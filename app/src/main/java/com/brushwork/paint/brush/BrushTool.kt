@@ -338,7 +338,6 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             selection = selection?.let { AlphaMaskReader(it.mask) },
             alphaLock = layer.alphaLocked && rec.target == EditTarget.CONTENT,
             color = strokeColor(maskTarget),
-            maxDiameter = preset.size,
         )
         /** Dabs held back until the end taper is known (only with a finger end taper). */
         private val pending = ArrayDeque<Dab>()
@@ -372,8 +371,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
 
         private fun render(dab: Dab) {
-            if (!painter.bounds(dab, box)) return
-            if (selBounds != null && !selBounds.intersects(box.left, box.top, box.right, box.bottom)) return
+            if (!painter.bounds(dab, box) ||
+                (selBounds != null && !selBounds.intersects(box.left, box.top, box.right, box.bottom))
+            ) {
+                painter.skip(dab)
+                return
+            }
             touchRect.set(box.left, box.top, box.right, box.bottom)
             rec.touch(touchRect)
             painter.apply(dab)

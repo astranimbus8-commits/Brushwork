@@ -14,7 +14,7 @@ object BrushLibrary {
     )
     val defaultSmudge = BrushPreset(
         "smudge", "Smudge", BrushTip.SMUDGE,
-        size = 40f, hardness = 0.3f, spacing = 0.08f, pressureSize = false, mixing = 0.75f,
+        size = 40f, hardness = 0.3f, spacing = 0.025f, pressureSize = false, mixing = 0.75f,
     )
     val defaultBlur = BrushPreset(
         "blur", "Blur", BrushTip.BLUR,
@@ -99,11 +99,11 @@ object BrushLibrary {
 
     private val smudgeStrong = BrushPreset(
         "smudgestrong", "Finger smear", BrushTip.SMUDGE,
-        size = 30f, hardness = 0.55f, spacing = 0.06f, pressureSize = false, pressureOpacity = true, mixing = 0.93f,
+        size = 30f, hardness = 0.55f, spacing = 0.025f, pressureSize = false, pressureOpacity = true, mixing = 0.93f,
     )
     private val blender = BrushPreset(
         "blender", "Soft blender", BrushTip.SMUDGE,
-        size = 70f, hardness = 0.15f, spacing = 0.1f, pressureSize = false, pressureOpacity = true, mixing = 0.4f,
+        size = 70f, hardness = 0.15f, spacing = 0.02f, pressureSize = false, pressureOpacity = true, mixing = 0.55f,
     )
 
     private val blurStrong = BrushPreset(

@@ -5,6 +5,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import kotlin.math.ceil
 import kotlin.math.log2
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -16,8 +17,11 @@ class Tip(val bitmap: Bitmap, val diameter: Float, val size: Int)
 
 /**
  * LRU cache of ALPHA_8 tip bitmaps. Anti-aliased tips are rendered at geometric size buckets
- * (4 per octave) and scaled down slightly when drawn; aliased tips are rendered at their exact
- * integer size with the rotation baked in. Not thread-safe: one instance per thread/owner.
+ * (4 per octave) and scaled down slightly when drawn; above [MAX_AA_TIP] px (textured tips:
+ * [MAX_TEXTURED_TIP]) they are rendered once at that resolution and scaled up, so huge brushes
+ * never rasterize megapixel tips. Aliased tips are rendered at their exact integer size (sizes
+ * above 128 px are quantized slightly) with the rotation baked in. Not thread-safe: one
+ * instance per thread/owner.
  */
 class TipCache(private val maxBytes: Long = 32L shl 20) {
     private data class Key(
@@ -39,10 +43,11 @@ class TipCache(private val maxBytes: Long = 32L shl 20) {
         val bucket: Int
         val tipDiameter: Float
         if (aa) {
-            bucket = bucketOf(diameter)
+            val cap = if (TipShapes.isTextured(preset.tip)) MAX_TEXTURED_TIP else MAX_AA_TIP
+            bucket = min(bucketOf(diameter), bucketOf(cap))
             tipDiameter = bucketDiameter(bucket)
         } else {
-            bucket = max(1, diameter.roundToInt())
+            bucket = aliasedDiameter(diameter)
             tipDiameter = bucket.toFloat()
         }
         val hq = (preset.hardness.coerceIn(0f, 1f) * 20f).roundToInt()
@@ -78,10 +83,26 @@ class TipCache(private val maxBytes: Long = 32L shl 20) {
     }
 
     companion object {
+        /** Largest rasterized anti-aliased tip; bigger dabs scale it up (edges stay smooth). */
+        const val MAX_AA_TIP = 512f
+        /** Same for textured tips (pencil, chalk, spray), whose rasterization is costlier. */
+        const val MAX_TEXTURED_TIP = 256f
+
         /** Size bucket (4 per octave) whose diameter is >= [d]. */
         fun bucketOf(d: Float): Int = if (d <= 1f) 0 else ceil(log2(d) * 4f - 1e-3f).toInt()
 
         fun bucketDiameter(bucket: Int): Float = 2f.pow(bucket / 4f)
+
+        /**
+         * Integer diameter of an aliased tip: exact up to 128 px, then rounded to multiples of
+         * 2, 4, 8... (under 1.6 %) so pressure strokes with huge pixel brushes reuse tips.
+         */
+        fun aliasedDiameter(d: Float): Int {
+            val n = max(1, d.roundToInt())
+            if (n <= 128) return n
+            val step = Integer.highestOneBit(n) / 64
+            return max(128, (n + step / 2) / step * step)
+        }
 
         /** Bitmap size for an aliased tip of integer diameter [n] (rotated squares need room). */
         private fun aliasedSize(tip: BrushTip, n: Int, angle: Int): Int {

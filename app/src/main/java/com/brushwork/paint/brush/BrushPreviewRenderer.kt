@@ -46,7 +46,7 @@ object BrushPreviewRenderer {
         val dynamics = StrokeDynamics(p, isStylus = true, seed = 12345L)
         val coverage = if (kind.isDirect) null else Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
         val covCanvas = coverage?.let { Canvas(it) }
-        val direct = if (kind.isDirect) DirectPainter(kind, p, BitmapSurface(out), null, false, ink or 0xFF000000.toInt(), d) else null
+        val direct = if (kind.isDirect) DirectPainter(kind, p, BitmapSurface(out), null, false, ink or 0xFF000000.toInt()) else null
         val sampler = StrokeSampler(
             spacingAt = { pr, dist -> dynamics.spacing(pr, dist) },
             onSample = { x, y, pr, dist ->

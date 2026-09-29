@@ -120,6 +120,41 @@ class BrushEngineTest {
     }
 
     @Test
+    fun hugeTipsRasterizeQuicklyWithTheRightShape() {
+        val start = System.nanoTime()
+        val n = 1000
+        val square = TipShapes.rasterize(BrushTip.SQUARE, n.toFloat(), n, 1f, 1f, 0f, 0, false)
+        val round = TipShapes.rasterize(BrushTip.ROUND_HARD, n.toFloat(), n, 1f, 1f, 0f, 0, false)
+        val aa = TipShapes.rasterize(BrushTip.ROUND_HARD, TipCache.MAX_AA_TIP, TipCache.MAX_AA_TIP.toInt() + 2, 0.9f, 1f, 0f, 0, true)
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertTrue("rasterizing took $ms ms", ms < 3000)
+        assertEquals(255, square[0].toInt() and 0xFF)
+        assertEquals(255, square[n * n - 1].toInt() and 0xFF)
+        assertEquals(255, round[500 * n + 500].toInt() and 0xFF)
+        assertEquals(0, round[0].toInt() and 0xFF)
+        assertEquals(255, round[500 * n + 1].toInt() and 0xFF) // left edge of the circle
+        assertTrue(round.all { (it.toInt() and 0xFF) == 0 || (it.toInt() and 0xFF) == 255 })
+        val c = TipCache.MAX_AA_TIP.toInt() / 2 + 1
+        assertEquals(255, aa[c * (TipCache.MAX_AA_TIP.toInt() + 2) + c].toInt() and 0xFF)
+    }
+
+    @Test
+    fun tipSizeQuantization() {
+        // Anti-aliased tips stop growing at the cap; bigger dabs scale the capped tip.
+        assertEquals(TipCache.MAX_AA_TIP, TipCache.bucketDiameter(TipCache.bucketOf(TipCache.MAX_AA_TIP)), 1e-2f)
+        assertTrue(TipCache.bucketDiameter(TipCache.bucketOf(37f)) >= 37f)
+        assertTrue(TipCache.bucketDiameter(TipCache.bucketOf(37f)) < 37f * 1.19f)
+        // Aliased tips are exact up to 128 px, then within 1.6 %.
+        for (d in 1..128) assertEquals(d, TipCache.aliasedDiameter(d.toFloat()))
+        for (d in 129..1000) {
+            val q = TipCache.aliasedDiameter(d.toFloat())
+            assertTrue("$d -> $q", abs(q - d) <= d * 0.016f + 0.5f)
+        }
+        val distinct = (129..1000).map { TipCache.aliasedDiameter(it.toFloat()) }.toSet().size
+        assertTrue("distinct huge aliased tips: $distinct", distinct < 250)
+    }
+
+    @Test
     fun paperTextureTilesSeamlessly() {
         val t = TipShapes.paperTexture(64)
         assertTrue(t.all { it in 0f..1f })
@@ -155,6 +190,48 @@ class BrushEngineTest {
         runDabs(DirectPainter(StrokeKind.SMUDGE, preset, selected, onlyLeft, false, 0), preset, 20f, 60f, 20f)
         assertEquals(0, selected.pixels[20 * 80 + 45])
         assertTrue((selected.pixels[20 * 80 + 35] ushr 24) > 80)
+    }
+
+    @Test
+    fun smudgeColorFadesOverAFewDiameters() {
+        val red = 0xFFFF0000.toInt()
+        // mixing 0.75: the dragged color lags behind the tip at 1/4 of its speed, so it has
+        // drained out after about 4 diameters.
+        val preset = BrushLibrary.defaultSmudge.copy(size = 20f, mixing = 0.75f, pressureSize = false)
+        val s = surface(300, 40) { x, _ -> if (x < 40) red else 0 }
+        runDabs(DirectPainter(StrokeKind.SMUDGE, preset, s, null, false, 0), preset, 30f, 280f, 20f)
+        val near = s.pixels[20 * 300 + 50] ushr 24
+        val far = s.pixels[20 * 300 + 160] ushr 24 // 6 diameters past the red edge
+        assertTrue("dragged just past the edge: $near", near > 100)
+        assertTrue("faded after 6 diameters: $far", far < 30)
+        // Alpha decreases steadily along the smear (no carried blob, no periodic stamping).
+        var prev = 256
+        for (x in 60..200 step 10) {
+            val a = s.pixels[20 * 300 + x] ushr 24
+            assertTrue("x=$x alpha $a after $prev", a <= prev + 2)
+            prev = a
+        }
+        // Full strength carries the color much further.
+        val strong = BrushLibrary.defaultSmudge.copy(size = 20f, mixing = 1f, pressureSize = false)
+        val s2 = surface(300, 40) { x, _ -> if (x < 40) red else 0 }
+        runDabs(DirectPainter(StrokeKind.SMUDGE, strong, s2, null, false, 0), strong, 30f, 280f, 20f)
+        assertTrue((s2.pixels[20 * 300 + 160] ushr 24) > 150)
+    }
+
+    @Test
+    fun smudgeHasNoPeriodicStampingAcrossStripes() {
+        // 8 px stripes smeared sideways: along the stroke center the result must be smooth
+        // (neighboring pixels differ little), not a comb at the dab spacing.
+        val preset = BrushLibrary.defaultSmudge.copy(size = 40f, pressureSize = false)
+        val s = surface(260, 60) { x, _ -> if ((x / 8) % 2 == 0) 0xFF2060E0.toInt() else 0xFFF0C020.toInt() }
+        runDabs(DirectPainter(StrokeKind.SMUDGE, preset, s, null, false, 0), preset, 20f, 240f, 30f)
+        var maxJump = 0
+        for (x in 120 until 200) {
+            val a = s.pixels[30 * 260 + x]
+            val b = s.pixels[30 * 260 + x + 1]
+            for (sh in intArrayOf(0, 8, 16)) maxJump = maxOf(maxJump, abs(((a shr sh) and 0xFF) - ((b shr sh) and 0xFF)))
+        }
+        assertTrue("max neighbor difference $maxJump", maxJump < 40)
     }
 
     @Test

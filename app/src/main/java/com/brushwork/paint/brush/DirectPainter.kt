@@ -55,11 +55,10 @@ class IntArraySurface(override val width: Int, override val height: Int, val pix
  * Works in premultiplied float space on the dab rectangle only, weighted by the soft tip
  * profile and the selection. With [alphaLock] the alpha of every pixel is preserved.
  *
- * One instance per stroke (it carries the smudge pick-up buffer / the watercolor paint load).
+ * One instance per stroke (it tracks the smudge transport / the watercolor paint load).
  * Pure Kotlin.
  *
  * @param color non-premultiplied opaque paint color (watercolor).
- * @param maxDiameter largest dab diameter of the stroke (sizes the smudge pick-up buffer).
  */
 class DirectPainter(
     val kind: StrokeKind,
@@ -68,7 +67,6 @@ class DirectPainter(
     private val selection: CoverageReader?,
     private val alphaLock: Boolean,
     color: Int,
-    private val maxDiameter: Float = preset.size,
 ) {
     init {
         require(kind.isDirect) { "DirectPainter does not handle $kind" }
@@ -92,28 +90,62 @@ class DirectPainter(
         return out.clip(surface.width, surface.height)
     }
 
+    /**
+     * Records [dab] as passed without painting it (it lies outside the surface or the selection),
+     * so the next dab's travel distance and smudge transport stay correct.
+     */
+    fun skip(dab: Dab) {
+        advance(dab)
+    }
+
     /** Applies one resolved dab. Returns false when it was entirely outside the surface. */
     fun apply(dab: Dab): Boolean {
+        val ratio = advance(dab)
         if (!bounds(dab, box)) return false
-        val ratio = if (lastDistance.isNaN()) preset.spacing else (dab.distance - lastDistance) / max(1f, dab.diameter)
-        lastDistance = dab.distance
+        if (kind == StrokeKind.SMUDGE && ox == 0 && oy == 0) return true
         val w = box.width
         val h = box.height
         ensure(w * h)
         surface.read(box.left, box.top, w, h, px)
         selection?.read(box.left, box.top, w, h, sel)
-        var strength = dab.alpha * preset.opacity
-        if (kind == StrokeKind.BLUR) strength *= 0.35f + 0.65f * preset.mixing
-        if (!computeWeights(dab, w, h, strength)) return true
-        val r = ratio.coerceIn(0.01f, 1f)
+        val strength = dab.alpha * preset.opacity
+        val weightScale = when (kind) {
+            StrokeKind.SMUDGE -> smudgeWeight(strength)
+            StrokeKind.BLUR -> strength * (0.35f + 0.65f * preset.mixing)
+            else -> strength
+        }
+        if (!computeWeights(dab, w, h, weightScale)) return true
         when (kind) {
-            StrokeKind.SMUDGE -> smudge(dab, w, h, r)
+            StrokeKind.SMUDGE -> smudge(w, h)
             StrokeKind.BLUR -> blur(dab, w, h)
-            StrokeKind.WATERCOLOR -> watercolor(w, h, r)
+            StrokeKind.WATERCOLOR -> watercolor(w, h, ratio.coerceIn(0.01f, 1f))
             else -> {}
         }
         surface.write(box.left, box.top, w, h, px)
         return true
+    }
+
+    /**
+     * Moves the stroke state to [dab]: returns the travel since the previous dab as a fraction
+     * of the diameter and (smudge) computes the integer transport offset [ox], [oy].
+     */
+    private fun advance(dab: Dab): Float {
+        val ratio = if (lastDistance.isNaN()) preset.spacing else (dab.distance - lastDistance) / max(1f, dab.diameter)
+        lastDistance = dab.distance
+        if (kind == StrokeKind.SMUDGE) {
+            val ix = floor(dab.cx + 0.5f).toInt()
+            val iy = floor(dab.cy + 0.5f).toInt()
+            if (!hasPrev) {
+                ox = 0; oy = 0
+                hasPrev = true
+            } else {
+                ox = prevIx - ix
+                oy = prevIy - iy
+            }
+            prevIx = ix
+            prevIy = iy
+        }
+        return ratio
     }
 
     private fun ensure(n: Int) {
@@ -152,91 +184,54 @@ class DirectPainter(
 
     // ------------------------------------------------------------------ smudge
 
-    private var pick: FloatArray? = null
-    private var pickSize = 0
-    private var pickHalf = 0
-    private var pickFactor = 1
+    // Smear model: each dab drags the pixels from where the tip was at the previous dab onto the
+    // pixels under it, blended by the tip profile * mixing * strength. The blend makes the
+    // carried paint lag behind the tip by (1 - weight) of the distance travelled, so it drains
+    // out of the back of the tip and fresh canvas color enters at the front: at mixing m the
+    // color is carried about 1 / (1 - m) diameters, independent of the dab spacing (100 %
+    // carries it indefinitely). The transport offset is integer (rounded tip centers), so the
+    // dragged pixels are not resampled; the soft profile uses the sub-pixel center.
 
-    private fun initPickup(dab: Dab) {
-        val maxD = max(maxDiameter, dab.diameter)
-        val f = max(1, ceil(maxD / MAX_PICKUP_CELLS).toInt())
-        val size = ceil(maxD / f).toInt() + 4
-        val half = size / 2
-        val buf = FloatArray(size * size * 4)
-        val icx = floor(dab.cx).toInt()
-        val icy = floor(dab.cy).toInt()
-        val xa = max(0, icx - half * f)
-        val xb = min(surface.width, icx + (size - half) * f)
-        if (xb > xa) {
-            val row = IntArray(xb - xa)
-            for (j in 0 until size) {
-                val y = icy + (j - half) * f
-                if (y < 0 || y >= surface.height) continue
-                surface.read(xa, y, xb - xa, 1, row)
-                for (i in 0 until size) {
-                    val x = icx + (i - half) * f
-                    if (x < xa || x >= xb) continue
-                    val c = row[x - xa]
-                    val a = (c ushr 24).toFloat()
-                    val k = (j * size + i) * 4
-                    buf[k] = a
-                    buf[k + 1] = ((c shr 16) and 0xFF) * a / 255f
-                    buf[k + 2] = ((c shr 8) and 0xFF) * a / 255f
-                    buf[k + 3] = (c and 0xFF) * a / 255f
-                }
-            }
-        }
-        pick = buf
-        pickSize = size
-        pickHalf = half
-        pickFactor = f
-    }
+    private var srcPx = IntArray(0)
+    private val srcBox = IntBox()
+    private var hasPrev = false
+    private var prevIx = 0
+    private var prevIy = 0
+    /** Transport offset of the current dab: source pixel = destination pixel + (ox, oy). */
+    private var ox = 0
+    private var oy = 0
 
-    private fun smudge(dab: Dab, w: Int, h: Int, ratio: Float) {
-        if (pick == null) initPickup(dab)
-        val buf = pick ?: return
-        val size = pickSize
-        val half = pickHalf
-        val f = pickFactor
-        val icx = floor(dab.cx).toInt()
-        val icy = floor(dab.cy).toInt()
-        val mixing = preset.mixing
-        // Fraction of the carried paint replaced by canvas color per dab, normalized by the
-        // distance travelled: mixing^2 of the carried color survives one diameter of travel.
-        val rate = if (mixing >= 0.999f) 0f else 1f - mixing.pow(2f * ratio)
+    /** Blend weight of the dragged pixels in the core of the tip (see the model above). */
+    private fun smudgeWeight(strength: Float): Float = (preset.mixing * strength).coerceIn(0f, 1f)
+
+    private fun smudge(w: Int, h: Int) {
+        srcBox.set(box.left + ox, box.top + oy, box.right + ox, box.bottom + oy)
+        if (!srcBox.clip(surface.width, surface.height)) return
+        val sw = srcBox.width
+        val sh = srcBox.height
+        if (srcPx.size < sw * sh) srcPx = IntArray(sw * sh)
+        surface.read(srcBox.left, srcBox.top, sw, sh, srcPx)
         for (yy in 0 until h) {
-            val y = box.top + yy
-            val gy = Math.floorDiv(y - icy, f) + half
-            if (gy < 0 || gy >= size) continue
-            val updateRow = f == 1 || Math.floorMod(y - icy, f) == 0
+            val sy = box.top + yy + oy - srcBox.top
+            if (sy < 0 || sy >= sh) continue
             for (xx in 0 until w) {
                 val i = yy * w + xx
-                val s = shape[i]
-                if (s <= 0f) continue
-                val x = box.left + xx
-                val gx = Math.floorDiv(x - icx, f) + half
-                if (gx < 0 || gx >= size) continue
+                val wt = weight[i]
+                if (wt <= 0f) continue
+                val sx = box.left + xx + ox - srcBox.left
+                if (sx < 0 || sx >= sw) continue
+                val s = srcPx[sy * sw + sx]
                 val c = px[i]
+                if (s == c) continue
+                val sa = (s ushr 24).toFloat()
                 val ca = (c ushr 24).toFloat()
+                val sr = ((s shr 16) and 0xFF) * sa / 255f
+                val sg = ((s shr 8) and 0xFF) * sa / 255f
+                val sb = (s and 0xFF) * sa / 255f
                 val cr = ((c shr 16) and 0xFF) * ca / 255f
                 val cg = ((c shr 8) and 0xFF) * ca / 255f
                 val cb = (c and 0xFF) * ca / 255f
-                val k = (gy * size + gx) * 4
-                val pa = buf[k]
-                val pr = buf[k + 1]
-                val pg = buf[k + 2]
-                val pb = buf[k + 3]
-                val wt = weight[i]
-                if (wt > 0f) {
-                    px[i] = pack(c, ca + (pa - ca) * wt, cr + (pr - cr) * wt, cg + (pg - cg) * wt, cb + (pb - cb) * wt)
-                }
-                if (rate > 0f && updateRow && (f == 1 || Math.floorMod(x - icx, f) == 0)) {
-                    val u = rate * s
-                    buf[k] = pa + (ca - pa) * u
-                    buf[k + 1] = pr + (cr - pr) * u
-                    buf[k + 2] = pg + (cg - pg) * u
-                    buf[k + 3] = pb + (cb - pb) * u
-                }
+                px[i] = pack(c, ca + (sa - ca) * wt, cr + (sr - cr) * wt, cg + (sg - cg) * wt, cb + (sb - cb) * wt)
             }
         }
     }
@@ -410,8 +405,6 @@ class DirectPainter(
     }
 
     companion object {
-        /** Max smudge pick-up cells across (bigger brushes carry a downsampled buffer). */
-        const val MAX_PICKUP_CELLS = 384f
         /** Max blur grid cells across a dab. */
         const val MAX_BLUR_CELLS = 160f
 

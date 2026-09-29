@@ -99,7 +99,9 @@ object TipShapes {
         val rad = -angleDeg * (PI.toFloat() / 180f)
         val cosA = cos(rad)
         val sinA = sin(rad)
-        val supersample = !antiAlias || diameter < 6f
+        // Small tips need 4x4 supersampling for an accurate shape; on big tips one centered
+        // sample per pixel is indistinguishable and 16x cheaper.
+        val supersample = if (antiAlias) diameter < 6f else diameter < 32f
         val chalk = if (tip == BrushTip.CHALK) ChalkEdge(variant) else null
         val shapeTip = if (chalk != null || tip == BrushTip.PENCIL) BrushTip.ROUND_SOFT else tip
         val cell = max(1.5f, diameter / 7f)
