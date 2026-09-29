@@ -57,6 +57,15 @@ class LineFiltersTest {
         assertTrue(b(kept[1]) > r(kept[1]) + 60)
         // Fully dense pixels keep their exact color.
         assertEquals(rgb(20, 0, 10), f.run(row(rgb(20, 0, 10)), "keepColor" to true).pixels[0])
+        // A bright saturated line (yellow pencil: luma ~214, near the paper level) survives with
+        // its color, while in single-color mode it is judged by luminance and nearly vanishes.
+        val yellow = rgb(255, 220, 0)
+        assertEquals(yellow, f.run(row(yellow), "keepColor" to true).pixels[0])
+        assertTrue(a(f.run(row(yellow)).pixels[0]) < 40)
+        // Gray ink gets the same density in both modes.
+        assertEquals(a(f.run(row(gray(90))).pixels[0]), a(f.run(row(gray(90)), "keepColor" to true).pixels[0]))
+        // Light, desaturated paper is still dropped with keep color on.
+        assertEquals(0, f.run(row(rgb(250, 245, 228)), "keepColor" to true).pixels[0])
     }
 
     // ---------------------------------------------------------------- find edges

@@ -33,6 +33,17 @@ private fun lumaOverWhite(c: Int): Float {
 }
 
 /**
+ * Darkest channel (0..255) of a straight color composited over white: how far the pixel is from
+ * white paper in any channel. A saturated color (e.g. yellow) is bright by luma but far from white
+ * in one channel, so this keeps colored lines visible and lets [unmix] reproduce them exactly.
+ */
+private fun minChannelOverWhite(c: Int): Float {
+    val a = c ushr 24
+    val m = min((c shr 16) and 0xFF, min((c shr 8) and 0xFF, c and 0xFF)).toFloat()
+    return if (a == 255) m else (m * a + 255f * (255 - a)) / 255f
+}
+
+/**
  * Line color channel for a pixel channel [ch] with alpha [a] whose over-white composite should be
  * reproduced by a line of density [k] (0..1] over white: solves  over = line * k + 255 * (1 - k).
  */
@@ -44,8 +55,10 @@ private fun unmix(ch: Int, a: Int, k: Float): Int {
 /**
  * Turns a scanned or photographed drawing into line art on transparency: paper (at or above the
  * White level) becomes transparent, ink (at or below the Black level) fully opaque, with the
- * Middle value bending the transition. Lines are drawn in one color, or keep their own color
- * (un-mixed from the white paper, so they composite back over white exactly).
+ * Middle value bending the transition. Lines are drawn in one color (density from luminance), or
+ * keep their own color: density then comes from the darkest channel (so colored lines such as
+ * yellow pencil survive) and the color is un-mixed from the white paper, so the result composites
+ * back over white like the original.
  */
 class ExtractLineDrawingFilter : Filter("adjust.extract_line_drawing", "Extract Line Drawing", FilterCategory.ADJUST) {
     override val params: List<FilterParam> = listOf(
@@ -62,8 +75,8 @@ class ExtractLineDrawingFilter : Filter("adjust.extract_line_drawing", "Extract 
         val lineRgb = values.color("lineColor") and 0xFFFFFF
         return FilterMath.mapPixels(src, ctx) { c ->
             val a = c ushr 24
-            val yIdx = (lumaOverWhite(c) + 0.5f).toInt().coerceIn(0, 255)
-            val na = density[yIdx]
+            val y = if (keepColor) minChannelOverWhite(c) else lumaOverWhite(c)
+            val na = density[(y + 0.5f).toInt().coerceIn(0, 255)]
             when {
                 na == 0 -> 0
                 !keepColor -> (na shl 24) or lineRgb
