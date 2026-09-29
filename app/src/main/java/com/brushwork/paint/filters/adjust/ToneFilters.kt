@@ -27,7 +27,10 @@ private fun channelLuts(channel: Int, lut: IntArray): Triple<IntArray, IntArray,
     }
 }
 
-/** Brightness lightens/darkens while keeping black and white fixed; contrast spreads around mid-gray. */
+/**
+ * Brightness blends every tone toward white (positive) or black (negative); contrast then pushes
+ * tones away from mid-gray (positive, +100 = hard threshold) or pulls them toward it (negative).
+ */
 class BrightnessContrastFilter : Filter("adjust.brightness_contrast", "Brightness & Contrast", FilterCategory.ADJUST) {
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("brightness", "Brightness", -100f, 100f, 0f, 1f),

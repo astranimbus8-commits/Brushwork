@@ -54,8 +54,12 @@ class ColorBalanceFilter : Filter("adjust.color_balance", "Color Balance", Filte
                 var gf = (g / 255f + shG[l2]).coerceIn(0f, 1f)
                 var bf = (b / 255f + shB[l2]).coerceIn(0f, 1f)
                 if (preserve) {
-                    val diff = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f - (rf * 0.299f + gf * 0.587f + bf * 0.114f)
-                    rf += diff; gf += diff; bf += diff
+                    // Restore the original luma; a second pass redistributes what clamping lost.
+                    val y0 = (r * 0.299f + g * 0.587f + b * 0.114f) / 255f
+                    repeat(2) {
+                        val diff = y0 - (rf * 0.299f + gf * 0.587f + bf * 0.114f)
+                        rf = (rf + diff).coerceIn(0f, 1f); gf = (gf + diff).coerceIn(0f, 1f); bf = (bf + diff).coerceIn(0f, 1f)
+                    }
                 }
                 AdjustMath.pack(c ushr 24, rf, gf, bf)
             }
