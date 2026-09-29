@@ -136,5 +136,15 @@ class StyleVisualDump {
             f.apply(big, f.defaultValues().also { v -> if (f.id == "style.extrude_parallel") v.set("depth", 400f) }, FilterContext())
             println("BIG ${f.id}: ${(System.nanoTime() - t0) / 1_000_000}ms")
         }
+        // Worst case for the distance transform: nearly every pixel is an edge pixel (noise texture).
+        for (i in big.pixels.indices) big.pixels[i] = ColorUtils.withAlpha(0x406080, (FilterMathRandom.at(i, 7) * 255f).toInt())
+        repeat(2) {
+            val t0 = System.nanoTime()
+            StyleMath.signedDistance(big, FilterContext())
+            println("BIG noise signedDistance: ${(System.nanoTime() - t0) / 1_000_000}ms")
+        }
+        val t1 = System.nanoTime()
+        StrokeOuterFilter().apply(big, StrokeOuterFilter().defaultValues(), FilterContext())
+        println("BIG noise style.stroke_outer: ${(System.nanoTime() - t1) / 1_000_000}ms")
     }
 }
