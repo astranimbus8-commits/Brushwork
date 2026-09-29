@@ -220,6 +220,7 @@ fun ChannelRow(
     modifier: Modifier = Modifier,
     fieldLabel: String = label,
     valueSuffix: String = "",
+    checker: Boolean = false,
 ) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         GradientSlider(
@@ -229,6 +230,7 @@ fun ChannelRow(
             thumbColor = thumbColor,
             label = label,
             valueText = "$value$valueSuffix",
+            checker = checker,
             modifier = Modifier.weight(1f),
         )
         Spacer(Modifier.width(8.dp))
@@ -288,6 +290,7 @@ fun AlphaSlider(state: ColorEditState, modifier: Modifier = Modifier) {
         onValueChange = { state.setAlpha((it * 255f / 100f).roundToInt()) },
         fieldLabel = "A%",
         valueSuffix = "%",
+        checker = true,
         modifier = modifier,
     )
 }

@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,7 +33,8 @@ fun ColorPickerDialog(
     val state = rememberColorEditState(start)
     val mode = PickerMode.entries.getOrElse(store.data.pickerMode) { PickerMode.WHEEL }
 
-    fun use(c: Int) = state.setColor(if (showAlpha) c else c or OPAQUE)
+    val use: (Int) -> Unit = remember(state, showAlpha) { { c -> state.setColor(if (showAlpha) c else c or OPAQUE) } }
+    val current: () -> Int = remember(state) { { state.color } }
 
     BwDialog(
         title = title,
@@ -55,7 +57,7 @@ fun ColorPickerDialog(
         Spacer(Modifier.height(8.dp))
         PickerBody(state, mode, wheelMaxSize = 240.dp)
         if (showAlpha) AlphaSlider(state, Modifier.padding(top = 4.dp))
-        PaletteSection(store, current = state.color, onUse = ::use, manage = false)
-        RecentColorsSection(store, onUse = ::use)
+        PaletteSection(store, current = current, onUse = use, manage = false)
+        RecentColorsSection(store, onUse = use)
     }
 }

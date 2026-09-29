@@ -65,16 +65,21 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
         }
     }
 
-    fun use(c: Int) {
-        val o = c or OPAQUE
-        state.setColor(o)
-        store.addRecent(o)
+    // Stable callbacks: the palette/recent sections then skip recomposition while dragging.
+    val use: (Int) -> Unit = remember(state, store) {
+        { c ->
+            val o = c or OPAQUE
+            state.setColor(o)
+            store.addRecent(o)
+        }
     }
-
-    fun swap() {
-        val primary = controller.color
-        controller.color = controller.secondaryColor or OPAQUE
-        controller.secondaryColor = primary
+    val current: () -> Int = remember(state) { { state.color } }
+    val swap: () -> Unit = remember(controller) {
+        {
+            val primary = controller.color
+            controller.color = controller.secondaryColor or OPAQUE
+            controller.secondaryColor = primary
+        }
     }
 
     BwSheet(
@@ -97,9 +102,9 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
             PrimarySecondary(
                 primary = display(controller.color),
                 secondary = display(controller.secondaryColor),
-                onSwap = ::swap,
+                onSwap = swap,
             )
-            IconButton(onClick = ::swap) { Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap primary and secondary colors") }
+            IconButton(onClick = swap) { Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap primary and secondary colors") }
         }
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -110,8 +115,8 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
         Spacer(Modifier.height(8.dp))
         PickerBody(state, mode, wheelMaxSize = 290.dp)
         if (colorMode != ColorMode.RGB) ColorModeHint(colorMode)
-        PaletteSection(store, current = state.color, onUse = ::use, display = display)
-        RecentColorsSection(store, onUse = ::use, display = display)
+        PaletteSection(store, current = current, onUse = use, display = display)
+        RecentColorsSection(store, onUse = use, display = display)
     }
 }
 

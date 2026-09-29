@@ -53,14 +53,14 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
  * Palette chips + swatches of the active palette. Tap a swatch to [onUse] it; long-press (user
- * palettes) for replace / move / delete. [current] is the color added by "+" and used by
- * "Replace". [display] maps colors for preview (grayscale documents). With [manage] the header
+ * palettes) for replace / move / delete. [current] supplies the color added by "+" and used by
+ * "Replace" (a lambda so dragging the picker doesn't recompose the swatches). [display] maps colors for preview (grayscale documents). With [manage] the header
  * menu can create, rename, duplicate and delete palettes.
  */
 @Composable
 fun PaletteSection(
     store: PaletteStore,
-    current: Int,
+    current: () -> Int,
     onUse: (Int) -> Unit,
     modifier: Modifier = Modifier,
     display: (Int) -> Int = { it },
@@ -132,7 +132,7 @@ fun PaletteSection(
                             canMoveLeft = i > 0,
                             canMoveRight = i < active.colors.lastIndex,
                             onDismiss = { swatchMenu = -1 },
-                            onReplace = { store.replaceColor(active.id, i, current); swatchMenu = -1 },
+                            onReplace = { store.replaceColor(active.id, i, current()); swatchMenu = -1 },
                             onMove = { d -> store.moveColor(active.id, i, d); swatchMenu = -1 },
                             onDelete = { store.removeColor(active.id, i); swatchMenu = -1 },
                         )
@@ -146,7 +146,7 @@ fun PaletteSection(
                         .size(swatchSize)
                         .clip(shape)
                         .border(1.dp, BrushworkColors.ChromeBorder, shape)
-                        .clickable(onClickLabel = "Add current color to palette") { store.addColor(active.id, current) },
+                        .clickable(onClickLabel = "Add current color to palette") { store.addColor(active.id, current()) },
                     contentAlignment = Alignment.Center,
                 ) { Icon(Icons.Filled.Add, contentDescription = "Add current color to palette", tint = BrushworkColors.OnChrome) }
             }
