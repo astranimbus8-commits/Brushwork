@@ -16,8 +16,9 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
- * Line density (0..1) for a position [t] (0 = no line, 1 = full line) bent so that the middle
- * value [middle] (fraction along the black -> white axis) gives 50 % density.
+ * Exponent e for density = t^e (t: 0 = no line, 1 = full line) such that the point [middle] of
+ * the way from the Black to the White level (t = 1 - middle) gets 50 % density; 0.5 is linear,
+ * lower values give lighter lines and higher values darker ones.
  */
 private fun middleExponent(middle: Float): Float {
     val m = middle.coerceIn(0.01f, 0.99f)
