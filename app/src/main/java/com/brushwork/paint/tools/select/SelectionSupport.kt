@@ -151,11 +151,16 @@ internal object SelectionJobs {
         return job
     }
 
-    /** Shows the busy overlay while [job] runs, but only if it takes noticeably long. */
+    /**
+     * Shows the busy overlay while [job] runs, but only if it takes noticeably long. Its Stop
+     * button cancels the job (the jobs poll for cancellation and change nothing when stopped).
+     */
     fun showBusyIfSlow(controller: EditorController, job: Job, label: String) {
         controller.scope.launch {
             delay(OVERLAY_DELAY_MS)
-            if (job.isActive && controller.busyMessage == null) controller.runBusy(label) { job.join() }
+            if (job.isActive && controller.busyMessage == null) {
+                controller.runBusy(label, onCancel = { job.cancel() }) { job.join() }
+            }
         }
     }
 }

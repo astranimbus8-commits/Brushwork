@@ -18,6 +18,7 @@ import com.brushwork.paint.segmentation.SegmentationService
 import com.brushwork.paint.segmentation.SmartTarget
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Operations of the selection menu. Entry points taking an [EditorController] must be called on
@@ -66,22 +67,25 @@ object SelectionEdits {
         val sel = controller.selection ?: return
         val r = kotlin.math.abs(px).coerceIn(1, MaskMath.MAX_RADIUS)
         val grow = px > 0
-        replaceAsync(controller, sel, if (grow) "Grow selection" else "Shrink selection", if (grow) "Growing selection…" else "Shrinking selection…") {
-            if (grow) grown(sel, r) else shrunk(sel, r)
+        replaceAsync(controller, sel, if (grow) "Grow selection" else "Shrink selection", if (grow) "Growing selection…" else "Shrinking selection…") { cancelled ->
+            if (grow) grown(sel, r, cancelled) else shrunk(sel, r, cancelled)
         }
     }
 
+    /** Softens the selection edge with a gaussian of [px]. */
     fun feather(controller: EditorController, px: Float) {
         val sel = controller.selection ?: return
         val r = px.coerceIn(0.5f, MaskMath.MAX_RADIUS.toFloat())
-        replaceAsync(controller, sel, "Feather selection", "Feathering selection…") { feathered(sel, r) }
+        replaceAsync(controller, sel, "Feather selection", "Feathering selection…") { cancelled -> feathered(sel, r, cancelled) }
     }
 
-    private fun replaceAsync(controller: EditorController, sel: Selection, label: String, busy: String, op: () -> Selection?) {
-        controller.runBusy(busy) {
-            val result = withContext(Dispatchers.Default) { op() }
+    /** Runs [op] in the background with a stoppable busy overlay and publishes its result. */
+    private fun replaceAsync(controller: EditorController, sel: Selection, label: String, busy: String, op: (cancelled: () -> Boolean) -> Selection?) {
+        val stopped = AtomicBoolean(false)
+        controller.runBusy(busy, onCancel = { stopped.set(true) }) {
+            val result = withContext(Dispatchers.Default) { op { stopped.get() } }
             // Only apply if nobody changed the selection meanwhile (e.g. undo).
-            if (result != null && controller.selection === sel) controller.setSelection(result, label = label)
+            if (result != null && !stopped.get() && controller.selection === sel) controller.setSelection(result, label = label)
         }
     }
 
