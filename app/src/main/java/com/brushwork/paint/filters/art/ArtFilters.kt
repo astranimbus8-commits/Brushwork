@@ -2,5 +2,20 @@ package com.brushwork.paint.filters.art
 
 import com.brushwork.paint.filters.Filter
 
-// STUB - replaced by a filter module. Every filter of this category is listed here.
-val artFilters: List<Filter> = emptyList()
+/** Every filter of the Art category, in the order shown in the filter browser. */
+val artFilters: List<Filter> = listOf(
+    ChromaticAberrationMovingFilter(),
+    ChromaticAberrationZoomingFilter(),
+    GlitchFilter(),
+    NoiseFilter(),
+    RetroGameFilter(),
+    OilPaintFilter(),
+    ChromeFilter(),
+    BloomFilter(),
+    CrossFilter(),
+    SheerFilter(SheerShape.CROSS),
+    SheerFilter(SheerShape.LINE),
+    SheerFilter(SheerShape.SQUARE),
+    SheerFilter(SheerShape.HEX),
+    SheerFilter(SheerShape.CIRCLE),
+)
