@@ -1,6 +1,7 @@
 package com.brushwork.paint.filters.adjust
 
 import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.filters.FilterContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -99,6 +100,17 @@ class LineFiltersTest {
         assertTrue(a(dog[9, 5]) > 200)
         for (x in 10 until 20) assertEquals("dog bright side x=$x", 0, a(dog[x, 5]))
         for (x in 0 until 5) assertEquals("dog far dark side x=$x", 0, a(dog[x, 5]))
+    }
+
+    @Test
+    fun edgesStillShowOnADownscaledPreview() {
+        // At 1/4 scale the smoothing shrinks below one pixel; every algorithm must still find the step.
+        for (alg in 0..2) for (smooth in listOf(0f, 1f)) {
+            val out = adjust<FindEdgesFilter>().run(stepImage(), "algorithm" to alg, "smoothness" to smooth, ctx = FilterContext(scale = 0.25f))
+            assertTrue("algorithm $alg smoothness $smooth", a(out[9, 5]) > 200)
+            assertEquals("algorithm $alg smoothness $smooth far from the edge", 0, a(out[2, 5]))
+            assertEquals("algorithm $alg smoothness $smooth bright side", 0, a(out[16, 5]))
+        }
     }
 
     @Test

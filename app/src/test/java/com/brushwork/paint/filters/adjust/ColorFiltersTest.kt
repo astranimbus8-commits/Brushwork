@@ -2,6 +2,8 @@ package com.brushwork.paint.filters.adjust
 
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.filters.FilterContext
+import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.GradientStop
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -143,6 +145,22 @@ class ColorFiltersTest {
         assertTrue(f.run(holes, "point" to floatArrayOf(0.25f, 0.5f)).pixels.contentEquals(holes.pixels))
     }
 
+    @Test
+    fun referenceWindowShrinksWithPreviewScale() {
+        // 5x5 full-resolution window; on a 1/4 preview one pixel already covers 4x4 of them.
+        val img = PixelBuffer(3, 3).fill(rgb(0, 0, 255))
+        img[1, 1] = rgb(255, 0, 0)
+        val center = floatArrayOf(0.5f, 0.5f)
+        assertEquals(rgb(255, 0, 0), ReplaceColorFilter.sampleReference(img, center, FilterContext(scale = 0.25f)))
+        val full = ReplaceColorFilter.sampleReference(img, center, FilterContext())!!
+        assertTrue(b(full) > r(full))
+        // Alpha-weighted: a half-transparent pixel counts half.
+        val two = row(rgb(255, 0, 0), rgb(0, 0, 255, 85))
+        val mixed = ReplaceColorFilter.sampleReference(two, floatArrayOf(0f, 0f), FilterContext())!!
+        assertEquals(255, a(mixed))
+        assertTrue(abs(r(mixed) - 191) <= 1 && abs(b(mixed) - 64) <= 1)
+    }
+
     // ---------------------------------------------------------------- gradation map
 
     @Test
@@ -167,11 +185,12 @@ class ColorFiltersTest {
     // ---------------------------------------------------------------- monocolor / change drawing color
 
     @Test
-    fun monocolorRampsThroughChosenColor() {
-        val c = rgb(200, 100, 50)
-        val out = adjust<MonocolorFilter>().run(row(gray(0), gray(128), gray(255), gray(90, 60), rgb(255, 0, 0)), "color" to c).pixels
+    fun monocolorRampsThroughChosenColorKeepingLuminance() {
+        val c = rgb(200, 100, 50) // luminance 124
+        val f = adjust<MonocolorFilter>()
+        val out = f.run(row(gray(0), gray(124), gray(255), gray(90, 60), rgb(255, 0, 0)), "color" to c).pixels
         assertEquals(gray(0), out[0])
-        assertNear(c, out[1], 2)
+        assertNear(c, out[1], 1)
         assertEquals(gray(255), out[2])
         assertEquals(60, a(out[3]))
         assertTrue(r(out[3]) < r(out[1]))
@@ -179,6 +198,30 @@ class ColorFiltersTest {
         val hsv = FloatArray(3); val chsv = FloatArray(3)
         ColorUtils.colorToHsv(c, chsv); ColorUtils.colorToHsv(out[4], hsv)
         assertTrue(abs(hsv[0] - chsv[0]) < 3f)
+        // Luminance and alpha of every pixel are kept, whatever the color.
+        val src = sampleImage()
+        for (color in listOf(c, rgb(20, 40, 220), rgb(255, 250, 120), rgb(0, 0, 0), rgb(255, 255, 255))) {
+            val o = f.run(src, "color" to color).pixels
+            for (i in src.pixels.indices) {
+                val s = src.pixels[i]
+                if (a(s) == 0) { assertEquals(s, o[i]); continue }
+                assertEquals(a(s), a(o[i]))
+                assertTrue("color ${ColorUtils.toHex(color)} pixel $i", abs(ColorUtils.luminance(o[i]) - ColorUtils.luminance(s)) <= 1)
+            }
+        }
+        // Black (the usual drawing color) or white degrade to plain grayscale instead of crushing tones.
+        val grays = f.run(row(rgb(255, 0, 0), rgb(30, 160, 90)), "color" to rgb(0, 0, 0)).pixels
+        assertTrue(grays.all { r(it) == g(it) && g(it) == b(it) })
+        assertNear(gray(76), grays[0])
+    }
+
+    @Test
+    fun drawingColorParamsStartAtTheDrawingColor() {
+        for (f in adjustFilters) for (p in f.params) {
+            if (p !is FilterParam.Color) continue
+            val expected = f is MonocolorFilter || f is ChangeDrawingColorFilter
+            assertEquals("${f.id}.${p.key}", expected, p.useDrawingColor)
+        }
     }
 
     @Test

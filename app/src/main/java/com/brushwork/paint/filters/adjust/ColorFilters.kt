@@ -11,7 +11,6 @@ import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.filters.GradientStop
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private const val ALPHA = 0xFF000000.toInt()
@@ -217,7 +216,8 @@ class ReplaceColorFilter : Filter("adjust.replace_color", "Replace Color", Filte
             val px = point.getOrElse(0) { 0.5f }; val py = point.getOrElse(1) { 0.5f }
             val cx = (px * src.width).toInt().coerceIn(0, src.width - 1)
             val cy = (py * src.height).toInt().coerceIn(0, src.height - 1)
-            val rad = ctx.px(2f).roundToInt().coerceIn(0, 8)
+            // Rounded down so a downscaled preview doesn't average a wider area than the final pass.
+            val rad = ctx.px(2f).toInt().coerceIn(0, 8)
             var sa = 0L; var sr = 0L; var sg = 0L; var sb = 0L
             for (y in max(0, cy - rad)..min(src.height - 1, cy + rad)) for (x in max(0, cx - rad)..min(src.width - 1, cx + rad)) {
                 val c = src[x, y]
@@ -266,12 +266,14 @@ class GradationMapFilter : Filter("adjust.gradation_map", "Gradation Map", Filte
 }
 
 /**
- * Turns the layer into shades of one color: luminance runs black -> color -> white (so a mid-gray
- * becomes exactly the chosen color). Alpha is kept.
+ * Turns the layer into shades of one color while keeping every pixel's luminance and alpha:
+ * luminance runs black -> color -> white, with the chosen color placed at its own luminance (a
+ * pixel as bright as the color becomes exactly that color). Black or white give plain grayscale.
+ * The color starts at the current drawing color.
  */
 class MonocolorFilter : Filter("adjust.monocolor", "Monocolor", FilterCategory.ADJUST) {
     override val params: List<FilterParam> = listOf(
-        FilterParam.Color("color", "Color", 0xFF9C6B3C.toInt()),
+        FilterParam.Color("color", "Color", 0xFF9C6B3C.toInt(), useDrawingColor = true),
         FilterParam.Slider("amount", "Strength", 0f, 100f, 100f, 1f, "%"),
     )
 
@@ -289,16 +291,22 @@ class MonocolorFilter : Filter("adjust.monocolor", "Monocolor", FilterCategory.A
     }
 
     companion object {
-        /** Opaque RGB for every luminance 0..255 along the black -> [color] -> white ramp. */
+        /**
+         * Opaque RGB for every luminance 0..255 along the black -> [color] -> white ramp, with
+         * [color] at its own Rec.601 luminance. The ramp is linear in RGB on both sides, so the
+         * output luminance equals the input luminance.
+         */
         fun rampLut(color: Int): IntArray {
             val cr = ((color shr 16) and 0xFF) / 255f; val cg = ((color shr 8) and 0xFF) / 255f; val cb = (color and 0xFF) / 255f
+            val pivot = AdjustMath.luma(color) / 255f
             return IntArray(256) { i ->
                 val y = i / 255f
-                if (y < 0.5f) {
-                    val k = 2f * y
+                if (y <= pivot) {
+                    // pivot > 0 here unless y == 0, where black is the right answer anyway.
+                    val k = if (pivot > 0f) y / pivot else 0f
                     AdjustMath.pack(255, cr * k, cg * k, cb * k)
                 } else {
-                    val k = 2f * y - 1f
+                    val k = (y - pivot) / (1f - pivot)
                     AdjustMath.pack(255, cr + (1f - cr) * k, cg + (1f - cg) * k, cb + (1f - cb) * k)
                 }
             }
@@ -306,10 +314,13 @@ class MonocolorFilter : Filter("adjust.monocolor", "Monocolor", FilterCategory.A
     }
 }
 
-/** Paints everything on the layer in one color, keeping its shape and anti-aliased alpha. */
+/**
+ * Paints everything on the layer in one color, keeping its shape and anti-aliased alpha (like
+ * filling an alpha-locked layer). The color starts at the current drawing color.
+ */
 class ChangeDrawingColorFilter : Filter("adjust.change_drawing_color", "Change Drawing Color", FilterCategory.ADJUST) {
     override val params: List<FilterParam> = listOf(
-        FilterParam.Color("color", "Color", 0xFF1E5BD8.toInt()),
+        FilterParam.Color("color", "Color", 0xFF1E5BD8.toInt(), useDrawingColor = true),
         FilterParam.Slider("amount", "Strength", 0f, 100f, 100f, 1f, "%"),
     )
 

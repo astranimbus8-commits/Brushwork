@@ -142,7 +142,9 @@ class FindEdgesFilter : Filter("adjust.find_edges", "Find Edges", FilterCategory
         val out = PixelBuffer(w, h)
         val d = out.pixels
         if (algorithm == 2) {
-            val s1 = max(sigma, ctx.px(0.5f))
+            // Floor in THIS buffer's pixels: a full-resolution floor would fall below the blur
+            // threshold on a downscaled preview and leave the DoG (and the preview) empty.
+            val s1 = max(sigma, 0.5f)
             val wide = lum.copyOf()
             AdjustMath.gaussianBlurInPlace(lum, w, h, s1, ctx)
             AdjustMath.gaussianBlurInPlace(wide, w, h, s1 * 1.6f, ctx)

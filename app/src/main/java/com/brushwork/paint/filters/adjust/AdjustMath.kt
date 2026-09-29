@@ -13,9 +13,10 @@ import kotlin.math.min
 
 /**
  * Helpers shared by the color-adjustment filters: lookup tables, tone curves, HSL math and a
- * memory-frugal in-place gaussian blur. Pure Kotlin and thread-safe.
+ * memory-frugal in-place gaussian blur. Pure Kotlin and thread-safe. [sampleCurve] is the exact
+ * curve the Tone Curve filter applies, so a curve editor can draw it.
  */
-internal object AdjustMath {
+object AdjustMath {
 
     private const val ALPHA_MASK = 0xFF000000.toInt()
 
@@ -77,12 +78,16 @@ internal object AdjustMath {
      * duplicated or out-of-range input.
      */
     fun curveLut(points: List<CurvePoint>): IntArray {
-        val f = curveSamples(points, 256)
+        val f = sampleCurve(points, 256)
         return IntArray(256) { ColorUtils.clamp255(f[it] * 255f) }
     }
 
-    /** [n] evenly spaced samples (x = i / (n - 1)) of the monotone curve through [points], 0..1. */
-    fun curveSamples(points: List<CurvePoint>, n: Int): FloatArray {
+    /**
+     * [n] evenly spaced samples (x = i / (n - 1); a single sample is taken at x = 0) of the
+     * monotone cubic curve through [points], each in 0..1. Returns an empty array for n <= 0.
+     */
+    fun sampleCurve(points: List<CurvePoint>, n: Int): FloatArray {
+        if (n <= 0) return FloatArray(0)
         val pts = points
             .filter { !it.x.isNaN() && !it.y.isNaN() }
             .map { CurvePoint(it.x.coerceIn(0f, 1f), it.y.coerceIn(0f, 1f)) }

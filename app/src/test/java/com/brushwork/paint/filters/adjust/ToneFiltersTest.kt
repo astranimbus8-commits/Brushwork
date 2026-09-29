@@ -124,6 +124,28 @@ class ToneFiltersTest {
     }
 
     @Test
+    fun sampleCurveIsWhatTheFilterApplies() {
+        val pts = listOf(CurvePoint(0f, 0.1f), CurvePoint(0.3f, 0.6f), CurvePoint(0.7f, 0.65f), CurvePoint(1f, 0.95f))
+        val s = AdjustMath.sampleCurve(pts, 256)
+        val lut = AdjustMath.curveLut(pts)
+        for (i in 0 until 256) assertEquals("at $i", lut[i], Math.round(s[i] * 255f))
+        // Arbitrary resolutions hit the control points exactly (x = i / (n - 1)).
+        val fine = AdjustMath.sampleCurve(pts, 11)
+        assertEquals(11, fine.size)
+        assertEquals(0.1f, fine[0], 1e-5f); assertEquals(0.6f, fine[3], 1e-5f)
+        assertEquals(0.65f, fine[7], 1e-5f); assertEquals(0.95f, fine[10], 1e-5f)
+        assertTrue(fine.all { it in 0f..1f })
+        // Degenerate sizes don't throw.
+        assertEquals(0, AdjustMath.sampleCurve(pts, 0).size)
+        assertEquals(0, AdjustMath.sampleCurve(pts, -3).size)
+        assertArrayEquals(floatArrayOf(0.1f), AdjustMath.sampleCurve(pts, 1), 1e-6f)
+        // The filter maps a gray ramp through exactly that curve.
+        val ramp = PixelBuffer(256, 1).also { for (x in 0 until 256) it[x, 0] = gray(x) }
+        val out = adjust<ToneCurveFilter>().run(ramp, "curve" to pts).pixels
+        for (x in 0 until 256) assertEquals(gray(lut[x]), out[x])
+    }
+
+    @Test
     fun toneCurveSingleChannel() {
         val src = row(rgb(100, 100, 100), rgb(10, 200, 50))
         val out = adjust<ToneCurveFilter>().run(src, "channel" to 1, "curve" to listOf(CurvePoint(0f, 1f), CurvePoint(1f, 0f))).pixels
