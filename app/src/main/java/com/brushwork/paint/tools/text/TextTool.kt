@@ -241,9 +241,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val h = handles(cur, block, t)
         val s = t.docToScreen(downDoc)
         val hit = t.dp(HANDLE_HIT_DP)
+        // On small text the handle hit areas overlap the box: a handle wins only when the finger
+        // is closer to it than to the box center.
+        val toCenter = s.distanceTo((h.corners[0] + h.corners[2]) / 2f)
+        val toRotate = s.distanceTo(h.rotate)
+        val toScale = s.distanceTo(h.scale)
         mode = when {
-            s.distanceTo(h.rotate) <= hit -> Mode.ROTATE
-            s.distanceTo(h.scale) <= hit -> Mode.SCALE
+            toRotate <= hit && toRotate < toCenter && toRotate <= toScale -> Mode.ROTATE
+            toScale <= hit && toScale < toCenter -> Mode.SCALE
             else -> Mode.MOVE
         }
         downInside = isInside(cur, block, downDoc, t)

@@ -150,7 +150,8 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         if (!controller.checkEditable(layer)) return false
         if (layer.alphaLocked) { controller.toast("Turn off \"Lock alpha\" on \"${layer.name}\" to edit the frame"); return false }
         val before = rec.model
-        val dirty: Rect = if (incremental && rec.version == layer.contentVersion) {
+        val beforeInSync = rec.version == layer.contentVersion
+        val dirty: Rect = if (incremental && beforeInSync) {
             val changed = HashSet<Panel>(before.panels).apply { removeAll(newModel.panels.toSet()) } +
                 HashSet<Panel>(newModel.panels).apply { removeAll(before.panels.toSet()) }
             FrameRenderer.dirtyRect(changed, layer.width, layer.height) ?: return false
@@ -174,18 +175,22 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         rec.model = newModel
         rec.version = layer.contentVersion
         lastFrame = WeakReference(layer)
-        controller.pushUndo(FrameEditAction(label, pixels, this, layer, before, newModel))
+        controller.pushUndo(FrameEditAction(label, pixels, this, layer, before, beforeInSync, newModel))
         controller.notifyLayersChanged()
         controller.invalidateDoc(dirty)
         revision++
         return true
     }
 
-    /** Called by [FrameEditAction] after its pixels were swapped back or forth. */
-    private fun syncModel(layer: Layer, model: FrameModel) {
+    /**
+     * Called by [FrameEditAction] after its pixels were swapped back or forth. [inSync] is false
+     * when the restored pixels did not match the model (an edit made while out of sync).
+     */
+    private fun syncModel(layer: Layer, model: FrameModel, inSync: Boolean) {
+        val version = if (inSync) layer.contentVersion else NEVER_IN_SYNC
         val rec = frames[layer]
-        if (rec == null) frames[layer] = FrameRecord(model, layer.contentVersion)
-        else { rec.model = model; rec.version = layer.contentVersion }
+        if (rec == null) frames[layer] = FrameRecord(model, version)
+        else { rec.model = model; rec.version = version }
         lastFrame = WeakReference(layer)
         revision++
     }
@@ -200,11 +205,12 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         private val tool: FrameDividerTool,
         private val layer: Layer,
         private val before: FrameModel,
+        private val beforeInSync: Boolean,
         private val after: FrameModel,
     ) : UndoAction {
         override val byteSize: Long get() = pixels.byteSize
-        override fun undo(c: EditorController) { pixels.undo(c); tool.syncModel(layer, before); c.notifyLayersChanged() }
-        override fun redo(c: EditorController) { pixels.redo(c); tool.syncModel(layer, after); c.notifyLayersChanged() }
+        override fun undo(c: EditorController) { pixels.undo(c); tool.syncModel(layer, before, beforeInSync); c.notifyLayersChanged() }
+        override fun redo(c: EditorController) { pixels.redo(c); tool.syncModel(layer, after, true); c.notifyLayersChanged() }
         override fun dispose() = pixels.dispose()
     }
 
@@ -322,5 +328,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         private const val ACCENT = 0xFF4DA3FF.toInt()
         /** Shorter drags (screen dp) count as taps. */
         private const val MIN_CUT_DP = 20f
+        /** Recorded version for a model known not to match the layer pixels. */
+        private const val NEVER_IN_SYNC = -1L
     }
 }
