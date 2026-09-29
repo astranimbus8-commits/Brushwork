@@ -28,10 +28,17 @@ internal object SmokeUi {
         override suspend fun <R> onInfiniteOperation(block: suspend () -> R): R = awaitCancellation()
     }
 
-    /** Makes every window recomposer created from now on use [ParkInfiniteAnimations]. */
+    /**
+     * Makes every window recomposer created from now on use [ParkInfiniteAnimations], and makes
+     * frames arrive only as the test advances the clock (one per frame interval, like vsync). By
+     * default Robolectric's Choreographer advances the clock itself when a frame is requested and
+     * delivers it at once, so a coroutine that awaits every frame (the layer list's auto-scroll
+     * while a row is dragged) keeps the looper busy forever.
+     */
     @OptIn(InternalComposeUiApi::class)
     fun installTestRecomposer() {
         WindowRecomposerPolicy.setFactory { root -> root.createLifecycleAwareWindowRecomposer(ParkInfiniteAnimations) }
+        org.robolectric.shadows.ShadowChoreographer.setPaused(true)
     }
 
     /** Windows that existed before the current screen was shown (other activities). */

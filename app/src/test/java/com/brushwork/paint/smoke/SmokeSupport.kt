@@ -51,14 +51,28 @@ internal object Smoke {
     fun watchdog(thread: Thread = Thread.currentThread(), limitMs: Long = 20_000): Thread =
         Thread {
             var reported = ""
+            // Also written to a file right away: a hung test only reports its output at the end.
+            val log = java.io.File(System.getProperty("java.io.tmpdir"), "bw-smoke-watchdog.txt")
+            runCatching { log.delete() }
+            val fileErr = java.io.PrintStream(java.io.FileOutputStream(log, true), true)
+            fun report(s: String) { System.err.println(s); fileErr.println(s) }
             try {
                 while (true) {
                     Thread.sleep(2_000)
                     val s = step
                     if (System.currentTimeMillis() - stepSince > limitMs && s != reported) {
                         reported = s
-                        System.err.println("[smoke] WATCHDOG: step \"$s\" running for ${System.currentTimeMillis() - stepSince} ms; main thread:")
-                        thread.stackTrace.take(80).forEach { System.err.println("    at $it") }
+                        report("[smoke] WATCHDOG: step \"$s\" running for ${System.currentTimeMillis() - stepSince} ms; main thread:")
+                        thread.stackTrace.take(80).forEach { report("    at $it") }
+                        // A tight loop shows different frames in each sample: print the app/Compose ones.
+                        repeat(8) { k ->
+                            Thread.sleep(300)
+                            report("[smoke] WATCHDOG sample $k:")
+                            thread.stackTrace
+                                .filter { f -> f.className.startsWith("com.brushwork") || f.className.startsWith("androidx.compose.foundation") || f.className.startsWith("androidx.compose.animation") || f.className.startsWith("androidx.compose.material3") }
+                                .take(25)
+                                .forEach { report("    at $it") }
+                        }
                     }
                 }
             } catch (_: InterruptedException) {
@@ -174,6 +188,18 @@ internal object Smoke {
 
         /** Lets [ms] of time pass (frames and posted callbacks run). */
         fun idle(ms: Long) = shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(ms))
+
+        /**
+         * Holds still for [ms] of REAL time while running the looper: Compose times a long press
+         * with coroutine delays that run on the wall clock and resume on the main looper.
+         */
+        fun holdRealTime(ms: Long) {
+            val end = System.currentTimeMillis() + ms
+            while (System.currentTimeMillis() < end) {
+                Thread.sleep(10)
+                idle(10)
+            }
+        }
 
         /** One finger through [points] (view pixels), a sample every 16 ms. */
         fun stroke(vararg points: Pair<Float, Float>) {

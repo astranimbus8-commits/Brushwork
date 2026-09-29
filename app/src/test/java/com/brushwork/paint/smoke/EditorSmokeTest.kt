@@ -45,6 +45,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -116,6 +117,7 @@ class EditorSmokeTest {
         val dog = Smoke.watchdog()
         section("editor screen, tools, panels, touch") { editorScreen() }
         section("panels composed directly") { panelsDirect() }
+        section("layers panel operated") { layersPanel() }
         section("number fields refuse NaN and infinity") { numberFields() }
         section("main activity end to end") { mainActivity() }
         dog.interrupt()
@@ -442,6 +444,95 @@ class EditorSmokeTest {
         Smoke.assertQuiet(c, "tool sheets done")
     }
 
+    // ================================================================== layers panel
+
+    private fun layersPanel() {
+        val activity = newActivity()
+        val c = Smoke.controller(activity, Smoke.document(400, 300, layers = 3))
+        val colors = listOf(0xFFFF0000.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt())
+        c.doc.layers.forEachIndexed { i, l -> Canvas(l.bitmap).drawRect(40f * i, 30f * i, 200f + 40f * i, 150f + 30f * i, Paint().apply { color = colors[i] }) }
+        c.undoManager.clear()
+        val originalLayers = c.doc.layers.toList()
+        val originalPixels = originalLayers.map { l -> IntArray(400 * 300).also { l.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) } }
+        var open by mutableStateOf(true)
+        activity.setContent { BrushworkTheme { if (open) LayersPanel(c, { open = false }, onImportPicture = {}) } }
+        settle()
+        assertWindowsLaidOut(2)
+        fun quiet(where: String) { settle(4); Smoke.assertQuiet(c, where); assertWindowsLaidOut(2) }
+
+        click("Layer 2", exact = true); assertEquals(1, c.doc.activeLayerIndex); quiet("select row")
+        click("Add layer"); assertEquals(4, c.doc.layers.size); quiet("add")
+        click("Duplicate layer"); assertEquals(5, c.doc.layers.size); quiet("duplicate")
+        click("Move layer up"); quiet("up")
+        click("Move layer down"); quiet("down")
+        click("Merge down"); assertEquals(4, c.doc.layers.size); quiet("merge")
+        click("Delete layer"); click("Delete", exact = true); assertEquals(3, c.doc.layers.size); quiet("delete")
+        click("Choose blend mode"); click("Multiply", exact = true)
+        assertEquals(com.brushwork.paint.model.LayerBlendMode.MULTIPLY, c.activeLayer.blendMode); quiet("blend")
+        for (t in listOf("Clipping", "α lock", "Lock")) { click(t, exact = true); click(t, exact = true); quiet("toggle $t") }
+        click("Hide layer"); click("Show layer"); quiet("visibility")
+        click("Layer mask"); click("Add mask", exact = true); assertNotNull(c.activeLayer.mask); quiet("add mask")
+        for (item in listOf("Invert mask", "Disable mask", "Enable mask", "Edit layer content", "Edit mask", "Apply mask")) {
+            click("Layer mask"); click(item, exact = true); quiet(item)
+        }
+        assertEquals(null, c.activeLayer.mask)
+        click("Layer mask"); click("Add mask", exact = true); click("Layer mask"); click("Delete mask", exact = true); quiet("delete mask")
+        click("More layer actions"); click("Rename…", exact = true)
+        SmokeUi.typeAndDone("Name", "Renamed")
+        assertEquals("Renamed", c.activeLayer.name); quiet("rename")
+        for (item in listOf("Flip horizontal", "Flip vertical")) { click("More layer actions"); click(item, exact = true); quiet(item) }
+        click("More layer actions"); click("Fill", exact = false); quiet("fill")
+        click("More layer actions"); click("Clear", exact = false); quiet("clear")
+
+        // Opacity: a real drag on the slider = live preview, ONE undo step on release.
+        val slider = RobolectricUiElements.slider()
+        val undo0 = c.undoManager.undoCount
+        val b = slider.bounds
+        com.brushwork.paint.ui.color.RobolectricUi.drag(slider.window, (b.right - 20f) to b.center.y, (b.left + b.width * 0.3f) to b.center.y)
+        quiet("opacity drag")
+        assertTrue("opacity changed: ${c.activeLayer.opacity}", c.activeLayer.opacity < 0.9f)
+        assertEquals("one undo step for the drag", undo0 + 1, c.undoManager.undoCount)
+        assertEquals("Opacity", c.undoManager.undoLabel)
+
+        // Long-press a row and drag it down one row: the layer moves once.
+        val topName = c.doc.layers.last().name
+        val row = SmokeUi.find(topName, exact = true) ?: throw AssertionError("no row \"$topName\"")
+        val rb = row.bounds
+        val touch = Smoke.Touch(row.window)
+        val order0 = c.doc.layers.map { it.name }
+        Smoke.step("reorder drag")
+        touch.send(MotionEvent.ACTION_DOWN, P(0, rb.center.x, rb.center.y))
+        touch.holdRealTime(800)
+        for (s in 1..12) { touch.idle(16); touch.send(MotionEvent.ACTION_MOVE, P(0, rb.center.x, rb.center.y + s * 12f)) }
+        touch.idle(16)
+        touch.send(MotionEvent.ACTION_UP, P(0, rb.center.x, rb.center.y + 144f))
+        touch.idle(300)
+        quiet("reorder drag")
+        assertTrue("the dragged top layer moved down: $order0 -> ${c.doc.layers.map { it.name }}", c.doc.layers.last().name != topName)
+
+        // Everything done through the panel undoes back to the original stack.
+        open = false
+        settle()
+        var guard = 200
+        while (c.canUndo && guard-- > 0) c.undo()
+        assertEquals(originalLayers, c.doc.layers.toList())
+        originalLayers.forEachIndexed { i, l ->
+            val now = IntArray(400 * 300).also { l.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+            assertTrue("layer $i pixels restored", originalPixels[i].contentEquals(now))
+            assertEquals(1f, l.opacity)
+            assertEquals(com.brushwork.paint.model.LayerBlendMode.NORMAL, l.blendMode)
+            assertNull(l.mask)
+        }
+        Smoke.assertQuiet(c, "layers undone")
+    }
+
+    /** The (only) slider on screen: the element with a progress range. */
+    private object RobolectricUiElements {
+        fun slider() = com.brushwork.paint.ui.color.RobolectricUi.elements().last { e ->
+            e.node.config.contains(androidx.compose.ui.semantics.SemanticsActions.SetProgress)
+        }
+    }
+
     // ================================================================== number fields
 
     private fun numberFields() {
@@ -583,7 +674,10 @@ class EditorSmokeTest {
         // the same session and framing, a new canvas view that still draws and undoes.
         val zoom = c.viewTransform.zoom
         val undoBefore = c.undoManager.undoCount
+        // Robolectric's recreate() needs frames to run by themselves (the new window's view root).
+        org.robolectric.shadows.ShadowChoreographer.setPaused(false)
         ctl.recreate()
+        org.robolectric.shadows.ShadowChoreographer.setPaused(true)
         val act = ctl.get()
         settle()
         assertSame("the open document survives recreation", session, app.editorSession)
