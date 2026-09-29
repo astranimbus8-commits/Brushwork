@@ -208,7 +208,13 @@ fun NumberField(
         if (step != null) RepeatIconButton(Icons.Filled.Remove, "Decrease $label", enabled = enabled) { onValueChange((value - step).coerceIn(min, max)) }
         OutlinedTextField(
             value = text,
-            onValueChange = { text = it },
+            onValueChange = {
+                text = it
+                // Commit valid in-range values while typing, so buttons (Apply, presets) that
+                // don't take focus always see the number the user typed.
+                val v = Units.parse(it)
+                if (v != null && v >= min && v <= max) onValueChange(v)
+            },
             label = { Text(label, maxLines = 1) },
             suffix = if (suffix.isNotEmpty()) ({ Text(suffix) }) else null,
             singleLine = true,
