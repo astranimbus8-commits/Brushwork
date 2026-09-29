@@ -115,13 +115,20 @@ internal fun TrimCropTab(
 
     PanelCard {
         CardTitle("Crop to selection")
-        if (sel != null) {
-            val b = sel.bounds
-            CardText("Crops to the selection's bounding box: ${b.width()} × ${b.height()} px at x ${b.left}, y ${b.top}. The selection is removed afterwards.")
-        } else {
-            CardText("Make a selection first; the canvas is cropped to its bounding box.")
+        val selCoversCanvas = sel != null && sel.bounds.width() == curW && sel.bounds.height() == curH
+        when {
+            sel == null -> CardText("Make a selection first; the canvas is cropped to its bounding box.")
+            selCoversCanvas -> CardText("The selection's bounding box already covers the whole canvas.")
+            else -> {
+                val b = sel.bounds
+                CardText("Crops to the selection's bounding box: ${b.width()} × ${b.height()} px at x ${b.left}, y ${b.top}. The selection is removed afterwards.")
+            }
         }
-        ApplyButton("Crop to selection", enabled = !busy && sel != null, onClick = { if (CanvasOps.applyCropToSelection(c)) onApplied() })
+        ApplyButton(
+            "Crop to selection",
+            enabled = !busy && sel != null && !selCoversCanvas,
+            onClick = { if (CanvasOps.applyCropToSelection(c)) onApplied() },
+        )
     }
 
     PanelCard {
@@ -131,6 +138,13 @@ internal fun TrimCropTab(
         var w by rememberSaveable { mutableDoubleStateOf(initial.width().toDouble()) }
         var h by rememberSaveable { mutableDoubleStateOf(initial.height().toDouble()) }
         fun setRect(r: Rect) { x = r.left.toDouble(); y = r.top.toDouble(); w = r.width().toDouble(); h = r.height().toDouble() }
+        // The typed rectangle limited to the canvas.
+        fun clampedRect(): Rect {
+            val l = x.roundToInt().coerceIn(0, curW - 1)
+            val t = y.roundToInt().coerceIn(0, curH - 1)
+            return Rect(l, t, l + w.roundToInt().coerceIn(1, curW - l), t + h.roundToInt().coerceIn(1, curH - t))
+        }
+        val afterCommit = rememberAfterFieldCommit()
 
         Row(verticalAlignment = Alignment.CenterVertically) {
             CardTitle("Crop to rectangle", Modifier.weight(1f))
@@ -147,25 +161,22 @@ internal fun TrimCropTab(
             LengthField("Height", h, { h = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = curH.toDouble())
         }
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            TextButton(onClick = { setRect(Rect(0, 0, curW, curH)) }) { Text("Whole canvas") }
-            TextButton(onClick = { sel?.let { setRect(it.bounds) } }, enabled = sel != null) { Text("Selection") }
-            TextButton(onClick = { painted?.let { setRect(it) } }, enabled = painted != null && !painted.isEmpty) { Text("Painted") }
+            TextButton(onClick = { afterCommit { setRect(Rect(0, 0, curW, curH)) } }) { Text("Whole canvas") }
+            TextButton(onClick = { afterCommit { sel?.let { setRect(it.bounds) } } }, enabled = sel != null) { Text("Selection") }
+            TextButton(onClick = { afterCommit { painted?.let { setRect(it) } } }, enabled = painted != null && !painted.isEmpty) { Text("Painted") }
         }
 
-        val rx = x.roundToInt().coerceIn(0, curW - 1)
-        val ry = y.roundToInt().coerceIn(0, curH - 1)
-        val rw = w.roundToInt().coerceIn(1, curW - rx)
-        val rh = h.roundToInt().coerceIn(1, curH - ry)
-        val clamped = rw != w.roundToInt() || rh != h.roundToInt()
-        val whole = rw == curW && rh == curH
-        CropPreview(curW, curH, rx, ry, rw, rh, thumbnail)
-        Text("Result: $rw × $rh px", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
+        val r = clampedRect()
+        val clamped = r.width() != w.roundToInt() || r.height() != h.roundToInt()
+        val whole = r.width() == curW && r.height() == curH
+        CropPreview(curW, curH, r.left, r.top, r.width(), r.height(), thumbnail)
+        Text("Result: ${r.width()} × ${r.height()} px", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
         if (clamped) Notice("The rectangle was limited to the canvas.", NoticeKind.WARNING)
         if (whole) Notice("The rectangle covers the whole canvas.")
         ApplyButton(
             "Crop",
             enabled = !busy && !whole,
-            onClick = { if (CanvasOps.applyCrop(c, Rect(rx, ry, rx + rw, ry + rh))) onApplied() },
+            onClick = { afterCommit { if (CanvasOps.applyCrop(c, clampedRect())) onApplied() } },
         )
     }
 }
@@ -219,6 +230,7 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     var dpi by rememberSaveable { mutableDoubleStateOf(curDpi) }
     var printUnit by rememberSaveable { mutableStateOf(LengthUnit.CM) }
     val presets = listOf(72, 96, 150, 300, 350, 600)
+    val afterCommit = rememberAfterFieldCommit()
 
     PanelCard {
         InfoRow("Pixels", "${doc.width} × ${doc.height} px")
@@ -232,7 +244,7 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     ChoiceChips(
         presets.map { "$it dpi" },
         presets.indexOfFirst { sameDpi(it.toDouble(), dpi.toFloat()) },
-        { dpi = presets[it].toDouble() },
+        { i -> afterCommit { dpi = presets[i].toDouble() } },
         modifier = Modifier.padding(top = 6.dp),
     )
     UnitHeader("Print size", printUnit, { printUnit = it }, units = listOf(LengthUnit.IN, LengthUnit.CM, LengthUnit.MM, LengthUnit.PT))
@@ -244,7 +256,7 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     ApplyButton(
         "Set ${formatDpi(dpi)} dpi",
         enabled = !busy && !sameDpi(dpi, doc.dpi),
-        onClick = { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() },
+        onClick = { afterCommit { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() } },
     )
 }
 

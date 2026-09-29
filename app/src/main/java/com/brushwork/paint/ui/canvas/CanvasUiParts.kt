@@ -24,7 +24,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalFocusManager
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -52,6 +57,26 @@ import kotlin.math.sin
 import kotlin.math.sign
 
 internal enum class NoticeKind { INFO, WARNING, ERROR }
+
+/**
+ * Returns a runner that first lets a focused number field commit its typed text (fields commit
+ * on focus loss, and tapping a button doesn't move focus), then runs the action one frame later.
+ * Actions must read the current state values themselves, not values captured at composition.
+ */
+@Composable
+internal fun rememberAfterFieldCommit(): (() -> Unit) -> Unit {
+    val focus = LocalFocusManager.current
+    val scope = rememberCoroutineScope()
+    return remember(focus, scope) {
+        { action ->
+            focus.clearFocus()
+            scope.launch {
+                withFrameNanos { }
+                action()
+            }
+        }
+    }
+}
 
 private val WarningColor = Color(0xFFFFC56B)
 

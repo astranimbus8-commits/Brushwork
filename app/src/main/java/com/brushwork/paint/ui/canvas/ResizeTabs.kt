@@ -80,6 +80,7 @@ internal fun ResizeImageTab(
     var resampleIdx by rememberSaveable { mutableIntStateOf(Resample.HIGH_QUALITY.ordinal) }
     val resample = Resample.entries[resampleIdx]
     val budget = remember { CanvasOps.memoryBudget() }
+    val afterCommit = rememberAfterFieldCommit()
 
     val newW = CanvasAdjustMath.toPixels(wPx)
     val newH = CanvasAdjustMath.toPixels(hPx)
@@ -131,7 +132,7 @@ internal fun ResizeImageTab(
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         for (p in intArrayOf(25, 50, 100, 200, 400)) {
             OutlinedButton(
-                onClick = { wPx = curW * p / 100.0; hPx = curH * p / 100.0 },
+                onClick = { afterCommit { wPx = curW * p / 100.0; hPx = curH * p / 100.0 } },
                 modifier = Modifier.weight(1f).heightIn(min = 40.dp),
                 contentPadding = PaddingValues(horizontal = 2.dp),
             ) { Text("$p%", maxLines = 1) }
@@ -174,7 +175,16 @@ internal fun ResizeImageTab(
     ApplyButton(
         text = if (!sizeChanged && dpiChanged) "Change resolution" else "Resize image",
         enabled = !busy && error == null && (sizeChanged || dpiChanged),
-        onClick = { if (CanvasOps.applyResizeImage(c, newW, newH, dpi.toFloat(), resample)) onApplied() },
+        onClick = {
+            afterCommit {
+                val w = CanvasAdjustMath.toPixels(wPx)
+                val h = CanvasAdjustMath.toPixels(hPx)
+                // Re-checked here: a just-committed field may have changed the numbers.
+                if (CanvasOps.validateSize(w, h, bitmaps, budget) == null &&
+                    CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])
+                ) onApplied()
+            }
+        },
     )
 }
 
@@ -199,6 +209,7 @@ internal fun CanvasSizeTab(
     var fillColor by rememberSaveable { mutableIntStateOf(0xFFFFFFFF.toInt()) }
     var picking by remember { mutableStateOf(false) }
     val budget = remember { CanvasOps.memoryBudget() }
+    val afterCommit = rememberAfterFieldCommit()
 
     val newW = CanvasAdjustMath.toPixels(wPx)
     val newH = CanvasAdjustMath.toPixels(hPx)
@@ -264,8 +275,15 @@ internal fun CanvasSizeTab(
         text = "Change canvas size",
         enabled = !busy && error == null && (newW != curW || newH != curH),
         onClick = {
-            val fill = if (fillEnabled && grows) fillColor else null
-            if (CanvasOps.applyResizeCanvas(c, newW, newH, anchor % 3, anchor / 3, fill)) onApplied()
+            afterCommit {
+                val w = CanvasAdjustMath.toPixels(wPx)
+                val h = CanvasAdjustMath.toPixels(hPx)
+                val growsNow = w > curW || h > curH
+                val fill = if (fillEnabled && growsNow) fillColor else null
+                if (CanvasOps.validateSize(w, h, bitmaps, budget) == null &&
+                    CanvasOps.applyResizeCanvas(c, w, h, anchor % 3, anchor / 3, fill)
+                ) onApplied()
+            }
         },
     )
 
