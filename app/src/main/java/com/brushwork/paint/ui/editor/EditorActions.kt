@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import com.brushwork.paint.BrushworkApp
@@ -73,7 +74,7 @@ internal class EditorActions(private val controller: EditorController, private v
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             val chooser = Intent.createChooser(send, "Share artwork").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            val activity = context as? Activity
+            val activity = context.findActivity()
             try {
                 if (activity != null && !activity.isFinishing && !activity.isDestroyed) {
                     activity.startActivity(chooser)
@@ -84,6 +85,13 @@ internal class EditorActions(private val controller: EditorController, private v
                 controller.toast("No app available to share with")
             }
         }
+    }
+
+    /** The hosting activity (LocalContext may be a ContextWrapper around it). */
+    private tailrec fun Context.findActivity(): Activity? = when (this) {
+        is Activity -> this
+        is ContextWrapper -> baseContext.findActivity()
+        else -> null
     }
 
     /** Bakes uncommitted tool work (placed text, transform...) so exports include it. */
