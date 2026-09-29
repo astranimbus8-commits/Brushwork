@@ -93,7 +93,7 @@ class DistortFiltersTest {
         val expected = setOf(
             "distort.expansion", "distort.fish_lens", "distort.sphere_lens", "distort.wave", "distort.ripple",
             "distort.twirl", "distort.polar_coordinates", "distort.tile_count", "distort.tile_size",
-            "frame.blur_frame", "frame.rain",
+            "frame.blur_frame", "frame.rain", "frame.table_count", "frame.table_size",
         )
         assertEquals(expected, ids)
         for (f in distortFilters) {

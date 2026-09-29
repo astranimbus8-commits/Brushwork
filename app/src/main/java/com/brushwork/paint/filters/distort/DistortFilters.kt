@@ -15,4 +15,6 @@ val distortFilters: List<Filter> = listOf(
     TileSizeFilter(),
     BlurFrameFilter(),
     RainFilter(),
+    TableCountFilter(),
+    TableSizeFilter(),
 )

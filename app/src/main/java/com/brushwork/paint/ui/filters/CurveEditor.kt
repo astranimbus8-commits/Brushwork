@@ -39,7 +39,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.filters.CurvePoint
-import com.brushwork.paint.filters.MonotoneCubic
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
@@ -64,7 +63,8 @@ fun CurveEditor(
     var selected by remember { mutableIntStateOf(-1) }
     var removing by remember { mutableStateOf(false) }
     val shown = current
-    val samples = remember(shown) { MonotoneCubic(shown).sample(161) }
+    // Same interpolation as the Tone Curve filter, so the drawn curve is exactly what gets applied.
+    val samples = remember(shown) { com.brushwork.paint.filters.adjust.AdjustMath.sampleCurve(shown, 161) }
     val heights = remember(histogram) { histogram?.let { CurveEditing.histogramHeights(it) } }
 
     Column(modifier.fillMaxWidth()) {
