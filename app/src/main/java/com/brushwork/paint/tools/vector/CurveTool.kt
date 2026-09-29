@@ -2,7 +2,6 @@ package com.brushwork.paint.tools.vector
 
 import android.graphics.Canvas
 import android.graphics.Path
-import android.graphics.Rect
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -98,8 +97,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     /** Time source for coalescing numeric edits (replaceable in tests). */
     internal var clock: () -> Long = { SystemClock.uptimeMillis() }
     private var targetLayer: Layer? = null
-    private var preview: VectorPreview? = null
-    private var previewDirty = Rect()
+    private val preview = PreviewHost(controller)
     private var observeJob: Job? = null
 
     private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, IGNORE }
@@ -385,32 +383,11 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private fun changed() {
         if (anchors.isNotEmpty()) ensureObserving()
         if (anchors.size >= 2) path().toAndroidPath(docPath) else docPath.rewind()
-        val specs = buildSpecs()
-        if (specs.isEmpty()) {
-            releasePreview()
-        } else {
-            val layer = targetLayer ?: controller.doc.activeLayer
-            val pv = preview?.takeIf { it.layer === layer } ?: run {
-                releasePreview()
-                VectorPreview(controller, layer).also { preview = it }
-            }
-            pv.specs = specs
-            if (controller.renderOverride !== pv) controller.renderOverride = pv
-            val dirty = pv.dirtyRect()
-            val inv = Rect(previewDirty).apply { union(dirty) }
-            previewDirty = dirty
-            if (!inv.isEmpty) controller.invalidateDoc(inv)
-        }
+        preview.show(targetLayer ?: controller.doc.activeLayer, buildSpecs())
         controller.invalidateOverlay()
     }
 
-    private fun releasePreview() {
-        val pv = preview
-        if (pv != null && controller.renderOverride === pv) controller.renderOverride = null
-        preview = null
-        if (!previewDirty.isEmpty) controller.invalidateDoc(Rect(previewDirty))
-        previewDirty = Rect()
-    }
+    private fun releasePreview() = preview.release()
 
     // ------------------------------------------------------------------ commit / discard
 

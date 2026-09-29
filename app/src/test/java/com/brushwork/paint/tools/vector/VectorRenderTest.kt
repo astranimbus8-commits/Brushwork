@@ -173,5 +173,63 @@ class VectorRenderTest {
         assertEquals(0, layer.bitmap.getPixel(10, 80))
     }
 
+    @Test
+    fun hollowShapeRegionsSkipTheInterior() {
+        val outline = ShapeGeometry.outline(ShapeType.RECTANGLE, ShapeBox(2000f, 2500f, 3800f, 4800f, 0f), OutlineParams())
+        val spec = VectorPaintSpec.build(null, 0, outline, red, 12f, LineCapStyle.ROUND, JoinStyle.MITER)!!
+        assertTrue(spec.regions.size > 4)
+        assertFalse(spec.regions.any { it.contains(2000, 2500) })
+        assertFalse(spec.regions.any { it.contains(1000, 1000) })
+        // Every corner and edge midpoint of the outline is covered.
+        for ((x, y) in listOf(100 to 100, 3900 to 100, 3900 to 4900, 100 to 4900, 2000 to 100, 3900 to 2500)) {
+            assertTrue("($x, $y)", spec.regions.any { it.contains(x, y) })
+        }
+        // Filled shapes cover their whole bounds.
+        val filled = VectorPaintSpec.build(outline, red, outline, red, 12f, LineCapStyle.ROUND, JoinStyle.MITER)!!
+        assertTrue(filled.regions.any { it.contains(2000, 2500) })
+        // A huge off-canvas shape falls back to its bounds instead of thousands of boxes.
+        val huge = ShapeGeometry.outline(ShapeType.ELLIPSE, ShapeBox(0f, 0f, 100_000f, 100_000f, 0f), OutlineParams())
+        val hugeSpec = VectorPaintSpec.build(null, 0, huge, red, 4f)!!
+        assertEquals(1, hugeSpec.regions.size)
+    }
+
+    /** Thick miters, square caps, star tips and arrowheads all stay inside the regions, so undo restores everything. */
+    @Test
+    fun everyPaintedPixelLiesInsideTheRegions() {
+        val specs = listOf(
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.RECTANGLE, ShapeBox(150f, 150f, 180f, 120f, 30f), OutlineParams()), red, 24f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.STAR, ShapeBox(150f, 150f, 220f, 220f, 17f), OutlineParams(starPoints = 7, innerRatio = 0.3f)), red, 8f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.ELLIPSE, ShapeBox(150f, 150f, 260f, 90f, -40f), OutlineParams()), red, 30f, LineCapStyle.ROUND, JoinStyle.ROUND)!!,
+            VectorPaintSpec.build(
+                null, 0,
+                CurveGeometry.toPath(listOf(CurveAnchor(20f, 280f), CurveAnchor(120f, 20f, sharp = true), CurveAnchor(280f, 260f)), false, 0f, false),
+                red, 16f, LineCapStyle.SQUARE, JoinStyle.MITER,
+            )!!,
+            ShapeGeometry.arrow(Vec2(30f, 40f), Vec2(270f, 200f), 10f, ArrowHeads.BOTH, ArrowHeadStyle.FILLED, 4f).let {
+                VectorPaintSpec.build(null, 0, it.stroke, red, 10f, LineCapStyle.SQUARE, JoinStyle.ROUND, it.fill)!!
+            },
+        )
+        for ((i, spec) in specs.withIndex()) {
+            for (withSelection in listOf(false, true)) {
+                val c = controller(300, 300)
+                val layer = c.doc.activeLayer
+                if (withSelection) c.setSelection(Selection.all(300, 300), recordUndo = false) // tiled path
+                assertTrue(VectorCommit.commit(c, layer, listOf(spec), "Shape"))
+                val px = IntArray(300 * 300)
+                layer.bitmap.getPixels(px, 0, 300, 0, 0, 300, 300)
+                var painted = 0
+                for (y in 0 until 300) for (x in 0 until 300) {
+                    if (px[y * 300 + x] == 0) continue
+                    painted++
+                    assertTrue("spec $i sel=$withSelection pixel ($x, $y)", spec.regions.any { it.contains(x, y) })
+                }
+                assertTrue(painted > 100)
+                c.undo()
+                layer.bitmap.getPixels(px, 0, 300, 0, 0, 300, 300)
+                assertTrue("spec $i sel=$withSelection undo", px.all { it == 0 })
+            }
+        }
+    }
+
     private data class Rect4(val l: Int, val t: Int, val r: Int, val b: Int)
 }

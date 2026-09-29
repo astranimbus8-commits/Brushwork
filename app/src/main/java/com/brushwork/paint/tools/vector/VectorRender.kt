@@ -18,12 +18,23 @@ import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
 /** Miter limit for sharp corners (the default 4 would bevel acute star tips). */
 internal const val MITER_LIMIT = 10f
+
+/** Stroke bands are split into boxes of about this size (document px). */
+private const val REGION_CHUNK = 128f
+
+/** Beyond this many band boxes a spec just uses its bounds. */
+private const val MAX_REGIONS = 256
+
+/** Flattening tolerance used for the stroke bands (added to their outset). */
+private const val REGION_TOLERANCE = 0.5f
 
 /** Converts to an android [Path] (reusing [out]). */
 fun VectorPath.toAndroidPath(out: Path = Path()): Path {
@@ -42,7 +53,9 @@ fun VectorPath.toAndroidPath(out: Path = Path()): Path {
 /**
  * Everything needed to draw one vector item into a layer: an optional filled path, an optional
  * stroked path and optional extra paths filled with the stroke color (arrowheads). Document
- * pixels. [bounds] covers everything that can be painted (stroke width, miters, anti-aliasing).
+ * pixels. [bounds] covers everything that can be painted (stroke width, miters, anti-aliasing);
+ * [regions] is a tighter conservative cover (a band of boxes along a stroke-only outline), so a
+ * large hollow shape neither redraws nor snapshots its untouched interior.
  */
 class VectorPaintSpec private constructor(
     val fill: Path?,
@@ -54,6 +67,7 @@ class VectorPaintSpec private constructor(
     val join: JoinStyle,
     val strokeFill: Path?,
     val bounds: RectF,
+    val regions: List<Rect>,
 ) {
     companion object {
         /** Builds a spec; returns null when there is nothing to draw. */
@@ -72,15 +86,20 @@ class VectorPaintSpec private constructor(
             val sf = strokeFill?.takeUnless { it.isEmpty }
             if (f == null && s == null && sf == null) return null
             var b: Bounds? = null
-            f?.controlBounds()?.let { b = it.outset(2f) }
+            val regions = ArrayList<Rect>()
+            f?.controlBounds()?.let { b = it.outset(2f); regions += it.outset(2f).toRect() }
             s?.controlBounds()?.let {
                 val joinFactor = if (join == JoinStyle.MITER) MITER_LIMIT else 1f
                 val capFactor = if (cap == LineCapStyle.SQUARE) sqrt(2f) else 1f
-                val o = it.outset(strokeWidth / 2f * max(joinFactor, capFactor) + 2f)
+                // How far paint can reach from the path: miter tips / square caps, plus anti-aliasing.
+                val reach = strokeWidth / 2f * max(joinFactor, capFactor) + 2f
+                val o = it.outset(reach)
                 b = b?.union(o) ?: o
+                strokeRegions(s, reach + REGION_TOLERANCE, regions)
             }
-            sf?.controlBounds()?.let { val o = it.outset(2f); b = b?.union(o) ?: o }
+            sf?.controlBounds()?.let { val o = it.outset(2f); b = b?.union(o) ?: o; regions += o.toRect() }
             val bb = b ?: return null
+            if (regions.size > MAX_REGIONS) { regions.clear(); regions += bb.toRect() }
             return VectorPaintSpec(
                 fill = f?.toAndroidPath(),
                 fillColor = fillColor,
@@ -91,7 +110,40 @@ class VectorPaintSpec private constructor(
                 join = join,
                 strokeFill = sf?.toAndroidPath(),
                 bounds = RectF(bb.left, bb.top, bb.right, bb.bottom),
+                regions = regions,
             )
+        }
+
+        private fun Bounds.toRect() = Rect(floor(left).toInt(), floor(top).toInt(), ceil(right).toInt(), ceil(bottom).toInt())
+
+        /**
+         * Boxes covering everything within [reach] of the stroked [path]: the flattened outline is
+         * cut into pieces of at most [REGION_CHUNK] and each piece's box is grown by [reach].
+         */
+        private fun strokeRegions(path: VectorPath, reach: Float, out: MutableList<Rect>) {
+            for (poly in path.flatten(REGION_TOLERANCE)) {
+                val pts = poly.points
+                if (pts.isEmpty()) continue
+                var l = pts[0].x; var t = pts[0].y; var r = l; var b = t
+                fun emit() = Bounds(l, t, r, b).outset(reach).toRect().let { out += it }
+                val n = if (poly.closed && pts.size > 1) pts.size + 1 else pts.size
+                var prev = pts[0]
+                for (i in 1 until n) {
+                    val q = pts[i % pts.size]
+                    val pieces = max(1, ceil(prev.distanceTo(q) / REGION_CHUNK).toInt()).coerceAtMost(MAX_REGIONS * 4)
+                    for (k in 1..pieces) {
+                        val p = prev.lerp(q, k.toFloat() / pieces)
+                        l = min(l, p.x); t = min(t, p.y); r = max(r, p.x); b = max(b, p.y)
+                        if (r - l >= REGION_CHUNK || b - t >= REGION_CHUNK) {
+                            emit()
+                            l = p.x; t = p.y; r = p.x; b = p.y
+                        }
+                    }
+                    prev = q
+                    if (out.size > MAX_REGIONS) return
+                }
+                emit()
+            }
         }
     }
 
@@ -186,16 +238,23 @@ object VectorCommit {
     fun commit(controller: EditorController, layer: Layer, specs: List<VectorPaintSpec>, label: String): Boolean {
         val doc = controller.doc
         if (specs.isEmpty() || doc.indexOf(layer) < 0) return false
-        val r = Rect()
-        val tmp = Rect()
-        for (s in specs) { s.boundsRect(tmp); r.union(tmp) }
-        if (!r.intersect(0, 0, doc.width, doc.height)) return false
         val sel = controller.selection
-        if (sel != null && !r.intersect(sel.bounds)) return false
+        // Only the regions the specs can paint (inside the canvas and the selection) are
+        // snapshotted for undo; a hollow shape leaves its interior tiles alone.
+        val regions = ArrayList<Rect>()
+        for (s in specs) for (sr in s.regions) {
+            val q = Rect(sr)
+            if (!q.intersect(0, 0, doc.width, doc.height)) continue
+            if (sel != null && !q.intersect(sel.bounds)) continue
+            regions += q
+        }
+        if (regions.isEmpty()) return false
+        val r = Rect(regions[0])
+        for (q in regions) r.union(q)
         val rec = controller.beginEdit(layer)
         val maskMode = rec.target == EditTarget.MASK
         val target = if (maskMode) layer.mask ?: return false else layer.bitmap
-        rec.touch(r)
+        for (q in regions) rec.touch(q)
         val canvas = Canvas(target)
         val renderer = VectorRenderer()
         val locked = layer.alphaLocked && !maskMode
@@ -206,17 +265,24 @@ object VectorCommit {
             canvas.restore()
         } else {
             // Offscreen layers are needed for the selection / alpha lock: work in bounded tiles so
-            // a canvas-sized shape never allocates a canvas-sized layer.
+            // a canvas-sized shape never allocates a canvas-sized layer, and skip tiles no spec
+            // can reach.
             val tile = Rect()
             var y = r.top
             while (y < r.bottom) {
                 var x = r.left
                 while (x < r.right) {
                     tile.set(x, y, min(x + TILE, r.right), min(y + TILE, r.bottom))
-                    canvas.save()
-                    canvas.clipRect(tile)
-                    for (s in specs) renderer.drawClipped(canvas, s, sel, locked, tile, maskMode, doc.colorMode)
-                    canvas.restore()
+                    if (regions.any { Rect.intersects(it, tile) }) {
+                        canvas.save()
+                        canvas.clipRect(tile)
+                        for (s in specs) {
+                            if (s.regions.any { Rect.intersects(it, tile) }) {
+                                renderer.drawClipped(canvas, s, sel, locked, tile, maskMode, doc.colorMode)
+                            }
+                        }
+                        canvas.restore()
+                    }
                     x += TILE
                 }
                 y += TILE
@@ -269,5 +335,46 @@ class VectorPreview(private val controller: EditorController, override val layer
         val tmp = Rect()
         for (s in specs) { s.boundsRect(tmp); r.union(tmp) }
         return r
+    }
+}
+
+/**
+ * Keeps one tool's [VectorPreview] installed as the controller's render override and redraws
+ * only the regions that the old and the new items cover (not their whole bounding boxes).
+ */
+internal class PreviewHost(private val controller: EditorController) {
+    private var preview: VectorPreview? = null
+    private var shown: List<Rect> = emptyList()
+
+    /** Previews [specs] on [layer]; an empty list removes the preview. */
+    fun show(layer: Layer, specs: List<VectorPaintSpec>) {
+        if (specs.isEmpty()) { release(); return }
+        val p = preview?.takeIf { it.layer === layer } ?: run {
+            release()
+            VectorPreview(controller, layer).also { preview = it }
+        }
+        p.specs = specs
+        if (controller.renderOverride !== p) controller.renderOverride = p
+        val regions = ArrayList<Rect>()
+        for (s in specs) regions += s.regions
+        invalidate(shown)
+        invalidate(regions)
+        shown = regions
+    }
+
+    /** Removes the preview (if it is still installed) and redraws what it covered. */
+    fun release() {
+        val p = preview
+        if (p != null && controller.renderOverride === p) controller.renderOverride = null
+        preview = null
+        invalidate(shown)
+        shown = emptyList()
+    }
+
+    private fun invalidate(rects: List<Rect>) {
+        if (rects.isEmpty()) return
+        val tiles = controller.tiles
+        for (r in rects) tiles.invalidate(r)
+        controller.invalidateOverlay()
     }
 }
