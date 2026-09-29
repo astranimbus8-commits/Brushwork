@@ -91,6 +91,49 @@ class LayerListMathTest {
     }
 
     @Test
+    fun draggedRowIsKeptInsideTheViewport() {
+        assertEquals(50f, LayerListMath.clampRowTop(50f, 100f, 0f, 600f), 0f)
+        assertEquals(0f, LayerListMath.clampRowTop(-80f, 100f, 0f, 600f), 0f)
+        assertEquals(500f, LayerListMath.clampRowTop(900f, 100f, 0f, 600f), 0f)
+        // A row taller than the viewport is left alone.
+        assertEquals(-30f, LayerListMath.clampRowTop(-30f, 100f, 0f, 60f), 0f)
+    }
+
+    @Test
+    fun edgeScrollOnlyInTheDragDirectionInsideTheZone() {
+        val size = 100f
+        fun speed(top: Float, travel: Float) = LayerListMath.edgeScrollSpeed(top, size, travel, 0f, 600f)
+        // Middle of the list: nothing.
+        assertEquals(0f, speed(250f, 120f), 0f)
+        assertEquals(0f, speed(250f, -120f), 0f)
+        // At the bottom edge while dragging down: scrolls down; dragging up there: nothing.
+        assertTrue(speed(500f, 120f) > 0f)
+        assertEquals(0f, speed(500f, -120f), 0f)
+        // At the top edge while dragging up: scrolls up.
+        assertTrue(speed(0f, -120f) < 0f)
+        assertEquals(0f, speed(0f, 120f), 0f)
+        // A jitter right after the long press (less than a quarter row) never scrolls.
+        assertEquals(0f, speed(500f, 10f), 0f)
+        assertEquals(0f, speed(0f, 0f), 0f)
+    }
+
+    @Test
+    fun edgeScrollRampsAndIsCappedBelowOneRowPerFrame() {
+        val size = 100f
+        fun speed(top: Float) = LayerListMath.edgeScrollSpeed(top, size, 200f, 0f, 600f)
+        // Zone is 60 px: the bottom of the row at 570 is halfway in.
+        val half = speed(470f)
+        val full = speed(540f)
+        val beyond = speed(5000f)
+        assertEquals(size * 9f * 0.5f, half, 0.01f)
+        assertEquals(size * 9f, full, 0.01f)
+        assertEquals(full, beyond, 0f)
+        // Even a slow 50 ms frame moves less than half a row.
+        assertTrue(beyond * 0.05f < size / 2f)
+        assertEquals(0f, LayerListMath.edgeScrollSpeed(500f, 0f, 200f, 0f, 600f), 0f)
+    }
+
+    @Test
     fun throttleAllowsAtMostOnePerInterval() {
         val t = PreviewThrottle(33)
         assertTrue(t.offer(1000))

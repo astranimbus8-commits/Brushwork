@@ -17,17 +17,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
  * Long-press-drag reordering for a LazyColumn (rows must be keyed). While dragging, the caller
  * keeps a LOCAL order and applies [onMove] swaps to it; the real move happens once in [onDrop].
- * Offsets are in pixels relative to the list viewport.
+ * Offsets are in pixels relative to the list viewport. Holding the row against the top or bottom
+ * edge scrolls the list continuously (see [autoScrollSpeed]).
  */
 class ReorderState internal constructor(
     val listState: LazyListState,
@@ -46,8 +52,6 @@ class ReorderState internal constructor(
         private set
     val settleOffset = Animatable(0f)
 
-    internal val scrollChannel = Channel<Float>(Channel.CONFLATED)
-
     private var draggedDelta by mutableFloatStateOf(0f)
     private var initialOffset by mutableIntStateOf(0)
 
@@ -56,7 +60,20 @@ class ReorderState internal constructor(
 
     /** Vertical translation to apply to the dragged row. */
     val draggingOffset: Float
-        get() = draggingItemInfo?.let { initialOffset + draggedDelta - it.offset } ?: 0f
+        get() = draggingItemInfo?.let { visualTop(it.size) - it.offset } ?: 0f
+
+    /**
+     * Where the dragged row is drawn: under the finger, but kept inside the viewport so that a
+     * finger beyond the list edge pins it there (its slot then follows it while auto-scrolling
+     * instead of scrolling out of view).
+     */
+    private fun visualTop(size: Int): Float {
+        val info = listState.layoutInfo
+        return LayerListMath.clampRowTop(
+            initialOffset + draggedDelta, size.toFloat(),
+            info.viewportStartOffset.toFloat(), info.viewportEndOffset.toFloat(),
+        )
+    }
 
     val isDragging: Boolean get() = draggingIndex != null
 
@@ -73,29 +90,44 @@ class ReorderState internal constructor(
 
     internal fun drag(dy: Float) {
         draggedDelta += dy
+        moveUnderDraggedRow()
+    }
+
+    /**
+     * Swaps the dragged row into the slot under its middle when that belongs to another row.
+     * The row is drawn at [visualTop] (it follows the finger, not its slot).
+     */
+    internal fun moveUnderDraggedRow() {
         val dragging = draggingItemInfo ?: return
-        val start = dragging.offset + draggingOffset
-        val end = start + dragging.size
-        val middle = (start + end) / 2f
+        val middle = visualTop(dragging.size) + dragging.size / 2f
         val target = listState.layoutInfo.visibleItemsInfo.firstOrNull {
             middle.toInt() in it.offset..(it.offset + it.size) && it.index != dragging.index
+        } ?: return
+        // Keep the scroll anchor from following the moved row when the first row is involved.
+        if (dragging.index == listState.firstVisibleItemIndex || target.index == listState.firstVisibleItemIndex) {
+            listState.requestScrollToItem(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
         }
-        if (target != null) {
-            // Keep the scroll anchor from following the moved row when the first row is involved.
-            if (dragging.index == listState.firstVisibleItemIndex || target.index == listState.firstVisibleItemIndex) {
-                listState.requestScrollToItem(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
-            }
-            onMove(dragging.index, target.index)
-            draggingIndex = target.index
-        } else {
-            val info = listState.layoutInfo
-            val overscroll = when {
-                draggedDelta > 0 -> (end - info.viewportEndOffset).coerceAtLeast(0f)
-                draggedDelta < 0 -> (start - info.viewportStartOffset).coerceAtMost(0f)
-                else -> 0f
-            }
-            if (overscroll != 0f) scrollChannel.trySend(overscroll)
-        }
+        onMove(dragging.index, target.index)
+        draggingIndex = target.index
+    }
+
+    /**
+     * Auto-scroll velocity in px/s (negative = up) while the dragged row is pushed into the edge
+     * zone of the list in the direction it was dragged; 0 otherwise (see
+     * [LayerListMath.edgeScrollSpeed]). Measured from the finger, not the clamped row. The speed
+     * cap (9 rows/s) keeps each frame far below one row, so the dragged slot stays composed.
+     */
+    internal fun autoScrollSpeed(): Float {
+        if (draggingIndex == null) return 0f
+        val size = draggingItemInfo?.size ?: return 0f
+        val info = listState.layoutInfo
+        return LayerListMath.edgeScrollSpeed(
+            top = initialOffset + draggedDelta,
+            size = size.toFloat(),
+            travel = draggedDelta,
+            viewportStart = info.viewportStartOffset.toFloat(),
+            viewportEnd = info.viewportEndOffset.toFloat(),
+        )
     }
 
     internal fun end(commit: Boolean) {
@@ -144,10 +176,31 @@ fun rememberReorderState(
         )
     }
     LaunchedEffect(state) {
-        for (diff in state.scrollChannel) listState.scrollBy(diff)
+        snapshotFlow { state.isDragging }.collectLatest { dragging ->
+            if (!dragging) return@collectLatest
+            var lastFrame = 0L
+            while (true) {
+                val now = withFrameNanos { it }
+                val dt = if (lastFrame == 0L) 0f else ((now - lastFrame) / 1e9f).coerceAtMost(MAX_FRAME_S)
+                lastFrame = now
+                val step = state.autoScrollSpeed() * dt
+                if (step == 0f) continue
+                val consumed = try {
+                    listState.scrollBy(step)
+                } catch (e: CancellationException) {
+                    // A swap's requestScrollToItem cancels a scroll in progress; only stop when
+                    // this loop itself was cancelled (drag ended / panel closed).
+                    currentCoroutineContext().ensureActive()
+                    0f
+                }
+                if (consumed != 0f) state.moveUnderDraggedRow()
+            }
+        }
     }
     return state
 }
+
+private const val MAX_FRAME_S = 0.05f
 
 /** Attach to the LazyColumn: long-press a row, then drag it. */
 fun Modifier.reorderContainer(state: ReorderState): Modifier =

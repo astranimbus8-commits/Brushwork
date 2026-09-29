@@ -52,6 +52,40 @@ object LayerListMath {
     /** [clipStructure] re-ordered for top-first display. */
     fun clipStructureForDisplay(clippingDocOrder: List<Boolean>): List<ClipInfo> =
         clipStructure(clippingDocOrder).asReversed()
+
+    /**
+     * Top of a dragged row of height [size] whose finger-following top is [top], kept inside the
+     * viewport [viewportStart]..[viewportEnd] (unchanged when the row is taller than the viewport).
+     */
+    fun clampRowTop(top: Float, size: Float, viewportStart: Float, viewportEnd: Float): Float {
+        val max = viewportEnd - size
+        return if (max < viewportStart) top else top.coerceIn(viewportStart, max)
+    }
+
+    /**
+     * Edge auto-scroll velocity in px/s (negative = up) for a dragged row of height [size] whose
+     * finger-following top is [top], after a total finger travel of [travel] px (its sign is the
+     * drag direction). Non-zero only once the row entered the edge zone ([edgeZone] rows deep)
+     * on the side it is being dragged towards, after at least [startTravel] rows of travel;
+     * ramps linearly to [maxRowsPerSecond] rows/s at the full zone depth.
+     */
+    fun edgeScrollSpeed(
+        top: Float,
+        size: Float,
+        travel: Float,
+        viewportStart: Float,
+        viewportEnd: Float,
+        edgeZone: Float = 0.6f,
+        startTravel: Float = 0.25f,
+        maxRowsPerSecond: Float = 9f,
+    ): Float {
+        if (size <= 0f || travel == 0f || kotlin.math.abs(travel) < size * startTravel) return 0f
+        val zone = size * edgeZone
+        val depth = if (travel > 0f) (top + size) - (viewportEnd - zone) else (viewportStart + zone) - top
+        if (depth <= 0f) return 0f
+        val speed = size * maxRowsPerSecond * (depth / zone).coerceAtMost(1f)
+        return if (travel > 0f) speed else -speed
+    }
 }
 
 /**
