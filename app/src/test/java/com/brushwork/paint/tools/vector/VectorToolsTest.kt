@@ -408,8 +408,10 @@ class VectorToolsTest {
         tool.deleteAnchor(0)
         assertFalse(tool.hasPendingWork)
         assertNull(c.renderOverride)
-        // The next path goes to whatever layer is active then.
+        assertTrue(tool.canUndoStep) // the deletion itself can still be undone in the tool...
+        // ...until the tool is deactivated. The next path goes to whatever layer is active then.
         val second = c.addLayer("Second")!!
+        assertFalse(tool.canUndoStep)
         tool.update { it.copy(stroke = CurveStroke.PLAIN) }
         c.tap(20f, 20f); c.tap(180f, 20f)
         tool.commit()

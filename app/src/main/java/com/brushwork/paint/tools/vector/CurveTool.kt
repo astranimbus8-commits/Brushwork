@@ -477,8 +477,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         observeJob = null
         drag = Drag.NONE
         if (hasPendingWork) commit()
-        if (hasPendingWork) discard()
-        releasePreview()
+        // Drops a path whose layer refused the commit (locked / hidden) and any in-tool history
+        // left over from a path whose points were all deleted.
+        clear()
     }
 
     // ------------------------------------------------------------------ overlay
