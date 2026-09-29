@@ -95,6 +95,17 @@ class PaletteStoreRobolectricTest {
     }
 
     @Test
+    fun singleChannelSettersKeepTheOtherChannels() {
+        val s = ColorEditState(0x80102030.toInt(), Hsb.fromColor(0x80102030.toInt())) {}
+        s.setRed(200)
+        s.setGreen(100)
+        s.setBlue(300)
+        assertEquals(ColorUtils.argb(0x80, 200, 100, 255), s.color)
+        s.setRed(-4)
+        assertEquals(ColorUtils.argb(0x80, 0, 100, 255), s.color)
+    }
+
+    @Test
     fun editStateClampsInput() {
         val s = ColorEditState(0xFF000000.toInt(), Hsb(0f, 0f, 0f)) {}
         s.setHsb(h = 400f, s = 2f, b = -1f)

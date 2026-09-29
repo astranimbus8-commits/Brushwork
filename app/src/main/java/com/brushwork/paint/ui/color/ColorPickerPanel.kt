@@ -27,6 +27,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ColorModeOps
@@ -48,7 +49,8 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
     val store = rememberPaletteStore()
     val previous = rememberSaveable { controller.color or OPAQUE }
     val state = rememberColorEditState(controller.color or OPAQUE) { c -> controller.color = c or OPAQUE }
-    val colorMode = controller.doc.colorMode
+    // Document.colorMode isn't observable; every mode change (and its undo) bumps docVersion.
+    val colorMode = remember(controller.docVersion) { controller.doc.colorMode }
     val display: (Int) -> Int = remember(colorMode) { { c -> ColorModeOps.displayColor(c, colorMode) } }
     val mode = PickerMode.entries.getOrElse(store.data.pickerMode) { PickerMode.WHEEL }
 
@@ -91,7 +93,9 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
             }
         },
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // The sheet is its own window: its focus manager is only visible inside the content.
+        val focusManager = LocalFocusManager.current
+        Row(Modifier.clearFocusOnPress(focusManager), verticalAlignment = Alignment.CenterVertically) {
             CompareSwatch(
                 previous = display(previous),
                 current = display(state.color),

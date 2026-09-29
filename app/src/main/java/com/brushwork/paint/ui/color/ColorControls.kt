@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -35,14 +36,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalFocusManager
@@ -78,11 +82,26 @@ private fun wheelLayout(sizePx: Float, density: Density): WheelLayout =
     WheelLayout(sizePx, sizePx * 0.12f, with(density) { 4.dp.toPx() })
 
 /**
+ * Clears text-field focus as soon as a touch starts here. A numeric or hex field that is being
+ * edited then commits BEFORE this control changes the color; otherwise its later focus-loss
+ * commit would re-apply the stale typed value over the change made here. Also hides the keyboard.
+ * Must be given the focus manager of the window the control lives in (sheets and dialogs are
+ * separate windows), i.e. read `LocalFocusManager.current` inside their content.
+ */
+internal fun Modifier.clearFocusOnPress(focusManager: FocusManager): Modifier = pointerInput(focusManager) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        focusManager.clearFocus()
+    }
+}
+
+/**
  * HSB wheel: drag the ring to change hue, the inner square to change saturation (x) and
  * brightness (y). Consumes its gestures so an enclosing scroll/sheet doesn't move.
  */
 @Composable
 fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
+    val focusManager = LocalFocusManager.current
     Box(
         modifier
             .aspectRatio(1f)
@@ -90,6 +109,7 @@ fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
                 contentDescription = "Color wheel"
                 stateDescription = "Hue ${state.hsb.displayH()}°, saturation ${state.hsb.displayS()}%, brightness ${state.hsb.displayB()}%"
             }
+            .clearFocusOnPress(focusManager)
             .pointerInput(state) {
                 awaitEachGesture {
                     val down = awaitFirstDown(requireUnconsumed = false)
@@ -111,6 +131,8 @@ fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
                 }
             }
             .drawWithCache {
+                // Everything that depends only on the size is built once per size; the square's
+                // white -> hue gradient only when the hue changes (not on S/B drags).
                 val layout = wheelLayout(size.width, this)
                 val center = Offset(layout.center, layout.center)
                 val ring = Brush.sweepGradient(HUE_COLORS, center)
@@ -120,31 +142,41 @@ fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
                 val darken = Brush.verticalGradient(listOf(Color.Transparent, Color.Black), startY = layout.squareTop, endY = layout.squareTop + layout.squareSide)
                 val ringThumb = layout.ringWidth / 2f - 1.dp.toPx()
                 val svThumb = 11.dp.toPx()
+                val thumb = ThumbStyle(this)
+                var squareHue = Float.NaN
+                var square: Brush = SolidColor(Color.White)
                 onDrawBehind {
                     // Hue 0 at the top: the sweep gradient starts at 3 o'clock, so rotate it.
                     rotate(-90f, pivot = center) { drawCircle(ring, radius = layout.ringMid, center = center, style = ringStroke) }
                     val hsb = state.hsb
                     val hueColor = Color(ColorUtils.hsvToColor(hsb.h, 1f, 1f))
-                    drawRect(
-                        Brush.horizontalGradient(listOf(Color.White, hueColor), startX = layout.squareLeft, endX = layout.squareLeft + layout.squareSide),
-                        topLeft = sqTopLeft, size = sqSize,
-                    )
+                    if (hsb.h != squareHue) {
+                        squareHue = hsb.h
+                        square = Brush.horizontalGradient(listOf(Color.White, hueColor), startX = layout.squareLeft, endX = layout.squareLeft + layout.squareSide)
+                    }
+                    drawRect(square, topLeft = sqTopLeft, size = sqSize)
                     drawRect(darken, topLeft = sqTopLeft, size = sqSize)
-                    val (hx, hy) = layout.huePoint(hsb.h)
-                    drawThumb(Offset(hx, hy), ringThumb, hueColor)
-                    val (sx, sy) = layout.svPoint(hsb.s, hsb.b)
-                    drawThumb(Offset(sx, sy), svThumb, Color(state.color or OPAQUE))
+                    drawThumb(Offset(layout.hueX(hsb.h), layout.hueY(hsb.h)), ringThumb, hueColor, thumb)
+                    drawThumb(Offset(layout.svX(hsb.s), layout.svY(hsb.b)), svThumb, Color(state.color or OPAQUE), thumb)
                 }
             }
     )
 }
 
+/** Pre-built strokes for [drawThumb] (sizes in px for the given density). */
+private class ThumbStyle(density: Density) {
+    val ringWidth = with(density) { 3.dp.toPx() }
+    val ring = Stroke(ringWidth)
+    val outline = Stroke(with(density) { 1.5.dp.toPx() })
+}
+
+private val THUMB_OUTLINE = Color.Black.copy(alpha = 0.55f)
+
 /** Thumb: color disc with a white ring and a thin dark outline (visible on any color). */
-private fun DrawScope.drawThumb(center: Offset, radius: Float, fill: Color) {
-    val ring = 3.dp.toPx()
-    drawCircle(Color.Black.copy(alpha = 0.55f), radius = radius + ring / 2f, center = center, style = Stroke(1.5.dp.toPx()))
-    drawCircle(Color.White, radius = radius, center = center, style = Stroke(ring))
-    drawCircle(fill, radius = (radius - ring / 2f).coerceAtLeast(1f), center = center)
+private fun DrawScope.drawThumb(center: Offset, radius: Float, fill: Color, style: ThumbStyle) {
+    drawCircle(THUMB_OUTLINE, radius = radius + style.ringWidth / 2f, center = center, style = style.outline)
+    drawCircle(Color.White, radius = radius, center = center, style = style.ring)
+    drawCircle(fill, radius = (radius - style.ringWidth / 2f).coerceAtLeast(1f), center = center)
 }
 
 /**
@@ -163,6 +195,7 @@ fun GradientSlider(
     valueText: String = "",
 ) {
     val onChange by rememberUpdatedState(onFractionChange)
+    val focusManager = LocalFocusManager.current
     val thumbRadius: Dp = 12.dp
     val trackShape = RoundedCornerShape(10.dp)
     Box(
@@ -174,6 +207,7 @@ fun GradientSlider(
                 progressBarRangeInfo = ProgressBarRangeInfo(fraction.coerceIn(0f, 1f), 0f..1f)
                 setProgress { v -> onChange(v.coerceIn(0f, 1f)); true }
             }
+            .clearFocusOnPress(focusManager)
             .pointerInput(Unit) {
                 detectTapGestures(onTap = { onChange(sliderFraction(it.x, size.width.toFloat(), thumbRadius.toPx())) })
             }
@@ -187,10 +221,11 @@ fun GradientSlider(
             }
             .drawWithCache {
                 val r = thumbRadius.toPx()
+                val thumb = ThumbStyle(this)
                 onDrawWithContent {
                     drawContent()
                     val x = r + fraction.coerceIn(0f, 1f) * (size.width - 2f * r)
-                    drawThumb(Offset(x, size.height / 2f), r, thumbColor)
+                    drawThumb(Offset(x, size.height / 2f), r, thumbColor, thumb)
                 }
             },
         contentAlignment = Alignment.Center,
@@ -208,7 +243,11 @@ fun GradientSlider(
     }
 }
 
-/** A labeled channel: gradient slider + numeric field (integer [value] in 0..[max]). */
+/**
+ * A labeled channel: gradient slider + numeric field (integer [value] in 0..[max]).
+ * [onValueChange] should ignore a value equal to the channel's current one: the field re-sends
+ * its number when it loses focus.
+ */
 @Composable
 fun ChannelRow(
     label: String,
@@ -252,10 +291,14 @@ fun RgbSliders(state: ColorEditState, modifier: Modifier = Modifier) {
     val c = state.color
     val r = ColorUtils.red(c); val g = ColorUtils.green(c); val b = ColorUtils.blue(c)
     val thumb = Color(c or OPAQUE)
+    // The callbacks compare with and read the state at call time, not the values captured here.
     Column(modifier) {
-        ChannelRow("Red", r, 255, Brush.horizontalGradient(listOf(rgb(0, g, b), rgb(255, g, b))), thumb, { state.setRgb(it, g, b) }, fieldLabel = "R")
-        ChannelRow("Green", g, 255, Brush.horizontalGradient(listOf(rgb(r, 0, b), rgb(r, 255, b))), thumb, { state.setRgb(r, it, b) }, fieldLabel = "G")
-        ChannelRow("Blue", b, 255, Brush.horizontalGradient(listOf(rgb(r, g, 0), rgb(r, g, 255))), thumb, { state.setRgb(r, g, it) }, fieldLabel = "B")
+        ChannelRow("Red", r, 255, Brush.horizontalGradient(listOf(rgb(0, g, b), rgb(255, g, b))), thumb,
+            { if (it != ColorUtils.red(state.color)) state.setRed(it) }, fieldLabel = "R")
+        ChannelRow("Green", g, 255, Brush.horizontalGradient(listOf(rgb(r, 0, b), rgb(r, 255, b))), thumb,
+            { if (it != ColorUtils.green(state.color)) state.setGreen(it) }, fieldLabel = "G")
+        ChannelRow("Blue", b, 255, Brush.horizontalGradient(listOf(rgb(r, g, 0), rgb(r, g, 255))), thumb,
+            { if (it != ColorUtils.blue(state.color)) state.setBlue(it) }, fieldLabel = "B")
     }
 }
 
@@ -264,15 +307,17 @@ fun RgbSliders(state: ColorEditState, modifier: Modifier = Modifier) {
 fun HsbSliders(state: ColorEditState, modifier: Modifier = Modifier) {
     val hsb = state.hsb
     val thumb = Color(state.color or OPAQUE)
+    // Unchanged whole values are ignored so a field re-sending its number on focus loss doesn't
+    // round away the finer hue/saturation/brightness set with the wheel.
     Column(modifier) {
         ChannelRow("Hue", hsb.displayH(), 360, Brush.horizontalGradient(HUE_COLORS), Color(ColorUtils.hsvToColor(hsb.h, 1f, 1f)),
-            { state.setHsb(h = it.toFloat()) }, fieldLabel = "H°", valueSuffix = "°")
+            { if (it != state.hsb.displayH()) state.setHsb(h = it.toFloat()) }, fieldLabel = "H°", valueSuffix = "°")
         ChannelRow("Saturation", hsb.displayS(), 100,
             Brush.horizontalGradient(listOf(Color(ColorUtils.hsvToColor(hsb.h, 0f, hsb.b)), Color(ColorUtils.hsvToColor(hsb.h, 1f, hsb.b)))),
-            thumb, { state.setHsb(s = it / 100f) }, fieldLabel = "S%", valueSuffix = "%")
+            thumb, { if (it != state.hsb.displayS()) state.setHsb(s = it / 100f) }, fieldLabel = "S%", valueSuffix = "%")
         ChannelRow("Brightness", hsb.displayB(), 100,
             Brush.horizontalGradient(listOf(Color.Black, Color(ColorUtils.hsvToColor(hsb.h, hsb.s, 1f)))),
-            thumb, { state.setHsb(b = it / 100f) }, fieldLabel = "B%", valueSuffix = "%")
+            thumb, { if (it != state.hsb.displayB()) state.setHsb(b = it / 100f) }, fieldLabel = "B%", valueSuffix = "%")
     }
 }
 
@@ -280,14 +325,13 @@ fun HsbSliders(state: ColorEditState, modifier: Modifier = Modifier) {
 @Composable
 fun AlphaSlider(state: ColorEditState, modifier: Modifier = Modifier) {
     val opaque = state.color or OPAQUE
-    val percent = (state.alpha * 100f / 255f).roundToInt()
     ChannelRow(
         label = "Opacity",
-        value = percent,
+        value = alphaToPercent(state.alpha),
         max = 100,
         track = Brush.horizontalGradient(listOf(Color(opaque and 0x00FFFFFF), Color(opaque))),
         thumbColor = Color(state.color),
-        onValueChange = { state.setAlpha((it * 255f / 100f).roundToInt()) },
+        onValueChange = { if (it != alphaToPercent(state.alpha)) state.setAlpha(percentToAlpha(it)) },
         fieldLabel = "A%",
         valueSuffix = "%",
         checker = true,
@@ -310,9 +354,16 @@ fun HexField(state: ColorEditState, withAlpha: Boolean, modifier: Modifier = Mod
     val maxLen = if (withAlpha) 8 else 6
 
     fun apply(digits: String) {
-        val parsed = parseHexInput(digits, withAlpha) ?: return
-        val c = if (digits.length == 8) parsed else ColorUtils.withAlpha(parsed, if (withAlpha) state.alpha else 255)
+        val c = hexTextColor(digits, withAlpha, state.alpha) ?: return
         if (c != state.color) state.setColor(c)
+    }
+
+    // While focused the field shows the typed text; if the color is changed some other way
+    // (e.g. the alpha slider), text that no longer stands for it is replaced.
+    if (focused) {
+        LaunchedEffect(current) {
+            if (hexTextColor(text, withAlpha, state.alpha) != state.color) text = current
+        }
     }
 
     OutlinedTextField(
@@ -339,6 +390,7 @@ fun HexField(state: ColorEditState, withAlpha: Boolean, modifier: Modifier = Mod
 /** Segmented Wheel / RGB / HSB selector (plain row: safe inside dialogs). */
 @Composable
 fun ModeTabs(selected: PickerMode, onSelect: (PickerMode) -> Unit, modifier: Modifier = Modifier) {
+    val focusManager = LocalFocusManager.current
     Row(
         modifier
             .height(44.dp)
@@ -354,7 +406,8 @@ fun ModeTabs(selected: PickerMode, onSelect: (PickerMode) -> Unit, modifier: Mod
                     .fillMaxHeight()
                     .clip(RoundedCornerShape(8.dp))
                     .background(if (isSel) BrushworkColors.AccentDim else Color.Transparent)
-                    .selectable(selected = isSel, role = Role.Tab, onClick = { onSelect(m) }),
+                    // Commit a field being edited before its tab goes away.
+                    .selectable(selected = isSel, role = Role.Tab, onClick = { focusManager.clearFocus(); onSelect(m) }),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(m.label, style = MaterialTheme.typography.labelLarge, color = if (isSel) Color.White else BrushworkColors.OnChrome, maxLines = 1)
@@ -382,8 +435,10 @@ fun PickerBody(state: ColorEditState, mode: PickerMode, wheelMaxSize: Dp, modifi
 @Composable
 fun CompareSwatch(previous: Int, current: Int, onRevert: () -> Unit, modifier: Modifier = Modifier) {
     val shape = RoundedCornerShape(8.dp)
+    val focusManager = LocalFocusManager.current
     Row(
         modifier
+            .clearFocusOnPress(focusManager)
             .height(48.dp)
             .clip(shape)
             .checkerboard(6.dp)

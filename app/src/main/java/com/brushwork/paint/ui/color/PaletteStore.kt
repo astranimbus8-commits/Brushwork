@@ -176,7 +176,7 @@ object BuiltInPalettes {
         builtIn("pastel", "Pastel",
             "#FFB3BA", "#FFDFBA", "#FFFFBA", "#BAFFC9", "#BAE1FF", "#D7BAFF", "#FFC8DD", "#BDE0FE",
             "#A2D2FF", "#CDB4DB", "#FFAFCC", "#E2F0CB", "#B5EAD7", "#C7CEEA", "#FFDAC1", "#F1E3D3"),
-        Palette("gray", "Grayscale", (0..15).map { ColorUtils.gray(it * 17) }, builtIn = true),
+        Palette(BUILT_IN_PREFIX + "gray", "Grayscale", (0..15).map { ColorUtils.gray(it * 17) }, builtIn = true),
         builtIn("earth", "Earth",
             "#3B2F2F", "#5C4033", "#6F4E37", "#8B5A2B", "#A0522D", "#C19A6B", "#D2B48C", "#E6D3A3",
             "#556B2F", "#6B8E23", "#808000", "#8F9779", "#2F4F4F", "#708090", "#B7410E", "#CC7722"),
@@ -190,8 +190,11 @@ object BuiltInPalettes {
     fun byId(id: String): Palette? = ids[id]
 
     private fun builtIn(id: String, name: String, vararg hex: String) =
-        Palette("builtin:$id", name, hexColors(*hex), builtIn = true)
+        Palette(BUILT_IN_PREFIX + id, name, hexColors(*hex), builtIn = true)
 }
+
+/** Id prefix of built-in palettes (user palettes use "u-<uuid>" or [PaletteData.MY_PALETTE_ID]). */
+private const val BUILT_IN_PREFIX = "builtin:"
 
 private fun hexColors(vararg hex: String): List<Int> = hex.map { requireNotNull(ColorUtils.parseHex(it)) { "bad color $it" } }
 

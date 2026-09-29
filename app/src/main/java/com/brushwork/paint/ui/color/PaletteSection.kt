@@ -39,12 +39,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
@@ -70,6 +74,7 @@ fun PaletteSection(
     val data = store.data
     val active = data.active
     val editable = data.isEditable(active.id)
+    val focusManager = LocalFocusManager.current
     var menuOpen by remember { mutableStateOf(false) }
     var swatchMenu by remember { mutableIntStateOf(-1) }
     var dialog by remember { mutableStateOf<PaletteDialog?>(null) }
@@ -114,7 +119,7 @@ fun PaletteSection(
             onSelect = { i -> all.getOrNull(i)?.let { store.setActive(it.id) }; swatchMenu = -1 },
         )
         FlowRow(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
+            Modifier.fillMaxWidth().padding(top = 8.dp).clearFocusOnPress(focusManager),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -122,6 +127,7 @@ fun PaletteSection(
                 Box {
                     ColorSwatch(
                         display(c),
+                        modifier = Modifier.swatchDescription(c),
                         size = swatchSize,
                         onClick = { onUse(c) },
                         onLongClick = if (editable) ({ swatchMenu = i }) else null,
@@ -222,25 +228,36 @@ private fun SwatchMenu(
 @Composable
 private fun NameDialog(title: String, initial: String, confirmText: String, onConfirm: (String) -> Unit, onDismiss: () -> Unit) {
     var name by remember { mutableStateOf(initial) }
+    var attempted by remember { mutableStateOf(false) }
     val valid = PaletteData.cleanName(name) != null
+    val confirm: () -> Unit = {
+        if (valid) onConfirm(name)
+        attempted = true
+    }
+    val showError = !valid && (attempted || name.isNotEmpty())
     BwDialog(
         title = title,
         onDismiss = onDismiss,
         confirmText = confirmText,
-        onConfirm = { if (valid) onConfirm(name) },
+        onConfirm = confirm,
     ) {
         OutlinedTextField(
             value = name,
             onValueChange = { name = it.take(PaletteData.MAX_NAME_LENGTH) },
             label = { Text("Name") },
             singleLine = true,
-            isError = !valid && name.isNotEmpty(),
+            isError = showError,
+            supportingText = if (showError) ({ Text("Enter a name") }) else null,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { if (valid) onConfirm(name) }),
+            keyboardActions = KeyboardActions(onDone = { confirm() }),
             modifier = Modifier.fillMaxWidth(),
         )
     }
 }
+
+/** Screen-reader label for a palette / recent swatch. */
+private fun Modifier.swatchDescription(color: Int): Modifier =
+    semantics { contentDescription = "Color ${ColorUtils.toHex(color)}" }
 
 /** The last colors used (newest first). Tap to [onUse]. */
 @Composable
@@ -252,6 +269,7 @@ fun RecentColorsSection(
     swatchSize: Dp = 40.dp,
 ) {
     val recent = store.data.recent
+    val focusManager = LocalFocusManager.current
     Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             SectionHeader("Recent", Modifier.weight(1f))
@@ -260,8 +278,12 @@ fun RecentColorsSection(
         if (recent.isEmpty()) {
             Text("Colors you use will appear here.", style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim)
         } else {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                recent.forEach { c -> ColorSwatch(display(c), size = swatchSize, onClick = { onUse(c) }) }
+            FlowRow(
+                Modifier.clearFocusOnPress(focusManager),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                recent.forEach { c -> ColorSwatch(display(c), Modifier.swatchDescription(c), size = swatchSize, onClick = { onUse(c) }) }
             }
         }
     }

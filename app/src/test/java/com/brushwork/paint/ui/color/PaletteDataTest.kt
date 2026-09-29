@@ -25,7 +25,10 @@ class PaletteDataTest {
         assertTrue(d.recent.isEmpty())
         assertEquals(listOf("My palette", "Basic", "Skin tones", "Pastel", "Grayscale", "Earth", "Neon"), d.all.map { it.name })
         assertTrue(BuiltInPalettes.all.all { it.builtIn && it.colors.isNotEmpty() })
-        assertEquals(16, BuiltInPalettes.byId("gray")?.colors?.size)
+        assertEquals(16, BuiltInPalettes.byId("builtin:gray")?.colors?.size)
+        // Every built-in id is namespaced, so it can never collide with a user palette id.
+        assertTrue(BuiltInPalettes.all.all { it.id.startsWith("builtin:") })
+        assertEquals(BuiltInPalettes.all.size, BuiltInPalettes.all.map { it.id }.distinct().size)
     }
 
     @Test

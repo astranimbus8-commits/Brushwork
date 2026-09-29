@@ -165,4 +165,38 @@ class ColorMathTest {
         assertEquals("80FF0000", hexDigits(0x80FF0000.toInt(), true))
         assertEquals("00FF00", hexDigits(0x8000FF00.toInt(), false))
     }
+
+    @Test
+    fun hexTextResolvesAgainstAlpha() {
+        // Without alpha: always opaque.
+        assertEquals(0xFF00FF00.toInt(), hexTextColor("00FF00", withAlpha = false, alpha = 0x40))
+        assertEquals(0xFFFF0000.toInt(), hexTextColor("#f00", withAlpha = false, alpha = 0x40))
+        // With alpha: 3/6 digits keep the slider's alpha, 8 digits carry their own.
+        assertEquals(0x4000FF00, hexTextColor("00FF00", withAlpha = true, alpha = 0x40))
+        assertEquals(0x40FF0000, hexTextColor("F00", withAlpha = true, alpha = 0x40))
+        assertEquals(0x8000FF00.toInt(), hexTextColor("8000FF00", withAlpha = true, alpha = 0x40))
+        // Incomplete or invalid text stands for no color.
+        for (t in listOf("", "1", "12", "1234", "12345", "1234567", "XYZXYZ")) {
+            assertNull(t, hexTextColor(t, withAlpha = true, alpha = 255))
+        }
+        assertNull(hexTextColor("8000FF00", withAlpha = false, alpha = 255))
+        // The field's own display text always resolves back to the color.
+        for (c in listOf(0x00000000, 0x80123456.toInt(), -1, 0x7FABCDEF)) {
+            assertEquals(c, hexTextColor(hexDigits(c, true), withAlpha = true, alpha = 0x11))
+            assertEquals(c or OPAQUE, hexTextColor(hexDigits(c, false), withAlpha = false, alpha = 0x11))
+        }
+    }
+
+    @Test
+    fun opacityPercentRoundTrip() {
+        assertEquals(0, alphaToPercent(0))
+        assertEquals(100, alphaToPercent(255))
+        assertEquals(50, alphaToPercent(128))
+        assertEquals(0, percentToAlpha(0))
+        assertEquals(255, percentToAlpha(100))
+        assertEquals(255, percentToAlpha(150))
+        assertEquals(0, alphaToPercent(-5))
+        // Every whole percent survives the trip through alpha, so the field shows what was typed.
+        for (p in 0..100) assertEquals(p, alphaToPercent(percentToAlpha(p)))
+    }
 }

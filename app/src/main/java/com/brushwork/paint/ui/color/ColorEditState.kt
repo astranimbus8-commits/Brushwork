@@ -41,6 +41,12 @@ class ColorEditState(initial: Int, initialHsb: Hsb, private val onUserChange: (I
     /** Sets R, G, B (0..255) keeping alpha. */
     fun setRgb(r: Int, g: Int, b: Int) = setColor(ColorUtils.argb(alpha, r, g, b))
 
+    // Single-channel setters read the other channels at call time (not from a composition that
+    // may be a frame old), so two quick edits of different channels can't undo each other.
+    fun setRed(v: Int) = setRgb(v, ColorUtils.green(color), ColorUtils.blue(color))
+    fun setGreen(v: Int) = setRgb(ColorUtils.red(color), v, ColorUtils.blue(color))
+    fun setBlue(v: Int) = setRgb(ColorUtils.red(color), ColorUtils.green(color), v)
+
     fun setAlpha(a: Int) = update(ColorUtils.withAlpha(color, a), true)
 
     private fun update(c: Int, notify: Boolean) {

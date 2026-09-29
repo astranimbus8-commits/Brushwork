@@ -76,14 +76,18 @@ class WheelLayout(val size: Float, ringWidth: Float, pad: Float) {
     fun brightnessAt(y: Float): Float = (1f - (y - squareTop) / squareSide).coerceIn(0f, 1f)
 
     /** Center of the hue thumb for [hue]: returns (x, y). */
-    fun huePoint(hue: Float): Pair<Float, Float> {
-        val a = Math.toRadians((hue - 90f).toDouble())
-        return Pair(center + ringMid * cos(a).toFloat(), center + ringMid * sin(a).toFloat())
-    }
+    fun huePoint(hue: Float): Pair<Float, Float> = Pair(hueX(hue), hueY(hue))
+
+    /** x / y of the hue thumb center (allocation-free, for drawing). */
+    fun hueX(hue: Float): Float = center + ringMid * cos(Math.toRadians((hue - 90f).toDouble())).toFloat()
+    fun hueY(hue: Float): Float = center + ringMid * sin(Math.toRadians((hue - 90f).toDouble())).toFloat()
 
     /** Center of the saturation/brightness thumb: returns (x, y). */
-    fun svPoint(s: Float, b: Float): Pair<Float, Float> =
-        Pair(squareLeft + s.coerceIn(0f, 1f) * squareSide, squareTop + (1f - b.coerceIn(0f, 1f)) * squareSide)
+    fun svPoint(s: Float, b: Float): Pair<Float, Float> = Pair(svX(s), svY(b))
+
+    /** x of the saturation/brightness thumb for saturation [s], y for brightness [b]. */
+    fun svX(s: Float): Float = squareLeft + s.coerceIn(0f, 1f) * squareSide
+    fun svY(b: Float): Float = squareTop + (1f - b.coerceIn(0f, 1f)) * squareSide
 
     companion object {
         private val SQRT2 = sqrt(2f)
@@ -116,5 +120,20 @@ fun parseHexInput(text: String, allowAlpha: Boolean): Int? {
     }
 }
 
+/**
+ * The color hex-field [text] stands for: 8 digits are a full ARGB value; 3 or 6 digits take
+ * [alpha] when [withAlpha] (the alpha slider owns it) and are opaque otherwise. Null while the
+ * text is incomplete or invalid.
+ */
+fun hexTextColor(text: String, withAlpha: Boolean, alpha: Int): Int? {
+    val digits = text.trim().removePrefix("#")
+    val parsed = parseHexInput(digits, withAlpha) ?: return null
+    return if (digits.length == 8) parsed else ColorUtils.withAlpha(parsed, if (withAlpha) alpha else 255)
+}
+
 /** Hex digits (no '#') for the hex field. */
 fun hexDigits(color: Int, withAlpha: Boolean): String = ColorUtils.toHex(color, withAlpha).removePrefix("#")
+
+/** Opacity 0..255 as the whole percent shown by the opacity slider, and back. */
+fun alphaToPercent(alpha: Int): Int = (alpha.coerceIn(0, 255) * 100f / 255f).roundToInt()
+fun percentToAlpha(percent: Int): Int = (percent.coerceIn(0, 100) * 255f / 100f).roundToInt()
