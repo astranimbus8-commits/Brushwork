@@ -168,6 +168,27 @@ class FrameDividerRobolectricTest {
     }
 
     @Test
+    fun onlyTilesThatChangeAreRewrittenAndSnapshotted() {
+        val w = 1200; val h = 1000
+        val style = FrameStyle(6f, black, fillOutside = true)
+        val area = FrameRect(40f, 40f, 1160f, 960f)
+        val one = FrameModel(area, listOf(Panel(area.toPolygon())), style)
+        val split = one.copy(panels = FrameMath.divide(one.panels, com.brushwork.paint.core.Vec2(600f, 0f), com.brushwork.paint.core.Vec2(600f, 1000f), 30f, 12f, 8f)!!)
+        val layer = BitmapUtils.createLayerBitmap(w, h)
+        FrameRenderer.render(android.graphics.Canvas(layer), one)
+        val touched = mutableListOf<android.graphics.Rect>()
+        val changed = FrameRenderer.renderChangedTiles(layer, split, android.graphics.Rect(0, 0, w, h), com.brushwork.paint.model.ColorMode.RGB) { touched += it }
+        // A vertical cut at x = 600 only changes the tile column(s) around it (512..768).
+        assertTrue(touched.isNotEmpty())
+        assertTrue(touched.all { it.left == 512 })
+        assertEquals(android.graphics.Rect(512, 0, 768, 1000), changed)
+        // The result equals a direct full render of the new model.
+        val expected = BitmapUtils.createLayerBitmap(w, h)
+        FrameRenderer.render(android.graphics.Canvas(expected), split)
+        assertTrue(expected.sameAs(layer))
+    }
+
+    @Test
     fun lockedOrAlphaLockedFrameLayerIsNotChanged() {
         val (c, tool, layer) = setup()
         layer.locked = true

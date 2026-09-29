@@ -92,6 +92,10 @@ fun TextEditorDialog(tool: TextTool) {
                     maxLines = 6,
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
+                // Same composition as the field, so the requester is attached when this runs.
+                LaunchedEffect(Unit) {
+                    if (tool.editingNew) runCatching { focus.requestFocus() }
+                }
 
                 SectionHeader("Font")
                 ChoiceChips(TextFont.entries.map { it.label }, spec.font.ordinal, { i -> style { it.copy(font = TextFont.entries[i]) } })
@@ -169,10 +173,6 @@ fun TextEditorDialog(tool: TextTool) {
             }
         },
     )
-
-    LaunchedEffect(Unit) {
-        if (tool.editingNew) runCatching { focus.requestFocus() }
-    }
 
     when (colorTarget) {
         ColorTarget.FILL -> ColorPickerDialog(

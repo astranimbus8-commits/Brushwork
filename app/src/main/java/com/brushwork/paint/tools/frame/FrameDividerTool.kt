@@ -151,7 +151,8 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         if (layer.alphaLocked) { controller.toast("Turn off \"Lock alpha\" on \"${layer.name}\" to edit the frame"); return false }
         val before = rec.model
         val beforeInSync = rec.version == layer.contentVersion
-        val dirty: Rect = if (incremental && beforeInSync) {
+        // While in sync, pixels outside the changed panels render identically: only look there.
+        val area: Rect = if (incremental && beforeInSync) {
             val changed = HashSet<Panel>(before.panels).apply { removeAll(newModel.panels.toSet()) } +
                 HashSet<Panel>(newModel.panels).apply { removeAll(before.panels.toSet()) }
             FrameRenderer.dirtyRect(changed, layer.width, layer.height) ?: return false
@@ -159,18 +160,21 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
             Rect(0, 0, layer.width, layer.height)
         }
         val recorder = controller.beginEdit(layer, EditTarget.CONTENT)
-        try {
-            recorder.touch(dirty)
-            val c = Canvas(layer.bitmap)
-            c.clipRect(dirty)
-            FrameRenderer.render(c, newModel)
+        val dirty = try {
+            FrameRenderer.renderChangedTiles(layer.bitmap, newModel, area, doc.colorMode) { recorder.touch(it) }
         } catch (e: OutOfMemoryError) {
             recorder.abort()
             controller.toast("Not enough memory to update the frame")
             return false
         }
-        if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(layer.bitmap, dirty, doc.colorMode)
-        val pixels = recorder.finish(label) ?: return false
+        val pixels = recorder.finish(label)
+        if (pixels == null) {
+            // Pixels already match (e.g. redrawing an unchanged frame): just adopt the model.
+            rec.model = newModel
+            rec.version = layer.contentVersion
+            revision++
+            return true
+        }
         layer.markChanged()
         rec.model = newModel
         rec.version = layer.contentVersion
@@ -221,6 +225,8 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     /** Panels that the cut in progress would create (drawn as a preview). */
     private var previewPanels: List<Panel> = emptyList()
     private var gestureActive = false
+    /** The frame was usable when the gesture started (else no cut preview is shown). */
+    private var cutAllowed = false
 
     private fun cancelCut() {
         gestureActive = false
@@ -234,6 +240,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
 
     override fun onDown(p: ToolPoint) {
         gestureActive = true
+        cutAllowed = status() == Status.READY
         cutStart = Vec2(p.x, p.y)
         cutEnd = cutStart
         previewPanels = emptyList()
@@ -241,7 +248,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
 
     override fun onMove(p: ToolPoint) {
         val a = cutStart ?: return
-        if (!gestureActive || removeMode) return
+        if (!gestureActive || removeMode || !cutAllowed) return
         val b = FrameMath.snapCut(a, Vec2(p.x, p.y))
         cutEnd = b
         val m = model
@@ -262,7 +269,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         val raw = Vec2(p.x, p.y)
         val isTap = t.docToScreen(raw).distanceTo(t.docToScreen(a)) < t.dp(MIN_CUT_DP)
         when (status()) {
-            Status.NONE -> { controller.toast("Create a frame layer first (\"New frame\")"); return }
+            Status.NONE -> { controller.toast("Create a frame layer first (\"New frame layer\")"); return }
             Status.OUT_OF_SYNC -> { controller.toast("The frame layer was edited: redraw it or start a new frame layer"); return }
             Status.READY -> {}
         }
@@ -292,9 +299,10 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = ACCENT }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = ACCENT }
     private val tmpPath = Path()
+    private var dashDensity = 0f
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
-        if (!gestureActive || removeMode) return
+        if (!gestureActive || removeMode || !cutAllowed) return
         val a = cutStart ?: return
         val b = cutEnd ?: return
         if (a == b) return
@@ -315,8 +323,11 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         val sb = t.docToScreen(b)
         val dir = (sb - sa).normalized()
         val far = t.dp(4000f)
-        guidePaint.strokeWidth = t.dp(1f)
-        guidePaint.pathEffect = DashPathEffect(floatArrayOf(t.dp(6f), t.dp(4f)), 0f)
+        if (dashDensity != t.density) {
+            dashDensity = t.density
+            guidePaint.strokeWidth = t.dp(1f)
+            guidePaint.pathEffect = DashPathEffect(floatArrayOf(t.dp(6f), t.dp(4f)), 0f)
+        }
         canvas.drawLine(sa.x - dir.x * far, sa.y - dir.y * far, sb.x + dir.x * far, sb.y + dir.y * far, guidePaint)
         canvas.drawLine(sa.x, sa.y, sb.x, sb.y, haloPaint)
         canvas.drawLine(sa.x, sa.y, sb.x, sb.y, accentPaint)
