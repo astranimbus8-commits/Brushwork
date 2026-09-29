@@ -43,9 +43,14 @@ object Regions {
 
     /**
      * Pixels of [passable] reachable (4-connected) from the pixels where [seed] is true AND
-     * passable. Returns a new mask.
+     * passable. [canStep] (from, to) can veto individual steps, e.g. across strong color edges.
+     * Returns a new mask.
      */
-    fun floodFrom(passable: BooleanArray, w: Int, h: Int, seed: (x: Int, y: Int) -> Boolean): BooleanArray {
+    fun floodFrom(
+        passable: BooleanArray, w: Int, h: Int,
+        canStep: ((from: Int, to: Int) -> Boolean)? = null,
+        seed: (x: Int, y: Int) -> Boolean,
+    ): BooleanArray {
         require(passable.size == w * h)
         val reached = BooleanArray(w * h)
         val queue = IntArray(w * h)
@@ -58,16 +63,20 @@ object Regions {
         while (head < tail) {
             val i = queue[head++]
             val x = i % w; val y = i / w
-            if (x > 0) tail = visit(i - 1, passable, reached, queue, tail)
-            if (x < w - 1) tail = visit(i + 1, passable, reached, queue, tail)
-            if (y > 0) tail = visit(i - w, passable, reached, queue, tail)
-            if (y < h - 1) tail = visit(i + w, passable, reached, queue, tail)
+            if (x > 0) tail = visit(i, i - 1, passable, reached, queue, tail, canStep)
+            if (x < w - 1) tail = visit(i, i + 1, passable, reached, queue, tail, canStep)
+            if (y > 0) tail = visit(i, i - w, passable, reached, queue, tail, canStep)
+            if (y < h - 1) tail = visit(i, i + w, passable, reached, queue, tail, canStep)
         }
         return reached
     }
 
-    private fun visit(j: Int, passable: BooleanArray, reached: BooleanArray, queue: IntArray, tail: Int): Int {
+    private fun visit(
+        from: Int, j: Int, passable: BooleanArray, reached: BooleanArray, queue: IntArray, tail: Int,
+        canStep: ((Int, Int) -> Boolean)?,
+    ): Int {
         if (!passable[j] || reached[j]) return tail
+        if (canStep != null && !canStep(from, j)) return tail
         reached[j] = true
         queue[tail] = j
         return tail + 1

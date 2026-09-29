@@ -84,7 +84,7 @@ class SegmentationPipeline(
         // The model ran and found nothing: trust it (a heuristic would e.g. call a white ceiling sky).
         if (MaskOps.maxValue(classMask) < 0.5f) return EMPTY
         val extra = if (target == SmartTarget.SKY) a.skyHeuristicWork else null
-        return Plan(MaskOps.refineBand(a.work, classMask, a.bandRadius, extra), a.radius, 1e-3f)
+        return Plan(MaskOps.refineBand(a.work, classMask, a.bandRadius, extra), a.refinedRadius, 1e-3f)
     }
 
     private fun analysis(image: PixelBuffer): Analysis {
@@ -117,6 +117,12 @@ class SegmentationPipeline(
 
         /** Guided-filter radius for coarse masks (~1/150 of the image). */
         val radius = max(2, (longSide / 150f).roundToInt())
+
+        /**
+         * Guided-filter radius after the color band refinement already moved the boundary; it
+         * mostly removes classification noise, and a gray guide cannot see iso-luminant edges.
+         */
+        val refinedRadius = max(2, (longSide / 256f).roundToInt())
 
         /** Guided-filter radius for masks that are already fine (ML Kit). */
         val fineRadius = max(1, (longSide / 400f).roundToInt())

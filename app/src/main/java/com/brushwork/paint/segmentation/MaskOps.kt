@@ -300,16 +300,27 @@ object MaskOps {
         for (k in 0 until nb) {
             val i = bandIdx[k]
             var a = m[i]
+            // Trust the color decision by position in the band (the coarse boundary is most likely
+            // wrong at its center) and by how clearly the color matches one side.
+            var weight = bandBeta[k]
             if (ins[k * 4] > 1e-4f && outs[k * 4] > 1e-4f) {
                 val c = px[i]
                 val r = ((c shr 16) and 0xFF) / 255f; val g = ((c shr 8) and 0xFF) / 255f; val b = (c and 0xFF) / 255f
                 val di = sq(r - ins[k * 4 + 1]) + sq(g - ins[k * 4 + 2]) + sq(b - ins[k * 4 + 3])
                 val dout = sq(r - outs[k * 4 + 1]) + sq(g - outs[k * 4 + 2]) + sq(b - outs[k * 4 + 3])
-                a = smoothstep(0.2f, 0.8f, dout / (di + dout + 1e-6f))
+                val ratio = dout / (di + dout + 1e-6f)
+                // Only distinct local colors are informative: when both sides look alike the
+                // ratio is noise and the coarse mask is kept.
+                val contrast = smoothstep(0.004f, 0.03f, sq(ins[k * 4 + 1] - outs[k * 4 + 1]) +
+                    sq(ins[k * 4 + 2] - outs[k * 4 + 2]) + sq(ins[k * 4 + 3] - outs[k * 4 + 3]))
+                a = m[i] + (smoothstep(0.2f, 0.8f, ratio) - m[i]) * contrast
+                weight = max(weight, abs(2f * ratio - 1f) * contrast)
             }
-            if (extra != null) a = max(a, extra[i])
-            val beta = bandBeta[k]
-            out[i] = clamp01((1f - beta) * m[i] + beta * a)
+            if (extra != null && extra[i] > a) {
+                weight = max(weight, extra[i])
+                a = extra[i]
+            }
+            out[i] = clamp01((1f - weight) * m[i] + weight * a)
         }
         return out
     }

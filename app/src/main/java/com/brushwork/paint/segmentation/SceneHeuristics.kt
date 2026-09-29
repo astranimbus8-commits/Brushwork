@@ -43,7 +43,11 @@ object SceneHeuristics {
         }
         val passable = BooleanArray(n) { cand[it] > 0.3f }
         val seedRows = max(1, h / 50)
-        val sky = Regions.floodFrom(passable, w, h) { x, y -> y < seedRows && cand[y * w + x] > 0.4f }
+        // Luma texture misses iso-luminant boundaries (blue sky against a gray wall of the same
+        // brightness), so the fill also refuses to step across a sharp color change.
+        val px = f.px
+        val colorEdge = { a: Int, b: Int -> colorStep(px[a], px[b]) < SKY_MAX_STEP }
+        val sky = Regions.floodFrom(passable, w, h, colorEdge) { x, y -> y < seedRows && cand[y * w + x] > 0.4f }
         Regions.fillHoles(sky, w, h, maxHoleSize = n / 200)
         return soften(FloatArray(n) { if (sky[it]) 1f else 0f }, w, h)
     }
@@ -159,13 +163,22 @@ object SceneHeuristics {
         for (i in 0 until n) out[i] = smoothstep(0.2f, 0.45f, out[i])
         if (saliency != null) {
             require(saliency.size == n)
-            val lab = Regions.label(BooleanArray(n) { saliency[it] > 0.5f }, w, h)
+            // A salient object that touches skin (face above a shirt) is a person as a whole.
+            val lab = Regions.label(BooleanArray(n) { saliency[it] > 0.5f || skin[it] > 0.5f }, w, h)
             if (lab.count > 0) {
                 val skinCount = IntArray(lab.count + 1)
-                for (i in 0 until n) if (lab.ids[i] != 0 && skin[i] > 0.5f) skinCount[lab.ids[i]]++
+                val salientCount = IntArray(lab.count + 1)
                 for (i in 0 until n) {
                     val id = lab.ids[i]
-                    if (id != 0 && skinCount[id] >= max(3, (lab.sizes[id] * 0.03f).toInt())) out[i] = max(out[i], saliency[i])
+                    if (id == 0) continue
+                    if (skin[i] > 0.5f) skinCount[id]++
+                    if (saliency[i] > 0.5f) salientCount[id]++
+                }
+                for (i in 0 until n) {
+                    val id = lab.ids[i]
+                    if (id != 0 && salientCount[id] > 0 && skinCount[id] >= max(3, (lab.sizes[id] * 0.03f).toInt())) {
+                        out[i] = max(out[i], max(saliency[i], smoothstep(0.2f, 0.5f, skin[i])))
+                    }
                 }
             }
         }
@@ -228,15 +241,24 @@ object SceneHeuristics {
             val i = y * w + x
             sal[i] = min(1f, sal[i] / norm) * (0.3f + 0.7f * centerWeight(x, y, w, h, 0.3f, 0.3f, 0.5f))
         }
+        // Hysteresis: objects are grown through moderately salient pixels (a face above a
+        // vivid shirt) but must contain strongly salient ones.
         val t = otsu(sal).coerceIn(0.15f, 0.7f)
-        val lab = Regions.label(BooleanArray(n) { sal[it] > t }, w, h)
+        val tLow = max(0.1f, 0.5f * t)
+        val lab = Regions.label(BooleanArray(n) { sal[it] > tLow }, w, h)
         if (lab.count == 0) return FloatArray(n)
         val score = FloatArray(lab.count + 1)
-        for (i in 0 until n) if (lab.ids[i] != 0) score[lab.ids[i]] += sal[i]
+        val peak = FloatArray(lab.count + 1)
+        for (i in 0 until n) {
+            val id = lab.ids[i]
+            if (id != 0) { score[id] += sal[i]; if (sal[i] > peak[id]) peak[id] = sal[i] }
+        }
         var best = 0f
-        for (id in 1..lab.count) if (score[id] > best) best = score[id]
+        for (id in 1..lab.count) if (peak[id] > t && score[id] > best) best = score[id]
         val minSize = max(4, n / 500)
-        val keepId = BooleanArray(lab.count + 1) { it > 0 && lab.sizes[it] >= minSize && score[it] >= 0.3f * best }
+        val keepId = BooleanArray(lab.count + 1) {
+            it > 0 && peak[it] > t && lab.sizes[it] >= minSize && score[it] >= 0.3f * best
+        }
         val kept = BooleanArray(n) { keepId[lab.ids[it]] }
         if (kept.none { it }) return FloatArray(n)
         Regions.fillHoles(kept, w, h, maxHoleSize = n / 4)
@@ -253,6 +275,17 @@ object SceneHeuristics {
     }
 
     // ------------------------------------------------------------------------------ helpers
+
+    /** Largest per-channel change allowed between neighbouring sky pixels (0..1). */
+    private const val SKY_MAX_STEP = 0.1f
+
+    /** Largest per-channel difference of two colors, 0..1. */
+    internal fun colorStep(a: Int, b: Int): Float {
+        val dr = kotlin.math.abs(((a shr 16) and 0xFF) - ((b shr 16) and 0xFF))
+        val dg = kotlin.math.abs(((a shr 8) and 0xFF) - ((b shr 8) and 0xFF))
+        val db = kotlin.math.abs((a and 0xFF) - (b and 0xFF))
+        return max(dr, max(dg, db)) / 255f
+    }
 
     private fun red(c: Int) = ((c shr 16) and 0xFF) / 255f
     private fun green(c: Int) = ((c shr 8) and 0xFF) / 255f
