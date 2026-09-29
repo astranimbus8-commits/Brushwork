@@ -11,4 +11,8 @@ val distortFilters: List<Filter> = listOf(
     RippleFilter(),
     TwirlFilter(),
     PolarCoordinatesFilter(),
+    TileCountFilter(),
+    TileSizeFilter(),
+    BlurFrameFilter(),
+    RainFilter(),
 )
