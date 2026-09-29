@@ -70,8 +70,17 @@ abstract class Tool(val controller: EditorController) {
      */
     open fun onLongPress(p: ToolPoint): Boolean = false
 
-    /** Tool became the active tool. */
+    /**
+     * Tool became active, or the active layer changed while it is the current tool (then it is
+     * preceded by [onDeactivate]).
+     */
     open fun onActivate() {}
+
+    /** The user picked this tool (called once, right after [onActivate]; not on layer changes). */
+    open fun onSelected() {}
+
+    /** controller.selection changed (menu, undo, another tool) while this tool is current. */
+    open fun onSelectionChanged() {}
 
     /** Another tool is being activated (or the editor closes): commit pending work. */
     open fun onDeactivate() { if (hasPendingWork) commit() }
