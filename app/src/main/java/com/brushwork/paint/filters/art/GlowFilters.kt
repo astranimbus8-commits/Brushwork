@@ -190,7 +190,7 @@ class CrossFilter : Filter("art.cross_filter", "Cross Filter", FilterCategory.AR
     )
 
     /** Detected light sources: centers (buffer px), premultiplied colors (0..255) and ray lengths. */
-    private class Glints(val n: Int, val x: FloatArray, val y: FloatArray, val r: FloatArray, val g: FloatArray, val b: FloatArray, val len: FloatArray)
+    internal class Glints(val n: Int, val x: FloatArray, val y: FloatArray, val r: FloatArray, val g: FloatArray, val b: FloatArray, val len: FloatArray)
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val area = (values.float("area") / 100f).coerceIn(0f, 1f)
@@ -248,7 +248,7 @@ class CrossFilter : Filter("art.cross_filter", "Cross Filter", FilterCategory.AR
      * The jitter is smooth value noise in full-resolution coordinates, so the glints chosen in a
      * flat bright area sit at the same places in a downscaled preview and in the final result.
      */
-    private fun detect(src: PixelBuffer, threshold: Float, length: Float, ctx: FilterContext): Glints {
+    internal fun detect(src: PixelBuffer, threshold: Float, length: Float, ctx: FilterContext): Glints {
         val w = src.width; val h = src.height
         val p = src.pixels
         val cell = max(Glow.minFactor(w, h, 1_500_000), max(1, (length / 40f).roundToInt()))

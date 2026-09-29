@@ -1,6 +1,7 @@
 package com.brushwork.paint.filters.art
 
 import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.art.ArtTestUtil.a
 import com.brushwork.paint.filters.art.ArtTestUtil.b
 import com.brushwork.paint.filters.art.ArtTestUtil.g
@@ -96,6 +97,54 @@ class SheerFilterTest {
         val nFilled = filled.pixels.count { it != gray }
         val nHollow = hollow.pixels.count { it != gray }
         assertTrue("filled $nFilled hollow $nHollow", nHollow < nFilled * 0.75 && nHollow > 0)
+    }
+
+    @Test
+    fun precomputedSmallSpecksMatchExactRasterizing() {
+        val w = 24
+        for (shape in SheerShape.entries) for (outline in listOf(false, true)) {
+            if (outline && !shape.filled) continue
+            for (size in listOf(1f, 2.5f, 5f)) {
+                val dx = ArtMath.unitX(30f); val dy = ArtMath.unitY(30f)
+                val fast = SheerFilter.Stamp(shape, size, 1f, outline, dx, dy)
+                val exact = SheerFilter.Stamp(shape, size, 1f, outline, dx, dy, exact = true)
+                // Tiny specks change energy quickly with their sub-pixel position, so energy is
+                // compared over many positions; single pixels must agree closely everywhere.
+                var energyFast = 0f; var energyExact = 0f
+                for (t in 0 until 32) {
+                    val fx = 8f + 8f * FilterMath.hash01(t, 1, 77); val fy = 8f + 8f * FilterMath.hash01(t, 2, 77)
+                    val fastAcc = FloatArray(w * w); val exactAcc = FloatArray(w * w)
+                    fast.draw(fastAcc, w, 0, w, fx, fy, 1f)
+                    exact.draw(exactAcc, w, 0, w, fx, fy, 1f)
+                    val what = "$shape outline=$outline size=$size at $fx,$fy"
+                    var maxDiff = 0f
+                    for (i in fastAcc.indices) maxDiff = maxOf(maxDiff, abs(fastAcc[i] - exactAcc[i]))
+                    assertTrue("$what differs by $maxDiff", maxDiff < 0.2f)
+                    energyFast += fastAcc.sum(); energyExact += exactAcc.sum()
+                    // Band clipping gives exactly the corresponding rows.
+                    val band = FloatArray(4 * w)
+                    fast.draw(band, w, 10, 14, fx, fy, 1f)
+                    for (i in band.indices) assertEquals(fastAcc[10 * w + i], band[i], 0f)
+                }
+                assertTrue(
+                    "$shape outline=$outline size=$size energy $energyFast vs $energyExact",
+                    energyExact > 0f && abs(energyFast - energyExact) < 0.03f * energyExact,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun smallestSpecksAtFullAmountAreDenseUnbiasedAndSeeded() {
+        for (shape in SheerShape.entries) {
+            val f = SheerFilter(shape)
+            val src = graySquare(100)
+            val out = run(f, src, "size" to 1f, "amount" to 100f)
+            val dev = out.pixels.map { r(it) - 128 }
+            assertTrue("${shape.name} changed ${dev.count { it != 0 }}", dev.count { it != 0 } > 5000)
+            assertTrue("${shape.name} bias ${dev.average()}", abs(dev.average()) < 4.0)
+            assertArrayEquals(out.pixels, run(f, src, "size" to 1f, "amount" to 100f).pixels)
+        }
     }
 
     @Test

@@ -123,7 +123,16 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
      * evaluating the shape per pixel) are stamped from kernels precomputed at [PHASES]×[PHASES]
      * sub-pixel positions; larger ones are rasterized exactly.
      */
-    private class Stamp(val shape: SheerShape, val s: Float, scale: Float, val outline: Boolean, val dcx: Float, val dcy: Float) {
+    internal class Stamp(
+        val shape: SheerShape,
+        val s: Float,
+        scale: Float,
+        val outline: Boolean,
+        val dcx: Float,
+        val dcy: Float,
+        /** Always rasterize exactly (tests compare the precomputed kernels against this). */
+        exact: Boolean = false,
+    ) {
         private val half = s / 2f
         /** Half width of line/cross strokes. */
         private val hw = when (shape) {
@@ -161,7 +170,7 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
                 else -> half + 1f
             }
             kr = ceil(reach).toInt() + 1
-            kernels = if (kr > MAX_KERNEL_RADIUS) null else {
+            kernels = if (exact || kr > MAX_KERNEL_RADIUS) null else {
                 val side = 2 * kr + 1
                 Array(PHASES * PHASES) { ph ->
                     val ox = (ph % PHASES + 0.5f) / PHASES; val oy = (ph / PHASES + 0.5f) / PHASES
@@ -309,7 +318,7 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
 
         private companion object {
             /** Sub-pixel positions per axis of the precomputed small-speck kernels. */
-            const val PHASES = 8
+            const val PHASES = 16
             /** Largest kernel radius (13×13 kernels) stamped from precomputed kernels. */
             const val MAX_KERNEL_RADIUS = 6
         }

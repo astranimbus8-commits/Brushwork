@@ -53,6 +53,42 @@ class OilPaintFilterTest {
     }
 
     @Test
+    fun keepsHueEdgesOfEqualBrightness() {
+        // Red and green of (nearly) the same luminance: the edge must not smear.
+        val red = ColorUtils.rgb(200, 60, 60); val green = ColorUtils.rgb(40, 140, 80)
+        val src = PixelBuffer(40, 20)
+        for (y in 0 until 20) for (x in 0 until 40) src[x, y] = if (x < 20) red else green
+        val out = run(oil, src, "size" to 6f, *plain)
+        for (y in 0 until 20) {
+            val l = out[18, y]; val rr = out[21, y]
+            assertTrue("left ${Integer.toHexString(l)}", kotlin.math.abs(r(l) - 200) <= 8 && kotlin.math.abs(g(l) - 60) <= 8)
+            assertTrue("right ${Integer.toHexString(rr)}", kotlin.math.abs(r(rr) - 40) <= 8 && kotlin.math.abs(g(rr) - 140) <= 8)
+        }
+    }
+
+    @Test
+    fun sharpnessRaisesEdgeContrastWithoutTouchingFlatAreasOrAlpha() {
+        val src = PixelBuffer(40, 20)
+        for (y in 0 until 20) for (x in 0 until 40) src[x, y] = if (x < 20) 0xFF404040.toInt() else 0xFFC0C0C0.toInt()
+        val soft = run(oil, src, *plain)
+        val sharp = run(oil, src, *plain, "sharpness" to 100f)
+        assertTrue("dark side ${r(sharp[19, 10])} vs ${r(soft[19, 10])}", r(sharp[19, 10]) < r(soft[19, 10]) - 5)
+        assertTrue("light side ${r(sharp[20, 10])} vs ${r(soft[20, 10])}", r(sharp[20, 10]) > r(soft[20, 10]) + 5)
+        assertEquals(soft[3, 10], sharp[3, 10]); assertEquals(soft[36, 10], sharp[36, 10])
+        assertEquals(r(sharp[20, 10]), b(sharp[20, 10]))
+        // A flat patch on a transparent layer gets no halo from the transparency around it.
+        val patch = PixelBuffer(40, 40)
+        for (y in 10 until 30) for (x in 10 until 30) patch[x, y] = 0xFF6080A0.toInt()
+        val plainPatch = run(oil, patch, *plain)
+        val sharpPatch = run(oil, patch, *plain, "sharpness" to 100f)
+        for (i in patch.pixels.indices) {
+            val p = plainPatch.pixels[i]; val s = sharpPatch.pixels[i]
+            assertEquals(a(p), a(s))
+            if (a(p) == 255) assertTrue("${Integer.toHexString(p)} -> ${Integer.toHexString(s)}", kotlin.math.abs(r(p) - r(s)) <= 3 && kotlin.math.abs(b(p) - b(s)) <= 3)
+        }
+    }
+
+    @Test
     fun paintOnTransparentLayerStaysNearTheStroke() {
         val src = PixelBuffer(60, 40)
         for (y in 14..25) for (x in 5 until 55) src[x, y] = 0xFF202020.toInt()

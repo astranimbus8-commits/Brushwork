@@ -65,6 +65,41 @@ class GlitchRetroChromeTest {
         assertTrue(ArtTestUtil.countDifferent(out, other) > 50)
     }
 
+    /** Distinct colors in every row and column (no channel saturates). */
+    private fun distinct(w: Int, h: Int) = PixelBuffer(w, h).also { p ->
+        for (y in 0 until h) for (x in 0 until w) p[x, y] = ColorUtils.argb(255, x * 3, y * 2, (x * 5 + y * 7) and 0xFF)
+    }
+
+    /** Offset d if [out] row y is [src] row y shifted right by d (wrapping), else null. */
+    private fun shiftOf(out: PixelBuffer, src: PixelBuffer, y: Int): Int? {
+        val w = src.width
+        return (0 until w).firstOrNull { d -> (0 until w).all { x -> out[x, y] == src[Math.floorMod(x - d, w), y] } }
+    }
+
+    @Test
+    fun glitchPreviewHasTheSameBandLayoutAsTheFinalResult() {
+        val params = arrayOf<Pair<String, Any>>("strength" to 60f, "height" to 10f, "colorShift" to 0f, "blocks" to 0f, "noise" to 0f)
+        val big = distinct(80, 120)
+        val full = run(glitch, big, *params)
+        val small = distinct(40, 60)
+        val preview = run(glitch, small, *params, scale = 0.5f)
+        var agree = 0; var glitched = 0
+        for (y in 0 until 60) {
+            val prevChanged = (0 until 40).any { preview[it, y] != small[it, y] }
+            val fullChanged = listOf(2 * y, 2 * y + 1).map { fy -> (0 until 80).any { full[it, fy] != big[it, fy] } }
+            if (prevChanged == fullChanged[0] || prevChanged == fullChanged[1]) agree++
+            // Shifted rows move by half as many preview pixels.
+            val d = shiftOf(preview, small, y) ?: continue
+            if (d == 0) continue
+            glitched++
+            val matches = listOf(2 * y, 2 * y + 1).mapNotNull { shiftOf(full, big, it) }
+                .any { dd -> Math.floorMod(dd - 2 * d + 1, 80) <= 2 }
+            assertTrue("row $y shifts $d in the preview", matches)
+        }
+        assertTrue("agree $agree", agree >= 54)
+        assertTrue("glitched $glitched", glitched > 10)
+    }
+
     @Test
     fun glitchStaticKeepsTransparency() {
         val src = PixelBuffer(40, 200)

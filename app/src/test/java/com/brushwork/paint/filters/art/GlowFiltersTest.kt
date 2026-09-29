@@ -1,6 +1,7 @@
 package com.brushwork.paint.filters.art
 
 import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.art.ArtTestUtil.a
 import com.brushwork.paint.filters.art.ArtTestUtil.b
 import com.brushwork.paint.filters.art.ArtTestUtil.g
@@ -110,6 +111,27 @@ class GlowFiltersTest {
         assertTrue(r(long[60 + 30, 60]) > 100)
         assertTrue(r(short[60 + 30, 60]) < 5)
         assertTrue(r(long[60 + 5, 60]) > r(long[60 + 40, 60]))
+    }
+
+    @Test
+    fun crossGlintsInFlatBrightAreasMatchBetweenPreviewAndFinal() {
+        // A big flat white area: glint positions come from the tie-breaking jitter only.
+        val full = PixelBuffer.filled(400, 400, black)
+        for (y in 100 until 300) for (x in 60 until 340) full[x, y] = -1
+        val small = PixelBuffer.filled(100, 100, black)
+        for (y in 25 until 75) for (x in 15 until 85) small[x, y] = -1
+        val gFull = cross.detect(full, 0.8f, 120f, FilterContext())
+        val gSmall = cross.detect(small, 0.8f, 30f, FilterContext(scale = 0.25f))
+        assertTrue("full ${gFull.n} preview ${gSmall.n}", gFull.n >= 5 && gSmall.n >= 5)
+        var matched = 0
+        for (i in 0 until gFull.n) {
+            val near = (0 until gSmall.n).any { j ->
+                kotlin.math.hypot(gSmall.x[j] * 4f - gFull.x[i], gSmall.y[j] * 4f - gFull.y[i]) <= 12f
+            }
+            if (near) matched++
+        }
+        assertTrue("matched $matched of ${gFull.n} (preview ${gSmall.n})", matched >= gFull.n * 3 / 4)
+        assertTrue(kotlin.math.abs(gFull.n - gSmall.n) <= maxOf(3, gFull.n / 4))
     }
 
     @Test
