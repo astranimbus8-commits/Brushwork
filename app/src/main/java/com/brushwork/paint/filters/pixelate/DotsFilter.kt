@@ -22,8 +22,9 @@ import kotlin.math.tan
  *
  * - Dot size "Uniform": every dot has the radius set by Density (100% fills the cells completely)
  *   and takes its cell's average color and opacity, like an LED / bead display.
- * - Dot size "By darkness": a halftone screen; the dot area follows the cell's ink amount
- *   (darkness x opacity), so white or empty cells get no dot and black cells a full one.
+ * - Dot size "By darkness": a halftone screen; the share of the cell covered by its dot equals
+ *   the cell's ink amount (darkness x opacity) at 100% density, so white or empty cells get no
+ *   dot and black cells a full one. Lower densities scale the dots down.
  * Dots use the cell color or a custom color, over transparency or a background color.
  */
 class DotsFilter private constructor(id: String, name: String, private val hexagonal: Boolean) :
@@ -58,7 +59,9 @@ class DotsFilter private constructor(id: String, name: String, private val hexag
         val out = PixelBuffer(w, h)
         val px = out.pixels
         CellMosaic.label(lattice, w, h, px, ctx)
+        ctx.progress(0.3f)
         val colors = CellMosaic.averages(src, lattice, px, ctx)
+        ctx.progress(0.5f)
         // +0.5 so that at 100% every pixel of a cell (even at its corners) is fully covered.
         val fullRadius = (lattice.boundRadius + 0.5f) * density
         val lut = inkLut

@@ -234,6 +234,19 @@ class PixelateFiltersTest {
     }
 
     @Test
+    fun crystalSeedsDoNotDependOnGridWidth() {
+        // 100 px -> 10 grid columns, 105 px -> 11: the shared columns must keep their seeds so a
+        // downscaled preview (whose grid may round differently) shows the same crystals.
+        val a = VoronoiLattice(100, 60, 10f, 1f, 3)
+        val b = VoronoiLattice(105, 60, 10f, 1f, 3)
+        val ca = FloatArray(2); val cb = FloatArray(2)
+        for (y in 0 until 60 step 3) for (x in 0 until 85 step 3) {
+            a.cellAt(x + 0.5f, y + 0.5f, ca); b.cellAt(x + 0.5f, y + 0.5f, cb)
+            assertEquals(ca[0], cb[0], 1e-4f); assertEquals(ca[1], cb[1], 1e-4f)
+        }
+    }
+
+    @Test
     fun previewScaleShrinksCellsProportionally() {
         // The same relative layout at 1/4 scale: distinct colors (= cells) stay about the same.
         val full = randomImage(200, 160, 8, withAlpha = false)

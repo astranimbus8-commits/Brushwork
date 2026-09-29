@@ -80,11 +80,14 @@ internal object CellMosaic {
         val out = PixelBuffer(w, h)
         val labels = out.pixels
         label(lattice, w, h, labels, ctx)
+        ctx.progress(0.5f)
         val colors = averages(src, lattice, labels, ctx)
+        ctx.progress(0.85f)
         Parallel.forRows(h) { y0, y1 ->
             ctx.checkCancelled()
             for (i in y0 * w until y1 * w) labels[i] = colors[labels[i]]
         }
+        ctx.progress(1f)
         return out
     }
 

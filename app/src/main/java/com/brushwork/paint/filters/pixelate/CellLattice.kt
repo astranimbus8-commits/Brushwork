@@ -292,10 +292,12 @@ internal class VoronoiLattice(width: Int, height: Int, size: Float, irregularity
 
     init {
         val j = irregularity.coerceIn(0f, 1f)
+        // Seeds are hashed by grid coordinates (not the linear index) so the pattern does not
+        // depend on the grid width, which may round differently in the downscaled preview.
         for (gy in 0 until gh) for (gx in 0 until gw) {
             val k = gy * gw + gx
-            sx[k] = (gx + 0.5f + (PixelRandom.rand01(k, 11, seed) - 0.5f) * j) * s
-            sy[k] = (gy + 0.5f + (PixelRandom.rand01(k, 12, seed) - 0.5f) * j) * s
+            sx[k] = (gx + 0.5f + (PixelRandom.rand01(gx, gy, 11, seed) - 0.5f) * j) * s
+            sy[k] = (gy + 0.5f + (PixelRandom.rand01(gx, gy, 12, seed) - 0.5f) * j) * s
         }
     }
 
@@ -338,6 +340,12 @@ internal object PixelRandom {
     /** Uniform value in [0, 1) for ([index], [stream], [seed]). */
     fun rand01(index: Int, stream: Int, seed: Int): Float {
         val h = fmix(fmix(seed * -0x61c88647 + index) xor (stream * 0x27d4eb2f))
+        return (h ushr 8) / 16777216f
+    }
+
+    /** Uniform value in [0, 1) for the 2D cell ([x], [y]), [stream] and [seed]. */
+    fun rand01(x: Int, y: Int, stream: Int, seed: Int): Float {
+        val h = fmix(fmix(fmix(seed * -0x61c88647 + x) xor (y * 0x27d4eb2f)) xor (stream * 0x165667b1))
         return (h ushr 8) / 16777216f
     }
 }
