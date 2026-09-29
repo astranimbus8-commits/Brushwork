@@ -164,14 +164,25 @@ internal object SmokeUi {
     /**
      * Nothing recomposes by itself once the screen has settled: no state written during
      * composition, no size-feedback loop, no animation that never ends. Lets [settleMs] of time
-     * pass, then requires ZERO applied changes over another second without input.
+     * pass (longer than a short snackbar, 4 s, whose dismissal recomposes), then requires ZERO
+     * applied changes over another second without input.
      */
-    fun assertIdle(where: String, settleMs: Long = 3_000) {
+    fun assertIdle(where: String, settleMs: Long = 5_000) {
         Smoke.pump(settleMs, stepMs = 50)
-        val before = appliedChanges()
-        Smoke.pump(1_000, stepMs = 50)
-        val after = appliedChanges()
-        assertTrue("$where: the UI keeps recomposing with no input (${after - before} changes in 1 s)", after == before)
+        // Background work (brush previews rendered one by one, thumbnails, a file list) finishes
+        // at real-time moments and recomposes once each; a loop never stops. So wait up to a few
+        // seconds of REAL time for one quiet (virtual) second.
+        val counts = mutableListOf<Long>()
+        val end = System.currentTimeMillis() + 8_000
+        while (System.currentTimeMillis() < end) {
+            Thread.sleep(50)
+            val before = appliedChanges()
+            Smoke.pump(1_000, stepMs = 50)
+            val changes = appliedChanges() - before
+            if (changes == 0L) return
+            counts += changes
+        }
+        throw AssertionError("$where: the UI keeps recomposing with no input (changes per second: $counts)")
     }
 
     /** At least [min] windows are shown and every one has a size (a sheet that failed to measure would not). */
