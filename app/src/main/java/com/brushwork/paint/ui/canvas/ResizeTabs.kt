@@ -51,7 +51,7 @@ internal fun printUnitFor(unit: LengthUnit) = if (unit == LengthUnit.PX) LengthU
 
 internal fun formatDpi(dpi: Double) = Units.formatNumber(dpi, 1)
 
-/** A typed resolution limited to the supported range. */
+/** A resolution limited to the supported range (also guards against a typed "NaN"). */
 internal fun clampDpi(v: Double): Double =
     if (v.isNaN()) CanvasOps.MIN_DPI.toDouble() else v.coerceIn(CanvasOps.MIN_DPI.toDouble(), CanvasOps.MAX_DPI.toDouble())
 
@@ -122,13 +122,13 @@ internal fun ResizeImageTab(
     NumberField(
         "Resolution", dpi,
         onValueChange = { typed ->
-            // Clamped here (not by the field) so every typed number takes effect right away.
             val v = clampDpi(typed)
             wPx = CanvasAdjustMath.pxAfterDpiChange(wPx, dpi, v, unit)
             hPx = CanvasAdjustMath.pxAfterDpiChange(hPx, dpi, v, unit)
             dpi = v
         },
         modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi",
+        min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
     )
     if (unit != LengthUnit.PX) {
         Notice("A new resolution keeps the size in ${unit.label.lowercase()}, so the number of pixels changes with it.")
@@ -182,10 +182,12 @@ internal fun ResizeImageTab(
         text = if (!sizeChanged && dpiChanged) "Change resolution" else "Resize image",
         enabled = !busy && error == null && (sizeChanged || dpiChanged),
         onClick = {
-            // Read the state now (not the values of the last composition).
-            val w = CanvasAdjustMath.toPixels(wPx)
-            val h = CanvasAdjustMath.toPixels(hPx)
-            if (CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])) onApplied()
+            // The resolution field clamps out-of-range text only when it commits on focus loss.
+            afterCommit {
+                val w = CanvasAdjustMath.toPixels(wPx)
+                val h = CanvasAdjustMath.toPixels(hPx)
+                if (CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])) onApplied()
+            }
         },
     )
 }

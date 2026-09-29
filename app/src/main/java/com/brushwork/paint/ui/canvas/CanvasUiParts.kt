@@ -63,8 +63,9 @@ internal enum class NoticeKind { INFO, WARNING, ERROR }
  * A focused NumberField doesn't show outside value changes and re-commits its own text when it
  * loses focus, which would overwrite the preset; so this clears focus first and runs the action
  * one frame later, after that commit. Actions must read the current state values themselves, not
- * values captured at composition. Apply buttons don't need it: fields commit valid numbers while
- * typing.
+ * values captured at composition. Apply buttons only need it next to a field with a min/max (the
+ * resolution): fields commit in-range numbers while typing but clamp out-of-range text only on
+ * focus loss.
  */
 @Composable
 internal fun rememberAfterFieldCommit(): (() -> Unit) -> Unit {

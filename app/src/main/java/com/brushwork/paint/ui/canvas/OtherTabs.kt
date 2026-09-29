@@ -240,6 +240,7 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     NumberField(
         "Resolution", dpi, { dpi = clampDpi(it) },
         modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", step = 1.0,
+        min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
     )
     ChoiceChips(
         presets.map { "$it dpi" },
@@ -256,7 +257,8 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     ApplyButton(
         "Set ${formatDpi(dpi)} dpi",
         enabled = !busy && !sameDpi(dpi, doc.dpi),
-        onClick = { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() },
+        // The field clamps out-of-range text only when it commits on focus loss.
+        onClick = { afterCommit { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() } },
     )
 }
 
