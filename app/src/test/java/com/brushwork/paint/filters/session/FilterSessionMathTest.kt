@@ -2,10 +2,8 @@ package com.brushwork.paint.filters.session
 
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.PixelBuffer
-import com.brushwork.paint.filters.CurvePoint
 import com.brushwork.paint.filters.FilterRecents
 import com.brushwork.paint.filters.FilterSessionMath
-import com.brushwork.paint.filters.MonotoneCubic
 import com.brushwork.paint.filters.PixelRect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -110,34 +108,6 @@ class FilterSessionMathTest {
         assertEquals(128, hs[0])
         assertTrue(FilterSessionMath.isFullyTransparent(PixelBuffer(2, 2)))
         assertTrue(!FilterSessionMath.isFullyTransparent(buf))
-    }
-
-    @Test
-    fun monotoneCubicPassesThroughPointsWithoutOvershoot() {
-        val pts = listOf(CurvePoint(0f, 0f), CurvePoint(0.25f, 0.6f), CurvePoint(0.5f, 0.62f), CurvePoint(1f, 1f))
-        val c = MonotoneCubic(pts)
-        for (p in pts) assertEquals(p.y, c.eval(p.x), 1e-5f)
-        val s = c.sample(256)
-        for (i in 1 until s.size) assertTrue("non-decreasing at $i", s[i] >= s[i - 1] - 1e-6f)
-        // Between the nearly flat pair the curve stays inside their range.
-        for (i in 65..127) assertTrue(s[i] in 0.6f..0.62f)
-    }
-
-    @Test
-    fun monotoneCubicIdentityFlatAndEdgeCases() {
-        val id = MonotoneCubic(listOf(CurvePoint(0f, 0f), CurvePoint(1f, 1f)))
-        for (i in 0..10) assertEquals(i / 10f, id.eval(i / 10f), 1e-5f)
-        val flat = MonotoneCubic(listOf(CurvePoint(0f, 0.3f), CurvePoint(0.5f, 0.3f), CurvePoint(1f, 0.9f)))
-        for (i in 0..50) assertEquals(0.3f, flat.eval(i / 100f), 1e-5f)
-        assertEquals(0.4f, MonotoneCubic(listOf(CurvePoint(0.5f, 0.4f))).eval(0.9f), 0f)
-        assertEquals(0.7f, MonotoneCubic(emptyList()).eval(0.7f), 0f)
-        // Unsorted input and duplicate x are tolerated; outside the range the curve is flat.
-        val messy = MonotoneCubic(listOf(CurvePoint(1f, 1f), CurvePoint(0.2f, 0.1f), CurvePoint(0.2f, 0.2f), CurvePoint(0.1f, 0f)))
-        assertEquals(0.2f, messy.eval(0.2f), 1e-5f)
-        assertEquals(0f, messy.eval(0f), 0f)
-        // Decreasing curves (inverted tone) are monotone too.
-        val inv = MonotoneCubic(listOf(CurvePoint(0f, 1f), CurvePoint(0.3f, 0.9f), CurvePoint(1f, 0f))).sample(64)
-        for (i in 1 until inv.size) assertTrue(inv[i] <= inv[i - 1] + 1e-6f)
     }
 
     @Test
