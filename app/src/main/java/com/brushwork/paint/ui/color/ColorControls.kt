@@ -372,8 +372,9 @@ fun HexField(state: ColorEditState, withAlpha: Boolean, modifier: Modifier = Mod
         if (c != state.color) state.setColor(c)
     }
 
-    // While focused the field shows the typed text; if the color is changed some other way
-    // (e.g. the alpha slider), text that no longer stands for it is replaced.
+    // While focused the field shows the typed text. The picker's own controls take focus away
+    // first (clearFocusOnPress); if the color still changes some other way (e.g. the drawing
+    // color is set from outside), text that no longer stands for it is replaced.
     if (focused) {
         LaunchedEffect(current) {
             if (hexTextColor(text, withAlpha, state.alpha) != state.color) text = current
