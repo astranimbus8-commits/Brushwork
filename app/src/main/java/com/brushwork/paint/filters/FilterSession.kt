@@ -166,7 +166,6 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Builds the preview source and renders the first preview. Called by EditorController.startFilter(). */
     fun start() {
         if (isClosed) return
-        runCatching { FilterRecents.record(controller.appContext, filter.id) }
         try {
             buildPreviewSource()
         } catch (e: OutOfMemoryError) {
@@ -175,6 +174,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
             controller.scope.launch(Dispatchers.Main) { cancel() }
             return
         }
+        runCatching { FilterRecents.record(controller.appContext, filter.id) }
         analyzeSourceAsync(firstTime = true)
         if (filter.livePreview) requestPreview(0L)
         // The selection can change from menus while the session is open: keep the preview in sync.
@@ -211,6 +211,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         analysisJob?.cancel(); analysisJob = null
         selectionWatch?.cancel(); selectionWatch = null
         applyJob?.cancel(); applyJob = null
+        computingJob = null
+        isRendering = false
         isComparing = false
         draggingPoint = null
         clearOverride()

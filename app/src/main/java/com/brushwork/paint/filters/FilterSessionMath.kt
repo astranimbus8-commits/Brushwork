@@ -146,9 +146,10 @@ object FilterSessionMath {
 }
 
 /**
- * Monotone cubic (Fritsch–Carlson) interpolation through tone-curve points, the same scheme the
- * color-adjustment filters use, so the curve drawn in the editor is the curve that gets applied.
- * Outside the first/last point the curve is flat; results are not clamped.
+ * Monotone cubic interpolation through tone-curve points (standard Fritsch–Carlson tangents), used
+ * to draw the curve editor. Curve-based adjustment filters are expected to use the same variant so
+ * the drawn curve matches the applied one. Outside the first/last point the curve is flat; results
+ * are not clamped.
  */
 class MonotoneCubic(points: List<CurvePoint>) {
     private val xs: FloatArray
