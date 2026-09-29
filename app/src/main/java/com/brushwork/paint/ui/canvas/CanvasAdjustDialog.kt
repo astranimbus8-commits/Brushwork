@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.canvas
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -11,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -19,6 +21,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -58,7 +61,9 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
     val layersVersion = controller.layersVersion
     val busy = controller.busyMessage != null
     val thumbnail by produceState<CanvasThumbnail?>(null, docVersion, layersVersion) {
-        value = withContext(Dispatchers.Default) { renderThumbnail(controller.doc) }
+        // The layer list is copied here on the main thread; only pixels are read in the background.
+        val source = thumbnailSource(controller.doc)
+        value = if (source == null) null else withContext(Dispatchers.Default) { renderThumbnail(source) }
     }
 
     BwSheet(title = "Canvas", onDismiss = onDismiss, scrollable = false) {
@@ -79,21 +84,8 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
                 )
             }
         }
-        if (busy) {
-            // The rotate tab stays open while it works; show the editor's busy state here too.
-            val progress = controller.busyProgress
-            if (progress >= 0f) {
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
-            }
-            Text(
-                controller.busyMessage ?: "",
-                style = MaterialTheme.typography.bodySmall,
-                color = BrushworkColors.OnChromeDim,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
+        // The rotate tab stays open while it works; show the editor's busy state here too.
+        if (busy) BusyStrip(controller)
         Column(
             Modifier
                 .fillMaxWidth()
@@ -115,15 +107,45 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
     }
 }
 
-/** Renders a ~360 px flattened preview. Reads layer bitmaps without modifying them. */
-private fun renderThumbnail(doc: Document): CanvasThumbnail? {
-    if (doc.layers.isEmpty()) return null
-    return try {
-        val bmp = Compositor(doc) { null }.renderThumbnail(360)
-        val px = IntArray(bmp.width * bmp.height)
-        bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
-        CanvasThumbnail(bmp.asImageBitmap(), bmp.width, bmp.height, px)
-    } catch (e: OutOfMemoryError) {
-        null
+/** Progress of the running operation, with Stop when it can be cancelled. Reads progress state here only. */
+@Composable
+private fun BusyStrip(controller: EditorController) {
+    val message = controller.busyMessage ?: return
+    val progress = controller.busyProgress
+    val cancel = controller.busyCancel
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            if (progress >= 0f) {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
+            }
+            Text(
+                message,
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+                modifier = Modifier.padding(top = 4.dp),
+            )
+        }
+        if (cancel != null) TextButton(onClick = cancel) { Text("Stop") }
     }
+}
+
+/** A private document sharing the layers (not the live list, which the main thread may change). */
+private fun thumbnailSource(doc: Document): Document? {
+    if (doc.layers.isEmpty()) return null
+    return Document("canvas-thumbnail", "", doc.width, doc.height, doc.dpi).also { it.layers += doc.layers }
+}
+
+/** Renders a ~360 px flattened preview. Reads layer bitmaps without modifying them. */
+private fun renderThumbnail(source: Document): CanvasThumbnail? = try {
+    val bmp = Compositor(source) { null }.renderThumbnail(360)
+    val px = IntArray(bmp.width * bmp.height)
+    bmp.getPixels(px, 0, bmp.width, 0, 0, bmp.width, bmp.height)
+    CanvasThumbnail(bmp.asImageBitmap(), bmp.width, bmp.height, px)
+} catch (e: OutOfMemoryError) {
+    null
+} catch (e: RuntimeException) {
+    // A layer changed under the renderer (e.g. an undo swapped its bitmap); the next version re-renders.
+    null
 }

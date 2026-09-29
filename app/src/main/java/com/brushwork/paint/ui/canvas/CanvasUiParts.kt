@@ -28,8 +28,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalFocusManager
-import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
@@ -39,6 +37,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -48,6 +47,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.theme.BrushworkColors
+import kotlinx.coroutines.launch
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -59,9 +59,12 @@ import kotlin.math.sign
 internal enum class NoticeKind { INFO, WARNING, ERROR }
 
 /**
- * Returns a runner that first lets a focused number field commit its typed text (fields commit
- * on focus loss, and tapping a button doesn't move focus), then runs the action one frame later.
- * Actions must read the current state values themselves, not values captured at composition.
+ * Runner for preset buttons that REPLACE field values (percent, dpi presets, crop shortcuts).
+ * A focused NumberField doesn't show outside value changes and re-commits its own text when it
+ * loses focus, which would overwrite the preset; so this clears focus first and runs the action
+ * one frame later, after that commit. Actions must read the current state values themselves, not
+ * values captured at composition. Apply buttons don't need it: fields commit valid numbers while
+ * typing.
  */
 @Composable
 internal fun rememberAfterFieldCommit(): (() -> Unit) -> Unit {

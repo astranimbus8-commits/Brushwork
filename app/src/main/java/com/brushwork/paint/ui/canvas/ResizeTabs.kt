@@ -51,6 +51,10 @@ internal fun printUnitFor(unit: LengthUnit) = if (unit == LengthUnit.PX) LengthU
 
 internal fun formatDpi(dpi: Double) = Units.formatNumber(dpi, 1)
 
+/** A typed resolution limited to the supported range. */
+internal fun clampDpi(v: Double): Double =
+    if (v.isNaN()) CanvasOps.MIN_DPI.toDouble() else v.coerceIn(CanvasOps.MIN_DPI.toDouble(), CanvasOps.MAX_DPI.toDouble())
+
 @Composable
 internal fun UnitHeader(title: String, unit: LengthUnit, onUnitChange: (LengthUnit) -> Unit, units: List<LengthUnit> = LengthUnit.entries) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -117,12 +121,14 @@ internal fun ResizeImageTab(
     )
     NumberField(
         "Resolution", dpi,
-        onValueChange = { v ->
+        onValueChange = { typed ->
+            // Clamped here (not by the field) so every typed number takes effect right away.
+            val v = clampDpi(typed)
             wPx = CanvasAdjustMath.pxAfterDpiChange(wPx, dpi, v, unit)
             hPx = CanvasAdjustMath.pxAfterDpiChange(hPx, dpi, v, unit)
             dpi = v
         },
-        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", min = 1.0, max = 10_000.0,
+        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi",
     )
     if (unit != LengthUnit.PX) {
         Notice("A new resolution keeps the size in ${unit.label.lowercase()}, so the number of pixels changes with it.")
@@ -176,14 +182,10 @@ internal fun ResizeImageTab(
         text = if (!sizeChanged && dpiChanged) "Change resolution" else "Resize image",
         enabled = !busy && error == null && (sizeChanged || dpiChanged),
         onClick = {
-            afterCommit {
-                val w = CanvasAdjustMath.toPixels(wPx)
-                val h = CanvasAdjustMath.toPixels(hPx)
-                // Re-checked here: a just-committed field may have changed the numbers.
-                if (CanvasOps.validateSize(w, h, bitmaps, budget) == null &&
-                    CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])
-                ) onApplied()
-            }
+            // Read the state now (not the values of the last composition).
+            val w = CanvasAdjustMath.toPixels(wPx)
+            val h = CanvasAdjustMath.toPixels(hPx)
+            if (CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])) onApplied()
         },
     )
 }
@@ -209,7 +211,6 @@ internal fun CanvasSizeTab(
     var fillColor by rememberSaveable { mutableIntStateOf(0xFFFFFFFF.toInt()) }
     var picking by remember { mutableStateOf(false) }
     val budget = remember { CanvasOps.memoryBudget() }
-    val afterCommit = rememberAfterFieldCommit()
 
     val newW = CanvasAdjustMath.toPixels(wPx)
     val newH = CanvasAdjustMath.toPixels(hPx)
@@ -275,15 +276,11 @@ internal fun CanvasSizeTab(
         text = "Change canvas size",
         enabled = !busy && error == null && (newW != curW || newH != curH),
         onClick = {
-            afterCommit {
-                val w = CanvasAdjustMath.toPixels(wPx)
-                val h = CanvasAdjustMath.toPixels(hPx)
-                val growsNow = w > curW || h > curH
-                val fill = if (fillEnabled && growsNow) fillColor else null
-                if (CanvasOps.validateSize(w, h, bitmaps, budget) == null &&
-                    CanvasOps.applyResizeCanvas(c, w, h, anchor % 3, anchor / 3, fill)
-                ) onApplied()
-            }
+            // Read the state now (not the values of the last composition).
+            val w = CanvasAdjustMath.toPixels(wPx)
+            val h = CanvasAdjustMath.toPixels(hPx)
+            val fill = if (fillEnabled && (w > curW || h > curH)) fillColor else null
+            if (CanvasOps.applyResizeCanvas(c, w, h, anchor % 3, anchor / 3, fill)) onApplied()
         },
     )
 

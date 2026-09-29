@@ -12,10 +12,17 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.RulerSettings
+import com.brushwork.paint.model.Selection
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -38,18 +45,29 @@ class CanvasSnapshot(
     val colorMode: ColorMode,
     val layers: List<LayerSnapshot>,
 ) {
-    class LayerSnapshot(val layer: Layer, val bitmap: Bitmap, val mask: Bitmap?, val visible: Boolean)
+    class LayerSnapshot(
+        val layer: Layer,
+        val bitmap: Bitmap,
+        val mask: Bitmap?,
+        val visible: Boolean,
+        /** [Layer.contentVersion] when the snapshot was taken (detects pixel edits in between). */
+        val contentVersion: Long = layer.contentVersion,
+    )
 
     /** Number of full-size bitmaps (layers + masks). */
     val bitmapCount: Int get() = layers.size + layers.count { it.mask != null }
 
-    /** True while [doc] still has exactly the layers/bitmaps/size this snapshot was taken from. */
+    /**
+     * True while [doc] still has exactly the layers, bitmaps, pixels, size, dpi and color mode
+     * this snapshot was taken from (so a result computed from it can be applied).
+     */
     fun matches(doc: Document): Boolean {
         if (doc.width != width || doc.height != height || doc.layers.size != layers.size) return false
+        if (doc.dpi != dpi || doc.colorMode != colorMode) return false
         return layers.indices.all { i ->
             val l = doc.layers[i]
             val s = layers[i]
-            l === s.layer && l.bitmap === s.bitmap && l.mask === s.mask
+            l === s.layer && l.bitmap === s.bitmap && l.mask === s.mask && l.contentVersion == s.contentVersion
         }
     }
 
@@ -94,14 +112,19 @@ class CanvasResult(
 /** A canvas operation can't run; [message] is shown to the user. */
 class CanvasOpException(message: String) : Exception(message)
 
+/** Thrown from a progress callback to abandon an operation (the user tapped Stop). */
+class CanvasOpCancelledException : RuntimeException("Stopped")
+
 /**
  * Document-wide operations: resize image, canvas size, trim/crop, rotate/flip canvas, resolution
  * and color mode.
  *
  * The first group of functions are pure: they read a [CanvasSnapshot] and build NEW bitmaps for
- * every layer and mask (safe on a background thread, usable from tests). The `apply*` functions
- * are the UI entry points: they commit pending tool work, compute on [Dispatchers.Default] under
- * the controller's busy overlay and record a single undo step ([commit]).
+ * every layer and mask (safe on a background thread, usable from tests). `progress` callbacks get
+ * 0..1 on the calling thread and may throw (e.g. [CanvasOpCancelledException]) to abort; bitmaps
+ * created so far are then freed. The `apply*` functions are the UI entry points: they commit
+ * pending tool work, compute on [Dispatchers.Default] under the controller's busy overlay (with
+ * a Stop button) and record a single undo step ([commit]).
  */
 object CanvasOps {
     /** Largest supported side, in pixels. */
@@ -109,6 +132,9 @@ object CanvasOps {
 
     /** Share of the heap all layer bitmaps may use (same budget as the controller's layer limit). */
     const val MEMORY_FRACTION = 0.55
+
+    const val MIN_DPI = 1f
+    const val MAX_DPI = 10_000f
 
     // ------------------------------------------------------------------ validation
 
@@ -136,9 +162,19 @@ object CanvasOps {
         else -> "${(bytes / 1024.0).roundToInt().coerceAtLeast(1)} KB"
     }
 
+    /**
+     * True when switching [from] -> [to] rewrites pixels. Switching to RGB, or from monochrome to
+     * grayscale, only changes the mode (the pixels already qualify).
+     */
+    fun convertsPixels(from: ColorMode, to: ColorMode): Boolean =
+        to != from && to != ColorMode.RGB && !(to == ColorMode.GRAYSCALE && from == ColorMode.MONOCHROME)
+
     // ------------------------------------------------------------------ pure operations
 
-    /** Resamples every layer and mask to [newWidth] x [newHeight]; the document gets [dpi]. */
+    /**
+     * Resamples every layer and mask to [newWidth] x [newHeight]; the document gets [dpi]. In a
+     * monochrome document the smoothly resampled layers are thresholded back to 1-bit.
+     */
     fun resizeImage(
         snap: CanvasSnapshot,
         newWidth: Int,
@@ -148,7 +184,19 @@ object CanvasOps {
         progress: (Float) -> Unit = {},
     ): CanvasResult {
         checkSize(snap, newWidth, newHeight)
-        val layers = mapLayers(snap, progress) { src, _ -> resampleBitmap(src, newWidth, newHeight, resample) }
+        // Grayscale stays gray (equal channels are filtered identically); 1-bit needs a threshold.
+        val constrain = snap.colorMode == ColorMode.MONOCHROME && resample != Resample.NEAREST
+        val layers = mapLayers(snap, progress) { src, isMask, sub ->
+            if (constrain && !isMask) {
+                val out = resampleBitmap(src, newWidth, newHeight, resample) { f -> sub(f * 0.8f) }
+                try {
+                    convertInto(out, out, ColorMode.MONOCHROME, 128, false) { f -> sub(0.8f + f * 0.2f) }
+                } catch (t: Throwable) { out.recycle(); throw t }
+                out
+            } else {
+                resampleBitmap(src, newWidth, newHeight, resample, sub)
+            }
+        }
         val geometry = CanvasGeometry.scale(newWidth.toDouble() / snap.width, newHeight.toDouble() / snap.height)
         return CanvasResult(newWidth, newHeight, dpi, snap.colorMode, layers, geometry)
     }
@@ -170,7 +218,7 @@ object CanvasOps {
         checkSize(snap, newWidth, newHeight)
         val fill = fillBottom?.let { ColorModeOps.displayColor(it, snap.colorMode) }
         val bottomBitmap = snap.layers.first().bitmap
-        val layers = mapLayers(snap, progress) { src, isMask ->
+        val layers = mapLayers(snap, progress) { src, isMask, _ ->
             val background = when {
                 isMask -> MASK_WHITE
                 fill != null && src === bottomBitmap -> fill
@@ -192,50 +240,52 @@ object CanvasOps {
      * Union of the non-transparent pixels of all visible layers (masks are ignored), or an empty
      * rect when nothing visible is painted.
      */
-    fun opaqueBounds(snap: CanvasSnapshot): Rect {
+    fun opaqueBounds(snap: CanvasSnapshot, progress: (Float) -> Unit = {}): Rect {
         val out = Rect()
-        for (l in snap.layers) {
-            if (!l.visible) continue
-            opaqueBounds(l.bitmap)?.let { out.union(it) }
+        val visible = snap.layers.filter { it.visible }
+        visible.forEachIndexed { i, l ->
+            opaqueBounds(l.bitmap) { f -> progress((i + f) / visible.size) }?.let { out.union(it) }
         }
         return out
     }
 
     /** Crops to [opaqueBounds]. Throws [CanvasOpException] when there's nothing to trim. */
     fun trimTransparent(snap: CanvasSnapshot, progress: (Float) -> Unit = {}): CanvasResult {
-        val bounds = opaqueBounds(snap)
+        val bounds = opaqueBounds(snap) { f -> progress(f * 0.5f) }
         if (bounds.isEmpty) throw CanvasOpException("Nothing to trim: the visible layers are empty.")
         if (bounds.width() == snap.width && bounds.height() == snap.height) throw CanvasOpException("There are no transparent edges to trim.")
-        return cropTo(snap, bounds, progress)
+        return cropTo(snap, bounds) { f -> progress(0.5f + f * 0.5f) }
     }
 
     /** Rotates the whole canvas (all layers and masks). */
     fun rotate(snap: CanvasSnapshot, rotation: CanvasRotation, progress: (Float) -> Unit = {}): CanvasResult {
+        if (snap.layers.isEmpty()) throw CanvasOpException("The drawing has no layers.")
         val swap = rotation.quarterTurnsCw % 2 == 1
         val w = if (swap) snap.height else snap.width
         val h = if (swap) snap.width else snap.height
         val geometry = CanvasGeometry.rotate(rotation, snap.width, snap.height)
-        val layers = mapLayers(snap, progress) { src, _ -> transformed(src, w, h, geometry) }
+        val layers = mapLayers(snap, progress) { src, _, _ -> transformed(src, w, h, geometry) }
         return CanvasResult(w, h, snap.dpi, snap.colorMode, layers, geometry)
     }
 
     /** Mirrors the whole canvas (all layers and masks). */
     fun flip(snap: CanvasSnapshot, horizontal: Boolean, progress: (Float) -> Unit = {}): CanvasResult {
+        if (snap.layers.isEmpty()) throw CanvasOpException("The drawing has no layers.")
         val geometry = CanvasGeometry.flip(horizontal, snap.width, snap.height)
-        val layers = mapLayers(snap, progress) { src, _ -> transformed(src, snap.width, snap.height, geometry) }
+        val layers = mapLayers(snap, progress) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
         return CanvasResult(snap.width, snap.height, snap.dpi, snap.colorMode, layers, geometry)
     }
 
     /** Changes only the resolution (print size); pixels are untouched. */
     fun setDpi(snap: CanvasSnapshot, dpi: Float): CanvasResult {
-        if (!(dpi >= 1f && dpi <= 10_000f)) throw CanvasOpException("Resolution must be between 1 and 10000 dpi.")
+        if (!(dpi >= MIN_DPI && dpi <= MAX_DPI)) throw CanvasOpException("Resolution must be between 1 and 10000 dpi.")
         return CanvasResult(snap.width, snap.height, dpi, snap.colorMode, emptyList(), CanvasGeometry.IDENTITY)
     }
 
     /**
      * Converts every layer's pixels (masks are unchanged) to [mode] and sets the document mode.
-     * [threshold] (1..255) and [dither] (Floyd–Steinberg) apply to MONOCHROME. Switching to RGB, or
-     * from monochrome to grayscale, only changes the mode (the pixels already qualify).
+     * [threshold] (1..255) and [dither] (Floyd–Steinberg) apply to MONOCHROME. Mode changes that
+     * don't need new pixels ([convertsPixels] is false) return no layer bitmaps.
      */
     fun convertColorMode(
         snap: CanvasSnapshot,
@@ -244,10 +294,14 @@ object CanvasOps {
         dither: Boolean = false,
         progress: (Float) -> Unit = {},
     ): CanvasResult {
-        val pixelsQualify = mode == ColorMode.RGB || mode == snap.colorMode ||
-            (mode == ColorMode.GRAYSCALE && snap.colorMode == ColorMode.MONOCHROME)
-        if (pixelsQualify) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
-        val layers = mapLayers(snap, progress, transformMasks = false) { src, _ -> convertedBitmap(src, mode, threshold, dither) }
+        if (!convertsPixels(snap.colorMode, mode)) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
+        val layers = mapLayers(snap, progress, transformMasks = false) { src, _, sub ->
+            val out = BitmapUtils.createLayerBitmap(src.width, src.height)
+            try {
+                convertInto(src, out, mode, threshold, dither, sub)
+            } catch (t: Throwable) { out.recycle(); throw t }
+            out
+        }
         return CanvasResult(snap.width, snap.height, snap.dpi, mode, layers, CanvasGeometry.IDENTITY)
     }
 
@@ -255,8 +309,9 @@ object CanvasOps {
 
     /**
      * Applies [result] (computed from [snap]) to the controller's document as ONE undo step:
-     * a [DocumentBitmapsAction] (wrapped so the ruler/grid follow the artwork and a selection
-     * survives same-geometry changes), or a small metadata action when no bitmaps changed.
+     * a [DocumentBitmapsAction] (wrapped so the ruler/grid follow the artwork, the selection comes
+     * back on undo and the active tool is reset around the swap), or a small metadata action when
+     * no bitmaps changed.
      */
     fun commit(c: EditorController, label: String, snap: CanvasSnapshot, result: CanvasResult): UndoAction {
         val action: UndoAction = if (result.layers.isEmpty()) {
@@ -264,9 +319,13 @@ object CanvasOps {
             MetadataAction(label, snap.dpi, result.dpi, snap.colorMode, result.colorMode)
         } else {
             require(result.layers.size == snap.layers.size) { "Every layer needs new bitmaps" }
+            var bytesBefore = 0L
+            var bytesAfter = 0L
             val entries = result.layers.mapIndexed { i, r ->
                 val s = snap.layers[i]
                 require(s.layer === r.layer)
+                if (s.bitmap !== r.bitmap) { bytesBefore += s.bitmap.byteCount; bytesAfter += r.bitmap.byteCount }
+                if (s.mask !== r.mask) { bytesBefore += s.mask?.byteCount ?: 0; bytesAfter += r.mask?.byteCount ?: 0 }
                 DocumentBitmapsAction.Entry(r.layer, s.bitmap, s.mask, r.bitmap, r.mask)
             }
             val inner = DocumentBitmapsAction(
@@ -274,7 +333,10 @@ object CanvasOps {
                 snap.width to snap.height, result.width to result.height,
                 snap.dpi, result.dpi, snap.colorMode, result.colorMode,
             )
-            CanvasChangeAction(inner, result.geometry, snap.width, snap.height, result.width, result.height)
+            CanvasChangeAction(
+                inner, result.geometry, snap.width, snap.height, result.width, result.height,
+                selectionBefore = c.selection, bytesBefore = bytesBefore, bytesAfter = bytesAfter,
+            )
         }
         action.redo(c)
         c.pushUndo(action)
@@ -282,19 +344,25 @@ object CanvasOps {
     }
 
     /**
-     * Runs [compute] on a background thread under the busy overlay and commits it on the main
-     * thread. Pending tool work is committed first. Returns false if another operation is running.
+     * Runs [compute] on a background thread under the busy overlay (with a Stop button) and
+     * commits it on the main thread. Pending tool work is committed first. Returns false if
+     * another operation is running.
      */
     fun run(c: EditorController, label: String, compute: (CanvasSnapshot, (Float) -> Unit) -> CanvasResult): Boolean {
         if (c.busyMessage != null) return false
         c.filterSession?.cancel()
         c.currentTool.onDeactivate()
         val snap = CanvasSnapshot.of(c.doc)
-        c.runBusy(label) {
+        val stop = AtomicBoolean(false)
+        c.runBusy(label, onCancel = { stop.set(true) }) {
+            var committed = false
             try {
-                var lastPosted = -1
                 val result = withContext(Dispatchers.Default) {
+                    val context = coroutineContext
+                    var lastPosted = -1
                     compute(snap) { p ->
+                        if (stop.get()) throw CanvasOpCancelledException()
+                        context.ensureActive()
                         val pct = (p * 100).toInt()
                         if (pct != lastPosted) {
                             lastPosted = pct
@@ -302,21 +370,46 @@ object CanvasOps {
                         }
                     }
                 }
-                if (!snap.matches(c.doc)) {
-                    result.recycle(snap)
-                    c.toast("The drawing changed while \"$label\" was running; nothing was applied.")
-                } else {
-                    commit(c, label, snap, result)
+                when {
+                    stop.get() -> {
+                        result.recycle(snap)
+                        c.toast("Stopped \"$label\"; nothing was changed.")
+                    }
+                    !snap.matches(c.doc) -> {
+                        result.recycle(snap)
+                        c.toast("The drawing changed while \"$label\" was running; nothing was applied.")
+                    }
+                    else -> {
+                        // The action's redo reactivates the tool after swapping the bitmaps.
+                        commit(c, label, snap, result)
+                        committed = true
+                    }
                 }
+            } catch (e: CanvasOpCancelledException) {
+                c.toast("Stopped \"$label\"; nothing was changed.")
             } catch (e: CanvasOpException) {
                 c.toast(e.message ?: label)
             } catch (e: OutOfMemoryError) {
                 c.toast("Not enough memory for \"$label\". Try a smaller size or fewer layers.")
             } finally {
-                c.currentTool.onActivate()
+                // Skipped when the editor is closing (scope cancelled): the controller is being disposed.
+                if (!committed && coroutineContext.isActive) c.currentTool.onActivate()
             }
         }
         return true
+    }
+
+    /** Applies a metadata-only change (no new bitmaps) immediately on the main thread. */
+    private fun applyNow(c: EditorController, label: String, compute: (CanvasSnapshot) -> CanvasResult): Boolean {
+        if (c.busyMessage != null) return false
+        val snap = CanvasSnapshot.of(c.doc)
+        return try {
+            commit(c, label, snap, compute(snap))
+            true
+        } catch (e: CanvasOpException) {
+            c.toast(e.message ?: label)
+            false
+        }
     }
 
     // ------------------------------------------------------------------ UI entry points
@@ -327,6 +420,7 @@ object CanvasOps {
         if (width == doc.width && height == doc.height) {
             return if (dpi != doc.dpi) applyDpi(c, dpi) else false
         }
+        if (!(dpi >= MIN_DPI && dpi <= MAX_DPI)) { c.toast("Resolution must be between 1 and 10000 dpi."); return false }
         validateSize(width, height, CanvasSnapshot.of(doc).bitmapCount)?.let { c.toast(it); return false }
         return run(c, "Resize image") { s, p -> resizeImage(s, width, height, resample, dpi, p) }
     }
@@ -366,14 +460,18 @@ object CanvasOps {
     fun applyFlip(c: EditorController, horizontal: Boolean): Boolean =
         run(c, if (horizontal) "Flip canvas horizontally" else "Flip canvas vertically") { s, p -> flip(s, horizontal, p) }
 
+    /** Resolution only (no resampling); applied immediately. */
     fun applyDpi(c: EditorController, dpi: Float): Boolean {
         if (dpi == c.doc.dpi) return false
-        return run(c, "Resolution") { s, _ -> setDpi(s, dpi) }
+        return applyNow(c, "Resolution") { s -> setDpi(s, dpi) }
     }
 
     fun applyColorMode(c: EditorController, mode: ColorMode, threshold: Int, dither: Boolean): Boolean {
-        if (mode == c.doc.colorMode) return false
-        return run(c, "Color mode: ${mode.label}") { s, p -> convertColorMode(s, mode, threshold, dither, p) }
+        val from = c.doc.colorMode
+        if (mode == from) return false
+        val label = "Color mode: ${mode.label}"
+        if (!convertsPixels(from, mode)) return applyNow(c, label) { s -> convertColorMode(s, mode) }
+        return run(c, label) { s, p -> convertColorMode(s, mode, threshold, dither, p) }
     }
 
     // ------------------------------------------------------------------ bitmap helpers
@@ -386,26 +484,34 @@ object CanvasOps {
     }
 
     /**
-     * Builds new bitmaps for every layer (and its mask when [transformMasks]) with [op]
-     * (`op(source, isMask)`); on failure frees what was already created and rethrows.
+     * Builds new bitmaps for every layer (and its mask when [transformMasks]) with
+     * `op(source, isMask, subProgress)`; on failure frees what was already created and rethrows.
      */
-    private inline fun mapLayers(
+    private fun mapLayers(
         snap: CanvasSnapshot,
         progress: (Float) -> Unit,
         transformMasks: Boolean = true,
-        op: (Bitmap, Boolean) -> Bitmap,
+        op: (Bitmap, Boolean, (Float) -> Unit) -> Bitmap,
     ): List<CanvasResult.LayerResult> {
         val out = ArrayList<CanvasResult.LayerResult>(snap.layers.size)
-        val total = snap.layers.size + (if (transformMasks) snap.layers.count { it.mask != null } else 0)
+        val total = (snap.layers.size + (if (transformMasks) snap.layers.count { it.mask != null } else 0)).toFloat()
         var done = 0
+        fun subProgress(): (Float) -> Unit {
+            val base = done
+            return { f -> progress((base + f.coerceIn(0f, 1f)) / total) }
+        }
         var pendingBitmap: Bitmap? = null
         try {
             progress(0f)
             for (l in snap.layers) {
-                val bmp = op(l.bitmap, false)
+                val bmp = op(l.bitmap, false, subProgress())
                 pendingBitmap = bmp
-                progress(++done / total.toFloat())
-                val mask = if (transformMasks && l.mask != null) op(l.mask, true).also { progress(++done / total.toFloat()) } else l.mask
+                progress(++done / total)
+                val mask = if (transformMasks && l.mask != null) {
+                    op(l.mask, true, subProgress()).also { progress(++done / total) }
+                } else {
+                    l.mask
+                }
                 out += CanvasResult.LayerResult(l.layer, bmp, mask)
                 pendingBitmap = null
             }
@@ -447,13 +553,13 @@ object CanvasOps {
     }
 
     /** Resamples [src] to [w] x [h] (always a new bitmap). */
-    internal fun resampleBitmap(src: Bitmap, w: Int, h: Int, resample: Resample): Bitmap {
+    internal fun resampleBitmap(src: Bitmap, w: Int, h: Int, resample: Resample, progress: (Float) -> Unit = {}): Bitmap {
         if (w == src.width && h == src.height) return BitmapUtils.copy(src)
         val out = newBitmap(w, h, 0)
         var stage: Bitmap = src
         try {
             if (resample == Resample.NEAREST) {
-                Resampler.nearest(BitmapRows(src), w, h, BitmapRows(out))
+                Resampler.nearest(BitmapRows(src), w, h, BitmapRows(out), progress)
             } else {
                 // Shrink by ~2x steps (an exact 2x2 box average in Skia) until the remaining factor
                 // is at most 4, so the final antialiased pass keeps a small, bounded kernel.
@@ -463,9 +569,10 @@ object CanvasOps {
                     val half = skiaScaled(stage, nw, nh)
                     if (stage !== src) stage.recycle()
                     stage = half
+                    progress(0f)
                 }
                 val kernel = if (resample == Resample.BILINEAR) ResampleKernel.TRIANGLE else ResampleKernel.CATMULL_ROM
-                Resampler.resample(BitmapRows(stage), w, h, kernel, BitmapRows(out))
+                Resampler.resample(BitmapRows(stage), w, h, kernel, BitmapRows(out), progress)
             }
         } catch (t: Throwable) {
             out.recycle()
@@ -486,32 +593,33 @@ object CanvasOps {
         return out
     }
 
-    private fun convertedBitmap(src: Bitmap, mode: ColorMode, threshold: Int, dither: Boolean): Bitmap {
+    /**
+     * Converts [src] into [dst] (same size; may be the same bitmap) to [mode], in bounded strips
+     * from top to bottom (dithering carries its error down the rows).
+     */
+    private fun convertInto(src: Bitmap, dst: Bitmap, mode: ColorMode, threshold: Int, dither: Boolean, progress: (Float) -> Unit) {
         val w = src.width
         val h = src.height
-        val out = newBitmap(w, h, 0)
-        try {
-            val strip = max(1, min(h, (1 shl 20) / w))
-            val buf = IntArray(w * strip)
-            val converter = ColorModeConverter(w, mode, threshold, dither)
-            var y = 0
-            while (y < h) {
-                val rows = min(strip, h - y)
-                src.getPixels(buf, 0, w, 0, y, w, rows)
-                if (dither && mode == ColorMode.MONOCHROME) {
-                    converter.convertRows(buf, rows)
-                } else {
-                    Parallel.forRange(rows * w, 4096) { from, to -> for (i in from until to) buf[i] = converter.convertPixel(buf[i]) }
-                }
-                out.setPixels(buf, 0, w, 0, y, w, rows)
-                y += rows
+        val strip = max(1, min(h, (1 shl 20) / w))
+        val buf = IntArray(w * strip)
+        val converter = ColorModeConverter(w, mode, threshold, dither)
+        var y = 0
+        while (y < h) {
+            val rows = min(strip, h - y)
+            src.getPixels(buf, 0, w, 0, y, w, rows)
+            if (dither && mode == ColorMode.MONOCHROME) {
+                converter.convertRows(buf, rows)
+            } else {
+                Parallel.forRange(rows * w, 4096) { from, to -> for (i in from until to) buf[i] = converter.convertPixel(buf[i]) }
             }
-        } catch (t: Throwable) { out.recycle(); throw t }
-        return out
+            dst.setPixels(buf, 0, w, 0, y, w, rows)
+            y += rows
+            progress(y / h.toFloat())
+        }
     }
 
     /** Tight bounds of pixels with alpha > 0, or null when fully transparent. */
-    fun opaqueBounds(bmp: Bitmap): Rect? {
+    fun opaqueBounds(bmp: Bitmap, progress: (Float) -> Unit = {}): Rect? {
         val w = bmp.width
         val h = bmp.height
         val strip = max(1, min(h, (1 shl 20) / w))
@@ -535,6 +643,7 @@ object CanvasOps {
                 maxY = y
             }
             y0 += rows
+            progress(y0 / h.toFloat())
         }
         return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
     }
@@ -550,9 +659,16 @@ object CanvasOps {
     // ------------------------------------------------------------------ undo actions
 
     /**
-     * Wraps the [DocumentBitmapsAction] so that, on redo/undo, the ruler and grid are carried
-     * along with the artwork ([geometry] / its inverse), and a selection survives changes that
-     * keep the geometry (color mode), where the document bitmaps action would drop it.
+     * Wraps the [DocumentBitmapsAction]:
+     *  - the active tool is deactivated before and reactivated after the swap, so it never keeps
+     *    buffers or bitmap references of the old geometry (undo/redo guarantee no pending work);
+     *  - the ruler and grid move with the artwork ([geometry] / its inverse); the exact settings
+     *    are remembered so an undo isn't affected by clamping;
+     *  - the selection from before the change comes back on undo, and a selection survives changes
+     *    that keep the geometry (color mode), where the document bitmaps action would drop it.
+     *
+     * [bytesBefore] / [bytesAfter] are the bitmaps only this action holds while it is applied /
+     * undone (shared masks are not counted).
      */
     private class CanvasChangeAction(
         private val inner: DocumentBitmapsAction,
@@ -561,28 +677,65 @@ object CanvasOps {
         private val oldHeight: Int,
         private val newWidth: Int,
         private val newHeight: Int,
+        private val selectionBefore: Selection?,
+        private val bytesBefore: Long,
+        private val bytesAfter: Long,
     ) : UndoAction {
         override val label: String get() = inner.label
-        override val byteSize: Long get() = inner.byteSize
 
-        private fun swap(c: EditorController, forward: Boolean) {
+        private var applied = false
+
+        override val byteSize: Long
+            get() = if (applied) bytesBefore + (selectionBefore?.mask?.byteCount ?: 0) else bytesAfter
+
+        private val keepsGeometry = geometry.isIdentity && oldWidth == newWidth && oldHeight == newHeight
+
+        private var rulerBefore: RulerSettings? = null
+        private var rulerAfter: RulerSettings? = null
+        private var gridBefore: GridSettings? = null
+        private var gridAfter: GridSettings? = null
+
+        override fun redo(c: EditorController) {
+            val tool = c.currentTool
+            tool.onDeactivate()
             val ruler = c.ruler
             val grid = c.grid
             val sel = c.selection
-            if (forward) inner.redo(c) else inner.undo(c)
-            if (!geometry.isIdentity) {
-                val g = if (forward) geometry else geometry.inverse()
-                val w = if (forward) newWidth else oldWidth
-                val h = if (forward) newHeight else oldHeight
-                c.updateRuler(g.mapRuler(ruler, w, h))
-                c.updateGrid(g.mapGrid(grid))
-            } else if (sel != null && oldWidth == newWidth && oldHeight == newHeight) {
-                c.setSelection(sel, recordUndo = false)
-            }
+            inner.redo(c)
+            applied = true
+            val r = rulerAfter?.takeIf { ruler == rulerBefore } ?: geometry.mapRuler(ruler, newWidth, newHeight)
+            val g = gridAfter?.takeIf { grid == gridBefore } ?: geometry.mapGrid(grid)
+            rulerBefore = ruler; rulerAfter = r
+            gridBefore = grid; gridAfter = g
+            setGuides(c, r, g)
+            if (keepsGeometry && sel != null) c.setSelection(sel, recordUndo = false)
+            c.currentTool.onActivate()
         }
 
-        override fun redo(c: EditorController) = swap(c, true)
-        override fun undo(c: EditorController) = swap(c, false)
+        override fun undo(c: EditorController) {
+            val tool = c.currentTool
+            tool.onDeactivate()
+            val ruler = c.ruler
+            val grid = c.grid
+            inner.undo(c)
+            applied = false
+            val inverse = geometry.inverse()
+            val r = rulerBefore?.takeIf { ruler == rulerAfter } ?: inverse.mapRuler(ruler, oldWidth, oldHeight)
+            val g = gridBefore?.takeIf { grid == gridAfter } ?: inverse.mapGrid(grid)
+            setGuides(c, r, g)
+            c.setSelection(selectionBefore, recordUndo = false)
+            c.currentTool.onActivate()
+        }
+
+        private fun setGuides(c: EditorController, r: RulerSettings, g: GridSettings) {
+            c.updateRuler(r)
+            c.updateGrid(g)
+            // onDocumentGeometryChanged() clamps the controller's ruler without storing it in the
+            // document; keep the saved settings identical to what's shown.
+            c.doc.ruler = c.ruler
+            c.doc.grid = c.grid
+        }
+
         override fun dispose() = inner.dispose()
     }
 

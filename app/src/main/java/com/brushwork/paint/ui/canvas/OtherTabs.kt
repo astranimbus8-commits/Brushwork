@@ -176,7 +176,7 @@ internal fun TrimCropTab(
         ApplyButton(
             "Crop",
             enabled = !busy && !whole,
-            onClick = { afterCommit { if (CanvasOps.applyCrop(c, clampedRect())) onApplied() } },
+            onClick = { if (CanvasOps.applyCrop(c, clampedRect())) onApplied() },
         )
     }
 }
@@ -238,8 +238,8 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     }
     SectionHeader("New resolution")
     NumberField(
-        "Resolution", dpi, { dpi = it },
-        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", min = 1.0, max = 10_000.0, step = 1.0,
+        "Resolution", dpi, { dpi = clampDpi(it) },
+        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", step = 1.0,
     )
     ChoiceChips(
         presets.map { "$it dpi" },
@@ -256,7 +256,7 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     ApplyButton(
         "Set ${formatDpi(dpi)} dpi",
         enabled = !busy && !sameDpi(dpi, doc.dpi),
-        onClick = { afterCommit { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() } },
+        onClick = { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() },
     )
 }
 
@@ -276,8 +276,7 @@ internal fun ColorModeTab(c: EditorController, busy: Boolean, thumbnail: CanvasT
     var threshold by rememberSaveable { mutableIntStateOf(128) }
     var dither by rememberSaveable { mutableStateOf(false) }
     val mode = ColorMode.entries[modeIdx]
-    val convertsPixels = mode != current && mode != ColorMode.RGB &&
-        !(mode == ColorMode.GRAYSCALE && current == ColorMode.MONOCHROME)
+    val convertsPixels = CanvasOps.convertsPixels(current, mode)
 
     PanelCard { InfoRow("Current mode", current.label, emphasize = true) }
     SectionHeader("Convert to")

@@ -113,8 +113,11 @@ object Resampler {
         return strip.coerceIn(1, min(dstH, max(1, min(512, 1_000_000 / dstW))))
     }
 
-    /** Resamples [src] to [dstW] x [dstH] with [kernel], writing rows to [dst]. */
-    fun resample(src: RowSource, dstW: Int, dstH: Int, kernel: ResampleKernel, dst: RowSink) {
+    /**
+     * Resamples [src] to [dstW] x [dstH] with [kernel], writing rows to [dst]. [onProgress]
+     * (0..1) is called on the calling thread after every strip; it may throw to abort.
+     */
+    fun resample(src: RowSource, dstW: Int, dstH: Int, kernel: ResampleKernel, dst: RowSink, onProgress: (Float) -> Unit = {}) {
         val srcW = src.width
         val srcH = src.height
         require(dstW > 0 && dstH > 0)
@@ -152,11 +155,15 @@ object Resampler {
             }
             dst.write(y0, y1 - y0, out)
             y0 = y1
+            onProgress(y0 / dstH.toFloat())
         }
     }
 
-    /** Nearest-neighbour (pixel art): each output pixel copies the source pixel under its center. */
-    fun nearest(src: RowSource, dstW: Int, dstH: Int, dst: RowSink) {
+    /**
+     * Nearest-neighbour (pixel art): each output pixel copies the source pixel under its center.
+     * [onProgress] works as in [resample].
+     */
+    fun nearest(src: RowSource, dstW: Int, dstH: Int, dst: RowSink, onProgress: (Float) -> Unit = {}) {
         val srcW = src.width
         val srcH = src.height
         require(dstW > 0 && dstH > 0)
@@ -176,6 +183,7 @@ object Resampler {
             }
             dst.write(y0, y1 - y0, out)
             y0 = y1
+            onProgress(y0 / dstH.toFloat())
         }
     }
 

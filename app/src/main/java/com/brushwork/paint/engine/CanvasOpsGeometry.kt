@@ -68,7 +68,11 @@ data class CanvasGeometry(
      * ([newWidth] x [newHeight]) like the controller does after geometry changes.
      */
     fun mapRuler(r: RulerSettings, newWidth: Int, newHeight: Int): RulerSettings {
-        if (r.centerX < 0f || r.centerY < 0f || isIdentity) return r
+        if (r.centerX < 0f || r.centerY < 0f) return r
+        if (isIdentity) {
+            // Same coordinates (e.g. a canvas cropped at the top-left): only keep it on the canvas.
+            return r.copy(centerX = r.centerX.coerceIn(0f, newWidth.toFloat()), centerY = r.centerY.coerceIn(0f, newHeight.toFloat()))
+        }
         val cx = mapX(r.centerX.toDouble(), r.centerY.toDouble())
         val cy = mapY(r.centerX.toDouble(), r.centerY.toDouble())
         return r.copy(
