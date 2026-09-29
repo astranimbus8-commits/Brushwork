@@ -732,6 +732,88 @@ class EditorRuntimeSmokeTest {
         }
     }
 
+    // ================================================================== assists, frames, import
+
+    @Test
+    fun rulerAndStabilizerStrokesLandWhereExpected() {
+        val layer = c.activeLayer
+        // Straight ruler along y = 150, strokes pulled onto it: a slanted stroke paints the line.
+        c.updateRuler(com.brushwork.paint.model.RulerSettings(enabled = true, centerX = 200f, centerY = 150f, angleDeg = 0f, snap = com.brushwork.paint.model.RulerSnap.ON_RULER))
+        strokeDoc(80f to 120f, 320f to 180f)
+        assertEquals(1, c.undoManager.undoCount)
+        assertEquals("on the ruler", 255, alpha(layer, 200, 150))
+        assertEquals("not where the finger was", 0, alpha(layer, 80, 120))
+        c.updateRuler(c.ruler.copy(enabled = false))
+        // Every stabilizer mode still paints one step, near the finger's path.
+        for (mode in com.brushwork.paint.model.StabilizerMode.entries) {
+            c.updateStabilizer(com.brushwork.paint.model.StabilizerSettings(mode = mode, strength = 0.8f, ropeLengthDp = 30f))
+            val n = c.undoManager.undoCount
+            strokeDoc(60f to 240f, 340f to 240f)
+            assertEquals("$mode: one step", n + 1, c.undoManager.undoCount)
+            assertEquals("$mode: the path is painted", 255, alpha(layer, 200, 240))
+            Smoke.assertQuiet(c, "stabilizer $mode")
+        }
+        c.updateStabilizer(com.brushwork.paint.model.StabilizerSettings())
+        // The ruler tool drags the ruler on the canvas (not an undo step).
+        c.selectTool(ToolId.RULER)
+        c.updateRuler(c.ruler.copy(enabled = true))
+        val before = c.ruler
+        val n = c.undoManager.undoCount
+        strokeDoc(200f to 150f, 240f to 190f)
+        assertNotEquals("the ruler moved", before, c.ruler)
+        assertEquals(n, c.undoManager.undoCount)
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    @Test
+    fun frameDividerCutsWithTouchAndUndoes() {
+        c.selectTool(ToolId.FRAME_DIVIDER)
+        val frame = c.tools.getValue(ToolId.FRAME_DIVIDER) as com.brushwork.paint.tools.frame.FrameDividerTool
+        frame.settings = frame.settings.copy(rows = 1, cols = 1)
+        assertTrue(frame.createFrameLayer())
+        Smoke.pump(50)
+        val panels0 = frame.model!!.panels.size
+        val n = c.undoManager.undoCount
+        strokeDoc(200f to 10f, 200f to 290f)
+        assertEquals("a vertical cut splits the panel", panels0 + 1, frame.model!!.panels.size)
+        assertEquals(n + 1, c.undoManager.undoCount)
+        frame.removeMode = true
+        touch.idle(200); screen(100f, 150f).let { touch.tap(it.first, it.second) }
+        assertEquals("tapping removes a panel", panels0, frame.model!!.panels.size)
+        frame.removeMode = false
+        c.undo(); c.undo()
+        Smoke.pump(50)
+        assertEquals(panels0, frame.model!!.panels.size)
+        assertEquals(com.brushwork.paint.tools.frame.FrameDividerTool.Status.READY, frame.status())
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    @Test
+    fun importedPictureIsPlacedAndCommitted() {
+        val file = java.io.File(activity.cacheDir, "picture.png")
+        Bitmap.createBitmap(120, 80, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF00AA00.toInt()) }
+            .compress(Bitmap.CompressFormat.PNG, 100, java.io.FileOutputStream(file))
+        val actions = com.brushwork.paint.ui.editor.EditorActions(c, activity)
+        actions.importPicture(android.net.Uri.fromFile(file))
+        assertTrue("imported", Smoke.pumpUntil { c.busyMessage == null && c.doc.layers.size == 3 })
+        Smoke.pump(100)
+        val tr = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        assertEquals(ToolId.TRANSFORM, c.activeToolId)
+        assertTrue("placing", tr.isPlacement && tr.hasPendingWork)
+        assertNull(c.message)
+        tr.commit()
+        Smoke.pump(50)
+        assertEquals("Import picture", c.undoManager.undoLabel)
+        assertEquals(0xFF00AA00.toInt(), c.activeLayer.bitmap.getPixel(200, 150))
+        // The same picture as a new project from the gallery.
+        val app = ApplicationProvider.getApplicationContext<BrushworkApp>()
+        val id = runBlocking { app.repository.createFromImage(android.net.Uri.fromFile(file)) }
+        val doc = runBlocking { app.repository.load(id) }
+        assertEquals(120, doc.width)
+        assertEquals(80, doc.height)
+        c.selectTool(ToolId.BRUSH)
+    }
+
     // ================================================================== export / share
 
     @Test
