@@ -67,8 +67,8 @@ import kotlinx.coroutines.flow.filterNotNull
  * brackets and visibility toggles, long-press-drag reordering, and the active layer's properties
  * and actions. Refreshes whenever [EditorController.layersVersion] (or the undo history) changes.
  *
- * [onImportPicture] asks the host to pick an image to add as a layer; the panel closes afterwards
- * so the placement (transform tool) is visible.
+ * [onImportPicture] asks the host to pick an image to add as a layer; the panel calls [onDismiss]
+ * right before it, so the placement (transform tool) is visible once the picture arrives.
  */
 @Composable
 fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPicture: () -> Unit) {
