@@ -14,7 +14,7 @@ import kotlin.math.max
 /**
  * Shared machinery of the two chromatic-aberration filters: every output pixel takes its red, green
  * and blue channel from three different source positions. Samples are bilinear in premultiplied
- * space with transparent outside the image; the output alpha is the largest of the three sampled
+ * space with the edge pixels extended; the output alpha is the largest of the three sampled
  * alphas and each channel keeps its own coverage (so fringes appear on transparent layers too).
  */
 internal object ChannelShift {
@@ -66,21 +66,16 @@ internal object ChannelShift {
         val xf = floor(x); val yf = floor(y)
         val x0 = xf.toInt(); val y0 = yf.toInt()
         val tx = x - xf; val ty = y - yf
-        var ps = 0f; var aS = 0f
-        // Four taps, skipping those outside the image (transparent outside).
-        if (y0 in 0 until h) {
-            val row = y0 * w
-            val wy = 1f - ty
-            if (x0 in 0 until w) { val c = p[row + x0]; val a = (c ushr 24) * (1f - tx) * wy; aS += a; ps += a * ((c shr shift) and 0xFF) }
-            if (x0 + 1 in 0 until w && tx > 0f) { val c = p[row + x0 + 1]; val a = (c ushr 24) * tx * wy; aS += a; ps += a * ((c shr shift) and 0xFF) }
-        }
-        if (y0 + 1 in 0 until h && ty > 0f) {
-            val row = (y0 + 1) * w
-            if (x0 in 0 until w) { val c = p[row + x0]; val a = (c ushr 24) * (1f - tx) * ty; aS += a; ps += a * ((c shr shift) and 0xFF) }
-            if (x0 + 1 in 0 until w && tx > 0f) { val c = p[row + x0 + 1]; val a = (c ushr 24) * tx * ty; aS += a; ps += a * ((c shr shift) and 0xFF) }
-        }
-        acc[0] = ps
-        acc[1] = aS
+        // Edge pixels extend outward: no colored frame on opaque images, and transparent edges
+        // of a layer stay transparent.
+        val xa = ArtMath.clampInt(x0, 0, w - 1); val xb = ArtMath.clampInt(x0 + 1, 0, w - 1)
+        val r0 = ArtMath.clampInt(y0, 0, h - 1) * w; val r1 = ArtMath.clampInt(y0 + 1, 0, h - 1) * w
+        val c00 = p[r0 + xa]; val c10 = p[r0 + xb]; val c01 = p[r1 + xa]; val c11 = p[r1 + xb]
+        val a00 = (c00 ushr 24) * (1f - tx) * (1f - ty); val a10 = (c10 ushr 24) * tx * (1f - ty)
+        val a01 = (c01 ushr 24) * (1f - tx) * ty; val a11 = (c11 ushr 24) * tx * ty
+        acc[0] = a00 * ((c00 shr shift) and 0xFF) + a10 * ((c10 shr shift) and 0xFF) +
+            a01 * ((c01 shr shift) and 0xFF) + a11 * ((c11 shr shift) and 0xFF)
+        acc[1] = a00 + a10 + a01 + a11
     }
 
     val orderParam = FilterParam.Choice("order", "Color order", ArtMath.colorOrderNames, 0)
