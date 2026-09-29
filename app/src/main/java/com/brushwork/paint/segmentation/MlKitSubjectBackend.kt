@@ -24,24 +24,32 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.min
 
 /**
  * Subject segmentation with Google ML Kit (Play services module "subject_segment").
  *
  * The module is installed on demand through [ModuleInstallClient]. The first call waits up to
- * [INSTALL_WAIT_MS] for the download; if it takes longer the install continues in the background
- * (a listener flips [moduleReady]) and later calls only wait briefly. Failures (no Play services,
- * no network, errors) make the backend return null — the pipeline then falls back to the scene
- * model and saliency — and are retried after [RETRY_AFTER_MS].
+ * [INSTALL_WAIT_MS] for the download while it makes progress (a download that shows no progress
+ * for [STALL_MS], e.g. offline, is not waited for); after that the install continues in the
+ * background (a listener flips [moduleReady]) and later calls only wait briefly. Failures (no Play
+ * services, no network, errors) make the backend return null — the pipeline then falls back to
+ * the scene model and saliency — and are retried after [RETRY_AFTER_MS].
  */
 internal class MlKitSubjectBackend private constructor(private val appContext: Context) : SubjectBackend {
-    private val lock = Any()
+    private val lock = ReentrantLock()
     private var segmenter: SubjectSegmenter? = null
+
+    /** A module install request whose listener has not reported completion yet. */
+    private class PendingInstall(val startedAt: Long) {
+        val done = CountDownLatch(1)
+        @Volatile var lastActivityAt: Long = startedAt
+    }
 
     @Volatile private var moduleReady = false
     @Volatile private var retryAtMs = 0L
-    @Volatile private var pendingInstall: CountDownLatch? = null
+    @Volatile private var pendingInstall: PendingInstall? = null
 
     override fun subjectMask(image: PixelBuffer): FloatArray? {
         if (Looper.getMainLooper().isCurrentThread) {
@@ -49,33 +57,44 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
             return null
         }
         if (!usable()) return null
-        synchronized(lock) {
-            return try {
-                val seg = segmenterLocked()
-                if (!ensureModuleLocked(seg, INSTALL_WAIT_MS)) null else processLocked(seg, image)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-                null
-            } catch (e: Exception) {
-                Log.w(TAG, "ML Kit subject segmentation unavailable", e)
-                backOff()
-                null
-            }
+        try {
+            // Interruptible: another thread may hold the lock while it waits for the download.
+            lock.lockInterruptibly()
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return null
+        }
+        try {
+            val seg = segmenterLocked()
+            return if (!ensureModuleLocked(seg, INSTALL_WAIT_MS)) null else processLocked(seg, image)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            return null
+        } catch (e: Exception) {
+            Log.w(TAG, "ML Kit subject segmentation unavailable", e)
+            backOff()
+            return null
+        } finally {
+            lock.unlock()
         }
     }
 
-    /** Starts the module download without waiting for it (call from a background thread). */
+    /**
+     * Starts the module download without waiting for it (call from a background thread). Does
+     * nothing if a segmentation is running (it requests the module itself).
+     */
     fun requestModule() {
         if (moduleReady || Looper.getMainLooper().isCurrentThread || !usable()) return
-        synchronized(lock) {
-            try {
-                ensureModuleLocked(segmenterLocked(), waitMs = 0L)
-            } catch (e: InterruptedException) {
-                Thread.currentThread().interrupt()
-            } catch (e: Exception) {
-                Log.w(TAG, "ML Kit module request failed", e)
-                backOff()
-            }
+        if (!lock.tryLock()) return
+        try {
+            ensureModuleLocked(segmenterLocked(), waitMs = 0L)
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (e: Exception) {
+            Log.w(TAG, "ML Kit module request failed", e)
+            backOff()
+        } finally {
+            lock.unlock()
         }
     }
 
@@ -99,17 +118,28 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
     /** True once the Play services module is installed; may wait up to [waitMs] for a download. */
     private fun ensureModuleLocked(seg: SubjectSegmenter, waitMs: Long): Boolean {
         if (moduleReady) return true
-        pendingInstall?.let { latch ->
-            if (waitMs > 0) latch.await(min(waitMs, PENDING_WAIT_MS), TimeUnit.MILLISECONDS)
-            return moduleReady
-        }
         val client = ModuleInstall.getClient(appContext)
-        if (Tasks.await(client.areModulesAvailable(seg), REQUEST_TIMEOUT_S, TimeUnit.SECONDS).areModulesAvailable()) {
+        pendingInstall?.let { pending ->
+            if (waitMs > 0 && awaitInstall(pending, min(waitMs, PENDING_WAIT_MS))) return true
+            if (moduleReady) return true
+            // The status listener can be lost (e.g. Play services restarted): ask directly.
+            if (modulesAvailable(client, seg)) {
+                moduleReady = true
+                if (pendingInstall === pending) pendingInstall = null
+                return true
+            }
+            if (SystemClock.elapsedRealtime() - pending.startedAt < PENDING_EXPIRY_MS) return false
+            Log.i(TAG, "ML Kit module install made no progress; requesting it again")
+            if (pendingInstall === pending) pendingInstall = null
+        }
+        if (modulesAvailable(client, seg)) {
             moduleReady = true
             return true
         }
-        val latch = CountDownLatch(1)
+        val pending = PendingInstall(SystemClock.elapsedRealtime())
         val listener = object : InstallStatusListener {
+            private var lastBytes = -1L
+
             override fun onInstallStatusUpdated(update: ModuleInstallStatusUpdate) {
                 when (update.installState) {
                     ModuleInstallStatusUpdate.InstallState.STATE_COMPLETED -> finish(true)
@@ -118,17 +148,25 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
                         Log.w(TAG, "ML Kit module install ended in state ${update.installState} (error ${update.errorCode})")
                         finish(false)
                     }
+                    ModuleInstallStatusUpdate.InstallState.STATE_DOWNLOADING,
+                    ModuleInstallStatusUpdate.InstallState.STATE_INSTALLING -> {
+                        val bytes = update.progressInfo?.bytesDownloaded ?: -1L
+                        if (update.installState == ModuleInstallStatusUpdate.InstallState.STATE_INSTALLING || bytes != lastBytes) {
+                            lastBytes = bytes
+                            pending.lastActivityAt = SystemClock.elapsedRealtime()
+                        }
+                    }
                 }
             }
 
             fun finish(ok: Boolean) {
                 if (ok) moduleReady = true else backOff()
-                pendingInstall = null
+                if (pendingInstall === pending) pendingInstall = null
                 client.unregisterListener(this)
-                latch.countDown()
+                pending.done.countDown()
             }
         }
-        pendingInstall = latch
+        pendingInstall = pending
         val request = ModuleInstallRequest.newBuilder()
             .addApi(seg)
             .setListener(listener, DIRECT)
@@ -140,12 +178,29 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
                 return true
             }
         } catch (e: Exception) {
-            pendingInstall = null
+            if (pendingInstall === pending) pendingInstall = null
             client.unregisterListener(listener)
             throw e
         }
-        if (waitMs > 0 && !latch.await(waitMs, TimeUnit.MILLISECONDS)) {
+        if (waitMs > 0 && !awaitInstall(pending, waitMs)) {
             Log.i(TAG, "ML Kit module still downloading; using the fallback for now")
+        }
+        return moduleReady
+    }
+
+    private fun modulesAvailable(client: ModuleInstallClient, seg: SubjectSegmenter): Boolean =
+        Tasks.await(client.areModulesAvailable(seg), REQUEST_TIMEOUT_S, TimeUnit.SECONDS).areModulesAvailable()
+
+    /**
+     * Waits for [pending] to finish for at most [maxMs], but gives up as soon as the download has
+     * shown no progress for [STALL_MS]. Returns true if the module is ready.
+     */
+    private fun awaitInstall(pending: PendingInstall, maxMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + maxMs
+        while (!moduleReady) {
+            val now = SystemClock.elapsedRealtime()
+            if (now >= deadline || now - pending.lastActivityAt > STALL_MS) return false
+            if (pending.done.await(min(POLL_MS, deadline - now), TimeUnit.MILLISECONDS)) break
         }
         return moduleReady
     }
@@ -183,10 +238,15 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
         private const val TAG = "Segmentation"
         private const val REQUEST_TIMEOUT_S = 20L
         private const val PROCESS_TIMEOUT_S = 30L
-        /** First wait for the module download. */
+        /** Longest wait for a module download that keeps making progress. */
         private const val INSTALL_WAIT_MS = 45_000L
+        /** A download without any progress for this long is not waited for (offline, queued). */
+        private const val STALL_MS = 8_000L
         /** Wait when a download started by an earlier call is still running. */
         private const val PENDING_WAIT_MS = 4_000L
+        /** A request whose listener never reported back is issued again after this long. */
+        private const val PENDING_EXPIRY_MS = 5 * 60_000L
+        private const val POLL_MS = 250L
         private const val RETRY_AFTER_MS = 3 * 60_000L
         private val DIRECT = Executor { it.run() }
 

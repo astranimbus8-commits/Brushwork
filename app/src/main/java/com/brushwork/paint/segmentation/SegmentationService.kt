@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.util.Log
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.FilterServices
+import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -34,7 +35,8 @@ enum class SmartTarget(val label: String) {
  *   uses the full-resolution image as guide ([SegmentationPipeline]).
  *
  * Safe to call repeatedly and concurrently from background threads; results for several
- * targets on the same image share one analysis.
+ * targets on the same image share one analysis. Interrupting the calling thread (e.g. with
+ * `runInterruptible`) abandons the work early and [segment] returns null.
  */
 class SegmentationService(private val context: Context) {
     private val appContext: Context = context.applicationContext ?: context
@@ -42,6 +44,7 @@ class SegmentationService(private val context: Context) {
     private val subjectBackend = MlKitSubjectBackend.get(appContext)
     private val pipeline = SegmentationPipeline(sceneParser, subjectBackend, log = { msg, t -> Log.w(TAG, msg, t) })
     private val prepared = AtomicBoolean(false)
+    private val releasing = AtomicBoolean(false)
 
     /**
      * Confidence 0..1 per pixel of [image] (same size) that it belongs to [target], or null if
@@ -54,6 +57,10 @@ class SegmentationService(private val context: Context) {
             pipeline.segment(image, target).also {
                 Log.d(TAG, "$target ${image.width}x${image.height} in ${SystemClock.elapsedRealtime() - start} ms")
             }
+        } catch (e: CancellationException) {
+            // The calling thread was interrupted (e.g. the user stopped a cancellable busy task).
+            Log.d(TAG, "segment($target) cancelled")
+            null
         } catch (e: OutOfMemoryError) {
             pipeline.clearCache()
             Log.e(TAG, "segment($target) ran out of memory on ${image.width}x${image.height}", e)
@@ -91,28 +98,58 @@ class SegmentationService(private val context: Context) {
         sceneParser.release()
     }
 
+    /**
+     * Frees memory when the system asks for it. The callbacks arrive on the main thread and the
+     * interpreter may be busy with an inference, so the release happens on a worker thread.
+     */
     private fun registerMemoryCallbacks() {
         appContext.registerComponentCallbacks(object : ComponentCallbacks2 {
+            @Suppress("DEPRECATION")
             override fun onTrimMemory(level: Int) {
-                if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) releaseMemory()
+                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) releaseMemoryAsync()
             }
 
             override fun onConfigurationChanged(newConfig: Configuration) = Unit
 
             @Deprecated("Deprecated in Java")
-            override fun onLowMemory() = releaseMemory()
+            override fun onLowMemory() = releaseMemoryAsync()
         })
+    }
+
+    private fun releaseMemoryAsync() {
+        if (!releasing.compareAndSet(false, true)) return
+        thread(name = "bw-seg-release", isDaemon = true) {
+            try {
+                releaseMemory()
+            } finally {
+                releasing.set(false)
+            }
+        }
+    }
+
+    /** Starts the ML Kit module download early (cheap; nothing is loaded into memory). */
+    private fun prefetchSubjectModule() {
+        thread(name = "bw-seg-module", isDaemon = true, priority = Thread.MIN_PRIORITY) {
+            try {
+                subjectBackend.requestModule()
+            } catch (t: Throwable) {
+                Log.w(TAG, "ML Kit module prefetch failed", t)
+            }
+        }
     }
 
     companion object {
         private const val TAG = "Segmentation"
 
         @Volatile private var instance: SegmentationService? = null
+
+        /** The process-wide service (cheap to call; also starts the ML Kit module download). */
         fun get(context: Context): SegmentationService =
             instance ?: synchronized(this) {
                 instance ?: SegmentationService(context.applicationContext).also {
                     instance = it
                     it.registerMemoryCallbacks()
+                    it.prefetchSubjectModule()
                 }
             }
     }

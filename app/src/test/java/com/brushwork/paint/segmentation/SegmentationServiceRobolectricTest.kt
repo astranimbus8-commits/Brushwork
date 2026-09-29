@@ -60,6 +60,27 @@ class SegmentationServiceRobolectricTest {
     }
 
     @Test
+    fun interruptedCallerGetsNullAndTheServiceRecovers() {
+        val service = SegmentationService(context)
+        val img = SegTestImages.skyOverFoliage(160, 120)
+        val pool = Executors.newSingleThreadExecutor()
+        try {
+            val cancelled = pool.submit<Boolean> {
+                Thread.currentThread().interrupt()
+                try {
+                    service.segment(img, SmartTarget.SKY) == null
+                } finally {
+                    Thread.interrupted()
+                }
+            }.get(60, TimeUnit.SECONDS)
+            assertTrue(cancelled)
+            assertNotNull(pool.submit<FloatArray?> { service.segment(img, SmartTarget.SKY) }.get(60, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    @Test
     fun mainThreadCallsStillReturnAResult() {
         val service = SegmentationService(context)
         val img = SegTestImages.disc(200, 150, SegTestImages.GRAY_BG, SegTestImages.RED, 0.2f)

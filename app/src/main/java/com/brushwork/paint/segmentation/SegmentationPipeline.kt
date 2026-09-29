@@ -1,6 +1,7 @@
 package com.brushwork.paint.segmentation
 
 import com.brushwork.paint.core.PixelBuffer
+import java.util.concurrent.CancellationException
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -43,18 +44,29 @@ class SegmentationPipeline(
 ) {
     @Volatile private var cached: Analysis? = null
 
-    /** Per-pixel confidence 0..1 (size = image.size) for [target], or null if nothing could run. */
+    /**
+     * Per-pixel confidence 0..1 (size = image.size) for [target], or null if nothing could run.
+     * Throws [CancellationException] when the calling thread is interrupted.
+     */
     fun segment(image: PixelBuffer, target: SmartTarget): FloatArray? {
         if (target == SmartTarget.BACKGROUND) {
             val subject = segment(image, SmartTarget.SUBJECT) ?: return null
             for (i in subject.indices) subject[i] = 1f - subject[i]
             return subject
         }
+        checkInterrupted()
         val a = analysis(image)
+        checkInterrupted()
         val plan = if (target == SmartTarget.SUBJECT) subjectPlan(a) else scenePlan(a, target)
+        checkInterrupted()
         if (plan === EMPTY) return FloatArray(image.size)
         val (meanA, meanB) = GuidedFilter.coefficients(a.lum, plan.mask, a.w, a.h, plan.radius, plan.eps)
+        checkInterrupted()
         return MaskOps.guidedUpsample(image, meanA, meanB, a.w, a.h)
+    }
+
+    private fun checkInterrupted() {
+        if (Thread.currentThread().isInterrupted) throw CancellationException("segmentation interrupted")
     }
 
     /** Drops the cached analysis (e.g. on memory pressure). */
@@ -67,6 +79,7 @@ class SegmentationPipeline(
 
     private fun subjectPlan(a: Analysis): Plan {
         val ml = a.subjectMask()
+        checkInterrupted()
         // ML Kit finds nothing confident on many drawings: use the fallback instead of an empty mask.
         if (ml != null && MaskOps.maxValue(ml) >= 0.5f) return Plan(ml, a.fineRadius, 1e-3f)
         val person = a.classMask(SmartTarget.PEOPLE)
