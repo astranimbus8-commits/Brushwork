@@ -47,6 +47,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -84,6 +85,12 @@ import kotlin.math.roundToInt
 
 /** Sheets and dialogs the editor can show (one at a time). */
 enum class EditorPanel { TOOLS, BRUSH, COLOR, LAYERS, FILTERS, SELECTION, CANVAS, RULER, GRID, STABILIZER, SETTINGS }
+
+/** Panels that edit the document, the selection, the active layer or the tool: closed while a filter is previewed. */
+private val PANELS_BLOCKED_BY_FILTER = setOf(
+    EditorPanel.TOOLS, EditorPanel.BRUSH, EditorPanel.COLOR, EditorPanel.LAYERS,
+    EditorPanel.FILTERS, EditorPanel.SELECTION, EditorPanel.CANVAS,
+)
 
 /** The painting screen: canvas view, hotbar, top bar, side sliders, menus, panels. */
 @Composable
@@ -165,9 +172,20 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         }
     }
 
+    // Only the on/off flags are shown here; the settings objects change on every ruler drag or
+    // grid slider move, which must not recompose the whole screen.
+    val rulerOn by remember(controller) { derivedStateOf { controller.ruler.enabled } }
+    val gridOn by remember(controller) { derivedStateOf { controller.grid.enabled } }
+    val stabilizerOn by remember(controller) { derivedStateOf { controller.stabilizer.mode != StabilizerMode.OFF } }
+
     val session = controller.filterSession
     val busy = controller.busyMessage
-    LaunchedEffect(session) { if (session != null && panel == EditorPanel.FILTERS) panel = null }
+    // While a filter is previewed, everything that changes the document, the selection or the
+    // active layer (or exports without the preview) waits until it is applied or cancelled.
+    val docActionsEnabled = session == null
+    LaunchedEffect(session) {
+        if (session != null && panel in PANELS_BLOCKED_BY_FILTER) panel = null
+    }
     // Back stops a cancellable operation; otherwise it waits for the operation to finish.
     BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
@@ -209,18 +227,18 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                     subtitle = "${doc.width} × ${doc.height} px",
                     onBack = onExit,
                     actions = listOf(
-                        BarAction("Filters", Icons.Filled.PhotoFilter) { panel = EditorPanel.FILTERS },
-                        BarAction("Selection", Icons.Filled.SelectAll) { panel = EditorPanel.SELECTION },
-                        BarAction("Canvas", Icons.Filled.AspectRatio) { panel = EditorPanel.CANVAS },
-                        BarAction("Ruler", Icons.Filled.Straighten, selected = controller.ruler.enabled) { panel = EditorPanel.RULER },
-                        BarAction("Grid", Icons.Filled.GridOn, selected = controller.grid.enabled) { panel = EditorPanel.GRID },
-                        BarAction("Stabilizer", Icons.Filled.Draw, selected = controller.stabilizer.mode != StabilizerMode.OFF) { panel = EditorPanel.STABILIZER },
+                        BarAction("Filters", Icons.Filled.PhotoFilter, enabled = docActionsEnabled) { panel = EditorPanel.FILTERS },
+                        BarAction("Selection", Icons.Filled.SelectAll, enabled = docActionsEnabled) { panel = EditorPanel.SELECTION },
+                        BarAction("Canvas", Icons.Filled.AspectRatio, enabled = docActionsEnabled) { panel = EditorPanel.CANVAS },
+                        BarAction("Ruler", Icons.Filled.Straighten, selected = rulerOn) { panel = EditorPanel.RULER },
+                        BarAction("Grid", Icons.Filled.GridOn, selected = gridOn) { panel = EditorPanel.GRID },
+                        BarAction("Stabilizer", Icons.Filled.Draw, selected = stabilizerOn) { panel = EditorPanel.STABILIZER },
                     ),
                     menu = listOf(
-                        MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate) { launchImport() },
-                        MenuEntry("Export PNG", Icons.Filled.SaveAlt) { requestExport(ExportFormat.PNG) },
-                        MenuEntry("Export JPG", Icons.Filled.Image) { requestExport(ExportFormat.JPEG) },
-                        MenuEntry("Share", Icons.Filled.Share) { actions.share() },
+                        MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled) { launchImport() },
+                        MenuEntry("Export PNG", Icons.Filled.SaveAlt, enabled = docActionsEnabled) { requestExport(ExportFormat.PNG) },
+                        MenuEntry("Export JPG", Icons.Filled.Image, enabled = docActionsEnabled) { requestExport(ExportFormat.JPEG) },
+                        MenuEntry("Share", Icons.Filled.Share, enabled = docActionsEnabled) { actions.share() },
                         MenuEntry("Flip view", Icons.Filled.Flip, checked = controller.viewMirrored, dividerBefore = true) {
                             controller.viewMirrored = !controller.viewMirrored
                         },
@@ -235,13 +253,16 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                     ),
                 )
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .background(BrushworkColors.Chrome.copy(alpha = 0.82f))
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-            ) {
-                ToolOptionsBar(controller, Modifier.fillMaxWidth())
+            // Tool options act on the document; the tool is not usable while a filter is previewed.
+            if (session == null) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(BrushworkColors.Chrome.copy(alpha = 0.82f))
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+                ) {
+                    ToolOptionsBar(controller, Modifier.fillMaxWidth())
+                }
             }
         }
 
@@ -322,7 +343,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         }
 
         // ------------------------------------------------------------ busy scrim (blocks input)
-        if (busy != null) BusyOverlay(busy, controller.busyProgress, onCancel = controller.busyCancel)
+        if (busy != null) BusyOverlay(busy, progress = { controller.busyProgress }, onCancel = controller.busyCancel)
     }
 
     // ---------------------------------------------------------------- panels

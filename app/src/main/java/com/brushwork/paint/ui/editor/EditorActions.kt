@@ -23,6 +23,7 @@ internal class EditorActions(private val controller: EditorController, private v
 
     /** Decodes a picked image off the main thread and places it on a new layer. */
     fun importPicture(uri: Uri) {
+        if (!readyForDocumentAction()) return
         if (!controller.canAddLayer) {
             controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size")
             return
@@ -32,12 +33,17 @@ internal class EditorActions(private val controller: EditorController, private v
         val appContext = context.applicationContext
         controller.runBusy("Importing picture") {
             val bitmap = withContext(Dispatchers.IO) { ImageImport.decode(appContext, uri, maxDim) }
+            val layersBefore = doc.layers.size
             controller.importImageAsLayer(bitmap)
+            // No layer was added (limit or out of memory, already reported): the picture was not
+            // handed to the transform tool, so free it now instead of waiting for the GC.
+            if (doc.layers.size == layersBefore) bitmap.recycle()
         }
     }
 
     /** Flattens the artwork and saves it to the device gallery. */
     fun exportToGallery(format: ExportFormat) {
+        if (!readyForDocumentAction()) return
         commitPendingWork()
         controller.runBusy("Exporting ${format.extension.uppercase()}") {
             letOverlayShow()
@@ -54,6 +60,7 @@ internal class EditorActions(private val controller: EditorController, private v
 
     /** Flattens the artwork to a PNG in the share cache and opens the system share sheet. */
     fun share() {
+        if (!readyForDocumentAction()) return
         commitPendingWork()
         controller.runBusy("Preparing to share") {
             letOverlayShow()
@@ -92,6 +99,20 @@ internal class EditorActions(private val controller: EditorController, private v
         is Activity -> this
         is ContextWrapper -> baseContext.findActivity()
         else -> null
+    }
+
+    /**
+     * False (with a message) while another long operation runs or a filter is being previewed.
+     * Otherwise ends any canvas stroke still in progress so the action sees a settled document.
+     */
+    private fun readyForDocumentAction(): Boolean {
+        if (controller.busyMessage != null) return false
+        if (controller.filterSession != null) {
+            controller.toast("Apply or cancel the filter first")
+            return false
+        }
+        controller.endCanvasGesture()
+        return true
     }
 
     /** Bakes uncommitted tool work (placed text, transform...) so exports include it. */

@@ -101,6 +101,17 @@ class Viewport {
     }
 
     /**
+     * Converts a screen direction ([radians] clockwise from the top of the screen, the convention
+     * of `MotionEvent.AXIS_ORIENTATION`) into the same convention relative to the document's up
+     * axis, removing the view rotation and mirror. Result in (-PI, PI].
+     */
+    fun screenAngleToDoc(radians: Float): Float {
+        if (radians.isNaN()) return 0f
+        val base = if (mirrored) -radians else radians
+        return normalizeRadians(base - Math.toRadians(rotation.toDouble()).toFloat())
+    }
+
+    /**
      * Writes the document -> screen transform in `android.graphics.Matrix` value order
      * (MSCALE_X, MSKEW_X, MTRANS_X, MSKEW_Y, MSCALE_Y, MTRANS_Y, MPERSP_0, MPERSP_1, MPERSP_2).
      */
@@ -255,6 +266,15 @@ class Viewport {
             var r = (d + 180f) % 360f
             if (r < 0f) r += 360f
             return r - 180f
+        }
+
+        /** Normalizes to (-PI, PI]. */
+        fun normalizeRadians(r: Float): Float {
+            val twoPi = (2.0 * Math.PI).toFloat()
+            var a = r % twoPi
+            if (a <= -Math.PI.toFloat()) a += twoPi
+            if (a > Math.PI.toFloat()) a -= twoPi
+            return a
         }
 
         /** Snaps to the nearest multiple of 90 degrees when within [threshold]. */

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,6 +56,9 @@ import kotlin.math.roundToInt
 
 /** Which side slider is being dragged (drives the preview overlay). */
 enum class SliderKind { SIZE, OPACITY }
+
+private val SLIDER_TOUCH_WIDTH = 44.dp
+private val SLIDER_TRACK_WIDTH = 34.dp
 
 /**
  * ibisPaint-style vertical brush size (logarithmic 0.5-1000 px) and opacity sliders for the
@@ -103,7 +107,10 @@ fun SideSliders(
             ToolIconButton(
                 icon = Icons.Filled.Colorize,
                 contentDescription = if (eyedropperActive) "Back to ${controller.lastPaintTool.label}" else "Eyedropper",
-                onClick = { controller.selectTool(if (eyedropperActive) controller.lastPaintTool else ToolId.EYEDROPPER) },
+                onClick = {
+                    controller.endCanvasGesture()
+                    controller.selectTool(if (controller.activeToolId == ToolId.EYEDROPPER) controller.lastPaintTool else ToolId.EYEDROPPER)
+                },
                 selected = eyedropperActive,
                 size = 40.dp,
             )
@@ -111,7 +118,7 @@ fun SideSliders(
     }
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         if (sideBySide) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { size(); opacity() }
+            Row { size(); opacity() }
         } else {
             size()
             opacity()
@@ -138,13 +145,11 @@ private fun VerticalSlider(
     val onDraggingState by rememberUpdatedState(onDragging)
     val shape = RoundedCornerShape(16.dp)
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        // The touch area is wider than the drawn track (touch targets >= 40dp).
         Box(
             Modifier
-                .width(34.dp)
+                .width(SLIDER_TOUCH_WIDTH)
                 .height(length)
-                .clip(shape)
-                .background(BrushworkColors.Chrome.copy(alpha = 0.85f))
-                .border(1.dp, BrushworkColors.ChromeBorder, shape)
                 .semantics {
                     contentDescription = label
                     stateDescription = valueText
@@ -171,26 +176,36 @@ private fun VerticalSlider(
                             onDraggingState(false)
                         }
                     }
-                }
-                .drawBehind {
-                    val pad = 4.dp.toPx()
-                    val trackH = size.height - 2 * pad
-                    val y = pad + trackH * (1f - fraction.coerceIn(0f, 1f))
-                    drawRoundRect(
-                        color = BrushworkColors.Accent.copy(alpha = 0.45f),
-                        topLeft = Offset(pad, y),
-                        size = Size(size.width - 2 * pad, size.height - pad - y),
-                        cornerRadius = CornerRadius(12.dp.toPx()),
-                    )
-                    val thumbH = 3.dp.toPx()
-                    drawRoundRect(
-                        color = Color.White,
-                        topLeft = Offset(pad + 2.dp.toPx(), (y - thumbH / 2f).coerceIn(pad, size.height - pad - thumbH)),
-                        size = Size(size.width - 2 * pad - 4.dp.toPx(), thumbH),
-                        cornerRadius = CornerRadius(thumbH / 2f),
-                    )
                 },
-        )
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(
+                Modifier
+                    .width(SLIDER_TRACK_WIDTH)
+                    .fillMaxHeight()
+                    .clip(shape)
+                    .background(BrushworkColors.Chrome.copy(alpha = 0.85f))
+                    .border(1.dp, BrushworkColors.ChromeBorder, shape)
+                    .drawBehind {
+                        val pad = 4.dp.toPx()
+                        val trackH = size.height - 2 * pad
+                        val y = pad + trackH * (1f - fraction.coerceIn(0f, 1f))
+                        drawRoundRect(
+                            color = BrushworkColors.Accent.copy(alpha = 0.45f),
+                            topLeft = Offset(pad, y),
+                            size = Size(size.width - 2 * pad, size.height - pad - y),
+                            cornerRadius = CornerRadius(12.dp.toPx()),
+                        )
+                        val thumbH = 3.dp.toPx()
+                        drawRoundRect(
+                            color = Color.White,
+                            topLeft = Offset(pad + 2.dp.toPx(), (y - thumbH / 2f).coerceIn(pad, size.height - pad - thumbH)),
+                            size = Size(size.width - 2 * pad - 4.dp.toPx(), thumbH),
+                            cornerRadius = CornerRadius(thumbH / 2f),
+                        )
+                    },
+            )
+        }
         Spacer(Modifier.height(3.dp))
         Text(
             valueText,

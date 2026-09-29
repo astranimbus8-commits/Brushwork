@@ -291,6 +291,61 @@ class ViewportTest {
         }
     }
 
+    // ------------------------------------------------------------------ stylus orientation
+
+    private val halfPi = (Math.PI / 2).toFloat()
+    private val pi = Math.PI.toFloat()
+
+    @Test
+    fun screenAngleIsUnchangedOnAnUnrotatedView() {
+        val v = viewport()
+        v.fit(1000, 1000)
+        assertEquals(0f, v.screenAngleToDoc(0f), 1e-5f)
+        assertEquals(halfPi, v.screenAngleToDoc(halfPi), 1e-5f)
+        assertEquals(-1f, v.screenAngleToDoc(-1f), 1e-5f)
+        assertEquals(0f, v.screenAngleToDoc(Float.NaN), 0f)
+    }
+
+    @Test
+    fun screenAngleRemovesTheViewRotation() {
+        val v = viewport()
+        v.fit(1000, 1000)
+        // View rotated 90 degrees clockwise: the document's up points to the screen's right, so a
+        // pen pointing right on screen points "up" on the paper, and screen-up is paper-left.
+        v.rotateAround(540f, 960f, 90f)
+        assertEquals(0f, v.screenAngleToDoc(halfPi), 1e-5f)
+        assertEquals(-halfPi, v.screenAngleToDoc(0f), 1e-5f)
+        // Direction check against the actual mapping: document up (0, -1) is on screen at +90 degrees.
+        v.docToScreen(500f, 500f, out); val cx = out[0]; val cy = out[1]
+        v.docToScreen(500f, 400f, out)
+        assertEquals(halfPi, kotlin.math.atan2(out[0] - cx, -(out[1] - cy)), 1e-4f)
+        // Rotated half a turn: pen up on screen points down on the paper; the result stays in (-PI, PI].
+        v.rotateAround(540f, 960f, 180f)
+        assertEquals(pi, v.screenAngleToDoc(0f), 1e-5f)
+        assertEquals(-halfPi, v.screenAngleToDoc(halfPi), 1e-5f)
+    }
+
+    @Test
+    fun screenAngleRemovesTheMirror() {
+        val v = viewport()
+        v.fit(1000, 1000)
+        v.mirrored = true
+        // On a mirrored display, a pen pointing right points left on the paper.
+        assertEquals(-halfPi, v.screenAngleToDoc(halfPi), 1e-5f)
+        assertEquals(0f, v.screenAngleToDoc(0f), 1e-5f)
+        v.rotateAround(540f, 960f, 30f)
+        val thirty = Math.toRadians(30.0).toFloat()
+        assertEquals(-0.5f - thirty, v.screenAngleToDoc(0.5f), 1e-5f)
+    }
+
+    @Test
+    fun normalizeRadiansWrapsIntoHalfOpenRange() {
+        assertEquals(pi, Viewport.normalizeRadians(-pi), 1e-5f)
+        assertEquals(pi, Viewport.normalizeRadians(pi), 1e-5f)
+        assertEquals(-halfPi, Viewport.normalizeRadians(3 * halfPi), 1e-5f)
+        assertEquals(0.25f, Viewport.normalizeRadians(0.25f + 4 * pi), 1e-4f)
+    }
+
     // ------------------------------------------------------------------ resize / snapshot
 
     @Test

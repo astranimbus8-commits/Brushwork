@@ -73,7 +73,13 @@ import kotlin.math.ln
 import kotlin.math.roundToInt
 
 /** A top-bar action; actions that don't fit the width move into the overflow menu. */
-data class BarAction(val label: String, val icon: ImageVector, val selected: Boolean = false, val onClick: () -> Unit)
+data class BarAction(
+    val label: String,
+    val icon: ImageVector,
+    val selected: Boolean = false,
+    val enabled: Boolean = true,
+    val onClick: () -> Unit,
+)
 
 /** An overflow menu entry; [checked] non-null shows a check mark when true (toggles). */
 data class MenuEntry(
@@ -81,8 +87,19 @@ data class MenuEntry(
     val icon: ImageVector,
     val checked: Boolean? = null,
     val dividerBefore: Boolean = false,
+    val enabled: Boolean = true,
     val onClick: () -> Unit,
 )
+
+/**
+ * Drops a canvas stroke that is still in progress before a chrome button acts. A button click
+ * fires on release, possibly while another finger is still drawing; undo, tool switches or
+ * committing tool work must never run in the middle of a tool gesture. The canvas' remaining
+ * events for that pointer are then ignored by the controller.
+ */
+internal fun EditorController.endCanvasGesture() {
+    if (isInteracting) pointerCancel()
+}
 
 private val BarButtonSize = 40.dp
 private val TitleMinWidth = 104.dp
@@ -104,14 +121,16 @@ fun EditorTopBar(
         val reserved = BarButtonSize * 2 + TitleMinWidth + 8.dp
         val fitting = ((maxWidth - reserved) / BarButtonSize).toInt().coerceIn(0, actions.size)
         val inBar = actions.take(fitting)
-        val overflow = actions.drop(fitting).map { MenuEntry(it.label, it.icon, checked = if (it.selected) true else null, onClick = it.onClick) }
+        val overflow = actions.drop(fitting).map {
+            MenuEntry(it.label, it.icon, checked = if (it.selected) true else null, enabled = it.enabled, onClick = it.onClick)
+        }
         Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             ToolIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back to gallery", onBack, size = BarButtonSize)
             Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                 Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = BrushworkColors.OnChrome)
                 Text(subtitle, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = BrushworkColors.OnChromeDim)
             }
-            inBar.forEach { ToolIconButton(it.icon, it.label, it.onClick, selected = it.selected, size = BarButtonSize) }
+            inBar.forEach { ToolIconButton(it.icon, it.label, it.onClick, selected = it.selected, enabled = it.enabled, size = BarButtonSize) }
             OverflowMenu(overflow, menu)
         }
     }
@@ -131,6 +150,7 @@ private fun OverflowMenu(first: List<MenuEntry>, rest: List<MenuEntry>) {
                     leadingIcon = { Icon(e.icon, contentDescription = null) },
                     trailingIcon = if (e.checked == true) ({ Icon(Icons.Filled.Check, contentDescription = "On", tint = BrushworkColors.Accent) }) else null,
                     onClick = { open = false; e.onClick() },
+                    enabled = e.enabled,
                 )
             }
         }
@@ -179,7 +199,7 @@ fun Hotbar(
             ToolIconButton(
                 icon = if (erasing) EditorIcons.Eraser else EditorIcons.tool(paintTool),
                 contentDescription = if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
-                onClick = { controller.toggleEraser() },
+                onClick = { controller.endCanvasGesture(); controller.toggleEraser() },
                 selected = erasing || active == paintTool,
             )
             BrushSizeButton(preset?.size ?: 0f, onBrushPanel)
@@ -191,8 +211,16 @@ fun Hotbar(
                 contentAlignment = Alignment.Center,
             ) { ColorSwatch(controller.color, size = 30.dp) }
             LayersButton(layerNumber, onLayersPanel)
-            ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo", { controller.undo() }, enabled = controller.canUndo || pending || session != null)
-            ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo", { controller.redo() }, enabled = controller.canRedo && !pending && session == null)
+            ToolIconButton(
+                Icons.AutoMirrored.Filled.Undo, "Undo",
+                { controller.endCanvasGesture(); controller.undo() },
+                enabled = controller.canUndo || pending || session != null,
+            )
+            ToolIconButton(
+                Icons.AutoMirrored.Filled.Redo, "Redo",
+                { controller.endCanvasGesture(); controller.redo() },
+                enabled = controller.canRedo && !pending && session == null,
+            )
         }
     }
 }
@@ -252,6 +280,7 @@ fun ToolPickerSheet(controller: EditorController, onDismiss: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { id ->
                     ToolTile(id, selected = id == active, modifier = Modifier.weight(1f)) {
+                        controller.endCanvasGesture()
                         controller.selectTool(id)
                         onDismiss()
                     }
@@ -290,7 +319,7 @@ private fun ToolTile(id: ToolId, selected: Boolean, modifier: Modifier, onClick:
 fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier = Modifier) {
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
         Surface(
-            onClick = { tool.discard(); controller.invalidateOverlay() },
+            onClick = { controller.endCanvasGesture(); tool.discard(); controller.invalidateOverlay() },
             shape = CircleShape,
             color = BrushworkColors.ChromeHigh,
             shadowElevation = 4.dp,
@@ -299,7 +328,7 @@ fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier 
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Close, contentDescription = "Discard ${tool.id.label.lowercase()} edit", tint = BrushworkColors.Danger) }
         }
         Surface(
-            onClick = { tool.commit(); controller.invalidateOverlay() },
+            onClick = { controller.endCanvasGesture(); tool.commit(); controller.invalidateOverlay() },
             shape = CircleShape,
             color = BrushworkColors.Accent,
             shadowElevation = 4.dp,
@@ -311,11 +340,12 @@ fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier 
 }
 
 /**
- * Full-screen scrim that blocks all input while a long operation runs. [onCancel] non-null
- * offers a Stop button (cancellable operations).
+ * Full-screen scrim that blocks all input while a long operation runs. [progress] (0..1, < 0 =
+ * indeterminate) is read here so frequent progress updates only recompose the overlay.
+ * [onCancel] non-null offers a Stop button (cancellable operations).
  */
 @Composable
-fun BusyOverlay(message: String, progress: Float, onCancel: (() -> Unit)? = null) {
+fun BusyOverlay(message: String, progress: () -> Float, onCancel: (() -> Unit)? = null) {
     Box(
         Modifier
             .fillMaxSize()
@@ -331,10 +361,11 @@ fun BusyOverlay(message: String, progress: Float, onCancel: (() -> Unit)? = null
             Column(Modifier.widthIn(min = 220.dp, max = 300.dp).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(message, style = MaterialTheme.typography.titleSmall, color = BrushworkColors.OnChrome, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(16.dp))
-                if (progress < 0f) {
+                val raw = progress()
+                if (raw < 0f || raw.isNaN()) {
                     LinearProgressIndicator(color = BrushworkColors.Accent, trackColor = BrushworkColors.ChromeBorder, modifier = Modifier.width(200.dp))
                 } else {
-                    val p = progress.coerceIn(0f, 1f)
+                    val p = raw.coerceIn(0f, 1f)
                     LinearProgressIndicator(progress = { p }, color = BrushworkColors.Accent, trackColor = BrushworkColors.ChromeBorder, modifier = Modifier.width(200.dp))
                     Spacer(Modifier.height(8.dp))
                     Text("${(p * 100f).roundToInt()}%", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)

@@ -103,15 +103,20 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     fun setMirrored(mirrored: Boolean) {
         if (viewport.mirrored == mirrored) return
+        interruptStroke()
         viewport.mirrored = mirrored
         if (mode == Mode.TRANSFORM) restartTransform(null, -1)
         applyTransform()
     }
 
-    fun fitToScreen() { fitNow() }
+    fun fitToScreen() {
+        interruptStroke()
+        fitNow()
+    }
 
     fun actualPixels() {
         if (!viewport.hasSize) return
+        interruptStroke()
         viewport.actualPixels()
         viewport.userAdjusted = true
         applyTransform()
@@ -120,10 +125,22 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     fun resetRotation() {
         if (!viewport.hasSize) return
+        interruptStroke()
         viewport.resetRotation()
         viewport.userAdjusted = true
         applyTransform()
         flashGestureInfo()
+    }
+
+    /**
+     * The view is about to move under a finger that is still drawing (menu action tapped with
+     * another finger): drop the stroke instead of letting it jump across the canvas.
+     */
+    private fun interruptStroke() {
+        if (mode != Mode.DRAW) return
+        cancelPendingLongPress()
+        controller.pointerCancel()
+        mode = Mode.IGNORE
     }
 
     val zoom: Float get() = viewport.scale
@@ -395,9 +412,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         val id = e.getPointerId(0)
         val tap = if (isIgnored(id)) TouchGestureClassifier.Tap.NONE else classifier.up(id, e.eventTime)
         when (mode) {
-            Mode.DRAW -> if (id == drawPointerId) {
+            Mode.DRAW -> {
                 cancelPendingLongPress()
-                controller.pointerUp(toolPoint(e, 0, -1))
+                // The gesture is over either way: never leave the tool mid-stroke.
+                if (id == drawPointerId) controller.pointerUp(toolPoint(e, 0, -1)) else controller.pointerCancel()
             }
             Mode.TRANSFORM -> {
                 endTransform()
@@ -490,7 +508,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     // ------------------------------------------------------------------ long press
 
     private val longPressRunnable = Runnable {
-        if (mode != Mode.DRAW) return@Runnable
+        if (mode != Mode.DRAW || controller.busyMessage != null) return@Runnable
         val now = SystemClock.uptimeMillis()
         if (!classifier.longPressDue(now)) return@Runnable
         classifier.markLongPressFired()
@@ -542,7 +560,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             val up = cur && (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_POINTER_UP)
             if (up && pressure <= 0f) pressure = lastPoint?.pressure ?: pressure
             tilt = if (cur) e.getAxisValue(MotionEvent.AXIS_TILT, idx) else e.getHistoricalAxisValue(MotionEvent.AXIS_TILT, idx, h)
-            orientation = if (cur) e.getAxisValue(MotionEvent.AXIS_ORIENTATION, idx) else e.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, idx, h)
+            // Like x/y, the pen direction is reported relative to the document (view rotation/mirror removed).
+            val screenOrientation = if (cur) e.getAxisValue(MotionEvent.AXIS_ORIENTATION, idx) else e.getHistoricalAxisValue(MotionEvent.AXIS_ORIENTATION, idx, h)
+            orientation = viewport.screenAngleToDoc(screenOrientation)
         }
         return ToolPoint(pts[0], pts[1], pressure, time, stylus, tilt, orientation).also { lastPoint = it }
     }

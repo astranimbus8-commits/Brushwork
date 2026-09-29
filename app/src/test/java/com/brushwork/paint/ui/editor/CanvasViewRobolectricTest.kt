@@ -257,6 +257,53 @@ class CanvasViewRobolectricTest {
     }
 
     @Test
+    fun strokeNeverDanglesWhenTheFinalUpIsFromAnotherPointer() {
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
+        assertTrue(controller.isInteracting)
+        // Inconsistent stream (the drawing pointer's id changed): the gesture still ends.
+        send(MotionEvent.ACTION_UP, 30, P(5, 410f, 400f))
+        assertFalse("tool released", controller.isInteracting)
+        send(MotionEvent.ACTION_DOWN, 100, P(0, 400f, 400f))
+        assertTrue("next stroke starts normally", controller.isInteracting)
+        send(MotionEvent.ACTION_UP, 120, P(0, 400f, 400f))
+    }
+
+    @Test
+    fun viewCommandsDropAStrokeInProgress() {
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
+        assertTrue(controller.isInteracting)
+        view.actualPixels()
+        assertFalse("stroke dropped before the view moves", controller.isInteracting)
+        // The rest of that finger's gesture neither draws nor pans.
+        val m = Matrix(controller.viewTransform.matrix)
+        send(MotionEvent.ACTION_MOVE, 20, P(0, 450f, 420f))
+        send(MotionEvent.ACTION_UP, 40, P(0, 450f, 420f))
+        assertFalse(controller.isInteracting)
+        assertEquals(m, controller.viewTransform.matrix)
+
+        send(MotionEvent.ACTION_DOWN, 100, P(0, 400f, 400f))
+        view.setMirrored(true)
+        assertFalse(controller.isInteracting)
+        send(MotionEvent.ACTION_UP, 120, P(0, 400f, 400f))
+    }
+
+    @Test
+    fun chromeActionEndsTheCanvasStrokeCleanly() {
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
+        send(MotionEvent.ACTION_MOVE, 16, P(0, 420f, 400f))
+        assertTrue(controller.isInteracting)
+        // A hotbar button tapped with another finger.
+        controller.endCanvasGesture()
+        assertFalse(controller.isInteracting)
+        send(MotionEvent.ACTION_MOVE, 32, P(0, 440f, 400f))
+        assertFalse("later samples of that finger are ignored", controller.isInteracting)
+        send(MotionEvent.ACTION_UP, 48, P(0, 450f, 400f))
+        send(MotionEvent.ACTION_DOWN, 100, P(0, 400f, 400f))
+        assertTrue(controller.isInteracting)
+        send(MotionEvent.ACTION_UP, 120, P(0, 400f, 400f))
+    }
+
+    @Test
     fun inputIsIgnoredWhileBusy() {
         var release: (() -> Unit)? = null
         controller.runBusy("Working") { kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c -> release = { c.resumeWith(Result.success(Unit)) } } }
