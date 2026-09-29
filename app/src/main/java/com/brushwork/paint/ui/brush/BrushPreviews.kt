@@ -59,7 +59,7 @@ fun BrushStrokePreview(
         val hPx = max(8, with(density) { height.roundToPx() })
         val image by produceState<ImageBitmap?>(null, preset, toolId, wPx, hPx, trueScale) {
             if (debounceMs > 0) delay(debounceMs)
-            value = withContext(Dispatchers.Default) {
+            value = withContext(PreviewDispatcher) {
                 val d = if (trueScale) trueScaleDiameter(preset, hPx) else BrushPreviewRenderer.thumbnailDiameter(preset, hPx)
                 BrushPreviewRenderer.render(preset, toolId, wPx, hPx, d).asImageBitmap()
             }
@@ -75,6 +75,13 @@ fun BrushStrokePreview(
         } ?: Box(Modifier.fillMaxSize())
     }
 }
+
+/**
+ * Previews render one at a time in the background: a panel full of thumbnails then never
+ * competes with the rest of the app for every core, and the selected preset's re-renders
+ * (slider drags) queue in order.
+ */
+private val PreviewDispatcher = Dispatchers.Default.limitedParallelism(1)
 
 private fun trueScaleDiameter(preset: BrushPreset, heightPx: Int): Float =
     if (preset.antiAlias) preset.size.coerceIn(1f, heightPx * 0.6f)
