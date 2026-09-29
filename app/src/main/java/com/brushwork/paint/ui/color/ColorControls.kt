@@ -105,10 +105,6 @@ fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
     Box(
         modifier
             .aspectRatio(1f)
-            .semantics {
-                contentDescription = "Color wheel"
-                stateDescription = "Hue ${state.hsb.displayH()}°, saturation ${state.hsb.displayS()}%, brightness ${state.hsb.displayB()}%"
-            }
             .clearFocusOnPress(focusManager)
             .pointerInput(state) {
                 awaitEachGesture {
@@ -160,6 +156,24 @@ fun HsbWheel(state: ColorEditState, modifier: Modifier = Modifier) {
                     drawThumb(Offset(layout.svX(hsb.s), layout.svY(hsb.b)), svThumb, Color(state.color or OPAQUE), thumb)
                 }
             }
+    ) {
+        WheelSemantics(state, Modifier.matchParentSize())
+    }
+}
+
+/**
+ * Screen-reader description of the wheel. A separate composable so that only this recomposes
+ * when the color changes (the wheel itself must not, or its draw cache would be rebuilt).
+ */
+@Composable
+private fun WheelSemantics(state: ColorEditState, modifier: Modifier) {
+    val hsb = state.hsb
+    val description = "Hue ${hsb.displayH()}°, saturation ${hsb.displayS()}%, brightness ${hsb.displayB()}%"
+    Box(
+        modifier.semantics {
+            contentDescription = "Color wheel"
+            stateDescription = description
+        }
     )
 }
 

@@ -9,7 +9,10 @@ import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -81,7 +84,9 @@ class PickerFocusRobolectricTest {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         val start = ColorUtils.rgb(10, 20, 30)
         val state = ColorEditState(start, Hsb.fromColor(start)) {}
-        activity.setContent { BrushworkTheme { Surface { Column { HexField(state, withAlpha = false); RgbSliders(state) } } } }
+        activity.setContent {
+            BrushworkTheme { Surface { Column { HexField(state, withAlpha = false); RgbSliders(state); HsbWheel(state, Modifier.size(160.dp)) } } }
+        }
         settle()
         val root = composeRoot(activity)
         val view = root as View
@@ -124,5 +129,9 @@ class PickerFocusRobolectricTest {
         settle()
         assertEquals(ColorUtils.rgb(0, 255, 0), state.color)
         assertEquals("00FF00", textFields(root)[0].text)
+
+        // The wheel's screen-reader state follows the color.
+        val wheel = byDescription(root, "Color wheel")
+        assertEquals("Hue 120°, saturation 100%, brightness 100%", wheel.config.getOrNull(SemanticsProperties.StateDescription))
     }
 }
