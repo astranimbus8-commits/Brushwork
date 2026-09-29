@@ -33,8 +33,7 @@ import org.robolectric.annotation.Config
  * color-mode change, and recent colors are recorded on close only when the color changed.
  *
  * Own sandbox (see [ColorPickerUiSmokeTest]): later tests in a shared sandbox get no frames.
- * (A sheet reopened within the test is not laid out again under Robolectric, so gestures are
- * only driven on the first opening.)
+ * Element bounds are read after forcing pending Compose layout (see [RobolectricUi.elements]).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.color.panellifecyclesandbox"])
