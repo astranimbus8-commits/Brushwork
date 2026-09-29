@@ -368,6 +368,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     /** Rebuilds the guide path and the compositor preview (plain line / fill), then redraws. */
     private fun changed() {
+        if (anchors.isNotEmpty()) ensureObserving()
         if (anchors.size >= 2) path().toAndroidPath(docPath) else docPath.rewind()
         val specs = buildSpecs()
         if (specs.isEmpty()) {
@@ -459,8 +460,15 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         tool.onUp(point(samples.lastIndex))
     }
 
-    override fun onActivate() {
-        observeJob?.cancel()
+    override fun onActivate() = ensureObserving()
+
+    /**
+     * The preview depends on the main color, selection and layer props. Started on activation
+     * and again whenever anchors exist, because some controller operations call onDeactivate
+     * without a following onActivate.
+     */
+    private fun ensureObserving() {
+        if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
             snapshotFlow { Triple(controller.color, controller.selection, controller.layersVersion) }
                 .drop(1)

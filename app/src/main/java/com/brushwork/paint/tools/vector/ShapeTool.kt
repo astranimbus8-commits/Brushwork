@@ -360,6 +360,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (specs.isEmpty()) {
             releasePreview()
         } else {
+            ensureObserving()
             val layer = targetLayer ?: controller.doc.activeLayer
             val p = preview?.takeIf { it.layer === layer } ?: run {
                 releasePreview()
@@ -409,9 +410,15 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         controller.invalidateOverlay()
     }
 
-    override fun onActivate() {
-        observeJob?.cancel()
-        // The preview depends on state the tool doesn't own: main color, selection, layer props.
+    override fun onActivate() = ensureObserving()
+
+    /**
+     * The preview depends on state the tool doesn't own (main color, selection, layer props).
+     * Started on activation and again whenever a shape appears, because some controller
+     * operations call onDeactivate without a following onActivate.
+     */
+    private fun ensureObserving() {
+        if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
             snapshotFlow { Triple(controller.color, controller.selection, controller.layersVersion) }
                 .drop(1)
