@@ -85,6 +85,41 @@ internal object SmokeUi {
 
     fun shown(): List<String> = elements().flatMap { it.node.labels() }.distinct()
 
+    private fun SemanticsNode.subtreeLabels(): List<String> = labels() + children.flatMap { it.subtreeLabels() }
+
+    /** The (last) editable text field labelled [label]. */
+    fun field(label: String): RobolectricUi.Element =
+        elements().lastOrNull { e -> e.node.config.getOrNull(SemanticsActions.SetText) != null && label in e.node.subtreeLabels() }
+            ?: throw AssertionError("no text field \"$label\"; shown: ${shown().take(100)}")
+
+    /**
+     * Types [text] into the field labelled [label] like a user: focus, replace the text, then
+     * press the keyboard's Done key (the commit path) and settle.
+     */
+    fun typeAndDone(label: String, text: String) {
+        Smoke.step("type \"$text\" into \"$label\"")
+        field(label).focus()
+        settle(2)
+        field(label).type(text)
+        settle(2)
+        val ime = field(label).node.config.getOrNull(SemanticsActions.OnImeAction)?.action
+            ?: throw AssertionError("field \"$label\" has no IME action")
+        ime.invoke()
+        settle(4)
+    }
+
+    /** Types [text] into [label], then moves focus away (the focus-loss commit path). */
+    fun typeAndLeave(label: String, text: String) {
+        Smoke.step("type \"$text\" into \"$label\" and leave")
+        val f = field(label)
+        f.focus()
+        settle(2)
+        field(label).type(text)
+        settle(2)
+        f.window.clearFocus()
+        settle(4)
+    }
+
     /** At least [min] windows are shown and every one has a size (a sheet that failed to measure would not). */
     fun assertWindowsLaidOut(min: Int = 1) {
         val roots = windows()

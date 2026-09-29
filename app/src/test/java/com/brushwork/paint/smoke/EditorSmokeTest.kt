@@ -45,6 +45,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -115,6 +116,8 @@ class EditorSmokeTest {
         val dog = Smoke.watchdog()
         section("editor screen, tools, panels, touch") { editorScreen() }
         section("panels composed directly") { panelsDirect() }
+        section("number fields refuse NaN and infinity") { numberFields() }
+        section("main activity end to end") { mainActivity() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -437,6 +440,167 @@ class EditorSmokeTest {
         c.selectTool(ToolId.BRUSH)
         settle()
         Smoke.assertQuiet(c, "tool sheets done")
+    }
+
+    // ================================================================== number fields
+
+    private fun numberFields() {
+        val activity = newActivity()
+        val c = Smoke.controller(activity)
+        c.seedContent()
+        var which by mutableStateOf(0)
+        var created: com.brushwork.paint.storage.NewCanvasSpec? = null
+        activity.setContent {
+            BrushworkTheme {
+                when (which) {
+                    1 -> GridPanel(c) {}
+                    2 -> RulerPanel(c) {}
+                    3 -> NewCanvasDialog(creating = false, onDismiss = {}, onCreate = { created = it })
+                    4 -> com.brushwork.paint.ui.placement.TransformNumbersSheet(c.tools.getValue(ToolId.TRANSFORM) as TransformTool)
+                    5 -> com.brushwork.paint.ui.placement.TextNumbersSheet(c.tools.getValue(ToolId.TEXT) as TextTool)
+                }
+            }
+        }
+        settle()
+        val bad = listOf("NaN", "Infinity", "-Infinity", "1e999")
+
+        which = 1
+        c.updateGrid(c.grid.copy(enabled = true))
+        settle()
+        for (t in bad) {
+            SmokeUi.typeAndDone("Spacing", t)
+            SmokeUi.typeAndLeave("Offset X", t)
+            SmokeUi.typeAndDone("Bold line every", t)
+        }
+        val g = c.grid
+        assertTrue("grid stays finite: $g", g.spacingPx.isFinite() && g.offsetXPx.isFinite() && g.spacingPx >= 1f)
+
+        which = 2
+        settle()
+        for (t in bad) {
+            SmokeUi.typeAndDone("Center X", t)
+            SmokeUi.typeAndLeave("Angle", t)
+            SmokeUi.typeAndDone("Nudge step", t)
+        }
+        val r = c.ruler
+        assertTrue("ruler stays finite: $r", r.centerX.isFinite() && r.angleDeg.isFinite() && r.nudgeStep.isFinite())
+
+        c.selectTool(ToolId.TRANSFORM)
+        Smoke.pump(100)
+        val tr = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        assertTrue(tr.hasPendingWork)
+        which = 4
+        settle()
+        val transformLabels = SmokeUi.shown().filter { it in listOf("X", "Y", "Width", "Height", "Rotation", "Scale") }.distinct()
+        assertEquals(6, transformLabels.size)
+        for (label in transformLabels) {
+            for (t in bad) SmokeUi.typeAndDone(label, t)
+        }
+        val st = tr.transformState!!
+        assertTrue("transform stays finite: $st", st.width.isFinite() && st.height.isFinite() && st.bounds().left.isFinite())
+        tr.commit()
+        c.selectTool(ToolId.TEXT)
+        val text = c.tools.getValue(ToolId.TEXT) as TextTool
+        text.startTextAt(100f, 100f)
+        text.setText("A")
+        text.confirmEditor()
+        which = 5
+        settle()
+        val textLabels = SmokeUi.shown().filter { it in listOf("Center X", "Center Y", "Size", "Rotation") }.distinct()
+        assertEquals(4, textLabels.size)
+        for (label in textLabels) {
+            for (t in bad) SmokeUi.typeAndDone(label, t)
+        }
+        val item = text.item!!
+        assertTrue("text stays finite: $item", item.cx.isFinite() && item.cy.isFinite() && item.spec.sizePx.isFinite())
+        text.discard()
+
+        which = 3
+        settle()
+        click("Custom", exact = true)
+        for (t in bad) {
+            SmokeUi.typeAndDone("Width", t)
+            SmokeUi.typeAndDone("Resolution", t)
+        }
+        SmokeUi.typeAndDone("Width", "640")
+        SmokeUi.typeAndDone("Height", "480")
+        click("Create", exact = true)
+        val spec = created ?: throw AssertionError("Create did not deliver a canvas")
+        assertEquals(640, spec.width)
+        assertEquals(480, spec.height)
+        assertTrue("dpi ${spec.dpi}", spec.dpi.isFinite() && spec.dpi > 0f)
+        Smoke.assertQuiet(c, "number fields")
+    }
+
+    // ================================================================== main activity
+
+    private fun mainActivity() {
+        SmokeUi.markBaseline()
+        val ctl = Robolectric.buildActivity(com.brushwork.paint.MainActivity::class.java).setup()
+        activities += ctl
+        val activity = ctl.get()
+        val app = activity.application as com.brushwork.paint.BrushworkApp
+        Smoke.step("gallery")
+        assertTrue("gallery shows", Smoke.pumpUntil { settle(1); has("New canvas") })
+
+        // A project created through the repository appears and opens from its card.
+        val id = kotlinx.coroutines.runBlocking {
+            app.repository.create(com.brushwork.paint.storage.NewCanvasSpec("Smoke art", 400, 300, 300f))
+        }
+        assertTrue("new project listed", Smoke.pumpUntil { settle(1); has("Smoke art") })
+        click("Smoke art", exact = true)
+        Smoke.step("open editor")
+        assertTrue("editor opened", Smoke.pumpUntil {
+            settle(1)
+            (app.editorSession?.state as? com.brushwork.paint.EditorSession.State.Ready) != null &&
+                Smoke.find(activity.window.decorView, CanvasView::class.java)?.width ?: 0 > 0
+        })
+        val session = app.editorSession!!
+        val c = (session.state as com.brushwork.paint.EditorSession.State.Ready).controller
+        assertEquals(id, c.doc.id)
+        assertEquals(2, c.doc.layers.size)
+        settle()
+        c.tools
+        c.brush = c.brush.copy(size = 10f, opacity = 1f, hardness = 1f, taperStart = 0f, taperEnd = 0f)
+        c.color = 0xFF112233.toInt()
+        val canvas = Smoke.find(activity.window.decorView, CanvasView::class.java)!!
+        val (ox, oy) = canvasOrigin(canvas)
+        fun screen(x: Float, y: Float) = c.viewTransform.docToScreen(x, y).let { (it.x + ox) to (it.y + oy) }
+        val touch = Smoke.Touch(activity.window.decorView)
+        touch.stroke(screen(50f, 50f), screen(350f, 250f))
+        settle()
+        val drawn = c.activeLayer
+        assertEquals("stroke painted through MainActivity", 0xFF112233.toInt(), drawn.bitmap.getPixel(200, 150))
+
+        // Leaving the app saves (onStop), coming back keeps the editor.
+        ctl.pause().stop()
+        assertTrue("saved on stop", Smoke.pumpUntil { drawn.savedVersion == drawn.contentVersion })
+        ctl.start().resume()
+        settle()
+        assertSame(session, app.editorSession)
+
+        // Back to the gallery: the editor closes after saving; the project has the stroke.
+        touch.stroke(screen(50f, 250f), screen(350f, 50f))
+        click("Back to gallery")
+        Smoke.step("closing editor")
+        assertTrue("back in the gallery", Smoke.pumpUntil { settle(1); app.editorSession == null && has("New canvas") })
+        val saved = kotlinx.coroutines.runBlocking { app.repository.load(id) }
+        val layer = saved.layers[saved.activeLayerIndex]
+        assertEquals(0xFF112233.toInt(), layer.bitmap.getPixel(200, 150))
+        // (275, 100) is on the second stroke only: (50, 250) -> (350, 50).
+        assertEquals("the second stroke was saved on exit", 0xFF112233.toInt(), layer.bitmap.getPixel(275, 100))
+
+        // New canvas through the dialog opens the editor on it; system back returns to the gallery.
+        click("New canvas")
+        assertWindowsLaidOut(2)
+        click("Create", exact = true)
+        assertTrue("created canvas opens", Smoke.pumpUntil {
+            settle(1)
+            app.editorSession?.state is com.brushwork.paint.EditorSession.State.Ready && app.editorSession?.projectId != id
+        })
+        settle()
+        activity.onBackPressedDispatcher.onBackPressed()
+        assertTrue("system back closes the editor", Smoke.pumpUntil { settle(1); app.editorSession == null && has("Smoke art") })
     }
 
     // ================================================================== direct composition

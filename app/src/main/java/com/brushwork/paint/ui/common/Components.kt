@@ -197,12 +197,16 @@ fun NumberField(
     step: Double? = null,
     enabled: Boolean = true,
 ) {
-    var text by remember { mutableStateOf(Units.formatNumber(value, decimals)) }
+    // "NaN", "Infinity" and "1e999" parse as doubles: they are invalid text here like any other
+    // garbage (NaN would pass coerceIn, and an infinite value would reach the model).
+    fun parse(s: String): Double? = Units.parse(s)?.takeIf { it.isFinite() }
+    fun format(v: Double): String = if (v.isFinite()) Units.formatNumber(v, decimals) else ""
+    var text by remember { mutableStateOf(format(value)) }
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(value, decimals) { if (!focused) text = Units.formatNumber(value, decimals) }
+    LaunchedEffect(value, decimals) { if (!focused) text = format(value) }
     fun commit() {
-        val v = Units.parse(text)
-        if (v != null) onValueChange(v.coerceIn(min, max)) else text = Units.formatNumber(value, decimals)
+        val v = parse(text)
+        if (v != null) onValueChange(v.coerceIn(min, max)) else text = format(value)
     }
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         if (step != null) RepeatIconButton(Icons.Filled.Remove, "Decrease $label", enabled = enabled) { onValueChange((value - step).coerceIn(min, max)) }
@@ -212,7 +216,7 @@ fun NumberField(
                 text = it
                 // Commit valid in-range values while typing, so buttons (Apply, presets) that
                 // don't take focus always see the number the user typed.
-                val v = Units.parse(it)
+                val v = parse(it)
                 if (v != null && v >= min && v <= max) onValueChange(v)
             },
             label = { Text(label, maxLines = 1) },
