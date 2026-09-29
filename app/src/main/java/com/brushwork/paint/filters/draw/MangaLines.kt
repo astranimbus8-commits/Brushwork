@@ -1,0 +1,253 @@
+package com.brushwork.paint.filters.draw
+
+import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.filters.Filter
+import com.brushwork.paint.filters.FilterCategory
+import com.brushwork.paint.filters.FilterContext
+import com.brushwork.paint.filters.FilterMath
+import com.brushwork.paint.filters.FilterParam
+import com.brushwork.paint.filters.FilterValues
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.ceil
+import kotlin.math.cos
+import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
+import kotlin.math.sin
+import kotlin.math.sqrt
+import kotlin.random.Random
+
+/**
+ * Manga focus (concentration) lines: wedge-shaped strokes that converge on the Center, thin at
+ * their inner end and widest at the far edge of the canvas, leaving a clear area with a ragged
+ * edge around the center.
+ */
+class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategory.DRAW) {
+    override val generatesContent = true
+
+    override val params: List<FilterParam> = listOf(
+        FilterParam.Point("center", "Center", 0.5f, 0.5f),
+        FilterParam.Slider("count", "Number of lines", 8f, 720f, 180f, 1f),
+        FilterParam.Slider("thickness", "Thickness", 0.5f, 120f, 12f, 0.5f, pixels = true),
+        FilterParam.Slider("thickness_var", "Thickness variation", 0f, 100f, 60f, 1f, "%"),
+        FilterParam.Slider("inner", "Clear area size", 0f, 100f, 35f, 1f, "%"),
+        FilterParam.Slider("jitter", "Ragged edge", 0f, 100f, 40f, 1f, "%"),
+        FilterParam.Slider("oval", "Clear area width", 25f, 400f, 100f, 1f, "%"),
+        FilterParam.Slider("spacing_var", "Spacing variation", 0f, 100f, 70f, 1f, "%"),
+        FilterParam.Color("color", "Color", 0xFF000000.toInt(), useDrawingColor = true),
+        DrawBlend.opacityParam(),
+        FilterParam.Seed(),
+    )
+
+    /** Line set in angle order; angles are relative to [base] and increase with the index. */
+    internal class Lines(
+        val base: Double, val step: Double,
+        val cos: DoubleArray, val sin: DoubleArray,
+        val startR: DoubleArray, val halfSlope: DoubleArray, val minStart: Double,
+    ) { val size get() = cos.size }
+
+    internal fun buildLines(values: FilterValues, w: Int, h: Int, cx: Double, cy: Double, ctx: FilterContext): Lines {
+        val n = values.int("count").coerceIn(1, 5000)
+        val rnd = Random(values.seed())
+        val halfDiag = 0.5 * sqrt(w.toDouble() * w + h.toDouble() * h)
+        // Farthest canvas corner: every line reaches its full thickness there.
+        val far = max(max(hypot(cx, cy), hypot(w - cx, cy)), max(hypot(cx, h - cy), hypot(w - cx, h - cy)))
+        val inner = values.float("inner").coerceIn(0f, 100f) / 100.0 * halfDiag
+        val jitter = values.float("jitter").coerceIn(0f, 100f) / 100.0 * 0.45 * halfDiag
+        val ratio = (values.float("oval") / 100.0).coerceIn(0.05, 20.0)
+        val ax = sqrt(ratio); val ay = 1.0 / ax
+        val thick = ctx.px(values.float("thickness")).toDouble().coerceAtLeast(0.0)
+        val thickVar = values.float("thickness_var").coerceIn(0f, 100f) / 100.0
+        val spaceVar = values.float("spacing_var").coerceIn(0f, 100f) / 100.0 * 0.9
+        val base = rnd.nextDouble() * 2 * PI
+        val step = 2 * PI / n
+        val cs = DoubleArray(n); val sn = DoubleArray(n); val rs = DoubleArray(n); val slope = DoubleArray(n)
+        var minStart = Double.MAX_VALUE
+        for (i in 0 until n) {
+            val phi = base + (i + 0.5 + (rnd.nextDouble() - 0.5) * spaceVar) * step
+            val c = cos(phi); val s = sin(phi)
+            // Radius of the (area-preserving) clear ellipse in this direction.
+            val oval = 1.0 / sqrt((c / ax) * (c / ax) + (s / ay) * (s / ay))
+            val start = (inner + jitter * rnd.nextDouble().pow(1.5)) * oval
+            val width = thick * (1.0 - thickVar * rnd.nextDouble())
+            cs[i] = c; sn[i] = s; rs[i] = start
+            slope[i] = 0.5 * width / max(1.0, far - start)
+            minStart = min(minStart, start)
+        }
+        return Lines(base, step, cs, sn, rs, slope, minStart)
+    }
+
+    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val opacity = (values.float("opacity") / 100f).coerceIn(0f, 1f)
+        if (opacity <= 0f) return src.copy()
+        val w = src.width; val h = src.height
+        val p = values.point("center")
+        val cx = p[0].toDouble() * w; val cy = p[1].toDouble() * h
+        val lines = buildLines(values, w, h, cx, cy, ctx)
+        val n = lines.size
+        val color = values.color("color")
+        val clear2 = max(0.0, lines.minStart - 1.0).let { it * it }
+        // A wedge's angular half-width never exceeds its half-slope (radians), so this many
+        // neighbours on each side (plus the spacing jitter) can reach a pixel.
+        val maxSlope = lines.halfSlope.maxOrNull() ?: 0.0
+        return FilterMath.mapXY(src, ctx) { x, y, c ->
+            val dx = x + 0.5 - cx; val dy = y + 0.5 - cy
+            val r2 = dx * dx + dy * dy
+            if (r2 <= clear2) return@mapXY c
+            // The half pixel of antialiasing adds 0.5/r radians near the center.
+            val reach = min(n / 2, min(64, ceil((maxSlope + 0.5 / sqrt(r2)) / lines.step + 1.5).toInt()))
+            var rel = atan2(dy, dx) - lines.base
+            rel -= 2 * PI * floor(rel / (2 * PI))
+            val k0 = (rel / lines.step).toInt()
+            var cov = 0f
+            for (k in k0 - reach..k0 + reach) {
+                val i = ((k % n) + n) % n
+                val along = dx * lines.cos[i] + dy * lines.sin[i]
+                val grow = along - lines.startR[i]
+                if (grow <= 0.0) continue
+                val perp = abs(dx * lines.sin[i] - dy * lines.cos[i])
+                val cv = Coverage.line((grow * lines.halfSlope[i]).toFloat(), perp.toFloat())
+                if (cv > cov) cov = cv
+            }
+            if (cov > 0f) DrawBlend.composite(c, color, cov * opacity, DrawBlend.NORMAL) else c
+        }
+    }
+
+    private fun hypot(a: Double, b: Double) = sqrt(a * a + b * b)
+}
+
+/**
+ * Manga speed lines: parallel streaks of random length, thickness and position running at the
+ * given angle across the whole canvas, tapered to points.
+ */
+class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.DRAW) {
+    override val generatesContent = true
+
+    override val params: List<FilterParam> = listOf(
+        FilterParam.Slider("angle", "Angle", 0f, 360f, 0f, 1f, "°"),
+        FilterParam.Slider("count", "Number of lines", 10f, 800f, 140f, 1f),
+        FilterParam.Slider("thickness", "Thickness", 0.5f, 60f, 6f, 0.5f, pixels = true),
+        FilterParam.Slider("thickness_var", "Thickness variation", 0f, 100f, 60f, 1f, "%"),
+        FilterParam.Slider("length", "Length", 5f, 150f, 45f, 1f, "%"),
+        FilterParam.Slider("length_var", "Length variation", 0f, 100f, 60f, 1f, "%"),
+        FilterParam.Slider("gap", "Gaps", 0f, 100f, 50f, 1f, "%"),
+        FilterParam.Choice("taper", "Taper", TAPERS, TAPER_BOTH),
+        FilterParam.Color("color", "Color", 0xFF000000.toInt(), useDrawingColor = true),
+        DrawBlend.opacityParam(),
+        FilterParam.Seed(),
+    )
+
+    /**
+     * Streaks grouped by lane (CSR layout): lane `l` owns indices laneStart[l] until
+     * laneStart[l + 1], sorted by [u0] and non-overlapping.
+     */
+    internal class Streaks(
+        val laneV: DoubleArray, val laneStart: IntArray,
+        val u0: DoubleArray, val u1: DoubleArray, val halfW: FloatArray,
+        val vMin: Double, val spacing: Double, val maxHalf: Double,
+    )
+
+    internal fun buildStreaks(values: FilterValues, w: Int, h: Int, ctx: FilterContext): Streaks {
+        val ang = Math.toRadians(values.float("angle").toDouble())
+        val dxu = cos(ang); val dyu = sin(ang)
+        val hw = w * 0.5; val hh = h * 0.5
+        // Extents of the canvas in the rotated frame (u along the lines, v across).
+        val uExt = abs(dxu) * hw + abs(dyu) * hh
+        val vExt = abs(dyu) * hw + abs(dxu) * hh
+        val lanes = values.int("count").coerceIn(1, 20000)
+        val spacing = max(1e-3, 2 * vExt / lanes)
+        val length = max(1.0, values.float("length").coerceIn(1f, 1000f) / 100.0 * 2 * uExt)
+        val lenVar = values.float("length_var").coerceIn(0f, 100f) / 100.0
+        val gap = values.float("gap").coerceIn(0f, 100f) / 100.0 * length
+        val thick = ctx.px(values.float("thickness")).toDouble().coerceAtLeast(0.0)
+        val thickVar = values.float("thickness_var").coerceIn(0f, 100f) / 100.0
+        val rnd = Random(values.seed())
+        val laneV = DoubleArray(lanes)
+        val laneStart = IntArray(lanes + 1)
+        val u0 = DoubleList(); val u1 = DoubleList(); val half = ArrayList<Float>()
+        for (l in 0 until lanes) {
+            laneStart[l] = u0.size
+            laneV[l] = -vExt + (l + 0.5 + (rnd.nextDouble() - 0.5) * 0.8) * spacing
+            var u = -uExt - rnd.nextDouble() * length
+            while (u < uExt) {
+                val len = max(1.0, length * (1.0 - lenVar * rnd.nextDouble()))
+                u0.add(u); u1.add(u + len)
+                half.add((0.5 * thick * (1.0 - thickVar * rnd.nextDouble())).toFloat())
+                u += len + max(0.5, gap * (0.2 + 1.6 * rnd.nextDouble()))
+            }
+        }
+        laneStart[lanes] = u0.size
+        return Streaks(laneV, laneStart, u0.toArray(), u1.toArray(), half.toFloatArray(), -vExt, spacing, 0.5 * thick)
+    }
+
+    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val opacity = (values.float("opacity") / 100f).coerceIn(0f, 1f)
+        if (opacity <= 0f) return src.copy()
+        val w = src.width; val h = src.height
+        val st = buildStreaks(values, w, h, ctx)
+        val ang = Math.toRadians(values.float("angle").toDouble())
+        val dxu = cos(ang); val dyu = sin(ang)
+        val taper = values.choice("taper")
+        val color = values.color("color")
+        val lanes = st.laneV.size
+        val reach = min(8, ceil((st.maxHalf + 1.0) / st.spacing).toInt() + 1)
+        val cx = w * 0.5; val cy = h * 0.5
+        return FilterMath.mapXY(src, ctx) { x, y, c ->
+            val px = x + 0.5 - cx; val py = y + 0.5 - cy
+            val u = px * dxu + py * dyu
+            val v = -px * dyu + py * dxu
+            val l0 = floor((v - st.vMin) / st.spacing).toInt()
+            var cov = 0f
+            for (l in max(0, l0 - reach)..min(lanes - 1, l0 + reach)) {
+                val dist = abs(v - st.laneV[l]).toFloat()
+                if (dist > st.maxHalf + 1.0) continue
+                val from = st.laneStart[l]; val to = st.laneStart[l + 1]
+                // Last streak starting before u + 0.5 (end-cap antialiasing margin).
+                var lo = from; var hi = to - 1; var j = from - 1
+                while (lo <= hi) {
+                    val mid = (lo + hi) ushr 1
+                    if (st.u0[mid] <= u + 0.5) { j = mid; lo = mid + 1 } else hi = mid - 1
+                }
+                for (k in max(from, j - 1)..j) {
+                    val cv = streakCoverage(st, k, u, dist, taper)
+                    if (cv > cov) cov = cv
+                }
+            }
+            if (cov > 0f) DrawBlend.composite(c, color, cov * opacity, DrawBlend.NORMAL) else c
+        }
+    }
+
+    private fun streakCoverage(st: Streaks, k: Int, u: Double, dist: Float, taper: Int): Float {
+        val a = st.u0[k]; val b = st.u1[k]
+        if (u < a - 0.5 || u > b + 0.5) return 0f
+        val s = ((u - a) / (b - a)).coerceIn(0.0, 1.0)
+        val profile = when (taper) {
+            TAPER_BOTH -> sin(PI * s)
+            TAPER_END -> sqrt(min(1.0, s * 8.0)) * (1.0 - s)
+            else -> 1.0
+        }
+        val cap = (min(u - a, b - u) + 0.5).coerceIn(0.0, 1.0).toFloat()
+        return Coverage.line((st.halfW[k] * profile).toFloat(), dist) * cap
+    }
+
+    /** Minimal growable double list (avoids boxing while generating streaks). */
+    private class DoubleList {
+        private var data = DoubleArray(256)
+        var size = 0; private set
+        fun add(v: Double) {
+            if (size == data.size) data = data.copyOf(size * 2)
+            data[size++] = v
+        }
+        fun toArray(): DoubleArray = data.copyOf(size)
+    }
+
+    internal companion object {
+        const val TAPER_BOTH = 0
+        const val TAPER_END = 1
+        const val TAPER_NONE = 2
+        val TAPERS = listOf("Both ends", "Toward the end", "None")
+    }
+}

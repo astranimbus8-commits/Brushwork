@@ -7,4 +7,8 @@ val drawFilters: List<Filter> = listOf(
     ParallelGradationFilter(),
     ConcentricGradationFilter(),
     RadialLineGradationFilter(),
+    RadialLineFilter(),
+    SpeedLineFilter(),
+    CloudsFilter(),
+    QrCodeFilter(),
 )
