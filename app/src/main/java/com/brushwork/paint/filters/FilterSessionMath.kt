@@ -6,7 +6,6 @@ import com.brushwork.paint.core.PixelBuffer
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 
 /** Integer pixel rectangle (right/bottom exclusive). Pure Kotlin twin of android.graphics.Rect. */
 data class PixelRect(val left: Int, val top: Int, val right: Int, val bottom: Int) {
@@ -142,63 +141,5 @@ object FilterSessionMath {
     private fun clampRegion(r: PixelRect, w: Int, h: Int): PixelRect? {
         val c = PixelRect(max(0, r.left), max(0, r.top), min(w, r.right), min(h, r.bottom))
         return if (c.isEmpty) null else c
-    }
-}
-
-/**
- * Monotone cubic interpolation through tone-curve points (standard Fritsch–Carlson tangents), used
- * to draw the curve editor. Curve-based adjustment filters are expected to use the same variant so
- * the drawn curve matches the applied one. Outside the first/last point the curve is flat; results
- * are not clamped.
- */
-class MonotoneCubic(points: List<CurvePoint>) {
-    private val xs: FloatArray
-    private val ys: FloatArray
-    private val ms: FloatArray
-
-    init {
-        // Sort by x and collapse duplicate x (last one wins) so every segment has a width.
-        val sorted = points.sortedBy { it.x }
-        val px = ArrayList<Float>(sorted.size); val py = ArrayList<Float>(sorted.size)
-        for (p in sorted) {
-            if (px.isNotEmpty() && p.x - px.last() < 1e-6f) { py[py.lastIndex] = p.y; continue }
-            px += p.x; py += p.y
-        }
-        xs = px.toFloatArray(); ys = py.toFloatArray()
-        val n = xs.size
-        ms = FloatArray(n)
-        if (n >= 2) {
-            val d = FloatArray(n - 1) { (ys[it + 1] - ys[it]) / (xs[it + 1] - xs[it]) }
-            ms[0] = d[0]; ms[n - 1] = d[n - 2]
-            for (k in 1 until n - 1) ms[k] = if (d[k - 1] * d[k] <= 0f) 0f else (d[k - 1] + d[k]) / 2f
-            for (k in 0 until n - 1) {
-                if (d[k] == 0f) { ms[k] = 0f; ms[k + 1] = 0f; continue }
-                val a = ms[k] / d[k]; val b = ms[k + 1] / d[k]
-                val s = a * a + b * b
-                if (s > 9f) {
-                    val t = 3f / sqrt(s)
-                    ms[k] = t * a * d[k]; ms[k + 1] = t * b * d[k]
-                }
-            }
-        }
-    }
-
-    fun eval(x: Float): Float {
-        val n = xs.size
-        if (n == 0) return x
-        if (n == 1 || x <= xs[0]) return ys[0]
-        if (x >= xs[n - 1]) return ys[n - 1]
-        var k = 0
-        while (k < n - 2 && x > xs[k + 1]) k++
-        val h = xs[k + 1] - xs[k]
-        val t = (x - xs[k]) / h
-        val t2 = t * t; val t3 = t2 * t
-        return (2 * t3 - 3 * t2 + 1) * ys[k] + (t3 - 2 * t2 + t) * h * ms[k] +
-            (-2 * t3 + 3 * t2) * ys[k + 1] + (t3 - t2) * h * ms[k + 1]
-    }
-
-    /** [count] evenly spaced samples over 0..1, clamped to 0..1. */
-    fun sample(count: Int): FloatArray = FloatArray(count) { i ->
-        eval(if (count <= 1) 0f else i.toFloat() / (count - 1)).coerceIn(0f, 1f)
     }
 }
