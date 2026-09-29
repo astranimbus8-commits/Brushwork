@@ -240,9 +240,10 @@ internal object DistortMath {
         val w = src.width
         val d = out.pixels
         Parallel.forRange(yb - ya, 4) { r0, r1 ->
-            ctx.checkCancelled()
             val q = FloatArray(2)
             for (y in ya + r0 until ya + r1) {
+                // Per row: supersampled rows can be slow, and Stop should react quickly.
+                ctx.checkCancelled()
                 val py = y + 0.5f
                 val row = y * w
                 for (x in xa until xb) {

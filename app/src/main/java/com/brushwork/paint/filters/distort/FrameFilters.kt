@@ -172,8 +172,10 @@ class RainFilter : Filter("frame.rain", "Rain", FilterCategory.FRAME) {
         ctx.checkCancelled()
         val coverage = FloatArray(w * h)
         Parallel.forRows(h) { y0, y1 ->
-            ctx.checkCancelled()
-            for (k in 0 until drops.count) drops.rasterize(k, coverage, w, y0, y1)
+            for (k in 0 until drops.count) {
+                if ((k and 1023) == 0) ctx.checkCancelled()
+                drops.rasterize(k, coverage, w, y0, y1)
+            }
         }
         val blur = ctx.px(values.float("blur"))
         if (blur >= 0.5f) DistortMath.blurPlaneInPlace(coverage, w, h, blur, ctx)

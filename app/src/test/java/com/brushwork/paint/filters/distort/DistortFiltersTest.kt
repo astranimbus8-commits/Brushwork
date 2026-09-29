@@ -560,6 +560,21 @@ class DistortFiltersTest {
     }
 
     @Test
+    fun everyFilterStopsWhenCancelled() {
+        val src = smoothImage(96, 80)
+        for (f in distortFilters) {
+            val calls = java.util.concurrent.atomic.AtomicInteger()
+            val cancelling = FilterContext(cancelled = { calls.incrementAndGet() > 2 })
+            try {
+                f.apply(src, f.defaultValues(), cancelling)
+                throw AssertionError("${f.id} ignored cancellation")
+            } catch (_: java.util.concurrent.CancellationException) {
+                // expected
+            }
+        }
+    }
+
+    @Test
     fun extremeValuesProduceFiniteResultsOnTinyImages() {
         for (f in distortFilters) for (size in listOf(1 to 1, 2 to 1, 1 to 3, 5 to 4)) {
             val src = PixelBuffer.filled(size.first, size.second, 0xFF336699.toInt())

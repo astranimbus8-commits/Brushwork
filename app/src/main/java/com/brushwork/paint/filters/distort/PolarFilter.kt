@@ -59,8 +59,8 @@ class PolarCoordinatesFilter : Filter("distort.polar_coordinates", "Polar Coordi
         val out = PixelBuffer(w, h)
         val d = out.pixels
         Parallel.forRows(h) { y0, y1 ->
-            ctx.checkCancelled()
             for (y in y0 until y1) {
+                ctx.checkCancelled()
                 val row = y * w
                 for (x in 0 until w) {
                     // 2x2 supersampling: both directions compress strongly near the center / rim.
