@@ -419,6 +419,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         }
     }
 
+    override fun onSelectionChanged() {
+        if (box != null || creatingBox != null) refreshPreview()
+    }
+
     override fun onDeactivate() {
         observeJob?.cancel()
         observeJob = null

@@ -468,6 +468,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         }
     }
 
+    override fun onSelectionChanged() {
+        if (anchors.size >= 2) changed()
+    }
+
     override fun onDeactivate() {
         observeJob?.cancel()
         observeJob = null
