@@ -1,6 +1,12 @@
 package com.brushwork.paint.storage
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorSpace
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import com.brushwork.paint.engine.BitmapUtils
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -15,12 +21,13 @@ import java.util.zip.DeflaterOutputStream
 import java.util.zip.Inflater
 import java.util.zip.InflaterInputStream
 import java.util.zip.ZipException
+import kotlin.math.max
 
 /** Thrown when a project file exists but can't be decoded. */
 class CorruptProjectException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
- * Lossless pixel files (`layer_<id>.bin`, `mask_<id>.bin`): a small header (magic, version,
+ * Lossless pixel files (`layer_<id>_r<rev>.bin`, `mask_<id>_r<rev>.bin`): a small header (magic, version,
  * width, height, byte length) followed by the raw premultiplied ARGB_8888 bytes exactly as
  * [Bitmap.copyPixelsToBuffer] produces them, zlib-compressed with [Deflater.BEST_SPEED].
  */
@@ -36,12 +43,70 @@ internal object LayerCodec {
         return n.toInt()
     }
 
-    /** Copies [bitmap]'s raw pixels into [dst] (MAIN thread for document bitmaps). */
+    /**
+     * Copies [bitmap]'s pixels into [dst] as premultiplied sRGB ARGB_8888 bytes (MAIN thread for
+     * document bitmaps). Bitmaps in another format or color space (a wide-gamut photo, a
+     * hardware bitmap) are converted through a temporary copy.
+     */
     fun copyPixels(bitmap: Bitmap, dst: ByteArray) {
         val len = byteLength(bitmap.width, bitmap.height)
-        check(bitmap.config == Bitmap.Config.ARGB_8888 && bitmap.byteCount == len) { "Unexpected bitmap format ${bitmap.config}" }
-        bitmap.copyPixelsToBuffer(ByteBuffer.wrap(dst, 0, len))
+        require(dst.size >= len)
+        if (isStorable(bitmap)) {
+            bitmap.copyPixelsToBuffer(ByteBuffer.wrap(dst, 0, len))
+            return
+        }
+        val tmp = toStorable(bitmap)
+        try {
+            tmp.copyPixelsToBuffer(ByteBuffer.wrap(dst, 0, len))
+        } finally {
+            tmp.recycle()
+        }
     }
+
+    /**
+     * True when [bitmap]'s raw bytes are exactly what pixel files hold: ARGB_8888 without row
+     * padding, premultiplied (or opaque) and in sRGB.
+     */
+    fun isStorable(bitmap: Bitmap): Boolean {
+        if (bitmap.config != Bitmap.Config.ARGB_8888) return false
+        if (bitmap.rowBytes != bitmap.width * 4) return false
+        if (bitmap.hasAlpha() && !bitmap.isPremultiplied) return false
+        val cs = bitmap.colorSpace
+        return cs == null || cs == SRGB
+    }
+
+    /** A new premultiplied sRGB ARGB_8888 copy of [bitmap] (colors converted by Skia). The caller owns it. */
+    fun toStorable(bitmap: Bitmap): Bitmap {
+        val w = bitmap.width
+        val h = bitmap.height
+        val out = BitmapUtils.createLayerBitmap(w, h)
+        if (bitmap.hasAlpha() && !bitmap.isPremultiplied) {
+            // Canvas refuses unpremultiplied bitmaps. getPixels returns exactly the stored
+            // (unpremultiplied) colors converted to sRGB; setPixels premultiplies them.
+            val band = max(1, (1 shl 20) / w).coerceAtMost(h)
+            val row = IntArray(w * band)
+            var y = 0
+            while (y < h) {
+                val n = minOf(band, h - y)
+                bitmap.getPixels(row, 0, w, 0, y, w, n)
+                out.setPixels(row, 0, w, 0, y, w, n)
+                y += n
+            }
+            return out
+        }
+        val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+        try {
+            Canvas(out).drawBitmap(src, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) })
+            return out
+        } catch (e: Throwable) {
+            out.recycle()
+            throw e
+        } finally {
+            if (src !== bitmap) src.recycle()
+        }
+    }
+
+    private val SRGB: ColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
 
     /** Writes [length] bytes of [data] as a pixel file (atomically). Blocking: call on IO. */
     fun write(file: File, width: Int, height: Int, data: ByteArray, length: Int = byteLength(width, height)) {

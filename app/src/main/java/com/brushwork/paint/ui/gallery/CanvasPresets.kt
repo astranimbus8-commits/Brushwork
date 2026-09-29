@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.gallery
 
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.storage.CanvasLimits
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.max
@@ -109,9 +110,9 @@ data class CanvasSize(
  */
 object CanvasPresets {
     /** Longest allowed canvas side in pixels. */
-    const val MAX_SIDE = 10_000
+    const val MAX_SIDE = CanvasLimits.MAX_SIDE
     /** A canvas must leave room for at least this many layers. */
-    const val MIN_LAYERS = 3
+    const val MIN_LAYERS = CanvasLimits.MIN_LAYERS
     const val DEFAULT_DPI = 350
     const val MIN_DPI = 1.0
     const val MAX_DPI = 2400.0
@@ -151,16 +152,14 @@ object CanvasPresets {
         max(1L, unit.toPx(value, dpi).roundToLong()).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
 
     /** Bytes of one ARGB_8888 layer of this size. */
-    fun layerBytes(width: Int, height: Int): Long = width.toLong() * height * 4
+    fun layerBytes(width: Int, height: Int): Long = CanvasLimits.layerBytes(width, height)
 
     /**
      * Layers that fit in the heap, using the same formula as `EditorController.maxLayers`
      * (55% of the heap, minus 3 for undo/composite buffers), NOT clamped.
      */
-    fun rawMaxLayers(width: Int, height: Int, maxHeapBytes: Long): Long {
-        val per = max(1L, layerBytes(width, height))
-        return (maxHeapBytes * 0.55).toLong() / per - 3
-    }
+    fun rawMaxLayers(width: Int, height: Int, maxHeapBytes: Long): Long =
+        CanvasLimits.rawMaxLayers(width, height, maxHeapBytes)
 
     /** Layer limit shown to the user (clamped to 2..100 like the editor). */
     fun maxLayers(width: Int, height: Int, maxHeapBytes: Long): Int =

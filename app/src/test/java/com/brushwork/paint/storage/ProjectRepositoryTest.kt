@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import android.graphics.ColorSpace
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.engine.BitmapUtils
@@ -33,9 +35,11 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowLog
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileNotFoundException
 import java.nio.ByteBuffer
 
@@ -305,6 +309,78 @@ class ProjectRepositoryTest {
         } catch (e: CorruptProjectException) {
             assertTrue("'${e.message}' should mention '$messagePart'", e.message!!.contains(messagePart))
         }
+    }
+
+    @Test
+    fun createFromImageBuildsPictureAndEmptyLayer() = runBlocking<Unit> {
+        val src = BitmapUtils.createLayerBitmap(30, 20)
+        Canvas(src).drawPaint(Paint().apply {
+            shader = LinearGradient(0f, 0f, 30f, 20f, 0xFF2040C0.toInt(), 0x60FFAA00, Shader.TileMode.CLAMP)
+        })
+        val png = File(context.cacheDir, "import-test.png")
+        png.outputStream().use { assertTrue(src.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+        val uri = Uri.parse("content://com.brushwork.test/pictures/1")
+        // ImageImport opens the picture several times (bounds, pixels, EXIF).
+        shadowOf(context.contentResolver).registerInputStreamSupplier(uri) { FileInputStream(png) }
+
+        val id = repo.createFromImage(uri)
+        val doc = repo.load(id)
+        assertEquals(30 to 20, doc.width to doc.height)
+        assertEquals(350f, doc.dpi)
+        assertEquals(listOf("Picture", "Layer 1"), doc.layers.map { it.name })
+        assertEquals(1, doc.activeLayerIndex)
+        assertSamePixels(BitmapFactory.decodeFile(png.path), doc.layers[0].bitmap)
+        assertArrayEquals(ByteArray(30 * 20 * 4), raw(doc.layers[1].bitmap))
+        val info = repo.list().single { it.id == id }
+        assertEquals("Imported picture", info.name)
+        assertEquals(30 to 20, BitmapFactory.decodeFile(info.thumbnail!!.path).let { it.width to it.height })
+    }
+
+    @Test
+    fun wideGamutAndUnpremultipliedBitmapsAreStoredAsSrgb() {
+        val srgb = ColorSpace.get(ColorSpace.Named.SRGB)
+        // Raw Display P3 bytes (R, G, B, A in memory) of a mid color: sRGB bytes must differ.
+        val p3 = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888, true, ColorSpace.get(ColorSpace.Named.DISPLAY_P3))
+        val p3Bytes = ByteArray(4 * 4 * 4) { i -> byteArrayOf(0x80.toByte(), 0xA0.toByte(), 0x33, 0xFF.toByte())[i % 4] }
+        p3.copyPixelsFromBuffer(ByteBuffer.wrap(p3Bytes))
+        assertFalse(LayerCodec.isStorable(p3))
+        val converted = LayerCodec.toStorable(p3)
+        assertEquals(srgb, converted.colorSpace)
+        assertTrue(LayerCodec.isStorable(converted))
+        val stored = ByteArray(p3Bytes.size).also { LayerCodec.copyPixels(p3, it) }
+        assertArrayEquals(raw(converted), stored)
+        assertFalse("P3 bytes must be converted, not copied", stored.contentEquals(p3Bytes))
+
+        // Unpremultiplied pixels are stored premultiplied.
+        val unpremul = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        unpremul.isPremultiplied = false
+        unpremul.eraseColor(0x80FF0000.toInt())
+        assertFalse(LayerCodec.isStorable(unpremul))
+        val out = ByteArray(2 * 2 * 4).also { LayerCodec.copyPixels(unpremul, it) }
+        val premultiplied = BitmapUtils.createLayerBitmap(2, 2).also { it.eraseColor(0x80FF0000.toInt()) }
+        assertArrayEquals(raw(premultiplied), out)
+        assertFalse(out.contentEquals(raw(unpremul)))
+
+        // Ordinary layer bitmaps are copied byte for byte.
+        val plain = BitmapUtils.createLayerBitmap(3, 3).also { it.eraseColor(0x40336699) }
+        assertTrue(LayerCodec.isStorable(plain))
+        assertArrayEquals(raw(plain), ByteArray(36).also { LayerCodec.copyPixels(plain, it) })
+    }
+
+    @Test
+    fun nanSettingsDoNotBreakSaving() = runBlocking<Unit> {
+        val doc = sampleDoc()
+        doc.dpi = Float.NaN
+        doc.layers[0].opacity = Float.NaN
+        doc.layers[1].opacity = 3f
+        doc.grid = doc.grid.copy(spacingPx = Float.NaN)
+        repo.save(doc, null)
+        val loaded = repo.load(doc.id)
+        assertEquals(350f, loaded.dpi)
+        assertEquals(1f, loaded.layers[0].opacity)
+        assertEquals(1f, loaded.layers[1].opacity)
+        assertTrue(loaded.grid.spacingPx.isNaN())
+        assertSamePixels(doc.layers[0].bitmap, loaded.layers[0].bitmap)
     }
 
     @Test

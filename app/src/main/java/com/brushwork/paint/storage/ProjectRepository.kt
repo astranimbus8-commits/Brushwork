@@ -2,6 +2,7 @@ package com.brushwork.paint.storage
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
@@ -10,6 +11,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerProps
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -156,9 +158,20 @@ class ProjectRepository(private val context: Context) {
     /**
      * Creates a project from a picture: a document of the image size (350 dpi, longest side at
      * most 4096 px) with the picture as a "Picture" layer and an empty "Layer 1" above it.
+     * Pictures too large for this device's memory are scaled down until at least
+     * [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the editor's layer limit uses);
+     * wide-gamut photos are converted to sRGB like every layer.
      */
     suspend fun createFromImage(uri: Uri): String = withContext(Dispatchers.IO) {
-        val picture = ImageImport.decode(context, uri, 4096)
+        val maxSide = pictureBounds(uri)?.let { (w, h) ->
+            CanvasLimits.importMaxSide(w, h, Runtime.getRuntime().maxMemory())
+        } ?: CanvasLimits.IMPORT_MAX_SIDE
+        val decoded = ImageImport.decode(context, uri, maxSide)
+        val picture = if (LayerCodec.isStorable(decoded)) {
+            decoded
+        } else {
+            try { LayerCodec.toStorable(decoded) } finally { decoded.recycle() }
+        }
         try {
             val w = picture.width
             val h = picture.height
@@ -177,7 +190,7 @@ class ProjectRepository(private val context: Context) {
                     dir,
                     ProjectFileDto(
                         id = id,
-                        name = displayNameOf(uri) ?: "Imported picture",
+                        name = cleanName(displayNameOf(uri) ?: "Imported picture"),
                         width = w,
                         height = h,
                         dpi = 350f,
@@ -248,7 +261,7 @@ class ProjectRepository(private val context: Context) {
                 val bitmap = BitmapUtils.createLayerBitmap(w, h).also { allocated += it }
                 readPixels(dir, entry.contentFileName, bitmap, scratch, "Layer \"${entry.props.name}\"")
                 val layer = Layer(entry.id, entry.props.name, bitmap)
-                layer.copyPropsFrom(entry.props)
+                layer.copyPropsFrom(sanitized(entry.props))
                 if (entry.hasMask) {
                     val mask = BitmapUtils.createLayerBitmap(w, h).also { allocated += it }
                     readPixels(dir, entry.maskFileName, mask, scratch, "The mask of layer \"${entry.props.name}\"")
@@ -264,6 +277,12 @@ class ProjectRepository(private val context: Context) {
         doc.activeLayerIndex = dto.activeLayerIndex.coerceIn(0, doc.layers.lastIndex)
         for (layer in doc.layers) layer.savedVersion = layer.contentVersion
         return doc
+    }
+
+    /** Layer properties with a usable opacity (a damaged or hand-edited file may hold NaN). */
+    private fun sanitized(props: LayerProps): LayerProps {
+        val o = props.opacity
+        return if (o.isFinite() && o in 0f..1f) props else props.copy(opacity = if (o.isNaN()) 1f else o.coerceIn(0f, 1f))
     }
 
     private fun readPixels(dir: File, fileName: String, into: Bitmap, scratch: ByteArray, what: String) {
@@ -303,7 +322,7 @@ class ProjectRepository(private val context: Context) {
                 name = doc.name,
                 width = w,
                 height = h,
-                dpi = doc.dpi,
+                dpi = validDpi(doc.dpi),
                 colorMode = doc.colorMode,
                 createdAt = doc.createdAt,
                 modifiedAt = doc.modifiedAt,
@@ -352,9 +371,11 @@ class ProjectRepository(private val context: Context) {
                 ProjectFormat.write(dir, dto)
                 ProjectFormat.deleteUnreferenced(dir, dto)
                 if (thumbnail != null && !thumbnail.isRecycled) {
+                    // The project itself is saved at this point; a thumbnail problem must not
+                    // turn it into a failed save.
                     try {
                         writeThumbnail(dir, thumbnail)
-                    } catch (e: IOException) {
+                    } catch (e: Exception) {
                         Log.w(TAG, "thumbnail write failed", e)
                     }
                 }
@@ -512,6 +533,15 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
+    /** The picture's stored size (before EXIF rotation), or null if it can't be read. BLOCKING. */
+    private fun pictureBounds(uri: Uri): Pair<Int, Int>? = try {
+        val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+        if (opts.outWidth > 0 && opts.outHeight > 0) opts.outWidth to opts.outHeight else null
+    } catch (e: Exception) {
+        null
+    }
+
     private fun displayNameOf(uri: Uri): String? = try {
         context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
             if (c.moveToFirst() && !c.isNull(0)) c.getString(0) else null
@@ -523,7 +553,7 @@ class ProjectRepository(private val context: Context) {
     companion object {
         private const val TAG = "Brushwork"
         /** Longest canvas side accepted by [create] and [load]. */
-        const val MAX_SIDE = 10_000
+        const val MAX_SIDE = CanvasLimits.MAX_SIDE
         private const val MAX_NAME = 100
         private const val DUP_PREFIX = ".dup-"
 

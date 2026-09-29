@@ -73,6 +73,9 @@ internal object ProjectFormat {
         ignoreUnknownKeys = true
         encodeDefaults = true
         coerceInputValues = true
+        // A NaN that slipped into a setting (grid spacing, ruler angle...) must not make every
+        // save fail; load() sanitizes the values it relies on.
+        allowSpecialFloatingPointValues = true
     }
 
     fun layerFile(id: Long, revision: Long) = "layer_${id}_r$revision.bin"

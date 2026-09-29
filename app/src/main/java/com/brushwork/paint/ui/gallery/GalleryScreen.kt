@@ -205,7 +205,13 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
             }
         }
     }
-    val importPicture = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+    val importPicture: () -> Unit = {
+        try {
+            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        } catch (e: ActivityNotFoundException) {
+            message("No app is available to pick pictures")
+        }
+    }
 
     fun export(info: ProjectInfo, format: ExportFormat) = storageGate {
         runBusy("Exporting ${format.name}…", "Export failed") {
@@ -575,7 +581,8 @@ private fun viewImage(context: Context, uri: Uri, mimeType: String) {
     if (context !is Activity) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     try {
         context.startActivity(view)
-    } catch (e: ActivityNotFoundException) {
-        // No gallery/viewer app installed: nothing sensible to open.
+    } catch (e: RuntimeException) {
+        // No viewer app (ActivityNotFoundException) or the URI grant was refused
+        // (SecurityException on some devices): the picture is saved either way.
     }
 }
