@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.text.format.DateUtils
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -231,6 +232,9 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
             ProjectAction.DELETE -> deleteTarget = info
         }
     }
+
+    // Don't leave the app halfway through an import/export/delete.
+    BackHandler(enabled = busy != null) {}
 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
@@ -532,7 +536,11 @@ private fun BusyOverlay(label: String) {
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.45f))
             // Swallow touches so nothing else starts while we work.
-            .pointerInput(Unit) { awaitPointerEventScope { while (true) awaitPointerEvent() } },
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) awaitPointerEvent().changes.forEach { it.consume() }
+                }
+            },
         contentAlignment = Alignment.Center,
     ) {
         Surface(color = BrushworkColors.ChromeHigh, shape = RoundedCornerShape(16.dp)) {
