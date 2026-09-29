@@ -81,7 +81,11 @@ sealed class FilterParam {
         override fun defaultValue(): Any = default
     }
 
-    data class Color(override val key: String, override val label: String, val default: Int) : FilterParam() {
+    /**
+     * A color. When [useDrawingColor] is true the filter session starts it at the user's current
+     * drawing color instead of [default] (which is still used in tests / without a session).
+     */
+    data class Color(override val key: String, override val label: String, val default: Int, val useDrawingColor: Boolean = false) : FilterParam() {
         override fun defaultValue(): Any = default
     }
 

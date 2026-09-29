@@ -237,6 +237,7 @@ class EditorController(
         activeToolId = id
         if (id == ToolId.BRUSH || id == ToolId.SMUDGE || id == ToolId.BLUR) lastPaintTool = id
         currentTool.onActivate()
+        currentTool.onSelected()
         invalidateOverlay()
     }
 
@@ -351,8 +352,9 @@ class EditorController(
 
     // ------------------------------------------------------------------ assists
 
-    fun updateRuler(r: RulerSettings) { ruler = r; doc.ruler = r; invalidateOverlay() }
-    fun updateGrid(g: GridSettings) { grid = g; doc.grid = g; invalidateOverlay() }
+    // Not undoable, but they are saved with the document, so count them as edits for autosave.
+    fun updateRuler(r: RulerSettings) { if (r == ruler) return; ruler = r; doc.ruler = r; editCount++; doc.touch(); invalidateOverlay() }
+    fun updateGrid(g: GridSettings) { if (g == grid) return; grid = g; doc.grid = g; editCount++; doc.touch(); invalidateOverlay() }
     fun updateStabilizer(s: StabilizerSettings) { stabilizer = s; settings.stabilizer = s }
 
     // ------------------------------------------------------------------ pixel edits
@@ -407,15 +409,21 @@ class EditorController(
     val activeLayer: Layer get() = doc.activeLayer
 
     fun selectLayer(index: Int) {
-        if (index !in doc.layers.indices || index == doc.activeLayerIndex) return
+        val target = doc.layers.getOrNull(index) ?: return
+        selectLayer(target)
+    }
+
+    fun selectLayer(layer: Layer) {
+        if (layer === activeLayer) return
+        // Deactivating may commit pending work that inserts a layer, so resolve the index after.
         currentTool.onDeactivate()
-        doc.activeLayerIndex = index
+        val idx = doc.indexOf(layer)
+        if (idx < 0) return
+        doc.activeLayerIndex = idx
         layersVersion++
         currentTool.onActivate()
         invalidateOverlay()
     }
-
-    fun selectLayer(layer: Layer) = selectLayer(doc.indexOf(layer))
 
     private fun uniqueLayerName(base: String): String {
         val names = doc.layers.map { it.name }.toSet()
@@ -444,8 +452,9 @@ class EditorController(
     /** Adds a new layer and lets [draw] paint into it (document coordinates). */
     fun addLayerWithContent(name: String, label: String, draw: (Canvas) -> Unit): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
-        val bmp = BitmapUtils.createLayerBitmap(doc.width, doc.height)
+        val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
         draw(Canvas(bmp))
+        if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, doc.bounds, doc.colorMode)
         val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp)
         currentTool.onDeactivate()
         val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
@@ -684,6 +693,7 @@ class EditorController(
         selection = new
         if (recordUndo) pushUndo(SelectionAction(before, new, label))
         if (new != null && new.outline == null) SelectionOutline.computeAsync(this, new)
+        currentTool.onSelectionChanged()
         invalidateOverlay()
     }
 
@@ -705,11 +715,22 @@ class EditorController(
 
     // ------------------------------------------------------------------ busy work
 
-    /** Runs [block] with a progress overlay; exceptions are shown as a message. */
-    fun runBusy(label: String, block: suspend () -> Unit) {
+    /**
+     * Non-null while the running busy operation can be stopped; the busy overlay shows a Stop
+     * button that calls it.
+     */
+    var busyCancel by mutableStateOf<(() -> Unit)?>(null)
+        private set
+
+    /**
+     * Runs [block] with a progress overlay; exceptions are shown as a message. [onCancel] (if
+     * given) is offered to the user as a Stop button while the block runs.
+     */
+    fun runBusy(label: String, onCancel: (() -> Unit)? = null, block: suspend () -> Unit) {
         scope.launch {
             busyMessage = label
             busyProgress = -1f
+            busyCancel = onCancel
             try {
                 block()
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -721,6 +742,7 @@ class EditorController(
             } finally {
                 busyMessage = null
                 busyProgress = -1f
+                busyCancel = null
             }
         }
     }

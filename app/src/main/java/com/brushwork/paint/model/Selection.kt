@@ -97,6 +97,17 @@ class Selection private constructor(val mask: Bitmap, bounds: Rect?) {
             return Selection(alpha8, null)
         }
 
+        /**
+         * Wraps an ALPHA_8 bitmap whose tight non-zero [bounds] are already known (skips the full
+         * scan). The caller guarantees the bounds are correct (they are clamped to the bitmap).
+         */
+        fun wrap(alpha8: Bitmap, bounds: Rect): Selection {
+            require(alpha8.config == Bitmap.Config.ALPHA_8) { "Selection mask must be ALPHA_8" }
+            val b = Rect(bounds)
+            if (!b.intersect(0, 0, alpha8.width, alpha8.height)) b.setEmpty()
+            return Selection(alpha8, b)
+        }
+
         fun computeBounds(mask: Bitmap): Rect {
             val bytes = BitmapUtils.alpha8ToBytes(mask)
             val w = mask.width; val h = mask.height
