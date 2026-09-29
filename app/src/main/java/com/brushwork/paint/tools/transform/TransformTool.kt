@@ -541,9 +541,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             clearSource(canvas, s)
             canvas.drawBitmap(s.drawSource, s.drawMatrix, drawPaint(s, forPreview = false))
         } catch (e: OutOfMemoryError) {
-            // Undo snapshots of a huge area didn't fit: put everything back as it was.
+            // Undo snapshots of a huge area didn't fit: put everything back as it was (a failed
+            // placement also takes its empty layer away).
             rec.abort()
-            endSession(s)
+            cancelSession(s)
             controller.toast("Not enough memory to apply the transform")
             return
         }
@@ -589,7 +590,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // history entry remains (Redo can still bring the empty layer back: the controller has
         // no way to drop a redo entry). Otherwise delete it as a regular step.
         if (isFreshImportLayer(layer)) controller.undo()
-        else controller.deleteLayer(layer)
+        else if (controller.doc.layers.size > 1) controller.deleteLayer(layer)
+        // else: it is the only layer left (the others were deleted meanwhile); a drawing needs one.
     }
 
     /**
