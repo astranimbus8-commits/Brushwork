@@ -342,17 +342,38 @@ class EditorSmokeTest {
         c.selectTool(ToolId.TEXT)
         settle()
         val text = c.tools.getValue(ToolId.TEXT) as TextTool
-        text.startTextAt(200f, 150f)
-        settle()
+        val canvasView = Smoke.find(activity.window.decorView, CanvasView::class.java)!!
+        val (tox, toy) = canvasOrigin(canvasView)
+        fun tapDoc(x: Float, y: Float) {
+            val p = c.viewTransform.docToScreen(x, y)
+            Smoke.Touch(activity.window.decorView).apply { idle(300); tap(p.x + tox, p.y + toy) }
+            settle()
+        }
+        // A tap on the canvas starts a text and opens the editor; a cancelled new text is gone.
+        tapDoc(200f, 150f)
+        assertTrue("editor open", text.editorOpen && has("Add text", exact = true))
+        click("Cancel", exact = true)
+        assertFalse("cancelled new text removed", text.hasPendingWork)
+        tapDoc(200f, 150f)
         assertWindowsLaidOut(2)
-        text.setText("Smoke\ntest")
+        SmokeUi.field("Text").type("Smoke\ntest")
         settle()
-        text.confirmEditor()
-        settle()
+        for (b in listOf("Bold", "Italic", "Vertical text", "Vertical text")) click(b, exact = true)
+        click("Use drawing color", exact = true)
+        click("OK", exact = true)
         assertTrue(text.hasPendingWork)
-        text.numbersOpen = true
-        settle()
+        assertEquals("Smoke\ntest", text.item!!.text)
+        assertTrue(text.item!!.spec.bold && text.item!!.spec.italic && !text.item!!.spec.vertical)
+        // Reopen from the strip, change and cancel: back to what it was.
+        click("Edit text", exact = true)
+        assertTrue(has("Edit text", exact = true))
+        SmokeUi.field("Text").type("changed")
+        click("Cancel", exact = true)
+        assertEquals("Smoke\ntest", text.item!!.text)
+        click("Numbers", exact = true)
         assertWindowsLaidOut(2)
+        assertTrue(text.numbersOpen)
+        closeSheets(activity, reset)
         text.numbersOpen = false
         settle()
         val layersBefore = c.doc.layers.size
@@ -530,6 +551,47 @@ class EditorSmokeTest {
         assertEquals(z0 * 2f, c.viewTransform.zoom, 0.02f)
         assertEquals(undo0, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "pinch")
+
+        // Editor settings apply live: with two-finger undo off, a two-finger tap undoes nothing.
+        Smoke.step("settings toggles")
+        click("More options")
+        click("Fit to screen", exact = true)
+        touch.idle(300)
+        val n0 = c.undoManager.undoCount
+        touch.stroke(screen(40f, 150f), screen(360f, 150f))
+        val strokes = c.undoManager.undoCount
+        assertEquals("the stroke reached the canvas", n0 + 1, strokes)
+        click("More options")
+        click("Settings", exact = true)
+        click("Two-finger tap to undo", exact = true)
+        assertFalse(c.settings.twoFingerUndo)
+        closeSheets(activity) {}
+        touch.idle(300)
+        touch.twoFingerTap(screen(150f, 150f), screen(250f, 150f))
+        settle()
+        assertEquals("two-finger undo is off", strokes, c.undoManager.undoCount)
+        c.settings.twoFingerUndo = true
+        touch.idle(300)
+        touch.twoFingerTap(screen(150f, 150f), screen(250f, 150f))
+        settle()
+        assertEquals(strokes - 1, c.undoManager.undoCount)
+
+        // An untouched transform lift doesn't block Redo; pressing it drops the lift and redoes.
+        Smoke.step("redo with an untouched lift")
+        c.selectTool(ToolId.TRANSFORM)
+        Smoke.pump(100)
+        settle()
+        assertTrue(
+            "lifted: layer ${c.activeLayer} visible=${c.activeLayer.visible} locked=${c.activeLayer.locked} " +
+                "sel=${c.selection} busy=${c.busyMessage} msg=${c.message} shown=${SmokeUi.shown().take(40)}",
+            c.currentTool.hasPendingWork,
+        )
+        assertTrue("Redo enabled", SmokeUi.isEnabled("Redo"))
+        click("Redo", exact = true)
+        assertEquals(strokes, c.undoManager.undoCount)
+        c.selectTool(ToolId.BRUSH)
+        settle()
+        Smoke.assertQuiet(c, "redo with lift")
 
         // Export and share from the editor menu run under the busy overlay and finish cleanly.
         for (entry in listOf("Export PNG", "Export JPG", "Share")) {

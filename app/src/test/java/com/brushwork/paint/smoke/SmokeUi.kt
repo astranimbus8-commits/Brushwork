@@ -92,6 +92,15 @@ internal object SmokeUi {
 
     fun shown(): List<String> = elements().flatMap { it.node.labels() }.distinct()
 
+    /** Whether the clickable element labelled [label] (or its clickable ancestor) is enabled. */
+    fun isEnabled(label: String, exact: Boolean = true): Boolean {
+        val e = find(label, exact) ?: throw AssertionError("nothing labelled \"$label\"")
+        var n: SemanticsNode? = e.node
+        while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+        requireNotNull(n) { "\"$label\" is not clickable" }
+        return !n.config.contains(SemanticsProperties.Disabled)
+    }
+
     /** Clicks the tab (semantic role Tab) labelled [label]. */
     fun clickTab(label: String) {
         Smoke.step("tab \"$label\"")
