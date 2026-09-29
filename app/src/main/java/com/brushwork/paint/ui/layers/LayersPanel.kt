@@ -183,7 +183,8 @@ private fun LayerList(
 ) {
     val doc = controller.doc
     val activeDisplay = rows.indexOfFirst { it.active }
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = activeDisplay.coerceAtLeast(0))
+    // Open with the active layer in view, one row of context above it.
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (activeDisplay - 1).coerceAtLeast(0))
     val haptics = LocalHapticFeedback.current
     val reorder = rememberReorderState(
         listState = listState,
@@ -211,7 +212,7 @@ private fun LayerList(
         val info = listState.layoutInfo
         val item = info.visibleItemsInfo.firstOrNull { it.index == activeDisplay }
         val fullyVisible = item != null && item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset
-        if (!fullyVisible) listState.animateScrollToItem(activeDisplay)
+        if (!fullyVisible) listState.animateScrollToItem((activeDisplay - 1).coerceAtLeast(0))
     }
 
     LazyColumn(state = listState, modifier = modifier.reorderContainer(reorder)) {
@@ -256,8 +257,9 @@ private fun RenameDialog(initial: String, onRename: (String) -> Unit, onDismiss:
             modifier = Modifier.fillMaxWidth().focusRequester(focus),
         )
         Box(Modifier.height(4.dp))
+        // Inside the dialog's own composition so the requester is attached when this runs.
+        LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
 }
 
 private const val MAX_NAME_LENGTH = 64

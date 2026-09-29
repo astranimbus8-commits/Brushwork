@@ -134,7 +134,6 @@ internal fun LayerRow(
         modifier
             .fillMaxWidth()
             .height(LAYER_ROW_HEIGHT)
-            .padding(vertical = 1.dp)
             .then(if (dragging) Modifier.shadow(8.dp, shape) else Modifier)
             .clip(shape)
             .background(background)
