@@ -332,7 +332,8 @@ class LayersRobolectricTest {
         LayerOps.addMask(c, layer, fromSelection = false)
         LayerOps.setMaskEnabled(c, layer, false)
         LayerOps.deleteMask(c, layer)
-        assertFalse(layer.maskEnabled)
+        // Deleting a mask re-enables the flag (inside the same undo step).
+        assertTrue(layer.maskEnabled)
 
         LayerOps.addMask(c, layer, fromSelection = false)
         assertNotNull(layer.mask)
@@ -342,8 +343,14 @@ class LayersRobolectricTest {
 
         c.undoManager.undo(c)
         assertNull(layer.mask)
-        assertFalse(layer.maskEnabled)
+        assertTrue(layer.maskEnabled)
         assertFalse(layer.editingMask)
+        assertEquals("Delete mask", c.undoManager.undoLabel)
+        // Undoing the delete brings back the disabled mask.
+        c.undoManager.undo(c)
+        assertNotNull(layer.mask)
+        assertFalse(layer.maskEnabled)
+        c.undoManager.redo(c)
         assertEquals("Delete mask", c.undoManager.undoLabel)
         c.undoManager.redo(c)
         assertNotNull(layer.mask)

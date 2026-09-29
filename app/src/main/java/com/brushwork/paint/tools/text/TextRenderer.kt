@@ -173,7 +173,7 @@ object TextRenderer {
         canvas.restore()
         if (selection != null) {
             canvas.clipRect(bounds)
-            canvas.drawBitmap(selection.mask, 0f, 0f, dstIn)
+            com.brushwork.paint.engine.BitmapUtils.maskWith(canvas, selection.mask)
         }
         canvas.restoreToCount(save)
     }

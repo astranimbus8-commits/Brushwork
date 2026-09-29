@@ -26,6 +26,25 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     var onChanged: (() -> Unit)? = null
 
     val canUndo: Boolean get() = undoStack.isNotEmpty()
+    val undoCount: Int get() = undoStack.size
+
+    /** Removes and returns the actions pushed after the stack had [mark] entries (oldest first). */
+    fun takeSince(mark: Int): List<UndoAction> {
+        val out = ArrayList<UndoAction>()
+        while (undoStack.size > mark.coerceAtLeast(0)) out.add(0, undoStack.removeLast())
+        if (out.isNotEmpty()) onChanged?.invoke()
+        return out
+    }
+
+    /** Pushes [action] without clearing the redo stack (used to re-add grouped actions). */
+    fun pushRaw(action: UndoAction) {
+        undoStack.addLast(action)
+        trim()
+        onChanged?.invoke()
+    }
+
+    /** Removes the newest undo action without undoing or disposing it. */
+    fun popLast(): UndoAction? = undoStack.removeLastOrNull()?.also { onChanged?.invoke() }
     val canRedo: Boolean get() = redoStack.isNotEmpty()
     val undoLabel: String? get() = undoStack.lastOrNull()?.label
     val redoLabel: String? get() = redoStack.lastOrNull()?.label
@@ -105,6 +124,12 @@ class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val ti
     fun touchAll() = touch(Rect(0, 0, bitmap.width, bitmap.height))
 
     val isEmpty: Boolean get() = saved.isEmpty()
+
+    /** Rects (document coords) of the tiles snapshotted so far. */
+    fun touchedTileRects(): List<Rect> = saved.keys.map { idx ->
+        val x = (idx % cols) * tileSize; val y = (idx / cols) * tileSize
+        Rect(x, y, min(bitmap.width, x + tileSize), min(bitmap.height, y + tileSize))
+    }
 
     /** Creates the undo action (or null if nothing was touched). The recorder must not be reused. */
     fun finish(label: String): UndoAction? {
@@ -201,11 +226,24 @@ class LayerPropsAction(private val layer: Layer, private val before: LayerProps,
     override fun redo(c: EditorController) = c.structural { layer.copyPropsFrom(after) }
 }
 
-/** Adds/removes/replaces a layer mask bitmap. */
+/**
+ * Adds/removes/replaces a layer mask bitmap. Removing a mask also re-enables the mask flag (so a
+ * mask added later isn't silently disabled); undo restores the previous flag.
+ */
 class MaskChangeAction(private val layer: Layer, private val before: Bitmap?, private val after: Bitmap?, override val label: String) : UndoAction {
+    private val enabledBefore = layer.maskEnabled
     override val byteSize: Long get() = (before?.byteCount ?: 0).toLong() + (after?.byteCount ?: 0).toLong()
-    override fun undo(c: EditorController) = c.structural { layer.mask = before; if (before == null) layer.editingMask = false; layer.markChanged() }
-    override fun redo(c: EditorController) = c.structural { layer.mask = after; if (after == null) layer.editingMask = false; layer.markChanged() }
+    override fun undo(c: EditorController) = c.structural {
+        layer.mask = before
+        layer.maskEnabled = enabledBefore
+        if (before == null) layer.editingMask = false
+        layer.markChanged()
+    }
+    override fun redo(c: EditorController) = c.structural {
+        layer.mask = after
+        if (after == null) { layer.editingMask = false; layer.maskEnabled = true }
+        layer.markChanged()
+    }
 }
 
 class SelectionAction(private val before: Selection?, private val after: Selection?, override val label: String = "Selection") : UndoAction {

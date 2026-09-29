@@ -98,7 +98,8 @@ class CoveragePainter {
                 }
                 canvas.drawRect(boundsF, grainPaint)
             }
-            if (selectionMask != null) canvas.drawBitmap(selectionMask, 0f, 0f, dstIn)
+            // (drawBitmap(A8, DST_IN) would be a no-op: Skia treats A8 bitmaps as coverage.)
+            if (selectionMask != null) com.brushwork.paint.engine.BitmapUtils.maskWith(canvas, selectionMask)
             canvas.restore()
         }
         canvas.restore()

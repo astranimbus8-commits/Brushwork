@@ -250,6 +250,8 @@ fun LengthField(
         modifier = modifier,
         decimals = unit.decimals,
         suffix = unit.short,
+        min = unit.fromPx(minPx, dpi),
+        max = unit.fromPx(maxPx, dpi),
         step = step,
         enabled = enabled,
     )

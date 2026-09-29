@@ -46,6 +46,11 @@ class EngineRobolectricTest {
         assertEquals(Rect(0, 0, 4, 4), all.bounds)
         val none = a.combine(a, SelectionMode.SUBTRACT)
         assertTrue(none.isEmpty)
+        // Intersect must actually intersect (A8 drawBitmap + DST_IN would be a no-op).
+        val left3 = Selection.fromBytes(ByteArray(16) { if (it % 4 < 3) -1 else 0 }, 4, 4)
+        val right3 = Selection.fromBytes(ByteArray(16) { if (it % 4 >= 1) -1 else 0 }, 4, 4)
+        assertEquals(Rect(1, 0, 3, 4), left3.combine(right3, SelectionMode.INTERSECT).bounds)
+        assertTrue(a.combine(inv, SelectionMode.INTERSECT).isEmpty)
     }
 
     @Test

@@ -83,6 +83,31 @@ object BitmapUtils {
 
     // ------------------------------------------------------------------ ALPHA_8 helpers
 
+    /**
+     * Multiplies everything drawn so far in [canvas] (within its clip) by the alpha of [alpha8]
+     * (e.g. a selection mask), positioned at ([left], [top]).
+     *
+     * Do NOT use `drawBitmap(alpha8, DST_IN)` for this: Skia draws ALPHA_8 bitmaps as a coverage
+     * mask for the paint color, which turns DST_IN into a no-op. A BitmapShader supplies the mask
+     * as source alpha instead.
+     */
+    fun maskWith(canvas: Canvas, alpha8: Bitmap, left: Float = 0f, top: Float = 0f) {
+        val p = Paint().apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            shader = android.graphics.BitmapShader(alpha8, android.graphics.Shader.TileMode.CLAMP, android.graphics.Shader.TileMode.CLAMP).also {
+                if (left != 0f || top != 0f) it.setLocalMatrix(Matrix().apply { setTranslate(left, top) })
+            }
+        }
+        val right = left + alpha8.width
+        val bottom = top + alpha8.height
+        canvas.drawRect(left, top, right, bottom, p)
+        // Outside the mask bitmap nothing is selected: clear it (CLAMP would repeat the edge).
+        val save = canvas.save()
+        canvas.clipOutRect(left, top, right, bottom)
+        canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+        canvas.restoreToCount(save)
+    }
+
     /** Reads an ALPHA_8 bitmap into a tightly packed width*height byte array. */
     fun alpha8ToBytes(bitmap: Bitmap): ByteArray {
         require(bitmap.config == Bitmap.Config.ALPHA_8)

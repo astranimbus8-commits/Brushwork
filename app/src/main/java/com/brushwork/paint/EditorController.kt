@@ -128,8 +128,13 @@ class EditorController(
     var selection by mutableStateOf<Selection?>(null)
         private set
 
-    var ruler by mutableStateOf(doc.ruler.let { if (it.centerX < 0f) it.copy(centerX = doc.width / 2f, centerY = doc.height / 2f) else it })
+    // Only the model default (-1, -1) means "not placed yet"; a ruler may legitimately sit left of
+    // or above the canvas.
+    var ruler by mutableStateOf(doc.ruler.let { if (it.centerX == -1f && it.centerY == -1f) it.copy(centerX = doc.width / 2f, centerY = doc.height / 2f) else it })
         private set
+
+    /** Transform tools set this while the selection is being moved (hides the stale ants). */
+    var hideSelectionOutline by mutableStateOf(false)
 
     var grid by mutableStateOf(doc.grid)
         private set
@@ -184,6 +189,29 @@ class EditorController(
         doc.touch()
     }
 
+    /**
+     * Runs [block] and folds every undo action it pushes into ONE step named [label] (e.g. a curve
+     * that is filled and then stroked with the brush tool).
+     */
+    fun groupUndo(label: String, block: () -> Unit) {
+        val mark = undoManager.undoCount
+        try {
+            block()
+        } finally {
+            val added = undoManager.takeSince(mark)
+            when {
+                added.size == 1 -> undoManager.pushRaw(added[0])
+                added.size > 1 -> undoManager.pushRaw(CompositeAction(label, added))
+            }
+        }
+    }
+
+    /**
+     * Removes the newest undo step WITHOUT undoing it and without leaving it on the redo stack.
+     * The caller must already have reverted its effect (e.g. a discarded picture placement).
+     */
+    fun dropLastUndo(): UndoAction? = undoManager.popLast()
+
     fun undo() {
         val session = filterSession
         if (session != null) { session.cancel(); return }
@@ -216,7 +244,8 @@ class EditorController(
         tiles.release()
         tiles = DisplayTiles(doc.width, doc.height)
         if (selection != null) { selection = null }
-        ruler = ruler.copy(centerX = ruler.centerX.coerceIn(0f, doc.width.toFloat()), centerY = ruler.centerY.coerceIn(0f, doc.height.toFloat()))
+        // Canvas operations move the ruler themselves (updateRuler); just keep the document in sync.
+        doc.ruler = ruler
         docVersion++
         layersVersion++
         invalidateDoc(null)
@@ -327,7 +356,7 @@ class EditorController(
     }
 
     fun pointerCancel() {
-        if (gestureToFilter) { gestureToFilter = false; return }
+        if (gestureToFilter) { filterSession?.onPointerCancel(); gestureToFilter = false; return }
         val tool = gestureTool ?: return
         gestureTool = null
         if (gestureAssisted) strokeAssist.cancel()
@@ -345,7 +374,7 @@ class EditorController(
         val t = viewTransform
         if (grid.enabled) GridRenderer.draw(canvas, t, doc, grid)
         if (ruler.enabled || activeToolId == ToolId.RULER) RulerRenderer.draw(canvas, t, doc, ruler, activeToolId == ToolId.RULER)
-        selection?.let { SelectionOutline.draw(canvas, t, it, antsPhase) }
+        if (!hideSelectionOutline) selection?.let { SelectionOutline.draw(canvas, t, it, antsPhase) }
         currentTool.drawOverlay(canvas, t)
         if (gestureAssisted && gestureTool != null) strokeAssist.drawOverlay(canvas, t)
         filterSession?.drawOverlay(canvas, t)
@@ -382,7 +411,8 @@ class EditorController(
         if (recorder.isEmpty) return false
         val rect = Rect(recorder.touched)
         if (recorder.target == EditTarget.CONTENT && doc.colorMode != ColorMode.RGB) {
-            ColorModeOps.constrain(recorder.layer.bitmap, rect, doc.colorMode)
+            // Only the snapshotted tiles can have changed (cheaper than the union bounding box).
+            for (tile in recorder.touchedTileRects()) ColorModeOps.constrain(recorder.layer.bitmap, tile, doc.colorMode)
         }
         val action = recorder.finish(label) ?: return false
         // Extra actions (e.g. a SelectionAction applied with recordUndo = false) join the same step.
@@ -434,37 +464,59 @@ class EditorController(
         return "$base $n"
     }
 
-    /** Adds an empty layer above the active one (or at [index]). Returns null if at the limit. */
-    fun addLayer(name: String? = null, index: Int = doc.activeLayerIndex + 1, label: String = "Add layer"): Layer? {
-        if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
-        val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
-        val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.layers.size + 1}"), bmp)
+    /**
+     * Commits/pauses the current tool around a layer operation (onDeactivate before, onActivate
+     * after), so pending work is baked in first and the tool re-targets the active layer after.
+     */
+    private inline fun <T> withToolPaused(block: () -> T): T {
         currentTool.onDeactivate()
-        val at = index.coerceIn(0, doc.layers.size)
-        structural {
-            doc.layers.add(at, layer)
-            doc.activeLayerIndex = at
+        try {
+            return block()
+        } finally {
+            currentTool.onActivate()
         }
-        pushUndo(AddLayerAction(layer, at, label))
-        currentTool.onActivate()
-        return layer
     }
 
-    /** Adds a new layer and lets [draw] paint into it (document coordinates). */
-    fun addLayerWithContent(name: String, label: String, draw: (Canvas) -> Unit): Layer? {
+    /**
+     * Adds an empty layer above the active one (or at [index], resolved AFTER pending tool work
+     * is committed). Returns null if at the limit.
+     */
+    fun addLayer(name: String? = null, index: Int? = null, label: String = "Add layer"): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
-        draw(Canvas(bmp))
-        if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, doc.bounds, doc.colorMode)
-        val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp)
-        currentTool.onDeactivate()
-        val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
-        structural {
-            doc.layers.add(at, layer)
-            doc.activeLayerIndex = at
+        return withToolPaused {
+            val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.layers.size + 1}"), bmp)
+            val at = (index ?: (doc.activeLayerIndex + 1)).coerceIn(0, doc.layers.size)
+            structural {
+                doc.layers.add(at, layer)
+                doc.activeLayerIndex = at
+            }
+            pushUndo(AddLayerAction(layer, at, label))
+            layer
         }
-        pushUndo(AddLayerAction(layer, at, label))
-        return layer
+    }
+
+    /** Adds a new layer above the active one and lets [draw] paint into it (document coordinates). */
+    fun addLayerWithContent(name: String, label: String, draw: (Canvas) -> Unit): Layer? {
+        if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
+        val bmp = try {
+            BitmapUtils.createLayerBitmap(doc.width, doc.height).also { b ->
+                draw(Canvas(b))
+                if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(b, doc.bounds, doc.colorMode)
+            }
+        } catch (e: OutOfMemoryError) {
+            toast("Not enough memory for another layer"); return null
+        }
+        return withToolPaused {
+            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp)
+            val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
+            structural {
+                doc.layers.add(at, layer)
+                doc.activeLayerIndex = at
+            }
+            pushUndo(AddLayerAction(layer, at, label))
+            layer
+        }
     }
 
     fun deleteLayer(layer: Layer = activeLayer) {
@@ -481,17 +533,25 @@ class EditorController(
 
     fun duplicateLayer(layer: Layer = activeLayer): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
-        val copy = Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), BitmapUtils.copy(layer.bitmap))
-        copy.copyPropsFrom(layer.props().copy(name = copy.name))
-        copy.mask = layer.mask?.let { BitmapUtils.copy(it) }
-        val at = doc.indexOf(layer) + 1
-        currentTool.onDeactivate()
-        structural {
-            doc.layers.add(at, copy)
-            doc.activeLayerIndex = at
+        return withToolPaused {
+            // Copy after committing pending work so the duplicate includes it.
+            val copy = try {
+                Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), BitmapUtils.copy(layer.bitmap)).also {
+                    it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
+                }
+            } catch (e: OutOfMemoryError) {
+                toast("Not enough memory to duplicate this layer"); return@withToolPaused null
+            }
+            copy.copyPropsFrom(layer.props().copy(name = copy.name))
+            val at = doc.indexOf(layer) + 1
+            if (at <= 0) return@withToolPaused null
+            structural {
+                doc.layers.add(at, copy)
+                doc.activeLayerIndex = at
+            }
+            pushUndo(AddLayerAction(copy, at, "Duplicate layer"))
+            copy
         }
-        pushUndo(AddLayerAction(copy, at, "Duplicate layer"))
-        return copy
     }
 
     /** Moves [layer] to [toIndex] (0 = bottom). */
@@ -499,12 +559,16 @@ class EditorController(
         val from = doc.indexOf(layer)
         val to = toIndex.coerceIn(0, doc.layers.lastIndex)
         if (from < 0 || from == to) return
-        structural {
-            doc.layers.removeAt(from)
-            doc.layers.add(to, layer)
-            doc.activeLayerIndex = to
+        withToolPaused {
+            val f = doc.indexOf(layer)
+            if (f < 0 || f == to) return@withToolPaused
+            structural {
+                doc.layers.removeAt(f)
+                doc.layers.add(to, layer)
+                doc.activeLayerIndex = to
+            }
+            pushUndo(MoveLayerAction(layer, f, to))
         }
-        pushUndo(MoveLayerAction(layer, from, to))
     }
 
     fun moveLayerUp(layer: Layer = activeLayer) = moveLayer(layer, doc.indexOf(layer) + 1)
@@ -512,19 +576,25 @@ class EditorController(
 
     /** Merges [layer] into the layer below it. */
     fun mergeDown(layer: Layer = activeLayer) {
+        if (doc.indexOf(layer) <= 0) { toast("There is no layer below to merge into"); return }
+        withToolPaused { mergeDownNow(layer) }
+    }
+
+    private fun mergeDownNow(layer: Layer) {
         val idx = doc.indexOf(layer)
-        if (idx <= 0) { toast("There is no layer below to merge into"); return }
+        if (idx <= 0) return
         val lower = doc.layers[idx - 1]
-        currentTool.onDeactivate()
         // Flatten lower (+ its mask, opacity) and upper (with blend, opacity, mask, clipping) via a
-        // temporary two-layer document so the result matches what's on screen.
+        // temporary two-layer document so the result matches what's on screen. When both clip to
+        // the same base further down, the upper one is simply drawn over the lower one here (the
+        // merged layer keeps the lower layer's clipping).
         val tmpDoc = Document("merge", "merge", doc.width, doc.height)
         val lowerView = Layer(-1, lower.name, lower.bitmap).also {
             it.copyPropsFrom(lower.props().copy(blendMode = LayerBlendMode.NORMAL, visible = true, clipping = false))
             it.mask = lower.mask
         }
         val upperView = Layer(-2, layer.name, layer.bitmap).also {
-            it.copyPropsFrom(layer.props().copy(visible = true))
+            it.copyPropsFrom(layer.props().copy(visible = true, clipping = layer.clipping && !lower.clipping))
             it.mask = layer.mask
         }
         tmpDoc.layers += lowerView
@@ -546,7 +616,10 @@ class EditorController(
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
     fun flipLayer(layer: Layer = activeLayer, horizontal: Boolean) {
         if (!checkEditable(layer)) return
-        currentTool.onDeactivate()
+        withToolPaused { flipLayerNow(layer, horizontal) }
+    }
+
+    private fun flipLayerNow(layer: Layer, horizontal: Boolean) {
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
                 val old = layer.bitmap
@@ -587,28 +660,55 @@ class EditorController(
     fun renameLayer(layer: Layer, name: String) = setLayerProps(layer, layer.props().copy(name = name.ifBlank { layer.name }), "Rename layer")
     fun setBlendMode(layer: Layer, mode: LayerBlendMode) = setLayerProps(layer, layer.props().copy(blendMode = mode), "Blend mode")
 
-    /** Clears the layer (or only the selected area). */
+    /**
+     * Clears the layer (or only the selected area). Follows the edit target: when the layer's mask
+     * is being edited, the mask is cleared to black (hidden). Refused on alpha-locked content.
+     */
     fun clearLayer(layer: Layer = activeLayer) {
         if (!checkEditable(layer)) return
-        val sel = selection
-        editWholeLayer(layer, "Clear", EditTarget.CONTENT) { bmp ->
-            if (sel == null) bmp.eraseColor(0)
-            else Canvas(bmp).drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+        withToolPaused {
+            val target = editTargetOf(layer)
+            if (target == EditTarget.CONTENT && layer.alphaLocked) {
+                toast("Transparency is locked on \"${layer.name}\""); return@withToolPaused
+            }
+            val sel = selection
+            val rec = beginEdit(layer, target)
+            rec.touch(sel?.bounds ?: doc.bounds)
+            val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
+            val c = Canvas(bmp)
+            if (target == EditTarget.MASK) {
+                if (sel == null) bmp.eraseColor(0xFF000000.toInt())
+                else c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = 0xFF000000.toInt() })
+            } else {
+                if (sel == null) bmp.eraseColor(0)
+                else c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+            }
+            commitEdit(rec, "Clear")
         }
     }
 
-    /** Fills the layer (or the selection) with [fill]. */
+    /**
+     * Fills the layer (or the selection) with [fill]. When the mask is being edited the mask is
+     * filled with the color's luminance. Alpha lock keeps transparent pixels transparent.
+     */
     fun fillLayer(layer: Layer = activeLayer, fill: Int = color) {
         if (!checkEditable(layer)) return
-        val sel = selection
-        editWholeLayer(layer, "Fill", EditTarget.CONTENT) { bmp ->
+        withToolPaused {
+            val target = editTargetOf(layer)
+            val sel = selection
+            val rec = beginEdit(layer, target)
+            rec.touch(sel?.bounds ?: doc.bounds)
+            val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
             val c = Canvas(bmp)
+            val paintColor = if (target == EditTarget.MASK) com.brushwork.paint.core.ColorUtils.gray(com.brushwork.paint.core.ColorUtils.luminance(fill)) else fill
+            val atop = target == EditTarget.CONTENT && layer.alphaLocked
             if (sel == null) {
-                if (layer.alphaLocked) c.drawColor(fill, PorterDuff.Mode.SRC_ATOP) else c.drawColor(fill)
+                if (atop) c.drawColor(paintColor, PorterDuff.Mode.SRC_ATOP) else c.drawColor(paintColor, PorterDuff.Mode.SRC_OVER)
             } else {
-                val p = Paint().apply { color = fill; if (layer.alphaLocked) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
+                val p = Paint().apply { color = paintColor; if (atop) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP) }
                 c.drawBitmap(sel.mask, 0f, 0f, p)
             }
+            commitEdit(rec, "Fill")
         }
     }
 
@@ -671,9 +771,11 @@ class EditorController(
     /** Switches painting between the layer's pixels and its mask (not an undoable change). */
     fun setEditingMask(layer: Layer, editing: Boolean) {
         if (editing && layer.mask == null) return
-        currentTool.onDeactivate()
-        layer.editingMask = editing
-        layersVersion++
+        if (layer.editingMask == editing) return
+        withToolPaused {
+            layer.editingMask = editing
+            layersVersion++
+        }
     }
 
     // ------------------------------------------------------------------ import

@@ -503,20 +503,25 @@ class TransformToolRobolectricTest {
     }
 
     @Test
-    fun previewMatchesCommitWhenTheLayerChangesMeanwhile() {
+    fun menuFillCommitsThePendingTransformFirst() {
         val (c, layer) = setup(64, 64)
         fill(layer.bitmap, Rect(0, 0, 10, 10), RED)
         val tool = activate(c)
         tool.moveBy(30f, 30f)
-        // A menu "Fill" doesn't go through the tool: the preview must still show what commit writes.
+        // The controller commits pending tool work before a menu Fill, so the moved pixels are
+        // baked in and then filled over; nothing is left floating.
         c.fillLayer(layer, BLUE)
+        assertFalse(tool.hasPendingWork)
+        assertEquals(BLUE, layer.bitmap.getPixel(50, 5))
+        assertEquals(BLUE, layer.bitmap.getPixel(5, 5))
+        assertEquals(BLUE, layer.bitmap.getPixel(35, 35))
         val preview = BitmapUtils.createLayerBitmap(64, 64)
         c.compositor.drawDocument(Canvas(preview), null)
-        assertEquals(BLUE, preview.getPixel(50, 5))
-        assertEquals(0, preview.getPixel(5, 5))
-        assertEquals(RED, preview.getPixel(35, 35))
-        tool.commit()
         assertTrue(pixels(preview).contentEquals(pixels(layer.bitmap)))
+        // Two undo steps: fill, then the transform.
+        c.undo()
+        assertEquals(RED, layer.bitmap.getPixel(35, 35))
+        assertEquals(0, layer.bitmap.getPixel(5, 5))
     }
 
     @Test
@@ -589,15 +594,14 @@ class TransformToolRobolectricTest {
         assertEquals(listOf(base), c.doc.layers.toList())
         assertFalse(c.canUndo)
 
-        // Painted meanwhile (menu fill): removed as a regular, undoable "Delete layer" step.
+        // A menu fill during placement commits the placement first (the picture stays).
         c.importImageAsLayer(img)
         idle()
         val placed = c.doc.activeLayer
         c.fillLayer(placed, RED)
-        transformTool(c).discard()
-        idle()
-        assertEquals(listOf(base), c.doc.layers.toList())
-        assertEquals("Delete layer", c.undoManager.undoLabel)
+        assertFalse(transformTool(c).hasPendingWork)
+        assertEquals(listOf(base, placed), c.doc.layers.toList())
+        assertEquals("Fill", c.undoManager.undoLabel)
     }
 
     @Test

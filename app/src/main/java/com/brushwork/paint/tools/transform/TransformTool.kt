@@ -498,7 +498,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         val c = Canvas(floating)
         c.drawBitmap(bmp, -r.left.toFloat(), -r.top.toFloat(), null)
-        if (sel != null) c.drawBitmap(sel.mask, -r.left.toFloat(), -r.top.toFloat(), dstInPaint)
+        if (sel != null) BitmapUtils.maskWith(c, sel.mask, -r.left.toFloat(), -r.top.toFloat())
         val initial = TransformState.identity(r.left, r.top, r.width(), r.height())
         startSession(Session(layer, target, bmp, floating, true, r, sel, bg, initial, placement = false), initial)
         return true

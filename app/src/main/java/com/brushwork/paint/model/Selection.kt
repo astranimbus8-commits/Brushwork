@@ -54,14 +54,14 @@ class Selection private constructor(val mask: Bitmap, bounds: Rect?) {
         if (mode == SelectionMode.REPLACE) return other
         val out = mask.copy(Bitmap.Config.ALPHA_8, true)
         val c = Canvas(out)
-        val p = Paint()
+        // A8 bitmaps drawn with drawBitmap act as coverage: fine for SRC_OVER (union) and
+        // DST_OUT (subtract), but DST_IN needs the mask as source alpha (BitmapUtils.maskWith).
         when (mode) {
-            SelectionMode.ADD -> p.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_OVER)
-            SelectionMode.SUBTRACT -> p.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-            SelectionMode.INTERSECT -> p.xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            SelectionMode.ADD -> c.drawBitmap(other.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_OVER) })
+            SelectionMode.SUBTRACT -> c.drawBitmap(other.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+            SelectionMode.INTERSECT -> BitmapUtils.maskWith(c, other.mask)
             SelectionMode.REPLACE -> {}
         }
-        c.drawBitmap(other.mask, 0f, 0f, p)
         return Selection(out, null)
     }
 
