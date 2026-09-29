@@ -7,6 +7,7 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CanvasGeometry
+import com.brushwork.paint.engine.CanvasOpCancelledException
 import com.brushwork.paint.engine.CanvasOpException
 import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasRotation
@@ -18,6 +19,10 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -329,9 +334,9 @@ class CanvasOpsRobolectricTest {
 
     // ------------------------------------------------------------------ undo / redo
 
-    private fun controllerFor(doc: Document): EditorController {
+    private fun controllerFor(doc: Document, job: Job = SupervisorJob()): EditorController {
         val ctx = ApplicationProvider.getApplicationContext<android.app.Application>()
-        return EditorController(ctx, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(ctx))
+        return EditorController(ctx, doc, CoroutineScope(Dispatchers.Unconfined + job), AppSettings(ctx))
     }
 
     @Test
@@ -413,6 +418,154 @@ class CanvasOpsRobolectricTest {
         assertTrue(snap.matches(doc))
         doc.layers[0].bitmap = bitmapOf(2, 2) { _, _ -> blue }
         assertFalse(snap.matches(doc))
+    }
+
+    @Test
+    fun snapshotDetectsPixelEditsAndMetadataChanges() {
+        val doc = docOf(2, 2, bitmapOf(2, 2) { _, _ -> red })
+        val snap = CanvasSnapshot.of(doc)
+        doc.layers[0].markChanged() // e.g. a stroke committed while the operation ran
+        assertFalse(snap.matches(doc))
+        val snap2 = CanvasSnapshot.of(doc)
+        assertTrue(snap2.matches(doc))
+        doc.dpi = 72f
+        assertFalse(snap2.matches(doc))
+    }
+
+    @Test
+    fun smoothResizeOfMonochromeStaysOneBit() {
+        val black = 0xFF000000.toInt()
+        val doc = docOf(9, 9, bitmapOf(9, 9) { x, y -> if (x == 4) 0 else if ((x + y) % 2 == 0) white else black })
+        doc.colorMode = ColorMode.MONOCHROME
+        doc.layers[0].mask = bitmapOf(9, 9) { x, _ -> if (x < 4) white else black }
+        for (mode in listOf(Resample.BILINEAR, Resample.HIGH_QUALITY)) {
+            val r = CanvasOps.resizeImage(CanvasSnapshot.of(doc), 20, 13, mode)
+            assertEquals(ColorMode.MONOCHROME, r.colorMode)
+            for (p in pixels(r.layers[0].bitmap)) assertTrue("$mode ${Integer.toHexString(p)}", p == 0 || p == white || p == black)
+            // Masks aren't layer pixels: they stay smooth.
+            assertTrue(pixels(r.layers[0].mask!!).any { (it and 0xFF) in 1..254 })
+        }
+    }
+
+    @Test
+    fun progressIsMonotonicAndThrowingAbandonsTheOperation() {
+        val doc = docOf(64, 64, bitmapOf(64, 64, ::code), bitmapOf(64, 64) { _, _ -> red })
+        doc.layers[1].mask = bitmapOf(64, 64) { _, _ -> white }
+        val seen = ArrayList<Float>()
+        CanvasOps.resizeImage(CanvasSnapshot.of(doc), 200, 150, Resample.HIGH_QUALITY) { seen += it }
+        assertEquals(0f, seen.first(), 0f)
+        assertEquals(1f, seen.last(), 1e-6f)
+        for (i in 1 until seen.size) assertTrue(seen[i] >= seen[i - 1])
+        assertTrue(seen.size > 6) // reports inside each bitmap, not only per layer
+
+        var calls = 0
+        try {
+            CanvasOps.resizeImage(CanvasSnapshot.of(doc), 200, 150, Resample.BILINEAR) { if (++calls == 3) throw CanvasOpCancelledException() }
+            fail("expected the operation to stop")
+        } catch (e: CanvasOpCancelledException) {
+            assertEquals(3, calls)
+        }
+        assertEquals(64, doc.layers[0].bitmap.width)
+        assertEquals(code(5, 5), doc.layers[0].bitmap.getPixel(5, 5))
+    }
+
+    @Test
+    fun undoRestoresSelectionAndExactGuides() {
+        val doc = docOf(10, 8, bitmapOf(10, 8, ::code))
+        val c = controllerFor(doc)
+        c.updateRuler(c.ruler.copy(centerX = 9f, centerY = 7f, angleDeg = 30f))
+        val rulerBefore = c.ruler
+        val gridBefore = c.grid
+        val sel = Selection.fromBytes(ByteArray(80) { i -> if (i % 10 in 2..5 && i / 10 in 1..3) -1 else 0 }, 10, 8)
+        c.setSelection(sel, recordUndo = false)
+        val snap = CanvasSnapshot.of(doc)
+        CanvasOps.commit(c, "Crop to selection", snap, CanvasOps.cropTo(snap, sel.bounds))
+        assertEquals(4, doc.width); assertEquals(3, doc.height)
+        assertEquals(code(2, 1), doc.layers[0].bitmap.getPixel(0, 0))
+        assertEquals(null, c.selection)
+        // The ruler center (9,7) - (2,1) = (7,6) is clamped to the new canvas and saved with it.
+        assertEquals(4f, c.ruler.centerX, 1e-4f); assertEquals(3f, c.ruler.centerY, 1e-4f)
+        assertEquals(c.ruler, doc.ruler)
+
+        c.undoManager.undo(c)
+        assertEquals(10, doc.width); assertEquals(8, doc.height)
+        assertSame(sel, c.selection)
+        // Exactly the old ruler, not the clamped center mapped back.
+        assertEquals(rulerBefore, c.ruler)
+        assertEquals(rulerBefore, doc.ruler)
+        assertEquals(gridBefore, c.grid)
+
+        c.undoManager.redo(c)
+        assertEquals(4, doc.width)
+        assertEquals(null, c.selection)
+        assertEquals(4f, c.ruler.centerX, 1e-4f)
+        assertEquals(code(2, 1), doc.layers[0].bitmap.getPixel(0, 0))
+    }
+
+    @Test
+    fun metadataChangesApplyImmediately() {
+        val doc = docOf(3, 3, bitmapOf(3, 3, ::code))
+        val c = controllerFor(doc)
+        assertTrue(CanvasOps.applyDpi(c, 72f))
+        assertEquals(72f, doc.dpi)
+        assertEquals(null, c.busyMessage)
+        assertFalse(CanvasOps.applyDpi(c, 72f))
+        c.undo()
+        assertEquals(300f, doc.dpi)
+
+        doc.colorMode = ColorMode.GRAYSCALE
+        val bmp = doc.layers[0].bitmap
+        assertTrue(CanvasOps.applyColorMode(c, ColorMode.RGB, 128, false))
+        assertEquals(ColorMode.RGB, doc.colorMode)
+        assertSame(bmp, doc.layers[0].bitmap)
+        c.undo()
+        assertEquals(ColorMode.GRAYSCALE, doc.colorMode)
+    }
+
+    private fun awaitIdle(scopeJob: Job) = runBlocking {
+        withTimeout(60_000) {
+            while (true) {
+                val active = scopeJob.children.filter { it.isActive }.toList()
+                if (active.isEmpty()) break
+                active.forEach { it.join() }
+            }
+        }
+    }
+
+    @Test
+    fun backgroundRunCommitsOneUndoStep() {
+        val doc = docOf(5, 3, bitmapOf(5, 3, ::code))
+        val job = SupervisorJob()
+        val c = controllerFor(doc, job)
+        assertTrue(CanvasOps.applyRotate(c, CanvasRotation.CW_90))
+        awaitIdle(job)
+        assertEquals(null, c.busyMessage)
+        assertEquals(3, doc.width); assertEquals(5, doc.height)
+        assertEquals(code(0, 0), doc.layers[0].bitmap.getPixel(2, 0))
+        assertTrue(c.canUndo)
+        c.undo()
+        assertEquals(5, doc.width); assertEquals(3, doc.height)
+        assertEquals(code(0, 0), doc.layers[0].bitmap.getPixel(0, 0))
+        assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun stopAbandonsARunningOperation() {
+        val n = 1200
+        val doc = docOf(n, n, bitmapOf(n, n) { x, y -> if ((x / 8 + y / 8) % 2 == 0) red else blue })
+        val original = doc.layers[0].bitmap
+        val job = SupervisorJob()
+        val c = controllerFor(doc, job)
+        assertTrue(CanvasOps.applyResizeImage(c, 1100, 1100, 300f, Resample.HIGH_QUALITY))
+        val stop = c.busyCancel
+        assertNotNull(stop)
+        stop!!.invoke()
+        awaitIdle(job)
+        assertEquals(n, doc.width)
+        assertSame(original, doc.layers[0].bitmap)
+        assertFalse(c.canUndo)
+        assertTrue(c.message.orEmpty().startsWith("Stopped"))
+        assertEquals(null, c.busyMessage)
     }
 
     @Test

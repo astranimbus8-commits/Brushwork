@@ -2,11 +2,13 @@ package com.brushwork.paint.canvas
 
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.engine.CanvasGeometry
+import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.engine.ColorModeConverter
 import com.brushwork.paint.engine.IntArrayImage
 import com.brushwork.paint.engine.ResampleKernel
 import com.brushwork.paint.engine.Resampler
+import com.brushwork.paint.engine.RowSink
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.RulerSettings
@@ -83,6 +85,21 @@ class CanvasPureTest {
         // An unplaced ruler is left alone.
         val unplaced = RulerSettings()
         assertEquals(unplaced, CanvasGeometry.scale(2.0, 2.0).mapRuler(unplaced, 10, 10))
+
+        // Same coordinates but a smaller canvas (cropped at the top-left): only clamped.
+        val kept = CanvasGeometry.IDENTITY.mapRuler(r, 60, 500)
+        assertEquals(60f, kept.centerX, 1e-4f); assertEquals(50f, kept.centerY, 1e-4f)
+        assertEquals(r.angleDeg, kept.angleDeg, 0f); assertEquals(r.radius, kept.radius, 0f)
+    }
+
+    @Test
+    fun colorModeConversionNeeds() {
+        assertTrue(CanvasOps.convertsPixels(ColorMode.RGB, ColorMode.GRAYSCALE))
+        assertTrue(CanvasOps.convertsPixels(ColorMode.RGB, ColorMode.MONOCHROME))
+        assertTrue(CanvasOps.convertsPixels(ColorMode.GRAYSCALE, ColorMode.MONOCHROME))
+        assertTrue(!CanvasOps.convertsPixels(ColorMode.MONOCHROME, ColorMode.GRAYSCALE))
+        assertTrue(!CanvasOps.convertsPixels(ColorMode.GRAYSCALE, ColorMode.RGB))
+        assertTrue(!CanvasOps.convertsPixels(ColorMode.GRAYSCALE, ColorMode.GRAYSCALE))
     }
 
     @Test
@@ -151,8 +168,17 @@ class CanvasPureTest {
         assertTrue(Resampler.stripHeight(w, h, dw, dh, 6) < dh)
         val out = IntArrayImage(dw, dh)
         var writes = 0
-        Resampler.resample(IntArrayImage(w, h, px), dw, dh, ResampleKernel.CATMULL_ROM) { y, n, p -> writes++; out.write(y, n, p) }
+        val progress = ArrayList<Float>()
+        Resampler.resample(
+            IntArrayImage(w, h, px), dw, dh, ResampleKernel.CATMULL_ROM,
+            dst = RowSink { y, n, p -> writes++; out.write(y, n, p) },
+            onProgress = { progress += it },
+        )
         assertTrue(writes > 1)
+        // One progress report per strip, increasing up to 1.
+        assertEquals(writes, progress.size)
+        for (i in 1 until progress.size) assertTrue(progress[i] > progress[i - 1])
+        assertEquals(1f, progress.last(), 0f)
 
         val tx = Resampler.taps(w, dw, ResampleKernel.CATMULL_ROM)
         val ty = Resampler.taps(h, dh, ResampleKernel.CATMULL_ROM)
