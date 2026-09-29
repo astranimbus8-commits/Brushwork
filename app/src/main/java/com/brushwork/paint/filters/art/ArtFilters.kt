@@ -9,6 +9,7 @@ val artFilters: List<Filter> = listOf(
     GlitchFilter(),
     NoiseFilter(),
     RetroGameFilter(),
+    OilPaintFilter(),
     ChromeFilter(),
     BloomFilter(),
     CrossFilter(),
