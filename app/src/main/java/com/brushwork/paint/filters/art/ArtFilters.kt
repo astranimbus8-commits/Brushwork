@@ -6,7 +6,10 @@ import com.brushwork.paint.filters.Filter
 val artFilters: List<Filter> = listOf(
     ChromaticAberrationMovingFilter(),
     ChromaticAberrationZoomingFilter(),
+    GlitchFilter(),
     NoiseFilter(),
+    RetroGameFilter(),
+    ChromeFilter(),
     SheerFilter(SheerShape.CROSS),
     SheerFilter(SheerShape.LINE),
     SheerFilter(SheerShape.SQUARE),
