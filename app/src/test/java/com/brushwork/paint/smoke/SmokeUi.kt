@@ -92,6 +92,18 @@ internal object SmokeUi {
 
     fun shown(): List<String> = elements().flatMap { it.node.labels() }.distinct()
 
+    /** Clicks [label] inside the window that shows [windowText] (e.g. a dialog's confirm button). */
+    fun clickIn(windowText: String, label: String) {
+        Smoke.step("click \"$label\" in \"$windowText\"")
+        val window = find(windowText, exact = true)?.window ?: throw AssertionError("no window shows \"$windowText\"; shown: ${shown().take(100)}")
+        val e = elements().lastOrNull { it.window === window && matches(it.node, label, exact = true) }
+            ?: throw AssertionError("no \"$label\" in the window of \"$windowText\"")
+        var n: SemanticsNode? = e.node
+        while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+        requireNotNull(n?.config?.getOrNull(SemanticsActions.OnClick)?.action) { "\"$label\" is not clickable" }.invoke()
+        settle()
+    }
+
     private fun SemanticsNode.subtreeLabels(): List<String> = labels() + children.flatMap { it.subtreeLabels() }
 
     /** The (last) editable text field labelled [label]. */
@@ -125,6 +137,21 @@ internal object SmokeUi {
         settle(2)
         f.window.clearFocus()
         settle(4)
+    }
+
+    private fun appliedChanges(): Long = androidx.compose.runtime.Recomposer.runningRecomposers.value.sumOf { it.changeCount }
+
+    /**
+     * Nothing recomposes by itself once the screen has settled: no state written during
+     * composition, no size-feedback loop, no animation that never ends. Lets [settleMs] of time
+     * pass, then requires ZERO applied changes over another second without input.
+     */
+    fun assertIdle(where: String, settleMs: Long = 3_000) {
+        Smoke.pump(settleMs, stepMs = 50)
+        val before = appliedChanges()
+        Smoke.pump(1_000, stepMs = 50)
+        val after = appliedChanges()
+        assertTrue("$where: the UI keeps recomposing with no input (${after - before} changes in 1 s)", after == before)
     }
 
     /** At least [min] windows are shown and every one has a size (a sheet that failed to measure would not). */

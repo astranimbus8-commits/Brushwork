@@ -151,6 +151,7 @@ class EditorSmokeTest {
         assertTrue("canvas has a size: ${canvas.width}x${canvas.height}", canvas.width > 0 && canvas.height > 0)
         assertTrue("fit zoom set", c.viewTransform.zoom > 0f)
         Smoke.assertQuiet(c, "first frame")
+        SmokeUi.assertIdle("editor at rest")
 
         // ---- every tool's options strip
         for (id in ToolId.entries) {
@@ -160,6 +161,7 @@ class EditorSmokeTest {
             assertEquals(id, c.activeToolId)
             assertWindowsLaidOut()
             Smoke.assertQuiet(c, "tool $id")
+            SmokeUi.assertIdle("tool $id", settleMs = 600)
         }
         c.selectTool(ToolId.BRUSH)
         settle()
@@ -196,6 +198,7 @@ class EditorSmokeTest {
             assertWindowsLaidOut(2)
             assertTrue("\"$opener\" shows \"$expected\"", has(expected))
             Smoke.assertQuiet(c, "panel $opener")
+            SmokeUi.assertIdle("panel $opener")
             closeSheets(activity) { screenKey++ }
         }
         for (entry in listOf("Grid", "Stabilizer", "Settings")) {
@@ -205,6 +208,7 @@ class EditorSmokeTest {
             settle()
             assertWindowsLaidOut(2)
             Smoke.assertQuiet(c, "menu $entry")
+            SmokeUi.assertIdle("panel $entry")
             closeSheets(activity) { screenKey++ }
         }
         click("More options")
@@ -560,7 +564,7 @@ class EditorSmokeTest {
         click("Move layer up"); quiet("up")
         click("Move layer down"); quiet("down")
         click("Merge down"); assertEquals(4, c.doc.layers.size); quiet("merge")
-        click("Delete layer"); click("Delete", exact = true); assertEquals(3, c.doc.layers.size); quiet("delete")
+        click("Delete layer"); SmokeUi.clickIn("Delete layer?", "Delete"); assertEquals(3, c.doc.layers.size); quiet("delete")
         click("Choose blend mode"); click("Multiply", exact = true)
         assertEquals(com.brushwork.paint.model.LayerBlendMode.MULTIPLY, c.activeLayer.blendMode); quiet("blend")
         for (t in listOf("Clipping", "α lock", "Lock")) { click(t, exact = true); click(t, exact = true); quiet("toggle $t") }
@@ -727,6 +731,7 @@ class EditorSmokeTest {
         val app = activity.application as com.brushwork.paint.BrushworkApp
         Smoke.step("gallery")
         assertTrue("gallery shows", Smoke.pumpUntil { settle(1); has("New canvas") })
+        SmokeUi.assertIdle("gallery")
 
         // A project created through the repository appears and opens from its card.
         val id = kotlinx.coroutines.runBlocking {
@@ -839,7 +844,8 @@ class EditorSmokeTest {
         val copyName = projects().first { it.id == copyId }.name
         click("More options for $copyName")
         click("Delete", exact = true)
-        click("Delete", exact = true) // the confirmation
+        assertTrue("delete asks first", Smoke.pumpUntil { settle(1); has("Delete artwork?", exact = true) })
+        SmokeUi.clickIn("Delete artwork?", "Delete")
         assertTrue("deleted", Smoke.pumpUntil { settle(1); projects().size == 1 })
         assertTrue(has("Renamed art", exact = true))
 
@@ -894,6 +900,7 @@ class EditorSmokeTest {
             settle()
             assertWindowsLaidOut(2)
             Smoke.assertQuiet(c, name)
+            SmokeUi.assertIdle(name)
             which = -1
             settle()
             assertEquals("$name closed", 1, SmokeUi.windows().size)
