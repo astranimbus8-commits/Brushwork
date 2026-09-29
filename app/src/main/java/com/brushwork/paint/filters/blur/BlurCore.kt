@@ -39,10 +39,15 @@ internal object BlurCore {
         return BoxSpec(r, alpha.toFloat().coerceIn(0f, 1f))
     }
 
-    /** Gaussian-blurs [plane] (w x h, row-major) in place; edges are clamped (replicated). */
+    /**
+     * Gaussian-blurs [plane] (w x h, row-major) in place; edges are clamped (replicated).
+     * Sigmas beyond twice the line length are capped: a blur that wide already washes the line out
+     * completely, and the cap keeps the box radius (and its O(r) start-up sum per line) bounded
+     * even for absurd or infinite input.
+     */
     fun blurPlane(plane: FloatArray, w: Int, h: Int, sigmaX: Float, sigmaY: Float, ctx: FilterContext) {
-        boxSpec(sigmaX)?.let { if (w > 1) horizontal(plane, w, h, it, ctx) }
-        boxSpec(sigmaY)?.let { if (h > 1) vertical(plane, w, h, it, ctx) }
+        boxSpec(min(sigmaX, 2f * w))?.let { if (w > 1) horizontal(plane, w, h, it, ctx) }
+        boxSpec(min(sigmaY, 2f * h))?.let { if (h > 1) vertical(plane, w, h, it, ctx) }
     }
 
     private fun horizontal(plane: FloatArray, w: Int, h: Int, spec: BoxSpec, ctx: FilterContext) {

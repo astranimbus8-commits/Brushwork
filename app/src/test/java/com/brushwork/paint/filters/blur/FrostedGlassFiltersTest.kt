@@ -2,7 +2,6 @@ package com.brushwork.paint.filters.blur
 
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.PixelBuffer
-import com.brushwork.paint.filters.FilterMath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,21 +37,34 @@ class FrostedGlassFiltersTest {
     }
 
     @Test
-    fun randomValuesStayBelowOne() {
-        // hash01 divides a 31-bit int by 2^31 in float, which rounds up to 1f for the top ~64 values;
-        // those must not index past the lookup tables (crashed full-size renders).
-        val s = FrostedGlass.streamSeed(1, 0)
-        var found = false
-        var y = 0
-        while (!found && y < 20_000) {
-            for (x in 0 until 10_000) if (FilterMath.hash01(x, y, s) >= 1f) {
-                assertTrue(FrostedGlass.random(x, y, 1, 0) < 1f)
-                found = true
-                break
-            }
-            y++
+    fun randomValuesAreUniformAndIndependent() {
+        // Values index lookup tables, so they must stay in [0, 1); the per-pixel distance, direction
+        // and extra samples come from different streams and must not be correlated with each
+        // other or with neighbouring pixels (that would show as streaks in the grain).
+        val n = 256
+        var sum = 0.0
+        val buckets = IntArray(16)
+        var crossStreams = 0.0; var crossSeeds = 0.0; var crossX = 0.0; var crossY = 0.0
+        for (y in 0 until n) for (x in 0 until n) {
+            val v = FrostedGlass.random(x, y, 1, 0)
+            assertTrue("value $v at ($x,$y) outside [0, 1)", v >= 0f && v < 1f)
+            sum += v
+            buckets[(v * 16).toInt()]++
+            val c = v - 0.5
+            crossStreams += c * (FrostedGlass.random(x, y, 1, 1) - 0.5)
+            crossSeeds += c * (FrostedGlass.random(x, y, 2, 0) - 0.5)
+            crossX += c * (FrostedGlass.random(x + 1, y, 1, 0) - 0.5)
+            crossY += c * (FrostedGlass.random(x, y + 1, 1, 0) - 0.5)
         }
-        assertTrue("no hash01 == 1f case found", found)
+        val count = n * n
+        assertEquals("mean", 0.5, sum / count, 0.01)
+        for (b in buckets) assertEquals("histogram bucket", count / 16.0, b.toDouble(), count / 16.0 * 0.08)
+        // Correlation = cross / (count * 1/12); independent values give |r| ~ 1/sqrt(count) = 0.004.
+        for ((what, cross) in listOf("streams" to crossStreams, "seeds" to crossSeeds, "x+1" to crossX, "y+1" to crossY)) {
+            val r = cross / (count / 12.0)
+            assertTrue("correlation with $what: $r", abs(r) < 0.02)
+        }
+        assertEquals(FrostedGlass.random(17, -4, 99, 3), FrostedGlass.random(17, -4, 99, 3))
     }
 
     @Test

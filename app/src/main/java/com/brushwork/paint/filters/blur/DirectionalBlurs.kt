@@ -12,6 +12,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -21,6 +22,12 @@ internal fun farthestCorner(cx: Float, cy: Float, w: Int, h: Int): Float {
     val dy = max(cy, h - cy)
     return sqrt(dx * dx + dy * dy)
 }
+
+/**
+ * Longest useful displacement in [src] (buffer pixels). Streaks or scatter longer than this only
+ * add samples clamped to the image edge; capping keeps absurd or infinite input finite.
+ */
+internal fun maxReach(src: PixelBuffer): Float = 2f * (src.width + src.height)
 
 /** Centre of a Point parameter in buffer pixels (clamped to the image). */
 internal fun FilterValues.centerPx(key: String, src: PixelBuffer): FloatArray {
@@ -54,22 +61,28 @@ class ZoomingBlurFilter : Filter("blur.zooming", "Zooming Blur", FilterCategory.
         // is smeared outward; "both ways" also samples beyond the pixel.
         val sMin = if (both) 1f - k / 2f else 1f - k
         val sMax = if (both) 1f + k / 2f else 1f
-        val maxStreak = max(0f, farthestCorner(cx, cy, w, h) - r0) * (sMax - sMin)
-        if (!(maxStreak >= 0.5f)) return src.copy()
+        val maxDist = max(0f, farthestCorner(cx, cy, w, h) - r0)
+        if (!(maxDist * (sMax - sMin) >= 0.5f)) return src.copy()
 
-        val passes = Progressive.passesFor(maxStreak + 1f)
-        // Scales are spaced evenly in log space so that the passes compose exactly. In "Outward"
-        // mode every scale is <= 1, so no sample ever leaves the image.
+        // Scales compose by multiplication, so they are spaced evenly in log space. Weighting every
+        // tap by its scale makes each composed sample's weight proportional to its total scale,
+        // which turns the log-spaced samples into a plain uniform average along the streak.
+        // Log spacing leaves the widest gaps at the outer end (d * sMax * step); size the cascade
+        // so those stay within about a pixel. In "Outward" mode every scale is <= 1, so no sample
+        // ever leaves the image.
         val lnMin = ln(sMin.toDouble())
         val lnMax = ln(sMax.toDouble())
+        val passes = Progressive.passesFor((maxDist * sMax * (lnMax - lnMin)).toFloat() + 1f)
         return Progressive.run(src, passes, ctx) { pass, input, out ->
             val params = Progressive.passParams(pass, passes, lnMin, lnMax)
             val scales = FloatArray(params.size) { exp(params[it]).toFloat() }
+            val scaleSum = scales.sum()
+            val weights = FloatArray(scales.size) { scales[it] / scaleSum }
             val inPx = input.pixels
             Parallel.forRows(h) { y0, y1 ->
-                ctx.checkCancelled()
                 val acc = SampleAccumulator(inPx, w, h)
                 for (y in y0 until y1) {
+                    if ((y - y0) % Progressive.CANCEL_ROWS == 0) ctx.checkCancelled()
                     val vy = y + 0.5f - cy
                     val row = y * w
                     for (x in 0 until w) {
@@ -80,9 +93,9 @@ class ZoomingBlurFilter : Filter("blur.zooming", "Zooming Blur", FilterCategory.
                         val ux = vx / r
                         val uy = vy / r
                         acc.reset()
-                        for (s in scales) {
-                            val rr = r0 + d * s
-                            acc.addClamped(cx + ux * rr, cy + uy * rr)
+                        for (i in scales.indices) {
+                            val rr = r0 + d * scales[i]
+                            acc.addClamped(cx + ux * rr, cy + uy * rr, weights[i])
                         }
                         out[row + x] = acc.result(inPx[row + x])
                     }
@@ -131,9 +144,9 @@ class SpinBlurFilter : Filter("blur.spin", "Spin Blur", FilterCategory.BLUR) {
             val sinT = FloatArray(phis.size) { sin(phis[it]).toFloat() }
             val inPx = input.pixels
             Parallel.forRows(h) { y0, y1 ->
-                ctx.checkCancelled()
                 val acc = SampleAccumulator(inPx, w, h)
                 for (y in y0 until y1) {
+                    if ((y - y0) % Progressive.CANCEL_ROWS == 0) ctx.checkCancelled()
                     val vy = y + 0.5f - cy
                     val row = y * w
                     for (x in 0 until w) {
@@ -166,9 +179,9 @@ class MotionBlurFilter : Filter("blur.motion", "Motion Blur", FilterCategory.BLU
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val w = src.width
         val h = src.height
-        val length = ctx.px(values.float("distance"))
+        val length = min(ctx.px(values.float("distance")), maxReach(src))
         if (!(length >= 0.5f)) return src.copy()
-        val angle = values.float("angle") * (PI / 180.0)
+        val angle = (values.float("angle").takeIf { it.isFinite() } ?: 0f) * (PI / 180.0)
         val dx = cos(angle)
         val dy = -sin(angle) // screen y points down
         // A pixel averages the content at p + t * dir. Trailing: t in [0, L] (content ahead of
@@ -182,9 +195,9 @@ class MotionBlurFilter : Filter("blur.motion", "Motion Blur", FilterCategory.BLU
             val oy = FloatArray(ts.size) { (ts[it] * dy).toFloat() }
             val inPx = input.pixels
             Parallel.forRows(h) { y0, y1 ->
-                ctx.checkCancelled()
                 val acc = SampleAccumulator(inPx, w, h)
                 for (y in y0 until y1) {
+                    if ((y - y0) % Progressive.CANCEL_ROWS == 0) ctx.checkCancelled()
                     val py = y + 0.5f
                     val row = y * w
                     for (x in 0 until w) {

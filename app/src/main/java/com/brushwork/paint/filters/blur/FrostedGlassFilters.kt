@@ -5,7 +5,6 @@ import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterContext
-import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import kotlin.math.PI
@@ -25,21 +24,33 @@ internal object FrostedGlass {
     fun smoothnessParam() = FilterParam.Slider("smoothness", "Smoothness", 0f, 100f, 0f, step = 1f, suffix = "%")
 
     /** Samples averaged per pixel: 1 (crisp grain) at 0 % up to [MAX_SAMPLES] (soft) at 100 %. */
-    fun sampleCount(values: FilterValues): Int =
-        1 + (values.float("smoothness").coerceIn(0f, 100f) / 100f * (MAX_SAMPLES - 1)).roundToInt()
-
-    /** Largest float below 1. */
-    private const val BELOW_ONE = 0.99999994f
+    fun sampleCount(values: FilterValues): Int {
+        val smoothness = values.float("smoothness").takeIf { !it.isNaN() } ?: 0f
+        return 1 + (smoothness.coerceIn(0f, 100f) / 100f * (MAX_SAMPLES - 1)).roundToInt()
+    }
 
     /**
-     * Uniform random value in [0, 1) for pixel ([x], [y]) from independent stream [k] of [seed].
-     * Clamped because hash01's float division can round up to exactly 1f.
+     * Uniform random value in [0, 1) for pixel ([x], [y]) from random stream [k] of [seed].
+     *
+     * Every input goes through a full avalanche mix (murmur3 finaliser) in turn, so neighbouring
+     * pixels, streams and seeds give independent values: the several values drawn per pixel
+     * (distance, direction, extra smoothness samples) must not be correlated, or the grain shows
+     * streaks or a preferred direction.
      */
-    fun random(x: Int, y: Int, seed: Int, k: Int): Float =
-        min(FilterMath.hash01(x, y, streamSeed(seed, k)), BELOW_ONE)
+    fun random(x: Int, y: Int, seed: Int, k: Int): Float {
+        var h = mix(seed * -0x61c88647 + k)
+        h = mix(h + y * -0x7a143589)
+        h = mix(h + x * 0x27d4eb2f)
+        return (h ushr 8) / 16777216f // 24 bits: exact in a float, always < 1
+    }
 
-    /** hash01 seed of random stream [k] for the user's [seed]. */
-    fun streamSeed(seed: Int, k: Int): Int = seed * 7919 + k * 104729 + 17
+    /** murmur3 fmix32 finaliser. */
+    private fun mix(v: Int): Int {
+        var h = v
+        h = (h xor (h ushr 16)) * -0x7a143595
+        h = (h xor (h ushr 13)) * -0x3d4d51cb
+        return h xor (h ushr 16)
+    }
 
     /**
      * Displaces every pixel by `offset(x, y, sample, out)` (written into out[0], out[1]) for
@@ -58,10 +69,10 @@ internal object FrostedGlass {
         val result = PixelBuffer(w, h)
         val d = result.pixels
         Parallel.forRows(h) { y0, y1 ->
-            ctx.checkCancelled()
             val acc = SampleAccumulator(s, w, h)
             val o = FloatArray(2)
             for (y in y0 until y1) {
+                if ((y - y0) % Progressive.CANCEL_ROWS == 0) ctx.checkCancelled()
                 val row = y * w
                 for (x in 0 until w) {
                     acc.reset()
@@ -81,8 +92,9 @@ internal object FrostedGlass {
 
 /**
  * Frosted Glass (Normal): every pixel is replaced by a pixel from a random spot within Radius, so the
- * picture looks as if seen through frosted glass. Variance shapes the scatter distance: 100 % spreads
- * evenly over the whole disc, lower values keep most pixels close with occasional far jumps.
+ * picture looks as if seen through frosted glass. Variance shapes the scatter distance (a Gaussian
+ * spread of Radius x Variance, cut off at Radius): 100 % spreads nearly evenly over the whole disc,
+ * lower values keep most pixels close with occasional far jumps.
  * Smoothness averages several scattered samples for a softer, less grainy result.
  */
 class FrostedGlassFilter : Filter("blur.frosted_glass", "Frosted Glass (Normal)", FilterCategory.BLUR) {
@@ -94,9 +106,9 @@ class FrostedGlassFilter : Filter("blur.frosted_glass", "Frosted Glass (Normal)"
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val radius = ctx.px(values.float("radius"))
+        val radius = min(ctx.px(values.float("radius")), maxReach(src))
         val variance = values.float("variance").coerceIn(0f, 100f) / 100f
-        if (!(radius >= 0.25f) || variance <= 0f) return src.copy()
+        if (!(radius >= 0.25f) || !(variance > 0f)) return src.copy()
         val rho = radiusLut(radius, radius * variance)
         val dirX = FloatArray(DIRS) { cos(it * 2.0 * PI / DIRS).toFloat() }
         val dirY = FloatArray(DIRS) { sin(it * 2.0 * PI / DIRS).toFloat() }
@@ -144,7 +156,7 @@ class FrostedGlassZoomingFilter : Filter("blur.frosted_glass_zooming", "Frosted 
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val radius = ctx.px(values.float("radius"))
+        val radius = min(ctx.px(values.float("radius")), maxReach(src))
         if (!(radius >= 0.25f)) return src.copy()
         val c = values.centerPx("center", src)
         val cx = c[0]
@@ -182,9 +194,9 @@ class FrostedGlassMovingFilter : Filter("blur.frosted_glass_moving", "Frosted Gl
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val radius = ctx.px(values.float("radius"))
+        val radius = min(ctx.px(values.float("radius")), maxReach(src))
         if (!(radius >= 0.25f)) return src.copy()
-        val angle = values.float("angle") * (PI / 180.0)
+        val angle = (values.float("angle").takeIf { it.isFinite() } ?: 0f) * (PI / 180.0)
         val dx = (cos(angle) * radius).toFloat()
         val dy = (-sin(angle) * radius).toFloat() // screen y points down
         val seed = values.seed()

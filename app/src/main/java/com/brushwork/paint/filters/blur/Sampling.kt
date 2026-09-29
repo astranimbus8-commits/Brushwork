@@ -19,17 +19,20 @@ internal class SampleAccumulator(private val px: IntArray, private val w: Int, p
     private var sr = 0f
     private var sg = 0f
     private var sb = 0f
-    private var count = 0
+    private var total = 0f
 
     fun reset() {
-        sa = 0f; sr = 0f; sg = 0f; sb = 0f; count = 0
+        sa = 0f; sr = 0f; sg = 0f; sb = 0f; total = 0f
     }
 
     /**
      * Adds the bilinear sample at ([fx], [fy]) (continuous coordinates, pixel centres at +0.5).
      * Positions outside the image are clamped to its edge, so edges never fade out.
      */
-    fun addClamped(fx: Float, fy: Float) {
+    fun addClamped(fx: Float, fy: Float) = addClamped(fx, fy, 1f)
+
+    /** Like [addClamped] with a relative [weight] (> 0) in the average. */
+    fun addClamped(fx: Float, fy: Float, weight: Float) {
         var x = fx - 0.5f
         var y = fy - 0.5f
         if (!(x > 0f)) x = 0f else if (x > maxX) x = maxX
@@ -41,11 +44,13 @@ internal class SampleAccumulator(private val px: IntArray, private val w: Int, p
         val x1 = if (x0 < w - 1) x0 + 1 else x0
         val r0 = y0 * w
         val r1 = if (y0 < h - 1) r0 + w else r0
-        tap(px[r0 + x0], (1f - tx) * (1f - ty))
-        tap(px[r0 + x1], tx * (1f - ty))
-        tap(px[r1 + x0], (1f - tx) * ty)
-        tap(px[r1 + x1], tx * ty)
-        count++
+        val wx0 = (1f - tx) * weight
+        val wx1 = tx * weight
+        tap(px[r0 + x0], wx0 * (1f - ty))
+        tap(px[r0 + x1], wx1 * (1f - ty))
+        tap(px[r1 + x0], wx0 * ty)
+        tap(px[r1 + x1], wx1 * ty)
+        total += weight
     }
 
     private fun tap(c: Int, weight: Float) {
@@ -57,10 +62,10 @@ internal class SampleAccumulator(private val px: IntArray, private val w: Int, p
         sb += (c and 0xFF) * a
     }
 
-    /** Mean of the added samples as NON-premultiplied ARGB, or [fallback] when nothing was added. */
+    /** Weighted mean of the added samples as NON-premultiplied ARGB, or [fallback] when nothing was added. */
     fun result(fallback: Int): Int {
-        if (count == 0) return fallback
-        val alpha = (sa / count + 0.5f).toInt()
+        if (!(total > 0f)) return fallback
+        val alpha = (sa / total + 0.5f).toInt()
         if (alpha <= 0) return 0
         val inv = 1f / sa
         val r = min(255, (sr * inv + 0.5f).toInt())
@@ -76,9 +81,13 @@ internal class SampleAccumulator(private val px: IntArray, private val w: Int, p
  * A blur that averages M samples along a family of commuting transforms T(t) (translations,
  * rotations or scalings about one centre) equals P passes that each average only [TAPS] samples,
  * pass j stepping TAPS^j times further than pass 0: TAPS^P evenly spaced samples for TAPS*P reads
- * per pixel. A 1000 px streak costs 20 bilinear reads per pixel instead of 1000.
+ * per pixel. A 1000 px streak costs 20 bilinear reads per pixel instead of 1000. Per-tap weights
+ * compose too: the weight of a composed sample is the product of its taps' weights.
  */
 internal object Progressive {
+    /** Rows between cancellation checks inside a pass (a pass over a large image takes a while). */
+    const val CANCEL_ROWS = 16
+
     const val TAPS = 4
     private const val MAX_PASSES = 7
 

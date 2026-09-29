@@ -53,6 +53,27 @@ class DirectionalBlursTest {
     }
 
     @Test
+    fun zoomAveragesUniformlyAlongTheStreak() {
+        // One row, centre on the left edge: every ray runs along +x. The source is a linear ramp, so
+        // a uniform average over radii [sMin * r, sMax * r] equals the ramp at the midpoint radius.
+        // (Regression: log-spaced cascade samples used to weight the streak toward the centre.)
+        val w = 401
+        val src = PixelBuffer(w, 1)
+        for (x in 0 until w) src[x, 0] = com.brushwork.paint.core.ColorUtils.gray(x * 255 / (w - 1))
+        fun ramp(radius: Double) = (radius - 0.5) * 255.0 / (w - 1)
+        val origin = "center" to floatArrayOf(0f, 0.5f)
+        val outward = zoom.render(src, origin, "strength" to 100f)
+        for (x in listOf(100, 250, 380)) {
+            val r = x + 0.5
+            assertEquals("outward at $x", ramp(r * (0.05 + 1.0) / 2), red(outward[x, 0]).toDouble(), 4.0)
+        }
+        val both = zoom.render(src, origin, "strength" to 100f, "direction" to 1)
+        for (x in listOf(60, 150, 260)) { // sMax * r stays inside the image
+            assertEquals("both ways at $x", ramp(x + 0.5), red(both[x, 0]).toDouble(), 4.0)
+        }
+    }
+
+    @Test
     fun zoomKeepsCenterRadiusSharp() {
         val src = randomImage(61, 61, seed = 4, opaque = true)
         val out = zoom.render(src, center, "strength" to 80f, "centerRadius" to 12f)

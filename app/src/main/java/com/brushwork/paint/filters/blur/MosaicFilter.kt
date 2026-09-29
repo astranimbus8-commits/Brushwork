@@ -8,6 +8,7 @@ import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import kotlin.math.floor
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -23,10 +24,11 @@ class MosaicFilter : Filter("blur.mosaic", "Mosaic", FilterCategory.BLUR) {
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val cell = ctx.px(values.float("size"))
-        if (!(cell > 1.0001f)) return src.copy()
         val w = src.width
         val h = src.height
+        // A cell as large as the image already covers all of it (from either grid origin).
+        val cell = min(ctx.px(values.float("size")), max(w, h).toFloat())
+        if (!(cell > 1.0001f)) return src.copy()
         val centered = values.choice("grid") == 1
         // Cell boundaries: centred mode puts one cell's centre on the image centre.
         val colStart = cellStarts(w, cell, if (centered) w / 2f - cell / 2f else 0f)

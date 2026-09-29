@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CancellationException
 
 class BlurFiltersContractTest {
 
@@ -43,6 +44,36 @@ class BlurFiltersContractTest {
         for (f in blurFilters) {
             val out = f.apply(PixelBuffer(23, 17), f.defaultValues(), FilterContext())
             assertTrue("${f.id} drew on an empty layer", out.pixels.all { it == 0 })
+        }
+    }
+
+    @Test
+    fun cancellationStopsEveryFilter() {
+        val src = randomImage(64, 48, seed = 5)
+        for (f in blurFilters) {
+            val ctx = FilterContext(cancelled = { true })
+            try {
+                f.apply(src, f.defaultValues(), ctx)
+                throw AssertionError("${f.id} ignored cancellation")
+            } catch (_: CancellationException) {
+            }
+        }
+    }
+
+    @Test
+    fun nonFiniteValuesDoNotBreakFilters() {
+        val src = randomImage(20, 16, seed = 8)
+        for (f in blurFilters) for (p in f.params) {
+            if (p !is FilterParam.Slider) continue
+            for (bad in floatArrayOf(Float.NaN, Float.POSITIVE_INFINITY)) {
+                val out = try {
+                    f.apply(src, f.defaultValues().set(p.key, bad), FilterContext())
+                } catch (e: Exception) {
+                    throw AssertionError("${f.id} ${p.key}=$bad threw $e", e)
+                }
+                assertEquals(src.width, out.width)
+                assertEquals(src.height, out.height)
+            }
         }
     }
 
