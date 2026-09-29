@@ -47,10 +47,10 @@ class AnimeBackgroundFilter : Filter("draw.anime_background", "Anime Background"
         val dog = if (outline > 0f) Stylize.dog(work[0], work.w, work.h, 0.9f * u, ctx) else null
         val colors = values.float("colors").coerceIn(0f, 100f) / 100f
         if (colors > 0f) {
-            // Hue and chroma snap to a palette of 28..6 colors; lightness is only pulled halfway
+            // Hue and chroma snap to a palette of 28..8 colors; lightness is only pulled halfway
             // because the shading bands below quantize it anyway.
-            val centers = Stylize.kMeans(work, (28 - 22 * colors).toInt().coerceIn(2, 28), PALETTE_SEED, ctx)
-            Stylize.quantizeTowards(work, centers, 0.9f * colors, ctx, lightWeight = 0.5f, softness = 6f)
+            val centers = Stylize.kMeans(work, (28 - 20 * colors).toInt().coerceIn(2, 28), PALETTE_SEED, ctx)
+            Stylize.quantizeTowards(work, centers, 0.9f * sqrt(colors), ctx, lightWeight = 0.5f, softness = 6f)
         }
         // Edges need a lightness drop of about 4..12 L units to be outlined.
         val eps = 1.4f - 1.0f * outline
