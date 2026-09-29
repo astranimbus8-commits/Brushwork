@@ -1,0 +1,94 @@
+package com.brushwork.paint.smoke
+
+import android.view.View
+import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.platform.InfiniteAnimationPolicy
+import androidx.compose.ui.platform.WindowRecomposerPolicy
+import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
+import androidx.compose.ui.semantics.SemanticsActions
+import kotlinx.coroutines.awaitCancellation
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
+import com.brushwork.paint.ui.color.RobolectricUi
+import org.junit.Assert.assertTrue
+
+/** Semantics lookups on top of [RobolectricUi] (click labels, texts, windows). */
+internal object SmokeUi {
+
+    fun settle(steps: Int = 12, stepMs: Long = 50) = RobolectricUi.settle(steps, stepMs)
+
+    /**
+     * Parks infinite animations instead of running them, like compose-ui-test does. Without it a
+     * `Popup` (every DropdownMenu) hangs Robolectric: it polls its anchor position in an endless
+     * `withInfiniteAnimationFrameNanos` loop that the paused looper keeps running at the same
+     * instant. Indeterminate progress indicators simply stay still.
+     */
+    private object ParkInfiniteAnimations : InfiniteAnimationPolicy {
+        override suspend fun <R> onInfiniteOperation(block: suspend () -> R): R = awaitCancellation()
+    }
+
+    /** Makes every window recomposer created from now on use [ParkInfiniteAnimations]. */
+    @OptIn(InternalComposeUiApi::class)
+    fun installTestRecomposer() {
+        WindowRecomposerPolicy.setFactory { root -> root.createLifecycleAwareWindowRecomposer(ParkInfiniteAnimations) }
+    }
+
+    /** Windows that existed before the current screen was shown (other activities). */
+    var baseline = 0
+
+    /** Root views of the windows shown since [baseline] was taken (activity first). */
+    fun windows(): List<View> = RobolectricUi.windowRoots().drop(baseline)
+
+    /** Call before creating the activity of a section: later window counts start from here. */
+    fun markBaseline() { baseline = RobolectricUi.windowRoots().size }
+
+    private fun SemanticsNode.texts(): List<String> = config.getOrNull(SemanticsProperties.Text)?.map { it.text }.orEmpty()
+    private fun SemanticsNode.descriptions(): List<String> = config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+    private fun SemanticsNode.clickLabel(): String? = config.getOrNull(SemanticsActions.OnClick)?.label
+
+    /** Everything a person could read or hear for this node. */
+    private fun SemanticsNode.labels(): List<String> = texts() + descriptions() + listOfNotNull(clickLabel())
+
+    private fun matches(n: SemanticsNode, label: String, exact: Boolean) = n.labels().any { if (exact) it == label else it.contains(label) }
+
+    private fun elements() = RobolectricUi.elements().filter { e -> RobolectricUi.windowRoots().indexOf(e.window) >= baseline }
+
+    fun find(label: String, exact: Boolean = false): RobolectricUi.Element? = elements().lastOrNull { matches(it.node, label, exact) }
+
+    fun has(label: String, exact: Boolean = false): Boolean = find(label, exact) != null
+
+    /** Taps the (last) element labelled [label] at its center with real touch events. */
+    fun tap(label: String, exact: Boolean = false) {
+        val e = find(label, exact) ?: throw AssertionError("nothing labelled \"$label\" on screen; shown: ${shown().take(100)}")
+        e.tap()
+    }
+
+    /**
+     * Invokes the click action of the element labelled [label] (text, content description or
+     * click label), or of its nearest clickable ancestor (an icon's description sits on a child
+     * of its button). Works for sheets that have not finished animating in.
+     */
+    fun click(label: String, exact: Boolean = false) {
+        Smoke.step("click \"$label\"")
+        val candidates = elements().filter { matches(it.node, label, exact) }
+        for (e in candidates.asReversed()) {
+            var n: SemanticsNode? = e.node
+            while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+            val action = n?.config?.getOrNull(SemanticsActions.OnClick)?.action ?: continue
+            action.invoke()
+            settle()
+            return
+        }
+        throw AssertionError("nothing clickable labelled \"$label\"; shown: ${shown().take(100)}")
+    }
+
+    fun shown(): List<String> = elements().flatMap { it.node.labels() }.distinct()
+
+    /** At least [min] windows are shown and every one has a size (a sheet that failed to measure would not). */
+    fun assertWindowsLaidOut(min: Int = 1) {
+        val roots = windows()
+        assertTrue("expected at least $min windows, got ${roots.size}", roots.size >= min)
+        assertTrue("a window has no size: ${roots.map { "${it.width}x${it.height}" }}", roots.all { it.width > 0 && it.height > 0 })
+    }
+}

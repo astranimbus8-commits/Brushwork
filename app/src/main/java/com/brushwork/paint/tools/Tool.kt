@@ -97,6 +97,14 @@ abstract class Tool(val controller: EditorController) {
      */
     open val hasPendingWork: Boolean get() = false
 
+    /**
+     * True when the pending work holds something the user did, so undo throws it away instead of
+     * stepping back in history (and redo waits for it). Work a tool set up on its own that is
+     * still untouched (the transform tool lifting the layer when it becomes active) is not: undo
+     * and redo drop it and act on the history right away, so they never seem to do nothing.
+     */
+    open val hasUserChanges: Boolean get() = hasPendingWork
+
     /** Bake pending work into the layer (with undo). */
     open fun commit() {}
 
