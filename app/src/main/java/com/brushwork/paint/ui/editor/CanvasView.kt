@@ -21,6 +21,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.theme.BrushworkColors
 import java.util.WeakHashMap
+import kotlin.math.abs
 import kotlin.math.pow
 
 /** Zoom/rotation readout while the user pinches (for the on-screen chip). */
@@ -88,10 +89,15 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     /** Reports the chrome that overlaps the canvas; the initial fit centers in the free area. */
     fun setFitInsets(left: Float, top: Float, right: Float, bottom: Float) {
-        if (left == insetLeft && top == insetTop && right == insetRight && bottom == insetBottom) return
+        val delta = abs(left - insetLeft) + abs(top - insetTop) + abs(right - insetRight) + abs(bottom - insetBottom)
+        if (delta == 0f) return
         insetLeft = left; insetTop = top; insetRight = right; insetBottom = bottom
-        // Refit only while the user hasn't adjusted the view since the last fit.
-        if (viewport.hasSize && !viewport.userAdjusted && viewport.fittedDocVersion == controller.docVersion && mode != Mode.TRANSFORM) {
+        // Refit only for real layout changes (first measurement, filter panel shown/hidden), never
+        // mid-gesture, and only while the user hasn't adjusted the view since the last fit. Small
+        // changes (tool option strips of different heights) must not make the canvas jump.
+        if (delta >= REFIT_INSET_DELTA_DP * density && mode == Mode.NONE && viewport.hasSize &&
+            !viewport.userAdjusted && viewport.fittedDocVersion == controller.docVersion
+        ) {
             fitNow()
         }
     }
@@ -271,7 +277,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     }
 
     private fun onFirstDown(e: MotionEvent) {
-        if (mode == Mode.DRAW) controller.pointerCancel() // missed UP (should not happen)
+        // A missed UP/CANCEL (should not happen): close the previous gesture cleanly.
+        if (mode == Mode.DRAW) controller.pointerCancel()
+        if (mode == Mode.TRANSFORM) endTransform()
+        cancelPendingLongPress()
         ignoredMask = 0L
         enteredTransform = false
         gestureHadStylus = false
@@ -536,6 +545,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         /** Above this zoom the tiles are drawn with nearest-neighbor sampling (crisp pixels). */
         const val SMOOTH_ZOOM_LIMIT = 2.5f
         const val WHEEL_ZOOM_STEP = 1.15f
+        const val REFIT_INSET_DELTA_DP = 24f
         val SHADOW_WIDTHS_DP = floatArrayOf(22f, 14f, 8f, 3f)
         val SHADOW_ALPHAS = intArrayOf(8, 14, 24, 40)
     }

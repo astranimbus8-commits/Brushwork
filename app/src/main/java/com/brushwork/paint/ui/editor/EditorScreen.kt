@@ -93,7 +93,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     val prefs = remember(controller) { EditorPrefs(controller.settings) }
     val actions = remember(controller, context) { EditorActions(controller, context) }
     var panel by rememberSaveable { mutableStateOf<EditorPanel?>(null) }
-    var canvasView by remember { mutableStateOf<CanvasView?>(null) }
+    // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
+    val canvasRef = remember { arrayOfNulls<CanvasView>(1) }
     val closePanel = { panel = null }
 
     // Chrome sizes (px), reported to the canvas so the initial fit centers between them.
@@ -174,7 +175,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         // ------------------------------------------------------------ canvas (full bleed)
         key(controller) {
             AndroidView(
-                factory = { ctx -> CanvasView(ctx, controller).also { canvasView = it } },
+                factory = { ctx -> CanvasView(ctx, controller).also { canvasRef[0] = it } },
                 modifier = Modifier.fillMaxSize(),
                 update = { v ->
                     v.onTapAction = { text -> tapText = text; tapVisible = true; tapSerial++ }
@@ -188,7 +189,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                     v.setMirrored(controller.viewMirrored)
                     v.setFitInsets(0f, topChromePx.toFloat(), 0f, bottomChromePx.toFloat())
                 },
-                onRelease = { v -> if (canvasView === v) canvasView = null },
+                onRelease = { v -> if (canvasRef[0] === v) canvasRef[0] = null },
             )
         }
 
@@ -222,9 +223,9 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                         MenuEntry("Flip view", Icons.Filled.Flip, checked = controller.viewMirrored, dividerBefore = true) {
                             controller.viewMirrored = !controller.viewMirrored
                         },
-                        MenuEntry("Fit to screen", Icons.Filled.FitScreen) { canvasView?.fitToScreen() },
-                        MenuEntry("100% (actual pixels)", Icons.Filled.CenterFocusStrong) { canvasView?.actualPixels() },
-                        MenuEntry("Reset rotation", Icons.Filled.CropRotate) { canvasView?.resetRotation() },
+                        MenuEntry("Fit to screen", Icons.Filled.FitScreen) { canvasRef[0]?.fitToScreen() },
+                        MenuEntry("100% (actual pixels)", Icons.Filled.CenterFocusStrong) { canvasRef[0]?.actualPixels() },
+                        MenuEntry("Reset rotation", Icons.Filled.CropRotate) { canvasRef[0]?.resetRotation() },
                         MenuEntry("Save now", Icons.Filled.Save, dividerBefore = true) {
                             onSaveNow()
                             controller.toast("Saved")
@@ -310,7 +311,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
             }
         }
         draggingSlider?.let { kind ->
-            SliderPreview(controller, kind, zoom = canvasView?.zoom ?: 1f, modifier = Modifier.align(Alignment.Center))
+            SliderPreview(controller, kind, zoom = canvasRef[0]?.zoom ?: 1f, modifier = Modifier.align(Alignment.Center))
         }
         SnackbarHost(
             snackbar,

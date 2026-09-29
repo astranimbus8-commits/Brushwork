@@ -153,34 +153,42 @@ fun Hotbar(
     val layerNumber = controller.doc.activeLayerIndex.coerceIn(0, (controller.doc.layers.size - 1).coerceAtLeast(0)) + 1
     val pending = controller.currentTool.hasPendingWork
     val session = controller.filterSession
-    Row(
+    Box(
         modifier
             .fillMaxWidth()
             .background(BrushworkColors.Chrome)
-            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
-            .height(56.dp)
-            .padding(horizontal = 4.dp),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
+            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
+        contentAlignment = Alignment.Center,
     ) {
-        ToolIconButton(EditorIcons.tool(active), "Tools (current: ${active.label})", onToolPicker)
-        ToolIconButton(
-            icon = if (erasing) EditorIcons.Eraser else EditorIcons.tool(paintTool),
-            contentDescription = if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
-            onClick = { controller.toggleEraser() },
-            selected = erasing || active == paintTool,
-        )
-        BrushSizeButton(preset?.size ?: 0f, onBrushPanel)
-        Box(
+        // Capped width so the buttons stay together on tablets and in landscape.
+        Row(
             Modifier
-                .size(44.dp)
-                .clip(CircleShape)
-                .clickable(onClickLabel = "Open color picker", role = Role.Button, onClick = onColorPanel),
-            contentAlignment = Alignment.Center,
-        ) { ColorSwatch(controller.color, size = 30.dp) }
-        LayersButton(layerNumber, onLayersPanel)
-        ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo", { controller.undo() }, enabled = controller.canUndo || pending || session != null)
-        ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo", { controller.redo() }, enabled = controller.canRedo && !pending && session == null)
+                .widthIn(max = 520.dp)
+                .fillMaxWidth()
+                .height(56.dp)
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ToolIconButton(EditorIcons.tool(active), "Tools (current: ${active.label})", onToolPicker)
+            ToolIconButton(
+                icon = if (erasing) EditorIcons.Eraser else EditorIcons.tool(paintTool),
+                contentDescription = if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
+                onClick = { controller.toggleEraser() },
+                selected = erasing || active == paintTool,
+            )
+            BrushSizeButton(preset?.size ?: 0f, onBrushPanel)
+            Box(
+                Modifier
+                    .size(44.dp)
+                    .clip(CircleShape)
+                    .clickable(onClickLabel = "Open color picker", role = Role.Button, onClick = onColorPanel),
+                contentAlignment = Alignment.Center,
+            ) { ColorSwatch(controller.color, size = 30.dp) }
+            LayersButton(layerNumber, onLayersPanel)
+            ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo", { controller.undo() }, enabled = controller.canUndo || pending || session != null)
+            ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo", { controller.redo() }, enabled = controller.canRedo && !pending && session == null)
+        }
     }
 }
 
