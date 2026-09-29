@@ -3,6 +3,8 @@ package com.brushwork.paint.filters
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.runtime.getValue
@@ -33,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
 import kotlin.math.hypot
 
 /**
@@ -138,6 +141,10 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private val docRect = RectF(0f, 0f, controller.doc.width.toFloat(), controller.doc.height.toFloat())
     private val previewPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    /** Replaces the original inside the preview region (the override draws into an isolated layer). */
+    private val previewReplacePaint = Paint(Paint.FILTER_BITMAP_FLAG).apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
+    /** Region where the shown preview differs from the layer (see [regionFor]); null = everywhere. */
+    private var shownRegion: Rect? = null
     private var maskPaintKey: Paint? = null
     private var maskPreviewPaint: Paint? = null
     private val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
@@ -150,17 +157,41 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     private val override = object : LayerRenderOverride {
         override val layer: Layer get() = this@FilterSession.layer
 
+        // With a selection, only the selection's area comes from the (downscaled) preview; the rest
+        // is the untouched original, drawn at full sharpness.
         override fun drawContent(canvas: Canvas): Boolean {
             if (target != EditTarget.CONTENT) return false
             val bmp = previewBitmap ?: return false
-            canvas.drawBitmap(bmp, null, docRect, previewPaint)
+            val region = shownRegion
+            if (region == null) {
+                canvas.drawBitmap(bmp, null, docRect, previewPaint)
+            } else {
+                canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
+                canvas.save()
+                canvas.clipRect(region)
+                canvas.drawBitmap(bmp, null, docRect, previewReplacePaint)
+                canvas.restore()
+            }
             return true
         }
 
         override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean {
             if (target != EditTarget.MASK) return false
             val bmp = previewBitmap ?: return false
-            canvas.drawBitmap(bmp, null, docRect, filteredMaskPaint(maskPaint))
+            val original = layer.mask ?: return false
+            val region = shownRegion
+            if (region == null) {
+                canvas.drawBitmap(bmp, null, docRect, filteredMaskPaint(maskPaint))
+            } else {
+                canvas.save()
+                canvas.clipOutRect(region)
+                canvas.drawBitmap(original, 0f, 0f, maskPaint)
+                canvas.restore()
+                canvas.save()
+                canvas.clipRect(region)
+                canvas.drawBitmap(bmp, null, docRect, filteredMaskPaint(maskPaint))
+                canvas.restore()
+            }
             return true
         }
     }
@@ -235,7 +266,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         isComparing = false
         draggingPoint = null
         clearOverride()
-        controller.invalidateDoc(null)
+        if (hasPreview) controller.invalidateDoc(shownRegion)
         if (controller.filterSession === this) controller.filterSession = null
         previewBitmap?.recycle()
         previewBitmap = null
@@ -296,7 +327,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (isClosed || isComparing == showOriginal) return
         isComparing = showOriginal
         if (showOriginal) clearOverride() else installOverride()
-        controller.invalidateDoc(null)
+        if (hasPreview) controller.invalidateDoc(shownRegion)
     }
 
     // ------------------------------------------------------------------ preview
@@ -383,6 +414,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (refreshSources() == Refresh.FAILED) return
         val src = previewSrc ?: return
         val sel = previewSel
+        val selSource = previewSelSource
         val vals = values
         val alphaLocked = layer.alphaLocked
         val mask = target == EditTarget.MASK
@@ -411,17 +443,39 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         }
         lastRenderMs = (System.nanoTime() - computeStartNs) / 1_000_000
         if (result == null || isClosed) return
-        publishPreview(result, vals)
+        publishPreview(result, vals, src, selSource)
     }
 
-    private fun publishPreview(result: PixelBuffer, vals: FilterValues) {
+    /** Shows a rendered preview; [src], [vals] and [selSource] are what it was rendered from. */
+    private fun publishPreview(result: PixelBuffer, vals: FilterValues, src: PixelBuffer, selSource: Selection?) {
         val bmp = previewBitmap ?: return
         BitmapUtils.writePixelBuffer(bmp, result)
+        val region = regionFor(selSource)
+        // Redraw where the old preview was shown and where the new one will be.
+        val dirty = if (hasPreview && !isComparing) unionOrAll(shownRegion, region) else region
+        shownRegion = region
         hasPreview = true
-        previewStale = vals !== values
-        if (!isComparing) installOverride()
-        controller.invalidateDoc(null)
+        previewStale = vals !== values || src !== previewSrc || selSource !== previewSelSource
+        if (!isComparing) {
+            installOverride()
+            controller.invalidateDoc(dirty)
+        }
     }
+
+    /**
+     * Document area where the filtered layer can differ from the original: the selection bounds
+     * plus a margin for the preview's down/up-scaling. Null = the whole document.
+     */
+    private fun regionFor(sel: Selection?): Rect? {
+        val b = sel?.bounds ?: return null
+        val w = controller.doc.width; val h = controller.doc.height
+        val margin = ceil(3f / previewScale).toInt() + 1
+        val r = Rect(b.left - margin, b.top - margin, b.right + margin, b.bottom + margin)
+        if (!r.intersect(0, 0, w, h)) return null
+        return if (r.left == 0 && r.top == 0 && r.right == w && r.bottom == h) null else r
+    }
+
+    private fun unionOrAll(a: Rect?, b: Rect?): Rect? = if (a == null || b == null) null else Rect(a).apply { union(b) }
 
     private fun installOverride() {
         if (!isClosed && hasPreview && previewBitmap != null) controller.renderOverride = override

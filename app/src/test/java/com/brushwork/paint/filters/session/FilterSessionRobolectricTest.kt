@@ -484,6 +484,48 @@ class FilterSessionRobolectricTest {
     }
 
     @Test
+    fun downscaledPreviewKeepsTheOriginalSharpOutsideTheSelection() {
+        // Left third plain blue, the rest 1-px red/blue stripes that the 1280 px preview can't hold.
+        val (c, layer) = newController(w = 3000, h = 200)
+        val stripes = IntArray(3000 * 200) { i -> val x = i % 3000; if (x >= 1000 && x % 2 == 1) RED else BLUE }
+        layer.bitmap.setPixels(stripes, 0, 3000, 0, 0, 3000, 200)
+        c.setSelection(Selection.fromBytes(ByteArray(3000 * 200) { if (it % 3000 < 1000) -1 else 0 }, 3000, 200), recordUndo = false)
+        val s = startSession(c, InvertFilter())
+        assertTrue(s.previewScale < 0.5f)
+
+        val screen = onScreen(c)
+        assertEquals(INVERTED_BLUE, screen.getPixel(500, 100))
+        assertEquals("outside the selection the original is shown as is", BLUE, screen.getPixel(2000, 100))
+        assertEquals(RED, screen.getPixel(2001, 100))
+        s.compare(true)
+        assertEquals(BLUE, onScreen(c).getPixel(500, 100))
+        s.compare(false)
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(500, 100))
+
+        s.apply()
+        waitUntil("apply") { c.filterSession == null && c.busyMessage == null }
+        assertEquals(INVERTED_BLUE, layer.bitmap.getPixel(999, 0))
+        assertEquals(BLUE, layer.bitmap.getPixel(1000, 0))
+        assertEquals(RED, layer.bitmap.getPixel(1001, 0))
+    }
+
+    @Test
+    fun maskPreviewWithASelectionOnlyChangesTheSelectedPart() {
+        val (c, layer) = newController()
+        val mask = BitmapUtils.createMaskBitmap(40, 30)
+        Canvas(mask).drawRect(30f, 0f, 40f, 30f, Paint().apply { color = 0xFF000000.toInt() })
+        layer.mask = mask
+        layer.editingMask = true
+        c.setSelection(leftHalfSelection(40, 30), recordUndo = false)
+        startSession(c, InvertFilter())
+        val screen = onScreen(c)
+        assertEquals("inverted mask hides the selected part", 0, screen.getPixel(5, 5))
+        assertEquals(BLUE, screen.getPixel(21, 5))
+        assertEquals("the original mask still applies outside the selection", 0, screen.getPixel(35, 5))
+        assertEquals(BLUE, layer.bitmap.getPixel(5, 5))
+    }
+
+    @Test
     fun deletedLayerCancelsInsteadOfApplying() {
         val (c, layer) = newController()
         c.addLayer("Other", index = 0)
