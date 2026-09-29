@@ -76,6 +76,49 @@ class CanvasPresetsTest {
     }
 
     @Test
+    fun canvasSizeStateTransitions() {
+        val a4 = paper("A4")
+        var s = CanvasSize(dpi = 300.0).withPaper(a4)
+        assertEquals(2480 to 3508, s.width to s.height)
+        assertEquals(a4, s.paper)
+
+        // A paper size keeps its physical size when the resolution changes.
+        s = s.withDpi(600.0, keepPhysical = false)
+        assertEquals(4961 to 7016, s.width to s.height)
+        assertEquals(a4, s.paper)
+
+        // Landscape re-lays the paper; swapping keeps it selected in the other orientation.
+        s = s.withOrientation(true)
+        assertEquals(7016 to 4961, s.width to s.height)
+        assertTrue(s.landscape)
+        assertEquals(a4, s.paper)
+        s = s.swapped()
+        assertEquals(4961 to 7016, s.width to s.height)
+        assertFalse(s.landscape)
+        assertEquals(a4, s.paper)
+
+        // Typing a size forgets the paper; a pixel size ignores resolution changes...
+        s = s.withPixels(3000.0, 2000.0)
+        assertEquals(null, s.paper)
+        assertEquals(3000 to 2000, s.withDpi(150.0, keepPhysical = false).let { it.width to it.height })
+        // ...unless the physical size must be kept (print tab / physical units).
+        val halved = s.withDpi(300.0, keepPhysical = true)
+        assertEquals(1500 to 1000, halved.width to halved.height)
+        assertEquals(300.0, halved.dpi, 0.0)
+        assertEquals(1.0, s.withDpi(0.2, keepPhysical = false).dpi, 0.0)
+        assertEquals(72.5, s.withDpi(72.46, keepPhysical = false).dpi, 0.0)
+
+        // Orientation of a free size swaps only when it disagrees.
+        val portrait = CanvasSize().withPreset(PixelPreset(1080, 1920))
+        assertFalse(portrait.landscape)
+        assertEquals(1920 to 1080, portrait.withOrientation(true).let { it.width to it.height })
+        val square = CanvasSize().withPreset(PixelPreset(2048, 2048))
+        assertEquals(2048 to 2048, square.withOrientation(true).let { it.width to it.height })
+        assertEquals(0, CanvasPresets.pixelsOf(Double.NaN))
+        assertEquals(3, CanvasPresets.pixelsOf(2.5))
+    }
+
+    @Test
     fun formatting() {
         assertEquals("16 MB", CanvasPresets.formatBytes(2048L * 2048 * 4))
         assertEquals("33.2 MB", CanvasPresets.formatBytes(2480L * 3508 * 4))

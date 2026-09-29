@@ -23,12 +23,85 @@ data class PaperPreset(val name: String, val width: Double, val height: Double, 
     }
 
     /** "210 × 297 mm", "8.5 × 11 in". */
-    val sizeLabel: String
-        get() = "${Units.formatNumber(width, 2)} × ${Units.formatNumber(height, 2)} ${unit.short}"
+    val sizeLabel: String get() = sizeLabel(landscape = false)
+
+    /** Physical size label, width first ("297 × 210 mm" for landscape A4). */
+    fun sizeLabel(landscape: Boolean): String {
+        val a = Units.formatNumber(if (landscape) height else width, 2)
+        val b = Units.formatNumber(if (landscape) width else height, 2)
+        return "$a × $b ${unit.short}"
+    }
 }
 
 /** Result of validating a canvas size. [message] explains why it can't be created. */
 data class CanvasCheck(val ok: Boolean, val message: String? = null)
+
+/**
+ * Size being chosen in the new canvas dialog. Pixel sizes are kept as doubles so switching
+ * units or resolutions doesn't accumulate rounding; [width]/[height] are the final pixels.
+ * [paperName] remembers the paper preset the size came from while the size still matches it.
+ * Serializable so the dialog can keep it in `rememberSaveable`.
+ */
+data class CanvasSize(
+    val widthPx: Double = 2048.0,
+    val heightPx: Double = 2048.0,
+    val dpi: Double = CanvasPresets.DEFAULT_DPI.toDouble(),
+    val landscape: Boolean = false,
+    val paperName: String? = null,
+) : java.io.Serializable {
+    val width: Int get() = CanvasPresets.pixelsOf(widthPx)
+    val height: Int get() = CanvasPresets.pixelsOf(heightPx)
+
+    /** The paper preset the size came from, if the size still matches it. */
+    val paper: PaperPreset?
+        get() = CanvasPresets.paper.firstOrNull { it.name == paperName }?.takeIf { it.pixels(dpi, landscape) == (width to height) }
+
+    /** A size typed by the user (forgets the paper preset). */
+    fun withPixels(widthPx: Double, heightPx: Double) = copy(widthPx = widthPx, heightPx = heightPx, paperName = null)
+
+    fun withPreset(p: PixelPreset) =
+        copy(widthPx = p.width.toDouble(), heightPx = p.height.toDouble(), landscape = p.width > p.height, paperName = null)
+
+    fun withPaper(p: PaperPreset): CanvasSize {
+        val (w, h) = p.pixels(dpi, landscape)
+        return copy(widthPx = w.toDouble(), heightPx = h.toDouble(), paperName = p.name)
+    }
+
+    /**
+     * Changes the resolution (rounded to 0.1, clamped to 1..2400). A paper size keeps its
+     * physical size; otherwise [keepPhysical] (print / physical units) scales the pixels, and a
+     * pure pixel size stays as it is.
+     */
+    fun withDpi(value: Double, keepPhysical: Boolean): CanvasSize {
+        val d = (Math.round(value * 10) / 10.0).coerceIn(CanvasPresets.MIN_DPI, CanvasPresets.MAX_DPI)
+        if (d == dpi) return this
+        val p = paper
+        return when {
+            p != null -> copy(dpi = d).withPaper(p)
+            keepPhysical -> copy(widthPx = widthPx * d / dpi, heightPx = heightPx * d / dpi, dpi = d)
+            else -> copy(dpi = d)
+        }
+    }
+
+    /** Portrait / landscape: re-lays a paper preset, else swaps the sides when they disagree. */
+    fun withOrientation(toLandscape: Boolean): CanvasSize {
+        if (toLandscape == landscape) return this
+        val p = paper
+        val turned = copy(landscape = toLandscape)
+        return when {
+            p != null -> turned.withPaper(p)
+            widthPx != heightPx && (widthPx > heightPx) != toLandscape -> turned.copy(widthPx = heightPx, heightPx = widthPx)
+            else -> turned
+        }
+    }
+
+    /** Swaps width and height (a paper preset stays selected in the other orientation). */
+    fun swapped(): CanvasSize {
+        val p = paper
+        val s = copy(widthPx = heightPx, heightPx = widthPx, landscape = heightPx > widthPx)
+        return if (p == null) s.copy(paperName = null) else s
+    }
+}
 
 /**
  * New-canvas presets and the size / memory math behind the new canvas dialog.
@@ -40,7 +113,12 @@ object CanvasPresets {
     /** A canvas must leave room for at least this many layers. */
     const val MIN_LAYERS = 3
     const val DEFAULT_DPI = 350
+    const val MIN_DPI = 1.0
+    const val MAX_DPI = 2400.0
     val dpiChoices: List<Int> = listOf(72, 150, 300, 350, 600)
+
+    /** Whole pixels of a (possibly fractional) size, clamped to a sane range. */
+    fun pixelsOf(v: Double): Int = if (v.isNaN()) 0 else v.roundToLong().coerceIn(0L, 1_000_000L).toInt()
 
     val screen: List<PixelPreset> = listOf(
         PixelPreset(500, 500),
