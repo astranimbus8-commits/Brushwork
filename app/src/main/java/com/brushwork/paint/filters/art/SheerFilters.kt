@@ -11,7 +11,6 @@ import com.brushwork.paint.filters.FilterValues
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -117,7 +116,13 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
         return out
     }
 
-    /** Rasterizes one antialiased speck into a band accumulator. All sizes are in buffer pixels. */
+    /**
+     * Rasterizes one antialiased speck into a band accumulator. All sizes are in buffer pixels.
+     *
+     * Small specks (the common case in previews and at small sizes, where most of the work is
+     * evaluating the shape per pixel) are stamped from kernels precomputed at [PHASES]×[PHASES]
+     * sub-pixel positions; larger ones are rasterized exactly.
+     */
     private class Stamp(val shape: SheerShape, val s: Float, scale: Float, val outline: Boolean, val dcx: Float, val dcy: Float) {
         private val half = s / 2f
         /** Half width of line/cross strokes. */
@@ -129,7 +134,12 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
         private val thick = max(1f, 0.12f * s / scale) * scale
         /** Maximum per-pixel coverage, so sub-pixel specks in a preview keep roughly their full-size energy. */
         private val cap: Float
+        private val lenCap = min(1f, 2f * half)
+        private val widthCap = min(1f, 2f * hw)
         val reach: Float
+        /** Kernel radius (pixels around the speck's pixel) and the phase kernels, or null for exact rasterizing. */
+        private val kr: Int
+        private val kernels: Array<FloatArray>?
 
         init {
             val area = when (shape) {
@@ -150,14 +160,66 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
                 SheerShape.SQUARE -> half * 1.4143f + 1f
                 else -> half + 1f
             }
+            kr = ceil(reach).toInt() + 1
+            kernels = if (kr > MAX_KERNEL_RADIUS) null else {
+                val side = 2 * kr + 1
+                Array(PHASES * PHASES) { ph ->
+                    val ox = (ph % PHASES + 0.5f) / PHASES; val oy = (ph / PHASES + 0.5f) / PHASES
+                    FloatArray(side * side) { k -> coverageAt(k % side - kr + 0.5f - ox, k / side - kr + 0.5f - oy) }
+                }
+            }
         }
 
         fun draw(acc: FloatArray, w: Int, by0: Int, by1: Int, fx: Float, fy: Float, v: Float) {
-            when (shape) {
-                SheerShape.LINE -> segments(acc, w, by0, by1, fx, fy, v, cross = false)
-                SheerShape.CROSS -> segments(acc, w, by0, by1, fx, fy, v, cross = true)
+            val k = kernels
+            when {
+                k != null -> stampKernel(k, acc, w, by0, by1, fx, fy, v)
+                shape == SheerShape.LINE -> segments(acc, w, by0, by1, fx, fy, v, cross = false)
+                shape == SheerShape.CROSS -> segments(acc, w, by0, by1, fx, fy, v, cross = true)
                 else -> area(acc, w, by0, by1, fx, fy, v)
             }
+        }
+
+        /** Coverage (already capped) of the pixel whose center is at offset (dx, dy) from the speck center. */
+        private fun coverageAt(dx: Float, dy: Float): Float = when (shape) {
+            SheerShape.LINE -> max(0f, coverage(dx, dy, false))
+            SheerShape.CROSS -> max(0f, coverage(dx, dy, true))
+            else -> {
+                val cov = areaCoverage(dx, dy)
+                if (cov > 0f) min(cov, cap) else 0f
+            }
+        }
+
+        private fun stampKernel(kernels: Array<FloatArray>, acc: FloatArray, w: Int, by0: Int, by1: Int, fx: Float, fy: Float, v: Float) {
+            val ixf = floor(fx); val iyf = floor(fy)
+            val ix = ixf.toInt(); val iy = iyf.toInt()
+            val px = ((fx - ixf) * PHASES).toInt().coerceIn(0, PHASES - 1)
+            val py = ((fy - iyf) * PHASES).toInt().coerceIn(0, PHASES - 1)
+            val k = kernels[py * PHASES + px]
+            val side = 2 * kr + 1
+            val y0 = max(by0, iy - kr); val y1 = min(by1 - 1, iy + kr)
+            val x0 = max(0, ix - kr); val x1 = min(w - 1, ix + kr)
+            for (y in y0..y1) {
+                val krow = (y - iy + kr) * side - (ix - kr)
+                val arow = (y - by0) * w
+                for (x in x0..x1) acc[arow + x] += v * k[krow + x]
+            }
+        }
+
+        /** Uncapped coverage of a filled or outlined area shape; <= 0 outside. */
+        private fun areaCoverage(dx: Float, dy: Float): Float {
+            val d = when (shape) {
+                SheerShape.SQUARE -> {
+                    val u = abs(dx * dcx + dy * dcy); val q = abs(-dx * dcy + dy * dcx)
+                    max(u, q) - half
+                }
+                SheerShape.HEX -> {
+                    val u = abs(dx * dcx + dy * dcy); val q = abs(-dx * dcy + dy * dcx)
+                    max(u * 0.8660254f + q * 0.5f, q) - half * 0.8660254f
+                }
+                else -> sqrt(dx * dx + dy * dy) - half
+            }
+            return if (outline) thick / 2f + 0.5f - abs(d + thick / 2f) else 0.5f - d
         }
 
         private fun area(acc: FloatArray, w: Int, by0: Int, by1: Int, fx: Float, fy: Float, v: Float) {
@@ -167,15 +229,7 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
                 val dy = y + 0.5f - fy
                 val arow = (y - by0) * w
                 for (x in x0..x1) {
-                    val dx = x + 0.5f - fx
-                    val u = abs(dx * dcx + dy * dcy)
-                    val q = abs(-dx * dcy + dy * dcx)
-                    val d = when (shape) {
-                        SheerShape.SQUARE -> max(u, q) - half
-                        SheerShape.HEX -> max(u * 0.8660254f + q * 0.5f, q) - half * 0.8660254f
-                        else -> hypot(dx, dy) - half
-                    }
-                    val cov = if (outline) thick / 2f + 0.5f - abs(d + thick / 2f) else 0.5f - d
+                    val cov = areaCoverage(x + 0.5f - fx, dy)
                     if (cov > 0f) acc[arow + x] += v * min(cov, cap)
                 }
             }
@@ -184,8 +238,6 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
         /** One segment along the direction, or two perpendicular ones for a cross. */
         private fun segments(acc: FloatArray, w: Int, by0: Int, by1: Int, fx: Float, fy: Float, v: Float, cross: Boolean) {
             val y0 = max(by0, floor(fy - reach).toInt()); val y1 = min(by1 - 1, ceil(fy + reach).toInt())
-            val lenCap = min(1f, 2f * half)
-            val widthCap = min(1f, 2f * hw)
             val reachAlong = half + 0.5f
             val reachPerp = hw + 0.5f
             for (y in y0..y1) {
@@ -197,24 +249,24 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
                 val b0 = if (cross) spanStart(py, -dcy, dcx, reachAlong, reachPerp, fx) else 0
                 val b1 = if (cross) spanEnd(py, -dcy, dcx, reachAlong, reachPerp, fx, w) else -1
                 for (x in a0..a1) {
-                    val c = coverage(x + 0.5f - fx, py, cross, lenCap, widthCap)
+                    val c = coverage(x + 0.5f - fx, py, cross)
                     if (c > 0f) acc[arow + x] += v * c
                 }
                 for (x in b0..b1) {
                     if (x in a0..a1) continue
-                    val c = coverage(x + 0.5f - fx, py, cross, lenCap, widthCap)
+                    val c = coverage(x + 0.5f - fx, py, cross)
                     if (c > 0f) acc[arow + x] += v * c
                 }
             }
         }
 
-        private fun coverage(px: Float, py: Float, cross: Boolean, lenCap: Float, widthCap: Float): Float {
-            val c1 = armCoverage(px * dcx + py * dcy, -px * dcy + py * dcx, cross, lenCap, widthCap)
+        private fun coverage(px: Float, py: Float, cross: Boolean): Float {
+            val c1 = armCoverage(px * dcx + py * dcy, -px * dcy + py * dcx, cross)
             if (!cross) return c1
-            return max(c1, armCoverage(-px * dcy + py * dcx, px * dcx + py * dcy, true, lenCap, widthCap))
+            return max(c1, armCoverage(-px * dcy + py * dcx, px * dcx + py * dcy, true))
         }
 
-        private fun armCoverage(along: Float, perp: Float, cross: Boolean, lenCap: Float, widthCap: Float): Float {
+        private fun armCoverage(along: Float, perp: Float, cross: Boolean): Float {
             val a = abs(along)
             val cw = (hw + 0.5f - abs(perp)).coerceIn(0f, widthCap)
             if (cw <= 0f) return 0f
@@ -253,6 +305,13 @@ class SheerFilter(val shape: SheerShape) : Filter("art.sheer_${shape.idName}", "
             } else if (abs(py * ux) > rp) return Float.NaN
             if (lo > hi) return Float.NaN
             return if (lower) lo else hi
+        }
+
+        private companion object {
+            /** Sub-pixel positions per axis of the precomputed small-speck kernels. */
+            const val PHASES = 8
+            /** Largest kernel radius (13×13 kernels) stamped from precomputed kernels. */
+            const val MAX_KERNEL_RADIUS = 6
         }
     }
 }

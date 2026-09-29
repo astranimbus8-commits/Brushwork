@@ -244,6 +244,9 @@ class CrossFilter : Filter("art.cross_filter", "Cross Filter", FilterCategory.AR
      * deterministic amount to break ties in flat bright areas, and every cell that is the maximum
      * of its neighborhood (radius about Length / 4) becomes a glint at its brightest pixel.
      * At most [MAX_GLINTS] of the strongest are kept.
+     *
+     * The jitter is smooth value noise in full-resolution coordinates, so the glints chosen in a
+     * flat bright area sit at the same places in a downscaled preview and in the final result.
      */
     private fun detect(src: PixelBuffer, threshold: Float, length: Float, ctx: FilterContext): Glints {
         val w = src.width; val h = src.height
@@ -252,6 +255,9 @@ class CrossFilter : Filter("art.cross_filter", "Cross Filter", FilterCategory.AR
         val cw = (w + cell - 1) / cell; val ch = (h + cell - 1) / cell
         val m = FloatArray(cw * ch)
         val arg = IntArray(cw * ch)
+        val toFull = 1f / max(ctx.scale, 1e-4f)
+        // Jitter features about half the glint spacing (Length / 8 at full resolution).
+        val jitterScale = 1f / max(2f, length * toFull / 8f)
         Parallel.forRows(ch) { j0, j1 ->
             ctx.checkCancelled()
             for (j in j0 until j1) for (i in 0 until cw) {
@@ -264,7 +270,10 @@ class CrossFilter : Filter("art.cross_filter", "Cross Filter", FilterCategory.AR
                     if (v > best) { best = v; bestIdx = y * w + x }
                 }
                 val o = j * cw + i
-                m[o] = if (bestIdx < 0) 0f else best + FilterMath.hash01(i, j, 4099) * 1e-4f
+                m[o] = if (bestIdx < 0) 0f else {
+                    val fx = (i + 0.5f) * cell * toFull * jitterScale; val fy = (j + 0.5f) * cell * toFull * jitterScale
+                    best + FilterMath.valueNoise(fx, fy, 4099) * 1e-4f
+                }
                 arg[o] = bestIdx
             }
         }
