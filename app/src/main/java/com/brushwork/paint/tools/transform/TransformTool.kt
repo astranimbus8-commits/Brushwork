@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.ColorMatrixColorFilter
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -109,12 +110,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Hint shown in the options strip when nothing is being transformed. */
     val statusText: String
         get() {
-            controller.layersVersion // re-read when the active layer or mask editing changes
+            controller.layersVersion // re-read when the active layer, its locks or mask editing change
             val layer = controller.activeLayer
+            val mask = layer.editingMask && layer.mask != null
             return when {
                 isPreparing -> "Preparing…"
+                layer.locked -> "The layer is locked"
+                !layer.visible -> "The layer is hidden"
+                !mask && layer.alphaLocked -> "Transparency is locked on this layer"
                 controller.selection != null -> "Touch the canvas to transform the selection"
-                layer.editingMask && layer.mask != null -> "Touch the canvas to transform the layer mask"
+                mask -> "Touch the canvas to transform the layer mask"
                 else -> "Touch the canvas to transform the layer"
             }
         }
@@ -154,14 +159,17 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
         /** Level 0 = [floating]; level k = half the size of level k-1 (box-filtered). */
         private val levels = arrayListOf(floating)
+        /** No further level can be made (1x1 reached, or out of memory: don't retry every frame). */
+        private var levelsExhausted = false
 
         fun level(k: Int): Bitmap {
-            while (levels.size <= k) {
+            while (levels.size <= k && !levelsExhausted) {
                 val prev = levels.last()
-                if (prev.width <= 1 && prev.height <= 1) break
+                if (prev.width <= 1 && prev.height <= 1) { levelsExhausted = true; break }
                 val next = try {
                     Bitmap.createScaledBitmap(prev, maxOf(1, (prev.width + 1) / 2), maxOf(1, (prev.height + 1) / 2), true)
                 } catch (e: OutOfMemoryError) {
+                    levelsExhausted = true
                     break
                 }
                 levels += next
@@ -215,7 +223,6 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     private var activationJob: Job? = null
     private var liftJob: Job? = null
-    private var placementEditCount = -1
 
     /** True while this tool itself changes controller.selection (ignored by [onSelectionChanged]). */
     private var ownSelectionChange = false
@@ -276,7 +283,6 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (controller.activeToolId != ToolId.TRANSFORM) controller.selectTool(ToolId.TRANSFORM)
         cancelJobs()
         if (session != null) commit()
-        placementEditCount = controller.editCount
         if (controller.doc.indexOf(layer) < 0) return
         // Hardware / other configs can't be drawn into a software canvas: work on an ARGB copy.
         val usable = !image.isRecycled && image.width > 0 && image.height > 0
@@ -587,12 +593,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /**
-     * True when the newest undo step is the "Import picture" AddLayerAction of [layer]: nothing
-     * was recorded since the placement started and the layer was never painted.
+     * True when the newest undo step is (by all we can see) the "Import picture" AddLayerAction
+     * of [layer]: startPlacement() gets the empty layer importImageAsLayer() just added, and a
+     * layer that was painted since (fill from a menu, a committed placement) no longer counts.
      */
     private fun isFreshImportLayer(layer: Layer): Boolean =
-        controller.doc.indexOf(layer) >= 0 && controller.editCount == placementEditCount &&
-            controller.undoManager.undoLabel == IMPORT_LABEL && layer.contentVersion == 0L
+        controller.doc.indexOf(layer) >= 0 && layer.contentVersion == 0L &&
+            controller.undoManager.undoLabel == IMPORT_LABEL
 
     /** The session's layer and bitmaps are still the ones it was started on. */
     private fun isValid(s: Session): Boolean {
@@ -776,8 +783,39 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private val whiteFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = -1 }
     private val accentFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = ACCENT }
 
+    private val outlinePath = Path()
+    private val outlineMatrix = Matrix()
+    private val outlineDark = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF000000.toInt() }
+    private val outlineLight = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = -1 }
+    private var outlineDashDensity = 0f
+
+    /**
+     * Where the lifted selection will land. The controller keeps drawing the marching ants of
+     * controller.selection at the old place until commit, so this shows the new place.
+     */
+    private fun drawMovedSelectionOutline(canvas: Canvas, t: ViewTransform, st: TransformState) {
+        val s = session ?: return
+        val outline = s.selection?.outline ?: return
+        val lr = s.liftRect ?: return
+        if (st.sameGeometry(s.initial)) return // still on top of the ants
+        if (outlineDashDensity != t.density) {
+            outlineDashDensity = t.density
+            outlineLight.pathEffect = DashPathEffect(floatArrayOf(t.dp(4f), t.dp(4f)), 0f)
+        }
+        outlineDark.strokeWidth = t.dp(1f)
+        outlineLight.strokeWidth = t.dp(1f)
+        // Document -> floating pixels -> transformed document -> screen.
+        outlineMatrix.setTranslate(-lr.left.toFloat(), -lr.top.toFloat())
+        outlineMatrix.postConcat(s.matrix)
+        outlineMatrix.postConcat(t.matrix)
+        outline.transform(outlineMatrix, outlinePath)
+        canvas.drawPath(outlinePath, outlineDark)
+        canvas.drawPath(outlinePath, outlineLight)
+    }
+
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val st = transformState ?: return
+        drawMovedSelectionOutline(canvas, t, st)
         val g = gesture
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, g?.rotateEdge?.takeIf { g.hit.kind == HandleKind.ROTATE })
         val c = layout.corners

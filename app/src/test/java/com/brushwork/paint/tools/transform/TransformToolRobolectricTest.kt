@@ -577,6 +577,61 @@ class TransformToolRobolectricTest {
         assertEquals(BLUE, c.doc.activeLayer.bitmap.getPixel(30, 30))
     }
 
+    @Test
+    fun discardingPlacementAfterNonUndoableChangesStillUndoesTheAdd() {
+        val (c, base) = setup(50, 50)
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        c.importImageAsLayer(img)
+        idle()
+        c.updateGrid(c.grid.copy(enabled = !c.grid.enabled)) // counts as an edit, but no undo step
+        transformTool(c).discard()
+        idle()
+        assertEquals(listOf(base), c.doc.layers.toList())
+        assertFalse(c.canUndo)
+
+        // Painted meanwhile (menu fill): removed as a regular, undoable "Delete layer" step.
+        c.importImageAsLayer(img)
+        idle()
+        val placed = c.doc.activeLayer
+        c.fillLayer(placed, RED)
+        transformTool(c).discard()
+        idle()
+        assertEquals(listOf(base), c.doc.layers.toList())
+        assertEquals("Delete layer", c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun movedSelectionOutlineIsDrawnAtTheNewPlace() {
+        val (c, layer) = setup(100, 100)
+        fill(layer.bitmap, Rect(0, 0, 100, 100), RED)
+        val sel = rectSelection(100, 100, Rect(10, 10, 50, 50))
+        // Stand-in for the asynchronously computed marching-ants outline (away from the handles).
+        sel.outline = Path().apply { addRect(20f, 20f, 40f, 40f, Path.Direction.CW) }
+        c.setSelection(sel, recordUndo = false)
+        val tool = activate(c)
+        val overlay = BitmapUtils.createLayerBitmap(100, 100)
+        tool.drawOverlay(Canvas(overlay), c.viewTransform)
+        assertEquals(0, overlay.getPixel(20, 30)) // unchanged transform: the ants already show it
+        tool.moveBy(20f, 0f)
+        overlay.eraseColor(0)
+        tool.drawOverlay(Canvas(overlay), c.viewTransform)
+        assertTrue(overlay.getPixel(40, 30) ushr 24 != 0)
+        assertEquals(0, overlay.getPixel(20, 30))
+    }
+
+    @Test
+    fun statusTextExplainsRefusals() {
+        val (c, layer) = setup(16, 16)
+        val tool = transformTool(c)
+        assertEquals("Touch the canvas to transform the layer", tool.statusText)
+        layer.alphaLocked = true
+        assertEquals("Transparency is locked on this layer", tool.statusText)
+        layer.visible = false
+        assertEquals("The layer is hidden", tool.statusText)
+        layer.locked = true
+        assertEquals("The layer is locked", tool.statusText)
+    }
+
     private companion object {
         const val RED = 0xFFFF0000.toInt()
         const val GREEN = 0xFF00FF00.toInt()
