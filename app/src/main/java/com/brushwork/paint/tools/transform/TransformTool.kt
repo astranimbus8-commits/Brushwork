@@ -74,7 +74,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             if (v == interpolationState) return
             interpolationState = v
             rebuildPreviewPaint()
-            lastBounds?.let { controller.invalidateDoc(Rect(it)) }
+            transformState?.let { applyState(it) } // re-picks the mip level and redraws
         }
 
     /** Whether the "Numbers" sheet is shown (kept here so it survives configuration changes). */
@@ -130,6 +130,33 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         /** Floating bitmap pixels -> document. */
         val matrix = Matrix()
         val preview = Preview(this)
+
+        /** Bitmap actually drawn: [floating], or a pre-halved copy for strong downscales. */
+        var drawSource: Bitmap = floating
+        /** Maps [drawSource] pixels -> document. */
+        val drawMatrix = Matrix()
+
+        /** Level 0 = [floating]; level k = half the size of level k-1 (box-filtered). */
+        private val levels = arrayListOf(floating)
+
+        fun level(k: Int): Bitmap {
+            while (levels.size <= k) {
+                val prev = levels.last()
+                if (prev.width <= 1 && prev.height <= 1) break
+                val next = try {
+                    Bitmap.createScaledBitmap(prev, maxOf(1, (prev.width + 1) / 2), maxOf(1, (prev.height + 1) / 2), true)
+                } catch (e: OutOfMemoryError) {
+                    break
+                }
+                levels += next
+            }
+            return levels[minOf(k, levels.lastIndex)]
+        }
+
+        fun releaseLevels() {
+            for (i in 1 until levels.size) levels[i].recycle()
+            levels.clear()
+        }
     }
 
     /** Draws the layer with the lifted area removed plus the transformed floating bitmap. */
@@ -141,7 +168,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             // Without a selection the whole content was lifted, so nothing else remains.
             if (s.placement || s.selection != null) canvas.drawBitmap(s.layer.bitmap, 0f, 0f, null)
             if (!s.placement) s.selection?.let { canvas.drawBitmap(it.mask, 0f, 0f, dstOutPaint) }
-            canvas.drawBitmap(s.floating, s.matrix, previewPaint)
+            canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
             return true
         }
 
@@ -152,7 +179,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val save = canvas.saveLayer(null, maskPaint)
             canvas.drawBitmap(mask, 0f, 0f, null)
             clearSource(canvas, s)
-            canvas.drawBitmap(s.floating, s.matrix, previewPaint)
+            canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
             canvas.restoreToCount(save)
             return true
         }
@@ -230,12 +257,20 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val label = if (s.placement) IMPORT_LABEL else TRANSFORM_LABEL
         val bmp = s.targetBitmap
         val rec = controller.beginEdit(s.layer, s.target)
-        s.liftRect?.let { rec.touch(it) }
-        val newRect = docRect(st)
-        if (newRect.intersect(0, 0, bmp.width, bmp.height)) rec.touch(newRect)
-        val canvas = Canvas(bmp)
-        clearSource(canvas, s)
-        canvas.drawBitmap(s.floating, s.matrix, drawPaint(s, forPreview = false))
+        try {
+            s.liftRect?.let { rec.touch(it) }
+            val newRect = docRect(st)
+            if (newRect.intersect(0, 0, bmp.width, bmp.height)) rec.touch(newRect)
+            val canvas = Canvas(bmp)
+            clearSource(canvas, s)
+            canvas.drawBitmap(s.drawSource, s.drawMatrix, drawPaint(s, forPreview = false))
+        } catch (e: OutOfMemoryError) {
+            // Undo snapshots of a huge area didn't fit: put everything back as it was.
+            rec.abort()
+            endSession(s)
+            controller.toast("Not enough memory to apply the transform")
+            return
+        }
         val extras = moveSelection(s, label)
         endSession(s)
         controller.commitEdit(rec, label, extras)
@@ -245,7 +280,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         cancelJobs()
         val s = session ?: return
         endSession(s)
-        if (s.placement) removePlacementLayer(s.layer)
+        // Deferred: discard() is also called from inside controller.deleteLayer(), which removes
+        // a layer by a precomputed index right after — changing the list now would break it.
+        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer) }
     }
 
     // ------------------------------------------------------------------ input
@@ -434,6 +471,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         isPlacement = false
         numbersOpen = false
         if (dirty.isEmpty) controller.invalidateOverlay() else controller.invalidateDoc(dirty)
+        s.releaseLevels()
         if (s.ownsFloating) s.floating.recycle()
     }
 
@@ -445,7 +483,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /** Removes the (still empty) layer of a discarded placement. */
     private fun removePlacementLayer(layer: Layer) {
-        if (controller.doc.indexOf(layer) < 0) return
+        // A transform started meanwhile: undo()/deleteLayer() would discard it, so leave the layer.
+        if (controller.doc.indexOf(layer) < 0 || session != null) return
         // Nothing was recorded since the layer was added: undo its AddLayerAction so no
         // history entry remains. Otherwise delete it as a regular step.
         if (controller.editCount == placementEditCount && controller.undoManager.undoLabel == IMPORT_LABEL) controller.undo()
@@ -465,6 +504,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         } else {
             s.matrix.setValues(new.affineValues())
         }
+        // Bilinear alone aliases below 50 %: draw from a pre-halved copy for strong downscales.
+        val level = if (interpolation == Interpolation.SMOOTH) new.minificationLevel() else 0
+        val src = s.level(level)
+        s.drawSource = src
+        s.drawMatrix.set(s.matrix)
+        if (src !== s.floating) s.drawMatrix.preScale(s.floating.width.toFloat() / src.width, s.floating.height.toFloat() / src.height)
         val nb = docRect(new)
         val dirty = Rect(nb)
         lastBounds?.let { dirty.union(it) }

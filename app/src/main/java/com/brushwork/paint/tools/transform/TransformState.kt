@@ -245,6 +245,21 @@ data class TransformState(
     fun clampX(k: Float): Float = clampFactor(k, MIN_SIZE / width)
     fun clampY(k: Float): Float = clampFactor(k, MIN_SIZE / height)
 
+    /**
+     * How many times the source should be halved before resampling so bilinear filtering never
+     * shrinks by more than 2x (0 = draw the source itself). Uses the larger axis scale so the
+     * less-shrunk axis isn't blurred.
+     */
+    fun minificationLevel(maxLevel: Int = 8): Int {
+        val c = corners()
+        val ex = max(c[0].distanceTo(c[1]), c[3].distanceTo(c[2])) / srcW
+        val ey = max(c[0].distanceTo(c[3]), c[1].distanceTo(c[2])) / srcH
+        var s = max(ex, ey)
+        var k = 0
+        while (s < 0.5f && k < maxLevel) { s *= 2f; k++ }
+        return k
+    }
+
     /** True when both map every corner to the same place (within [eps] document pixels). */
     fun sameGeometry(other: TransformState, eps: Float = 1e-3f): Boolean {
         if (srcW != other.srcW || srcH != other.srcH) return false

@@ -246,6 +246,17 @@ class TransformMathTest {
     }
 
     @Test
+    fun minificationLevels() {
+        val s = TransformState.identity(0, 0, 1000, 500)
+        assertEquals(0, s.minificationLevel())
+        assertEquals(0, s.withScalePercent(50f).minificationLevel())
+        assertEquals(1, s.withScalePercent(40f).minificationLevel())
+        assertEquals(3, s.withScalePercent(9f).minificationLevel())
+        // Only one axis shrunk: the larger scale decides, so nothing gets over-blurred.
+        assertEquals(0, s.withSize(width = 10f).minificationLevel())
+    }
+
+    @Test
     fun angleNormalization() {
         assertEquals(-170f, TransformState.normalizeDeg(190f), eps)
         assertEquals(180f, TransformState.normalizeDeg(-180f), eps)

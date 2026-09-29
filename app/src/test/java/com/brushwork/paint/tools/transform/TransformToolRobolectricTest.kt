@@ -263,6 +263,7 @@ class TransformToolRobolectricTest {
         val tool = transformTool(c)
         assertEquals(2, c.doc.layers.size)
         tool.discard()
+        idle()
         assertFalse(tool.hasPendingWork)
         assertEquals(listOf(base), c.doc.layers.toList())
         assertFalse(c.canUndo)
@@ -272,8 +273,50 @@ class TransformToolRobolectricTest {
         idle()
         assertEquals(2, c.doc.layers.size)
         c.undo()
+        idle()
         assertFalse(tool.hasPendingWork)
         assertEquals(listOf(base), c.doc.layers.toList())
+    }
+
+    @Test
+    fun deletingLayersDuringPlacementIsSafe() {
+        val (c, base) = setup(50, 50)
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        c.importImageAsLayer(img)
+        idle()
+        val placed = c.doc.activeLayer
+        // deleteLayer() calls discard() and then removes by a precomputed index.
+        c.deleteLayer(placed)
+        idle()
+        assertFalse(transformTool(c).hasPendingWork)
+        assertEquals(listOf(base), c.doc.layers.toList())
+
+        val (c2, base2) = setup(50, 50)
+        c2.importImageAsLayer(img)
+        idle()
+        val placed2 = c2.doc.activeLayer
+        c2.deleteLayer(base2)
+        idle()
+        assertEquals(listOf(placed2), c2.doc.layers.toList()) // the other layer went, nothing else
+    }
+
+    @Test
+    fun strongDownscaleAveragesInsteadOfAliasing() {
+        val (c, _) = setup(100, 100)
+        // 1-px black/white checkerboard: a plain bilinear 9 % shrink would pick near-pure pixels.
+        val n = 1000
+        val px = IntArray(n * n) { i -> if ((i % n + i / n) % 2 == 0) BLACK else WHITE }
+        val img = Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888).apply { setPixels(px, 0, n, 0, 0, n, n) }
+        c.importImageAsLayer(img)
+        idle()
+        val tool = transformTool(c)
+        assertEquals(3, tool.transformState!!.minificationLevel())
+        val placed = c.doc.activeLayer
+        tool.commit()
+        for ((x, y) in listOf(50 to 50, 30 to 40, 61 to 57)) {
+            val v = placed.bitmap.getPixel(x, y) and 0xFF
+            assertTrue("gray expected at ($x,$y), got $v", v in 96..160)
+        }
     }
 
     @Test
