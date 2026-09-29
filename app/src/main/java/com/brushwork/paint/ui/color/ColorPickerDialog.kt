@@ -2,25 +2,23 @@ package com.brushwork.paint.ui.color
 
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.ui.common.BwDialog
-import com.brushwork.paint.ui.common.ColorSwatch
 
-// STUB - replaced by the color module (full wheel + sliders + palette in a dialog).
 /**
  * Stand-alone color picker dialog for any module that needs a color (shape fill, text color,
- * grid color, filter color parameters...). [showAlpha] adds an alpha slider.
+ * grid color, filter color parameters...): wheel / RGB / HSB, hex, the active palette and the
+ * recent colors. [showAlpha] adds an opacity slider; without it the result is always opaque.
+ * OK calls [onPick] with the color and then [onDismiss]; Cancel only calls [onDismiss].
  */
 @Composable
 fun ColorPickerDialog(
@@ -30,13 +28,36 @@ fun ColorPickerDialog(
     title: String = "Pick a color",
     showAlpha: Boolean = false,
 ) {
-    var hex by remember { mutableStateOf(ColorUtils.toHex(initial, showAlpha)) }
-    val parsed = ColorUtils.parseHex(hex)
-    BwDialog(title = title, onDismiss = onDismiss, onConfirm = { parsed?.let(onPick); onDismiss() }) {
+    val store = rememberPaletteStore()
+    val start = rememberSaveable { if (showAlpha) initial else initial or OPAQUE }
+    val state = rememberColorEditState(start)
+    val mode = PickerMode.entries.getOrElse(store.data.pickerMode) { PickerMode.WHEEL }
+
+    val use: (Int) -> Unit = remember(state, showAlpha) { { c -> state.setColor(if (showAlpha) c else c or OPAQUE) } }
+    val current: () -> Int = remember(state) { { state.color } }
+
+    BwDialog(
+        title = title,
+        onDismiss = onDismiss,
+        confirmText = "OK",
+        onConfirm = {
+            val picked = if (showAlpha) state.color else state.color or OPAQUE
+            if (picked != start) store.addRecent(picked)
+            onPick(picked)
+            onDismiss()
+        },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            ColorSwatch(parsed ?: initial)
-            Spacer(Modifier.width(12.dp))
-            OutlinedTextField(value = hex, onValueChange = { hex = it }, label = { Text("Hex") }, singleLine = true)
+            CompareSwatch(previous = start, current = state.color, onRevert = { state.setColor(start) }, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            HexField(state, withAlpha = showAlpha, modifier = Modifier.width(if (showAlpha) 152.dp else 128.dp))
         }
+        Spacer(Modifier.height(8.dp))
+        ModeTabs(mode, onSelect = { store.setPickerMode(it) }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        PickerBody(state, mode, wheelMaxSize = 240.dp)
+        if (showAlpha) AlphaSlider(state, Modifier.padding(top = 4.dp))
+        PaletteSection(store, current = current, onUse = use, manage = false)
+        RecentColorsSection(store, onUse = use)
     }
 }
