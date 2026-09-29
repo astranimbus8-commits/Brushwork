@@ -27,13 +27,8 @@ internal class SampleAccumulator(private val px: IntArray, private val w: Int, p
 
     /**
      * Adds the bilinear sample at ([fx], [fy]) (continuous coordinates, pixel centres at +0.5).
-     * Points outside the image are skipped, so edges keep their opacity instead of fading.
+     * Positions outside the image are clamped to its edge, so edges never fade out.
      */
-    fun addInside(fx: Float, fy: Float) {
-        if (fx >= 0f && fy >= 0f && fx <= w && fy <= h) addClamped(fx, fy) // NaN fails every test
-    }
-
-    /** Adds the bilinear sample at ([fx], [fy]) with the position clamped to the image. */
     fun addClamped(fx: Float, fy: Float) {
         var x = fx - 0.5f
         var y = fy - 0.5f
@@ -102,14 +97,22 @@ internal object Progressive {
     }
 
     /**
-     * Parameter values for pass [pass]: `offset + i * step * TAPS^pass` for i in 0 until TAPS,
-     * where the [offset] is applied in pass 0 only. Summed over all passes this enumerates
-     * `offset + m * step` for m in 0 until TAPS^passes.
+     * Transform parameters of pass [pass] (of [passes]) for a kernel spanning [lo]..[hi], which
+     * must contain 0 (the identity): `base + i * stride` for i in 0 until TAPS, with
+     * stride = (hi - lo) * TAPS^pass / (M - 1). Summed over all passes this enumerates
+     * `lo + m * (hi - lo) / (M - 1)` for every m in 0 until M = TAPS^passes exactly once.
+     *
+     * Each pass carries a share of [lo] proportional to its span, so the partial sums visited on the
+     * way (the last, coarsest pass is applied first from the output pixel) always stay inside a
+     * shrunken copy of the kernel. Were the whole offset put into one pass, intermediate samples
+     * would wander past the image edge and leave gaps (ghost copies) in the composed streak.
      */
-    fun passParams(pass: Int, offset: Double, step: Double): DoubleArray {
-        var stride = step
-        repeat(pass) { stride *= TAPS }
-        val base = if (pass == 0) offset else 0.0
+    fun passParams(pass: Int, passes: Int, lo: Double, hi: Double): DoubleArray {
+        val m1 = (effectiveSamples(passes) - 1).toDouble()
+        var scale = 1.0
+        repeat(pass) { scale *= TAPS }
+        val stride = (hi - lo) * scale / m1
+        val base = lo * (TAPS - 1) * scale / m1
         return DoubleArray(TAPS) { base + it * stride }
     }
 

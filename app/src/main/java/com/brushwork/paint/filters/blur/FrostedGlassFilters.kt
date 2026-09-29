@@ -13,6 +13,7 @@ import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -27,8 +28,18 @@ internal object FrostedGlass {
     fun sampleCount(values: FilterValues): Int =
         1 + (values.float("smoothness").coerceIn(0f, 100f) / 100f * (MAX_SAMPLES - 1)).roundToInt()
 
-    /** Independent random stream [k] for [seed] (hash01 takes one seed int per stream). */
-    fun stream(seed: Int, k: Int): Int = seed * 7919 + k * 104729 + 17
+    /** Largest float below 1. */
+    private const val BELOW_ONE = 0.99999994f
+
+    /**
+     * Uniform random value in [0, 1) for pixel ([x], [y]) from independent stream [k] of [seed].
+     * Clamped because hash01's float division can round up to exactly 1f.
+     */
+    fun random(x: Int, y: Int, seed: Int, k: Int): Float =
+        min(FilterMath.hash01(x, y, streamSeed(seed, k)), BELOW_ONE)
+
+    /** hash01 seed of random stream [k] for the user's [seed]. */
+    fun streamSeed(seed: Int, k: Int): Int = seed * 7919 + k * 104729 + 17
 
     /**
      * Displaces every pixel by `offset(x, y, sample, out)` (written into out[0], out[1]) for
@@ -91,8 +102,8 @@ class FrostedGlassFilter : Filter("blur.frosted_glass", "Frosted Glass (Normal)"
         val dirY = FloatArray(DIRS) { sin(it * 2.0 * PI / DIRS).toFloat() }
         val seed = values.seed()
         return FrostedGlass.scatter(src, FrostedGlass.sampleCount(values), ctx) { x, y, k, o ->
-            val dist = rho[(FilterMath.hash01(x, y, FrostedGlass.stream(seed, 2 * k)) * LUT).toInt()]
-            val dir = (FilterMath.hash01(x, y, FrostedGlass.stream(seed, 2 * k + 1)) * DIRS).toInt()
+            val dist = rho[(FrostedGlass.random(x, y, seed, 2 * k) * LUT).toInt()]
+            val dir = (FrostedGlass.random(x, y, seed, 2 * k + 1) * DIRS).toInt()
             o[0] = dirX[dir] * dist
             o[1] = dirY[dir] * dist
             true
@@ -149,7 +160,7 @@ class FrostedGlassZoomingFilter : Filter("blur.frosted_glass_zooming", "Frosted 
                 false
             } else {
                 val f = ((r - r0) / ramp).coerceAtMost(1f)
-                val t = (2f * FilterMath.hash01(x, y, FrostedGlass.stream(seed, k)) - 1f) * radius * f / r
+                val t = (2f * FrostedGlass.random(x, y, seed, k) - 1f) * radius * f / r
                 o[0] = vx * t
                 o[1] = vy * t
                 true
@@ -178,7 +189,7 @@ class FrostedGlassMovingFilter : Filter("blur.frosted_glass_moving", "Frosted Gl
         val dy = (-sin(angle) * radius).toFloat() // screen y points down
         val seed = values.seed()
         return FrostedGlass.scatter(src, FrostedGlass.sampleCount(values), ctx) { x, y, k, o ->
-            val t = 2f * FilterMath.hash01(x, y, FrostedGlass.stream(seed, k)) - 1f
+            val t = 2f * FrostedGlass.random(x, y, seed, k) - 1f
             o[0] = dx * t
             o[1] = dy * t
             true

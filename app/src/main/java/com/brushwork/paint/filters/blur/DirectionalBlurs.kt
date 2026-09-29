@@ -58,11 +58,12 @@ class ZoomingBlurFilter : Filter("blur.zooming", "Zooming Blur", FilterCategory.
         if (!(maxStreak >= 0.5f)) return src.copy()
 
         val passes = Progressive.passesFor(maxStreak + 1f)
-        // Scales are spaced evenly in log space so that the passes compose exactly.
+        // Scales are spaced evenly in log space so that the passes compose exactly. In "Outward"
+        // mode every scale is <= 1, so no sample ever leaves the image.
         val lnMin = ln(sMin.toDouble())
-        val step = (ln(sMax.toDouble()) - lnMin) / (Progressive.effectiveSamples(passes) - 1)
+        val lnMax = ln(sMax.toDouble())
         return Progressive.run(src, passes, ctx) { pass, input, out ->
-            val params = Progressive.passParams(pass, lnMin, step)
+            val params = Progressive.passParams(pass, passes, lnMin, lnMax)
             val scales = FloatArray(params.size) { exp(params[it]).toFloat() }
             val inPx = input.pixels
             Parallel.forRows(h) { y0, y1 ->
@@ -81,7 +82,7 @@ class ZoomingBlurFilter : Filter("blur.zooming", "Zooming Blur", FilterCategory.
                         acc.reset()
                         for (s in scales) {
                             val rr = r0 + d * s
-                            acc.addInside(cx + ux * rr, cy + uy * rr)
+                            acc.addClamped(cx + ux * rr, cy + uy * rr)
                         }
                         out[row + x] = acc.result(inPx[row + x])
                     }
@@ -124,9 +125,8 @@ class SpinBlurFilter : Filter("blur.spin", "Spin Blur", FilterCategory.BLUR) {
         if (!(maxArc >= 0.5)) return src.copy()
 
         val passes = Progressive.passesFor(maxArc.toFloat() + 1f)
-        val step = theta / (Progressive.effectiveSamples(passes) - 1)
         return Progressive.run(src, passes, ctx) { pass, input, out ->
-            val phis = Progressive.passParams(pass, phiMin, step)
+            val phis = Progressive.passParams(pass, passes, phiMin, phiMin + theta)
             val cosT = FloatArray(phis.size) { cos(phis[it]).toFloat() }
             val sinT = FloatArray(phis.size) { sin(phis[it]).toFloat() }
             val inPx = input.pixels
@@ -142,7 +142,7 @@ class SpinBlurFilter : Filter("blur.spin", "Spin Blur", FilterCategory.BLUR) {
                         for (i in cosT.indices) {
                             val c = cosT[i]
                             val s = sinT[i]
-                            acc.addInside(cx + vx * c - vy * s, cy + vx * s + vy * c)
+                            acc.addClamped(cx + vx * c - vy * s, cy + vx * s + vy * c)
                         }
                         out[row + x] = acc.result(inPx[row + x])
                     }
@@ -176,9 +176,8 @@ class MotionBlurFilter : Filter("blur.motion", "Motion Blur", FilterCategory.BLU
         val tMin = if (values.choice("direction") == 1) 0.0 else -length / 2.0
 
         val passes = Progressive.passesFor(length + 1f)
-        val step = length.toDouble() / (Progressive.effectiveSamples(passes) - 1)
         return Progressive.run(src, passes, ctx) { pass, input, out ->
-            val ts = Progressive.passParams(pass, tMin, step)
+            val ts = Progressive.passParams(pass, passes, tMin, tMin + length)
             val ox = FloatArray(ts.size) { (ts[it] * dx).toFloat() }
             val oy = FloatArray(ts.size) { (ts[it] * dy).toFloat() }
             val inPx = input.pixels
@@ -191,7 +190,7 @@ class MotionBlurFilter : Filter("blur.motion", "Motion Blur", FilterCategory.BLU
                     for (x in 0 until w) {
                         val px = x + 0.5f
                         acc.reset()
-                        for (i in ox.indices) acc.addInside(px + ox[i], py + oy[i])
+                        for (i in ox.indices) acc.addClamped(px + ox[i], py + oy[i])
                         out[row + x] = acc.result(inPx[row + x])
                     }
                 }

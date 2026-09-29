@@ -139,12 +139,15 @@ internal object BlurCore {
         val h = src.height
         val n = src.size
         val px = src.pixels
-        val alpha: FloatArray? = if (isOpaque(src)) null else FloatArray(n).also { a ->
+        val opaque = isOpaque(src)
+        val steps = if (opaque) 3f else 4f
+        val alpha: FloatArray? = if (opaque) null else FloatArray(n).also { a ->
             Parallel.forRange(n, FLAT_CHUNK) { i0, i1 -> for (i in i0 until i1) a[i] = (px[i] ushr 24).toFloat() }
             blurPlane(a, w, h, sigmaX, sigmaY, ctx)
+            ctx.progress(1f / steps)
         }
         val plane = FloatArray(n)
-        for (shift in CHANNEL_SHIFTS) {
+        for ((index, shift) in CHANNEL_SHIFTS.withIndex()) {
             ctx.checkCancelled()
             Parallel.forRange(n, FLAT_CHUNK) { i0, i1 ->
                 if (alpha == null) {
@@ -160,6 +163,7 @@ internal object BlurCore {
                 }
             }
             consume(shift, plane, alpha)
+            ctx.progress((steps - 2f + index) / steps)
         }
     }
 
