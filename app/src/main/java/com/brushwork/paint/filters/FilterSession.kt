@@ -175,7 +175,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
             controller.scope.launch(Dispatchers.Main) { cancel() }
             return
         }
-        analyzeSourceAsync()
+        analyzeSourceAsync(firstTime = true)
         if (filter.livePreview) requestPreview(0L)
         // The selection can change from menus while the session is open: keep the preview in sync.
         selectionWatch = controller.scope.launch {
@@ -194,7 +194,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
             controller.toast("Not enough memory to preview \"${filter.name}\"")
             return
         }
-        analyzeSourceAsync()
+        analyzeSourceAsync(firstTime = false)
         previewStale = true
         if (filter.livePreview) requestPreview(0L)
     }
@@ -285,10 +285,11 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         previewBitmap = BitmapUtils.createLayerBitmap(pw, ph)
     }
 
-    private fun analyzeSourceAsync() {
+    private fun analyzeSourceAsync(firstTime: Boolean) {
         val src = previewSrc ?: return
         val sel = previewSel
-        val warnEmpty = target == EditTarget.CONTENT && !filter.generatesContent
+        val warnEmpty = firstTime && target == EditTarget.CONTENT && !filter.generatesContent
+        analysisJob?.cancel()
         analysisJob = controller.scope.launch {
             val (hist, empty) = withContext(Dispatchers.Default) {
                 FilterSessionMath.luminanceHistogram(src, sel) to (warnEmpty && FilterSessionMath.isFullyTransparent(src))
