@@ -313,7 +313,55 @@ class FilterPanelInteractionTest {
         byDescription("Cancel filter").tap()
         assertNull(c.filterSession)
         assertNull(c.renderOverride)
+
+        // ---------------------------------------------------------------- the panel while applying
+        // Real filters finish too fast on a test canvas to see the busy state; this one blocks.
+        val slow = BlockingFilter()
+        c.startFilter(slow)
+        s = session(c, "test.blocking")
+        Fx.awaitPreview(s, "blocking")
+        settle(3)
+        slow.armed = true
+        byDescription("Apply filter").tap()
+        Fx.waitUntil("progress reported") { s.isApplying && s.applyProgress >= 0.5f }
+        settle(3)
+        assertTrue("apply progress shown", hasText("Applying at full size"))
+        // Controls are disabled while applying.
+        val amount0 = s.values.float("amount")
+        visible { byDescription("Increase Amount") }.tap()
+        assertEquals("disabled while applying", amount0, s.values.float("amount"), 0f)
+        visible { byText("Stop") }.tap()
+        Fx.waitUntil("apply stopped") { !s.isApplying && c.busyMessage == null }
+        settle(3)
+        assertFalse(s.isClosed)
+        assertFalse("progress hidden", hasText("Applying at full size"))
+        assertEquals("nothing applied", 2, c.undoManager.undoCount)
+        visible { byDescription("Increase Amount") }.tap()
+        assertEquals("enabled again", amount0 + 1f, s.values.float("amount"), 0f)
+        // Back while applying stops the apply first, then a second Back cancels the session.
+        byDescription("Apply filter").tap()
+        Fx.waitUntil("applying again") { s.isApplying }
+        activity.onBackPressedDispatcher.onBackPressed()
+        Fx.waitUntil("apply stopped by Back") { !s.isApplying && c.busyMessage == null }
+        assertFalse("Back during apply only stops the apply", s.isClosed)
+        settle(3)
+        activity.onBackPressedDispatcher.onBackPressed()
+        settle(3)
+        assertTrue(s.isClosed)
+        assertNull(c.filterSession)
+        slow.armed = false
         rs.assertNoErrors("panel interactions")
         c.dispose()
+    }
+
+    /** Blocks (reporting half progress) until cancelled while [armed]. */
+    private class BlockingFilter : com.brushwork.paint.filters.Filter("test.blocking", "Blocking", com.brushwork.paint.filters.FilterCategory.ART) {
+        @Volatile var armed = false
+        override val params = listOf(com.brushwork.paint.filters.FilterParam.Slider("amount", "Amount", 0f, 100f, 50f, step = 1f))
+        override fun apply(src: com.brushwork.paint.core.PixelBuffer, values: com.brushwork.paint.filters.FilterValues, ctx: com.brushwork.paint.filters.FilterContext): com.brushwork.paint.core.PixelBuffer {
+            val end = System.currentTimeMillis() + 20_000
+            while (armed && System.currentTimeMillis() < end) { ctx.progress(0.6f); ctx.checkCancelled(); Thread.sleep(2) }
+            return com.brushwork.paint.core.PixelBuffer.filled(src.width, src.height, 0xFF00FF00.toInt())
+        }
     }
 }

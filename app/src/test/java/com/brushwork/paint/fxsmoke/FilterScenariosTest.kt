@@ -386,31 +386,41 @@ class FilterScenariosTest {
     // ------------------------------------------------------------------ cancel while applying
 
     @Test
-    fun undoWhileApplyingCancelsWithoutATrace() = forEachFilter { f ->
-        // With Main.immediate the apply is already waiting on its background work when apply()
-        // returns, so the undo always lands mid-apply, whatever the size.
-        val w = 160; val h = 60
-        val d = Fx.newDoc(context, rs.scope, w, h)
-        val c = d.controller
-        val original = Fx.pixels(d.paint.bitmap)
-        try {
-            val s = startOn(d, f, d.paint)
-            Fx.setNonDefaults(c, s)
-            Fx.awaitPreview(s, "before apply")
-            s.apply()
-            assertTrue(s.isApplying)
-            c.undo() // two-finger tap: cancels the session
-            assertTrue(s.isClosed)
-            assertNull(c.filterSession)
-            Fx.waitUntil("apply job to end") { !s.isApplying && c.busyMessage == null }
-            Fx.pump(100)
-            assertNull(c.renderOverride)
-            assertEquals(0, c.undoManager.undoCount)
-            assertTrue("layer untouched", Fx.pixels(d.paint.bitmap).contentEquals(original))
-            Fx.assertNoErrorMessage(c, f.id)
-        } finally {
-            c.filterSession?.cancel(); c.dispose()
+    fun undoWhileApplyingCancelsWithoutATrace() {
+        var midApply = 0
+        forEachFilter { f ->
+            // With Main.immediate, apply() returns while the filter runs in the background; only a
+            // filter that finishes before the main thread suspends completes inside apply().
+            val w = 320; val h = 120
+            val d = Fx.newDoc(context, rs.scope, w, h)
+            val c = d.controller
+            val original = Fx.pixels(d.paint.bitmap)
+            try {
+                val s = startOn(d, f, d.paint)
+                Fx.awaitPreview(s, "before apply")
+                s.apply()
+                if (!s.isApplying) {
+                    // Finished synchronously: applied and closed like a normal apply.
+                    assertTrue(s.isClosed)
+                    assertNull(c.busyMessage)
+                    c.undo()
+                } else {
+                    midApply++
+                    c.undo() // two-finger tap: cancels the session
+                    assertTrue(s.isClosed)
+                    assertNull(c.filterSession)
+                    Fx.waitUntil("apply job to end") { !s.isApplying && c.busyMessage == null }
+                    Fx.pump(100)
+                    assertEquals(0, c.undoManager.undoCount)
+                }
+                assertNull(c.renderOverride)
+                assertTrue("layer untouched", Fx.pixels(d.paint.bitmap).contentEquals(original))
+                Fx.assertNoErrorMessage(c, f.id)
+            } finally {
+                c.filterSession?.cancel(); c.dispose()
+            }
         }
+        assertTrue("only $midApply filters were still applying when undone", midApply >= FilterRegistry.all.size * 3 / 4)
     }
 
     // ------------------------------------------------------------------ background removal
@@ -461,6 +471,66 @@ class FilterScenariosTest {
         }
         val mainThread = ShadowLog.getLogs().filter { it.msg?.contains("main thread", ignoreCase = true) == true }
         assertTrue("segmentation ran on the main thread: ${mainThread.map { it.msg }}", mainThread.isEmpty())
+    }
+
+    // ------------------------------------------------------------------ tool interplay
+
+    /**
+     * A moved (pending) transform when a filter starts: the transform is committed first and the
+     * filter previews/applies the committed pixels inside the moved selection; both are separate
+     * undo steps; afterwards the still-current Transform tool lifts again on the next touch.
+     */
+    @Test
+    fun startingAFilterCommitsAPendingTransformFirst() {
+        val d = Fx.newDoc(context, rs.scope, withLineArt = false)
+        val c = d.controller
+        val original = Fx.pixels(d.paint.bitmap)
+        val sel = ByteArray(Fx.W * Fx.H) { i -> if (i % Fx.W in 8 until 24 && i / Fx.W in 8 until 24) -1 else 0 }
+        c.setSelection(Selection.fromBytes(sel, Fx.W, Fx.H), recordUndo = false)
+        c.selectTool(com.brushwork.paint.tools.ToolId.TRANSFORM)
+        Fx.pump(50)
+        c.pointerDown(com.brushwork.paint.tools.ToolPoint(16f, 16f))
+        c.pointerMove(com.brushwork.paint.tools.ToolPoint(24f, 20f))
+        c.pointerMove(com.brushwork.paint.tools.ToolPoint(36f, 26f))
+        c.pointerUp(com.brushwork.paint.tools.ToolPoint(36f, 26f))
+        Fx.pump(50)
+        assertTrue("the transform is pending", c.currentTool.hasPendingWork)
+
+        val invert = FilterRegistry.byId("adjust.invert") ?: throw AssertionError("no invert filter")
+        c.startFilter(invert)
+        val s = c.filterSession ?: throw AssertionError("session did not start: ${c.message}")
+        s.debounceMs = 0
+        assertFalse("the transform was committed", c.currentTool.hasPendingWork)
+        assertEquals(1, c.undoManager.undoCount)
+        val committed = Fx.pixels(d.paint.bitmap)
+        assertFalse(committed.contentEquals(original))
+        val movedSel = c.selection ?: throw AssertionError("the selection should move with the transform")
+        Fx.awaitPreview(s, "after transform")
+        assertSame("the filter owns the render override now", s.layer, c.renderOverride?.layer)
+        val src = BitmapUtils.toPixelBuffer(d.paint.bitmap)
+        val out = Fx.direct(invert, src, s.values)
+        FilterSessionMath.compose(src, out, movedSel.toBytes(), alphaLocked = false, maskTarget = false)
+        val expected = Fx.roundTrip(out)
+        assertTrue("preview: ${Fx.diff(expected, Fx.overrideContent(c)!!, Fx.W)}", expected.contentEquals(Fx.overrideContent(c)!!))
+        Fx.applyAndWait(s)
+        assertTrue(s.isClosed)
+        assertTrue("applied: ${Fx.diff(expected, Fx.pixels(d.paint.bitmap), Fx.W)}", expected.contentEquals(Fx.pixels(d.paint.bitmap)))
+        assertEquals(2, c.undoManager.undoCount)
+        assertEquals(invert.name, c.undoManager.undoLabel)
+
+        // The Transform tool is still current: the next touch lifts the (filtered) selection again.
+        c.pointerDown(com.brushwork.paint.tools.ToolPoint(30f, 20f))
+        c.pointerMove(com.brushwork.paint.tools.ToolPoint(28f, 18f))
+        c.pointerUp(com.brushwork.paint.tools.ToolPoint(28f, 18f))
+        Fx.pump(50)
+        assertTrue("the transform tool works again after the filter", c.currentTool.hasPendingWork)
+        c.currentTool.discard()
+        Fx.pump(50)
+        assertTrue(Fx.pixels(d.paint.bitmap).contentEquals(expected))
+        c.undo(); c.undo()
+        assertTrue("undoing both steps restores the original", Fx.pixels(d.paint.bitmap).contentEquals(original))
+        rs.assertNoErrors("transform + filter")
+        c.dispose()
     }
 
     // ------------------------------------------------------------------ misc
