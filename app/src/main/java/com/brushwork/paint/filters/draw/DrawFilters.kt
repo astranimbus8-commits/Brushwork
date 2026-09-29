@@ -2,5 +2,9 @@ package com.brushwork.paint.filters.draw
 
 import com.brushwork.paint.filters.Filter
 
-// STUB - replaced by a filter module. Every filter of this category is listed here.
-val drawFilters: List<Filter> = emptyList()
+/** Every filter of the Draw category (plus the AI Background Removal, which lives here too). */
+val drawFilters: List<Filter> = listOf(
+    ParallelGradationFilter(),
+    ConcentricGradationFilter(),
+    RadialLineGradationFilter(),
+)
