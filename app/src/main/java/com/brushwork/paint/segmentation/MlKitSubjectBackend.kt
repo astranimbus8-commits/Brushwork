@@ -30,12 +30,12 @@ import kotlin.math.min
 /**
  * Subject segmentation with Google ML Kit (Play services module "subject_segment").
  *
- * The module is installed on demand through [ModuleInstallClient]. The first call waits up to
- * [INSTALL_WAIT_MS] for the download while it makes progress (a download that shows no progress
- * for [STALL_MS], e.g. offline, is not waited for); after that the install continues in the
- * background (a listener flips [moduleReady]) and later calls only wait briefly. Failures (no Play
- * services, no network, errors) make the backend return null — the pipeline then falls back to
- * the scene model and saliency — and are retried after [RETRY_AFTER_MS].
+ * The module is installed on demand through [ModuleInstallClient] (and prefetched when the
+ * service is created). A call waits up to [INSTALL_WAIT_MS] for a download while it makes
+ * progress; a download that has shown no progress for [STALL_MS] (offline, queued) is not waited
+ * for, and the install continues in the background (a listener flips [moduleReady]). Failures (no
+ * Play services, no network, errors) make the backend return null — the pipeline then falls back
+ * to the scene model and saliency — and are retried after [RETRY_AFTER_MS].
  */
 internal class MlKitSubjectBackend private constructor(private val appContext: Context) : SubjectBackend {
     private val lock = ReentrantLock()
@@ -120,7 +120,8 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
         if (moduleReady) return true
         val client = ModuleInstall.getClient(appContext)
         pendingInstall?.let { pending ->
-            if (waitMs > 0 && awaitInstall(pending, min(waitMs, PENDING_WAIT_MS))) return true
+            // E.g. started by the prefetch: wait while it progresses, not at all once it stalled.
+            if (waitMs > 0 && awaitInstall(pending, waitMs)) return true
             if (moduleReady) return true
             // The status listener can be lost (e.g. Play services restarted): ask directly.
             if (modulesAvailable(client, seg)) {
@@ -241,9 +242,7 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
         /** Longest wait for a module download that keeps making progress. */
         private const val INSTALL_WAIT_MS = 45_000L
         /** A download without any progress for this long is not waited for (offline, queued). */
-        private const val STALL_MS = 8_000L
-        /** Wait when a download started by an earlier call is still running. */
-        private const val PENDING_WAIT_MS = 4_000L
+        private const val STALL_MS = 10_000L
         /** A request whose listener never reported back is issued again after this long. */
         private const val PENDING_EXPIRY_MS = 5 * 60_000L
         private const val POLL_MS = 250L
