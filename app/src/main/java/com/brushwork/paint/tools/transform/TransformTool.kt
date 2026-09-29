@@ -107,6 +107,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     override val hasPendingWork: Boolean get() = transformState != null
 
+    /** A lift nobody moved yet is the tool's own preparation; a placement is always the user's. */
+    override val hasUserChanges: Boolean
+        get() {
+            val st = transformState ?: return false
+            val s = session ?: return true
+            return s.placement || !st.sameGeometry(s.initial)
+        }
+
     /** Hint shown in the options strip when nothing is being transformed. */
     val statusText: String
         get() {

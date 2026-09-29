@@ -34,6 +34,10 @@ class BrushPresetStore private constructor(private val prefs: SharedPreferences)
 
     /** Stores [preset]'s settings (removes the entry when it matches the library default). */
     fun save(preset: BrushPreset) {
+        // Clamped like the stroke engine does: JSON can't hold NaN/Infinity, and encoding one
+        // would throw at the end of a stroke (persist runs on the main thread).
+        @Suppress("NAME_SHADOWING")
+        val preset = preset.sanitized()
         val default = BrushLibrary.byId(preset.id)
         val key = KEY_PRESET + preset.id
         if (default != null && default == preset) {

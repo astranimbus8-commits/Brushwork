@@ -176,7 +176,10 @@ fun Hotbar(
     val preset = controller.presetFor(controller.sliderToolId)
     controller.layersVersion // observe layer changes for the active layer number
     val layerNumber = controller.doc.activeLayerIndex.coerceIn(0, (controller.doc.layers.size - 1).coerceAtLeast(0)) + 1
-    val pending = controller.currentTool.hasPendingWork
+    val tool = controller.currentTool
+    val pending = tool.hasPendingWork
+    // An untouched automatic lift (transform tool) doesn't block redo (see Tool.hasUserChanges).
+    val userWork = tool.hasUserChanges
     val session = controller.filterSession
     Box(
         modifier
@@ -219,7 +222,7 @@ fun Hotbar(
             ToolIconButton(
                 Icons.AutoMirrored.Filled.Redo, "Redo",
                 { controller.endCanvasGesture(); controller.redo() },
-                enabled = controller.canRedo && !pending && session == null,
+                enabled = controller.canRedo && !userWork && session == null,
             )
         }
     }

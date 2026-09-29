@@ -9,13 +9,13 @@ import com.brushwork.paint.EditorController
 internal object HistoryLabels {
     fun undo(c: EditorController): String = when {
         c.filterSession != null -> "Filter cancelled"
-        c.currentTool.hasPendingWork -> "Undo: ${c.activeToolId.label} (discarded)"
+        c.currentTool.hasUserChanges -> "Undo: ${c.activeToolId.label} (discarded)"
         else -> c.undoManager.undoLabel?.let { "Undo: $it" } ?: "Nothing to undo"
     }
 
     fun redo(c: EditorController): String = when {
         c.filterSession != null -> "Finish the filter first"
-        c.currentTool.hasPendingWork -> "Apply or discard the ${c.activeToolId.label.lowercase()} edit first"
+        c.currentTool.hasUserChanges -> "Apply or discard the ${c.activeToolId.label.lowercase()} edit first"
         else -> c.undoManager.redoLabel?.let { "Redo: $it" } ?: "Nothing to redo"
     }
 }

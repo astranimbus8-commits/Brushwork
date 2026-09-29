@@ -216,14 +216,25 @@ class EditorController(
         val session = filterSession
         if (session != null) { session.cancel(); return }
         val tool = currentTool
-        if (tool.hasPendingWork) { tool.discard(); invalidateOverlay(); return }
+        if (tool.hasPendingWork) {
+            // The user's pending work is what undo takes back; an untouched automatic lift
+            // (transform tool) is just dropped and the last step is undone as usual.
+            val userWork = tool.hasUserChanges
+            tool.discard()
+            invalidateOverlay()
+            if (userWork) return
+        }
         if (undoManager.undo(this)) { editCount++; doc.touch() }
     }
 
     fun redo() {
         if (filterSession != null) return
         val tool = currentTool
-        if (tool.hasPendingWork) return
+        if (tool.hasPendingWork) {
+            if (tool.hasUserChanges) return
+            tool.discard()
+            invalidateOverlay()
+        }
         if (undoManager.redo(this)) { editCount++; doc.touch() }
     }
 
