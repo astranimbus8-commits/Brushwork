@@ -1,10 +1,5 @@
 package com.brushwork.paint.ui.color
 
-import android.os.Looper
-import android.os.SystemClock
-import android.view.InputDevice
-import android.view.MotionEvent
-import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.brushwork.paint.AppSettings
@@ -13,6 +8,12 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.ui.color.RobolectricUi.byDescription
+import com.brushwork.paint.ui.color.RobolectricUi.byText
+import com.brushwork.paint.ui.color.RobolectricUi.drag
+import com.brushwork.paint.ui.color.RobolectricUi.settle
+import com.brushwork.paint.ui.color.RobolectricUi.tap
+import com.brushwork.paint.ui.color.RobolectricUi.windowRoots
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import kotlinx.coroutines.MainScope
 import org.junit.Assert.assertEquals
@@ -21,14 +22,13 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import java.time.Duration
 
 /**
  * Hosts the real panel and dialog in an activity (phone-sized, hdpi) and lets them compose,
  * measure and animate in: catches crashes such as intrinsic-measurement or layout errors inside
- * the sheet/dialog windows, and drives the dialog with real touch events.
+ * the sheet/dialog windows, and drives the dialog with real touch events. Elements are located
+ * through the semantics tree (see [RobolectricUi]), not fixed pixel positions.
  *
  * Compose keeps a process-static frame clock bound to the first test's Choreographer, so frames
  * (animations) stall in later tests of the same Robolectric sandbox. These tests only rely on
@@ -39,19 +39,8 @@ import java.time.Duration
 @Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.color.uitestsandbox"])
 class ColorPickerUiSmokeTest {
 
-    private fun settle() = repeat(20) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100)) }
-
-    /** All window root views (activity + sheet/dialog windows). */
-    @Suppress("UNCHECKED_CAST")
-    private fun rootViews(): List<View> {
-        val wmg = Class.forName("android.view.WindowManagerGlobal")
-        val inst = wmg.getMethod("getInstance").invoke(null)
-        val f = wmg.getDeclaredField("mViews").apply { isAccessible = true }
-        return (f.get(inst) as List<View>).toList()
-    }
-
     private fun assertWindowsLaidOut() {
-        val roots = rootViews()
+        val roots = windowRoots()
         assertTrue("expected the activity plus a sheet/dialog window, got ${roots.size}", roots.size >= 2)
         assertTrue(roots.all { it.width > 0 && it.height > 0 })
     }
@@ -63,45 +52,8 @@ class ColorPickerUiSmokeTest {
         return EditorController(activity.applicationContext, doc, MainScope(), AppSettings(activity))
     }
 
-    private fun tap(v: View, x: Float, y: Float) {
-        val t = SystemClock.uptimeMillis()
-        val down = MotionEvent.obtain(t, t, MotionEvent.ACTION_DOWN, x, y, 0).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
-        v.dispatchTouchEvent(down)
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(50))
-        val up = MotionEvent.obtain(t, t + 50, MotionEvent.ACTION_UP, x, y, 0).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
-        v.dispatchTouchEvent(up)
-        settle()
-    }
-
-    /** One finger gesture through [points] (with interpolated moves in between). */
-    private fun drag(v: View, vararg points: Pair<Float, Float>) {
-        val t0 = SystemClock.uptimeMillis()
-        var t = t0
-        fun send(action: Int, x: Float, y: Float) {
-            val e = MotionEvent.obtain(t0, t, action, x, y, 0).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
-            v.dispatchTouchEvent(e)
-            e.recycle()
-        }
-        send(MotionEvent.ACTION_DOWN, points[0].first, points[0].second)
-        for (i in 1 until points.size) {
-            val (ax, ay) = points[i - 1]
-            val (bx, by) = points[i]
-            for (s in 1..8) {
-                t += 8
-                send(MotionEvent.ACTION_MOVE, ax + (bx - ax) * s / 8f, ay + (by - ay) * s / 8f)
-            }
-        }
-        t += 8
-        send(MotionEvent.ACTION_UP, points.last().first, points.last().second)
-        settle()
-    }
-
-    // Dialog geometry at w360dp-h760dp-hdpi (1.5 px/dp): the window is as tall as the dialog;
-    // the wheel is 240 dp (360 px) centered at x = 270, center y = 474 px from the window top.
-    private val wheelCx = 270f
-    private val wheelCy = 474f
-    private fun okButton(root: View) = Pair(root.width - 80f, root.height - 72f)
-    private fun cancelButton(root: View) = Pair(root.width - 187f, root.height - 72f)
+    private fun wheel(activity: ComponentActivity) =
+        RobolectricUi.WheelPoints(byDescription("Color wheel"), activity.resources.displayMetrics.density)
 
     @Test
     fun panelComposesInEveryMode() {
@@ -141,8 +93,7 @@ class ColorPickerUiSmokeTest {
         activity.setContent { BrushworkTheme { ColorPickerDialog(0x8033AA55.toInt(), {}, {}, showAlpha = true) } }
         settle()
         assertWindowsLaidOut()
-        // "RGB" tab: middle third of the tab row, 249 px from the dialog window top (hdpi, 360 dp).
-        tap(rootViews().last(), 269f, 249f)
+        byText("RGB").tap()
         assertEquals(PickerMode.RGB.ordinal, store.data.pickerMode)
         assertWindowsLaidOut()
     }
@@ -159,13 +110,13 @@ class ColorPickerUiSmokeTest {
             BrushworkTheme { ColorPickerDialog(0xFF3366CC.toInt(), onPick = { picked = it }, onDismiss = { dismissed = true }) }
         }
         settle()
-        val root = rootViews().last()
+        val w = wheel(activity)
+        val window = byDescription("Color wheel").window
         // Tap the top of the hue ring (hue 0), then drag in the square from the center past the
         // bottom-left corner (black) and on past the top-right corner (full saturation/brightness).
-        tap(root, wheelCx, wheelCy - 152f)
-        drag(root, wheelCx to wheelCy, wheelCx - 150f to wheelCy + 220f, wheelCx + 150f to wheelCy - 130f)
-        val (okX, okY) = okButton(root)
-        tap(root, okX, okY)
+        tap(window, w.ringTop.first, w.ringTop.second)
+        drag(window, w.center, w.square(-1.7f, 2.5f), w.square(1.7f, -1.5f))
+        byText("OK").tap()
 
         assertTrue(dismissed)
         val c = requireNotNull(picked) { "OK did not deliver a color" }
@@ -188,10 +139,9 @@ class ColorPickerUiSmokeTest {
             BrushworkTheme { ColorPickerDialog(0xFF3366CC.toInt(), onPick = { picked = it }, onDismiss = { dismissed = true }) }
         }
         settle()
-        val root = rootViews().last()
-        tap(root, wheelCx, wheelCy - 152f)
-        val (x, y) = cancelButton(root)
-        tap(root, x, y)
+        val w = wheel(activity)
+        tap(byDescription("Color wheel").window, w.ringTop.first, w.ringTop.second)
+        byText("Cancel").tap()
         assertTrue(dismissed)
         assertEquals(null, picked)
     }
