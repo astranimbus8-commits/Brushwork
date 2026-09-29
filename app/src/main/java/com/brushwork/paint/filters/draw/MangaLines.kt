@@ -23,7 +23,8 @@ import kotlin.random.Random
 /**
  * Manga focus (concentration) lines: wedge-shaped strokes that converge on the Center, thin at
  * their inner end and widest at the far edge of the canvas, leaving a clear area with a ragged
- * edge around the center.
+ * edge around the center. The clear area is an ellipse shaped like the canvas (at 100% it
+ * touches the canvas edges), so wide panels get lines all around, not only at the sides.
  */
 class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategory.DRAW) {
     override val generatesContent = true
@@ -33,7 +34,7 @@ class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategor
         FilterParam.Slider("count", "Number of lines", 8f, 720f, 180f, 1f),
         FilterParam.Slider("thickness", "Thickness", 0.5f, 120f, 12f, 0.5f, pixels = true),
         FilterParam.Slider("thickness_var", "Thickness variation", 0f, 100f, 60f, 1f, "%"),
-        FilterParam.Slider("inner", "Clear area size", 0f, 100f, 35f, 1f, "%"),
+        FilterParam.Slider("inner", "Clear area size", 0f, 100f, 40f, 1f, "%"),
         FilterParam.Slider("jitter", "Ragged edge", 0f, 100f, 40f, 1f, "%"),
         FilterParam.Slider("oval", "Clear area width", 25f, 400f, 100f, 1f, "%"),
         FilterParam.Slider("spacing_var", "Spacing variation", 0f, 100f, 70f, 1f, "%"),
@@ -42,23 +43,28 @@ class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategor
         FilterParam.Seed(),
     )
 
-    /** Line set in angle order; angles are relative to [base] and increase with the index. */
+    /**
+     * Line set in angle order; angles are relative to [base] and increase with the index.
+     * [maxSinHalfAngle] bounds sin of the angular half-width of every wedge anywhere on the canvas.
+     */
     internal class Lines(
         val base: Double, val step: Double,
         val cos: DoubleArray, val sin: DoubleArray,
         val startR: DoubleArray, val halfSlope: DoubleArray, val minStart: Double,
+        val maxSinHalfAngle: Double,
     ) { val size get() = cos.size }
 
     internal fun buildLines(values: FilterValues, w: Int, h: Int, cx: Double, cy: Double, ctx: FilterContext): Lines {
         val n = values.int("count").coerceIn(1, 5000)
         val rnd = Random(values.seed())
-        val halfDiag = 0.5 * sqrt(w.toDouble() * w + h.toDouble() * h)
         // Farthest canvas corner: every line reaches its full thickness there.
-        val far = max(max(hypot(cx, cy), hypot(w - cx, cy)), max(hypot(cx, h - cy), hypot(w - cx, h - cy)))
-        val inner = values.float("inner").coerceIn(0f, 100f) / 100.0 * halfDiag
-        val jitter = values.float("jitter").coerceIn(0f, 100f) / 100.0 * 0.45 * halfDiag
-        val ratio = (values.float("oval") / 100.0).coerceIn(0.05, 20.0)
-        val ax = sqrt(ratio); val ay = 1.0 / ax
+        val far = max(1e-3, max(max(hypot(cx, cy), hypot(w - cx, cy)), max(hypot(cx, h - cy), hypot(w - cx, h - cy))))
+        val inner = values.float("inner").coerceIn(0f, 100f) / 100.0
+        val jitter = values.float("jitter").coerceIn(0f, 100f) / 100.0 * JITTER_SPAN
+        // Semi-axes of the clear ellipse at 100%: the canvas' half extents, reshaped by "Clear
+        // area width" without changing the area.
+        val ratio = sqrt((values.float("oval") / 100.0).coerceIn(0.05, 20.0))
+        val ax = 0.5 * w * ratio; val ay = 0.5 * h / ratio
         val thick = ctx.px(values.float("thickness")).toDouble().coerceAtLeast(0.0)
         val thickVar = values.float("thickness_var").coerceIn(0f, 100f) / 100.0
         val spaceVar = values.float("spacing_var").coerceIn(0f, 100f) / 100.0 * 0.9
@@ -66,18 +72,21 @@ class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategor
         val step = 2 * PI / n
         val cs = DoubleArray(n); val sn = DoubleArray(n); val rs = DoubleArray(n); val slope = DoubleArray(n)
         var minStart = Double.MAX_VALUE
+        var maxHalf = 0.0
         for (i in 0 until n) {
             val phi = base + (i + 0.5 + (rnd.nextDouble() - 0.5) * spaceVar) * step
             val c = cos(phi); val s = sin(phi)
-            // Radius of the (area-preserving) clear ellipse in this direction.
+            // Radius of the clear ellipse in this direction.
             val oval = 1.0 / sqrt((c / ax) * (c / ax) + (s / ay) * (s / ay))
             val start = (inner + jitter * rnd.nextDouble().pow(1.5)) * oval
             val width = thick * (1.0 - thickVar * rnd.nextDouble())
             cs[i] = c; sn[i] = s; rs[i] = start
             slope[i] = 0.5 * width / max(1.0, far - start)
             minStart = min(minStart, start)
+            // Half width / distance grows along the wedge and peaks at the far corner.
+            maxHalf = max(maxHalf, max(0.0, far - start) * slope[i] / far)
         }
-        return Lines(base, step, cs, sn, rs, slope, minStart)
+        return Lines(base, step, cs, sn, rs, slope, minStart, maxHalf)
     }
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
@@ -90,15 +99,16 @@ class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategor
         val n = lines.size
         val color = values.color("color")
         val clear2 = max(0.0, lines.minStart - 1.0).let { it * it }
-        // A wedge's angular half-width never exceeds its half-slope (radians), so this many
-        // neighbours on each side (plus the spacing jitter) can reach a pixel.
-        val maxSlope = lines.halfSlope.maxOrNull() ?: 0.0
         return FilterMath.mapXY(src, ctx) { x, y, c ->
             val dx = x + 0.5 - cx; val dy = y + 0.5 - cy
             val r2 = dx * dx + dy * dy
             if (r2 <= clear2) return@mapXY c
-            // The half pixel of antialiasing adds 0.5/r radians near the center.
-            val reach = min(n / 2, min(64, ceil((maxSlope + 0.5 / sqrt(r2)) / lines.step + 1.5).toInt()))
+            // A wedge touches this pixel only if its axis is within half its width plus one
+            // pixel of antialiasing: sin(angle) < maxSinHalfAngle + 1/r. tan(asin s) >= asin s
+            // gives a cheap upper bound of that angle; +1.5 slots covers the spacing jitter.
+            val s = lines.maxSinHalfAngle + 1.0 / sqrt(r2)
+            val angle = if (s >= 0.7) PI / 2 else s / sqrt(1.0 - s * s)
+            val reach = min(n / 2, ceil(angle / lines.step + 1.5).toInt())
             var rel = atan2(dy, dx) - lines.base
             rel -= 2 * PI * floor(rel / (2 * PI))
             val k0 = (rel / lines.step).toInt()
@@ -117,6 +127,11 @@ class RadialLineFilter : Filter("draw.radial_line", "Radial Line", FilterCategor
     }
 
     private fun hypot(a: Double, b: Double) = sqrt(a * a + b * b)
+
+    private companion object {
+        /** "Ragged edge" at 100% lets a line start up to this fraction of the ellipse radius later. */
+        const val JITTER_SPAN = 0.6
+    }
 }
 
 /**
@@ -164,22 +179,26 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         val density = values.float("density").coerceIn(0f, 100f) / 100.0
         val lanes = ceil(2 * vExt / (thick * (1.2 + 8.0 * (1.0 - density)))).toInt().coerceIn(1, 20000)
         val spacing = max(1e-3, 2 * vExt / lanes)
-        val length = max(1.0, values.float("length").coerceIn(1f, 1000f) / 100.0 * 2 * uExt)
+        // Every length below is relative to the canvas (no absolute pixel floors), and each lane
+        // draws from its own random stream: the preview (a downscaled buffer whose size is
+        // rounded) then produces the same streaks as the full-resolution apply.
+        val length = max(1e-3, values.float("length").coerceIn(1f, 1000f) / 100.0 * 2 * uExt)
         val lenVar = values.float("length_var").coerceIn(0f, 100f) / 100.0
         val gap = values.float("gap").coerceIn(0f, 100f) / 100.0 * length
-        val rnd = Random(values.seed())
+        val seed = values.seed()
         val laneStart = IntArray(lanes + 1)
         val u0 = DoubleList(); val u1 = DoubleList(); val vs = DoubleList(); val half = DoubleList()
         for (l in 0 until lanes) {
             laneStart[l] = u0.size
+            val rnd = Random(Noise.hash(l, LANE_SALT, seed))
             val center = -vExt + (l + 0.5) * spacing
             var u = -uExt - rnd.nextDouble() * length
             while (u < uExt) {
-                val len = max(1.0, length * (1.0 - lenVar * rnd.nextDouble()))
+                val len = length * max(MIN_LENGTH, 1.0 - lenVar * rnd.nextDouble())
                 u0.add(u); u1.add(u + len)
                 vs.add(center + (rnd.nextDouble() - 0.5) * LATERAL_JITTER * spacing)
                 half.add(0.5 * thick * (1.0 - thickVar * rnd.nextDouble()))
-                u += len + max(0.5, gap * (0.2 + 1.6 * rnd.nextDouble()))
+                u += len + gap * (0.2 + 1.6 * rnd.nextDouble())
             }
         }
         laneStart[lanes] = u0.size
@@ -246,6 +265,10 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         val TAPERS = listOf("Both ends", "Toward the end", "None")
         /** Lateral scatter of each streak within its lane, as a fraction of the lane spacing. */
         const val LATERAL_JITTER = 0.9
+        /** Shortest streak as a fraction of the mean length (bounds the streak count per lane). */
+        const val MIN_LENGTH = 0.02
+        private const val LANE_SALT = 0x51EED
+
     }
 }
 
