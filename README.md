@@ -1,19 +1,65 @@
 # Brushwork
 
-A painting app for Android in the spirit of ibisPaint and Clip Studio Paint. Work in progress.
+A painting and illustration app for Android in the spirit of ibisPaint and Clip Studio Paint.
 
-## Download
+## Install on your phone
 
-Get the latest APK from the [Releases](../../releases) page, open it on your phone and allow
-"install from unknown sources" when asked.
+1. On your phone, open the [Releases](../../releases) page and download the newest `Brushwork-vX.Y.Z.apk` from **Assets**.
+2. Open the downloaded file. The first time, Android asks to allow installs from your browser: tap **Settings**, enable **Allow from this source**, then go back.
+3. Tap **Install**. If Play Protect warns about an unknown app, choose **More details → Install anyway** (this happens for every app installed outside the Play Store).
 
-## Build
+Requires Android 8.0 or newer. Every release is signed with the same key, so a newer APK installs over the old one and keeps your artwork.
 
-Requires JDK 17 and the Android SDK (platform 37).
+## Features
+
+**Gallery and files**
+- Gallery of your artworks with thumbnails; rename, duplicate, delete, export PNG/JPG to the phone's gallery, share.
+- Autosave: when you leave the app, when you go back to the gallery, and every 45 s while drawing (adjustable).
+- New canvas with a custom size in pixels, inches, centimeters, millimeters or points plus DPI, and presets: 500×500, 1080×2408, 2048×2048, 1536×2048, 1080×1920, 1920×1080 and more; print sizes A3–A6, B4/B5, US Letter, Legal, Tabloid, postcard and manga manuscript at 72–600 DPI.
+- Start from a picture.
+
+**Painting**
+- ibisPaint-style hotbar: tool, brush/eraser switch, brush size, color, layers, undo, redo; side sliders for size and opacity.
+- 16+ brushes (pens, G-pen, pencils, airbrush, marker, calligraphy, watercolor, chalk, spray, pixel pen…), erasers, smudge and blur tools, pressure and taper, full brush settings.
+- Undo/redo, **two-finger tap = undo, three-finger tap = redo**, pinch to zoom/rotate, flip view.
+- Stabilizer: smoothing, or a Blender-style **rope (lazy mouse)** where painting happens at the end of a string you drag.
+- Rulers: straight, circular, elliptical and radial, with exact numeric control (position, angle, radius…) in px/in/cm/mm/pt and nudge buttons (e.g. move the circular ruler 3 px left).
+- Grids: square, rule of thirds, isometric, diagonal.
+
+**Color**
+- HSB color wheel, RGB and HSB sliders, hex input, eyedropper, saved palettes and recent colors.
+
+**Layers**
+- Add, delete, duplicate, reorder by dragging, merge down, flip horizontal/vertical, opacity, 17 blend modes, clipping masks, layer masks, lock and alpha lock, import picture.
+
+**Tools**
+- Magic wand, lasso (freehand/polygon), rectangle/ellipse selection, bucket fill (tolerance, gap closing), text (horizontal and vertical manga text), manga frame divider, transform (move/scale/rotate/distort, numeric).
+- Shapes: line, rectangle, ellipse/circle, polygon with any number of sides, star, arrow; sharp, round, bevel or inverted corners like Illustrator; exact numeric editing.
+- Bezier curve tool (tap to add points, long-press a point to make it a sharp corner) and polyline tool.
+- Smart selection: subject, background, sky, nature, buildings, people, water (on-device).
+- Canvas: resize image, canvas size with anchor, trim, crop, rotate/flip canvas, resolution, color mode (RGB / grayscale / 1-bit monochrome).
+
+**Filters (84)**
+Brightness & Contrast, Tone Curve, Color Balance, Hue/Saturation/Brightness, Level Adjustment, Replace Color, Gradation Map, Posterize, Invert, Grayscale, Black & White, Monocolor, Change Drawing Color, Extract Line Drawing, Find Edges · Gaussian, Zooming, Spin and Motion Blur, Mosaic, Unsharp Mask, Frosted Glass (normal/zooming/moving) · Stroke (both/outer/inner), Stained Glass, Wet Edge, Glow (inner/outer), Bevel (outer), Relief, Relief HQ, Waterdrop, Satin, Drop Shadow, Extrude Parallel, God Rays · Parallel/Concentric/Radial Line Gradation, Radial Line, Speed Line, Clouds, QR Code, Watercolor, Anime Background, Manga Background, Background Removal · Chromatic Aberration (moving/zooming), Glitch, Noise, Retro Game, Oil Paint, Chrome, Bloom, Cross Filter, Sheer (cross/line/square/hex/circle) · Crystallize, Hexagonal/Square/Triangular Pixelate, Pointillize, Dots (hexagonal/square) · Expansion, Fish Lens, Sphere Lens, Wave, Ripple, Twirl, Polar Coordinates, Tile (count/size), Table (count/size), Blur Frame, Rain. Every filter has a live preview, respects the selection and can be undone.
+
+## Build from source
+
+Requires JDK 17 and the Android SDK (platform 37, build-tools 36).
 
 ```
-./gradlew assembleDebug
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-Every push to `main` builds an APK in GitHub Actions (see the workflow run's artifacts); pushing a
-`v*` tag publishes a GitHub Release with the APK attached.
+Every push to `main` runs the tests and builds a signed APK in GitHub Actions (download it from the run's artifacts). Pushing a `v*` tag publishes a GitHub Release with the APK attached. Release signing uses repository secrets (`KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`); without them the APK is signed with a debug key.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the code is organized.
+
+## Testing status
+
+The app is covered by 900+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
+
+## Credits
+
+- Scene segmentation model: Autoseg-EdgeTPU-S from the TensorFlow Model Garden (Apache 2.0), see `app/src/main/assets/models/NOTICE.txt`.
+- Subject segmentation: Google ML Kit (downloaded on demand by Google Play services).
+- QR codes: ZXing (Apache 2.0).
