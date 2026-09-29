@@ -378,6 +378,29 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val box = IntBox()
         private val touchRect = Rect()
 
+        /**
+         * 1-bit documents: the dabs build up intermediate grays in the layer (thresholding each
+         * dab would stop low-flow strokes from accumulating), so the layer is shown thresholded
+         * exactly as the commit will constrain it.
+         */
+        private val monochrome: LayerRenderOverride? =
+            if (rec.target == EditTarget.CONTENT && controller.doc.colorMode == ColorMode.MONOCHROME) {
+                object : LayerRenderOverride {
+                    private val paint = Paint().apply { colorFilter = MONOCHROME_FILTER }
+                    override val layer: Layer get() = this@DirectStroke.layer
+                    override fun drawContent(canvas: Canvas): Boolean {
+                        val save = canvas.saveLayer(null, paint)
+                        canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
+                        canvas.restoreToCount(save)
+                        return true
+                    }
+                }
+            } else null
+
+        init {
+            if (monochrome != null) controller.renderOverride = monochrome
+        }
+
         override val budget: Float get() = 1_500_000f
 
         override fun dabCost(d: Float): Float = if (kind == StrokeKind.BLUR) 2.5f * d * d else d * d
@@ -416,15 +439,21 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         override fun complete() {
             drain(final = true)
             dirty.setEmpty()
+            dropOverride()
             controller.commitEdit(rec, undoLabel(kind))
         }
 
         override fun cancel() {
             pending.clear()
             dirty.setEmpty()
+            dropOverride()
             val touched = Rect(rec.touched)
             rec.abort()
             if (!touched.isEmpty) controller.invalidateDoc(touched)
+        }
+
+        private fun dropOverride() {
+            if (monochrome != null && controller.renderOverride === monochrome) controller.renderOverride = null
         }
     }
 

@@ -462,6 +462,34 @@ class BrushToolRobolectricTest {
     }
 
     @Test
+    fun monochromeWatercolorAccumulatesAndPreviewsThresholded() {
+        val c = newController(300, 200)
+        c.doc.colorMode = ColorMode.MONOCHROME
+        c.color = 0xFF000000.toInt()
+        val tool = c.tool(ToolId.BRUSH)
+        // One dab alone stays below the 1-bit alpha threshold; only the overlap crosses it.
+        c.brush = BrushLibrary.byId("watercolor")!!.copy(size = 40f, flow = 0.3f, pressureOpacity = false)
+        tool.line(20f, 100f, 280f, 100f, steps = 40, up = false)
+        assertNotNull(c.renderOverride)
+        val preview = BitmapUtils.createLayerBitmap(300, 200)
+        c.compositor.drawDocument(Canvas(preview), null)
+        tool.onUp(ToolPoint(280f, 100f))
+        assertNull(c.renderOverride)
+        val a = preview.pixels()
+        val b = c.activeLayer.bitmap.pixels()
+        assertTrue(a.all { it == 0 || it == 0xFF000000.toInt() || it == -1 })
+        var painted = 0
+        for (i in a.indices) {
+            if (i % 300 > 230) continue // dabs held for the tail are only drawn on release
+            if (b[i] != 0) painted++
+            assertEquals("pixel ${i % 300},${i / 300}", a[i], b[i])
+        }
+        // Low-flow dabs still build up past the 1-bit threshold.
+        assertTrue("painted $painted", painted > 1500)
+        assertTrue(c.canUndo)
+    }
+
+    @Test
     fun nanStylusPressureStillPaints() {
         val c = newController()
         val tool = c.tool(ToolId.BRUSH)
