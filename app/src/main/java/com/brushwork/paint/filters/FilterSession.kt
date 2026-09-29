@@ -338,7 +338,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         val (pw, ph) = FilterSessionMath.previewSize(w, h)
         previewScale = pw.toFloat() / w
         val version = layer.contentVersion
-        val scaled = if (pw == w && ph == h) targetBitmap else Bitmap.createScaledBitmap(targetBitmap, pw, ph, true)
+        val scaled = FilterSessionBitmaps.downscale(targetBitmap, pw, ph)
         try {
             previewSrc = BitmapUtils.toPixelBuffer(scaled)
         } finally {
@@ -648,13 +648,11 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Selection coverage downscaled to the preview size (packed bytes). */
     private fun scaledSelectionBytes(sel: Selection, w: Int, h: Int): ByteArray {
         val m = sel.mask
-        if (m.width == w && m.height == h) return BitmapUtils.alpha8ToBytes(m)
-        val dst = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
+        val scaled = FilterSessionBitmaps.downscale(m, w, h)
         try {
-            Canvas(dst).drawBitmap(m, null, Rect(0, 0, w, h), Paint(Paint.FILTER_BITMAP_FLAG))
-            return BitmapUtils.alpha8ToBytes(dst)
+            return BitmapUtils.alpha8ToBytes(scaled)
         } finally {
-            dst.recycle()
+            if (scaled !== m) scaled.recycle()
         }
     }
 
