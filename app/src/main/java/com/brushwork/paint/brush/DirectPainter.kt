@@ -31,6 +31,10 @@ class IntBox(var left: Int = 0, var top: Int = 0, var right: Int = 0, var bottom
 
     fun set(l: Int, t: Int, r: Int, b: Int) { left = l; top = t; right = r; bottom = b }
 
+    fun set(o: IntBox) = set(o.left, o.top, o.right, o.bottom)
+
+    fun intersects(o: IntBox): Boolean = left < o.right && o.left < right && top < o.bottom && o.top < bottom
+
     /** Clips to [0, w) x [0, h); returns false when the result is empty. */
     fun clip(w: Int, h: Int): Boolean {
         left = max(left, 0); top = max(top, 0)
@@ -56,9 +60,11 @@ class IntArraySurface(override val width: Int, override val height: Int, val pix
  * profile and the selection. With [alphaLock] the alpha of every pixel is preserved.
  *
  * One instance per stroke (it tracks the smudge transport / the watercolor paint load).
- * Pure Kotlin.
+ * Every dab goes through [prepare] (which never touches the surface) and, when that returns
+ * true, [paint]; callers that record undo snapshot the prepared rectangle in between. Pure Kotlin.
  *
  * @param color non-premultiplied opaque paint color (watercolor).
+ * @param limit bounds of the non-zero [selection] pixels (dabs outside it are skipped cheaply).
  */
 class DirectPainter(
     val kind: StrokeKind,
@@ -67,6 +73,7 @@ class DirectPainter(
     private val selection: CoverageReader?,
     private val alphaLock: Boolean,
     color: Int,
+    private val limit: IntBox? = null,
 ) {
     init {
         require(kind.isDirect) { "DirectPainter does not handle $kind" }
@@ -81,6 +88,7 @@ class DirectPainter(
     private var weight = FloatArray(0)
     private var sel = IntArray(0)
     private val box = IntBox()
+    private val scratch = IntBox()
     private var lastDistance = Float.NaN
 
     /** Bounds of the pixels [dab] may change, clipped to the surface. Returns false if empty. */
@@ -90,23 +98,26 @@ class DirectPainter(
         return out.clip(surface.width, surface.height)
     }
 
-    /**
-     * Records [dab] as passed without painting it (it lies outside the surface or the selection),
-     * so the next dab's travel distance and smudge transport stay correct.
-     */
-    fun skip(dab: Dab) {
-        advance(dab)
-    }
+    /** The dab accepted by the last successful [prepare], waiting for [paint]. */
+    private var prepared: Dab? = null
+    private var preparedRatio = 0f
 
-    /** Applies one resolved dab. Returns false when it was entirely outside the surface. */
-    fun apply(dab: Dab): Boolean {
+    /**
+     * Moves the stroke to [dab] (every dab must pass through here, painted or not, so travel
+     * distances and the smudge transport stay continuous) and computes its weights without
+     * touching the surface. Returns true, with the rectangle [paint] will rewrite in [out], only
+     * when the dab changes pixels: not for dabs outside the surface or selection, with zero
+     * strength, or smudge dabs that did not move a whole pixel.
+     */
+    fun prepare(dab: Dab, out: IntBox): Boolean {
+        prepared = null
         val ratio = advance(dab)
         if (!bounds(dab, box)) return false
-        if (kind == StrokeKind.SMUDGE && ox == 0 && oy == 0) return true
+        if (limit != null && !box.intersects(limit)) return false
+        if (kind == StrokeKind.SMUDGE && ox == 0 && oy == 0) return false
         val w = box.width
         val h = box.height
         ensure(w * h)
-        surface.read(box.left, box.top, w, h, px)
         selection?.read(box.left, box.top, w, h, sel)
         val strength = dab.alpha * preset.opacity
         val weightScale = when (kind) {
@@ -114,14 +125,33 @@ class DirectPainter(
             StrokeKind.BLUR -> strength * (0.35f + 0.65f * preset.mixing)
             else -> strength
         }
-        if (!computeWeights(dab, w, h, weightScale)) return true
+        if (!computeWeights(dab, w, h, weightScale)) return false
+        prepared = dab
+        preparedRatio = ratio
+        out.set(box)
+        return true
+    }
+
+    /** Rewrites the pixels of the dab accepted by the last [prepare]. */
+    fun paint() {
+        val dab = prepared ?: return
+        prepared = null
+        val w = box.width
+        val h = box.height
+        surface.read(box.left, box.top, w, h, px)
         when (kind) {
             StrokeKind.SMUDGE -> smudge(w, h)
             StrokeKind.BLUR -> blur(dab, w, h)
-            StrokeKind.WATERCOLOR -> watercolor(w, h, ratio.coerceIn(0.01f, 1f))
+            StrokeKind.WATERCOLOR -> watercolor(w, h, preparedRatio.coerceIn(0.01f, 1f))
             else -> {}
         }
         surface.write(box.left, box.top, w, h, px)
+    }
+
+    /** [prepare] + [paint] (no undo recording). Returns true when pixels were rewritten. */
+    fun apply(dab: Dab): Boolean {
+        if (!prepare(dab, scratch)) return false
+        paint()
         return true
     }
 

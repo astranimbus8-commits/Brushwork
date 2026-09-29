@@ -15,13 +15,18 @@ import kotlinx.serialization.json.Json
 class BrushPresetStore private constructor(private val prefs: SharedPreferences) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; coerceInputValues = true }
 
-    /** The user's edited version of preset [id], or null when it was never changed. */
+    /**
+     * The user's edited version of preset [id], or null when it was never changed. The name and
+     * tip are not user settings, so they always come from the current library.
+     */
     fun edited(id: String): BrushPreset? {
         val text = prefs.getString(KEY_PRESET + id, null) ?: return null
-        return runCatching { json.decodeFromString(BrushPreset.serializer(), text) }
+        val stored = runCatching { json.decodeFromString(BrushPreset.serializer(), text) }
             .getOrNull()
             ?.takeIf { it.id == id }
-            ?.sanitized()
+            ?: return null
+        val library = BrushLibrary.byId(id)
+        return (if (library != null) stored.copy(name = library.name, tip = library.tip) else stored).sanitized()
     }
 
     /** Preset [id] including the user's edits; null for an unknown id. */

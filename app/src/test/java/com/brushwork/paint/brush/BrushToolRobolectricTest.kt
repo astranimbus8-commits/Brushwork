@@ -21,6 +21,8 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -29,6 +31,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import kotlin.math.abs
+import kotlin.math.hypot
 
 /** Drives [BrushTool] on real Skia (Robolectric NATIVE graphics). */
 @RunWith(RobolectricTestRunner::class)
@@ -374,6 +378,95 @@ class BrushToolRobolectricTest {
         c.brush = BrushLibrary.defaultBrush.copy(size = 0.5f)
         tool.line(1f, 1f, 7f, 5f)
         assertTrue(c.canUndo)
+    }
+
+    @Test
+    fun smudgeTapAndZeroStrengthLeaveNoUndoEntry() {
+        val c = newController(fill = 0xFF3366CC.toInt())
+        val before = c.activeLayer.bitmap.pixels()
+        val tool = c.tool(ToolId.SMUDGE)
+        c.smudgeBrush = BrushLibrary.defaultSmudge.copy(size = 30f)
+        // A tap moves nothing.
+        tool.onDown(ToolPoint(100f, 100f)); tool.onUp(ToolPoint(100f, 100f))
+        assertFalse(c.canUndo)
+        // Strength 0 moves nothing either.
+        c.smudgeBrush = c.smudgeBrush.copy(mixing = 0f)
+        tool.line(40f, 100f, 160f, 100f)
+        assertFalse(c.canUndo)
+        // Zero-opacity paint strokes are not recorded.
+        c.brush = BrushLibrary.byId("hardround")!!.copy(opacity = 0f)
+        c.tool(ToolId.BRUSH).line(40f, 60f, 160f, 60f)
+        assertFalse(c.canUndo)
+        assertTrue(before.contentEquals(c.activeLayer.bitmap.pixels()))
+        assertNull(c.renderOverride)
+    }
+
+    @Test
+    fun tiledCommitMatchesTheLivePreview() {
+        // Grain + selection use an offscreen layer, which the commit now builds per 256 px tile:
+        // the committed pixels must equal what the live preview showed, across tile edges.
+        val c = newController(700, 600)
+        c.color = 0xFF804020.toInt()
+        val tool = c.tool(ToolId.BRUSH)
+        c.brush = BrushLibrary.byId("chalk")!!.copy(size = 40f)
+        val bytes = ByteArray(700 * 600) { i -> if ((i % 700) in 100..600 && (i / 700) in 50..550) -1 else 64 }
+        c.setSelection(Selection.fromBytes(bytes, 700, 600))
+        tool.line(30f, 40f, 670f, 560f, steps = 80, up = false)
+        val preview = BitmapUtils.createLayerBitmap(700, 600)
+        c.compositor.drawDocument(Canvas(preview), null)
+        tool.onUp(ToolPoint(670f, 560f))
+        val a = preview.pixels()
+        val b = c.activeLayer.bitmap.pixels()
+        var maxDiff = 0
+        var where = ""
+        for (i in a.indices) {
+            // The live curve trails the last input point until release: skip the stroke's tail.
+            if (hypot(i % 700 - 670f, i / 700 - 560f) < 70f) continue
+            for (sh in intArrayOf(0, 8, 16, 24)) {
+                // Compare premultiplied values (getPixels unpremultiplies, magnifying tiny-alpha noise).
+                fun pm(c: Int) = if (sh == 24) c ushr 24 else ((c shr sh) and 0xFF) * (c ushr 24) / 255
+                val d = abs(pm(a[i]) - pm(b[i]))
+                if (d > maxDiff) { maxDiff = d; where = "${i % 700},${i / 700}: ${Integer.toHexString(a[i])} vs ${Integer.toHexString(b[i])}" }
+            }
+        }
+        assertTrue("preview vs commit max channel difference $maxDiff at $where", maxDiff <= 1)
+        assertTrue(b.count { it ushr 24 != 0 } > 5000)
+        // Nothing outside the stroke's tiles changed: far corner stays empty.
+        assertEquals(0, alphaAt(c.activeLayer.bitmap, 650, 40))
+    }
+
+    @Test
+    fun nanStylusPressureStillPaints() {
+        val c = newController()
+        val tool = c.tool(ToolId.BRUSH)
+        c.brush = BrushLibrary.byId("hardround")!!.copy(size = 10f)
+        tool.onDown(ToolPoint(40f, 100f, pressure = Float.NaN, isStylus = true))
+        for (i in 1..10) tool.onMove(ToolPoint(40f + 12f * i, 100f, pressure = Float.NaN, isStylus = true))
+        tool.onUp(ToolPoint(160f, 100f, pressure = Float.NaN, isStylus = true))
+        assertEquals(255, alphaAt(c.activeLayer.bitmap, 100, 100))
+    }
+
+    @Test
+    fun resourcesAreFreedWhenTheEditorScopeIsCancelled() {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val doc = Document("t", "t", 100, 100).apply { layers += Layer(newLayerId(), "L", BitmapUtils.createLayerBitmap(100, 100)) }
+        val c = EditorController(context, doc, scope, AppSettings(context))
+        c.tool(ToolId.BRUSH).line(10f, 10f, 90f, 90f)
+        val res = StrokeResources.of(c)
+        assertTrue(res.hasCoverage)
+        scope.cancel()
+        assertFalse(res.hasCoverage)
+        assertTrue(StrokeResources.of(c) !== res)
+    }
+
+    @Test
+    fun storedEditsKeepTheLibraryNameAndTip() {
+        val store = BrushPresetStore.get(context)
+        store.save(BrushLibrary.byId("pencil")!!.copy(name = "Old pencil", tip = BrushTip.ROUND_HARD, size = 21f))
+        val loaded = store.load("pencil")!!
+        assertEquals("Pencil", loaded.name)
+        assertEquals(BrushTip.PENCIL, loaded.tip)
+        assertEquals(21f, loaded.size)
     }
 
     @Test

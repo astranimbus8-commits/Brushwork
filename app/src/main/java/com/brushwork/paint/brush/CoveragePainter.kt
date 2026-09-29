@@ -60,13 +60,18 @@ class CoveragePainter {
     private fun xfer(mode: PorterDuff.Mode): PorterDuffXfermode? =
         if (mode == PorterDuff.Mode.SRC_OVER) null else modes.getOrPut(mode) { PorterDuffXfermode(mode) }
 
+    private fun alphaOf(style: CoverageStyle): Int = (style.opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+
+    /** False when [style] is so transparent that [draw] changes nothing. */
+    fun isVisible(style: CoverageStyle): Boolean = alphaOf(style) > 0
+
     /**
      * Draws [coverage] limited to [bounds] with [style]. [selectionMask] (ALPHA_8, document
      * sized) limits the effect to the selection.
      */
     fun draw(canvas: Canvas, coverage: Bitmap, bounds: Rect, style: CoverageStyle, selectionMask: Bitmap?) {
         if (bounds.isEmpty) return
-        val alpha = (style.opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        val alpha = alphaOf(style)
         if (alpha <= 0) return
         canvas.save()
         canvas.clipRect(bounds)

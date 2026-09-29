@@ -134,7 +134,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         /** Approximate pixel operations of one dab of diameter [d]. */
         open fun dabCost(d: Float): Float = d * d
 
-        fun pressureOf(p: ToolPoint): Float = if (isStylus) p.pressure.coerceIn(0f, 1f) else 1f
+        fun pressureOf(p: ToolPoint): Float =
+            if (isStylus && !p.pressure.isNaN()) p.pressure.coerceIn(0f, 1f) else 1f
 
         fun begin(p: ToolPoint) {
             sampler.begin(p.x, p.y, pressureOf(p))
@@ -291,25 +292,48 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val commitRect = Rect(bounds)
             val sel = selection
             if (sel != null && !commitRect.intersect(sel.bounds)) commitRect.setEmpty()
-            if (!commitRect.isEmpty) {
+            if (!commitRect.isEmpty && res.painter.isVisible(style)) {
                 val rec = controller.beginEdit(layer)
-                // Snapshot only the undo tiles under the dabs (not the whole bounding box of a
-                // long diagonal stroke); coverage is zero elsewhere, so nothing else changes.
-                val r = Rect()
-                for (dab in dabs) {
-                    if (!dab.hasBounds) continue
-                    r.set(dab.left, dab.top, dab.right, dab.bottom)
-                    if (r.intersect(commitRect)) rec.touch(r)
-                }
                 val target = if (rec.target == EditTarget.MASK) layer.mask else layer.bitmap
-                if (target != null && !rec.isEmpty) {
-                    res.painter.draw(Canvas(target), coverage, commitRect, style, sel?.mask)
+                if (target != null) {
+                    // Composite tile by tile, only where dabs landed: long diagonal strokes skip
+                    // their empty bounding box, and the grain/selection offscreen layer stays
+                    // tile-sized instead of stroke-sized. Coverage, grain and selection are all
+                    // document-anchored and drawn unscaled, so the result equals one big draw.
+                    val canvas = Canvas(target)
+                    for (r in touchedTiles(commitRect)) {
+                        rec.touch(r)
+                        res.painter.draw(canvas, coverage, r, style, sel?.mask)
+                    }
                     controller.commitEdit(rec, undoLabel(kind))
-                } else {
-                    rec.abort()
                 }
             }
             release()
+        }
+
+        /** [COMMIT_TILE]-aligned tiles (clipped to [clip]) that contain part of a dab. */
+        private fun touchedTiles(clip: Rect): List<Rect> {
+            val cols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
+            val rows = (docH + COMMIT_TILE - 1) / COMMIT_TILE
+            val hit = BooleanArray(cols * rows)
+            val r = Rect()
+            for (dab in dabs) {
+                if (!dab.hasBounds) continue
+                r.set(dab.left, dab.top, dab.right, dab.bottom)
+                if (!r.intersect(clip)) continue
+                for (row in r.top / COMMIT_TILE..(r.bottom - 1) / COMMIT_TILE) {
+                    for (col in r.left / COMMIT_TILE..(r.right - 1) / COMMIT_TILE) hit[row * cols + col] = true
+                }
+            }
+            val out = ArrayList<Rect>()
+            for (i in hit.indices) {
+                if (!hit[i]) continue
+                val x = (i % cols) * COMMIT_TILE
+                val y = (i / cols) * COMMIT_TILE
+                val t = Rect(x, y, x + COMMIT_TILE, y + COMMIT_TILE)
+                if (t.intersect(clip)) out += t
+            }
+            return out
         }
 
         override fun cancel() = release()
@@ -338,12 +362,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             selection = selection?.let { AlphaMaskReader(it.mask) },
             alphaLock = layer.alphaLocked && rec.target == EditTarget.CONTENT,
             color = strokeColor(maskTarget),
+            limit = selection?.bounds?.let { IntBox(it.left, it.top, it.right, it.bottom) },
         )
         /** Dabs held back until the end taper is known (only with a finger end taper). */
         private val pending = ArrayDeque<Dab>()
         private val box = IntBox()
         private val touchRect = Rect()
-        private val selBounds = selection?.bounds
 
         override val budget: Float get() = 1_500_000f
 
@@ -371,15 +395,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
 
         private fun render(dab: Dab) {
-            if (!painter.bounds(dab, box) ||
-                (selBounds != null && !selBounds.intersects(box.left, box.top, box.right, box.bottom))
-            ) {
-                painter.skip(dab)
-                return
-            }
+            // Snapshot for undo only what the painter is really about to change, so a smudge
+            // tap (which moves nothing) leaves no undo entry.
+            if (!painter.prepare(dab, box)) return
             touchRect.set(box.left, box.top, box.right, box.bottom)
             rec.touch(touchRect)
-            painter.apply(dab)
+            painter.paint()
             dirty.union(touchRect)
         }
 
@@ -396,5 +417,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             rec.abort()
             if (!touched.isEmpty) controller.invalidateDoc(touched)
         }
+    }
+
+    private companion object {
+        /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
+        const val COMMIT_TILE = 256
     }
 }

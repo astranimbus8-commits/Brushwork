@@ -5,13 +5,16 @@ import android.graphics.Canvas
 import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.EditorController
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import java.util.WeakHashMap
 
 /**
  * Per-editor brush engine resources shared by the brush, eraser, smudge and blur tools: one
  * document-sized ALPHA_8 coverage buffer (allocated lazily, reused, cleared only in dirty
- * regions) and the tip cache. Main thread only. Holds no reference to the controller, so the
- * weak registry releases everything when the editor goes away.
+ * regions) and the tip cache. Main thread only. Freed when the editor's coroutine scope is
+ * cancelled (the editor session closes); holds no reference to the controller, so the weak
+ * registry never keeps an editor alive.
  */
 class StrokeResources {
     val tips = TipCache()
@@ -20,6 +23,9 @@ class StrokeResources {
 
     private var buffer: Bitmap? = null
     private var bufferCanvas: Canvas? = null
+
+    /** True while the coverage buffer is allocated. */
+    internal val hasCoverage: Boolean get() = buffer != null
 
     /** The coverage buffer for a [width] x [height] document (reallocated when the size changes). */
     fun coverage(width: Int, height: Int): Bitmap {
@@ -58,6 +64,22 @@ class StrokeResources {
     companion object {
         private val registry = WeakHashMap<EditorController, StrokeResources>()
 
-        fun of(controller: EditorController): StrokeResources = registry.getOrPut(controller) { StrokeResources() }
+        /** The resources of [controller]'s editor (created on first use). */
+        fun of(controller: EditorController): StrokeResources {
+            registry[controller]?.let { return it }
+            val res = StrokeResources()
+            registry[controller] = res
+            // The session cancels the scope when the editor closes (after committing strokes):
+            // free the ~20 MB buffer right then instead of whenever the weak entry is purged.
+            controller.scope.launch {
+                try {
+                    awaitCancellation()
+                } finally {
+                    res.release()
+                    if (registry[controller] === res) registry.remove(controller)
+                }
+            }
+            return res
+        }
     }
 }
