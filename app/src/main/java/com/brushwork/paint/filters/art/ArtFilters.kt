@@ -10,6 +10,8 @@ val artFilters: List<Filter> = listOf(
     NoiseFilter(),
     RetroGameFilter(),
     ChromeFilter(),
+    BloomFilter(),
+    CrossFilter(),
     SheerFilter(SheerShape.CROSS),
     SheerFilter(SheerShape.LINE),
     SheerFilter(SheerShape.SQUARE),
