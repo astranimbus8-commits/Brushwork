@@ -475,6 +475,100 @@ class EditorRuntimeSmokeTest {
         lasso.setPolygonMode(false)
     }
 
+    // ================================================================== every tool, every layer state
+
+    private fun allPixels(): List<IntArray> = c.doc.layers.flatMap { l -> listOfNotNull(pixels(l.bitmap), l.mask?.let { pixels(it) }) }
+
+    private fun settleBusy(where: String) {
+        assertTrue("$where: busy operation finished", Smoke.pumpUntil(20_000) { c.busyMessage == null })
+        Smoke.pump(60)
+    }
+
+    /** Taps, drags and a long press with [id] on the canvas, then applies any pending work. */
+    private fun exercise(id: ToolId, state: String) {
+        val where = "$id / $state"
+        Smoke.step(where)
+        c.selectTool(id)
+        Smoke.pump(60)
+        touch.idle(200); touch.tap(screen(200f, 150f).first, screen(200f, 150f).second)
+        settleBusy("$where tap")
+        touch.idle(200); touch.tap(screen(90f, 80f).first, screen(90f, 80f).second)
+        settleBusy("$where tap 2")
+        touch.idle(200); touch.stroke(screen(60f, 60f), screen(340f, 240f))
+        settleBusy("$where drag")
+        touch.idle(200); touch.stroke(screen(200f, 150f), screen(230f, 160f))
+        settleBusy("$where drag 2")
+        val (lx, ly) = screen(300f, 70f)
+        touch.idle(200)
+        touch.send(MotionEvent.ACTION_DOWN, P(0, lx, ly))
+        touch.idle(700)
+        touch.send(MotionEvent.ACTION_UP, P(0, lx, ly))
+        settleBusy("$where long press")
+        val tool = c.currentTool
+        if (tool.hasPendingWork) {
+            tool.commit()
+            settleBusy("$where commit")
+        }
+        Smoke.assertQuiet(c, where)
+    }
+
+    @Test
+    fun everyToolSurvivesTouchInEveryLayerState() {
+        val top = c.doc.layers[1]
+        val bottom = c.doc.layers[0]
+        bottom.bitmap.eraseColor(-1)
+        seed(top)
+        c.undoManager.clear()
+        c.selectTool(ToolId.BRUSH)
+        val original = allPixels()
+        val states = listOf<Pair<String, () -> Unit>>(
+            "plain" to {},
+            "selection" to { c.setSelection(com.brushwork.paint.model.Selection.fromBytes(ByteArray(400 * 300) { i -> if (i % 400 in 100..299 && i / 400 in 50..249) -1 else 0 }, 400, 300)) },
+            "mask" to { c.deselect(); c.addMask(top, fromSelection = false) },
+            "alpha locked" to { c.setEditingMask(top, false); c.toggleAlphaLock(top) },
+            "hidden" to { c.toggleAlphaLock(top); c.toggleVisibility(top) },
+            "locked" to { c.toggleVisibility(top); c.toggleLock(top) },
+            "grayscale" to { c.toggleLock(top); c.doc.colorMode = com.brushwork.paint.model.ColorMode.GRAYSCALE; c.onDocumentGeometryChanged() },
+            "bottom layer" to { c.doc.colorMode = com.brushwork.paint.model.ColorMode.RGB; c.onDocumentGeometryChanged(); c.selectLayer(bottom) },
+        )
+        val leaks = mutableListOf<String>()
+        for ((state, setUp) in states) {
+            c.selectTool(ToolId.BRUSH)
+            setUp()
+            Smoke.pump(60)
+            for (id in ToolId.entries) {
+                // Whatever the tool did must be undoable back to exactly these pixels. (History
+                // is capped at 150 steps, so start each tool from an empty one.)
+                c.undoManager.clear()
+                val n0 = 0
+                val p0 = allPixels()
+                val layers0 = c.doc.layers.size
+                exercise(id, state)
+                c.selectTool(ToolId.BRUSH)
+                var g = 100
+                while (c.undoManager.undoCount > n0 && g-- > 0) { c.undo(); settleBusy("undo $id / $state") }
+                assertEquals("$id / $state: layers after undo", layers0, c.doc.layers.size)
+                val p1 = allPixels()
+                for (k in p0.indices) {
+                    val a = p0[k]; val b = p1.getOrNull(k)
+                    if (b == null || !a.contentEquals(b)) {
+                        val i = a.indices.firstOrNull { b == null || a[it] != b[it] } ?: -1
+                        leaks += "$id / $state: bitmap $k differs after undo, first at (${i % 400}, ${i / 400}): " +
+                            "${Integer.toHexString(a.getOrElse(i) { 0 })} -> ${Integer.toHexString(b?.getOrElse(i) { 0 } ?: 0)}, " +
+                            "${a.indices.count { b == null || a[it] != b[it] }} px"
+                    }
+                }
+                // Redo it so the next tools work on real content again.
+                while (c.canRedo && g-- > 0) { c.redo(); settleBusy("redo $id / $state") }
+            }
+        }
+        assertTrue("pixels changed outside undo:\n" + leaks.joinToString("\n"), leaks.isEmpty())
+        assertEquals(2, c.doc.layers.size)
+        assertTrue("the tools did paint", original.indices.any { !original[it].contentEquals(allPixels().getOrNull(it) ?: IntArray(0)) })
+        val errors = Smoke.errorLogs()
+        println("[smoke] error logs: ${errors.size}\n" + errors.joinToString("\n"))
+    }
+
     // ================================================================== smart select
 
     @Test
