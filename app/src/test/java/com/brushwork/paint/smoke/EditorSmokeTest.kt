@@ -123,6 +123,9 @@ class EditorSmokeTest {
         section("number fields refuse NaN and infinity") { numberFields() }
         section("main activity end to end") { mainActivity() }
         dog.interrupt()
+        // Failures that are only logged (swallowed exceptions) count as failures too.
+        val errors = Smoke.errorLogs()
+        if (errors.isNotEmpty()) failures += AssertionError("error logs:\n" + errors.joinToString("\n"))
         if (failures.isNotEmpty()) {
             val first = failures.first()
             failures.drop(1).forEach { first.addSuppressed(it) }
@@ -971,7 +974,8 @@ class EditorSmokeTest {
         for (entry in listOf("Export PNG", "Export JPG", "Share")) {
             click("More options for Renamed art", exact = false)
             click(entry, exact = true)
-            Smoke.pumpUntil(5_000) { settle(1); false } // let the busy overlay come and go
+            // The gallery ignores other actions while its busy overlay is up.
+            assertTrue("$entry: busy overlay gone", Smoke.pumpUntil { settle(1); !has("Exporting") && !has("Preparing to share") })
             assertTrue("$entry: gallery usable again", has("New canvas"))
         }
         if (java.io.File.separatorChar == '/') {
@@ -984,7 +988,10 @@ class EditorSmokeTest {
         click("Delete", exact = true)
         assertTrue("delete asks first", Smoke.pumpUntil { settle(1); has("Delete artwork?", exact = true) })
         SmokeUi.clickIn("Delete artwork?", "Delete")
-        assertTrue("deleted", Smoke.pumpUntil { settle(1); projects().size == 1 })
+        assertTrue("deleted", Smoke.pumpUntil(8_000) { settle(1); projects().size == 1 } || run {
+            System.err.println("[smoke] delete did not happen; projects ${projects().map { it.name }}; shown: ${SmokeUi.shown()}")
+            false
+        })
         assertTrue(has("Renamed art", exact = true))
 
         // New canvas through the dialog opens the editor on it; system back returns to the gallery.

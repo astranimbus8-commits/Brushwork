@@ -136,9 +136,14 @@ internal object Smoke {
         return null
     }
 
-    /** Error-level log lines (Robolectric's ShadowLog) since the last [clearLogs]. */
+    /**
+     * Error-level log lines (Robolectric's ShadowLog) since the last [clearLogs], except the one
+     * expected off-device: the LiteRT native library can't load here, and smart select falls
+     * back to its heuristics (the behavior under test).
+     */
     fun errorLogs(): List<String> = ShadowLog.getLogs()
         .filter { it.type >= Log.ERROR }
+        .filterNot { it.tag == "Segmentation" && it.msg.startsWith("scene model unavailable; using heuristics") }
         .map { "${it.tag}: ${it.msg}" + (it.throwable?.let { t -> " / ${t.javaClass.simpleName}: ${t.message}" } ?: "") }
 
     fun clearLogs() = ShadowLog.clear()
