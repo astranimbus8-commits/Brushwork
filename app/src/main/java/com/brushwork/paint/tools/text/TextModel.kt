@@ -49,9 +49,9 @@ data class TextSpec(
     companion object {
         const val MIN_SIZE_PX = 2f
         const val MIN_LETTER_SPACING = -0.3f
-        const val MAX_LETTER_SPACING = 2f
+        const val MAX_LETTER_SPACING = 1f
         const val MIN_LINE_SPACING = 0.5f
-        const val MAX_LINE_SPACING = 4f
+        const val MAX_LINE_SPACING = 3f
     }
 }
 

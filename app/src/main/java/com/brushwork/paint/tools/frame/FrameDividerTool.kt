@@ -172,6 +172,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
             // Pixels already match (e.g. redrawing an unchanged frame): just adopt the model.
             rec.model = newModel
             rec.version = layer.contentVersion
+            lastFrame = WeakReference(layer)
             revision++
             return true
         }

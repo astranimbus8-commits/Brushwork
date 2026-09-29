@@ -144,14 +144,14 @@ fun TextEditorDialog(tool: TextTool) {
                     label = "Letter spacing",
                     value = spec.letterSpacing,
                     onValueChange = { v -> style { it.copy(letterSpacing = v) } },
-                    valueRange = TextSpec.MIN_LETTER_SPACING..1f,
+                    valueRange = TextSpec.MIN_LETTER_SPACING..TextSpec.MAX_LETTER_SPACING,
                     valueText = Units.formatNumber(spec.letterSpacing.toDouble(), 2) + " em",
                 )
                 LabeledSlider(
                     label = if (spec.vertical) "Column spacing" else "Line spacing",
                     value = spec.lineSpacing,
                     onValueChange = { v -> style { it.copy(lineSpacing = v) } },
-                    valueRange = TextSpec.MIN_LINE_SPACING..3f,
+                    valueRange = TextSpec.MIN_LINE_SPACING..TextSpec.MAX_LINE_SPACING,
                     valueText = "× " + Units.formatNumber(spec.lineSpacing.toDouble(), 2),
                 )
 
