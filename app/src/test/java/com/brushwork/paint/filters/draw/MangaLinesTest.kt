@@ -92,7 +92,7 @@ class MangaLinesTest {
     @Test
     fun speedLinesRunAlongTheAngle() {
         val f = SpeedLineFilter()
-        val v = f.defaultValues().set("count", 25f).set("thickness", 3f)
+        val v = f.defaultValues().set("thickness", 3f)
         val horizontal = f.apply(PixelBuffer(200, 150), v, ctx)
         val (hx, hy) = anisotropy(horizontal)
         assertTrue("x=$hx y=$hy", hy > hx * 4)
@@ -107,16 +107,20 @@ class MangaLinesTest {
     @Test
     fun speedLinesStayWithinTheirLanes() {
         val f = SpeedLineFilter()
-        val v = f.defaultValues().set("count", 20f).set("thickness", 4f).set("thickness_var", 0f)
+        val v = f.defaultValues().set("density", 90f).set("thickness", 4f).set("thickness_var", 0f)
         val out = f.apply(PixelBuffer(100, 100), v, ctx)
         val st = f.buildStreaks(v, 100, 100, ctx)
-        // At angle 0 lanes are rows: every inked pixel is within half a thickness (+AA) of a lane.
+        // At angle 0 streaks are horizontal: every inked pixel lies within half a thickness
+        // (+ antialiasing) of the axis of a streak that spans its x position.
+        var inked = 0
         for (y in 0 until 100) for (x in 0 until 100) {
             if (alpha(out[x, y]) == 0) continue
-            val vy = y + 0.5 - 50.0
-            val near = st.laneV.minOf { abs(it - vy) }
-            assertTrue("pixel $x,$y is $near px from a lane", near <= 2.6)
+            inked++
+            val u = x + 0.5 - 50.0; val vy = y + 0.5 - 50.0
+            val near = st.v.indices.filter { u >= st.u0[it] - 0.5 && u <= st.u1[it] + 0.5 }.minOf { abs(st.v[it] - vy) }
+            assertTrue("pixel $x,$y is $near px from a streak", near <= 2.51)
         }
+        assertTrue(inked > 100)
     }
 
     @Test
@@ -125,9 +129,20 @@ class MangaLinesTest {
         val v = f.defaultValues()
         val full = f.buildStreaks(v, 400, 400, ctx)
         val small = f.buildStreaks(v, 100, 100, FilterContext(scale = 0.25f))
-        assertEquals(full.laneV.size, small.laneV.size)
+        assertEquals(full.lanes, small.lanes)
         assertEquals(full.u0.size, small.u0.size)
         assertEquals(full.halfW[3] * 0.25f, small.halfW[3], 1e-4f)
+        assertEquals(full.v[5] * 0.25, small.v[5], 1e-6)
+    }
+
+    @Test
+    fun speedLineDensityControlsLaneSpacing() {
+        val f = SpeedLineFilter()
+        val sparse = f.buildStreaks(f.defaultValues().set("density", 10f), 300, 300, ctx)
+        val dense = f.buildStreaks(f.defaultValues().set("density", 100f), 300, 300, ctx)
+        assertTrue(dense.lanes > sparse.lanes * 4)
+        // At full density lanes sit about 1.2 thicknesses apart.
+        assertEquals(6.0 * 1.2, dense.spacing, 0.5)
     }
 
     @Test

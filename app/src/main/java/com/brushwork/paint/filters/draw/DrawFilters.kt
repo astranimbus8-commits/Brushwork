@@ -2,7 +2,10 @@ package com.brushwork.paint.filters.draw
 
 import com.brushwork.paint.filters.Filter
 
-/** Every filter of the Draw category (plus the AI Background Removal, which lives here too). */
+/**
+ * Every filter of the Draw category, plus Background Removal (category AI, id
+ * "ai.background_removal") which this module also provides.
+ */
 val drawFilters: List<Filter> = listOf(
     ParallelGradationFilter(),
     ConcentricGradationFilter(),
@@ -11,4 +14,8 @@ val drawFilters: List<Filter> = listOf(
     SpeedLineFilter(),
     CloudsFilter(),
     QrCodeFilter(),
+    WatercolorFilter(),
+    AnimeBackgroundFilter(),
+    MangaBackgroundFilter(),
+    BackgroundRemovalFilter(),
 )

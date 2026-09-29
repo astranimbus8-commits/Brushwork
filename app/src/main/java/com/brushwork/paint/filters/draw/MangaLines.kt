@@ -128,7 +128,7 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
 
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("angle", "Angle", 0f, 360f, 0f, 1f, "°"),
-        FilterParam.Slider("count", "Number of lines", 10f, 800f, 140f, 1f),
+        FilterParam.Slider("density", "Density", 1f, 100f, 65f, 1f, "%"),
         FilterParam.Slider("thickness", "Thickness", 0.5f, 60f, 6f, 0.5f, pixels = true),
         FilterParam.Slider("thickness_var", "Thickness variation", 0f, 100f, 60f, 1f, "%"),
         FilterParam.Slider("length", "Length", 5f, 150f, 45f, 1f, "%"),
@@ -142,13 +142,14 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
 
     /**
      * Streaks grouped by lane (CSR layout): lane `l` owns indices laneStart[l] until
-     * laneStart[l + 1], sorted by [u0] and non-overlapping.
+     * laneStart[l + 1], sorted by [u0] and non-overlapping along u. Each streak has its own
+     * lateral position [v] within half a lane spacing of the lane center.
      */
     internal class Streaks(
-        val laneV: DoubleArray, val laneStart: IntArray,
-        val u0: DoubleArray, val u1: DoubleArray, val halfW: FloatArray,
+        val laneStart: IntArray,
+        val u0: DoubleArray, val u1: DoubleArray, val v: DoubleArray, val halfW: FloatArray,
         val vMin: Double, val spacing: Double, val maxHalf: Double,
-    )
+    ) { val lanes: Int get() = laneStart.size - 1 }
 
     internal fun buildStreaks(values: FilterValues, w: Int, h: Int, ctx: FilterContext): Streaks {
         val ang = Math.toRadians(values.float("angle").toDouble())
@@ -157,30 +158,33 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         // Extents of the canvas in the rotated frame (u along the lines, v across).
         val uExt = abs(dxu) * hw + abs(dyu) * hh
         val vExt = abs(dyu) * hw + abs(dxu) * hh
-        val lanes = values.int("count").coerceIn(1, 20000)
+        val thick = ctx.px(values.float("thickness")).toDouble().coerceAtLeast(1e-3)
+        val thickVar = values.float("thickness_var").coerceIn(0f, 100f) / 100.0
+        // Lane spacing relative to the thickness: 100% density packs lanes 1.2 widths apart.
+        val density = values.float("density").coerceIn(0f, 100f) / 100.0
+        val lanes = ceil(2 * vExt / (thick * (1.2 + 8.0 * (1.0 - density)))).toInt().coerceIn(1, 20000)
         val spacing = max(1e-3, 2 * vExt / lanes)
         val length = max(1.0, values.float("length").coerceIn(1f, 1000f) / 100.0 * 2 * uExt)
         val lenVar = values.float("length_var").coerceIn(0f, 100f) / 100.0
         val gap = values.float("gap").coerceIn(0f, 100f) / 100.0 * length
-        val thick = ctx.px(values.float("thickness")).toDouble().coerceAtLeast(0.0)
-        val thickVar = values.float("thickness_var").coerceIn(0f, 100f) / 100.0
         val rnd = Random(values.seed())
-        val laneV = DoubleArray(lanes)
         val laneStart = IntArray(lanes + 1)
-        val u0 = DoubleList(); val u1 = DoubleList(); val half = ArrayList<Float>()
+        val u0 = DoubleList(); val u1 = DoubleList(); val vs = DoubleList(); val half = DoubleList()
         for (l in 0 until lanes) {
             laneStart[l] = u0.size
-            laneV[l] = -vExt + (l + 0.5 + (rnd.nextDouble() - 0.5) * 0.8) * spacing
+            val center = -vExt + (l + 0.5) * spacing
             var u = -uExt - rnd.nextDouble() * length
             while (u < uExt) {
                 val len = max(1.0, length * (1.0 - lenVar * rnd.nextDouble()))
                 u0.add(u); u1.add(u + len)
-                half.add((0.5 * thick * (1.0 - thickVar * rnd.nextDouble())).toFloat())
+                vs.add(center + (rnd.nextDouble() - 0.5) * LATERAL_JITTER * spacing)
+                half.add(0.5 * thick * (1.0 - thickVar * rnd.nextDouble()))
                 u += len + max(0.5, gap * (0.2 + 1.6 * rnd.nextDouble()))
             }
         }
         laneStart[lanes] = u0.size
-        return Streaks(laneV, laneStart, u0.toArray(), u1.toArray(), half.toFloatArray(), -vExt, spacing, 0.5 * thick)
+        val halfW = half.toArray().let { d -> FloatArray(d.size) { d[it].toFloat() } }
+        return Streaks(laneStart, u0.toArray(), u1.toArray(), vs.toArray(), halfW, -vExt, spacing, 0.5 * thick)
     }
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
@@ -192,8 +196,10 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         val dxu = cos(ang); val dyu = sin(ang)
         val taper = values.choice("taper")
         val color = values.color("color")
-        val lanes = st.laneV.size
-        val reach = min(8, ceil((st.maxHalf + 1.0) / st.spacing).toInt() + 1)
+        val lanes = st.lanes
+        // Lanes whose streaks (offset up to half the jitter) can touch a pixel, plus AA.
+        val margin = st.maxHalf + 1.0 + 0.5 * LATERAL_JITTER * st.spacing
+        val reach = min(16, ceil(margin / st.spacing).toInt() + 1)
         val cx = w * 0.5; val cy = h * 0.5
         return FilterMath.mapXY(src, ctx) { x, y, c ->
             val px = x + 0.5 - cx; val py = y + 0.5 - cy
@@ -202,8 +208,6 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
             val l0 = floor((v - st.vMin) / st.spacing).toInt()
             var cov = 0f
             for (l in max(0, l0 - reach)..min(lanes - 1, l0 + reach)) {
-                val dist = abs(v - st.laneV[l]).toFloat()
-                if (dist > st.maxHalf + 1.0) continue
                 val from = st.laneStart[l]; val to = st.laneStart[l + 1]
                 // Last streak starting before u + 0.5 (end-cap antialiasing margin).
                 var lo = from; var hi = to - 1; var j = from - 1
@@ -212,7 +216,7 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
                     if (st.u0[mid] <= u + 0.5) { j = mid; lo = mid + 1 } else hi = mid - 1
                 }
                 for (k in max(from, j - 1)..j) {
-                    val cv = streakCoverage(st, k, u, dist, taper)
+                    val cv = streakCoverage(st, k, u, v, taper)
                     if (cv > cov) cov = cv
                 }
             }
@@ -220,9 +224,11 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         }
     }
 
-    private fun streakCoverage(st: Streaks, k: Int, u: Double, dist: Float, taper: Int): Float {
+    private fun streakCoverage(st: Streaks, k: Int, u: Double, v: Double, taper: Int): Float {
         val a = st.u0[k]; val b = st.u1[k]
         if (u < a - 0.5 || u > b + 0.5) return 0f
+        val dist = abs(v - st.v[k]).toFloat()
+        if (dist > st.halfW[k] + 1f) return 0f
         val s = ((u - a) / (b - a)).coerceIn(0.0, 1.0)
         val profile = when (taper) {
             TAPER_BOTH -> sin(PI * s)
@@ -233,21 +239,23 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         return Coverage.line((st.halfW[k] * profile).toFloat(), dist) * cap
     }
 
-    /** Minimal growable double list (avoids boxing while generating streaks). */
-    private class DoubleList {
-        private var data = DoubleArray(256)
-        var size = 0; private set
-        fun add(v: Double) {
-            if (size == data.size) data = data.copyOf(size * 2)
-            data[size++] = v
-        }
-        fun toArray(): DoubleArray = data.copyOf(size)
-    }
-
     internal companion object {
         const val TAPER_BOTH = 0
         const val TAPER_END = 1
         const val TAPER_NONE = 2
         val TAPERS = listOf("Both ends", "Toward the end", "None")
+        /** Lateral scatter of each streak within its lane, as a fraction of the lane spacing. */
+        const val LATERAL_JITTER = 0.9
     }
+}
+
+/** Minimal growable double list (avoids boxing while generating lines). */
+internal class DoubleList {
+    private var data = DoubleArray(256)
+    var size = 0; private set
+    fun add(v: Double) {
+        if (size == data.size) data = data.copyOf(size * 2)
+        data[size++] = v
+    }
+    fun toArray(): DoubleArray = data.copyOf(size)
 }
