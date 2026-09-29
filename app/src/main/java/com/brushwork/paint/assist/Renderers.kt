@@ -321,11 +321,12 @@ object RulerRenderer {
         val axisDeg = Math.toDegrees(atan2(pts[3], pts[2]).toDouble()).toFloat()
         if (r.type == RulerType.ELLIPSE) {
             // Semi-axes, to show which handle changes which radius.
-            for (h in arrayOf(RulerHandle.RADIUS_X, RulerHandle.RADIUS_Y)) {
-                val p = RulerGeometry.handlePosition(r, h, docPerDp)
-                mapPoint(t, p.x, p.y)
-                stroke(canvas, t, cx, cy, pts[0], pts[1], faint = true)
-            }
+            val px = RulerGeometry.handlePosition(r, RulerHandle.RADIUS_X, docPerDp)
+            mapPoint(t, px.x, px.y)
+            stroke(canvas, t, cx, cy, pts[0], pts[1], faint = true)
+            val py = RulerGeometry.handlePosition(r, RulerHandle.RADIUS_Y, docPerDp)
+            mapPoint(t, py.x, py.y)
+            stroke(canvas, t, cx, cy, pts[0], pts[1], faint = true)
         }
         for (h in RulerGeometry.handlesOf(r.type)) {
             val p = RulerGeometry.handlePosition(r, h, docPerDp)

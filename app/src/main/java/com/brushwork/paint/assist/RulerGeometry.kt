@@ -36,10 +36,14 @@ object RulerGeometry {
 
     /** Handles of [type], in hit-test priority order (the center last so resize handles win ties). */
     fun handlesOf(type: RulerType): List<RulerHandle> = when (type) {
-        RulerType.STRAIGHT, RulerType.RADIAL -> listOf(RulerHandle.ROTATE, RulerHandle.CENTER)
-        RulerType.CIRCLE -> listOf(RulerHandle.RADIUS, RulerHandle.CENTER)
-        RulerType.ELLIPSE -> listOf(RulerHandle.ROTATE, RulerHandle.RADIUS_X, RulerHandle.RADIUS_Y, RulerHandle.CENTER)
+        RulerType.STRAIGHT, RulerType.RADIAL -> LINE_HANDLES
+        RulerType.CIRCLE -> CIRCLE_HANDLES
+        RulerType.ELLIPSE -> ELLIPSE_HANDLES
     }
+
+    private val LINE_HANDLES = listOf(RulerHandle.ROTATE, RulerHandle.CENTER)
+    private val CIRCLE_HANDLES = listOf(RulerHandle.RADIUS, RulerHandle.CENTER)
+    private val ELLIPSE_HANDLES = listOf(RulerHandle.ROTATE, RulerHandle.RADIUS_X, RulerHandle.RADIUS_Y, RulerHandle.CENTER)
 
     /** Document position of handle [h] of [r]. */
     fun handlePosition(r: RulerSettings, h: RulerHandle, docPerDp: Float): Vec2 {

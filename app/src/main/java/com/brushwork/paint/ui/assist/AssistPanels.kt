@@ -31,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -217,7 +218,7 @@ private fun formatStep(r: RulerSettings): String =
 fun RulerToolOptions(tool: RulerTool) {
     val controller = tool.controller
     val ruler = controller.ruler
-    var showNumbers by remember { mutableStateOf(false) }
+    var showNumbers by rememberSaveable { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         for (type in RulerType.entries) {
             ToolIconButton(
@@ -237,7 +238,6 @@ fun RulerToolOptions(tool: RulerTool) {
         Button(
             onClick = { controller.selectTool(controller.lastPaintTool) },
             contentPadding = PaddingValues(horizontal = 14.dp),
-            modifier = Modifier.height(36.dp),
         ) { Text("Done") }
     }
     if (showNumbers) RulerPanel(controller, onDismiss = { showNumbers = false })
@@ -262,7 +262,7 @@ private val GRID_PRESETS = listOf(
 fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
     val grid = controller.grid
     val dpi = controller.doc.dpi.toDouble()
-    var pickColor by remember { mutableStateOf(false) }
+    var pickColor by rememberSaveable { mutableStateOf(false) }
     fun update(block: (GridSettings) -> GridSettings) = controller.updateGrid(block(controller.grid))
 
     BwSheet(title = "Grid", onDismiss = onDismiss) {
