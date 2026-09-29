@@ -111,9 +111,23 @@ class FindEdgesFilter : Filter("adjust.find_edges", "Find Edges", FilterCategory
         val w = src.width; val h = src.height
         val algorithm = values.choice("algorithm")
         val sigma = ctx.px(values.float("smoothness").coerceAtLeast(0f))
+        // Output color for every quantized edge strength.
+        val density = densityLut(values.float("black") / 100f, values.float("white") / 100f, values.float("middle") / 100f)
+        val lineRgb = values.color("lineColor") and 0xFFFFFF
+        val onWhite = values.choice("background") == 1
+        val lr = (lineRgb shr 16) and 0xFF; val lg = (lineRgb shr 8) and 0xFF; val lb = lineRgb and 0xFF
+        val colors = IntArray(LUT_SIZE) { i ->
+            val na = density[i]
+            if (onWhite) {
+                val inv = 255 - na
+                ColorUtils.argbUnchecked(255, (lr * na + 255 * inv + 127) / 255, (lg * na + 255 * inv + 127) / 255, (lb * na + 255 * inv + 127) / 255)
+            } else if (na == 0) 0 else (na shl 24) or lineRgb
+        }
+
         val sp = src.pixels
         val lum = FloatArray(src.size) { lumaOverWhite(sp[it]) / 255f }
-        val strength = FloatArray(src.size)
+        val out = PixelBuffer(w, h)
+        val d = out.pixels
         if (algorithm == 2) {
             val s1 = max(sigma, ctx.px(0.5f))
             val wide = lum.copyOf()
@@ -121,7 +135,7 @@ class FindEdgesFilter : Filter("adjust.find_edges", "Find Edges", FilterCategory
             AdjustMath.gaussianBlurInPlace(wide, w, h, s1 * 1.6f, ctx)
             Parallel.forRows(h) { y0, y1 ->
                 ctx.checkCancelled()
-                for (i in y0 * w until y1 * w) strength[i] = max(0f, wide[i] - lum[i]) * DOG_NORM
+                for (i in y0 * w until y1 * w) d[i] = colors[lutIndex(max(0f, wide[i] - lum[i]) * DOG_NORM)]
             }
         } else {
             AdjustMath.gaussianBlurInPlace(lum, w, h, sigma, ctx)
@@ -134,35 +148,22 @@ class FindEdgesFilter : Filter("adjust.find_edges", "Find Edges", FilterCategory
                         val tl = lum[up + xl]; val tc = lum[up + x]; val tr = lum[up + xr]
                         val ml = lum[row + xl]; val mc = lum[row + x]; val mr = lum[row + xr]
                         val bl = lum[dn + xl]; val bc = lum[dn + x]; val br = lum[dn + xr]
-                        strength[row + x] = if (algorithm == 1) {
+                        val strength = if (algorithm == 1) {
                             max(0f, tl + tc + tr + ml + mr + bl + bc + br - 8f * mc) / 3f
                         } else {
                             val gx = (tr + 2f * mr + br) - (tl + 2f * ml + bl)
                             val gy = (bl + 2f * bc + br) - (tl + 2f * tc + tr)
                             sqrt(gx * gx + gy * gy) * 0.25f
                         }
+                        d[row + x] = colors[lutIndex(strength)]
                     }
                 }
             }
         }
-        val density = densityLut(values.float("black") / 100f, values.float("white") / 100f, values.float("middle") / 100f)
-        val lineRgb = values.color("lineColor") and 0xFFFFFF
-        val onWhite = values.choice("background") == 1
-        val lr = (lineRgb shr 16) and 0xFF; val lg = (lineRgb shr 8) and 0xFF; val lb = lineRgb and 0xFF
-        val out = PixelBuffer(w, h)
-        val d = out.pixels
-        Parallel.forRows(h) { y0, y1 ->
-            ctx.checkCancelled()
-            for (i in y0 * w until y1 * w) {
-                val na = density[(strength[i].coerceIn(0f, 1f) * (LUT_SIZE - 1) + 0.5f).toInt()]
-                d[i] = if (onWhite) {
-                    val inv = 255 - na
-                    ColorUtils.argbUnchecked(255, (lr * na + 255 * inv + 127) / 255, (lg * na + 255 * inv + 127) / 255, (lb * na + 255 * inv + 127) / 255)
-                } else if (na == 0) 0 else (na shl 24) or lineRgb
-            }
-        }
         return out
     }
+
+    private fun lutIndex(strength: Float): Int = (strength.coerceIn(0f, 1f) * (LUT_SIZE - 1) + 0.5f).toInt()
 
     companion object {
         private const val LUT_SIZE = 1024
