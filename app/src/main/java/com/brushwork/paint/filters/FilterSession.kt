@@ -114,8 +114,6 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     private var previewSrc: PixelBuffer? = null
     private var previewSel: ByteArray? = null
     private var previewBitmap: Bitmap? = null
-    /** The values the current preview bitmap was rendered with. */
-    private var previewValues: FilterValues? = null
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
@@ -343,7 +341,6 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     private fun publishPreview(result: PixelBuffer, vals: FilterValues) {
         val bmp = previewBitmap ?: return
         BitmapUtils.writePixelBuffer(bmp, result)
-        previewValues = vals
         hasPreview = true
         previewStale = vals !== values
         if (!isComparing) installOverride()
@@ -376,6 +373,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (isClosed || isApplying) return
         if (!checkTarget()) return
         if (!controller.checkEditable(layer)) return
+        // A pending preview is dropped (CPU goes to the apply); it's re-run if the apply stops.
+        val droppedPreview = previewJob?.isActive == true
         previewJob?.cancel()
         val vals = values
         val sel = controller.selection
@@ -389,7 +388,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         applyProgress = -1f
         rawApplyProgress = -1f
         controller.runBusy(filter.name) {
-            if (isClosed) { isApplying = false; return@runBusy }
+            if (isClosed) { isApplying = false; return@runBusy } // cancelled before the job started
             applyJob = currentCoroutineContext().job
             try {
                 val outcome = coroutineScope {
@@ -427,7 +426,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
                 applyJob = null
                 isApplying = false
                 applyProgress = -1f
-                if (!isClosed && filter.livePreview && previewValues !== values) requestPreview(0L)
+                if (!isClosed && droppedPreview) requestPreview(0L)
             }
         }
     }
