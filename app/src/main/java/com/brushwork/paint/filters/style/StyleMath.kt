@@ -206,8 +206,9 @@ internal object StyleMath {
         }
 
         // Row pass: exact 2-D nearest edge pixel (by centre) via lower envelopes. Along a stair-stepped
-        // contour that pixel can sit a pixel or two away from the true closest point, so the edge
-        // points of all edge pixels in its 3x3 block are candidates and the closest one wins.
+        // contour that pixel can sit a few pixels away from the edge pixel whose edge point is truly
+        // closest, so the search then walks along the contour: the closest edge point in the 3x3
+        // block becomes the next centre until no neighbour is closer.
         Parallel.forRows(h) { y0, y1 ->
             ctx.checkCancelled()
             val off = IntArray(w)
@@ -225,30 +226,35 @@ internal object StyleMath {
                     continue
                 }
                 for (x in 0 until w) {
-                    val qx = arg[x]
-                    val qy = y + off[qx]
+                    var cx = arg[x]
+                    var cy = y + off[cx]
                     val ins = alphaIn[px[row + x] ushr 24]
                     var best = Float.MAX_VALUE
-                    for (j in max(0, qy - 1)..min(h - 1, qy + 1)) {
-                        for (i in max(0, qx - 1)..min(w - 1, qx + 1)) {
-                            val e = edge[j * w + i].toInt() and 0xFFFF
-                            if (e == 0) continue
-                            val hi = e ushr 8; val lo = e and 0xFF
-                            val d2: Float
-                            if (hi == NO_GRADIENT) {
-                                // Edge |0.5 - coverage| away along the line between the pixels.
-                                val s = lo / 510f
-                                val dx = (x - i).toFloat(); val dy = (y - j).toFloat()
-                                val dist = sqrt(dx * dx + dy * dy)
-                                val d = if (alphaIn[px[j * w + i] ushr 24] == ins) dist + s else max(0f, dist - s)
-                                d2 = d * d
-                            } else {
-                                val dx = x - (i + (hi - 128) * INV_OFFSET_SCALE)
-                                val dy = y - (j + (lo - 128) * INV_OFFSET_SCALE)
-                                d2 = dx * dx + dy * dy
+                    for (step in 0 until MAX_WALK) {
+                        var bx = cx; var by = cy
+                        for (j in max(0, cy - 1)..min(h - 1, cy + 1)) {
+                            for (i in max(0, cx - 1)..min(w - 1, cx + 1)) {
+                                val e = edge[j * w + i].toInt() and 0xFFFF
+                                if (e == 0) continue
+                                val hi = e ushr 8; val lo = e and 0xFF
+                                val d2: Float
+                                if (hi == NO_GRADIENT) {
+                                    // Edge |0.5 - coverage| away along the line between the pixels.
+                                    val s = lo / 510f
+                                    val dx = (x - i).toFloat(); val dy = (y - j).toFloat()
+                                    val dist = sqrt(dx * dx + dy * dy)
+                                    val d = if (alphaIn[px[j * w + i] ushr 24] == ins) dist + s else max(0f, dist - s)
+                                    d2 = d * d
+                                } else {
+                                    val dx = x - (i + (hi - 128) * INV_OFFSET_SCALE)
+                                    val dy = y - (j + (lo - 128) * INV_OFFSET_SCALE)
+                                    d2 = dx * dx + dy * dy
+                                }
+                                if (d2 < best) { best = d2; bx = i; by = j }
                             }
-                            if (d2 < best) best = d2
                         }
+                        if (bx == cx && by == cy) break
+                        cx = bx; cy = by
                     }
                     val d = sqrt(best)
                     out[row + x] = if (ins) -d else d
@@ -265,6 +271,9 @@ internal object StyleMath {
     /** Packed-offset units per pixel (offsets stay within +-0.71 px, so +-121 around 128). */
     private const val OFFSET_SCALE = 170f
     private const val INV_OFFSET_SCALE = 1f / OFFSET_SCALE
+
+    /** Maximum number of 3x3 steps of the walk along the contour in [signedDistance]. */
+    private const val MAX_WALK = 4
 
     /** High byte marking an edge pixel without a usable alpha gradient. */
     private const val NO_GRADIENT = 1

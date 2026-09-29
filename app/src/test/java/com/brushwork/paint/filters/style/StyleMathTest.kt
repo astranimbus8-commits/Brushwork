@@ -29,7 +29,7 @@ class StyleMathTest {
             sumErr += e; n++
         }
         assertTrue("max error $maxErr at $worst", maxErr < 0.35f)
-        assertTrue("mean error ${sumErr / n}", sumErr / n < 0.03)
+        assertTrue("mean error ${sumErr / n}", sumErr / n < 0.02)
         // Gradient direction error inside the disc (drives the shading of domes and bevels).
         var maxAng = 0f
         var sumAng = 0.0
@@ -44,8 +44,8 @@ class StyleMathTest {
             val cross = abs(gx * ry - gy * rx) / (gl * rr)
             maxAng = max(maxAng, cross); sumAng += cross; m++
         }
-        assertTrue("max gradient error $maxAng", maxAng < 0.2f)
-        assertTrue("mean gradient error ${sumAng / m}", sumAng / m < 0.025)
+        assertTrue("max gradient error $maxAng", maxAng < 0.12f)
+        assertTrue("mean gradient error ${sumAng / m}", sumAng / m < 0.012)
     }
 
     @Test
