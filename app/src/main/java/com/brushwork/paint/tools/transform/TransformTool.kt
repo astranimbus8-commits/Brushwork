@@ -102,10 +102,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /** Hint shown in the options strip when nothing is being transformed. */
     val statusText: String
-        get() = when {
-            isPreparing -> "Preparing…"
-            controller.selection != null -> "Touch the canvas to transform the selection"
-            else -> "Touch the canvas to transform the layer"
+        get() {
+            controller.layersVersion // re-read when the active layer or mask editing changes
+            val layer = controller.activeLayer
+            return when {
+                isPreparing -> "Preparing…"
+                controller.selection != null -> "Touch the canvas to transform the selection"
+                layer.editingMask && layer.mask != null -> "Touch the canvas to transform the layer mask"
+                else -> "Touch the canvas to transform the layer"
+            }
         }
 
     // ------------------------------------------------------------------ session
@@ -354,12 +359,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     fun setSize(width: Double? = null, height: Double? = null) =
         update { it.withSize(width?.toFloat(), height?.toFloat(), keepAspect) }
 
+    /** Sets the absolute rotation in degrees (around the center). */
     fun setRotation(degrees: Double) = update { it.withRotation(degrees.toFloat()) }
 
+    /** Sets a uniform scale relative to the original size (100 = original), around the center. */
     fun setScalePercent(percent: Double) = update { it.withScalePercent(percent.toFloat()) }
 
+    /** Mirrors along the content's own axes. */
     fun flip(horizontal: Boolean) = update { it.flipped(horizontal) }
 
+    /** Quarter turn around the center (pixel-exact for unscaled content). */
     fun rotate90(clockwise: Boolean) = update { it.rotated90(clockwise) }
 
     /** Back to where the transform started (the original position, or the initial placement). */
