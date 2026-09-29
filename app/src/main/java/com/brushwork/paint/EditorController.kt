@@ -824,7 +824,8 @@ class EditorController(
         filterSession?.cancel()
         currentTool.onDeactivate()
         if (!checkEditable()) return
-        filterSession = FilterSession(this, filter).also { it.start() }
+        // A session that closes itself during start() (target not usable) must not stay installed.
+        filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
     }
 
     // ------------------------------------------------------------------ busy work
