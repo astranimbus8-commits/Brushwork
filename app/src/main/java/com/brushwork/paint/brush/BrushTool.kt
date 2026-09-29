@@ -293,9 +293,16 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (sel != null && !commitRect.intersect(sel.bounds)) commitRect.setEmpty()
             if (!commitRect.isEmpty) {
                 val rec = controller.beginEdit(layer)
-                rec.touch(commitRect)
+                // Snapshot only the undo tiles under the dabs (not the whole bounding box of a
+                // long diagonal stroke); coverage is zero elsewhere, so nothing else changes.
+                val r = Rect()
+                for (dab in dabs) {
+                    if (!dab.hasBounds) continue
+                    r.set(dab.left, dab.top, dab.right, dab.bottom)
+                    if (r.intersect(commitRect)) rec.touch(r)
+                }
                 val target = if (rec.target == EditTarget.MASK) layer.mask else layer.bitmap
-                if (target != null) {
+                if (target != null && !rec.isEmpty) {
                     res.painter.draw(Canvas(target), coverage, commitRect, style, sel?.mask)
                     controller.commitEdit(rec, undoLabel(kind))
                 } else {
