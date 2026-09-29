@@ -268,7 +268,6 @@ class SpeedLineFilter : Filter("draw.speed_line", "Speed Line", FilterCategory.D
         /** Shortest streak as a fraction of the mean length (bounds the streak count per lane). */
         const val MIN_LENGTH = 0.02
         private const val LANE_SALT = 0x51EED
-
     }
 }
 
