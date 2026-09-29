@@ -112,6 +112,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     fun fitToScreen() {
         interruptStroke()
         fitNow()
+        reanchorGesture()
     }
 
     fun actualPixels() {
@@ -119,6 +120,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         interruptStroke()
         viewport.actualPixels()
         viewport.userAdjusted = true
+        reanchorGesture()
         applyTransform()
         flashGestureInfo()
     }
@@ -128,6 +130,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         interruptStroke()
         viewport.resetRotation()
         viewport.userAdjusted = true
+        reanchorGesture()
         applyTransform()
         flashGestureInfo()
     }
@@ -141,6 +144,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         cancelPendingLongPress()
         controller.pointerCancel()
         mode = Mode.IGNORE
+    }
+
+    /** A pinch in progress continues from the new framing instead of snapping back to the old one. */
+    private fun reanchorGesture() {
+        if (mode == Mode.TRANSFORM) restartTransform(null, -1)
     }
 
     val zoom: Float get() = viewport.scale
@@ -175,6 +183,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
+        // The document moves under the finger (rotation, split screen): a stroke would jump.
+        if (oldw > 0 && oldh > 0) interruptStroke()
         viewport.resize(w, h)
         if (mode == Mode.TRANSFORM) restartTransform(null, -1)
         ensureFitted()

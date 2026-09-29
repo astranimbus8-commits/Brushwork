@@ -14,6 +14,7 @@ import com.brushwork.paint.storage.ExportFormat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.max
 import kotlin.math.min
 
@@ -126,10 +127,17 @@ internal class EditorActions(private val controller: EditorController, private v
 
     /**
      * runBusy starts on Main.immediate: wait for frames so the busy scrim is on screen before
-     * the (blocking) full-resolution flatten starts.
+     * the (blocking) full-resolution flatten starts. Bounded, because no frames arrive while the
+     * app is in the background.
      */
     private suspend fun letOverlayShow() {
-        awaitFrame()
-        awaitFrame()
+        withTimeoutOrNull(OVERLAY_WAIT_MS) {
+            awaitFrame()
+            awaitFrame()
+        }
+    }
+
+    private companion object {
+        const val OVERLAY_WAIT_MS = 150L
     }
 }

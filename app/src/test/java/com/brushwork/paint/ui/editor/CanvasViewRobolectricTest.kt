@@ -288,6 +288,28 @@ class CanvasViewRobolectricTest {
     }
 
     @Test
+    fun fitDuringAPinchDoesNotSnapBackOnTheNextMove() {
+        val t = controller.viewTransform
+        val fitZoom = t.zoom
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
+        send(MotionEvent.ACTION_POINTER_DOWN, 20, P(0, 400f, 400f), P(1, 600f, 400f), index = 1)
+        send(MotionEvent.ACTION_MOVE, 40, P(0, 300f, 400f), P(1, 700f, 400f))
+        assertEquals(fitZoom * 2f, t.zoom, 1e-3f)
+        view.fitToScreen()
+        assertEquals(fitZoom, t.zoom, 1e-4f)
+        val center = t.docToScreen(400f, 300f)
+        // Fingers still: the view stays fitted; then the pinch continues from there.
+        send(MotionEvent.ACTION_MOVE, 60, P(0, 300f, 400f), P(1, 700f, 400f))
+        assertEquals(fitZoom, t.zoom, 1e-4f)
+        assertEquals(center.x, t.docToScreen(400f, 300f).x, 0.01f)
+        assertEquals(center.y, t.docToScreen(400f, 300f).y, 0.01f)
+        send(MotionEvent.ACTION_MOVE, 80, P(0, 250f, 400f), P(1, 750f, 400f))
+        assertEquals(fitZoom * 1.25f, t.zoom, 1e-3f)
+        send(MotionEvent.ACTION_POINTER_UP, 600, P(0, 250f, 400f), P(1, 750f, 400f), index = 0)
+        send(MotionEvent.ACTION_UP, 620, P(1, 750f, 400f))
+    }
+
+    @Test
     fun chromeActionEndsTheCanvasStrokeCleanly() {
         send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
         send(MotionEvent.ACTION_MOVE, 16, P(0, 420f, 400f))
