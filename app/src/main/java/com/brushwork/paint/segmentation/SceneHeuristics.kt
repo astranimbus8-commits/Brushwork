@@ -78,8 +78,9 @@ object SceneHeuristics {
     fun buildings(img: PixelBuffer, sky: FloatArray? = null, vegetation: FloatArray? = null): FloatArray {
         val f = Features(img)
         val w = f.w; val h = f.h; val n = f.n
-        val skyM = sky ?: sky(img)
-        val vegM = vegetation ?: vegetation(img)
+        val skyM = sky ?: SceneHeuristics.sky(img)
+        val vegM = vegetation ?: SceneHeuristics.vegetation(img)
+        require(skyM.size == n && vegM.size == n) { "mask size mismatch" }
         val gx = f.gradX; val gy = f.gradY
         val hv = FloatArray(n); val all = FloatArray(n)
         for (i in 0 until n) {
@@ -116,8 +117,9 @@ object SceneHeuristics {
     fun water(img: PixelBuffer, sky: FloatArray? = null, vegetation: FloatArray? = null): FloatArray {
         val f = Features(img)
         val w = f.w; val h = f.h
-        val skyM = sky ?: sky(img)
-        val vegM = vegetation ?: vegetation(img)
+        val skyM = sky ?: SceneHeuristics.sky(img)
+        val vegM = vegetation ?: SceneHeuristics.vegetation(img)
+        require(skyM.size == f.n && vegM.size == f.n) { "mask size mismatch" }
         var horizonRow = -1
         for (y in 0 until h) {
             var s = 0f

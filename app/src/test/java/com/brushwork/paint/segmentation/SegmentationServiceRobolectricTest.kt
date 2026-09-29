@@ -7,9 +7,11 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.shadows.ShadowLog
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
@@ -21,6 +23,11 @@ import java.util.concurrent.TimeUnit
 class SegmentationServiceRobolectricTest {
 
     private val context: Context get() = ApplicationProvider.getApplicationContext()
+
+    @Before
+    fun showLogs() {
+        ShadowLog.stream = System.out
+    }
 
     @Test
     fun everyTargetDegradesGracefullyOnABackgroundThread() {

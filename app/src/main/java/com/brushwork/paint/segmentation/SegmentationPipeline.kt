@@ -152,11 +152,15 @@ class SegmentationPipeline(
             }
         }
 
-        /** Binary scene-class mask for [target] upsampled (bilinear) to working resolution. */
+        /**
+         * Binary scene-class mask for [target] without argmax speckles, upsampled (bilinear) to
+         * working resolution.
+         */
         fun classMask(target: SmartTarget): FloatArray? {
             val map = classMap() ?: return null
             val cw = letterbox.contentWidth; val ch = letterbox.contentHeight
-            return MaskOps.resizeBilinear(SceneClasses.targetMask(map, cw, ch, target), cw, ch, w, h)
+            val mask = Regions.removeSpecks(SceneClasses.targetMask(map, cw, ch, target), cw, ch, max(4, cw * ch / 5000))
+            return MaskOps.resizeBilinear(mask, cw, ch, w, h)
         }
 
         private val subjectLock = Any()

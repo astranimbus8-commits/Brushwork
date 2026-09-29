@@ -83,6 +83,22 @@ object Regions {
     }
 
     /**
+     * Area opening + closing of a binary 0/1 plane: removes components smaller than [minSize]
+     * pixels and fills enclosed holes smaller than [minSize] (speckles of an argmax classifier).
+     * Returns a new 0/1 plane.
+     */
+    fun removeSpecks(mask: FloatArray, w: Int, h: Int, minSize: Int): FloatArray {
+        require(mask.size == w * h)
+        val on = BooleanArray(mask.size) { mask[it] >= 0.5f }
+        if (minSize > 1) {
+            val lab = label(on, w, h, eightConnected = true)
+            for (i in on.indices) if (on[i] && lab.sizes[lab.ids[i]] < minSize) on[i] = false
+            fillHoles(on, w, h, maxHoleSize = minSize - 1)
+        }
+        return FloatArray(mask.size) { if (on[it]) 1f else 0f }
+    }
+
+    /**
      * Fills holes of [mask] in place: components of the complement that do not touch the image
      * border and have at most [maxHoleSize] pixels become part of the mask.
      */
