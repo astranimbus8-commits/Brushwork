@@ -166,6 +166,16 @@ class PaletteDataTest {
         d = d.withRenamed("s2", "Ink")
         assertEquals("Ink 2", d.palette("s2")!!.name)
         assertEquals(PaletteData.MAX_NAME_LENGTH, d.withRenamed("s1", "x".repeat(100)).palette("s1")!!.name.length)
+        // Renaming to its own name is allowed; a built-in's name is not reused.
+        assertEquals("Ink", d.withRenamed("s1", "Ink").palette("s1")!!.name)
+        assertEquals("Basic 2", d.withRenamed("s1", "Basic").palette("s1")!!.name)
+        assertEquals("Neon 2", d.withNewPalette("Neon", "n").palette("n")!!.name)
+        // Numbered names stay within the length limit.
+        val long = "L".repeat(PaletteData.MAX_NAME_LENGTH)
+        val twice = d.withNewPalette(long, "l1").withNewPalette(long, "l2")
+        assertEquals(long, twice.palette("l1")!!.name)
+        assertEquals("L".repeat(PaletteData.MAX_NAME_LENGTH - 2) + " 2", twice.palette("l2")!!.name)
+        assertEquals(long, twice.withRenamed("l1", long).palette("l1")!!.name)
 
         // Deleting the active palette activates its left neighbor.
         d = d.withActive("s2").withDeleted("s2")

@@ -161,12 +161,9 @@ fun PaletteSection(
             !editable && manage -> "Built-in palette (read-only). Use the ⋮ menu to duplicate it into an editable copy."
             !editable -> "Built-in palette (read-only)."
             active.colors.isEmpty() -> "Tap + to add the current color."
-            manage -> "Long-press a swatch to replace, move or delete it."
-            else -> null
+            else -> "Long-press a swatch to replace, move or delete it."
         }
-        if (hint != null) {
-            Text(hint, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(top = 6.dp))
-        }
+        Text(hint, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(top = 6.dp))
     }
 
     when (val d = dialog) {

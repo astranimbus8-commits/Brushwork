@@ -83,8 +83,7 @@ data class PaletteData(
     fun withRenamed(id: String, name: String): PaletteData {
         val clean = cleanName(name) ?: return this
         if (!isEditable(id)) return this
-        val others = palettes.filter { it.id != id }.map { it.name }.toSet()
-        val finalName = if (clean in others) uniqueName(clean) else clean
+        val finalName = uniqueName(clean, exceptId = id)
         return copy(palettes = palettes.map { if (it.id == id) it.copy(name = finalName) else it })
     }
 
@@ -127,12 +126,20 @@ data class PaletteData(
         return copy(palettes = palettes.map { if (it.id == id) it.copy(colors = colors) else it })
     }
 
-    private fun uniqueName(base: String): String {
-        val names = palettes.map { it.name }.toSet()
+    /**
+     * [base], or "[base] N" (still at most [MAX_NAME_LENGTH] chars) if another palette, user or
+     * built-in, already has that name. The palette [exceptId] (being renamed) doesn't count.
+     */
+    private fun uniqueName(base: String, exceptId: String? = null): String {
+        val names = (palettes.filter { it.id != exceptId } + BuiltInPalettes.all).map { it.name }.toSet()
         if (base !in names) return base
         var n = 2
-        while ("$base $n" in names) n++
-        return "$base $n"
+        while (true) {
+            val suffix = " $n"
+            val candidate = base.take(MAX_NAME_LENGTH - suffix.length).trimEnd() + suffix
+            if (candidate !in names) return candidate
+            n++
+        }
     }
 
     companion object {
