@@ -166,6 +166,97 @@ class DistortFiltersTest {
         assertTrue("round trip error $worst", worst <= 8)
     }
 
+    private fun checkerboard(w: Int, h: Int): PixelBuffer {
+        val b = PixelBuffer(w, h)
+        for (y in 0 until h) for (x in 0 until w) b[x, y] = if ((x + y) % 2 == 0) -1 else 0xFF000000.toInt()
+        return b
+    }
+
+    /** Mean distance from mid-gray of the pixels within [radius] of the image center. */
+    private fun grayDeviation(b: PixelBuffer, radius: Float): Double {
+        var sum = 0.0; var n = 0
+        val cx = b.width / 2f; val cy = b.height / 2f
+        for (y in 0 until b.height) for (x in 0 until b.width) {
+            val dx = x + 0.5f - cx; val dy = y + 0.5f - cy
+            if (dx * dx + dy * dy > radius * radius) continue
+            sum += abs(ColorUtils.red(b[x, y]) - 127.5); n++
+        }
+        return sum / n
+    }
+
+    @Test
+    fun strongPinchIsAntialiased() {
+        // A 1-px checkerboard squeezed ~10-20x must average out to gray instead of sparkling.
+        val src = checkerboard(200, 200)
+        val out = filter<ExpansionFilter>().run(src, "amount" to -100f, "radius" to 90f)
+        // Same mapping, plain bilinear (what the filter did before supersampling).
+        val s = 0.95f
+        val profile = RadialProfile.inverseOf { t -> t * (1f - s + s * t * t) }
+        val plain = DistortMath.warp(src, ctx, 0, 0, 200, 200, DistortMath.EDGE_CLAMP) { px, py, q ->
+            val dx = px - 100f; val dy = py - 100f
+            val r = sqrt(dx * dx + dy * dy)
+            if (r >= 90f) false else {
+                val k = profile.ratioAt(r / 90f)
+                q[0] = 100f + dx * k; q[1] = 100f + dy * k
+                true
+            }
+        }
+        val aa = grayDeviation(out, 20f)
+        val aliased = grayDeviation(plain, 20f)
+        assertTrue("antialiased $aa vs plain $aliased", aa < aliased * 0.5 && aa < 25.0)
+    }
+
+    @Test
+    fun sphereLensHasNoHardRingAtTheRim() {
+        // Red = half the distance to the center: a clean spherize keeps it monotonic and smooth,
+        // without a jump where the asin mapping's slope becomes infinite.
+        val size = 601
+        val src = PixelBuffer(size, size)
+        val c = size / 2f
+        for (y in 0 until size) for (x in 0 until size) {
+            val dx = x + 0.5f - c; val dy = y + 0.5f - c
+            src[x, y] = ColorUtils.argb(255, (sqrt(dx * dx + dy * dy) / 2f).toInt().coerceAtMost(255), 0, 0)
+        }
+        // Radius 80% = 240 px: the rim lies inside the image, at x = 540.
+        val out = filter<SphereLensFilter>().run(src, "strength" to 100f, "radius" to 80f)
+        var worst = 0
+        for (x in 301 until size) {
+            val step = ColorUtils.red(out[x, 300]) - ColorUtils.red(out[x - 1, 300])
+            assertTrue("not monotonic at $x", step >= -1)
+            worst = max(worst, step)
+        }
+        assertTrue("largest step $worst", worst <= 4)
+        // Still a real lens: the middle is magnified (content comes from closer to the center).
+        assertTrue(ColorUtils.red(out[400, 300]) < ColorUtils.red(src[400, 300]) - 8)
+    }
+
+    @Test
+    fun fastAtan2MatchesMath() {
+        for (i in -40..40) for (j in -40..40) {
+            if (i == 0 && j == 0) continue
+            val y = i * 0.37f; val x = j * 1.13f
+            val expected = kotlin.math.atan2(y, x)
+            assertEquals("atan2($y, $x)", expected, DistortMath.atan2(y, x), 3e-5f)
+        }
+        assertEquals(0f, DistortMath.atan2(0f, 0f), 0f)
+        assertEquals(0f, DistortMath.atan2(Float.NaN, 1f), 0f)
+    }
+
+    @Test
+    fun supersampleCountFollowsMinification() {
+        assertEquals(1, DistortMath.samplesFor(0.3f))
+        assertEquals(1, DistortMath.samplesFor(1.4f))
+        assertEquals(2, DistortMath.samplesFor(2.5f))
+        assertEquals(DistortMath.MAX_SUPERSAMPLE, DistortMath.samplesFor(1000f))
+        assertEquals(DistortMath.MAX_SUPERSAMPLE, DistortMath.samplesFor(Float.POSITIVE_INFINITY))
+        assertEquals(1, DistortMath.samplesFor(Float.NaN))
+        // Magnifying lenses stay plain bilinear; pinching ones supersample near the center.
+        val bulge = RadialProfile.of { t -> t * (0.4f + 0.6f * t * t) }
+        val pinch = RadialProfile.inverseOf { t -> t * (0.4f + 0.6f * t * t) }
+        assertEquals(1, bulge.samplesAt(0.1f))
+        assertTrue(pinch.samplesAt(0.05f) >= 2)
+    }
+
     @Test
     fun radialProfileInverseComposesToIdentity() {
         val f = { t: Float -> t * (1f - 0.6f + 0.6f * t * t) }
@@ -220,7 +311,7 @@ class DistortFiltersTest {
     @Test
     fun rippleIsMirrorSymmetricAroundItsCenter() {
         val src = radialImage(100)
-        val out = filter<RippleFilter>().run(src, "amplitude" to 5f, "wavelength" to 12f, "radius" to 90f)
+        val out = filter<RippleFilter>().run(src, "amplitude" to 8f, "wavelength" to 12f, "radius" to 90f)
         var changed = 0
         for (d in 0 until 50) for (e in 0 until 50) {
             // Red encodes the distance to the center, which mirroring preserves.
@@ -343,6 +434,21 @@ class DistortFiltersTest {
         // Blur only (no color) on a uniform image changes nothing visible.
         val blurOnly = filter<BlurFrameFilter>().run(src, "opacity" to 0f, "blur" to 30f)
         assertTrue(blurOnly.pixels.all { maxChannelDiff(it, src[0, 0]) <= 1 })
+    }
+
+    @Test
+    fun blurFrameWorkingCopyIsBounded() {
+        // Small images and radii blur at full resolution; big ones never exceed the pixel budget.
+        assertEquals(1f, BlurFrameFilter.blurWorkScale(200, 200, 8f), 0f)
+        assertEquals(0.5f, BlurFrameFilter.blurWorkScale(200, 200, 24f), 1e-6f)
+        for (blur in listOf(0.5f, 2f, 8f, 12f, 40f, 300f)) {
+            val f = BlurFrameFilter.blurWorkScale(4000, 5000, blur)
+            val pixels = kotlin.math.ceil(4000 * f).toLong() * kotlin.math.ceil(5000 * f).toLong()
+            assertTrue("blur $blur: $pixels px", pixels <= BlurFrameFilter.MAX_WORK_PIXELS * 1.01)
+            assertTrue(f > 0f)
+        }
+        // A tall, thin 1 px image stays valid.
+        assertTrue(BlurFrameFilter.blurWorkScale(1, 20000, 5f) > 0f)
     }
 
     @Test

@@ -8,7 +8,6 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.floor
 import kotlin.math.max
@@ -44,6 +43,19 @@ class PolarCoordinatesFilter : Filter("distort.polar_coordinates", "Polar Coordi
             insideOut = values.bool("insideOut"),
         )
         val toPolar = values.choice("mode") == 0
+        // Polar to rectangular: the angle depends only on the column, so tabulate its cos / sin for
+        // the two sub-sample columns of every pixel.
+        val cosT: FloatArray
+        val sinT: FloatArray
+        if (toPolar) {
+            cosT = FloatArray(0); sinT = FloatArray(0)
+        } else {
+            cosT = FloatArray(2 * w); sinT = FloatArray(2 * w)
+            for (i in 0 until 2 * w) {
+                val theta = g.angleOfColumn(i * 0.5f + 0.25f)
+                cosT[i] = cos(theta); sinT[i] = sin(theta)
+            }
+        }
         val out = PixelBuffer(w, h)
         val d = out.pixels
         Parallel.forRows(h) { y0, y1 ->
@@ -54,9 +66,13 @@ class PolarCoordinatesFilter : Filter("distort.polar_coordinates", "Polar Coordi
                     // 2x2 supersampling: both directions compress strongly near the center / rim.
                     var sa = 0f; var sr = 0f; var sg = 0f; var sb = 0f
                     for (s in 0 until 4) {
-                        val px = x + 0.25f + 0.5f * (s and 1)
                         val py = y + 0.25f + 0.5f * (s shr 1)
-                        val c = if (toPolar) g.samplePolar(src, px, py) else g.sampleRect(src, px, py)
+                        val c = if (toPolar) {
+                            g.samplePolar(src, x + 0.25f + 0.5f * (s and 1), py)
+                        } else {
+                            val col = 2 * x + (s and 1)
+                            g.sampleRect(src, cosT[col], sinT[col], py)
+                        }
                         val a = (c ushr 24).toFloat()
                         if (a <= 0f) continue
                         sa += a
@@ -98,7 +114,7 @@ class PolarCoordinatesFilter : Filter("distort.polar_coordinates", "Polar Coordi
             val rho = sqrt(dx * dx + dy * dy) / rMax
             if (rho > 1f) return 0
             // 0 turns at 12 o'clock, increasing clockwise (y points down).
-            val turns = atan2(dy, dx) / DistortMath.TWO_PI + 0.25f - phaseTurns
+            val turns = DistortMath.atan2(dy, dx) / DistortMath.TWO_PI + 0.25f - phaseTurns
             val f = turns - floor(turns)
             val u = f * stripW - mH
             val v = (if (insideOut) rho else 1f - rho) * stripH - mV
@@ -110,14 +126,21 @@ class PolarCoordinatesFilter : Filter("distort.polar_coordinates", "Polar Coordi
             return src.sampleBilinear(u, v)
         }
 
-        /** Output is the strip: find where (px, py) came from in the disc. */
-        fun sampleRect(src: PixelBuffer, px: Float, py: Float): Int {
+        /** Polar angle (radians, y down) that output column position [px] of the strip unwraps. */
+        fun angleOfColumn(px: Float): Float {
             val f = (px + mH) / stripW
+            return DistortMath.TWO_PI * (f + phaseTurns) - DistortMath.PI * 0.5f
+        }
+
+        /**
+         * Output is the strip: find where the point at row position [py] of the column with angle
+         * cos / sin ([cosA], [sinA]) (see [angleOfColumn]) came from in the disc.
+         */
+        fun sampleRect(src: PixelBuffer, cosA: Float, sinA: Float, py: Float): Int {
             val t = (py + mV) / stripH
             val rho = if (insideOut) t else 1f - t
-            val theta = DistortMath.TWO_PI * (f + phaseTurns) - DistortMath.PI * 0.5f
             val r = rho * rMax
-            return src.sampleBilinear(cx + r * cos(theta), cy + r * sin(theta), transparentOutside = true)
+            return src.sampleBilinear(cx + r * cosA, cy + r * sinA, transparentOutside = true)
         }
     }
 }

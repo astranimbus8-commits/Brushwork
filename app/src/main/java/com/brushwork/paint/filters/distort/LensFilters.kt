@@ -87,8 +87,10 @@ class SphereLensFilter : Filter("distort.sphere_lens", "Sphere Lens", FilterCate
         val k = values.float("strength").coerceIn(-100f, 100f) / 100f
         if (abs(k) < 1e-3f) return src.copy()
         val ak = abs(k)
-        // Inverse spherical projection r_src = R * (2 / PI) * asin(t), blended with identity by strength.
-        val sphere = { t: Float -> t + ak * (TWO_OVER_PI * asin(t.coerceIn(0f, 1f)) - t) }
+        // Inverse spherical projection r_src = R * asin(a * t) / asin(a), blended with identity by
+        // strength. a slightly below 1 keeps the slope at the rim finite (pure asin(t) squeezes tens
+        // of source pixels into the outermost pixel ring, which shows up as a hard aliased line).
+        val sphere = { t: Float -> t + ak * (asin(RIM * t.coerceIn(0f, 1f)) * INV_ASIN_RIM - t) }
         val profile = if (k > 0f) RadialProfile.of(sphere) else RadialProfile.inverseOf(sphere)
         val c = values.point("center")
         val radius = DistortMath.percentRadius(values.float("radius"), src.width, src.height)
@@ -96,6 +98,7 @@ class SphereLensFilter : Filter("distort.sphere_lens", "Sphere Lens", FilterCate
     }
 
     private companion object {
-        const val TWO_OVER_PI = (2.0 / Math.PI).toFloat()
+        const val RIM = 0.99f
+        val INV_ASIN_RIM = (1.0 / kotlin.math.asin(RIM.toDouble())).toFloat()
     }
 }

@@ -143,6 +143,64 @@ internal object DistortMath {
         return if (i < 0) 0 else if (i >= n) n - 1 else i
     }
 
+    /** Largest supersampling grid (n x n samples per output pixel) used by the warps. */
+    const val MAX_SUPERSAMPLE = 4
+
+    /** Source-pixel spacing of the samples below which a warp is not supersampled. */
+    private const val SAMPLE_SPACING = 1.5f
+
+    /**
+     * Supersampling grid size for a warp that locally shrinks the source by [minification]
+     * (source pixels per output pixel), so samples stay about [SAMPLE_SPACING] pixels apart.
+     */
+    fun samplesFor(minification: Float): Int {
+        if (!(minification > SAMPLE_SPACING)) return 1
+        return min(MAX_SUPERSAMPLE.toFloat(), ceil(minification / SAMPLE_SPACING - 1e-3f)).toInt().coerceAtLeast(1)
+    }
+
+    /**
+     * Fast atan2 (max error about 1e-5 rad, i.e. well below a pixel at any canvas radius).
+     * Returns 0 for (0, 0) and NaN inputs.
+     */
+    fun atan2(y: Float, x: Float): Float {
+        val ax = abs(x); val ay = abs(y)
+        val mx = max(ax, ay)
+        if (!(mx > 0f) || mx.isInfinite()) return if (mx.isInfinite()) kotlin.math.atan2(y, x) else 0f
+        val a = min(ax, ay) / mx
+        val s = a * a
+        var r = a * (0.99986600f + s * (-0.33029950f + s * (0.18014100f + s * (-0.08513300f + s * 0.02083510f))))
+        if (ay > ax) r = HALF_PI - r
+        if (x < 0f) r = PI - r
+        return if (y < 0f) -r else r
+    }
+
+    private const val HALF_PI = (Math.PI / 2.0).toFloat()
+
+    /**
+     * Averages an [n] x [n] grid of samples over output pixel ([x], [y]) in premultiplied space.
+     * [at] receives each sub-pixel position and returns a NON-premultiplied color.
+     */
+    inline fun superSample(x: Int, y: Int, n: Int, at: (fx: Float, fy: Float) -> Int): Int {
+        var sa = 0f; var sr = 0f; var sg = 0f; var sb = 0f
+        val step = 1f / n
+        for (j in 0 until n) {
+            val fy = y + (j + 0.5f) * step
+            for (i in 0 until n) {
+                val c = at(x + (i + 0.5f) * step, fy)
+                val a = (c ushr 24).toFloat()
+                if (a <= 0f) continue
+                sa += a
+                sr += ((c shr 16) and 0xFF) * a
+                sg += ((c shr 8) and 0xFF) * a
+                sb += (c and 0xFF) * a
+            }
+        }
+        val alpha = sa / (n * n)
+        if (alpha < 0.5f) return 0
+        val inv = 1f / sa
+        return ColorUtils.argb((alpha + 0.5f).toInt(), (sr * inv + 0.5f).toInt(), (sg * inv + 0.5f).toInt(), (sb * inv + 0.5f).toInt())
+    }
+
     /**
      * Inverse-mapping warp driver. For each pixel inside [x0, x1) x [y0, y1), [map] receives the
      * pixel center and writes the source position into `q`; when it returns true the output pixel
@@ -156,6 +214,23 @@ internal object DistortMath {
         x1: Int,
         y1: Int,
         edge: Int,
+        crossinline map: (px: Float, py: Float, q: FloatArray) -> Boolean,
+    ): PixelBuffer = warp(src, ctx, x0, y0, x1, y1, edge, { _, _ -> 1 }, map)
+
+    /**
+     * Like [warp], with antialiasing where the mapping shrinks the source: [samples] gives the
+     * supersampling grid size (see [samplesFor]) at a pixel center. Supersampled pixels average
+     * `n x n` mapped sub-pixel samples; a sub-sample that [map] rejects samples the source in place.
+     */
+    inline fun warp(
+        src: PixelBuffer,
+        ctx: FilterContext,
+        x0: Int,
+        y0: Int,
+        x1: Int,
+        y1: Int,
+        edge: Int,
+        crossinline samples: (px: Float, py: Float) -> Int,
         crossinline map: (px: Float, py: Float, q: FloatArray) -> Boolean,
     ): PixelBuffer {
         val out = src.copy()
@@ -171,7 +246,15 @@ internal object DistortMath {
                 val py = y + 0.5f
                 val row = y * w
                 for (x in xa until xb) {
-                    if (map(x + 0.5f, py, q)) d[row + x] = sample(src, q[0], q[1], edge)
+                    val px = x + 0.5f
+                    val n = samples(px, py)
+                    if (n <= 1) {
+                        if (map(px, py, q)) d[row + x] = sample(src, q[0], q[1], edge)
+                    } else {
+                        d[row + x] = superSample(x, y, n) { sx, sy ->
+                            if (map(sx, sy, q)) sample(src, q[0], q[1], edge) else sample(src, sx, sy, edge)
+                        }
+                    }
                 }
             }
         }
@@ -181,6 +264,7 @@ internal object DistortMath {
     /**
      * Radial warp inside the circle of [radius] around ([cx], [cy]): a pixel at offset v from the
      * center samples the source at center + v * profile.ratioAt(|v| / radius). Outside unchanged.
+     * Areas the profile shrinks are supersampled.
      */
     fun radialWarp(
         src: PixelBuffer,
@@ -195,7 +279,14 @@ internal object DistortMath {
         val invR = 1f / radius
         val x0 = floor(cx - radius).toInt(); val x1 = ceil(cx + radius).toInt() + 1
         val y0 = floor(cy - radius).toInt(); val y1 = ceil(cy + radius).toInt() + 1
-        return warp(src, ctx, x0, y0, x1, y1, edge) { px, py, q ->
+        return warp(
+            src, ctx, x0, y0, x1, y1, edge,
+            samples = { px, py ->
+                val dx = px - cx; val dy = py - cy
+                val r2 = dx * dx + dy * dy
+                if (r2 >= r2max) 1 else profile.samplesAt(sqrt(r2) * invR)
+            },
+        ) { px, py, q ->
             val dx = px - cx; val dy = py - cy
             val r2 = dx * dx + dy * dy
             if (r2 >= r2max) {
@@ -427,11 +518,36 @@ internal object DistortMath {
  */
 internal class RadialProfile private constructor(private val ratio: FloatArray) {
 
+    /**
+     * Supersampling grid size per table cell. The mapping p -> c + v * k(t) shrinks the source by
+     * d(t * k(t)) / dt radially and by k(t) tangentially; the larger one decides.
+     */
+    private val samples = ByteArray(N + 1).also { s ->
+        var prev = 1
+        for (i in 0..N) {
+            val lo = max(0, i - 1); val hi = min(N, i + 1)
+            val gLo = lo.toFloat() / N * ratio[lo]
+            val gHi = hi.toFloat() / N * ratio[hi]
+            val radial = abs(gHi - gLo) * N / (hi - lo)
+            val n = DistortMath.samplesFor(max(radial, abs(ratio[i])))
+            // Conservative across neighboring cells (the lookup uses the pixel center only).
+            s[i] = max(n, prev).toByte()
+            if (i > 0) s[i - 1] = max(s[i - 1].toInt(), n).toByte()
+            prev = n
+        }
+    }
+
     fun ratioAt(t: Float): Float {
         val x = (if (t < 0f) 0f else if (t > 1f) 1f else t) * N
         val i = min(N - 1, x.toInt())
         val fr = x - i
         return ratio[i] + (ratio[i + 1] - ratio[i]) * fr
+    }
+
+    /** Supersampling grid size (1 = plain bilinear) needed at normalized radius [t]. */
+    fun samplesAt(t: Float): Int {
+        val x = (if (t < 0f) 0f else if (t > 1f) 1f else t) * N
+        return samples[min(N, (x + 0.5f).toInt())].toInt()
     }
 
     companion object {

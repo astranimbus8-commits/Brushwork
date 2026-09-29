@@ -45,9 +45,9 @@ class BlurFrameFilter : Filter("frame.blur_frame", "Blur Frame", FilterCategory.
         val mask = if (values.choice("shape") == 1) ellipseMask(w, h, size, soft, half) else rectMask(w, h, size * half, soft)
 
         // Two blur levels (half and full radius) so the blur grows gradually toward the edge.
-        // Large radii are computed on a box-downscaled copy: the result is smooth anyway.
+        // They are computed on a box-downscaled copy (smooth anyway, and bounded in memory).
         val levels: Array<PixelBuffer>? = if (blur >= 0.5f) {
-            val f = min(1f, BLUR_WORK_RADIUS / blur)
+            val f = blurWorkScale(w, h, blur)
             val small = DistortMath.downscale(src, ceil(w * f).toInt(), ceil(h * f).toInt(), ctx)
             val rs = blur * (small.width.toFloat() / w + small.height.toFloat() / h) * 0.5f
             val b1 = DistortMath.blurImage(small, rs * 0.5f, ctx)
@@ -116,11 +116,29 @@ class BlurFrameFilter : Filter("frame.blur_frame", "Blur Frame", FilterCategory.
         }
     }
 
-    private companion object {
-        const val LUT_N = 4096
+    internal companion object {
+        private const val LUT_N = 4096
 
         /** Blur radius (px) the working copy is downscaled to when the requested blur is larger. */
-        const val BLUR_WORK_RADIUS = 12f
+        private const val BLUR_WORK_RADIUS = 12f
+
+        /**
+         * Pixel budget of the blurred working copies: each blur pass needs two float planes of its
+         * size, which at full resolution (12+ MP) would cost hundreds of MB on a phone.
+         */
+        const val MAX_WORK_PIXELS = 2_500_000
+
+        /**
+         * Scale (0..1] of the working copy the frame blur of radius [blur] is computed on for a
+         * [w] x [h] image: small enough that the radius is at most [BLUR_WORK_RADIUS] and the copy
+         * has at most [MAX_WORK_PIXELS] pixels. The blurred copy is upsampled bilinearly and blended
+         * in by a smooth mask, so the reduction is not visible.
+         */
+        fun blurWorkScale(w: Int, h: Int, blur: Float): Float {
+            val byRadius = if (blur > BLUR_WORK_RADIUS) BLUR_WORK_RADIUS / blur else 1f
+            val byPixels = sqrt(MAX_WORK_PIXELS.toDouble() / (w.toDouble() * h)).toFloat()
+            return min(1f, min(byRadius, byPixels))
+        }
     }
 }
 
