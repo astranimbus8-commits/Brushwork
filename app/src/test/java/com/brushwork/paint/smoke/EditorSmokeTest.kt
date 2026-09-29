@@ -119,6 +119,7 @@ class EditorSmokeTest {
         section("panels composed directly") { panelsDirect() }
         section("editor branches: slider, busy, filter layout, pinch, export") { editorBranches() }
         section("layers panel operated") { layersPanel() }
+        section("selection, canvas and brush panels operated") { panelActions() }
         section("number fields refuse NaN and infinity") { numberFields() }
         section("main activity end to end") { mainActivity() }
         dog.interrupt()
@@ -540,6 +541,110 @@ class EditorSmokeTest {
             val started = org.robolectric.Shadows.shadowOf(activity).nextStartedActivity
             assertEquals("share opens the system chooser", android.content.Intent.ACTION_CHOOSER, started?.action)
         }
+    }
+
+    // ================================================================== panel actions
+
+    private fun panelActions() {
+        val activity = newActivity()
+        val c = Smoke.controller(activity, Smoke.document(400, 300, layers = 2, whiteBottom = true))
+        c.seedContent()
+        c.undoManager.clear()
+        var which by mutableStateOf(-1)
+        activity.setContent {
+            BrushworkTheme {
+                val close = { which = -1 }
+                when (which) {
+                    0 -> SelectionPanel(c, close)
+                    1 -> CanvasAdjustDialog(c, close)
+                    2 -> BrushPanel(c, close)
+                }
+            }
+        }
+        settle()
+        fun open(i: Int) { which = i; settle(); assertWindowsLaidOut(2) }
+        fun waitIdle(where: String) {
+            assertTrue("$where finished", Smoke.pumpUntil { settle(1); c.busyMessage == null })
+            Smoke.assertQuiet(c, where)
+        }
+
+        // Selection menu: every action, each from a freshly opened sheet (most close it).
+        Smoke.step("selection panel")
+        open(0); click("Select all", exact = true); assertNotNull(c.selection)
+        click("Invert", exact = true); assertNull("inverting everything selects nothing", c.selection)
+        click("Select all", exact = true)
+        c.setSelection(com.brushwork.paint.model.Selection.fromBytes(ByteArray(400 * 300) { i -> if (i % 400 in 100..299 && i / 400 in 80..219) -1 else 0 }, 400, 300))
+        settle()
+        for (action in listOf("Grow", "Shrink", "Feather")) {
+            if (which != 0) open(0)
+            click(action, exact = true)
+            waitIdle(action)
+            assertNotNull("$action keeps a selection", c.selection)
+        }
+        open(0); click("Layer opacity", exact = true); waitIdle("layer opacity")
+        open(0); click("Sky", exact = true); waitIdle("smart select")
+        for (action in listOf("Fill", "Clear", "Copy to new layer", "Cut to new layer")) {
+            if (c.selection == null) click("Select all", exact = true).also { settle() }
+            open(0)
+            click(action, exact = true)
+            waitIdle(action)
+        }
+        if (c.selection == null) c.selectAll()
+        open(0); click("Fill with…", exact = true)
+        assertTrue("color dialog open", Smoke.pumpUntil { settle(1); has("OK", exact = true) })
+        click("OK", exact = true)
+        waitIdle("fill with")
+        assertEquals(-1, which)
+
+        // Canvas dialog: one operation per tab, through its own buttons.
+        Smoke.step("canvas dialog")
+        c.deselect()
+        open(1); SmokeUi.clickTab("Rotate & flip"); click("Rotate 90° clockwise", exact = true); waitIdle("rotate")
+        assertEquals(300, c.doc.width); assertEquals(400, c.doc.height)
+        click("Flip horizontally", exact = true); waitIdle("flip")
+        SmokeUi.clickTab("Color mode"); click("Grayscale", exact = true); click("Convert to Grayscale", exact = true); waitIdle("grayscale")
+        assertEquals(com.brushwork.paint.model.ColorMode.GRAYSCALE, c.doc.colorMode)
+        if (which != 1) open(1)
+        SmokeUi.clickTab("Resolution"); click("72 dpi", exact = true); click("Set 72 dpi", exact = true); waitIdle("dpi")
+        assertEquals(72f, c.doc.dpi)
+        if (which != 1) open(1)
+        SmokeUi.clickTab("Image size")
+        SmokeUi.typeAndDone("Width", "150")
+        click("Resize image", exact = true); waitIdle("resize image")
+        assertEquals(150, c.doc.width)
+        if (which != 1) open(1)
+        SmokeUi.clickTab("Canvas size")
+        SmokeUi.typeAndDone("Height", "260")
+        click("Change canvas size", exact = true); waitIdle("canvas size")
+        assertEquals(260, c.doc.height)
+        if (which != 1) open(1)
+        SmokeUi.clickTab("Trim & crop")
+        c.doc.layers[0].bitmap.eraseColor(0); c.doc.layers[0].markChanged(); c.invalidateDoc(null) // transparent edges to trim
+        which = -1; settle(); open(1); SmokeUi.clickTab("Trim & crop"); settle()
+        click("Trim", exact = true); waitIdle("trim")
+        which = -1
+        settle()
+        var g = 50
+        while (c.canUndo && g-- > 0) { c.undo(); waitIdle("undo") }
+        assertEquals("back to the original size", 400, c.doc.width)
+        assertEquals(300, c.doc.height)
+
+        // Brush panel: pick every preset, then reset an edited one.
+        Smoke.step("brush panel")
+        open(2)
+        val presets = com.brushwork.paint.brush.BrushLibrary.presetsFor(ToolId.BRUSH)
+        for (p in presets) {
+            click("Use ${p.name}", exact = true)
+            assertEquals(p.id, c.brush.id)
+        }
+        c.brush = c.brush.copy(size = c.brush.size + 7f)
+        settle()
+        click("Reset ${c.brush.name} to default")
+        SmokeUi.clickIn("Reset \"${c.brush.name}\"?", "Reset")
+        assertEquals(presets.last().size, c.brush.size)
+        which = -1
+        settle()
+        Smoke.assertQuiet(c, "panel actions")
     }
 
     // ================================================================== layers panel

@@ -92,6 +92,17 @@ internal object SmokeUi {
 
     fun shown(): List<String> = elements().flatMap { it.node.labels() }.distinct()
 
+    /** Clicks the tab (semantic role Tab) labelled [label]. */
+    fun clickTab(label: String) {
+        Smoke.step("tab \"$label\"")
+        val tab = elements().lastOrNull { e ->
+            e.node.config.getOrNull(SemanticsProperties.Role) == androidx.compose.ui.semantics.Role.Tab &&
+                e.node.subtreeLabels().contains(label)
+        } ?: throw AssertionError("no tab \"$label\"; shown: ${shown().take(100)}")
+        requireNotNull(tab.node.config.getOrNull(SemanticsActions.OnClick)?.action).invoke()
+        settle()
+    }
+
     /** Clicks [label] inside the window that shows [windowText] (e.g. a dialog's confirm button). */
     fun clickIn(windowText: String, label: String) {
         Smoke.step("click \"$label\" in \"$windowText\"")
