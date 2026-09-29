@@ -199,6 +199,9 @@ class EditorController(
         if (undoManager.redo(this)) { editCount++; doc.touch() }
     }
 
+    /** Tells observers (layer panel thumbnails, etc.) that layer content/properties changed. */
+    fun notifyLayersChanged() { layersVersion++ }
+
     /** Runs a structural change and refreshes everything that depends on the layer list. */
     fun structural(block: () -> Unit) {
         block()
@@ -372,14 +375,15 @@ class EditorController(
      * Finishes a pixel edit: applies color-mode constraints to the touched area, pushes the undo
      * action, marks the layer changed and redraws. Returns false if nothing was touched.
      */
-    fun commitEdit(recorder: PixelEditRecorder, label: String): Boolean {
+    fun commitEdit(recorder: PixelEditRecorder, label: String, extraActions: List<UndoAction> = emptyList()): Boolean {
         if (recorder.isEmpty) return false
         val rect = Rect(recorder.touched)
         if (recorder.target == EditTarget.CONTENT && doc.colorMode != ColorMode.RGB) {
             ColorModeOps.constrain(recorder.layer.bitmap, rect, doc.colorMode)
         }
         val action = recorder.finish(label) ?: return false
-        pushUndo(action)
+        // Extra actions (e.g. a SelectionAction applied with recordUndo = false) join the same step.
+        pushUndo(if (extraActions.isEmpty()) action else CompositeAction(label, listOf(action) + extraActions))
         recorder.layer.markChanged()
         layersVersion++
         invalidateDoc(rect)

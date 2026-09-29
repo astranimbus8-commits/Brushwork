@@ -79,7 +79,10 @@ abstract class Tool(val controller: EditorController) {
     /** Screen-space overlay; [t] maps document -> screen. */
     open fun drawOverlay(canvas: Canvas, t: ViewTransform) {}
 
-    /** True while there is uncommitted, editable work (the UI shows confirm/cancel buttons). */
+    /**
+     * True while there is uncommitted, editable work (the UI shows confirm/cancel buttons).
+     * Implementations MUST back this with Compose snapshot state (mutableStateOf) so the UI updates.
+     */
     open val hasPendingWork: Boolean get() = false
 
     /** Bake pending work into the layer (with undo). */
