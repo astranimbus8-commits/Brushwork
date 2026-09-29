@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -299,7 +300,8 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             LengthField(
                 label = "Length", px = b.w.toDouble(),
                 onPxChange = { len -> tool.place(ShapeBox.line(st, st + direction(b.rotationDeg) * len.toFloat())) },
-                unit = unit, dpi = dpi, modifier = Modifier.fillMaxWidth(), minPx = 0.0, maxPx = MAX_LEN,
+                // >= 1 px so a "0" typed on the way to "0.5 cm" keeps the line's direction.
+                unit = unit, dpi = dpi, modifier = Modifier.fillMaxWidth(), minPx = 1.0, maxPx = MAX_LEN,
             )
             NumberField(
                 label = "Angle", value = b.rotationDeg.toDouble(),
@@ -315,14 +317,17 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 unit, dpi,
             )
             if (b.rotationDeg != 0f) Hint("Top-left corner of the shape before rotation")
+            // Fields commit while typing, so intermediate values ("1" on the way to "120") would
+            // erode a ratio recomputed from the box: keep the one from when proportions got locked.
+            val aspect = remember(s.keepProportions) { if (b.h > 0f) b.w / b.h else 1f }
             SectionHeader("Size")
             FieldPair(
                 "Width", b.w, { w ->
-                    val h = if (s.keepProportions && b.w > 0f) b.h * w / b.w else b.h
+                    val h = if (s.keepProportions) w / aspect else b.h
                     tool.place(b.copy(cx = b.left + w / 2f, cy = b.top + h / 2f, w = w, h = h))
                 },
                 "Height", b.h, { h ->
-                    val w = if (s.keepProportions && b.h > 0f) b.w * h / b.h else b.w
+                    val w = if (s.keepProportions) h * aspect else b.w
                     tool.place(b.copy(cx = b.left + w / 2f, cy = b.top + h / 2f, w = w, h = h))
                 },
                 unit, dpi, minPx = 1.0,

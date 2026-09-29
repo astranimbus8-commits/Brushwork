@@ -305,6 +305,61 @@ class VectorToolsTest {
     }
 
     @Test
+    fun numericAnchorsAndCoalescedHistory() {
+        val c = controller()
+        val tool = curveTool(c, polyline = true)
+        tool.update { it.copy(nudgeStepPx = 3f) }
+        assertTrue(tool.addAnchor(Vec2(10f, 10f)))
+        assertTrue(tool.addAnchor(Vec2(90f, 10f)))
+        assertEquals(1, tool.selected)                      // the new point is selected
+        assertTrue(tool.anchors.all { it.sharp })
+        // Typing a coordinate commits on every keystroke: one undo step for the whole edit.
+        tool.moveAnchor(1, Vec2(1f, 10f))
+        tool.moveAnchor(1, Vec2(12f, 10f))
+        tool.moveAnchor(1, Vec2(120f, 10f))
+        // Holding a nudge arrow: one undo step for the run.
+        repeat(5) { tool.nudge(-1, 0) }
+        assertEquals(105f, tool.anchors[1].x, 1e-4f)
+        tool.undoStep()
+        assertEquals(120f, tool.anchors[1].x, 1e-4f)
+        tool.undoStep()
+        assertEquals(90f, tool.anchors[1].x, 1e-4f)
+        // Nudging with nothing selected moves the whole path.
+        tool.deselect()
+        tool.nudge(0, 1)
+        assertEquals(listOf(13f, 13f), tool.anchors.map { it.y })
+        tool.undoStep(); tool.undoStep(); tool.undoStep()
+        assertFalse(tool.hasPendingWork)
+        assertFalse(tool.canUndoStep)
+        assertFalse(c.canUndo)
+        // A locked layer refuses numeric creation too.
+        c.doc.activeLayer.locked = true
+        assertFalse(tool.addAnchor(Vec2(5f, 5f)))
+        assertFalse(tool.hasPendingWork)
+    }
+
+    @Test
+    fun numericShapeOnEmptyToolCreatesADefaultShape() {
+        val c = controller(300, 150)
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.STAR, keepProportions = false) }
+        assertTrue(tool.ensurePending())
+        val b = tool.box!!
+        assertEquals(150f, b.cx, 1e-4f)
+        assertEquals(75f, b.cy, 1e-4f)
+        assertEquals(50f, b.w, 1e-4f)
+        assertFalse(c.canUndo)
+        // Placement is clamped to sane sizes and normalized rotation.
+        tool.place(b.copy(w = -5f, rotationDeg = 270f))
+        assertEquals(1f, tool.box!!.w, 0f)
+        assertEquals(-90f, tool.box!!.rotationDeg, 1e-4f)
+        tool.discard()
+        c.doc.activeLayer.locked = true
+        assertFalse(tool.ensurePending())
+        assertFalse(tool.hasPendingWork)
+    }
+
+    @Test
     fun brushStrokeCommitClearsThePath() {
         val c = controller()
         val tool = curveTool(c, polyline = false)

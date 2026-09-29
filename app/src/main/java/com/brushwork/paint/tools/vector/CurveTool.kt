@@ -148,7 +148,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         anchors = prev
         if (selected !in prev.indices) selected = -1
         canUndoStep = history.isNotEmpty()
-        if (prev.isNotEmpty() && targetLayer == null) targetLayer = controller.doc.activeLayer
+        if (prev.isEmpty()) targetLayer = null
+        else if (targetLayer == null) targetLayer = controller.doc.activeLayer
         changed()
     }
 
