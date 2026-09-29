@@ -23,3 +23,5 @@ keystore.properties
 # OS
 .DS_Store
 Thumbs.db
+# Agent worktrees
+/.wt/
