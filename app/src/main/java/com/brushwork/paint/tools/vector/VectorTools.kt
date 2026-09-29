@@ -24,6 +24,9 @@ internal fun EditorController.snapToGrid(p: Vec2): Vec2 {
 /** A screen distance in dp expressed in document pixels (for hit testing). */
 internal fun EditorController.docLength(dp: Float): Float = viewTransform.screenToDocLength(viewTransform.dp(dp))
 
+/** This value, or [fallback] when it is NaN or infinite (numeric fields can deliver "NaN"). */
+internal fun Float.finiteOr(fallback: Float): Float = if (isFinite()) this else fallback
+
 /** Screen-space drawing of guides and handles, readable over any artwork. */
 internal class OverlayPainter {
     private val dark = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x99000000.toInt(); strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND }

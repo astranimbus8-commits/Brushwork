@@ -148,6 +148,75 @@ class VectorToolsTest {
     }
 
     @Test
+    fun tapsOnAPendingShapeDoNotChangeIt() {
+        val c = controller(400, 400)
+        val tool = shapeTool(c)
+        tool.update { it.copy(snapAngle = true) }
+        c.drag(103f to 104f, 200f to 170f)
+        val before = tool.box!!
+        // Grid snapping would move the shape if a tap counted as a drag.
+        c.updateGrid(GridSettings(enabled = true, snap = true, spacingPx = 25f))
+        c.tap(150f, 137f)                                 // inside (move)
+        c.tap(before.cx + before.w / 2f + 1f, before.cy)  // right handle (resize), with jitter
+        c.tap(before.cx + 3f, before.cy - before.h / 2f - 34f) // rotation handle, off-center
+        assertEquals(before, tool.box)
+        assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun rotationIsRelativeToWhereTheHandleWasGrabbed() {
+        val c = controller(400, 400)
+        val tool = shapeTool(c)
+        tool.update { it.copy(snapAngle = false) }
+        c.drag(100f to 100f, 200f to 160f)                // box (150,130) 100x60, handle at (150, 66)
+        // Grabbed 12 px right of the handle: the first move past the slop must not jump.
+        c.pointerDown(ToolPoint(162f, 66f))
+        c.pointerMove(ToolPoint(162f, 80f))
+        c.pointerUp(ToolPoint(162f, 80f))
+        val v0 = Vec2(12f, -64f); val v1 = Vec2(12f, -50f)
+        val expected = Math.toDegrees(ShapeGeometry.signedAngle(v0, v1).toDouble()).toFloat()
+        assertEquals(expected, tool.box!!.rotationDeg, 1e-3f)
+        assertTrue(kotlin.math.abs(tool.box!!.rotationDeg) < 5f)
+    }
+
+    @Test
+    fun smallDragOutsideCommitsLikeATap() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(style = ShapeStyle.FILL) }
+        c.drag(10f to 10f, 50f to 50f)
+        // A flat drag outside makes no new shape (zero height) but still commits the pending one.
+        c.drag(120f to 150f, 180f to 150f)
+        assertFalse(tool.hasPendingWork)
+        assertTrue(c.canUndo)
+        assertEquals(red, c.doc.activeLayer.bitmap.getPixel(30, 30))
+        assertNull(c.renderOverride)
+    }
+
+    @Test
+    fun nonFiniteNumbersAreIgnored() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(strokeWidth = 12f) }
+        tool.update { it.copy(strokeWidth = Float.NaN, cornerRadius = Float.POSITIVE_INFINITY) }
+        assertEquals(12f, tool.settings.strokeWidth, 0f)
+        assertEquals(30f, tool.settings.cornerRadius, 0f)
+        assertTrue(tool.ensurePending())
+        val b = tool.box!!
+        tool.place(b.copy(cx = Float.NaN))
+        tool.place(b.copy(rotationDeg = Float.NEGATIVE_INFINITY))
+        assertEquals(b, tool.box)
+        val curve = curveTool(c, polyline = false)
+        assertFalse(curve.addAnchor(Vec2(Float.NaN, 3f)))
+        assertTrue(curve.addAnchor(Vec2(10f, 10f)))
+        curve.moveAnchor(0, Vec2(5f, Float.NaN))
+        assertEquals(Vec2(10f, 10f), curve.anchors[0].pos)
+        curve.update { it.copy(plainWidth = Float.NaN, tension = 0.3f) }
+        assertEquals(6f, curve.settings.plainWidth, 0f)
+        assertEquals(0.3f, curve.settings.tension, 0f)
+    }
+
+    @Test
     fun linesSnapAngleAndGrid() {
         val c = controller()
         val tool = shapeTool(c)
@@ -305,9 +374,54 @@ class VectorToolsTest {
     }
 
     @Test
+    fun coalescingNeedsQuickSuccession() {
+        val c = controller()
+        val tool = curveTool(c, polyline = true)
+        var now = 10_000L
+        tool.clock = { now }
+        tool.addAnchor(Vec2(10f, 10f))
+        tool.addAnchor(Vec2(50f, 10f))
+        repeat(3) { tool.nudge(1, 0); now += 60 }         // one held run
+        now += 5_000
+        tool.nudge(1, 0)                                  // a separate tap much later
+        assertEquals(54f, tool.anchors[1].x, 1e-4f)
+        tool.undoStep()
+        assertEquals(53f, tool.anchors[1].x, 1e-4f)
+        tool.undoStep()
+        assertEquals(50f, tool.anchors[1].x, 1e-4f)
+        // Typing in the field again later starts a new step too.
+        tool.moveAnchor(1, Vec2(70f, 10f)); now += 300
+        tool.moveAnchor(1, Vec2(75f, 10f)); now += 4_000
+        tool.moveAnchor(1, Vec2(80f, 10f))
+        tool.undoStep()
+        assertEquals(75f, tool.anchors[1].x, 1e-4f)
+        tool.undoStep()
+        assertEquals(50f, tool.anchors[1].x, 1e-4f)
+    }
+
+    @Test
+    fun deletingTheLastAnchorEndsThePendingPath() {
+        val c = controller()
+        val tool = curveTool(c, polyline = false)
+        c.tap(20f, 20f)
+        assertTrue(tool.hasPendingWork)
+        tool.deleteAnchor(0)
+        assertFalse(tool.hasPendingWork)
+        assertNull(c.renderOverride)
+        // The next path goes to whatever layer is active then.
+        val second = c.addLayer("Second")!!
+        tool.update { it.copy(stroke = CurveStroke.PLAIN) }
+        c.tap(20f, 20f); c.tap(180f, 20f)
+        tool.commit()
+        assertEquals(red, second.bitmap.getPixel(100, 20))
+        assertEquals(0, c.doc.layers[0].bitmap.getPixel(100, 20))
+    }
+
+    @Test
     fun numericAnchorsAndCoalescedHistory() {
         val c = controller()
         val tool = curveTool(c, polyline = true)
+        tool.clock = { 1_000L }
         tool.update { it.copy(nudgeStepPx = 3f) }
         assertTrue(tool.addAnchor(Vec2(10f, 10f)))
         assertTrue(tool.addAnchor(Vec2(90f, 10f)))

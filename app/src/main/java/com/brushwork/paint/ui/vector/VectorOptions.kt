@@ -32,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -377,19 +378,25 @@ private fun direction(deg: Float): Vec2 {
 @Composable
 fun CurveToolOptions(tool: CurveTool) {
     val s = tool.settings
-    val anchors = tool.anchors
-    val sel = tool.selected
+    // Only what the row shows about the selected point: dragging anchors doesn't recompose it.
+    val selInfo by remember(tool) {
+        derivedStateOf {
+            val i = tool.selected
+            tool.anchors.getOrNull(i)?.let { SelectedAnchor(i, it.sharp, it.hasCustomTangent) }
+        }
+    }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
 
     ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
-    val a = anchors.getOrNull(sel)
+    val a = selInfo
     if (a != null) {
+        val sel = a.index
         if (!tool.polyline) {
             if (a.sharp) ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharp(sel, false) }
             else ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharp(sel, true) }
-            if (a.hasCustomTangent) ActionChip("Auto tangent", Icons.Filled.Restore) { tool.resetTangent(sel) }
+            if (a.customTangent) ActionChip("Auto tangent", Icons.Filled.Restore) { tool.resetTangent(sel) }
         }
         ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(sel) }
         ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
@@ -411,6 +418,9 @@ fun CurveToolOptions(tool: CurveTool) {
     if (showSettings) CurveSettingsSheet(tool) { showSettings = false }
     if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
 }
+
+/** What the curve options row shows about the selected anchor. */
+private data class SelectedAnchor(val index: Int, val sharp: Boolean, val customTangent: Boolean)
 
 @Composable
 private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
@@ -536,8 +546,8 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
         SectionHeader("Add point")
         PanelCard {
             FieldPair(
-                "X", addX, { addX = it },
-                "Y", addY, { addY = it },
+                "X", addX, { if (it.isFinite()) addX = it },
+                "Y", addY, { if (it.isFinite()) addY = it },
                 unit, dpi,
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {

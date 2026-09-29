@@ -21,7 +21,6 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
-import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 
@@ -47,27 +46,29 @@ data class ShapeSettings(
     val fromCenter: Boolean = false,
     val keepProportions: Boolean = false,
     /** Lines snap to 15 degree steps; rotation snaps to 15 degrees. */
-    val snapAngle: Boolean = true,
+    val snapAngle: Boolean = false,
     /** Unit used by the numeric fields. */
     val unit: LengthUnit = LengthUnit.PX,
     val nudgeStepPx: Float = 1f,
 ) {
     val outlineParams: OutlineParams get() = OutlineParams(sides, starPoints, innerRatio, corner, cornerRadius)
 
-    fun sanitized() = copy(
-        strokeWidth = strokeWidth.coerceIn(MIN_STROKE, MAX_STROKE),
-        cornerRadius = cornerRadius.coerceIn(0f, MAX_LENGTH),
+    /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
+    fun sanitized(fallback: ShapeSettings = DEFAULT) = copy(
+        strokeWidth = strokeWidth.finiteOr(fallback.strokeWidth).coerceIn(MIN_STROKE, MAX_STROKE),
+        cornerRadius = cornerRadius.finiteOr(fallback.cornerRadius).coerceIn(0f, MAX_LENGTH),
         sides = sides.coerceIn(ShapeGeometry.MIN_SIDES, ShapeGeometry.MAX_SIDES),
         starPoints = starPoints.coerceIn(ShapeGeometry.MIN_SIDES, ShapeGeometry.MAX_SIDES),
-        innerRatio = innerRatio.coerceIn(0.05f, 0.95f),
-        arrowHeadScale = arrowHeadScale.coerceIn(2f, 12f),
-        nudgeStepPx = nudgeStepPx.coerceIn(0.01f, MAX_LENGTH),
+        innerRatio = innerRatio.finiteOr(fallback.innerRatio).coerceIn(0.05f, 0.95f),
+        arrowHeadScale = arrowHeadScale.finiteOr(fallback.arrowHeadScale).coerceIn(2f, 12f),
+        nudgeStepPx = nudgeStepPx.finiteOr(fallback.nudgeStepPx).coerceIn(0.01f, MAX_LENGTH),
     )
 
     companion object {
         const val MIN_STROKE = 0.25f
         const val MAX_STROKE = 2000f
         const val MAX_LENGTH = 100_000f
+        private val DEFAULT = ShapeSettings()
     }
 }
 
@@ -102,7 +103,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private var startBox: ShapeBox? = null
     private var downPoint = Vec2.ZERO
     private var anchor = Vec2.ZERO
-    private var createStarted = false
+    /** The current gesture moved past the touch slop. */
+    private var started = false
 
     private val painter = OverlayPainter()
     private val boxPath = Path()
@@ -113,7 +115,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** Changes the options; a pending shape updates live. */
     fun update(transform: (ShapeSettings) -> ShapeSettings) {
         val old = settings
-        val new = transform(old).sanitized()
+        val new = transform(old).sanitized(fallback = old)
         if (new == old) return
         settings = new
         runCatching { controller.settings.putObject(PREFS_KEY, ShapeSettings.serializer(), new) }
@@ -160,9 +162,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         return true
     }
 
-    /** Replaces the pending shape's placement (numeric fields). */
+    /** Replaces the pending shape's placement (numeric fields). Non-finite input is ignored. */
     fun place(b: ShapeBox) {
         if (box == null) return
+        if (!(b.cx.isFinite() && b.cy.isFinite() && b.w.isFinite() && b.h.isFinite() && b.rotationDeg.isFinite())) return
         val lim = ShapeSettings.MAX_LENGTH
         val clean = ShapeBox(
             b.cx.coerceIn(-lim, lim), b.cy.coerceIn(-lim, lim),
@@ -186,7 +189,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onDown(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
         downPoint = pt
-        createStarted = false
+        started = false
         val b = box
         if (b != null) {
             val hit = hitTest(b, pt)
@@ -204,16 +207,17 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onMove(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
         val s = settings
+        if (mode == Mode.NONE) return
+        // Nothing changes until the finger really moves, so a tap never nudges, snaps or
+        // re-quantizes the pending shape.
+        if (!started) {
+            if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
+            started = true
+            if (mode == Mode.CREATE && box == null) targetLayer = controller.doc.activeLayer
+        }
         when (mode) {
             Mode.NONE -> return
-            Mode.CREATE -> {
-                if (!createStarted) {
-                    if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
-                    createStarted = true
-                    if (box == null) targetLayer = controller.doc.activeLayer
-                }
-                creatingBox = creationBox(pt)
-            }
+            Mode.CREATE -> creatingBox = creationBox(pt)
             Mode.MOVE -> {
                 val start = startBox ?: return
                 val ref = if (s.type.isLineLike) start.start else start.toDoc(Vec2(-start.w / 2f, -start.h / 2f))
@@ -229,8 +233,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             Mode.ROTATE -> {
                 val start = startBox ?: return
                 val v = pt - start.center
-                if (v.lengthSq < 1e-6f) return
-                var deg = Math.toDegrees(atan2(v.y, v.x).toDouble()).toFloat() + 90f
+                val v0 = downPoint - start.center
+                if (v.lengthSq < 1e-6f || v0.lengthSq < 1e-6f) return
+                // Relative to where the handle was grabbed, so the shape never jumps.
+                var deg = start.rotationDeg + Math.toDegrees(ShapeGeometry.signedAngle(v0, v).toDouble()).toFloat()
                 deg = if (s.snapAngle) ShapeGeometry.snapDegrees(deg) else ShapeGeometry.normalizeDegrees(deg)
                 box = start.copy(rotationDeg = deg)
             }
@@ -249,13 +255,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         when (mode) {
             Mode.NONE -> {}
             Mode.CREATE -> {
-                if (createStarted) creatingBox = creationBox(Vec2(p.x, p.y))
-                val created = creatingBox
+                if (started) creatingBox = creationBox(Vec2(p.x, p.y))
+                val created = creatingBox?.takeIf { started && isBigEnough(it) }
                 creatingBox = null
-                if (!createStarted) {
-                    // Tapping outside the pending shape commits it.
+                if (created == null) {
+                    // A tap (or a drag too small to make a shape) outside the pending shape commits it.
                     if (box != null) commit()
-                } else if (created != null && isBigEnough(created)) {
+                } else {
                     val layer = controller.doc.activeLayer
                     if (box != null) commit()
                     if (box == null) {
@@ -263,6 +269,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                         box = created
                     }
                 }
+                if (box == null) targetLayer = null
                 refreshPreview()
             }
             else -> onMove(p)

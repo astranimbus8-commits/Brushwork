@@ -126,7 +126,7 @@ internal fun IntStepper(label: String, value: Int, onChange: (Int) -> Unit, rang
     NumberField(
         label = label,
         value = value.toDouble(),
-        onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
+        onValueChange = { if (it.isFinite()) onChange(it.roundToInt().coerceIn(range)) },
         modifier = modifier.fillMaxWidth(),
         decimals = 0,
         min = range.first.toDouble(),

@@ -50,12 +50,17 @@ data class CurveSettings(
     val unit: LengthUnit = LengthUnit.PX,
     val nudgeStepPx: Float = 1f,
 ) {
-    fun sanitized() = copy(
-        tension = tension.coerceIn(0f, 1f),
-        plainWidth = plainWidth.coerceIn(ShapeSettings.MIN_STROKE, ShapeSettings.MAX_STROKE),
-        taperPercent = taperPercent.coerceIn(1f, 50f),
-        nudgeStepPx = nudgeStepPx.coerceIn(0.01f, ShapeSettings.MAX_LENGTH),
+    /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
+    fun sanitized(fallback: CurveSettings = DEFAULT) = copy(
+        tension = tension.finiteOr(fallback.tension).coerceIn(0f, 1f),
+        plainWidth = plainWidth.finiteOr(fallback.plainWidth).coerceIn(ShapeSettings.MIN_STROKE, ShapeSettings.MAX_STROKE),
+        taperPercent = taperPercent.finiteOr(fallback.taperPercent).coerceIn(1f, 50f),
+        nudgeStepPx = nudgeStepPx.finiteOr(fallback.nudgeStepPx).coerceIn(0.01f, ShapeSettings.MAX_LENGTH),
     )
+
+    companion object {
+        private val DEFAULT = CurveSettings()
+    }
 }
 
 /**
@@ -87,7 +92,11 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     private val history = ArrayDeque<List<CurveAnchor>>()
     private var historyKey: Any? = null
+    private var historyKeyTime = 0L
     private data class NumericKey(val kind: String, val index: Int)
+
+    /** Time source for coalescing numeric edits (replaceable in tests). */
+    internal var clock: () -> Long = { SystemClock.uptimeMillis() }
     private var targetLayer: Layer? = null
     private var preview: VectorPreview? = null
     private var previewDirty = Rect()
@@ -115,7 +124,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     // ------------------------------------------------------------------ settings
 
     fun update(transform: (CurveSettings) -> CurveSettings) {
-        val new = transform(settings).sanitized()
+        val new = transform(settings).sanitized(fallback = settings)
         if (new == settings) return
         settings = new
         runCatching { controller.settings.putObject(prefsKey, CurveSettings.serializer(), new) }
@@ -130,12 +139,15 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     // ------------------------------------------------------------------ editing actions
 
     /**
-     * Saves the anchors for [undoStep]. Consecutive edits with the same non-null [key] (typing a
-     * coordinate, holding a nudge arrow) share one step.
+     * Saves the anchors for [undoStep]. Consecutive edits with the same non-null [key] that follow
+     * each other quickly (typing a coordinate, holding a nudge arrow) share one step.
      */
     private fun pushHistory(key: Any? = null) {
-        if (key != null && key == historyKey && history.isNotEmpty()) return
+        val now = if (key != null) clock() else 0L
+        val coalesce = key != null && key == historyKey && history.isNotEmpty() && now - historyKeyTime <= COALESCE_MS
         historyKey = key
+        historyKeyTime = now
+        if (coalesce) return
         history.addLast(anchors)
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
@@ -158,6 +170,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
      * layer can't be edited.
      */
     fun addAnchor(p: Vec2): Boolean {
+        if (!p.x.isFinite() || !p.y.isFinite()) return false
         if (anchors.isEmpty() && !controller.checkEditable()) return false
         val lim = ShapeSettings.MAX_LENGTH
         pushHistory()
@@ -196,12 +209,14 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         pushHistory()
         anchors = anchors.toMutableList().also { it.removeAt(index) }
         selected = -1
+        if (anchors.isEmpty()) targetLayer = null
         changed()
     }
 
     /** Moves anchor [index] to [p] (numeric entry; edits of the same anchor share one undo step). */
     fun moveAnchor(index: Int, p: Vec2) {
         val a = anchors.getOrNull(index) ?: return
+        if (!p.x.isFinite() || !p.y.isFinite()) return
         val lim = ShapeSettings.MAX_LENGTH
         val q = Vec2(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim))
         if (q == a.pos) return
@@ -520,6 +535,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     companion object {
         private const val MAX_HISTORY = 200
+        /** Keyed numeric edits closer together than this share one in-tool undo step. */
+        private const val COALESCE_MS = 1500L
         private const val TOUCH_SLOP_DP = 6f
         private const val HANDLE_TOUCH_DP = 22f
         private const val BRUSH_SAMPLE_SPACING = 0.75f
