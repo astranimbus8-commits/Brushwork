@@ -396,6 +396,187 @@ class TransformToolRobolectricTest {
         assertEquals(DocBox(1500f, 700f, 1510f, 720f), tool.transformState!!.bounds())
     }
 
+    @Test
+    fun selectingDuringTransformAppliesItAndLiftsTheSelection() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(0, 0, 10, 10), RED)
+        val tool = activate(c)
+        tool.moveBy(20f, 0f)
+        // "Select all"-like menu action while the whole-layer transform is pending.
+        c.setSelection(rectSelection(64, 64, Rect(16, 0, 40, 20)), label = "Select")
+        assertEquals(RED, layer.bitmap.getPixel(25, 5))   // the move was applied
+        assertEquals(0, layer.bitmap.getPixel(5, 5))
+        assertEquals(Rect(16, 0, 40, 20), c.selection!!.bounds) // the user's selection is kept as set
+        assertTrue(tool.hasPendingWork)                   // lifted again, now with the selection
+        assertEquals(DocBox(16f, 0f, 40f, 20f), tool.transformState!!.bounds())
+
+        tool.discard() // an unchanged re-lift leaves nothing behind
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+        c.undo()
+        assertEquals(RED, layer.bitmap.getPixel(5, 5))
+        assertEquals("Select", c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun deselectDuringSelectionTransformCommitsAtTheNewPlace() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(0, 0, 40, 40), RED)
+        c.setSelection(rectSelection(64, 64, Rect(0, 0, 10, 10)), recordUndo = false)
+        val tool = activate(c)
+        tool.moveBy(50f, 50f)
+        c.deselect()
+        assertNull(c.selection)
+        val b = layer.bitmap
+        assertEquals(RED, b.getPixel(55, 55))
+        assertEquals(0, b.getPixel(5, 5))
+        assertEquals(RED, b.getPixel(20, 20))
+        // Re-lifted without a selection: the whole content (still pending, unchanged).
+        assertEquals(DocBox(0f, 0f, 60f, 60f), tool.transformState!!.bounds())
+        tool.commit()
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun ownSelectionMoveDoesNotRetrigger() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(0, 0, 20, 20), RED)
+        c.setSelection(rectSelection(64, 64, Rect(0, 0, 10, 10)), recordUndo = false)
+        val tool = activate(c)
+        tool.moveBy(30f, 0f)
+        tool.commit()
+        assertFalse(tool.hasPendingWork) // no re-lift from its own setSelection
+        assertEquals(Rect(30, 0, 40, 10), c.selection!!.bounds)
+    }
+
+    @Test
+    fun movedSelectionBoundsAreTight() {
+        val (c, layer) = setup(100, 100)
+        fill(layer.bitmap, Rect(0, 0, 100, 100), RED)
+        c.setSelection(rectSelection(100, 100, Rect(30, 30, 60, 50)), recordUndo = false)
+        val tool = activate(c)
+        tool.setRotation(30.0)
+        tool.moveBy(7f, -3f)
+        tool.commit()
+        val sel = c.selection!!
+        assertEquals(Selection.computeBounds(sel.mask), sel.bounds)
+
+        // Moved completely off the canvas: nothing stays selected.
+        val t2 = transformTool(c)
+        t2.start()
+        t2.moveBy(500f, 0f)
+        t2.commit()
+        assertNull(c.selection)
+    }
+
+    @Test
+    fun contentBoundsScanRegionOfAlpha8() {
+        val m = Bitmap.createBitmap(50, 40, Bitmap.Config.ALPHA_8)
+        Canvas(m).drawRect(Rect(12, 7, 20, 30), Paint().apply { color = BLACK })
+        Canvas(m).drawRect(Rect(40, 35, 45, 38), Paint().apply { color = BLACK })
+        assertEquals(Rect(12, 7, 45, 38), ContentBounds.of(m))
+        assertEquals(Rect(12, 7, 20, 30), ContentBounds.of(m, region = Rect(0, 0, 30, 40)))
+        assertEquals(Rect(14, 10, 20, 30), ContentBounds.of(m, region = Rect(14, 10, 25, 33)))
+        assertNull(ContentBounds.of(m, region = Rect(21, 0, 39, 40)))
+        assertNull(ContentBounds.of(m, region = Rect(60, 60, 70, 70)))
+    }
+
+    @Test
+    fun nonFiniteNumbersAreIgnored() {
+        val (c, layer) = setup(32, 32)
+        fill(layer.bitmap, Rect(4, 4, 12, 12), RED)
+        val tool = activate(c)
+        val start = tool.transformState
+        tool.setRotation(Double.NaN)
+        tool.setSize(width = Double.NaN)
+        tool.setSize(height = Double.POSITIVE_INFINITY)
+        tool.setPosition(left = Double.NaN, top = Double.NEGATIVE_INFINITY)
+        tool.setScalePercent(Double.NaN)
+        tool.moveBy(Float.NaN, 1f)
+        tool.nudgeStepPx = Double.NaN
+        tool.nudgeStepPx = -3.0
+        assertEquals(1.0, tool.nudgeStepPx, 0.0)
+        assertEquals(start, tool.transformState)
+        // Valid numbers still work, and the nudge step moves by exact amounts.
+        tool.nudgeStepPx = 3.0
+        tool.nudge(-1, 0)
+        assertEquals(DocBox(1f, 4f, 9f, 12f), tool.transformState!!.bounds())
+    }
+
+    @Test
+    fun previewMatchesCommitWhenTheLayerChangesMeanwhile() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(0, 0, 10, 10), RED)
+        val tool = activate(c)
+        tool.moveBy(30f, 30f)
+        // A menu "Fill" doesn't go through the tool: the preview must still show what commit writes.
+        c.fillLayer(layer, BLUE)
+        val preview = BitmapUtils.createLayerBitmap(64, 64)
+        c.compositor.drawDocument(Canvas(preview), null)
+        assertEquals(BLUE, preview.getPixel(50, 5))
+        assertEquals(0, preview.getPixel(5, 5))
+        assertEquals(RED, preview.getPixel(35, 35))
+        tool.commit()
+        assertTrue(pixels(preview).contentEquals(pixels(layer.bitmap)))
+    }
+
+    @Test
+    fun lockedMeanwhileCancelsInsteadOfWriting() {
+        val (c, layer) = setup(32, 32)
+        fill(layer.bitmap, Rect(0, 0, 8, 8), RED)
+        val before = pixels(layer.bitmap)
+        val tool = activate(c)
+        tool.moveBy(10f, 10f)
+        layer.locked = true
+        tool.commit()
+        assertFalse(tool.hasPendingWork)
+        assertNull(c.renderOverride)
+        assertTrue(before.contentEquals(pixels(layer.bitmap)))
+        assertFalse(c.canUndo)
+        assertTrue(c.message!!.contains("locked"))
+    }
+
+    @Test
+    fun replacedBitmapEndsTheSessionSafely() {
+        val (c, layer) = setup(32, 32)
+        fill(layer.bitmap, Rect(0, 0, 8, 8), RED)
+        val tool = activate(c)
+        // E.g. another module replaced the layer bitmap without deactivating the tool.
+        layer.bitmap = BitmapUtils.createLayerBitmap(32, 32)
+        tool.moveBy(5f, 5f)
+        assertFalse(tool.hasPendingWork)
+        assertNull(c.renderOverride)
+        tool.commit()
+        assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun unusablePictureRemovesTheImportLayer() {
+        val (c, base) = setup(40, 40)
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { recycle() }
+        c.importImageAsLayer(img)
+        idle()
+        val tool = transformTool(c)
+        assertFalse(tool.hasPendingWork)
+        assertEquals(listOf(base), c.doc.layers.toList())
+        assertFalse(c.canUndo)
+        assertEquals("The picture could not be placed", c.message)
+    }
+
+    @Test
+    fun placementIgnoresSelectionChanges() {
+        val (c, _) = setup(60, 60)
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        c.importImageAsLayer(img)
+        idle()
+        val tool = transformTool(c)
+        val st = tool.transformState
+        c.selectAll()
+        assertTrue(tool.isPlacement)
+        assertEquals(st, tool.transformState)
+        tool.commit()
+        assertEquals(BLUE, c.doc.activeLayer.bitmap.getPixel(30, 30))
+    }
+
     private companion object {
         const val RED = 0xFFFF0000.toInt()
         const val GREEN = 0xFF00FF00.toInt()
