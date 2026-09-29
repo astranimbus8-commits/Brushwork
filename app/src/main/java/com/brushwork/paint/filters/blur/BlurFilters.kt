@@ -2,5 +2,15 @@ package com.brushwork.paint.filters.blur
 
 import com.brushwork.paint.filters.Filter
 
-// STUB - replaced by a filter module. Every filter of this category is listed here.
-val blurFilters: List<Filter> = emptyList()
+/** Every filter of the Blur category, in menu order. */
+val blurFilters: List<Filter> = listOf(
+    GaussianBlurFilter(),
+    ZoomingBlurFilter(),
+    SpinBlurFilter(),
+    MotionBlurFilter(),
+    MosaicFilter(),
+    UnsharpMaskFilter(),
+    FrostedGlassFilter(),
+    FrostedGlassZoomingFilter(),
+    FrostedGlassMovingFilter(),
+)
