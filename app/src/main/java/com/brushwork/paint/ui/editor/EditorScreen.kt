@@ -46,6 +46,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -61,9 +62,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.StabilizerMode
 import com.brushwork.paint.storage.ExportFormat
@@ -103,6 +106,22 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
     val canvasRef = remember { arrayOfNulls<CanvasView>(1) }
     val closePanel = { panel = null }
+
+    // The editor chrome is always dark: light system bar icons whatever the system theme
+    // (edge-to-edge picks them from it), restored when the editor closes.
+    val hostView = LocalView.current
+    DisposableEffect(hostView) {
+        val window = hostView.context.findActivity()?.window
+        val bars = window?.let { WindowCompat.getInsetsController(it, hostView) }
+        val lightStatus = bars?.isAppearanceLightStatusBars ?: false
+        val lightNav = bars?.isAppearanceLightNavigationBars ?: false
+        bars?.isAppearanceLightStatusBars = false
+        bars?.isAppearanceLightNavigationBars = false
+        onDispose {
+            bars?.isAppearanceLightStatusBars = lightStatus
+            bars?.isAppearanceLightNavigationBars = lightNav
+        }
+    }
 
     // Chrome sizes (px), reported to the canvas so the initial fit centers between them.
     var topChromePx by remember { mutableIntStateOf(0) }

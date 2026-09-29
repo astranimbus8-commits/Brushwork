@@ -18,6 +18,13 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.max
 import kotlin.math.min
 
+/** The hosting activity (LocalContext may be a ContextWrapper around it). */
+internal tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 /** Import / export / share operations of the editor menu (all run with the busy overlay). */
 internal class EditorActions(private val controller: EditorController, private val context: Context) {
     private val app: BrushworkApp get() = context.applicationContext as BrushworkApp
@@ -93,13 +100,6 @@ internal class EditorActions(private val controller: EditorController, private v
                 controller.toast("No app available to share with")
             }
         }
-    }
-
-    /** The hosting activity (LocalContext may be a ContextWrapper around it). */
-    private tailrec fun Context.findActivity(): Activity? = when (this) {
-        is Activity -> this
-        is ContextWrapper -> baseContext.findActivity()
-        else -> null
     }
 
     /**
