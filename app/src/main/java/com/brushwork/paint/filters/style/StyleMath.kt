@@ -544,16 +544,60 @@ internal object StyleMath {
     }
 
     /**
-     * Unit surface normal of height field [z] at (x, y) from central differences, written into [n].
+     * Unit surface normal (nx, ny, nz; image coordinates, z toward the viewer) of height field [z]
+     * at (x, y) from central differences, passed to [block] without allocating.
      */
-    fun normalAt(z: FloatArray, w: Int, h: Int, x: Int, y: Int, n: FloatArray) {
+    inline fun <R> withNormal(z: FloatArray, w: Int, h: Int, x: Int, y: Int, block: (nx: Float, ny: Float, nz: Float) -> R): R {
         val row = y * w
         val xl = if (x > 0) x - 1 else x; val xr = if (x < w - 1) x + 1 else x
         val yu = if (y > 0) y - 1 else y; val yd = if (y < h - 1) y + 1 else y
         val dx = (z[row + xr] - z[row + xl]) / max(1, xr - xl)
         val dy = (z[yd * w + x] - z[yu * w + x]) / max(1, yd - yu)
         val inv = 1f / sqrt(dx * dx + dy * dy + 1f)
-        n[0] = -dx * inv; n[1] = -dy * inv; n[2] = inv
+        return block(-dx * inv, -dy * inv, inv)
+    }
+
+    /**
+     * Self-shadowing of height field [z] (px) under a directional light with horizontal direction
+     * ([lx], [ly]) (towards the light, image coordinates) and elevation slope [tanE]. Returns the
+     * shadow amount 0..1 per pixel, with a penumbra of [soft] height px. O(n): a horizon sweep
+     * from the side facing the light, one pixel line at a time.
+     */
+    fun shadowSweep(z: FloatArray, w: Int, h: Int, lx: Float, ly: Float, tanE: Float, soft: Float, ctx: FilterContext): FloatArray {
+        val out = FloatArray(w * h)
+        val len = sqrt(lx * lx + ly * ly)
+        if (!(len > 1e-4f) || !(tanE < 1e3f)) return out
+        val dx = lx / len; val dy = ly / len
+        val majorX = kotlin.math.abs(dx) >= kotlin.math.abs(dy)
+        val nu = if (majorX) w else h
+        val nv = if (majorX) h else w
+        val du = if (majorX) dx else dy
+        val dvPerStep = (if (majorX) dy else dx) / kotlin.math.abs(du)
+        val drop = sqrt(1f + dvPerStep * dvPerStep) * tanE
+        val towardLight = if (du > 0f) 1 else -1
+        val low = -1.0e9f
+        var prev = FloatArray(nv) { low }
+        var cur = FloatArray(nv)
+        val invSoft = 1f / max(soft, 1e-3f)
+        // Start at the line nearest to the light; the previous line is one step towards it.
+        for (step in 0 until nu) {
+            if (step and 255 == 0) ctx.checkCancelled()
+            val u = if (towardLight > 0) nu - 1 - step else step
+            for (v in 0 until nv) {
+                val pv = v + dvPerStep
+                val v0 = kotlin.math.floor(pv).toInt()
+                val f = pv - v0
+                val a = if (v0 in 0 until nv) prev[v0] else low
+                val b = if (v0 + 1 in 0 until nv) prev[v0 + 1] else low
+                val horizon = a + (b - a) * f - drop
+                val i = if (majorX) v * w + u else u * w + v
+                val zz = z[i]
+                out[i] = ((horizon - zz) * invSoft).coerceIn(0f, 1f)
+                cur[v] = max(zz, horizon)
+            }
+            val t = prev; prev = cur; cur = t
+        }
+        return out
     }
 
     /**
