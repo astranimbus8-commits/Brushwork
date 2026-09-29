@@ -342,7 +342,17 @@ fun ToolIconButton(
 /** Horizontal row of single-choice chips. */
 @Composable
 fun ChoiceChips(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    // Scroll only when the width is bounded: inside another horizontally scrolling container
+    // (e.g. the tool options strip) a nested horizontalScroll would crash at measure time.
+    androidx.compose.foundation.layout.BoxWithConstraints(modifier) {
+        val scroll = if (constraints.hasBoundedWidth) Modifier.horizontalScroll(rememberScrollState()) else Modifier
+        ChoiceChipsRow(options, selected, onSelect, scroll)
+    }
+}
+
+@Composable
+private fun ChoiceChipsRow(options: List<String>, selected: Int, onSelect: (Int) -> Unit, modifier: Modifier) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         options.forEachIndexed { i, label ->
             FilterChip(
                 selected = i == selected,
