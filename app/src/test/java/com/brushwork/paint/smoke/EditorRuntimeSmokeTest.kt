@@ -732,6 +732,109 @@ class EditorRuntimeSmokeTest {
         }
     }
 
+    // ================================================================== brush engine extremes
+
+    @Test
+    fun everyBrushPresetAtExtremeSettingsPaintsAndUndoes() {
+        val layer = c.activeLayer
+        c.doc.layers[0].bitmap.eraseColor(-1)
+        c.editWholeLayer(layer, "Seed") { b ->
+            Canvas(b).drawRect(150f, 0f, 250f, 300f, Paint().apply { color = blue })
+        }
+        c.undoManager.clear()
+        val problems = mutableListOf<String>()
+        fun variants(p: com.brushwork.paint.brush.BrushPreset) = listOf(
+            "as is" to p,
+            "min" to p.copy(size = 0.5f, minSizeRatio = 0f, opacity = 0.01f, flow = 0.01f, hardness = 0f, spacing = 0.01f, roundness = 0.05f, mixing = 0f, grain = 1f),
+            "max" to p.copy(size = 1000f, minSizeRatio = 1f, hardness = 1f, spacing = 2f, scatter = 3f, taperStart = 2000f, taperEnd = 2000f, angle = 359f, mixing = 1f, pressureOpacity = true),
+            "huge dense" to p.copy(size = 600f, spacing = 0.01f, hardness = 0f, scatter = 3f),
+            "NaN" to p.copy(size = Float.NaN, opacity = Float.NaN, spacing = Float.NaN, hardness = Float.NaN, angle = Float.NaN),
+        )
+        for (tool in EditorController.PAINT_TOOLS) {
+            c.selectTool(tool)
+            for (preset in com.brushwork.paint.brush.BrushLibrary.presetsFor(tool)) {
+                for ((vName, v) in variants(preset)) {
+                    val where = "$tool / ${preset.name} / $vName"
+                    Smoke.step(where)
+                    c.updatePreset(tool, v)
+                    val before = pixels(layer.bitmap)
+                    val n = c.undoManager.undoCount
+                    val t0 = System.currentTimeMillis()
+                    try {
+                        strokeDoc(40f to 60f, 360f to 240f)
+                        // A pen stroke with changing pressure and tilt, straight to the controller.
+                        c.pointerDown(ToolPoint(60f, 250f, 0.1f, 0L, isStylus = true, tilt = 0.8f, orientation = 1f))
+                        for (i in 1..20) c.pointerMove(ToolPoint(60f + i * 14f, 250f - i * 9f, (i % 7) / 6f, i * 8L, isStylus = true, tilt = 0.3f * (i % 3), orientation = i * 0.3f))
+                        c.pointerUp(ToolPoint(340f, 70f, 0f, 200L, isStylus = true))
+                        Smoke.pump(30)
+                    } catch (t: Throwable) {
+                        problems += "$where: ${t.javaClass.simpleName}: ${t.message}"
+                        continue
+                    }
+                    val ms = System.currentTimeMillis() - t0
+                    if (ms > 6_000) problems += "$where: two strokes took $ms ms"
+                    if (c.isInteracting || c.renderOverride != null) problems += "$where: stroke left open"
+                    if (c.undoManager.undoCount - n !in 0..2) problems += "$where: ${c.undoManager.undoCount - n} undo steps"
+                    while (c.undoManager.undoCount > n) c.undo()
+                    if (!before.contentEquals(pixels(layer.bitmap))) problems += "$where: undo did not restore the pixels"
+                }
+                c.updatePreset(tool, preset)
+            }
+        }
+        assertTrue("brush problems:\n" + problems.joinToString("\n"), problems.isEmpty())
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    @Test
+    fun overlaysDrawForEveryGridRulerAndToolAtExtremeViews() {
+        seed()
+        val probe = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(probe)
+        val cx = view.width / 2f
+        val cy = view.height / 2f
+        // Selection outline + pending shape/curve/text/transform overlays at once where possible.
+        c.selectAll()
+        Smoke.pump(100)
+        for (zoomSteps in listOf(0, 3, -3)) {
+            // Pinch in / out repeatedly, with a rotation.
+            repeat(kotlin.math.abs(zoomSteps)) {
+                if (zoomSteps > 0) pinch(cx - 30f to cy, cx + 30f to cy, cx - 150f to cy + 20f, cx + 150f to cy - 20f)
+                else pinch(cx - 150f to cy, cx + 150f to cy, cx - 30f to cy - 10f, cx + 30f to cy + 10f)
+            }
+            for (type in com.brushwork.paint.model.GridType.entries) {
+                c.updateGrid(c.grid.copy(enabled = true, type = type, spacingPx = 1f))
+                view.draw(canvas)
+                c.updateGrid(c.grid.copy(enabled = true, type = type, spacingPx = 5000f))
+                view.draw(canvas)
+            }
+            c.updateGrid(c.grid.copy(enabled = false))
+            for (type in com.brushwork.paint.model.RulerType.entries) {
+                c.updateRuler(c.ruler.copy(enabled = true, type = type, radius = 1f, radiusX = 1f, radiusY = 5000f, radialLines = 360))
+                view.draw(canvas)
+            }
+            c.updateRuler(c.ruler.copy(enabled = false))
+            for (id in ToolId.entries) {
+                c.selectTool(id)
+                Smoke.pump(40)
+                when (val t = c.currentTool) {
+                    is ShapeTool -> t.ensurePending()
+                    is CurveTool -> { t.addAnchor(Vec2(10f, 10f)); t.addAnchor(Vec2(390f, 290f)); t.select(1) }
+                    is TextTool -> { t.startTextAt(200f, 150f); t.setText("Overlay"); t.confirmEditor() }
+                    else -> {}
+                }
+                view.draw(canvas)
+                if (c.currentTool.hasPendingWork) c.currentTool.discard()
+                Smoke.pump(40)
+            }
+            c.selectTool(ToolId.BRUSH)
+        }
+        c.deselect()
+        view.setMirrored(true)
+        view.draw(canvas)
+        view.setMirrored(false)
+        Smoke.assertQuiet(c, "overlays")
+    }
+
     // ================================================================== assists, frames, import
 
     @Test
