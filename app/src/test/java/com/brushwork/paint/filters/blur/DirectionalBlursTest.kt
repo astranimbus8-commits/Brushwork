@@ -4,6 +4,12 @@ import com.brushwork.paint.core.PixelBuffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+
+/** Marks reference pixels whose samples leave the image (edge handling differs by design). */
+private const val OUTSIDE = 0x00123456
 
 class DirectionalBlursTest {
     private val zoom = ZoomingBlurFilter()
@@ -71,6 +77,83 @@ class DirectionalBlursTest {
         for (x in listOf(60, 150, 260)) { // sMax * r stays inside the image
             assertEquals("both ways at $x", ramp(x + 0.5), red(both[x, 0]).toDouble(), 4.0)
         }
+    }
+
+    /**
+     * Independent reference: premultiplied mean of [n] bilinear samples at `pos(x, y, t)` for t evenly
+     * spaced in 0..1. Pixels with any sample outside the image are marked with [OUTSIDE].
+     */
+    private fun bruteForce(src: PixelBuffer, n: Int, pos: (x: Float, y: Float, t: Float, out: FloatArray) -> Unit): PixelBuffer {
+        val out = PixelBuffer(src.width, src.height)
+        val p = FloatArray(2)
+        for (y in 0 until src.height) for (x in 0 until src.width) {
+            var sa = 0.0; var sr = 0.0; var sg = 0.0; var sb = 0.0
+            var inside = true
+            for (i in 0 until n) {
+                pos(x + 0.5f, y + 0.5f, i / (n - 1f), p)
+                if (p[0] < 0.5f || p[1] < 0.5f || p[0] > src.width - 0.5f || p[1] > src.height - 0.5f) inside = false
+                val c = src.sampleBilinear(p[0], p[1])
+                val a = alpha(c).toDouble()
+                sa += a; sr += red(c) * a; sg += ((c shr 8) and 0xFF) * a; sb += (c and 0xFF) * a
+            }
+            out[x, y] = if (!inside) OUTSIDE else if (sa <= 0.0) 0 else
+                com.brushwork.paint.core.ColorUtils.argb((sa / n).roundToInt(), (sr / sa).roundToInt(), (sg / sa).roundToInt(), (sb / sa).roundToInt())
+        }
+        return out
+    }
+
+    /** Smooth test pattern (no detail finer than a few pixels) with varying opacity. */
+    private fun smoothImage(w: Int, h: Int) = PixelBuffer(w, h).also { b ->
+        for (y in 0 until h) for (x in 0 until w) {
+            val v = 0.5 + 0.5 * sin(x * 0.31) * cos(y * 0.23)
+            b[x, y] = com.brushwork.paint.core.ColorUtils.argb(
+                (120 + 135 * (0.5 + 0.5 * sin((x + y) * 0.17))).roundToInt(),
+                (255 * v).roundToInt(), (x * 255) / w, (y * 255) / h,
+            )
+        }
+    }
+
+    private fun assertCloseToReference(what: String, ref: PixelBuffer, got: PixelBuffer) {
+        var sum = 0L; var count = 0; var worst = 0
+        for (i in ref.pixels.indices) {
+            if (ref.pixels[i] == OUTSIDE) continue
+            val d = channelDiff(ref.pixels[i], got.pixels[i])
+            sum += d; count++; worst = maxOf(worst, d)
+        }
+        assertTrue("$what: too few comparable pixels ($count)", count > ref.size / 4)
+        val mean = sum.toDouble() / count
+        assertTrue("$what: mean difference $mean", mean < 1.5)
+        assertTrue("$what: max difference $worst", worst <= 12)
+    }
+
+    @Test
+    fun cascadesMatchBruteForceAverages() {
+        val w = 96; val h = 72
+        val src = smoothImage(w, h)
+        val cx = w / 2f; val cy = h / 2f
+
+        val k = 0.6f * 0.95f
+        val zoomRef = bruteForce(src, 400) { x, y, t, p ->
+            val s = (1f - k) + k * t
+            p[0] = cx + (x - cx) * s; p[1] = cy + (y - cy) * s
+        }
+        assertCloseToReference("zoom", zoomRef, zoom.render(src, center, "strength" to 60f))
+
+        val theta = Math.toRadians(40.0)
+        val spinRef = bruteForce(src, 400) { x, y, t, p ->
+            val phi = -theta / 2 + theta * t
+            val c = cos(phi).toFloat(); val s = sin(phi).toFloat()
+            p[0] = cx + (x - cx) * c - (y - cy) * s; p[1] = cy + (x - cx) * s + (y - cy) * c
+        }
+        assertCloseToReference("spin", spinRef, spin.render(src, center, "angle" to 40f))
+
+        val len = 30f
+        val a = Math.toRadians(25.0)
+        val motionRef = bruteForce(src, 400) { x, y, t, p ->
+            val d = -len / 2 + len * t
+            p[0] = x + d * cos(a).toFloat(); p[1] = y - d * sin(a).toFloat()
+        }
+        assertCloseToReference("motion", motionRef, motion.render(src, "angle" to 25f, "distance" to len))
     }
 
     @Test
