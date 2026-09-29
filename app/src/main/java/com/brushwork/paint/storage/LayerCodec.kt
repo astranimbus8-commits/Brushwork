@@ -80,29 +80,31 @@ internal object LayerCodec {
         val w = bitmap.width
         val h = bitmap.height
         val out = BitmapUtils.createLayerBitmap(w, h)
-        if (bitmap.hasAlpha() && !bitmap.isPremultiplied) {
-            // Canvas refuses unpremultiplied bitmaps. getPixels returns exactly the stored
-            // (unpremultiplied) colors converted to sRGB; setPixels premultiplies them.
-            val band = max(1, (1 shl 20) / w).coerceAtMost(h)
-            val row = IntArray(w * band)
-            var y = 0
-            while (y < h) {
-                val n = minOf(band, h - y)
-                bitmap.getPixels(row, 0, w, 0, y, w, n)
-                out.setPixels(row, 0, w, 0, y, w, n)
-                y += n
-            }
-            return out
-        }
-        val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
         try {
-            Canvas(out).drawBitmap(src, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) })
+            if (bitmap.hasAlpha() && !bitmap.isPremultiplied) {
+                // Canvas refuses unpremultiplied bitmaps. getPixels returns exactly the stored
+                // (unpremultiplied) colors converted to sRGB; setPixels premultiplies them.
+                val band = max(1, (1 shl 20) / w).coerceAtMost(h)
+                val row = IntArray(w * band)
+                var y = 0
+                while (y < h) {
+                    val n = minOf(band, h - y)
+                    bitmap.getPixels(row, 0, w, 0, y, w, n)
+                    out.setPixels(row, 0, w, 0, y, w, n)
+                    y += n
+                }
+                return out
+            }
+            val src = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap
+            try {
+                Canvas(out).drawBitmap(src, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) })
+            } finally {
+                if (src !== bitmap) src.recycle()
+            }
             return out
         } catch (e: Throwable) {
             out.recycle()
             throw e
-        } finally {
-            if (src !== bitmap) src.recycle()
         }
     }
 
