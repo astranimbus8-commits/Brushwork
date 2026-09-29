@@ -38,7 +38,7 @@ class AnimeBackgroundFilter : Filter("draw.anime_background", "Anime Background"
         Stylize.fillTransparent(work, 3, 3, 4f * u, ctx)
         val smooth = values.float("smoothing").coerceIn(0f, 100f) / 100f
         val iterations = if (smooth <= 0f) 0 else 1 + (smooth * 2.99f).toInt()
-        Stylize.bilateral(work, 3, 3, u * (1f + 2.5f * smooth), 5f + 9f * smooth, iterations, ctx)
+        Stylize.bilateral(work, 3, 3, u * (1.5f + 5f * smooth), 5f + 9f * smooth, iterations, ctx)
         ctx.progress(0.6f)
         val outline = values.float("outline").coerceIn(0f, 100f) / 100f
         val dog = if (outline > 0f) Stylize.dog(work[0], work.w, work.h, 0.9f * u, ctx) else null

@@ -54,7 +54,7 @@ class MangaBackgroundFilter : Filter("draw.manga_background", "Manga Background"
         } else null
         ctx.progress(0.4f)
         val iterations = if (smooth <= 0f) 0 else 1 + (smooth * 2.99f).toInt()
-        Stylize.bilateral(work, 1, 1, u * (1f + 2f * smooth), 0.07f + 0.1f * smooth, iterations, ctx)
+        Stylize.bilateral(work, 1, 1, u * (1.5f + 4f * smooth), 0.07f + 0.1f * smooth, iterations, ctx)
         // A light blur so tone boundaries follow smooth contours instead of photo grain.
         val tones = FilterMath.gaussianBlurPlane(work[0], ww, wh, 0.4f * u * (1f + smooth), ctx)
         ctx.progress(0.7f)
