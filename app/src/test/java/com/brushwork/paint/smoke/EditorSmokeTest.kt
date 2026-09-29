@@ -117,6 +117,7 @@ class EditorSmokeTest {
         val dog = Smoke.watchdog()
         section("editor screen, tools, panels, touch") { editorScreen() }
         section("panels composed directly") { panelsDirect() }
+        section("editor branches: slider, busy, filter layout, pinch, export") { editorBranches() }
         section("layers panel operated") { layersPanel() }
         section("number fields refuse NaN and infinity") { numberFields() }
         section("main activity end to end") { mainActivity() }
@@ -444,6 +445,99 @@ class EditorSmokeTest {
         Smoke.assertQuiet(c, "tool sheets done")
     }
 
+    // ================================================================== editor branches
+
+    private fun editorBranches() {
+        val activity = newActivity()
+        val c = Smoke.controller(activity)
+        c.seedContent()
+        activity.setContent { BrushworkTheme { EditorScreen(c, onExit = {}, onSaveNow = {}) } }
+        settle()
+        c.tools
+        c.brush = c.brush.copy(size = 20f)
+        settle()
+        val root = activity.window.decorView
+        val touch = Smoke.Touch(root)
+
+        // Side slider: a real vertical drag shows the size preview and changes the size.
+        Smoke.step("side slider drag")
+        val slider = com.brushwork.paint.ui.color.RobolectricUi.elements().last { e ->
+            e.node.config.contains(androidx.compose.ui.semantics.SemanticsActions.SetProgress) &&
+                e.node.config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) { null }?.contains("Brush size") == true
+        }
+        val sb = slider.bounds
+        touch.send(MotionEvent.ACTION_DOWN, P(0, sb.center.x, sb.center.y))
+        for (s in 1..8) { touch.idle(16); touch.send(MotionEvent.ACTION_MOVE, P(0, sb.center.x, sb.center.y - s * 12f)) }
+        settle(2)
+        assertWindowsLaidOut()
+        touch.send(MotionEvent.ACTION_UP, P(0, sb.center.x, sb.center.y - 96f))
+        settle()
+        assertTrue("dragging up grew the brush: ${c.brush.size}", c.brush.size > 20f)
+        Smoke.assertQuiet(c, "side slider")
+
+        // Busy overlay with a Stop button; the canvas ignores touches meanwhile.
+        Smoke.step("busy overlay")
+        var stopped = false
+        var release: (() -> Unit)? = null
+        c.runBusy("Working hard", onCancel = { stopped = true }) {
+            kotlinx.coroutines.suspendCancellableCoroutine<Unit> { cont -> release = { cont.resumeWith(Result.success(Unit)) } }
+        }
+        settle()
+        assertTrue(has("Working hard"))
+        val undo0 = c.undoManager.undoCount
+        val canvas = Smoke.find(root, CanvasView::class.java)!!
+        val (ox, oy) = canvasOrigin(canvas)
+        fun screen(x: Float, y: Float) = c.viewTransform.docToScreen(x, y).let { (it.x + ox) to (it.y + oy) }
+        touch.stroke(screen(50f, 50f), screen(300f, 200f))
+        assertEquals("no stroke through the busy overlay", undo0, c.undoManager.undoCount)
+        click("Stop", exact = true)
+        assertTrue("Stop reached the operation", stopped)
+        release!!.invoke()
+        settle()
+        Smoke.assertQuiet(c, "busy finished")
+        assertFalse(has("Working hard"))
+
+        // A filter preview swaps the tool strip and hotbar for the filter panel, and back.
+        Smoke.step("filter session layout")
+        assertTrue(has("Choose brush"))
+        c.startFilter(com.brushwork.paint.filters.FilterRegistry.all.first())
+        settle()
+        assertNotNull(c.filterSession)
+        assertFalse("tool options hidden during a filter", has("Choose brush"))
+        assertFalse("hotbar hidden during a filter", has("Open color picker"))
+        assertWindowsLaidOut()
+        assertTrue("filter preview finished", Smoke.pumpUntil { settle(1); c.filterSession?.let { !it.isRendering } ?: true })
+        c.filterSession?.cancel()
+        settle()
+        assertTrue(has("Choose brush"))
+        Smoke.assertQuiet(c, "filter cancelled")
+
+        // Pinch through the window: zoom readout, no paint, no undo.
+        Smoke.step("pinch")
+        val z0 = c.viewTransform.zoom
+        val cx = canvas.width / 2f + ox
+        val cy = canvas.height / 2f + oy
+        touch.idle(300)
+        touch.pinch(cx - 60f to cy, cx + 60f to cy, cx - 120f to cy, cx + 120f to cy)
+        assertEquals(z0 * 2f, c.viewTransform.zoom, 0.02f)
+        assertEquals(undo0, c.undoManager.undoCount)
+        Smoke.assertQuiet(c, "pinch")
+
+        // Export and share from the editor menu run under the busy overlay and finish cleanly.
+        for (entry in listOf("Export PNG", "Export JPG", "Share")) {
+            click("More options")
+            click(entry, exact = true)
+            assertTrue("$entry finished", Smoke.pumpUntil { settle(1); c.busyMessage == null })
+            assertFalse("$entry: no failure message", has("failed"))
+            Smoke.assertQuiet(c, entry)
+        }
+        // FileProvider needs '/' paths (see exportAndShareFilesAreWritten): only checkable there.
+        if (java.io.File.separatorChar == '/') {
+            val started = org.robolectric.Shadows.shadowOf(activity).nextStartedActivity
+            assertEquals("share opens the system chooser", android.content.Intent.ACTION_CHOOSER, started?.action)
+        }
+    }
+
     // ================================================================== layers panel
 
     private fun layersPanel() {
@@ -721,6 +815,34 @@ class EditorSmokeTest {
             assertTrue("layer $i: what was on screen when the editor closed is what was saved", mem.contentEquals(disk))
         }
 
+        // Gallery card menu: rename, duplicate, export, share, delete.
+        fun projects() = kotlinx.coroutines.runBlocking { app.repository.list() }
+        assertTrue("gallery lists the project", Smoke.pumpUntil { settle(1); has("More options for Smoke art") })
+        click("More options for Smoke art")
+        click("Rename", exact = true)
+        SmokeUi.typeAndDone("Name", "Renamed art")
+        assertTrue("renamed", Smoke.pumpUntil { settle(1); has("Renamed art", exact = true) })
+        click("More options for Renamed art")
+        click("Duplicate", exact = true)
+        assertTrue("duplicated", Smoke.pumpUntil { settle(1); projects().size == 2 })
+        for (entry in listOf("Export PNG", "Export JPG", "Share")) {
+            click("More options for Renamed art", exact = false)
+            click(entry, exact = true)
+            Smoke.pumpUntil(5_000) { settle(1); false } // let the busy overlay come and go
+            assertTrue("$entry: gallery usable again", has("New canvas"))
+        }
+        if (java.io.File.separatorChar == '/') {
+            val chooser = org.robolectric.Shadows.shadowOf(act).nextStartedActivity
+            assertEquals("share opens the system chooser", android.content.Intent.ACTION_CHOOSER, chooser?.action)
+        }
+        val copyId = projects().first { it.id != id }.id
+        val copyName = projects().first { it.id == copyId }.name
+        click("More options for $copyName")
+        click("Delete", exact = true)
+        click("Delete", exact = true) // the confirmation
+        assertTrue("deleted", Smoke.pumpUntil { settle(1); projects().size == 1 })
+        assertTrue(has("Renamed art", exact = true))
+
         // New canvas through the dialog opens the editor on it; system back returns to the gallery.
         click("New canvas")
         assertWindowsLaidOut(2)
@@ -731,7 +853,7 @@ class EditorSmokeTest {
         })
         settle()
         act.onBackPressedDispatcher.onBackPressed()
-        assertTrue("system back closes the editor", Smoke.pumpUntil { settle(1); app.editorSession == null && has("Smoke art") })
+        assertTrue("system back closes the editor", Smoke.pumpUntil { settle(1); app.editorSession == null && has("Renamed art") })
     }
 
     // ================================================================== direct composition

@@ -566,8 +566,9 @@ class EditorRuntimeSmokeTest {
         assertTrue("pixels changed outside undo:\n" + leaks.joinToString("\n"), leaks.isEmpty())
         assertEquals(2, c.doc.layers.size)
         assertTrue("the tools did paint", original.indices.any { !original[it].contentEquals(allPixels().getOrNull(it) ?: IntArray(0)) })
+        // Failures that are only logged (swallowed exceptions) count as failures here.
         val errors = Smoke.errorLogs()
-        println("[smoke] error logs: ${errors.size}\n" + errors.joinToString("\n"))
+        assertTrue("error logs:\n" + errors.joinToString("\n"), errors.isEmpty())
     }
 
     // ================================================================== canvas operations
@@ -729,6 +730,23 @@ class EditorRuntimeSmokeTest {
         } finally {
             sc.dispose()
         }
+    }
+
+    // ================================================================== export / share
+
+    @Test
+    fun exportAndShareFilesAreWritten() {
+        val app = ApplicationProvider.getApplicationContext<BrushworkApp>()
+        val bmp = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888).apply { eraseColor(red) }
+        val share = runBlocking { app.repository.exportForShare(bmp, "Share me", com.brushwork.paint.storage.ExportFormat.PNG) }
+        // FileProvider matches its roots with '/' (as on Android); on a Windows test host the
+        // cache path has backslashes and the Uri can't be made.
+        if (java.io.File.separatorChar == '/') assertNotNull("share file written", share)
+        val shareFile = java.io.File(app.cacheDir, "exports/Share me.png")
+        assertTrue("the share PNG was encoded", shareFile.length() > 0)
+        val gallery = runBlocking { app.repository.exportToGallery(bmp, "Gallery me", com.brushwork.paint.storage.ExportFormat.JPEG) }
+        println("[smoke] gallery export: $gallery")
+        Smoke.pump(50)
     }
 
     // ================================================================== autosave
