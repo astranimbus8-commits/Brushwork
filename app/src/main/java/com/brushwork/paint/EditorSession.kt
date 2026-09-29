@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -87,12 +88,21 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     fun close(onClosed: () -> Unit) {
         if (closed) return
         closed = true
+        // The editor stays on screen until the save is done, and the save copies the layers one
+        // by one between file writes: anything drawn meanwhile would be dropped with the
+        // controller. Show "Saving…" instead, which also makes the canvas ignore input.
+        val saved = CompletableDeferred<Unit>()
+        controller?.runBusy("Saving…") { saved.await() }
         app.appScope.launch {
-            controller?.let { c -> runCatching { c.currentTool.onDeactivate() } }
-            save()
-            controller?.dispose()
-            controller = null
-            scope.cancel()
+            try {
+                controller?.let { c -> runCatching { c.currentTool.onDeactivate() } }
+                save()
+                controller?.dispose()
+                controller = null
+            } finally {
+                saved.complete(Unit)
+                scope.cancel()
+            }
             onClosed()
         }
     }

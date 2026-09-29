@@ -579,16 +579,53 @@ class EditorSmokeTest {
         settle()
         assertSame(session, app.editorSession)
 
+        // Recreated (a configuration change the activity doesn't handle itself, e.g. font size):
+        // the same session and framing, a new canvas view that still draws and undoes.
+        val zoom = c.viewTransform.zoom
+        val undoBefore = c.undoManager.undoCount
+        ctl.recreate()
+        val act = ctl.get()
+        settle()
+        assertSame("the open document survives recreation", session, app.editorSession)
+        val canvas2 = Smoke.find(act.window.decorView, CanvasView::class.java) ?: throw AssertionError("no canvas after recreation")
+        assertTrue(canvas2 !== canvas)
+        assertEquals("same framing", zoom, c.viewTransform.zoom, 1e-4f)
+        val (ox2, oy2) = canvasOrigin(canvas2)
+        fun screen2(x: Float, y: Float) = c.viewTransform.docToScreen(x, y).let { (it.x + ox2) to (it.y + oy2) }
+        val touch2 = Smoke.Touch(act.window.decorView)
+        touch2.stroke(screen2(50f, 150f), screen2(350f, 150f))
+        settle()
+        assertEquals("the recreated canvas draws", undoBefore + 1, c.undoManager.undoCount)
+        touch2.idle(300)
+        touch2.twoFingerTap(screen2(150f, 100f), screen2(250f, 100f))
+        settle()
+        assertEquals("two-finger undo on the recreated canvas", undoBefore, c.undoManager.undoCount)
+
         // Back to the gallery: the editor closes after saving; the project has the stroke.
-        touch.stroke(screen(50f, 250f), screen(350f, 50f))
-        click("Back to gallery")
+        touch2.stroke(screen2(50f, 250f), screen2(350f, 50f))
+        click("Back to gallery", settleAfter = false)
         Smoke.step("closing editor")
+        // The save on the way out copies the layers one by one while the editor is still on
+        // screen; anything drawn after that would be dropped with the controller. So the canvas
+        // refuses input from the moment Back is pressed.
+        assertTrue(session.closed)
+        assertEquals("the editor shows it is saving (and ignores input)", "Saving…", c.busyMessage)
+        val undoAtBack = c.undoManager.undoCount
+        val topAtBack = IntArray(400 * 300).also { c.activeLayer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+        touch2.stroke(screen2(20f, 280f), screen2(380f, 280f))
+        assertEquals("no stroke while closing", undoAtBack, c.undoManager.undoCount)
+        assertTrue("no pixels while closing", topAtBack.contentEquals(IntArray(400 * 300).also { c.activeLayer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }))
         assertTrue("back in the gallery", Smoke.pumpUntil { settle(1); app.editorSession == null && has("New canvas") })
         val saved = kotlinx.coroutines.runBlocking { app.repository.load(id) }
         val layer = saved.layers[saved.activeLayerIndex]
         assertEquals(0xFF112233.toInt(), layer.bitmap.getPixel(200, 150))
         // (275, 100) is on the second stroke only: (50, 250) -> (350, 50).
         assertEquals("the second stroke was saved on exit", 0xFF112233.toInt(), layer.bitmap.getPixel(275, 100))
+        for ((i, l) in c.doc.layers.withIndex()) {
+            val mem = IntArray(400 * 300).also { l.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+            val disk = IntArray(400 * 300).also { saved.layers[i].bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+            assertTrue("layer $i: what was on screen when the editor closed is what was saved", mem.contentEquals(disk))
+        }
 
         // New canvas through the dialog opens the editor on it; system back returns to the gallery.
         click("New canvas")
@@ -599,7 +636,7 @@ class EditorSmokeTest {
             app.editorSession?.state is com.brushwork.paint.EditorSession.State.Ready && app.editorSession?.projectId != id
         })
         settle()
-        activity.onBackPressedDispatcher.onBackPressed()
+        act.onBackPressedDispatcher.onBackPressed()
         assertTrue("system back closes the editor", Smoke.pumpUntil { settle(1); app.editorSession == null && has("Smoke art") })
     }
 

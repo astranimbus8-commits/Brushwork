@@ -69,7 +69,7 @@ internal object SmokeUi {
      * click label), or of its nearest clickable ancestor (an icon's description sits on a child
      * of its button). Works for sheets that have not finished animating in.
      */
-    fun click(label: String, exact: Boolean = false) {
+    fun click(label: String, exact: Boolean = false, settleAfter: Boolean = true) {
         Smoke.step("click \"$label\"")
         val candidates = elements().filter { matches(it.node, label, exact) }
         for (e in candidates.asReversed()) {
@@ -77,7 +77,7 @@ internal object SmokeUi {
             while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
             val action = n?.config?.getOrNull(SemanticsActions.OnClick)?.action ?: continue
             action.invoke()
-            settle()
+            if (settleAfter) settle()
             return
         }
         throw AssertionError("nothing clickable labelled \"$label\"; shown: ${shown().take(100)}")
