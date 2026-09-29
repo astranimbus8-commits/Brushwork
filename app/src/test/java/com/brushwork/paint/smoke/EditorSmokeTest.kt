@@ -899,6 +899,39 @@ class EditorSmokeTest {
         settle()
         assertEquals("two-finger undo on the recreated canvas", undoBefore, c.undoManager.undoCount)
 
+        // Rotation: the activity handles it itself (configChanges), so the same editor is resized
+        // to landscape: the canvas refits, still draws under the finger, and the layers panel
+        // switches to its side-by-side layout.
+        Smoke.step("rotate to landscape")
+        org.robolectric.RuntimeEnvironment.setQualifiers("w760dp-h360dp-land-hdpi")
+        ctl.configurationChange()
+        settle()
+        assertSame("rotation keeps the activity", act, ctl.get())
+        val canvasL = Smoke.find(act.window.decorView, CanvasView::class.java) ?: throw AssertionError("no canvas in landscape")
+        assertTrue("landscape canvas: ${canvasL.width}x${canvasL.height}", canvasL.width > canvasL.height)
+        run {
+            val (oxL, oyL) = canvasOrigin(canvasL)
+            fun screenL(x: Float, y: Float) = c.viewTransform.docToScreen(x, y).let { (it.x + oxL) to (it.y + oyL) }
+            val n = c.undoManager.undoCount
+            val tl = Smoke.Touch(act.window.decorView)
+            tl.idle(300)
+            tl.stroke(screenL(60f, 280f), screenL(340f, 280f))
+            settle()
+            assertEquals(n + 1, c.undoManager.undoCount)
+            assertEquals("landscape stroke under the finger", 0xFF112233.toInt(), c.activeLayer.bitmap.getPixel(200, 280))
+            c.undo()
+            settle()
+        }
+        click("Open layers")
+        assertWindowsLaidOut(2)
+        assertTrue(has("Add layer"))
+        SmokeUi.assertIdle("layers panel in landscape")
+        closeSheets(act) {}
+        org.robolectric.RuntimeEnvironment.setQualifiers("w360dp-h760dp-port-hdpi")
+        ctl.configurationChange()
+        settle()
+        Smoke.assertQuiet(c, "rotated back")
+
         // Back to the gallery: the editor closes after saving; the project has the stroke.
         touch2.stroke(screen2(50f, 250f), screen2(350f, 50f))
         click("Back to gallery", settleAfter = false)
