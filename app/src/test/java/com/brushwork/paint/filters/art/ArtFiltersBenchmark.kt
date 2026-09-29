@@ -31,6 +31,64 @@ class ArtFiltersBenchmark {
     }
 
     @Test
+    fun timeWorstCaseParameters() {
+        val src = scene(2000, 1500)
+        val white = PixelBuffer.filled(2000, 1500, -1)
+        val cases = listOf(
+            Triple(SheerFilter(SheerShape.SQUARE), src, mapOf("size" to 1f, "amount" to 100f)),
+            Triple(SheerFilter(SheerShape.LINE), src, mapOf("size" to 100f, "amount" to 100f)),
+            Triple(SheerFilter(SheerShape.CROSS), src, mapOf("size" to 1f, "amount" to 100f)),
+            Triple(CrossFilter(), white, mapOf("count" to 16f, "length" to 1000f, "thickness" to 10f, "area" to 100f, "brightness" to 200f)),
+            Triple(CrossFilter(), src, mapOf("count" to 16f, "length" to 5f, "area" to 100f)),
+            Triple(NoiseFilter(), src, mapOf("size" to 1.5f, "mode" to 1, "distribution" to 1)),
+            Triple(OilPaintFilter(), src, mapOf("size" to 30f, "smoothness" to 100f, "detail" to 100f, "texture" to 100f)),
+            Triple(RetroGameFilter(), src, mapOf("dotSize" to 1f, "palette" to 2)),
+            Triple(GlitchFilter(), src, mapOf("height" to 1f, "strength" to 100f, "noise" to 100f, "blocks" to 100f)),
+            Triple(BloomFilter(), src, mapOf("radius" to 200f, "area" to 100f)),
+            Triple(BloomFilter(), src, mapOf("radius" to 1f, "area" to 100f)),
+            Triple(ChromeFilter(), lineArt(2000, 1500), mapOf("smoothness" to 10f)),
+        )
+        for ((f, img, params) in cases) {
+            val v = f.defaultValues()
+            for ((k, value) in params) v.set(k, value)
+            val t0 = System.nanoTime()
+            f.apply(img, v, FilterContext())
+            println("WORST ${f.id} $params: ${(System.nanoTime() - t0) / 1_000_000} ms")
+        }
+    }
+
+    /**
+     * Single-threaded cost per megapixel (Parallel runs inline on its own worker threads), a rough
+     * proxy for phones: divide by ~3 for an 8-core phone and multiply by 12 for 12 megapixels.
+     */
+    @Test
+    fun timeSingleThreadPerMegapixel() {
+        val src = scene(1000, 1000)
+        var error: Throwable? = null
+        val t = Thread({
+            try {
+                for (f in artFilters) {
+                    val v = f.defaultValues()
+                    f.apply(src, v, FilterContext())
+                    val t0 = System.nanoTime()
+                    f.apply(src, v, FilterContext())
+                    println("SINGLE ${f.id}: ${(System.nanoTime() - t0) / 1_000_000} ms/MP")
+                }
+                val oil = OilPaintFilter()
+                for (texture in listOf(0f, 40f)) {
+                    val v = oil.defaultValues().set("texture", texture)
+                    oil.apply(src, v, FilterContext())
+                    val t0 = System.nanoTime()
+                    oil.apply(src, v, FilterContext())
+                    println("SINGLE oil texture=$texture: ${(System.nanoTime() - t0) / 1_000_000} ms/MP")
+                }
+            } catch (e: Throwable) { error = e }
+        }, "bw-parallel-bench")
+        t.start(); t.join()
+        error?.let { throw it }
+    }
+
+    @Test
     fun dumpPreviews() {
         val dir = File("build/art-previews").apply { mkdirs() }
         val scene = scene(480, 320)

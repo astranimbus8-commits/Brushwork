@@ -36,22 +36,23 @@ class ChromeFilter : Filter("art.chrome", "Chrome", FilterCategory.ART) {
         val tint = values.color("tint")
         val sp = src.pixels
 
-        // (1) Height field.
-        val height = FloatArray(n)
+        // (1) Height field: luma × alpha plus a bulge that rises over 8 px from transparent edges
+        // (a constant when nothing is transparent). The distance array is reused as the height
+        // field to keep peak memory at two float planes.
         var anyTransparent = false
-        for (i in 0 until n) {
-            val c = sp[i]
-            val a = c ushr 24
-            if (a < 128) anyTransparent = true
-            height[i] = ArtMath.luma((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF) * a / 65025f
-        }
-        if (anyTransparent) {
+        for (i in 0 until n) if (sp[i] ushr 24 < 128) { anyTransparent = true; break }
+        val height = if (anyTransparent) {
             val clear = FloatArray(n) { 1f - (sp[it] ushr 24) / 255f }
             val dist = FilterMath.distanceToCoverage(clear, w, h, 0.5f, ctx)
             val bulge = max(ctx.px(8f), 1e-3f)
-            for (i in 0 until n) height[i] += 0.5f * (dist[i] / bulge).coerceIn(0f, 1f)
+            for (i in 0 until n) dist[i] = 0.5f * (dist[i] / bulge).coerceIn(0f, 1f)
+            dist
         } else {
-            for (i in 0 until n) height[i] += 0.5f
+            FloatArray(n) { 0.5f }
+        }
+        for (i in 0 until n) {
+            val c = sp[i]
+            height[i] += ArtMath.luma((c shr 16) and 0xFF, (c shr 8) and 0xFF, c and 0xFF) * (c ushr 24) / 65025f
         }
         ctx.checkCancelled()
 

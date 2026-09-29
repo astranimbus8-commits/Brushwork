@@ -100,6 +100,7 @@ class RetroGameFilter : Filter("art.retro_game", "Retro Game", FilterCategory.AR
             xStart[nbx] = w
             val blockColor = IntArray(nbx)
             for (by in b0 until b1) {
+                ctx.checkCancelled()
                 val y0 = min(h, floor(by * dot).toInt())
                 val y1 = if (by == nby - 1) h else min(h, floor((by + 1) * dot).toInt())
                 if (y1 <= y0) continue
