@@ -1,5 +1,8 @@
 package com.brushwork.paint.ui.layers
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -16,12 +19,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,6 +37,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -50,6 +57,10 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.theme.BrushworkColors
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 
 /**
  * ibisPaint-style layers panel: the layer stack (top first) with thumbnails, masks, clipping
@@ -89,6 +100,19 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
     var deleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
 
+    // Refusals ("layer is locked") and failures arrive as controller messages, but the editor's
+    // snackbar sits behind this modal sheet, so echo new ones inside the panel for a moment.
+    var noticeText by remember { mutableStateOf("") }
+    var noticeVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(controller) {
+        snapshotFlow { controller.message }.drop(1).filterNotNull().collectLatest { m ->
+            noticeText = m
+            noticeVisible = true
+            delay(NOTICE_MS)
+            noticeVisible = false
+        }
+    }
+
     val shortScreen = LocalConfiguration.current.screenHeightDp < 480
     BwSheet(
         title = "Layers",
@@ -105,14 +129,17 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
         },
     ) {
         val list: @Composable (Modifier) -> Unit = { m ->
-            LayerList(
-                controller = controller,
-                rows = rows,
-                thumbs = thumbs,
-                docAspect = doc.width.toFloat() / doc.height.coerceAtLeast(1),
-                dragOrder = dragOrderState,
-                modifier = m,
-            )
+            Box(m) {
+                LayerList(
+                    controller = controller,
+                    rows = rows,
+                    thumbs = thumbs,
+                    docAspect = doc.width.toFloat() / doc.height.coerceAtLeast(1),
+                    dragOrder = dragOrderState,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                PanelNotice(noticeText, noticeVisible, Modifier.align(Alignment.BottomCenter).padding(8.dp))
+            }
         }
         val controls: @Composable ColumnScope.() -> Unit = {
             LayerProperties(controller, activeRow, isBottom = activeDocIndex == 0)
@@ -125,7 +152,9 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
                 hasSelection = hasSelection,
                 onDelete = { deleteId = active.id },
                 onRename = { renameId = active.id },
-                onImportPicture = { onImportPicture(); onDismiss() },
+                // Close first so a host that opens its own picker/panel state isn't overridden,
+                // and the transform placement of the imported picture is visible afterwards.
+                onImportPicture = { onDismiss(); onImportPicture() },
             )
         }
         BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -198,10 +227,15 @@ private fun LayerList(
         onDrop = { index ->
             val order = dragOrder.value
             dragOrder.value = null
-            if (index >= 0 && order != null && order.size == doc.layers.size) {
+            if (index >= 0 && order != null) {
                 val layer = order[index]
-                val target = LayerListMath.displayToDoc(index, order.size)
-                if (doc.indexOf(layer) != target) controller.moveLayer(layer, target)
+                // moveLayer makes the moved layer active without the tool lifecycle; selecting it
+                // first lets the current tool commit/re-target (which may itself add a layer).
+                controller.selectLayer(layer)
+                if (order.size == doc.layers.size) {
+                    val target = LayerListMath.displayToDoc(index, order.size)
+                    if (doc.indexOf(layer) != target) controller.moveLayer(layer, target)
+                }
             }
         },
     )
@@ -239,6 +273,21 @@ private fun LayerList(
     }
 }
 
+/** Short-lived message bubble over the bottom of the layer list. */
+@Composable
+private fun PanelNotice(text: String, visible: Boolean, modifier: Modifier) {
+    AnimatedVisibility(visible = visible, modifier = modifier, enter = fadeIn(), exit = fadeOut()) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+            contentColor = BrushworkColors.OnChrome,
+            shadowElevation = 6.dp,
+        ) {
+            Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+        }
+    }
+}
+
 @Composable
 private fun RenameDialog(initial: String, onRename: (String) -> Unit, onDismiss: () -> Unit) {
     var value by rememberSaveable(stateSaver = TextFieldValue.Saver) {
@@ -263,3 +312,4 @@ private fun RenameDialog(initial: String, onRename: (String) -> Unit, onDismiss:
 }
 
 private const val MAX_NAME_LENGTH = 64
+private const val NOTICE_MS = 2500L

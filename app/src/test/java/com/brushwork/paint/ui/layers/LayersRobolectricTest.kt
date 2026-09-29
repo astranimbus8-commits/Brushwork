@@ -258,6 +258,98 @@ class LayersRobolectricTest {
     }
 
     @Test
+    fun clearOnAlphaLockedContentIsRefusedButMaskClearWorks() {
+        val c = newController()
+        val layer = c.doc.activeLayer
+        layer.bitmap.eraseColor(red)
+        layer.alphaLocked = true
+        assertFalse(LayerOps.clear(c, layer))
+        assertEquals(red, layer.bitmap.px(3, 3))
+        assertTrue(c.message!!.contains("Alpha lock"))
+        assertFalse(c.undoManager.canUndo)
+
+        // Alpha lock is about the content; the mask can still be cleared.
+        layer.mask = BitmapUtils.createMaskBitmap(8, 8)
+        layer.editingMask = true
+        assertTrue(LayerOps.clear(c, layer))
+        assertEquals(black, layer.mask!!.px(3, 3))
+        assertEquals(red, layer.bitmap.px(3, 3))
+    }
+
+    @Test
+    fun fillFollowsTheDocumentColorMode() {
+        val c = newController()
+        c.doc.colorMode = com.brushwork.paint.model.ColorMode.GRAYSCALE
+        val layer = c.doc.activeLayer
+        c.color = red
+        assertTrue(LayerOps.fill(c, layer))
+        assertEquals(0xFF4C4C4C.toInt(), layer.bitmap.px(2, 2))
+    }
+
+    @Test
+    fun mergingTwoClippedLayersKeepsUpperPixelsOutsideTheLowerOne() {
+        val c = newController(layers = 3)
+        val (base, lower, upper) = c.doc.layers
+        val green = 0xFF00FF00.toInt()
+        base.bitmap.eraseColor(white)
+        lower.clipping = true
+        upper.clipping = true
+        lower.bitmap.setPixel(1, 1, red)
+        upper.bitmap.setPixel(6, 6, green)
+
+        LayerOps.mergeDown(c, upper)
+        assertEquals(listOf(base, lower), c.doc.layers)
+        // Both were clipped to the base, so the upper pixel must survive outside the lower's alpha.
+        assertEquals(green, lower.bitmap.px(6, 6))
+        assertEquals(red, lower.bitmap.px(1, 1))
+        assertTrue(lower.clipping)
+        assertTrue(upper.clipping)
+
+        c.undoManager.undo(c)
+        assertEquals(listOf(base, lower, upper), c.doc.layers)
+        assertTrue(upper.clipping)
+        assertEquals(0, lower.bitmap.px(6, 6))
+    }
+
+    @Test
+    fun mergingIntoTheBaseStillClipsToIt() {
+        val c = newController(layers = 2)
+        val (base, upper) = c.doc.layers
+        base.bitmap.setPixel(1, 1, red)
+        upper.clipping = true
+        upper.bitmap.eraseColor(blue)
+        LayerOps.mergeDown(c, upper)
+        assertEquals(listOf(base), c.doc.layers)
+        assertEquals(blue, base.bitmap.px(1, 1))
+        assertEquals(0, base.bitmap.px(5, 5)) // outside the base's pixels: clipped away, as shown
+    }
+
+    @Test
+    fun addingAMaskAfterADisabledOneEnablesItInOneStep() {
+        val c = newController()
+        val layer = c.doc.activeLayer
+        LayerOps.addMask(c, layer, fromSelection = false)
+        LayerOps.setMaskEnabled(c, layer, false)
+        LayerOps.deleteMask(c, layer)
+        assertFalse(layer.maskEnabled)
+
+        LayerOps.addMask(c, layer, fromSelection = false)
+        assertNotNull(layer.mask)
+        assertTrue(layer.maskEnabled)
+        assertTrue(layer.editingMask)
+        assertEquals("Add mask", c.undoManager.undoLabel)
+
+        c.undoManager.undo(c)
+        assertNull(layer.mask)
+        assertFalse(layer.maskEnabled)
+        assertFalse(layer.editingMask)
+        assertEquals("Delete mask", c.undoManager.undoLabel)
+        c.undoManager.redo(c)
+        assertNotNull(layer.mask)
+        assertTrue(layer.maskEnabled)
+    }
+
+    @Test
     fun maskEnableToggleAndDeleteAreUndoable() {
         val c = newController()
         val layer = c.doc.activeLayer

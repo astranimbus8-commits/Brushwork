@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import com.brushwork.paint.model.Layer
+import java.lang.ref.WeakReference
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -16,7 +17,8 @@ import kotlin.math.roundToInt
  */
 class LayerThumbnails(private val maxSize: Int) {
 
-    private class Entry(val version: Long, val source: Bitmap, val image: ImageBitmap)
+    /** [source] is weak: a flip or merge replaces the full-size bitmap, which must not be kept alive here. */
+    private class Entry(val version: Long, val source: WeakReference<Bitmap>, val image: ImageBitmap)
 
     private val content = HashMap<Long, Entry>()
     private val masks = HashMap<Long, Entry>()
@@ -40,10 +42,10 @@ class LayerThumbnails(private val maxSize: Int) {
 
     private fun lookup(cache: HashMap<Long, Entry>, id: Long, version: Long, source: Bitmap): ImageBitmap {
         val e = cache[id]
-        if (e != null && e.version == version && e.source === source) return e.image
+        if (e != null && e.version == version && e.source.get() === source) return e.image
         if (source.isRecycled) return e?.image ?: EMPTY
         val image = downscale(source, maxSize).asImageBitmap()
-        cache[id] = Entry(version, source, image)
+        cache[id] = Entry(version, WeakReference(source), image)
         return image
     }
 

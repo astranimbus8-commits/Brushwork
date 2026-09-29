@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.layers
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
@@ -7,19 +8,25 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerPropsAction
+import com.brushwork.paint.engine.MaskChangeAction
+import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.model.Layer
 
 /**
  * Layer operations as offered by the layers panel. Wraps the controller with the guards it leaves
- * to callers (lock checks, memory failures) and implements Clear/Fill so they respect the edit
- * target: while a mask is being edited they paint the mask (black = hidden, fill = the gray
- * luminance of the color). Only the selection bounds are snapshotted for undo when a selection
- * exists. Main thread only.
+ * to callers (lock checks, memory failures, pending tool work) and implements Clear/Fill so they
+ * respect the edit target: while a mask is being edited they paint the mask (black = hidden,
+ * fill = the gray luminance of the color). Only the selection bounds are snapshotted for undo
+ * when a selection exists. Main thread only.
  *
  * Policy: operations that change pixels require [EditorController.checkEditable] (not locked, not
  * hidden); operations that change a mask's existence require the layer to be unlocked; property
- * changes (visibility, opacity, blend, clipping, locks, name) are always allowed.
+ * changes (visibility, opacity, blend, clipping, locks, name) are always allowed. Clearing the
+ * content of an alpha-locked layer is refused (it would change the locked alpha).
  */
 object LayerOps {
 
@@ -38,6 +45,19 @@ object LayerOps {
         }
     }
 
+    /**
+     * Bakes the current tool's editable pending work (floating transform, unconfirmed text or
+     * shape...) as its confirm button would, so a panel operation never interleaves with it.
+     * The controller already does this for flip, merge, add/duplicate and edit-target switches.
+     */
+    fun commitPendingWork(c: EditorController) {
+        val tool = c.currentTool
+        if (tool.hasPendingWork) {
+            tool.commit()
+            c.invalidateOverlay()
+        }
+    }
+
     fun addLayer(c: EditorController) = guardMemory(c, "Add layer") { c.addLayer() }
 
     fun duplicate(c: EditorController, layer: Layer) = guardMemory(c, "Duplicate layer") { c.duplicateLayer(layer) }
@@ -45,13 +65,28 @@ object LayerOps {
     /** Whether [layer] has a layer below it to merge into. */
     fun canMergeDown(c: EditorController, layer: Layer): Boolean = c.doc.indexOf(layer) > 0
 
+    /**
+     * Merges [layer] into the layer below. When both are clipped to the same base, the upper one
+     * is flattened onto the lower one WITHOUT clipping it to the lower layer's pixels: on screen
+     * both are clipped to the shared base, and the merged layer stays clipped to it.
+     */
     fun mergeDown(c: EditorController, layer: Layer) {
         val idx = c.doc.indexOf(layer)
         if (idx <= 0) { c.toast("There is no layer below to merge into"); return }
         val lower = c.doc.layers[idx - 1]
         if (!c.checkEditable(layer)) return
         if (!ensureUnlocked(c, lower)) return
-        guardMemory(c, "Merge down") { c.mergeDown(layer) }
+        // The controller renders the pair as a two-layer document where the lower layer is the
+        // base, so a clipped upper layer would be cut to the lower layer's alpha. Present it as
+        // unclipped for the duration of the (synchronous) merge; the flag is restored before
+        // anything composites, and the removed layer keeps it for undo.
+        val sameGroup = layer.clipping && lower.clipping && idx - 1 > 0
+        if (sameGroup) layer.clipping = false
+        try {
+            guardMemory(c, "Merge down") { c.mergeDown(layer) }
+        } finally {
+            if (sameGroup) layer.clipping = true
+        }
     }
 
     fun flip(c: EditorController, layer: Layer, horizontal: Boolean) =
@@ -72,20 +107,24 @@ object LayerOps {
     fun clear(c: EditorController, layer: Layer): Boolean {
         if (!c.checkEditable(layer)) return false
         val target = c.editTargetOf(layer)
+        if (target == EditTarget.CONTENT && layer.alphaLocked) {
+            c.toast("Alpha lock is on for \"${layer.name}\": turn it off to clear")
+            return false
+        }
+        commitPendingWork(c)
         val sel = c.selection
         val rect = if (sel != null) Rect(sel.bounds) else Rect(c.doc.bounds)
         if (rect.isEmpty) return false
-        val rec = c.beginEdit(layer, target)
-        rec.touch(rect)
-        val bmp = if (target == EditTarget.MASK) layer.mask!! else layer.bitmap
-        if (target == EditTarget.MASK) {
-            if (sel == null) bmp.eraseColor(MASK_HIDDEN)
-            else Canvas(bmp).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = MASK_HIDDEN })
-        } else {
-            if (sel == null) bmp.eraseColor(0)
-            else Canvas(bmp).drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+        val label = if (target == EditTarget.MASK) "Clear mask" else "Clear"
+        return recordedEdit(c, layer, target, rect, label) { bmp ->
+            if (sel == null) {
+                bmp.eraseColor(if (target == EditTarget.MASK) MASK_HIDDEN else 0)
+            } else {
+                val paint = if (target == EditTarget.MASK) Paint().apply { color = MASK_HIDDEN }
+                else Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+                Canvas(bmp).apply { clipRect(rect) }.drawBitmap(sel.mask, 0f, 0f, paint)
+            }
         }
-        return c.commitEdit(rec, if (target == EditTarget.MASK) "Clear mask" else "Clear")
     }
 
     /**
@@ -94,52 +133,112 @@ object LayerOps {
      */
     fun fill(c: EditorController, layer: Layer, color: Int = c.color): Boolean {
         if (!c.checkEditable(layer)) return false
+        commitPendingWork(c)
         val target = c.editTargetOf(layer)
         val sel = c.selection
         val rect = if (sel != null) Rect(sel.bounds) else Rect(c.doc.bounds)
         if (rect.isEmpty) return false
-        val rec = c.beginEdit(layer, target)
-        rec.touch(rect)
-        if (target == EditTarget.MASK) {
-            val gray = ColorUtils.gray(ColorUtils.luminance(color))
-            val bmp = layer.mask!!
-            if (sel == null) bmp.eraseColor(gray)
-            else Canvas(bmp).drawBitmap(sel.mask, 0f, 0f, Paint().apply { this.color = gray })
-        } else {
-            val canvas = Canvas(layer.bitmap)
-            val alphaLock = layer.alphaLocked
-            if (sel == null) {
-                if (alphaLock) canvas.drawColor(color, PorterDuff.Mode.SRC_ATOP) else canvas.drawColor(color, PorterDuff.Mode.SRC_OVER)
+        val label = if (target == EditTarget.MASK) "Fill mask" else "Fill"
+        return recordedEdit(c, layer, target, rect, label) { bmp ->
+            if (target == EditTarget.MASK) {
+                val gray = ColorUtils.gray(ColorUtils.luminance(color))
+                if (sel == null) bmp.eraseColor(gray)
+                else Canvas(bmp).apply { clipRect(rect) }.drawBitmap(sel.mask, 0f, 0f, Paint().apply { this.color = gray })
             } else {
-                val p = Paint().apply {
-                    this.color = color
-                    if (alphaLock) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                val canvas = Canvas(bmp)
+                val alphaLock = layer.alphaLocked
+                if (sel == null) {
+                    canvas.drawColor(color, if (alphaLock) PorterDuff.Mode.SRC_ATOP else PorterDuff.Mode.SRC_OVER)
+                } else {
+                    val p = Paint().apply {
+                        this.color = color
+                        if (alphaLock) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+                    }
+                    canvas.clipRect(rect)
+                    canvas.drawBitmap(sel.mask, 0f, 0f, p)
                 }
-                canvas.drawBitmap(sel.mask, 0f, 0f, p)
             }
         }
-        return c.commitEdit(rec, if (target == EditTarget.MASK) "Fill mask" else "Fill")
+    }
+
+    /**
+     * Snapshots [rect] of [layer]'s [target], runs [draw] on the target bitmap and commits one
+     * undo step. Out of memory (the snapshot of a big canvas, or the color-mode pass) restores
+     * the pixels and reports it instead of crashing.
+     */
+    private inline fun recordedEdit(
+        c: EditorController,
+        layer: Layer,
+        target: EditTarget,
+        rect: Rect,
+        label: String,
+        draw: (Bitmap) -> Unit,
+    ): Boolean {
+        val rec = c.beginEdit(layer, target)
+        val editsBefore = c.editCount
+        return try {
+            rec.touch(rect)
+            draw(if (target == EditTarget.MASK) layer.mask!! else layer.bitmap)
+            c.commitEdit(rec, label)
+        } catch (e: OutOfMemoryError) {
+            // Once the step reached the history it owns the snapshot tiles; before that, undo it.
+            if (c.editCount == editsBefore) rec.abort()
+            c.toast("Not enough memory for \"$label\"")
+            false
+        }
     }
 
     // ------------------------------------------------------------------ masks
 
+    /**
+     * Adds a mask (from the selection when [fromSelection] and one exists) and starts editing it.
+     * A layer whose previous mask was deleted or applied while disabled still has
+     * `maskEnabled = false`; the new mask is enabled in the same undo step so painting on it
+     * actually shows.
+     */
     fun addMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
         if (layer.mask != null || !ensureUnlocked(c, layer)) return
-        guardMemory(c, "Add mask") { c.addMask(layer, fromSelection = fromSelection && c.selection != null) }
+        commitPendingWork(c)
+        val useSelection = fromSelection && c.selection != null
+        guardMemory(c, "Add mask") {
+            if (layer.maskEnabled) {
+                c.addMask(layer, fromSelection = useSelection)
+            } else {
+                addEnabledMask(c, layer, useSelection)
+            }
+        }
+    }
+
+    /** Same as [EditorController.addMask] plus re-enabling the mask, as ONE undo step. */
+    private fun addEnabledMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
+        val sel = if (fromSelection) c.selection else null
+        val mask = BitmapUtils.createMaskBitmap(c.doc.width, c.doc.height, if (sel != null) MASK_HIDDEN else MASK_VISIBLE)
+        if (sel != null) Canvas(mask).drawBitmap(sel.mask, 0f, 0f, Paint().apply { color = MASK_VISIBLE })
+        val before = layer.props()
+        val actions = listOf<UndoAction>(
+            MaskChangeAction(layer, null, mask, "Add mask"),
+            LayerPropsAction(layer, before, before.copy(maskEnabled = true), "Add mask"),
+        )
+        actions.forEach { it.redo(c) }
+        layer.editingMask = true
+        c.pushUndo(CompositeAction("Add mask", actions))
     }
 
     fun deleteMask(c: EditorController, layer: Layer) {
         if (layer.mask == null || !ensureUnlocked(c, layer)) return
+        commitPendingWork(c)
         c.deleteMask(layer)
     }
 
     fun applyMask(c: EditorController, layer: Layer) {
         if (layer.mask == null || !c.checkEditable(layer)) return
+        commitPendingWork(c)
         guardMemory(c, "Apply mask") { c.applyMask(layer) }
     }
 
     fun invertMask(c: EditorController, layer: Layer) {
         if (layer.mask == null || !c.checkEditable(layer)) return
+        commitPendingWork(c)
         guardMemory(c, "Invert mask") { c.invertMask(layer) }
     }
 
@@ -156,4 +255,5 @@ object LayerOps {
     }
 
     private const val MASK_HIDDEN = 0xFF000000.toInt()
+    private const val MASK_VISIBLE = -1
 }
