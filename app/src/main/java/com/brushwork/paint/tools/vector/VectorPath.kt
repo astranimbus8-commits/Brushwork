@@ -73,6 +73,23 @@ class VectorPath(val ops: List<PathOp>) {
         }
     }.asIterable())
 
+    /** [controlBounds] of every sub-path separately (e.g. the two heads of a double arrow). */
+    fun subpathControlBounds(): List<Bounds> {
+        val out = ArrayList<Bounds>()
+        var cur: Bounds? = null
+        fun add(p: Vec2) { cur = Bounds(p.x, p.y, p.x, p.y).let { b -> cur?.union(b) ?: b } }
+        for (op in ops) {
+            when (op) {
+                is PathOp.MoveTo -> { cur?.let { out += it }; cur = null; add(op.p) }
+                is PathOp.LineTo -> add(op.p)
+                is PathOp.CubicTo -> { add(op.c1); add(op.c2); add(op.p) }
+                PathOp.Close -> {}
+            }
+        }
+        cur?.let { out += it }
+        return out
+    }
+
     /** Tight bounds of the flattened geometry. */
     fun bounds(tolerance: Float = 0.1f): Bounds? = Bounds.of(flatten(tolerance).flatMap { it.points })
 

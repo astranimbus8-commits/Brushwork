@@ -87,7 +87,8 @@ class VectorPaintSpec private constructor(
             if (f == null && s == null && sf == null) return null
             var b: Bounds? = null
             val regions = ArrayList<Rect>()
-            f?.controlBounds()?.let { b = it.outset(2f); regions += it.outset(2f).toRect() }
+            f?.controlBounds()?.let { b = it.outset(2f) }
+            f?.subpathControlBounds()?.forEach { regions += it.outset(2f).toRect() }
             s?.controlBounds()?.let {
                 val joinFactor = if (join == JoinStyle.MITER) MITER_LIMIT else 1f
                 val capFactor = if (cap == LineCapStyle.SQUARE) sqrt(2f) else 1f
@@ -97,9 +98,16 @@ class VectorPaintSpec private constructor(
                 b = b?.union(o) ?: o
                 strokeRegions(s, reach + REGION_TOLERANCE, regions)
             }
-            sf?.controlBounds()?.let { val o = it.outset(2f); b = b?.union(o) ?: o; regions += o.toRect() }
+            sf?.controlBounds()?.let { val o = it.outset(2f); b = b?.union(o) ?: o }
+            sf?.subpathControlBounds()?.forEach { regions += it.outset(2f).toRect() }
             val bb = b ?: return null
-            if (regions.size > MAX_REGIONS) { regions.clear(); regions += bb.toRect() }
+            // Too many boxes, or boxes so thick (huge miters) that they cover more than the bounds.
+            val boundsRect = bb.toRect()
+            val boundsArea = boundsRect.width().toLong() * boundsRect.height()
+            if (regions.size > MAX_REGIONS || regions.sumOf { it.width().toLong() * it.height() } >= boundsArea) {
+                regions.clear()
+                regions += boundsRect
+            }
             return VectorPaintSpec(
                 fill = f?.toAndroidPath(),
                 fillColor = fillColor,

@@ -196,36 +196,38 @@ class VectorRenderTest {
     /** Thick miters, square caps, star tips and arrowheads all stay inside the regions, so undo restores everything. */
     @Test
     fun everyPaintedPixelLiesInsideTheRegions() {
+        val n = 1000
         val specs = listOf(
-            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.RECTANGLE, ShapeBox(150f, 150f, 180f, 120f, 30f), OutlineParams()), red, 24f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
-            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.STAR, ShapeBox(150f, 150f, 220f, 220f, 17f), OutlineParams(starPoints = 7, innerRatio = 0.3f)), red, 8f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
-            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.ELLIPSE, ShapeBox(150f, 150f, 260f, 90f, -40f), OutlineParams()), red, 30f, LineCapStyle.ROUND, JoinStyle.ROUND)!!,
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.RECTANGLE, ShapeBox(500f, 500f, 800f, 600f, 30f), OutlineParams()), red, 12f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.STAR, ShapeBox(500f, 500f, 900f, 900f, 17f), OutlineParams(starPoints = 7, innerRatio = 0.3f)), red, 6f, LineCapStyle.ROUND, JoinStyle.MITER)!!,
+            VectorPaintSpec.build(null, 0, ShapeGeometry.outline(ShapeType.ELLIPSE, ShapeBox(500f, 500f, 900f, 300f, -40f), OutlineParams()), red, 30f, LineCapStyle.ROUND, JoinStyle.ROUND)!!,
             VectorPaintSpec.build(
                 null, 0,
-                CurveGeometry.toPath(listOf(CurveAnchor(20f, 280f), CurveAnchor(120f, 20f, sharp = true), CurveAnchor(280f, 260f)), false, 0f, false),
-                red, 16f, LineCapStyle.SQUARE, JoinStyle.MITER,
+                CurveGeometry.toPath(listOf(CurveAnchor(60f, 940f), CurveAnchor(400f, 60f, sharp = true), CurveAnchor(940f, 880f)), false, 0f, false),
+                red, 10f, LineCapStyle.SQUARE, JoinStyle.MITER,
             )!!,
-            ShapeGeometry.arrow(Vec2(30f, 40f), Vec2(270f, 200f), 10f, ArrowHeads.BOTH, ArrowHeadStyle.FILLED, 4f).let {
+            ShapeGeometry.arrow(Vec2(60f, 100f), Vec2(940f, 700f), 10f, ArrowHeads.BOTH, ArrowHeadStyle.FILLED, 4f).let {
                 VectorPaintSpec.build(null, 0, it.stroke, red, 10f, LineCapStyle.SQUARE, JoinStyle.ROUND, it.fill)!!
             },
         )
+        val px = IntArray(n * n)
         for ((i, spec) in specs.withIndex()) {
+            assertTrue("spec $i is banded", spec.regions.size > 3)
             for (withSelection in listOf(false, true)) {
-                val c = controller(300, 300)
+                val c = controller(n, n)
                 val layer = c.doc.activeLayer
-                if (withSelection) c.setSelection(Selection.all(300, 300), recordUndo = false) // tiled path
+                if (withSelection) c.setSelection(Selection.all(n, n), recordUndo = false) // tiled path
                 assertTrue(VectorCommit.commit(c, layer, listOf(spec), "Shape"))
-                val px = IntArray(300 * 300)
-                layer.bitmap.getPixels(px, 0, 300, 0, 0, 300, 300)
+                layer.bitmap.getPixels(px, 0, n, 0, 0, n, n)
                 var painted = 0
-                for (y in 0 until 300) for (x in 0 until 300) {
-                    if (px[y * 300 + x] == 0) continue
+                for (y in 0 until n) for (x in 0 until n) {
+                    if (px[y * n + x] == 0) continue
                     painted++
                     assertTrue("spec $i sel=$withSelection pixel ($x, $y)", spec.regions.any { it.contains(x, y) })
                 }
-                assertTrue(painted > 100)
+                assertTrue(painted > 1000)
                 c.undo()
-                layer.bitmap.getPixels(px, 0, 300, 0, 0, 300, 300)
+                layer.bitmap.getPixels(px, 0, n, 0, 0, n, n)
                 assertTrue("spec $i sel=$withSelection undo", px.all { it == 0 })
             }
         }

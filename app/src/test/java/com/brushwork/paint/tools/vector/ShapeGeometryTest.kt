@@ -188,6 +188,11 @@ class ShapeGeometryTest {
         val g = ShapeGeometry.arrow(a, b, 4f, ArrowHeads.BOTH, ArrowHeadStyle.FILLED, 4f)
         val fill = g.fill.flatten()
         assertEquals(2, fill.size)
+        // Each head has its own bounds (not one box spanning the whole arrow).
+        val headBounds = g.fill.subpathControlBounds()
+        assertEquals(2, headBounds.size)
+        assertEquals(84f, headBounds[0].left, 1e-3f); assertEquals(100f, headBounds[0].right, 1e-3f)
+        assertEquals(0f, headBounds[1].left, 1e-3f); assertEquals(16f, headBounds[1].right, 1e-3f)
         // Head length = 16 px, half width 8 px, tip at the end point.
         val endHead = fill[0].points
         assertVec(b, endHead[0])
