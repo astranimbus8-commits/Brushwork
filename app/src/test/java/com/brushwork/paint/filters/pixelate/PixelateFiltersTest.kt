@@ -235,14 +235,37 @@ class PixelateFiltersTest {
 
     @Test
     fun crystalSeedsDoNotDependOnGridWidth() {
-        // 100 px -> 10 grid columns, 105 px -> 11: the shared columns must keep their seeds so a
-        // downscaled preview (whose grid may round differently) shows the same crystals.
+        // 100 px -> 10 grid columns, 105 px -> 11: every point of the smaller image must keep its
+        // crystal (seeds extend beyond the image) so a downscaled preview, whose grid may round
+        // differently, shows the same crystals right up to the edge.
         val a = VoronoiLattice(100, 60, 10f, 1f, 3)
         val b = VoronoiLattice(105, 60, 10f, 1f, 3)
         val ca = FloatArray(2); val cb = FloatArray(2)
-        for (y in 0 until 60 step 3) for (x in 0 until 85 step 3) {
+        for (y in 0 until 60) for (x in 0 until 100) {
             a.cellAt(x + 0.5f, y + 0.5f, ca); b.cellAt(x + 0.5f, y + 0.5f, cb)
             assertEquals(ca[0], cb[0], 1e-4f); assertEquals(ca[1], cb[1], 1e-4f)
+        }
+    }
+
+    @Test
+    fun crystalCellsAreExactVoronoiRegions() {
+        // The seed returned for a point is the nearest of ALL seeds (brute force), including seeds
+        // two grid squares away and seeds beyond the image edge.
+        val rnd = Random(99)
+        for ((w, h) in listOf(97 to 61, 1 to 1, 5 to 90)) {
+            for (size in floatArrayOf(1f, 2.5f, 7f, 30f)) for (irr in floatArrayOf(0f, 0.4f, 0.8f, 1f)) {
+                val lat = VoronoiLattice(w, h, size, irr, rnd.nextInt())
+                val rows = rowOfCells(lat)
+                val seeds = Array(lat.cellCount) { FloatArray(2).also { c -> lat.centerOf(rows[it], it, c) } }
+                val c = FloatArray(2)
+                repeat(400) {
+                    val px = rnd.nextFloat() * w; val py = rnd.nextFloat() * h
+                    lat.cellAt(px, py, c)
+                    val found = hypot(c[0] - px, c[1] - py)
+                    val nearest = seeds.minOf { hypot(it[0] - px, it[1] - py) }
+                    assertEquals("size $size irr $irr at ($px,$py)", nearest, found, 1e-3f)
+                }
+            }
         }
     }
 
@@ -318,6 +341,44 @@ class PixelateFiltersTest {
                 // The ink is the custom color.
                 assertTrue(out.pixels.all { it == 0 || (it and 0xFFFFFF) == 0 })
             }
+        }
+    }
+
+    @Test
+    fun halftoneDensityCapsTheDotWithoutLighteningOtherTones() {
+        // Density is the largest dot: tones whose dot fits stay exact, darker ones stop there.
+        for (f in listOf(DotsFilter.hexagonal(), DotsFilter.square())) {
+            val pitch = 20f
+            val density = 0.7f
+            val lattice = f.lattice(240, 240, pitch, 0f)
+            val capRadius = (lattice.boundRadius + 0.5f) * density
+            fun coverage(level: Int): Double {
+                val src = PixelBuffer.filled(240, 240, ColorUtils.gray(level))
+                val out = f.apply(src, values(f, "size" to pitch, "density" to density * 100f, "sizing" to 1, "dotColor" to 1, "color" to 0xFF000000.toInt()), ctx)
+                var sum = 0.0; var n = 0
+                for (y in 40 until 200) for (x in 40 until 200) { sum += (out[x, y] ushr 24) / 255.0; n++ }
+                return sum / n
+            }
+            for (level in intArrayOf(255, 230, 191, 128)) assertEquals("${f.id} gray $level", 1.0 - level / 255.0, coverage(level), 0.04)
+            // Share of a cell covered by the capped dot, measured on a solid black image.
+            val capped = coverage(0)
+            assertTrue("${f.id}: black must be capped ($capped)", capped < 0.97)
+            val fullDisc = Math.PI * capRadius * capRadius / (if (f.id.endsWith("square")) pitch * pitch else pitch * pitch * SQRT3 / 2f)
+            assertTrue("${f.id}: black coverage $capped vs cap disc $fullDisc", capped <= fullDisc + 0.03)
+            // Dark gray (ink 0.75) is at least as covered as mid gray, never lighter than the cap allows.
+            assertTrue(coverage(64) >= coverage(128))
+        }
+    }
+
+    @Test
+    fun squareDotsDefaultToRoundDotsWithGaps() {
+        // At the default density the square lattice's dots must not be clipped by their cells.
+        for (f in listOf(DotsFilter.hexagonal(), DotsFilter.square())) {
+            val v = f.defaultValues()
+            val pitch = 16f
+            val lattice = f.lattice(64, 64, pitch, 0f)
+            val radius = (lattice.boundRadius + 0.5f) * v.float("density") / 100f
+            assertTrue("${f.id}: default dot radius $radius exceeds half the pitch", radius < pitch / 2f)
         }
     }
 

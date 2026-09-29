@@ -275,46 +275,75 @@ internal class TriangleLattice(width: Int, height: Int, radius: Float, angleDeg:
 
 /**
  * Voronoi cells around one jittered seed per `size x size` grid square (a "crystal" pattern).
- * [irregularity] 0..1 scales the jitter (0 = seeds at square centers). The nearest seed is found
- * among the 3x3 neighbouring grid squares, so every point is within `sqrt(2) * size` of its seed.
+ * [irregularity] 0..1 scales the jitter (0 = seeds at square centers); a seed never leaves its
+ * square, so every point is within `sqrt(2) * size` of its nearest seed.
+ *
+ * The seed field extends [PAD] squares beyond the image on every side and the nearest seed is
+ * found exactly (3x3 squares, plus the ring two squares away only when it could hold a closer
+ * seed). Cells therefore do not depend on where the image ends: edge cells are cut by the border
+ * like everywhere else, and a downscaled preview shows the same crystals.
  */
 internal class VoronoiLattice(width: Int, height: Int, size: Float, irregularity: Float, seed: Int) : CellLattice() {
     private val s = max(1f, size)
     private val inv = 1f / s
+    private val jitter = irregularity.coerceIn(0f, 1f)
     private val gw = max(1, ceil(width / s).toInt())
     private val gh = max(1, ceil(height / s).toInt())
-    private val sx = FloatArray(gw * gh)
-    private val sy = FloatArray(gw * gh)
+    /** Padded grid width: grid column `gx` (-PAD..gw-1+PAD) is stored at `gx + PAD`. */
+    private val stride = gw + 2 * PAD
+    private val sx = FloatArray(stride * (gh + 2 * PAD))
+    private val sy = FloatArray(sx.size)
 
-    override val rowCount: Int = gh
-    override val cellCount: Int = gw * gh
+    override val rowCount: Int = gh + 2 * PAD
+    override val cellCount: Int = sx.size
     override val boundRadius: Float = s * 1.4142135f
 
     init {
-        val j = irregularity.coerceIn(0f, 1f)
         // Seeds are hashed by grid coordinates (not the linear index) so the pattern does not
         // depend on the grid width, which may round differently in the downscaled preview.
-        for (gy in 0 until gh) for (gx in 0 until gw) {
-            val k = gy * gw + gx
-            sx[k] = (gx + 0.5f + (PixelRandom.rand01(gx, gy, 11, seed) - 0.5f) * j) * s
-            sy[k] = (gy + 0.5f + (PixelRandom.rand01(gx, gy, 12, seed) - 0.5f) * j) * s
+        for (gy in -PAD until gh + PAD) for (gx in -PAD until gw + PAD) {
+            val k = (gy + PAD) * stride + gx + PAD
+            sx[k] = (gx + 0.5f + (PixelRandom.rand01(gx, gy, 11, seed) - 0.5f) * jitter) * s
+            sy[k] = (gy + 0.5f + (PixelRandom.rand01(gx, gy, 12, seed) - 0.5f) * jitter) * s
         }
     }
 
-    override fun rowStart(row: Int): Int = row * gw
+    override fun rowStart(row: Int): Int = row * stride
 
     override fun cellAt(px: Float, py: Float, center: FloatArray?): Int {
-        val gx = min(gw - 1, max(0, floor(px * inv).toInt()))
-        val gy = min(gh - 1, max(0, floor(py * inv).toInt()))
-        var best = gy * gw + gx
+        // Padded coordinates of the square holding the point (clamped to the image's squares,
+        // so the 5x5 neighbourhood below always lies inside the padded grid).
+        val gx = min(gw - 1, max(0, floor(px * inv).toInt())) + PAD
+        val gy = min(gh - 1, max(0, floor(py * inv).toInt())) + PAD
+        var best = gy * stride + gx
         var bestD = Float.MAX_VALUE
-        for (y in max(0, gy - 1)..min(gh - 1, gy + 1)) {
-            val rowK = y * gw
-            for (x in max(0, gx - 1)..min(gw - 1, gx + 1)) {
+        for (y in gy - 1..gy + 1) {
+            val rowK = y * stride
+            for (x in gx - 1..gx + 1) {
                 val k = rowK + x
                 val dx = sx[k] - px; val dy = sy[k] - py
                 val d = dx * dx + dy * dy
                 if (d < bestD) { bestD = d; best = k }
+            }
+        }
+        // A seed two squares away is at least `reach` from the point: the distance to the border
+        // of the 3x3 block plus the seed's minimum inset into its square.
+        val x0 = (gx - PAD - 1) * s; val y0 = (gy - PAD - 1) * s
+        val edge = min(min(px - x0, x0 + 3f * s - px), min(py - y0, y0 + 3f * s - py))
+        val reach = edge + (1f - jitter) * 0.5f * s
+        if (bestD > reach * reach) {
+            for (y in gy - 2..gy + 2) {
+                val rowK = y * stride
+                val inner = y >= gy - 1 && y <= gy + 1
+                var x = gx - 2
+                while (x <= gx + 2) {
+                    val k = rowK + x
+                    val dx = sx[k] - px; val dy = sy[k] - py
+                    val d = dx * dx + dy * dy
+                    if (d < bestD) { bestD = d; best = k }
+                    // Skip the 3x3 block already searched.
+                    x = if (inner && x == gx - 2) gx + 2 else x + 1
+                }
             }
         }
         if (center != null) { center[0] = sx[best]; center[1] = sy[best] }
@@ -323,6 +352,11 @@ internal class VoronoiLattice(width: Int, height: Int, size: Float, irregularity
 
     override fun centerOf(row: Int, cell: Int, out: FloatArray) {
         out[0] = sx[cell]; out[1] = sy[cell]
+    }
+
+    private companion object {
+        /** Squares of seeds beyond each image edge: the nearest seed is at most 2 squares away. */
+        const val PAD = 2
     }
 }
 

@@ -23,8 +23,10 @@ import kotlin.math.tan
  * - Dot size "Uniform": every dot has the radius set by Density (100% fills the cells completely)
  *   and takes its cell's average color and opacity, like an LED / bead display.
  * - Dot size "By darkness": a halftone screen; the share of the cell covered by its dot equals
- *   the cell's ink amount (darkness x opacity) at 100% density, so white or empty cells get no
- *   dot and black cells a full one. Lower densities scale the dots down.
+ *   the cell's ink amount (darkness x opacity), so white or empty cells get no dot and black
+ *   cells a full one. Density is then the largest dot allowed: tones stay exact up to that dot
+ *   size and darker cells stop growing there (100% reproduces every tone; the defaults, chosen
+ *   for round Uniform dots, hold back the darkest tones).
  * Dots use the cell color or a custom color, over transparency or a background color.
  */
 class DotsFilter private constructor(id: String, name: String, private val hexagonal: Boolean) :
@@ -32,7 +34,9 @@ class DotsFilter private constructor(id: String, name: String, private val hexag
 
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("size", "Size", 2f, 200f, 16f, step = 1f, pixels = true),
-        FilterParam.Slider("density", "Density", 0f, 100f, 80f, step = 1f, suffix = "%"),
+        // Defaults leave a small gap between round dots (the square cell's corners need a larger
+        // radius to fill, so the same look takes a lower density there).
+        FilterParam.Slider("density", "Density", 0f, 100f, if (hexagonal) 80f else 65f, step = 1f, suffix = "%"),
         FilterParam.Slider("angle", "Angle", 0f, if (hexagonal) 360f else 90f, 0f, step = 1f, suffix = "°"),
         FilterParam.Choice("sizing", "Dot size", listOf("Uniform", "By darkness"), 0),
         FilterParam.Choice("dotColor", "Dot color", listOf("Cell color", "Custom"), 0),
@@ -82,7 +86,7 @@ class DotsFilter private constructor(id: String, name: String, private val hexag
                     val opacity: Float
                     if (byDarkness) {
                         val ink = ca / 255f * (1f - ColorUtils.luminance(col) / 255f)
-                        radius = if (ink > 0f) halftoneRadius(ink, pitch, lut) * density else 0f
+                        radius = if (ink > 0f) min(halftoneRadius(ink, pitch, lut), fullRadius) else 0f
                         rgb = if (custom) customColor else col
                         opacity = if (custom) customA else 1f
                     } else {
