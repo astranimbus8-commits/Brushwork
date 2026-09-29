@@ -18,7 +18,7 @@ object BrushLibrary {
     )
     val defaultBlur = BrushPreset(
         "blur", "Blur", BrushTip.BLUR,
-        size = 60f, hardness = 0.3f, spacing = 0.12f, pressureSize = false, mixing = 0.45f,
+        size = 60f, hardness = 0.3f, spacing = 0.12f, pressureSize = false, mixing = 0.6f,
     )
 
     private val gPen = BrushPreset(
