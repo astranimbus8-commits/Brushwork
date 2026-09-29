@@ -110,6 +110,7 @@ class DotsFilter private constructor(id: String, name: String, private val hexag
                 }
             }
         }
+        ctx.progress(1f)
         return out
     }
 
