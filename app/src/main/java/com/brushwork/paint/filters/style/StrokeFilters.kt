@@ -20,7 +20,7 @@ class StrokeOuterFilter : Filter("style.stroke_outer", "Stroke (Outer)", FilterC
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("width", "Width", 1f, 300f, 10f, 1f, pixels = true),
         StyleMath.antialiasParam(),
-        FilterParam.Color("color", "Color", 0xFF000000.toInt()),
+        FilterParam.Color("color", "Color", 0xFF000000.toInt(), useDrawingColor = true),
         StyleMath.opacityParam(),
         StyleMath.outputParam("Stroke behind layer", "Stroke only"),
     )
@@ -52,7 +52,7 @@ class StrokeBothFilter : Filter("style.stroke_both", "Stroke (Both)", FilterCate
         FilterParam.Slider("outer_width", "Outer width", 0f, 300f, 4f, 1f, pixels = true),
         FilterParam.Slider("inner_width", "Inner width", 0f, 300f, 4f, 1f, pixels = true),
         StyleMath.antialiasParam(),
-        FilterParam.Color("color", "Color", 0xFF000000.toInt()),
+        FilterParam.Color("color", "Color", 0xFF000000.toInt(), useDrawingColor = true),
         StyleMath.opacityParam(),
         StyleMath.outputParam("Stroke over layer", "Stroke only"),
     )
@@ -84,7 +84,7 @@ class StrokeInnerFilter : Filter("style.stroke_inner", "Stroke (Inner)", FilterC
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("width", "Width", 1f, 300f, 6f, 1f, pixels = true),
         StyleMath.antialiasParam(),
-        FilterParam.Color("color", "Color", 0xFF000000.toInt()),
+        FilterParam.Color("color", "Color", 0xFF000000.toInt(), useDrawingColor = true),
         StyleMath.opacityParam(),
         StyleMath.outputParam("Stroke on layer", "Stroke only"),
     )

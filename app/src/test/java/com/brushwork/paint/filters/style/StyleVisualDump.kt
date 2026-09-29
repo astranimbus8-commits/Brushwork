@@ -19,6 +19,10 @@ import kotlin.math.max
  */
 class StyleVisualDump {
 
+    private object FilterMathRandom {
+        fun at(k: Int, salt: Int): Float = com.brushwork.paint.filters.FilterMath.hash01(k, salt, 12345)
+    }
+
     private fun shapes(w: Int, h: Int): PixelBuffer {
         val b = PixelBuffer(w, h)
         for (y in 0 until h) for (x in 0 until w) {
@@ -112,6 +116,14 @@ class StyleVisualDump {
         save(GlowInnerFilter().let { it.apply(inputs.getValue("shapes"), it.defaultValues().set("crystal", true).set("color", 0xFFFFEE00.toInt()), FilterContext()) }, File(out, "glow_inner_crystal.png"))
         save(ExtrudeParallelFilter().let { it.apply(inputs.getValue("shapes"), it.defaultValues().set("angle", 250f).set("depth", 60f).set("side_color", 1), FilterContext()) }, File(out, "extrude_layer_colors.png"))
         save(ReliefFilter().let { it.apply(inputs.getValue("dots"), it.defaultValues(), FilterContext()) }, File(out, "relief_dots.png"))
+        val canopy = PixelBuffer(w, h)
+        for (k in 0 until 60) {
+            val cx = FilterMathRandom.at(k, 1) * w; val cy = FilterMathRandom.at(k, 2) * h * 0.6f
+            val r = 8f + FilterMathRandom.at(k, 3) * 22f
+            for (y in 0 until h) for (x in 0 until w) if (hypot(x - cx, y - cy) < r) canopy[x, y] = 0xFF1E3B22.toInt()
+        }
+        save(canopy, File(out, "_canopy.png"))
+        save(GodRaysFilter().let { it.apply(canopy, it.defaultValues().set("source", 2).set("light", floatArrayOf(0.5f, 0.2f)).set("length", 90f).set("source_size", 120f), FilterContext()) }, File(out, "god_rays_behind.png"))
         // Preview-scale consistency
         val half = PixelBuffer(w / 2, h / 2).also { hb -> for (y in 0 until h / 2) for (x in 0 until w / 2) hb[x, y] = inputs.getValue("shapes")[x * 2, y * 2] }
         save(StrokeOuterFilter().apply(half, StrokeOuterFilter().defaultValues(), FilterContext(scale = 0.5f)), File(out, "stroke_outer_half.png"))

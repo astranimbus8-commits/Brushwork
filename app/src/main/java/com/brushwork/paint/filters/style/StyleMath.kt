@@ -1,4 +1,4 @@
-﻿package com.brushwork.paint.filters.style
+package com.brushwork.paint.filters.style
 
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.Parallel
