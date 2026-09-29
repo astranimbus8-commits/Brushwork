@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.editor
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
@@ -48,11 +49,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     var onViewGesture: ((ViewGestureInfo?) -> Unit)? = null
 
     private val viewport = ViewportStore.of(controller)
-    private val density = resources.displayMetrics.density
-    private val classifier = TouchGestureClassifier(
-        tapSlopPx = TouchGestureClassifier.TAP_SLOP_DP * density,
-        longPressSlopPx = TouchGestureClassifier.LONG_PRESS_SLOP_DP * density,
-    )
+    // The activity handles density changes itself (manifest configChanges): see onConfigurationChanged.
+    private var density = resources.displayMetrics.density
+    private var classifier = createClassifier()
 
     // Screen area not covered by chrome (insets from each edge, px); the fit centers in it.
     private var insetLeft = 0f
@@ -63,7 +62,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     // ------------------------------------------------------------------ drawing resources
 
     private val backdropColor = BrushworkColors.CanvasBackdrop.toArgb()
-    private val checkerPaint = Paint().apply { shader = createCheckerShader((8f * density).toInt().coerceAtLeast(2)) }
+    private val checkerPaint = Paint().apply { shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2)) }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeJoin = Paint.Join.ROUND
@@ -163,6 +162,20 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         if (mode == Mode.TRANSFORM) restartTransform(null, -1)
         ensureFitted()
         applyTransform()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val d = resources.displayMetrics.density
+        if (d == density) return
+        // Display size changed while editing: rebuild everything measured in dp.
+        abortGesture()
+        mode = Mode.NONE
+        ignoredMask = 0L
+        density = d
+        classifier = createClassifier()
+        checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2))
+        if (viewport.hasSize) applyTransform()
     }
 
     override fun onAttachedToWindow() {
@@ -534,6 +547,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         return ToolPoint(pts[0], pts[1], pressure, time, stylus, tilt, orientation).also { lastPoint = it }
     }
 
+    private fun createClassifier() = TouchGestureClassifier(
+        tapSlopPx = TouchGestureClassifier.TAP_SLOP_DP * density,
+        longPressSlopPx = TouchGestureClassifier.LONG_PRESS_SLOP_DP * density,
+    )
+
     private fun createCheckerShader(cell: Int): Shader {
         val bmp = Bitmap.createBitmap(cell * 2, cell * 2, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
@@ -551,6 +569,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         const val SMOOTH_ZOOM_LIMIT = 2.5f
         const val WHEEL_ZOOM_STEP = 1.15f
         const val REFIT_INSET_DELTA_DP = 24f
+        const val CHECKER_CELL_DP = 8f
         val SHADOW_WIDTHS_DP = floatArrayOf(22f, 14f, 8f, 3f)
         val SHADOW_ALPHAS = intArrayOf(8, 14, 24, 40)
     }

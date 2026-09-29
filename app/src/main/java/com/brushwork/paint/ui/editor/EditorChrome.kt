@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -31,12 +33,15 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -305,9 +310,12 @@ fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier 
     }
 }
 
-/** Full-screen scrim that blocks all input while a long operation runs. */
+/**
+ * Full-screen scrim that blocks all input while a long operation runs. [onCancel] non-null
+ * offers a Stop button (cancellable operations).
+ */
 @Composable
-fun BusyOverlay(message: String, progress: Float) {
+fun BusyOverlay(message: String, progress: Float, onCancel: (() -> Unit)? = null) {
     Box(
         Modifier
             .fillMaxSize()
@@ -330,6 +338,19 @@ fun BusyOverlay(message: String, progress: Float) {
                     LinearProgressIndicator(progress = { p }, color = BrushworkColors.Accent, trackColor = BrushworkColors.ChromeBorder, modifier = Modifier.width(200.dp))
                     Spacer(Modifier.height(8.dp))
                     Text("${(p * 100f).roundToInt()}%", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
+                }
+                if (onCancel != null) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onCancel,
+                        border = BorderStroke(1.dp, BrushworkColors.ChromeBorder),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = BrushworkColors.Accent),
+                        modifier = Modifier.heightIn(min = 44.dp),
+                    ) {
+                        Icon(Icons.Filled.Stop, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Stop")
+                    }
                 }
             }
         }

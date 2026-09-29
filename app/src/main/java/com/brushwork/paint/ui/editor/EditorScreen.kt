@@ -168,7 +168,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     val session = controller.filterSession
     val busy = controller.busyMessage
     LaunchedEffect(session) { if (session != null && panel == EditorPanel.FILTERS) panel = null }
-    BackHandler(enabled = busy != null) { /* wait for the operation to finish */ }
+    // Back stops a cancellable operation; otherwise it waits for the operation to finish.
+    BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
 
     Box(Modifier.fillMaxSize().background(BrushworkColors.CanvasBackdrop)) {
@@ -321,7 +322,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         }
 
         // ------------------------------------------------------------ busy scrim (blocks input)
-        if (busy != null) BusyOverlay(busy, controller.busyProgress)
+        if (busy != null) BusyOverlay(busy, controller.busyProgress, onCancel = controller.busyCancel)
     }
 
     // ---------------------------------------------------------------- panels
