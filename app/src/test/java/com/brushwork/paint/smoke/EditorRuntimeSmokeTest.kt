@@ -11,6 +11,7 @@ import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.EditorSession
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.segmentation.SegTestImages
 import com.brushwork.paint.segmentation.SmartTarget
 import com.brushwork.paint.storage.NewCanvasSpec
@@ -567,6 +568,129 @@ class EditorRuntimeSmokeTest {
         assertTrue("the tools did paint", original.indices.any { !original[it].contentEquals(allPixels().getOrNull(it) ?: IntArray(0)) })
         val errors = Smoke.errorLogs()
         println("[smoke] error logs: ${errors.size}\n" + errors.joinToString("\n"))
+    }
+
+    // ================================================================== canvas operations
+
+    /** Leaves [kind] of pending tool work (or none) on the active layer; returns its undo label. */
+    private fun pending(kind: String): String? {
+        when (kind) {
+            "shape" -> {
+                c.selectTool(ToolId.SHAPE)
+                assertTrue((c.tools.getValue(ToolId.SHAPE) as ShapeTool).ensurePending())
+                return "Shape"
+            }
+            "moved transform" -> {
+                c.selectTool(ToolId.TRANSFORM)
+                Smoke.pump(100)
+                val tr = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+                assertTrue("lifted", tr.hasPendingWork)
+                tr.moveBy(15f, 10f)
+                return "Transform"
+            }
+            "untouched transform" -> {
+                c.selectTool(ToolId.TRANSFORM)
+                Smoke.pump(100)
+                assertTrue("lifted", c.currentTool.hasPendingWork)
+                return null
+            }
+            "text" -> {
+                c.selectTool(ToolId.TEXT)
+                val text = c.tools.getValue(ToolId.TEXT) as TextTool
+                text.startTextAt(150f, 120f)
+                text.setText("Canvas")
+                text.confirmEditor()
+                return "Add text"
+            }
+            "curve" -> {
+                c.selectTool(ToolId.CURVE)
+                val curve = c.tools.getValue(ToolId.CURVE) as CurveTool
+                curve.update { it.copy(stroke = com.brushwork.paint.tools.vector.CurveStroke.PLAIN) }
+                for (p in listOf(Vec2(30f, 30f), Vec2(200f, 200f), Vec2(350f, 40f))) curve.addAnchor(p)
+                return "Curve"
+            }
+        }
+        c.selectTool(ToolId.BRUSH)
+        return null
+    }
+
+    @Test
+    fun canvasOperationsCommitPendingWorkFirstAndUndoCleanly() {
+        val top = c.doc.layers[1]
+        val bottom = c.doc.layers[0]
+        bottom.bitmap.eraseColor(-1)
+        seed(top)
+        c.addMask(top, fromSelection = false)
+        c.setEditingMask(top, false)
+        c.toggleAlphaLock(bottom)
+        c.updateRuler(c.ruler.copy(enabled = true))
+        c.updateGrid(c.grid.copy(enabled = true))
+        c.undoManager.clear()
+        val probe = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val ops = listOf<Triple<String, String, () -> Boolean>>(
+            Triple("Resize image", "Resize image") { CanvasOps.applyResizeImage(c, 200, 150, 150f, com.brushwork.paint.engine.Resample.entries.first()) },
+            Triple("Canvas size", "Canvas size") { CanvasOps.applyResizeCanvas(c, 500, 360, 1, 1, null) },
+            Triple("Crop", "Crop") { CanvasOps.applyCrop(c, android.graphics.Rect(20, 10, 300, 250)) },
+            Triple("Crop to selection", "Crop to selection") { CanvasOps.applyCropToSelection(c) },
+            Triple("Trim", "Trim") { CanvasOps.applyTrim(c) },
+            Triple("Rotate CW", com.brushwork.paint.engine.CanvasRotation.CW_90.label) { CanvasOps.applyRotate(c, com.brushwork.paint.engine.CanvasRotation.CW_90) },
+            Triple("Rotate 180", com.brushwork.paint.engine.CanvasRotation.R_180.label) { CanvasOps.applyRotate(c, com.brushwork.paint.engine.CanvasRotation.R_180) },
+            Triple("Flip", "Flip canvas horizontally") { CanvasOps.applyFlip(c, horizontal = true) },
+            Triple("Resolution", "Resolution") { CanvasOps.applyDpi(c, 72f) },
+            Triple("Grayscale", "Color mode: Grayscale") { CanvasOps.applyColorMode(c, com.brushwork.paint.model.ColorMode.GRAYSCALE, 128, false) },
+            Triple("Monochrome", "Color mode: Monochrome (1-bit)") { CanvasOps.applyColorMode(c, com.brushwork.paint.model.ColorMode.MONOCHROME, 128, true) },
+        )
+        val problems = mutableListOf<String>()
+        for ((name, label, op) in ops) {
+            for (kind in listOf("none", "shape", "moved transform", "untouched transform", "text", "curve")) {
+                val where = "$name with $kind"
+                Smoke.step(where)
+                c.deselect()
+                when (name) {
+                    // A selection to crop to, made before the pending work like a user would.
+                    "Crop to selection" -> c.setSelection(com.brushwork.paint.model.Selection.fromBytes(
+                        ByteArray(c.doc.width * c.doc.height) { i -> if (i % c.doc.width in 50..249 && i / c.doc.width in 40..199) -1 else 0 },
+                        c.doc.width, c.doc.height,
+                    ))
+                    // Transparent edges to trim: clear the white background.
+                    "Trim" -> if (bottom.bitmap.getPixel(0, 0) != 0) c.editWholeLayer(bottom, "Clear") { it.eraseColor(0) }
+                }
+                c.undoManager.clear()
+                val w0 = c.doc.width
+                val h0 = c.doc.height
+                val pixels0 = allPixels()
+                val layers0 = c.doc.layers.size
+                val pendingLabel = pending(kind)
+                c.message = null
+                assertTrue("$where started", op())
+                settleBusy(where)
+                Smoke.assertQuiet(c, where)
+                if (c.message != null) problems += "$where: message \"${c.message}\""
+                val got = labels()
+                // Resolution only changes metadata: pending work stays editable (and is harmless).
+                val want = listOfNotNull(if (name == "Resolution") null else pendingLabel, label)
+                if (got != want) problems += "$where: history $got, expected $want"
+                view.draw(Canvas(probe)) // the view refits and draws the new geometry
+                // Undo everything: the original canvas comes back exactly.
+                var g = 20
+                while (c.canUndo && g-- > 0) { c.undo(); settleBusy("$where undo") }
+                Smoke.assertQuiet(c, "$where undone")
+                if (c.currentTool.hasPendingWork) { c.currentTool.discard(); Smoke.pump(60) }
+                if (c.doc.width != w0 || c.doc.height != h0) problems += "$where: size after undo ${c.doc.width}x${c.doc.height}"
+                if (c.doc.layers.size != layers0) problems += "$where: ${c.doc.layers.size} layers after undo"
+                val back = allPixels()
+                if (back.size != pixels0.size || pixels0.indices.any { !pixels0[it].contentEquals(back[it]) }) problems += "$where: pixels not restored by undo"
+                // And redo brings the operation back without errors.
+                while (c.canRedo && g-- > 0) { c.redo(); settleBusy("$where redo") }
+                Smoke.assertQuiet(c, "$where redone")
+                view.draw(Canvas(probe))
+                while (c.canUndo && g-- > 0) { c.undo(); settleBusy("$where undo 2") }
+                if (c.currentTool.hasPendingWork) { c.currentTool.discard(); Smoke.pump(60) }
+                c.selectTool(ToolId.BRUSH)
+                if (c.doc.width != w0 || c.doc.height != h0) problems += "$where: size after the second undo ${c.doc.width}x${c.doc.height}"
+            }
+        }
+        assertTrue("canvas operation problems:\n" + problems.joinToString("\n"), problems.isEmpty())
     }
 
     // ================================================================== smart select
