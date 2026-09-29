@@ -28,10 +28,15 @@ import java.time.Duration
 /**
  * Hosts the real panel and dialog in an activity (phone-sized, hdpi) and lets them compose,
  * measure and animate in: catches crashes such as intrinsic-measurement or layout errors inside
- * the sheet/dialog windows, and checks the dialog's mode tabs react to a real tap.
+ * the sheet/dialog windows, and drives the dialog with real touch events.
+ *
+ * Compose keeps a process-static frame clock bound to the first test's Choreographer, so frames
+ * (animations) stall in later tests of the same Robolectric sandbox. These tests only rely on
+ * composition, layout and synchronous input dispatch, and the placeholder instrumented package
+ * gives this class its own sandbox so it can't affect other Compose tests.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(qualifiers = "w360dp-h760dp-hdpi")
+@Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.color.uitestsandbox"])
 class ColorPickerUiSmokeTest {
 
     private fun settle() = repeat(20) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100)) }
