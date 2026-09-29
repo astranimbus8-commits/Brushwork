@@ -75,6 +75,7 @@ object FilterSessionMath {
     ) {
         require(src.width == result.width && src.height == result.height) { "Filter changed the image size" }
         require(selection == null || selection.size >= src.size) { "Selection size mismatch" }
+        if (selection == null && !alphaLocked && !maskTarget) return // the result is used as is
         val w = src.width
         val s = src.pixels; val d = result.pixels
         val r = clampRegion(region, src.width, src.height) ?: return

@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.os.Looper
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
@@ -54,7 +55,8 @@ import java.time.Duration
 class FilterSessionRobolectricTest {
 
     /** Inverts RGB, blended by "amount" (0..100 %). */
-    private class InvertFilter : Filter("test_invert", "Test invert", FilterCategory.ADJUST) {
+    private class InvertFilter(live: Boolean = true) : Filter("test_invert", "Test invert", FilterCategory.ADJUST) {
+        override val livePreview = live
         override val params = listOf(FilterParam.Slider("amount", "Amount", 0f, 100f, 100f, step = 1f, suffix = "%"))
         override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
             val t = values.float("amount") / 100f
@@ -232,6 +234,36 @@ class FilterSessionRobolectricTest {
         s.compare(false)
         assertNotNull(c.renderOverride)
         assertEquals(INVERTED_BLUE, onScreen(c).getPixel(1, 1))
+    }
+
+    @Test
+    fun slowFiltersPreviewOnlyOnDemand() {
+        val (c, _) = newController()
+        val s = startSession(c, InvertFilter(live = false), waitForPreview = false)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+        assertFalse(s.hasPreview)
+        assertNull(c.renderOverride)
+        assertTrue(s.previewStale)
+        s.renderPreview()
+        waitUntil("on-demand preview") { s.hasPreview && !s.isRendering }
+        assertFalse(s.previewStale)
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(1, 1))
+        s.update("amount", 0f)
+        assertTrue(s.previewStale)
+        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(300))
+        assertFalse(s.isRendering)
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(1, 1)) // not re-rendered until asked
+    }
+
+    @Test
+    fun selectionChangedDuringTheSessionUpdatesThePreview() {
+        val (c, _) = newController()
+        val s = startSession(c, InvertFilter())
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(30, 5))
+        c.setSelection(leftHalfSelection(40, 30), recordUndo = false)
+        Snapshot.sendApplyNotifications()
+        waitUntil("preview for the new selection") { !s.isRendering && !s.previewStale && onScreen(c).getPixel(30, 5) == BLUE }
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(5, 5))
     }
 
     @Test

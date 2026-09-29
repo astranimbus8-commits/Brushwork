@@ -9,6 +9,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
@@ -113,10 +114,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private var previewSrc: PixelBuffer? = null
     private var previewSel: ByteArray? = null
+    /** The selection [previewSel] was built from. */
+    private var previewSelSource: Selection? = null
     private var previewBitmap: Bitmap? = null
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
+    private var selectionWatch: Job? = null
     private var applyJob: Job? = null
     /** The preview job currently running the filter (null while debouncing / idle). */
     private var computingJob: Job? = null
@@ -173,6 +177,26 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         }
         analyzeSourceAsync()
         if (filter.livePreview) requestPreview(0L)
+        // The selection can change from menus while the session is open: keep the preview in sync.
+        selectionWatch = controller.scope.launch {
+            snapshotFlow { controller.selection }.collect { if (it !== previewSelSource) onSelectionChanged() }
+        }
+    }
+
+    private fun onSelectionChanged() {
+        if (isClosed || isApplying) return
+        val src = previewSrc ?: return
+        try {
+            val sel = controller.selection
+            previewSel = sel?.let { scaledSelectionBytes(it, src.width, src.height) }
+            previewSelSource = sel
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to preview \"${filter.name}\"")
+            return
+        }
+        analyzeSourceAsync()
+        previewStale = true
+        if (filter.livePreview) requestPreview(0L)
     }
 
     /** Discards the preview and closes the session; the layer is left untouched. */
@@ -185,6 +209,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         isClosed = true
         previewJob?.cancel(); previewJob = null
         analysisJob?.cancel(); analysisJob = null
+        selectionWatch?.cancel(); selectionWatch = null
         applyJob?.cancel(); applyJob = null
         isComparing = false
         draggingPoint = null
@@ -195,6 +220,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         previewBitmap = null
         previewSrc = null
         previewSel = null
+        previewSelSource = null
     }
 
     // ------------------------------------------------------------------ parameters
@@ -227,6 +253,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private fun onValuesChanged() {
         previewStale = true
+        if (pointParams.isNotEmpty()) controller.invalidateOverlay()
         if (filter.livePreview) requestPreview(debounceMs)
     }
 
@@ -252,7 +279,9 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         } finally {
             if (scaled !== targetBitmap) scaled.recycle()
         }
-        previewSel = controller.selection?.let { scaledSelectionBytes(it, pw, ph) }
+        val sel = controller.selection
+        previewSel = sel?.let { scaledSelectionBytes(it, pw, ph) }
+        previewSelSource = sel
         previewBitmap = BitmapUtils.createLayerBitmap(pw, ph)
     }
 
@@ -305,6 +334,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     }
 
     private suspend fun renderOnce(self: Job) {
+        if (!checkTarget()) return
         val src = previewSrc ?: return
         val sel = previewSel
         val vals = values
@@ -426,7 +456,10 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
                 applyJob = null
                 isApplying = false
                 applyProgress = -1f
-                if (!isClosed && droppedPreview) requestPreview(0L)
+                if (!isClosed) {
+                    if (controller.selection !== previewSelSource) onSelectionChanged()
+                    else if (droppedPreview) requestPreview(0L)
+                }
             }
         }
     }
