@@ -1,4 +1,4 @@
-package com.brushwork.paint.filters.style
+﻿package com.brushwork.paint.filters.style
 
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.Parallel
@@ -26,9 +26,6 @@ internal object StyleMath {
 
     /** Distance reported when the image contains no shape at all (or no background at all). */
     const val FAR = 1.0e7f
-
-    /** Pixels whose normalized alpha is at least this act as shape features for outside distances. */
-    private const val FRINGE = 0.2f
 
     private const val INF = Int.MAX_VALUE
     private const val NO_OFFSET = Float.MAX_VALUE
@@ -142,11 +139,15 @@ internal object StyleMath {
     /**
      * Signed distance in pixels from each pixel centre to the shape edge, negative inside and
      * positive outside. The edge is the 50 % contour of the alpha channel normalized by the image's
-     * maximum alpha (so a layer painted at 40 % opacity still has a solid shape). Antialiased edge
-     * pixels shift the edge by their partial coverage, so the result is accurate to a fraction of a
-     * pixel and iso-lines are smooth. Uses one float plane and an exact Euclidean nearest-feature
-     * transform (Felzenszwalb-Huttenlocher) in O(n). Returns [FAR] everywhere for an empty image
-     * and `-FAR` inside when there is no background.
+     * maximum alpha (so a layer painted at 40 % opacity still has a solid shape).
+     *
+     * Anti-aliased distance transform in the spirit of Gustavson & Strand (2011): every pixel next to
+     * the 50 % crossing estimates the sub-pixel point where the contour passes (from its coverage and
+     * the local alpha gradient), an exact Euclidean nearest-feature transform (Felzenszwalb-Huttenlocher,
+     * O(n)) finds the closest such edge pixel for every pixel, and the distance is measured to that
+     * pixel's edge point. The result is accurate to a small fraction of a pixel and its gradient is a
+     * smooth normal, so iso-lines and lit height fields built from it have no streaks. Returns [FAR]
+     * everywhere for an empty image and `-FAR` everywhere when nothing is outside the shape.
      */
     fun signedDistance(src: PixelBuffer, ctx: FilterContext): FloatArray {
         val w = src.width; val h = src.height; val px = src.pixels
@@ -154,39 +155,49 @@ internal object StyleMath {
         val aMax = maxAlpha(src)
         if (aMax == 0) { out.fill(FAR); return out }
         val an = FloatArray(256) { min(1f, it.toFloat() / aMax) }
-        // 0 = background, 1 = fringe (feature for outside distances AND background for inside ones), 2 = inside
-        val cls = ByteArray(256) { val v = an[it]; (if (v >= 0.5f) 2 else if (v >= FRINGE) 1 else 0).toByte() }
+        val alphaIn = BooleanArray(256) { an[it] >= 0.5f }
+        val partial = BooleanArray(256) { an[it] > 0f && an[it] < 1f }
 
-        // Column pass: signed row offset to the nearest target pixel in the same column.
-        // Background pixels target features (cls >= 1); inside pixels target background (cls <= 1).
+        // Edge pixels: a 4-neighbour lies on the other side of the 50 % contour. Partially covered
+        // pixels locate the contour precisely. Saturated coverage only bounds the distance, so a
+        // fully covered pixel counts only across a hard (aliased) step, and an empty one never.
+        // Each edge pixel stores its packed sub-pixel edge point (0 = not an edge pixel).
+        val edge = ShortArray(w * h)
+        Parallel.forRows(h) { y0, y1 ->
+            ctx.checkCancelled()
+            for (y in y0 until y1) {
+                val row = y * w
+                for (x in 0 until w) {
+                    val i = row + x
+                    val a = px[i] ushr 24
+                    if ((x > 0 && crosses(a, px[i - 1] ushr 24, alphaIn, partial)) ||
+                        (x < w - 1 && crosses(a, px[i + 1] ushr 24, alphaIn, partial)) ||
+                        (y > 0 && crosses(a, px[i - w] ushr 24, alphaIn, partial)) ||
+                        (y < h - 1 && crosses(a, px[i + w] ushr 24, alphaIn, partial))
+                    ) edge[i] = packedEdgePoint(px, an, w, h, x, y)
+                }
+            }
+        }
+
+        // Column pass: signed row offset to the nearest edge pixel in the same column.
         Parallel.forRange(w, 16) { x0, x1 ->
             ctx.checkCancelled()
             val n = x1 - x0
-            val lastF = IntArray(n) { -1 }
-            val lastO = IntArray(n) { -1 }
+            val last = IntArray(n) { -1 }
             for (y in 0 until h) {
                 val row = y * w + x0
                 for (i in 0 until n) {
-                    val c = cls[px[row + i] ushr 24].toInt()
-                    if (c >= 1) lastF[i] = y
-                    if (c <= 1) lastO[i] = y
-                    out[row + i] = when (c) {
-                        0 -> if (lastF[i] >= 0) (lastF[i] - y).toFloat() else NO_OFFSET
-                        2 -> if (lastO[i] >= 0) (lastO[i] - y).toFloat() else NO_OFFSET
-                        else -> 0f
-                    }
+                    if (edge[row + i].toInt() != 0) last[i] = y
+                    out[row + i] = if (last[i] >= 0) (last[i] - y).toFloat() else NO_OFFSET
                 }
             }
-            lastF.fill(-1); lastO.fill(-1)
+            last.fill(-1)
             for (y in h - 1 downTo 0) {
                 val row = y * w + x0
                 for (i in 0 until n) {
-                    val c = cls[px[row + i] ushr 24].toInt()
-                    if (c >= 1) lastF[i] = y
-                    if (c <= 1) lastO[i] = y
-                    val next = when (c) { 0 -> lastF[i]; 2 -> lastO[i]; else -> -1 }
-                    if (next >= 0) {
-                        val cand = (next - y).toFloat()
+                    if (edge[row + i].toInt() != 0) last[i] = y
+                    if (last[i] >= 0) {
+                        val cand = (last[i] - y).toFloat()
                         val cur = out[row + i]
                         if (cur == NO_OFFSET || cand < -cur) out[row + i] = cand
                     }
@@ -194,63 +205,115 @@ internal object StyleMath {
             }
         }
 
-        // Row pass: exact 2-D nearest feature via lower envelopes, then sub-pixel edge correction.
+        // Row pass: exact 2-D nearest edge pixel (by centre) via lower envelopes. Along a stair-stepped
+        // contour that pixel can sit a pixel or two away from the true closest point, so the edge
+        // points of all edge pixels in its 3x3 block are candidates and the closest one wins.
         Parallel.forRows(h) { y0, y1 ->
             ctx.checkCancelled()
             val off = IntArray(w)
-            val fF = IntArray(w); val fO = IntArray(w)
-            val argF = IntArray(w); val argO = IntArray(w)
+            val f = IntArray(w); val arg = IntArray(w)
             val v = IntArray(w); val z = DoubleArray(w + 1)
             for (y in y0 until y1) {
                 val row = y * w
                 for (x in 0 until w) {
-                    val c = cls[px[row + x] ushr 24].toInt()
                     val o = out[row + x]
-                    val k = if (o == NO_OFFSET) 0 else o.toInt()
-                    off[x] = k
-                    when (c) {
-                        0 -> { fO[x] = 0; fF[x] = if (o == NO_OFFSET) INF else k * k }
-                        2 -> { fF[x] = 0; fO[x] = if (o == NO_OFFSET) INF else k * k }
-                        else -> { fF[x] = 0; fO[x] = 0 }
-                    }
+                    if (o == NO_OFFSET) { f[x] = INF; off[x] = 0 } else { val k = o.toInt(); off[x] = k; f[x] = k * k }
                 }
-                val hasF = lowerEnvelope(fF, w, v, z, argF)
-                val hasO = lowerEnvelope(fO, w, v, z, argO)
+                if (!lowerEnvelope(f, w, v, z, arg)) {
+                    // No edge anywhere: everything is on one side of the contour.
+                    for (x in 0 until w) out[row + x] = if (alphaIn[px[row + x] ushr 24]) -FAR else FAR
+                    continue
+                }
                 for (x in 0 until w) {
-                    val a = px[row + x] ushr 24
-                    val c = cls[a].toInt()
-                    val av = an[a]
-                    out[row + x] = when (c) {
-                        1 -> 0.5f - av
-                        0 -> {
-                            var sd = FAR
-                            if (hasF) {
-                                val q = argF[x]
-                                val dy = if (cls[px[row + q] ushr 24].toInt() == 0) off[q] else 0
-                                val dx = x - q
-                                val dist = sqrt((dx * dx).toFloat() + fF[q].toFloat())
-                                val aq = an[px[(y + dy) * w + q] ushr 24]
-                                sd = dist - (aq - 0.5f)
+                    val qx = arg[x]
+                    val qy = y + off[qx]
+                    val ins = alphaIn[px[row + x] ushr 24]
+                    var best = Float.MAX_VALUE
+                    for (j in max(0, qy - 1)..min(h - 1, qy + 1)) {
+                        for (i in max(0, qx - 1)..min(w - 1, qx + 1)) {
+                            val e = edge[j * w + i].toInt() and 0xFFFF
+                            if (e == 0) continue
+                            val hi = e ushr 8; val lo = e and 0xFF
+                            val d2: Float
+                            if (hi == NO_GRADIENT) {
+                                // Edge |0.5 - coverage| away along the line between the pixels.
+                                val s = lo / 510f
+                                val dx = (x - i).toFloat(); val dy = (y - j).toFloat()
+                                val dist = sqrt(dx * dx + dy * dy)
+                                val d = if (alphaIn[px[j * w + i] ushr 24] == ins) dist + s else max(0f, dist - s)
+                                d2 = d * d
+                            } else {
+                                val dx = x - (i + (hi - 128) * INV_OFFSET_SCALE)
+                                val dy = y - (j + (lo - 128) * INV_OFFSET_SCALE)
+                                d2 = dx * dx + dy * dy
                             }
-                            if (av > 0f) min(sd, 0.5f - av) else sd
-                        }
-                        else -> {
-                            var sd = -FAR
-                            if (hasO) {
-                                val q = argO[x]
-                                val dy = if (cls[px[row + q] ushr 24].toInt() == 2) off[q] else 0
-                                val dx = x - q
-                                val dist = sqrt((dx * dx).toFloat() + fO[q].toFloat())
-                                val aq = an[px[(y + dy) * w + q] ushr 24]
-                                sd = -(dist - (0.5f - aq))
-                            }
-                            if (av < 1f) max(sd, 0.5f - av) else sd
+                            if (d2 < best) best = d2
                         }
                     }
+                    val d = sqrt(best)
+                    out[row + x] = if (ins) -d else d
                 }
             }
         }
         return out
+    }
+
+    /** True when a pixel of alpha [a] is an edge pixel with respect to its neighbour of alpha [b]. */
+    private fun crosses(a: Int, b: Int, alphaIn: BooleanArray, partial: BooleanArray): Boolean =
+        alphaIn[a] != alphaIn[b] && (partial[a] || (alphaIn[a] && !partial[b]))
+
+    /** Packed-offset units per pixel (offsets stay within +-0.71 px, so +-121 around 128). */
+    private const val OFFSET_SCALE = 170f
+    private const val INV_OFFSET_SCALE = 1f / OFFSET_SCALE
+
+    /** High byte marking an edge pixel without a usable alpha gradient. */
+    private const val NO_GRADIENT = 1
+
+    /**
+     * The point where the 50 % contour passes closest to the centre of edge pixel ([x], [y]), packed
+     * as `(dx * 170 + 128) shl 8 | (dy * 170 + 128)` (never 0). It lies along the alpha gradient at
+     * the distance a straight edge of that orientation needs to produce the pixel's coverage
+     * (box-filtered anti-aliasing). Pixels without a usable gradient (1-px lines, isolated dots)
+     * store [NO_GRADIENT] and `|0.5 - coverage| * 510` instead.
+     */
+    private fun packedEdgePoint(px: IntArray, an: FloatArray, w: Int, h: Int, x: Int, y: Int): Short {
+        val xl = if (x > 0) x - 1 else x; val xr = if (x < w - 1) x + 1 else x
+        val yu = if (y > 0) y - 1 else y; val yd = if (y < h - 1) y + 1 else y
+        val ru = yu * w; val rc = y * w; val rd = yd * w
+        val a = an[px[rc + x] ushr 24]
+        // Sobel gradient of the normalized alpha (points into the shape).
+        val gx = (an[px[ru + xr] ushr 24] + 2f * an[px[rc + xr] ushr 24] + an[px[rd + xr] ushr 24]) -
+            (an[px[ru + xl] ushr 24] + 2f * an[px[rc + xl] ushr 24] + an[px[rd + xl] ushr 24])
+        val gy = (an[px[rd + xl] ushr 24] + 2f * an[px[rd + x] ushr 24] + an[px[rd + xr] ushr 24]) -
+            (an[px[ru + xl] ushr 24] + 2f * an[px[ru + x] ushr 24] + an[px[ru + xr] ushr 24])
+        val gl = sqrt(gx * gx + gy * gy)
+        if (gl < 1e-3f) {
+            val s = ColorUtils.clamp255(kotlin.math.abs(0.5f - a) * 510f)
+            return ((NO_GRADIENT shl 8) or s).toShort()
+        }
+        val nx = gx / gl; val ny = gy / gl
+        // Signed distance of the centre from the edge (positive = outside); the edge point is that
+        // far along the inward normal.
+        val s = coverageToDistance(nx, ny, a)
+        val hi = (kotlin.math.round(nx * s * OFFSET_SCALE).toInt() + 128).coerceIn(NO_GRADIENT + 1, 255)
+        val lo = (kotlin.math.round(ny * s * OFFSET_SCALE).toInt() + 128).coerceIn(0, 255)
+        return ((hi shl 8) or lo).toShort()
+    }
+
+    /**
+     * Signed distance (px, positive = outside) from a pixel centre to a straight edge with unit
+     * normal ([nx], [ny]) that covers fraction [a] of the pixel (Gustavson's `edgedf`).
+     */
+    fun coverageToDistance(nx: Float, ny: Float, a: Float): Float {
+        var gx = kotlin.math.abs(nx); var gy = kotlin.math.abs(ny)
+        if (gx < gy) { val t = gx; gx = gy; gy = t }
+        if (gy < 1e-4f) return 0.5f - a
+        val a1 = 0.5f * gy / gx
+        return when {
+            a < a1 -> 0.5f * (gx + gy) - sqrt(2f * gx * gy * a)
+            a < 1f - a1 -> (0.5f - a) * gx
+            else -> -0.5f * (gx + gy) + sqrt(2f * gx * gy * (1f - a))
+        }
     }
 
     /**
@@ -472,6 +535,10 @@ internal object StyleMath {
      * plateau; [heightScale] 1 gives a hemisphere. Outside pixels become 0.
      */
     fun domeHeights(sd: FloatArray, w: Int, h: Int, flatness: Float, heightScale: Float, ctx: FilterContext) {
+        // The dome profile is steep near the rim and amplifies pixel-scale wobble of the distance
+        // gradient along stair-stepped edges; a 1 px blur of the (locally linear) distance removes
+        // it without moving the contour.
+        gaussianInPlace(sd, w, h, 1f, ctx)
         val visited = 1.0e5f
         val half = visited * 0.5f
         // Inside distances are bounded by the image size (-FAR means "no background at all").
