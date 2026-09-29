@@ -39,15 +39,30 @@ class WaveFilter : Filter("distort.wave", "Wave", FilterCategory.DISTORT) {
         // Displacement axis: perpendicular to the direction of travel.
         val nx = -dirY; val ny = dirX
         val phaseTurns = values.float("phase") / 360f
-        val wave = when (values.choice("shape")) {
+        val shape = values.choice("shape")
+        val wave = when (shape) {
             1 -> TRIANGLE
             2 -> SQUARE
             else -> PeriodicLut.SINE
         }
+        val slope = when (shape) {
+            1 -> TRIANGLE_SLOPE
+            2 -> SQUARE_SLOPE
+            else -> SINE_SLOPE
+        }
         val edge = values.choice("edges").coerceIn(0, DistortMath.EDGE_OPTIONS.lastIndex)
         val cx = src.width * 0.5f; val cy = src.height * 0.5f
         val invLambda = 1f / lambda
-        return DistortMath.warp(src, ctx, 0, 0, src.width, src.height, edge) { px, py, q ->
+        val shearScale = amp * invLambda
+        return DistortMath.warp(
+            src, ctx, 0, 0, src.width, src.height, edge,
+            samples = { px, py ->
+                // The displacement shears the image by s = amplitude * waveform' / wavelength.
+                val u = (px - cx) * dirX + (py - cy) * dirY
+                val s = abs(shearScale * slope.at(u * invLambda + phaseTurns))
+                DistortMath.samplesFor((s + sqrt(s * s + 4f)) * 0.5f)
+            },
+        ) { px, py, q ->
             val u = (px - cx) * dirX + (py - cy) * dirY
             val off = amp * wave.at(u * invLambda + phaseTurns)
             q[0] = px - nx * off
@@ -61,6 +76,13 @@ class WaveFilter : Filter("distort.wave", "Wave", FilterCategory.DISTORT) {
 
         /** Square wave with short linear ramps so the tearing edges stay antialiased. */
         val SQUARE = PeriodicLut { t -> (sin(t * DistortMath.TWO_PI) * 6f).coerceIn(-1f, 1f) }
+
+        // Derivatives (per period) of the waveforms, for choosing the supersampling.
+        val SINE_SLOPE = PeriodicLut { t -> DistortMath.TWO_PI * cos(t * DistortMath.TWO_PI) }
+        val TRIANGLE_SLOPE = PeriodicLut { 4f }
+        val SQUARE_SLOPE = PeriodicLut { t ->
+            if (abs(sin(t * DistortMath.TWO_PI) * 6f) < 1f) 6f * DistortMath.TWO_PI * cos(t * DistortMath.TWO_PI) else 0f
+        }
     }
 }
 

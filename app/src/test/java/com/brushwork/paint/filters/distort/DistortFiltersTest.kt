@@ -283,7 +283,8 @@ class DistortFiltersTest {
         var moved = 0
         for (y in 10 until 118) for (x in 0 until 128) {
             val o = out[x, y]; val s = src[x, y]
-            assertEquals("x unchanged", ColorUtils.red(s), ColorUtils.red(o))
+            // Supersampled steep parts may round differently by one level (half a pixel).
+            assertTrue("x unchanged at $x,$y", abs(ColorUtils.red(s) - ColorUtils.red(o)) <= 1)
             val dy = abs(ColorUtils.green(o) - ColorUtils.green(s)) * 127f / 255f
             assertTrue("displacement $dy", dy <= amp + 1f)
             if (dy > 2f) moved++
@@ -291,7 +292,35 @@ class DistortFiltersTest {
         assertTrue(moved > 1000)
         // Angle 90: displaces along x only.
         val out90 = f.run(src, "amplitude" to amp, "wavelength" to 32f, "angle" to 90f)
-        for (y in 0 until 128) for (x in 10 until 118) assertEquals(ColorUtils.green(src[x, y]), ColorUtils.green(out90[x, y]))
+        for (y in 0 until 128) for (x in 10 until 118) {
+            assertTrue(abs(ColorUtils.green(src[x, y]) - ColorUtils.green(out90[x, y])) <= 1)
+        }
+    }
+
+    @Test
+    fun steepWaveIsAntialiased() {
+        // Horizontal 1-px stripes, strongly sheared by a steep vertical wave: the folded areas
+        // must average toward gray instead of showing random full-contrast stripes.
+        val src = PixelBuffer(160, 160)
+        for (y in 0 until 160) for (x in 0 until 160) src[x, y] = if (y % 2 == 0) -1 else 0xFF000000.toInt()
+        val out = filter<WaveFilter>().run(src, "amplitude" to 40f, "wavelength" to 40f, "angle" to 0f)
+        // Same displacement, plain bilinear.
+        val plain = DistortMath.warp(src, ctx, 0, 0, 160, 160, DistortMath.EDGE_CLAMP) { px, py, q ->
+            q[0] = px
+            q[1] = py - 40f * sin((px - 80f) / 40f * 2f * Math.PI.toFloat())
+            true
+        }
+        fun extremes(b: PixelBuffer): Int {
+            var n = 0
+            for (y in 45 until 115) for (x in 0 until 160) {
+                val r = ColorUtils.red(b[x, y])
+                if (r < 40 || r > 215) n++
+            }
+            return n
+        }
+        val aa = extremes(out)
+        val aliased = extremes(plain)
+        assertTrue("antialiased $aa vs plain $aliased", aa * 3 < aliased)
     }
 
     @Test
