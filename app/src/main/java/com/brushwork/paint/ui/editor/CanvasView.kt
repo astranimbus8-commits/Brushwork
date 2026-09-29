@@ -288,6 +288,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         startAdjusted = viewport.userAdjusted
         val id = e.getPointerId(0)
         val type = e.getToolType(0)
+        // Every gesture starts clean, even if ignored (palm) pointers never reported their UP.
+        classifier.cancel()
         classifier.down(id, e.getX(0), e.getY(0), e.eventTime)
         // Pen gestures may long-press but are never multi-finger taps (see onLastUp).
         if (isStylusType(type)) gestureHadStylus = true
@@ -306,15 +308,18 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             return
         }
         if (stylus) {
+            if (mode == Mode.DRAW && drawIsStylus) { ignore(id); return } // a second pen: keep the first
             gestureHadStylus = true
-            classifier.invalidate()
             when (mode) {
-                Mode.DRAW -> if (drawIsStylus) { ignore(id); return } else { cancelPendingLongPress(); controller.pointerCancel() }
+                Mode.DRAW -> { cancelPendingLongPress(); controller.pointerCancel() }
                 Mode.TRANSFORM -> endTransform()
                 else -> {}
             }
-            // The pen takes over: every other contact is now a resting palm.
+            // The pen takes over: every other contact is now a resting palm, and recognition
+            // (long press) restarts with the pen alone. Taps are excluded by gestureHadStylus.
             for (i in 0 until e.pointerCount) if (i != idx) ignore(e.getPointerId(i))
+            classifier.cancel()
+            classifier.down(id, e.getX(idx), e.getY(idx), e.eventTime)
             startDraw(e, idx)
             return
         }

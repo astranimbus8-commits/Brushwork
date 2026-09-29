@@ -216,6 +216,47 @@ class CanvasViewRobolectricTest {
     }
 
     @Test
+    fun twoFingerTapStillWorksAfterAPenTakeover() {
+        // Palm lands first, the pen takes over, both lift (the palm's UP is ignored).
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 700f, 600f))
+        send(MotionEvent.ACTION_POINTER_DOWN, 20, P(0, 700f, 600f), P(1, 400f, 300f, MotionEvent.TOOL_TYPE_STYLUS), index = 1)
+        send(MotionEvent.ACTION_POINTER_UP, 60, P(0, 700f, 600f), P(1, 400f, 300f, MotionEvent.TOOL_TYPE_STYLUS), index = 1)
+        send(MotionEvent.ACTION_UP, 80, P(0, 700f, 600f))
+        // A later two-finger tap must be recognized again.
+        var undone = false
+        pushTestAction("Test", onUndo = { undone = true })
+        send(MotionEvent.ACTION_DOWN, 1000, P(0, 400f, 400f))
+        send(MotionEvent.ACTION_POINTER_DOWN, 1030, P(0, 400f, 400f), P(1, 600f, 400f), index = 1)
+        send(MotionEvent.ACTION_POINTER_UP, 1120, P(0, 400f, 400f), P(1, 600f, 400f), index = 0)
+        send(MotionEvent.ACTION_UP, 1150, P(1, 600f, 400f))
+        assertTrue(undone)
+    }
+
+    @Test
+    fun fitCentersBetweenReportedChromeAndIgnoresSmallChanges() {
+        view.setFitInsets(0f, 300f, 0f, 200f)
+        val t = controller.viewTransform
+        // Free area 1000 x 300: min(1000 * 0.9 / 800, 300 * 0.9 / 600) = 0.45, centered at y = 450.
+        assertEquals(0.45f, t.zoom, 1e-4f)
+        assertEquals(450f, t.docToScreen(400f, 300f).y, 0.01f)
+        // A few pixels of chrome change (another tool's option strip) must not move the canvas.
+        view.setFitInsets(0f, 304f, 0f, 200f)
+        assertEquals(450f, t.docToScreen(400f, 300f).y, 0.01f)
+        // Once the user adjusted the view, even large chrome changes keep it.
+        send(MotionEvent.ACTION_DOWN, 0, P(0, 400f, 400f))
+        send(MotionEvent.ACTION_POINTER_DOWN, 20, P(0, 400f, 400f), P(1, 600f, 400f), index = 1)
+        send(MotionEvent.ACTION_MOVE, 40, P(0, 350f, 400f), P(1, 650f, 400f))
+        send(MotionEvent.ACTION_POINTER_UP, 600, P(0, 350f, 400f), P(1, 650f, 400f), index = 0)
+        send(MotionEvent.ACTION_UP, 620, P(1, 650f, 400f))
+        val zoomed = t.zoom
+        view.setFitInsets(0f, 100f, 0f, 100f)
+        assertEquals(zoomed, t.zoom, 1e-5f)
+        // Fit to screen uses the latest chrome.
+        view.fitToScreen()
+        assertEquals(400f, t.docToScreen(400f, 300f).y, 0.01f)
+    }
+
+    @Test
     fun inputIsIgnoredWhileBusy() {
         var release: (() -> Unit)? = null
         controller.runBusy("Working") { kotlinx.coroutines.suspendCancellableCoroutine<Unit> { c -> release = { c.resumeWith(Result.success(Unit)) } } }
