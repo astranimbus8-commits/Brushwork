@@ -62,7 +62,9 @@ internal object StyleMath {
      * Runs [block] on the sub-image `[l, t, r, b)` (clamped to the image) and pastes its result into
      * a copy of [src]; pixels outside the rectangle are copied unchanged. The block receives the
      * sub-image and its offset (left, top) inside [src]. [block] must not mutate its argument (it
-     * may be [src] itself when the rectangle covers the whole image).
+     * may be [src] itself: a rectangle covering most of the image is not worth two extra copies,
+     * so the whole image is processed instead). Callers pass rectangles whose surroundings the
+     * block leaves unchanged, so both paths give the same result.
      */
     inline fun cropped(
         src: PixelBuffer, l0: Int, t0: Int, r0: Int, b0: Int,
@@ -71,7 +73,7 @@ internal object StyleMath {
         val l = max(0, l0); val t = max(0, t0)
         val r = min(src.width, r0); val b = min(src.height, b0)
         if (r <= l || b <= t) return src.copy()
-        if (l == 0 && t == 0 && r == src.width && b == src.height) return block(src, 0, 0)
+        if ((r - l).toLong() * (b - t) * 4 >= src.size.toLong() * 3) return block(src, 0, 0)
         val cw = r - l; val ch = b - t; val sw = src.width
         val sub = PixelBuffer(cw, ch)
         for (y in 0 until ch) System.arraycopy(src.pixels, (t + y) * sw + l, sub.pixels, y * cw, cw)
@@ -670,13 +672,15 @@ internal object StyleMath {
     /**
      * Self-shadowing of height field [z] (px) under a directional light with horizontal direction
      * ([lx], [ly]) (towards the light, image coordinates) and elevation slope [tanE]. Returns the
-     * shadow amount 0..1 per pixel, with a penumbra of [soft] height px. O(n): a horizon sweep
-     * from the side facing the light, one pixel line at a time.
+     * shadow amount 0..1 per pixel (written to [out], which is returned), with a penumbra of [soft]
+     * height px. O(n): a horizon sweep from the side facing the light, one pixel line at a time.
      */
-    fun shadowSweep(z: FloatArray, w: Int, h: Int, lx: Float, ly: Float, tanE: Float, soft: Float, ctx: FilterContext): FloatArray {
-        val out = FloatArray(w * h)
+    fun shadowSweep(
+        z: FloatArray, w: Int, h: Int, lx: Float, ly: Float, tanE: Float, soft: Float, ctx: FilterContext,
+        out: FloatArray = FloatArray(w * h),
+    ): FloatArray {
         val len = sqrt(lx * lx + ly * ly)
-        if (!(len > 1e-4f) || !(tanE < 1e3f)) return out
+        if (!(len > 1e-4f) || !(tanE < 1e3f)) { out.fill(0f); return out }
         val dx = lx / len; val dy = ly / len
         val majorX = kotlin.math.abs(dx) >= kotlin.math.abs(dy)
         val nu = if (majorX) w else h

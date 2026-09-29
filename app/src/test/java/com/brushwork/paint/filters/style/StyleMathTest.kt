@@ -194,6 +194,13 @@ class StyleMathTest {
         assertEquals(-1, out[10, 5])
         assertEquals(0, out[9, 5])
         assertEquals(0, out[22, 20])
+        // A rectangle covering most of the image runs on the image itself (no copies).
+        var sawSource = false
+        StyleMath.cropped(img, 2, 1, 49, 40) { sub, offX, offY ->
+            sawSource = sub === img && offX == 0 && offY == 0
+            sub.copy()
+        }
+        assertTrue(sawSource)
     }
 
     @Test

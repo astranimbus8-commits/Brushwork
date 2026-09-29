@@ -113,6 +113,31 @@ class StyleFiltersTest {
         }
     }
 
+    /**
+     * Filters work on a crop around the content, or on the whole image when the crop would cover
+     * most of it. Faint pixels in the corners force the whole-image path; around the shape both
+     * paths must agree.
+     */
+    @Test
+    fun croppedAndWholeImageProcessingAgree() {
+        val n = 240
+        val small = disc(n, n, 120f, 120f, 14f)
+        val spread = small.copy()
+        for ((x, y) in listOf(0 to 0, n - 1 to 0, 0 to n - 1, n - 1 to n - 1)) spread[x, y] = 0x01FFFFFF
+        for (f in styleFilters) for (output in listOf(0, 1)) {
+            val v = f.defaultValues()
+            if (output == 1) { if (f.params.none { it.key == "output" }) continue; v.set("output", 1) }
+            val a = f.apply(small, v, ctx)
+            val b = f.apply(spread, v, ctx)
+            var worst = 0
+            for (y in 80 until 160) for (x in 80 until 160) {
+                val p = a[x, y]; val q = b[x, y]
+                worst = max(worst, maxOf(abs(alpha(p) - alpha(q)), abs(red(p) - red(q)), abs(green(p) - green(q)), abs(blue(p) - blue(q))))
+            }
+            assertTrue("${f.id} output $output: crop and whole-image results differ by $worst", worst <= 2)
+        }
+    }
+
     // ------------------------------------------------------------------ strokes
 
     @Test

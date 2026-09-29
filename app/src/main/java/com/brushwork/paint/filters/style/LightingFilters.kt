@@ -278,16 +278,24 @@ class ReliefHQFilter : Filter("style.relief_hq", "Relief HQ", FilterCategory.STY
         return StyleMath.aroundContent(src, StyleMath.margin(smooth * 1.6f + aoRadius * 1.6f)) { img, _, _ ->
             val w = img.width; val h = img.height
             val z = Relief.heightField(img, brightness, flatness, heightScale, smooth, ctx)
-            val shade = if (shadows) {
+            // Ambient occlusion from how far the surface lies below its blurred surroundings, kept
+            // as bytes so the work plane can be reused for the cast shadows (planes are 80 MB at 20 MP).
+            val work = z.copyOf()
+            StyleMath.gaussianInPlace(work, w, h, aoRadius, ctx)
+            val aoScale = 1f / max(0.5f, aoRadius * 1.5f)
+            val ao = ByteArray(w * h)
+            Parallel.forRows(h) { y0, y1 ->
+                ctx.checkCancelled()
+                for (i in y0 * w until y1 * w) {
+                    ao[i] = (255f / (1f + max(0f, work[i] - z[i]) * aoScale) + 0.5f).toInt().toByte()
+                }
+            }
+            if (shadows) {
                 val horiz = sqrt(light[0] * light[0] + light[1] * light[1])
                 val tanE = if (horiz < 1e-4f) Float.POSITIVE_INFINITY else light[2] / horiz
-                StyleMath.shadowSweep(z, w, h, light[0], light[1], tanE, max(0.5f, ctx.px(2f)), ctx).also {
-                    StyleMath.gaussianInPlace(it, w, h, max(0.5f, ctx.px(1f)), ctx)
-                }
-            } else null
-            val blurred = z.copyOf()
-            StyleMath.gaussianInPlace(blurred, w, h, aoRadius, ctx)
-            val aoScale = 1f / max(0.5f, aoRadius * 1.5f)
+                StyleMath.shadowSweep(z, w, h, light[0], light[1], tanE, max(0.5f, ctx.px(2f)), ctx, out = work)
+                StyleMath.gaussianInPlace(work, w, h, max(0.5f, ctx.px(1f)), ctx)
+            }
             FilterMath.mapXY(img, ctx) { x, y, c ->
                 if (c ushr 24 == 0) c else StyleMath.withNormal(z, w, h, x, y) { nx, ny, nz ->
                     val i = y * w + x
@@ -305,12 +313,12 @@ class ReliefHQFilter : Filter("style.relief_hq", "Relief HQ", FilterCategory.STY
                     val fr = f0r + (1f - f0r) * fresnelBase
                     val fg = f0g + (1f - f0g) * fresnelBase
                     val fb = f0b + (1f - f0b) * fresnelBase
-                    val lit = nl * key * (1f - (shade?.get(i) ?: 0f))
+                    val lit = nl * key * (if (shadows) 1f - work[i] else 1f)
                     val diff = 1f - metallic
-                    val ao = (1f / (1f + max(0f, blurred[i] - z[i]) * aoScale))
-                    val ambR = envR * (br * diff + f0r * metallic) * ao
-                    val ambG = envG * (bg * diff + f0g * metallic) * ao
-                    val ambB = envB * (bb * diff + f0b * metallic) * ao
+                    val occ = (ao[i].toInt() and 0xFF) * (1f / 255f)
+                    val ambR = envR * (br * diff + f0r * metallic) * occ
+                    val ambG = envG * (bg * diff + f0g * metallic) * occ
+                    val ambB = envB * (bb * diff + f0b * metallic) * occ
                     val outR = ((1f - fr) * diff * br + specCommon * fr * PI.toFloat()) * lit + ambR
                     val outG = ((1f - fg) * diff * bg + specCommon * fg * PI.toFloat()) * lit + ambG
                     val outB = ((1f - fb) * diff * bb + specCommon * fb * PI.toFloat()) * lit + ambB
