@@ -39,6 +39,8 @@ object SelectionOutline {
                 throw e
             } catch (e: OutOfMemoryError) {
                 null // the bounds rectangle is drawn instead
+            } catch (e: Exception) {
+                null
             }
             // A newer selection replaced this one: drop the result.
             if (path != null && controller.selection === sel) {

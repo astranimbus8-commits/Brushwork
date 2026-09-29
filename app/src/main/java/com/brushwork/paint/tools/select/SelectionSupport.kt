@@ -167,6 +167,8 @@ internal object SelectionJobs {
                 throw e
             } catch (e: OutOfMemoryError) {
                 controller.toast("Not enough memory for \"$label\"")
+            } catch (e: Exception) {
+                controller.toast("$label failed: ${e.message ?: e.javaClass.simpleName}")
             } finally {
                 onFinished()
             }

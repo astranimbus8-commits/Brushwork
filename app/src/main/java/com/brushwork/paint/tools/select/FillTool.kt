@@ -110,6 +110,8 @@ class FillTool(controller: EditorController) : Tool(controller) {
                 throw e
             } catch (e: OutOfMemoryError) {
                 controller.toast("Not enough memory to fill this area")
+            } catch (e: Exception) {
+                controller.toast("Fill failed: ${e.message ?: e.javaClass.simpleName}")
             } finally {
                 busy = false
             }
