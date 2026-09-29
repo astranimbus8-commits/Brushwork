@@ -1,0 +1,366 @@
+package com.brushwork.paint.tools.transform
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import android.os.Looper
+import com.brushwork.paint.AppSettings
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.ToolPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+
+/** Transform tool against the real controller, undo stack and Skia (Robolectric NATIVE graphics). */
+@RunWith(RobolectricTestRunner::class)
+class TransformToolRobolectricTest {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    @After
+    fun tearDown() = scope.cancel()
+
+    private fun setup(w: Int, h: Int): Pair<EditorController, Layer> {
+        val app = RuntimeEnvironment.getApplication()
+        val doc = Document("t", "t", w, h)
+        val layer = Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(w, h))
+        doc.layers += layer
+        return EditorController(app, doc, scope, AppSettings(app)) to layer
+    }
+
+    private fun idle() = shadowOf(Looper.getMainLooper()).idle()
+
+    private fun transformTool(c: EditorController) = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+
+    /** Selects the tool and lets the deferred activation lift the content. */
+    private fun activate(c: EditorController): TransformTool {
+        c.selectTool(ToolId.TRANSFORM)
+        idle()
+        return transformTool(c)
+    }
+
+    private fun fill(b: Bitmap, r: Rect, color: Int) = Canvas(b).drawRect(r, Paint().apply { this.color = color })
+
+    private fun pixels(b: Bitmap) = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
+
+    private fun rectSelection(w: Int, h: Int, r: Rect): Selection =
+        Selection.fromPath(Path().apply { addRect(r.left.toFloat(), r.top.toFloat(), r.right.toFloat(), r.bottom.toFloat(), Path.Direction.CW) }, w, h, antiAlias = false)
+
+    @Test
+    fun dragMovesPixelsAndUndoRestores() {
+        val (c, layer) = setup(128, 128)
+        fill(layer.bitmap, Rect(20, 20, 60, 60), RED)
+        c.viewTransform.set(Matrix().apply { setScale(2f, 2f) })
+        val tool = activate(c)
+        assertTrue(tool.hasPendingWork)
+        assertEquals(DocBox(20f, 20f, 60f, 60f), tool.transformState!!.bounds())
+        assertTrue(c.renderOverride != null)
+
+        c.pointerDown(ToolPoint(40f, 40f))
+        c.pointerMove(ToolPoint(55f, 45f))
+        c.pointerUp(ToolPoint(60f, 45f))
+        // Preview goes through the compositor while the layer itself is untouched.
+        val preview = BitmapUtils.createLayerBitmap(128, 128)
+        c.compositor.drawDocument(Canvas(preview), null)
+        assertEquals(RED, preview.getPixel(70, 50))
+        assertEquals(0, preview.getPixel(25, 25))
+        assertEquals(RED, layer.bitmap.getPixel(25, 25))
+
+        tool.commit()
+        assertFalse(tool.hasPendingWork)
+        assertNull(c.renderOverride)
+        val b = layer.bitmap
+        assertEquals(RED, b.getPixel(40, 25))
+        assertEquals(RED, b.getPixel(79, 64))
+        assertEquals(0, b.getPixel(39, 25))
+        assertEquals(0, b.getPixel(80, 64))
+        assertEquals(0, b.getPixel(20, 20))
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+
+        c.undo()
+        assertEquals(RED, b.getPixel(20, 20))
+        assertEquals(RED, b.getPixel(59, 59))
+        assertEquals(0, b.getPixel(79, 64))
+        assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun selectionMovesWithContentInOneUndoStep() {
+        val (c, layer) = setup(128, 128)
+        fill(layer.bitmap, Rect(10, 10, 50, 50), RED)
+        c.setSelection(rectSelection(128, 128, Rect(20, 20, 40, 40)), recordUndo = false)
+        val tool = activate(c)
+        assertEquals(DocBox(20f, 20f, 40f, 40f), tool.transformState!!.bounds())
+        tool.moveBy(40f, 0f)
+        tool.commit()
+
+        val b = layer.bitmap
+        assertEquals(0, b.getPixel(25, 25))      // lifted area cleared
+        assertEquals(RED, b.getPixel(15, 15))    // unselected content stays
+        assertEquals(RED, b.getPixel(45, 25))
+        assertEquals(RED, b.getPixel(61, 25))    // moved block (60..80, 20..40)
+        assertEquals(RED, b.getPixel(79, 39))
+        assertEquals(0, b.getPixel(81, 25))
+        assertEquals(Rect(60, 20, 80, 40), c.selection!!.bounds)
+
+        c.undo()
+        assertEquals(Rect(20, 20, 40, 40), c.selection!!.bounds)
+        assertEquals(RED, b.getPixel(25, 25))
+        assertEquals(0, b.getPixel(65, 25))
+        assertFalse(c.canUndo) // pixels + selection were one step
+
+        c.redo()
+        assertEquals(Rect(60, 20, 80, 40), c.selection!!.bounds)
+        assertEquals(RED, b.getPixel(65, 25))
+    }
+
+    @Test
+    fun discardAndGestureCancelLeaveNoTrace() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(8, 8, 30, 20), BLUE)
+        val before = pixels(layer.bitmap)
+        c.viewTransform.set(Matrix().apply { setScale(3f, 3f) })
+        val tool = activate(c)
+        val start = tool.transformState
+
+        c.pointerDown(ToolPoint(19f, 14f))
+        c.pointerMove(ToolPoint(40f, 30f))
+        c.pointerCancel()
+        assertEquals(start, tool.transformState)
+
+        tool.moveBy(10f, 10f)
+        tool.rotate90(clockwise = true)
+        tool.discard()
+        assertFalse(tool.hasPendingWork)
+        assertNull(c.renderOverride)
+        assertTrue(before.contentEquals(pixels(layer.bitmap)))
+        assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun unchangedCommitRecordsNothing() {
+        val (c, layer) = setup(32, 32)
+        fill(layer.bitmap, Rect(4, 4, 10, 10), RED)
+        val tool = activate(c)
+        tool.moveBy(3f, 0f)
+        tool.moveBy(-3f, 0f)
+        tool.commit()
+        assertFalse(c.canUndo)
+        assertEquals(RED, layer.bitmap.getPixel(4, 4))
+    }
+
+    @Test
+    fun switchingToolCommits() {
+        val (c, layer) = setup(64, 64)
+        fill(layer.bitmap, Rect(0, 0, 10, 10), RED)
+        val tool = activate(c)
+        tool.moveBy(20f, 0f)
+        c.selectTool(ToolId.BRUSH)
+        assertFalse(tool.hasPendingWork)
+        assertEquals(RED, layer.bitmap.getPixel(25, 5))
+        assertEquals(0, layer.bitmap.getPixel(5, 5))
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun quarterTurnIsPixelExact() {
+        for (mode in TransformTool.Interpolation.entries) {
+            val (c, layer) = setup(48, 48)
+            val colors = intArrayOf(RED, GREEN, BLUE, CYAN, MAGENTA, YELLOW)
+            // 3x2 block at (20, 20): R G B / C M Y
+            for (i in 0 until 6) layer.bitmap.setPixel(20 + i % 3, 20 + i / 3, colors[i])
+            val tool = activate(c)
+            tool.interpolation = mode
+            tool.rotate90(clockwise = true)
+            tool.commit()
+            val b = layer.bitmap
+            val expected = mapOf(
+                (21 to 20) to CYAN, (22 to 20) to RED,
+                (21 to 21) to MAGENTA, (22 to 21) to GREEN,
+                (21 to 22) to YELLOW, (22 to 22) to BLUE,
+            )
+            for ((p, col) in expected) assertEquals("$mode at $p", col, b.getPixel(p.first, p.second))
+            assertEquals("$mode", 0, b.getPixel(20, 20))
+            assertEquals("$mode", 0, b.getPixel(23, 20))
+            assertEquals("$mode", 0, b.getPixel(21, 23))
+        }
+    }
+
+    @Test
+    fun distortCornerDragMakesPerspective() {
+        val (c, layer) = setup(80, 80)
+        fill(layer.bitmap, Rect(20, 20, 60, 60), RED)
+        c.viewTransform.set(Matrix().apply { setScale(2f, 2f) })
+        val tool = activate(c)
+        tool.mode = TransformTool.Mode.DISTORT
+        c.pointerDown(ToolPoint(20f, 20f))
+        c.pointerMove(ToolPoint(10f, 5f))
+        c.pointerUp(ToolPoint(10f, 5f))
+        val st = tool.transformState!!
+        assertTrue(st.isDistorted)
+        assertEquals(10f, st.corner(0).x, 1e-3f)
+        assertEquals(5f, st.corner(0).y, 1e-3f)
+        assertEquals(60f, st.corner(2).x, 1e-3f)
+        assertEquals(0, layer.bitmap.getPixel(14, 10))
+        tool.commit()
+        assertEquals(RED, layer.bitmap.getPixel(14, 10))
+        assertEquals(RED, layer.bitmap.getPixel(55, 55))
+        assertEquals(0, layer.bitmap.getPixel(12, 55)) // left of the new left edge (20,60)-(10,5)
+    }
+
+    @Test
+    fun placementFitsAndCommitsAsImport() {
+        val (c, _) = setup(100, 100)
+        val img = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        c.importImageAsLayer(img)
+        idle()
+        val tool = transformTool(c)
+        assertEquals(ToolId.TRANSFORM, c.activeToolId)
+        assertTrue(tool.hasPendingWork)
+        assertTrue(tool.isPlacement)
+        assertEquals(DocBox(5f, 28f, 95f, 73f), tool.transformState!!.bounds())
+        assertEquals(2, c.doc.layers.size)
+        val placed = c.doc.activeLayer
+        tool.commit()
+        assertFalse(tool.isPlacement)
+        assertEquals(BLUE, placed.bitmap.getPixel(50, 50))
+        assertEquals(BLUE, placed.bitmap.getPixel(6, 29))
+        assertEquals(0, placed.bitmap.getPixel(2, 50))
+        assertEquals(0, placed.bitmap.getPixel(50, 20))
+        assertEquals(TransformTool.IMPORT_LABEL, c.undoManager.undoLabel)
+        c.undo() // pixels
+        assertEquals(0, placed.bitmap.getPixel(50, 50))
+        assertEquals(2, c.doc.layers.size)
+        c.undo() // the layer
+        assertEquals(1, c.doc.layers.size)
+    }
+
+    @Test
+    fun discardingPlacementRemovesTheLayer() {
+        val (c, base) = setup(100, 100)
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        c.importImageAsLayer(img)
+        idle()
+        val tool = transformTool(c)
+        assertEquals(2, c.doc.layers.size)
+        tool.discard()
+        assertFalse(tool.hasPendingWork)
+        assertEquals(listOf(base), c.doc.layers.toList())
+        assertFalse(c.canUndo)
+
+        // Undo (two-finger tap) while placing does the same.
+        c.importImageAsLayer(img)
+        idle()
+        assertEquals(2, c.doc.layers.size)
+        c.undo()
+        assertFalse(tool.hasPendingWork)
+        assertEquals(listOf(base), c.doc.layers.toList())
+    }
+
+    @Test
+    fun maskEditingTransformsTheMask() {
+        val (c, layer) = setup(64, 64)
+        layer.bitmap.eraseColor(RED)
+        val mask = BitmapUtils.createMaskBitmap(64, 64)
+        fill(mask, Rect(10, 10, 20, 20), BLACK)
+        layer.mask = mask
+        layer.editingMask = true
+        val tool = activate(c)
+        assertEquals(DocBox(10f, 10f, 20f, 20f), tool.transformState!!.bounds())
+        tool.moveBy(30f, 0f)
+
+        // Preview composes the moved mask (saveLayer + mask paint).
+        val preview = BitmapUtils.createLayerBitmap(64, 64)
+        c.compositor.drawDocument(Canvas(preview), null)
+        assertEquals(RED, preview.getPixel(15, 15))
+        assertEquals(0, preview.getPixel(45, 15))
+
+        tool.commit()
+        assertEquals(WHITE, mask.getPixel(15, 15))
+        assertEquals(BLACK, mask.getPixel(45, 15))
+        assertEquals(RED, layer.bitmap.getPixel(45, 15)) // content untouched
+        c.undo()
+        assertEquals(BLACK, mask.getPixel(15, 15))
+        assertEquals(WHITE, mask.getPixel(45, 15))
+    }
+
+    @Test
+    fun refusesAlphaLockedEmptyLockedAndHiddenLayers() {
+        val (c, layer) = setup(32, 32)
+        val tool = activate(c)
+        assertFalse(tool.hasPendingWork)
+        assertEquals("Nothing to transform on this layer", c.message)
+
+        fill(layer.bitmap, Rect(0, 0, 5, 5), RED)
+        layer.alphaLocked = true
+        c.message = null
+        tool.start()
+        assertFalse(tool.hasPendingWork)
+        assertTrue(c.message!!.contains("Transparency is locked"))
+
+        layer.alphaLocked = false
+        layer.locked = true
+        c.message = null
+        c.pointerDown(ToolPoint(2f, 2f))
+        c.pointerUp(ToolPoint(2f, 2f))
+        assertFalse(tool.hasPendingWork)
+        assertTrue(c.message!!.contains("locked"))
+
+        layer.locked = false
+        layer.visible = false
+        c.message = null
+        tool.start()
+        assertFalse(tool.hasPendingWork)
+        assertTrue(c.message!!.contains("hidden"))
+    }
+
+    @Test
+    fun largeLayerBoundsAreFoundInTheBackground() {
+        val (c, layer) = setup(2000, 1100) // above the synchronous scan limit
+        fill(layer.bitmap, Rect(1500, 700, 1510, 720), RED)
+        c.selectTool(ToolId.TRANSFORM)
+        val tool = transformTool(c)
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!tool.hasPendingWork && System.currentTimeMillis() < deadline) {
+            idle()
+            Thread.sleep(5)
+        }
+        assertTrue(tool.hasPendingWork)
+        assertFalse(tool.isPreparing)
+        assertEquals(DocBox(1500f, 700f, 1510f, 720f), tool.transformState!!.bounds())
+        tool.fitToCanvas()
+        assertNotEquals(DocBox(1500f, 700f, 1510f, 720f), tool.transformState!!.bounds())
+        tool.reset()
+        assertEquals(DocBox(1500f, 700f, 1510f, 720f), tool.transformState!!.bounds())
+    }
+
+    private companion object {
+        const val RED = 0xFFFF0000.toInt()
+        const val GREEN = 0xFF00FF00.toInt()
+        const val BLUE = 0xFF0000FF.toInt()
+        const val CYAN = 0xFF00FFFF.toInt()
+        const val MAGENTA = 0xFFFF00FF.toInt()
+        const val YELLOW = 0xFFFFFF00.toInt()
+        const val BLACK = 0xFF000000.toInt()
+        const val WHITE = 0xFFFFFFFF.toInt()
+    }
+}
