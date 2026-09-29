@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Brush over a paint swatch. 108dp adaptive-icon foreground (safe zone = central 66dp). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- paint blob -->
+    <path
+        android:fillColor="#FFFF6B6B"
+        android:pathData="M30,66 C24,56 30,44 42,44 C50,44 52,52 60,52 C70,52 76,60 72,70 C68,80 54,82 44,80 C36,78 34,72 30,66 Z" />
+    <path
+        android:fillColor="#FFFFC94D"
+        android:pathData="M40,62 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <path
+        android:fillColor="#FF4DA3FF"
+        android:pathData="M55,68 m-5,0 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0" />
+    <!-- brush handle -->
+    <path
+        android:fillColor="#FFF2E6D0"
+        android:pathData="M74,26 L80,32 L58,56 L52,50 Z" />
+    <!-- ferrule -->
+    <path
+        android:fillColor="#FFB0B6BE"
+        android:pathData="M52,50 L58,56 L54,60 L48,54 Z" />
+    <!-- bristles -->
+    <path
+        android:fillColor="#FF2B2D31"
+        android:pathData="M48,54 L54,60 C52,66 46,70 40,70 C40,64 43,57 48,54 Z" />
+</vector>

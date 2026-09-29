@@ -1,0 +1,25 @@
+# Gradle / Android
+.gradle/
+build/
+/local.properties
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+# IDE
+.idea/
+*.iml
+.vscode/
+# Signing material - never commit
+/signing/
+*.jks
+*.keystore
+keystore.properties
+# Claude Code local files
+.claude/
+# OS
+.DS_Store
+Thumbs.db
