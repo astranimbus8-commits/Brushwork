@@ -39,6 +39,7 @@ object RegionFill {
     private const val ERODED = 2
     private const val SEEDED = 4
     private const val REGION = 8
+    private const val CONNECTED = 16
 
     /**
      * Color difference used by the tolerance: the maximum absolute difference over the A, R, G, B
@@ -124,7 +125,7 @@ object RegionFill {
             if (cancelled()) return null
             if (closed != null) {
                 bounds = closed
-                regionBit = REGION
+                regionBit = CONNECTED
             } else {
                 bounds = flood(map, width, height, seedX, seedY, PASSABLE, SEEDED) ?: return null
                 regionBit = SEEDED
@@ -136,9 +137,10 @@ object RegionFill {
 
     /**
      * Gap closing: erode the passable set by [r] (pixels within r of a barrier are removed), flood
-     * from the seed, then grow the result back by r + 1 inside the passable set. Returns the
-     * bounds of the [REGION]-flagged result, or null to fall back to a plain fill (when no eroded
-     * pixel is near the seed, e.g. inside a very thin area).
+     * from the seed, then grow the result back by r + 1 inside the passable set, keeping only what
+     * stays 4-connected to it (so the grow never jumps across thin lines). Returns the bounds of
+     * the [CONNECTED]-flagged result, or null to fall back to a plain fill (when no eroded pixel is
+     * reachable near the seed, e.g. inside a very thin area).
      */
     private fun floodWithGapClosing(map: ByteArray, w: Int, h: Int, sx: Int, sy: Int, r: Int, cancelled: () -> Boolean): IntArray? {
         val r2 = r * r
@@ -151,51 +153,73 @@ object RegionFill {
             }
         }, cancelled)
         if (cancelled()) return null
-        // Taps close to a line land in the eroded band: start from the nearest eroded pixel.
-        val start = nearestWithFlag(map, w, h, sx, sy, r + 1, ERODED) ?: return null
+        // Taps close to a line land in the eroded band: start from the nearest eroded pixel that
+        // is reachable from the tap without crossing a barrier.
+        val path = pathToFlag(map, w, h, sx, sy, r + 1, ERODED) ?: return null
+        val start = path[path.size - 1]
         val seeded = flood(map, w, h, start % w, start / w, ERODED, SEEDED) ?: return null
         if (cancelled()) return null
         val grow = r + 1
         val g2 = grow * grow
         val bx0 = max(0, seeded[0] - grow); val by0 = max(0, seeded[1] - grow)
         val bx1 = min(w, seeded[2] + grow); val by1 = min(h, seeded[3] + grow)
-        val acc = intArrayOf(Int.MAX_VALUE, Int.MAX_VALUE, Int.MIN_VALUE, Int.MIN_VALUE)
-        val lock = Any()
         Distance.bounded(w, h, bx0, by0, bx1, by1, grow, { i -> map[i].toInt() and SEEDED != 0 }, { y, d2 ->
             val row = y * w
-            var minX = Int.MAX_VALUE; var maxX = Int.MIN_VALUE
             for (k in d2.indices) {
-                val x = bx0 + k
-                val i = row + x
+                val i = row + bx0 + k
                 val m = map[i].toInt()
-                if (m and PASSABLE != 0 && d2[k] <= g2) {
-                    map[i] = (m or REGION).toByte()
-                    if (x < minX) minX = x
-                    if (x > maxX) maxX = x
-                }
-            }
-            if (maxX >= 0) synchronized(lock) {
-                acc[0] = min(acc[0], minX); acc[2] = max(acc[2], maxX + 1)
-                acc[1] = min(acc[1], y); acc[3] = max(acc[3], y + 1)
+                if (m and PASSABLE != 0 && d2[k] <= g2) map[i] = (m or REGION).toByte()
             }
         }, cancelled)
-        if (acc[2] < 0) return null
-        return acc
+        if (cancelled()) return null
+        // The tapped pixel always belongs to the fill, joined to the core along the path found.
+        for (i in path) map[i] = (map[i].toInt() or REGION).toByte()
+        return flood(map, w, h, start % w, start / w, REGION, CONNECTED)
     }
 
-    /** Index of the pixel with [flag] nearest to (sx, sy) within [radius], or null. */
-    private fun nearestWithFlag(map: ByteArray, w: Int, h: Int, sx: Int, sy: Int, radius: Int, flag: Int): Int? {
-        var best = -1
-        var bestD = Int.MAX_VALUE
-        for (y in max(0, sy - radius)..min(h - 1, sy + radius)) {
-            val dy = y - sy
-            for (x in max(0, sx - radius)..min(w - 1, sx + radius)) {
-                val dx = x - sx
-                val d = dx * dx + dy * dy
-                if (d < bestD && d <= radius * radius && map[y * w + x].toInt() and flag != 0) { bestD = d; best = y * w + x }
+    /**
+     * Breadth-first search from (sx, sy) through [PASSABLE] pixels (4-connected) within the
+     * square of [radius] around it, for the closest pixel having [flag] within [radius]. Returns
+     * the pixel indices of the path from the seed to that pixel (seed first), or null.
+     */
+    private fun pathToFlag(map: ByteArray, w: Int, h: Int, sx: Int, sy: Int, radius: Int, flag: Int): IntArray? {
+        val x0 = max(0, sx - radius); val y0 = max(0, sy - radius)
+        val x1 = min(w - 1, sx + radius); val y1 = min(h - 1, sy + radius)
+        val ww = x1 - x0 + 1
+        val n = ww * (y1 - y0 + 1)
+        val parent = IntArray(n) { -2 } // -2 = unvisited, -1 = the seed
+        val queue = IntArray(n)
+        var head = 0; var tail = 0
+        val seed = (sy - y0) * ww + (sx - x0)
+        parent[seed] = -1
+        queue[tail++] = seed
+        val r2 = radius * radius
+        while (head < tail) {
+            val q = queue[head++]
+            val lx = q % ww; val ly = q / ww
+            val x = x0 + lx; val y = y0 + ly
+            val dx = x - sx; val dy = y - sy
+            if (dx * dx + dy * dy <= r2 && map[y * w + x].toInt() and flag != 0) {
+                var len = 0
+                var c = q
+                while (c >= 0) { len++; c = parent[c] }
+                val out = IntArray(len)
+                c = q
+                for (k in len - 1 downTo 0) { out[k] = (y0 + c / ww) * w + x0 + c % ww; c = parent[c] }
+                return out
+            }
+            for (dir in 0..3) {
+                val nx = lx + (if (dir == 0) -1 else if (dir == 1) 1 else 0)
+                val ny = ly + (if (dir == 2) -1 else if (dir == 3) 1 else 0)
+                if (nx < 0 || ny < 0 || nx >= ww || ny > y1 - y0) continue
+                val nq = ny * ww + nx
+                if (parent[nq] != -2) continue
+                if (map[(y0 + ny) * w + x0 + nx].toInt() and PASSABLE == 0) continue
+                parent[nq] = q
+                queue[tail++] = nq
             }
         }
-        return if (best < 0) null else best
+        return null
     }
 
     /**

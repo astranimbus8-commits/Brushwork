@@ -101,6 +101,41 @@ class RegionFillTest {
         assertEquals(255, closed.at(20, 20))
     }
 
+    /** 1 px, 8-connected diagonal lines y = x + k for each k in [offsets] (a 4-connected barrier). */
+    private fun diagonals(w: Int, h: Int, vararg offsets: Int): IntArray {
+        val px = IntArray(w * h)
+        for (k in offsets) for (x in 0 until w) { val y = x + k; if (y in 0 until h) px[y * w + x] = black }
+        return px
+    }
+
+    @Test
+    fun gapClosingDoesNotBleedAcrossThinDiagonalLines() {
+        val w = 60; val h = 60
+        val px = diagonals(w, h, 0)
+        for (gap in listOf(5, 7, 10)) {
+            val r = fill(px, w, h, 40, 10, RegionParams(tolerance = 10, gapClose = gap, antiAlias = false))!!
+            assertEquals(255, r.at(40, 10))
+            assertEquals(255, r.at(59, 0))
+            for (y in 0 until h) for (x in 0 until w) {
+                if (y > x) assertEquals("gap=$gap ($x,$y) is across the line", 0, r.at(x, y))
+            }
+        }
+    }
+
+    @Test
+    fun gapClosingInNarrowCorridorStaysInTheCorridor() {
+        val w = 60; val h = 60
+        // A 3 px wide diagonal corridor between two lines: too narrow to keep any eroded pixel.
+        val px = diagonals(w, h, 0, 4)
+        for (gap in listOf(3, 7, 10)) {
+            val r = fill(px, w, h, 20, 21, RegionParams(tolerance = 10, gapClose = gap, antiAlias = false))!!
+            assertEquals("gap=$gap tapped pixel", 255, r.at(20, 21))
+            assertEquals("gap=$gap corridor", 255, r.at(30, 33))
+            assertEquals("gap=$gap lower side", 0, r.at(40, 10))
+            assertEquals("gap=$gap upper side", 0, r.at(10, 40))
+        }
+    }
+
     @Test
     fun expandGrowsUnderTheBarrier() {
         val w = 30; val h = 10
