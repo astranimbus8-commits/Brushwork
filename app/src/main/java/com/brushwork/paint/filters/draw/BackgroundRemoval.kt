@@ -7,7 +7,6 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
-import java.lang.ref.WeakReference
 import java.util.concurrent.CancellationException
 import kotlin.math.max
 import kotlin.math.min
@@ -30,8 +29,9 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
         FilterParam.Toggle("invert", "Invert (remove the subject)", false),
     )
 
-    private class CachedMask(val key: WeakReference<IntArray>, val w: Int, val h: Int, val sig: Long, val mask: FloatArray)
+    private class CachedMask(val w: Int, val h: Int, val hash: Long, val mask: FloatArray)
 
+    /** Last preview-sized segmentation, keyed by content (parameter changes reuse it). */
     @Volatile private var cache: CachedMask? = null
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
@@ -65,12 +65,14 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
         return out
     }
 
-    /** Subject confidence from the segmentation service (cached for the live preview buffer). */
+    /** Subject confidence from the segmentation service (cached for preview-sized images). */
     private fun subjectMask(src: PixelBuffer, ctx: FilterContext): FloatArray? {
         val services = ctx.services ?: return null
-        val sig = signature(src)
-        cache?.let { c ->
-            if (c.key.get() === src.pixels && c.w == src.width && c.h == src.height && c.sig == sig) return c.mask
+        // Only preview-sized results are cached: the full-resolution one is used once.
+        val cacheable = src.size <= CACHE_MAX_PIXELS
+        val hash = if (cacheable) contentHash(src.pixels) else 0L
+        if (cacheable) cache?.let { c ->
+            if (c.w == src.width && c.h == src.height && c.hash == hash) return c.mask
         }
         val mask = try {
             services.subjectMask(src)
@@ -80,18 +82,15 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
             null
         } ?: return null
         if (mask.size != src.size) return null
-        // Keep only the preview-sized result: the full-resolution one is used once.
-        if (src.size <= CACHE_MAX_PIXELS) cache = CachedMask(WeakReference(src.pixels), src.width, src.height, sig, mask)
+        if (cacheable) cache = CachedMask(src.width, src.height, hash, mask)
         return mask
     }
 
-    private fun signature(src: PixelBuffer): Long {
-        var hsh = 1125899906842597L
-        val p = src.pixels
-        val step = max(1, p.size / 97)
-        var i = 0
-        while (i < p.size) { hsh = 31 * hsh + p[i]; i += step }
-        return hsh
+    /** 64-bit FNV-1a style hash over every pixel (a few ms for a preview-sized buffer). */
+    private fun contentHash(p: IntArray): Long {
+        var h = -3750763034362895579L
+        for (v in p) { h = (h xor v.toLong()) * 1099511628211L }
+        return h
     }
 
     // ------------------------------------------------------------------ color-key heuristic

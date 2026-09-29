@@ -86,10 +86,13 @@ class BackgroundRemovalTest {
         assertEquals(0, alpha(out[10, 5]))
         assertEquals(255, alpha(out[90, 5]))
         assertEquals(128f, alpha(out[50, 5]).toFloat(), 20f)
-        val higher = f.apply(src, f.defaultValues().set("threshold", 80f).set("softness", 0f), c)
+        // A distinct buffer with the same content (e.g. a fresh preview copy) reuses the mask.
+        val higher = f.apply(src.copy(), f.defaultValues().set("threshold", 80f).set("softness", 0f), c)
         assertEquals(0, alpha(higher[70, 5]))
-        // The mask of the same (preview) buffer is computed once.
         assertEquals(1, calls)
+        // Different content is segmented again.
+        f.apply(PixelBuffer.filled(101, 10, 0xFF0000FF.toInt()), f.defaultValues(), c)
+        assertEquals(2, calls)
     }
 
     @Test
