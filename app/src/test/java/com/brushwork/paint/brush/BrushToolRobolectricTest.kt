@@ -501,14 +501,14 @@ class BrushToolRobolectricTest {
     }
 
     @Test
-    fun resourcesAreFreedWhenTheEditorScopeIsCancelled() {
+    fun resourcesAreFreedWhenTheEditorIsDisposed() {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         val doc = Document("t", "t", 100, 100).apply { layers += Layer(newLayerId(), "L", BitmapUtils.createLayerBitmap(100, 100)) }
         val c = EditorController(context, doc, scope, AppSettings(context))
         c.tool(ToolId.BRUSH).line(10f, 10f, 90f, 90f)
         val res = StrokeResources.of(c)
         assertTrue(res.hasCoverage)
-        scope.cancel()
+        c.dispose()
         assertFalse(res.hasCoverage)
         assertTrue(StrokeResources.of(c) !== res)
     }

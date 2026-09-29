@@ -224,7 +224,8 @@ class EditorController(
 
     // ------------------------------------------------------------------ tools
 
-    val tools: Map<ToolId, Tool> by lazy { ToolFactory.create(this) }
+    private val toolsLazy = lazy { ToolFactory.create(this) }
+    val tools: Map<ToolId, Tool> by toolsLazy
 
     val currentTool: Tool get() = tools.getValue(activeToolId)
 
@@ -750,6 +751,7 @@ class EditorController(
     fun dispose() {
         runCatching { currentTool.onDeactivate() }
         filterSession?.cancel()
+        if (toolsLazy.isInitialized()) tools.values.forEach { runCatching { it.onDispose() } }
         tiles.release()
         undoManager.clear()
     }

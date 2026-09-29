@@ -96,6 +96,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         store.persist(controller, id)
     }
 
+    override fun onDispose() {
+        // Shared by the brush/eraser/smudge/blur instances; releasing twice is harmless.
+        StrokeResources.releaseFor(controller)
+    }
+
     // ------------------------------------------------------------------ strokes
 
     private fun undoLabel(kind: StrokeKind) = when (kind) {

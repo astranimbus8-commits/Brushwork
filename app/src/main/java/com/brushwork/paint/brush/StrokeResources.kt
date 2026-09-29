@@ -5,8 +5,6 @@ import android.graphics.Canvas
 import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.EditorController
-import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.launch
 import java.util.WeakHashMap
 
 /**
@@ -65,21 +63,15 @@ class StrokeResources {
         private val registry = WeakHashMap<EditorController, StrokeResources>()
 
         /** The resources of [controller]'s editor (created on first use). */
-        fun of(controller: EditorController): StrokeResources {
-            registry[controller]?.let { return it }
-            val res = StrokeResources()
-            registry[controller] = res
-            // The session cancels the scope when the editor closes (after committing strokes):
-            // free the ~20 MB buffer right then instead of whenever the weak entry is purged.
-            controller.scope.launch {
-                try {
-                    awaitCancellation()
-                } finally {
-                    res.release()
-                    if (registry[controller] === res) registry.remove(controller)
-                }
-            }
-            return res
+        fun of(controller: EditorController): StrokeResources =
+            registry.getOrPut(controller) { StrokeResources() }
+
+        /**
+         * Frees [controller]'s buffer and tips right away (called from Tool.onDispose when the
+         * editor closes) instead of whenever the weak entry is purged. Safe to call repeatedly.
+         */
+        fun releaseFor(controller: EditorController) {
+            registry.remove(controller)?.release()
         }
     }
 }

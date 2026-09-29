@@ -85,6 +85,9 @@ abstract class Tool(val controller: EditorController) {
     /** Another tool is being activated (or the editor closes): commit pending work. */
     open fun onDeactivate() { if (hasPendingWork) commit() }
 
+    /** The editor is closing (after [onDeactivate]): free large buffers/caches now. */
+    open fun onDispose() {}
+
     /** Screen-space overlay; [t] maps document -> screen. */
     open fun drawOverlay(canvas: Canvas, t: ViewTransform) {}
 
