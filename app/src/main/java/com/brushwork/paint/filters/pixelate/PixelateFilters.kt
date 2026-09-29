@@ -2,5 +2,13 @@ package com.brushwork.paint.filters.pixelate
 
 import com.brushwork.paint.filters.Filter
 
-// STUB - replaced by a filter module. Every filter of this category is listed here.
-val pixelateFilters: List<Filter> = emptyList()
+/** Every filter of the Pixelate category, in ibisPaint's menu order. */
+val pixelateFilters: List<Filter> = listOf(
+    CrystallizeFilter(),
+    HexagonalPixelateFilter(),
+    SquarePixelateFilter(),
+    TriangularPixelateFilter(),
+    PointillizeFilter(),
+    DotsFilter.hexagonal(),
+    DotsFilter.square(),
+)
