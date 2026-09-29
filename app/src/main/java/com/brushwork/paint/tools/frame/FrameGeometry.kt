@@ -27,6 +27,9 @@ data class FrameRect(val left: Float, val top: Float, val right: Float, val bott
 data class Panel(val points: List<Vec2>) {
     val area: Float get() = abs(Geometry.signedArea(points))
     fun contains(p: Vec2): Boolean = Geometry.pointInPolygon(p, points)
+
+    /** Bounding box of the vertices. */
+    fun bounds(): FrameRect = FrameRect(points.minOf { it.x }, points.minOf { it.y }, points.maxOf { it.x }, points.maxOf { it.y })
 }
 
 /**
