@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.vector
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowRightAlt
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.HorizontalRule
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.CropSquare
@@ -17,6 +20,8 @@ import androidx.compose.material.icons.outlined.Hexagon
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -28,6 +33,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,8 +75,9 @@ internal class LogScale(private val min: Float, private val max: Float) {
 }
 
 /**
- * A length in document pixels: numeric field in [unit] + unit picker, and optionally a
- * logarithmic slider from [sliderMin] to [sliderMax] px.
+ * A length in document pixels: numeric field in [unit] + unit picker (unless [showUnit] is
+ * false because the sheet has a shared one), and optionally a logarithmic slider from
+ * [sliderMin] to [sliderMax] px.
  */
 @Composable
 internal fun LengthEditor(
@@ -85,6 +92,7 @@ internal fun LengthEditor(
     sliderMin: Float = 0.5f,
     sliderMax: Float = 500f,
     showSlider: Boolean = true,
+    showUnit: Boolean = true,
     enabled: Boolean = true,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -99,7 +107,7 @@ internal fun LengthEditor(
             maxPx = maxPx.toDouble(),
             enabled = enabled,
         )
-        UnitSelector(unit, onUnit)
+        if (showUnit) UnitSelector(unit, onUnit)
     }
     if (showSlider) {
         val scale = LogScale(sliderMin, sliderMax)
@@ -143,14 +151,68 @@ internal fun OptionChip(label: String, selected: Boolean, onClick: () -> Unit, i
 
 /** One-shot action chip used in the tool option strips. */
 @Composable
-internal fun ActionChip(label: String, icon: ImageVector, onClick: () -> Unit, tint: Color = BrushworkColors.OnChrome) {
+internal fun ActionChip(label: String, icon: ImageVector, tint: Color = BrushworkColors.OnChrome, enabled: Boolean = true, onClick: () -> Unit) {
     AssistChip(
         onClick = onClick,
+        enabled = enabled,
         label = { Text(label, maxLines = 1) },
         leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = tint) },
         colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome),
         modifier = Modifier.padding(horizontal = 3.dp),
     )
+}
+
+/**
+ * Chip that shows the current choice and opens a menu of [options] (the selected one is
+ * checked). [leading] decorates the chip, [optionLeading] each menu item.
+ */
+@Composable
+internal fun <T> DropdownChip(
+    label: String,
+    options: List<T>,
+    selected: T,
+    optionLabel: (T) -> String,
+    onSelect: (T) -> Unit,
+    leading: (@Composable () -> Unit)? = null,
+    optionLeading: (@Composable (T) -> Unit)? = null,
+    contentDescription: String? = null,
+) {
+    var open by remember { mutableStateOf(false) }
+    Box(Modifier.padding(horizontal = 3.dp)) {
+        AssistChip(
+            onClick = { open = true },
+            label = { Text(label, maxLines = 1) },
+            leadingIcon = leading,
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = contentDescription, modifier = Modifier.size(18.dp)) },
+            colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome, trailingIconContentColor = BrushworkColors.OnChromeDim),
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEach { o ->
+                DropdownMenuItem(
+                    text = { Text(optionLabel(o)) },
+                    onClick = { onSelect(o); open = false },
+                    leadingIcon = optionLeading?.let { f -> { f(o) } },
+                    trailingIcon = if (o == selected) ({ Icon(Icons.Filled.Check, contentDescription = "Selected", tint = BrushworkColors.Accent) }) else null,
+                )
+            }
+        }
+    }
+}
+
+/** Read-only note that strokes use the main drawing color. */
+@Composable
+internal fun MainColorNote(color: Int, text: String = "Stroke uses the main drawing color") {
+    Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        ColorSwatch(color, size = 24.dp)
+        Spacer(Modifier.width(12.dp))
+        Text(text, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim)
+    }
+}
+
+/** Small explanatory text under a control. */
+@Composable
+internal fun Hint(text: String, modifier: Modifier = Modifier) {
+    Text(text, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = modifier.padding(vertical = 2.dp))
 }
 
 /** Small glyph that shows a shape style (outline / filled / both) with the fill color. */

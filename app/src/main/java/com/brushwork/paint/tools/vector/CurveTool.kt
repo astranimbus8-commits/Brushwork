@@ -86,6 +86,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     override val hasPendingWork: Boolean get() = anchors.isNotEmpty()
 
     private val history = ArrayDeque<List<CurveAnchor>>()
+    private var historyKey: Any? = null
+    private data class NumericKey(val kind: String, val index: Int)
     private var targetLayer: Layer? = null
     private var preview: VectorPreview? = null
     private var previewDirty = Rect()
@@ -127,7 +129,13 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     // ------------------------------------------------------------------ editing actions
 
-    private fun pushHistory() {
+    /**
+     * Saves the anchors for [undoStep]. Consecutive edits with the same non-null [key] (typing a
+     * coordinate, holding a nudge arrow) share one step.
+     */
+    private fun pushHistory(key: Any? = null) {
+        if (key != null && key == historyKey && history.isNotEmpty()) return
+        historyKey = key
         history.addLast(anchors)
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
@@ -136,11 +144,27 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     /** Steps back one anchor edit (add, move, delete, corner change). */
     fun undoStep() {
         val prev = history.removeLastOrNull() ?: return
+        historyKey = null
         anchors = prev
         if (selected !in prev.indices) selected = -1
         canUndoStep = history.isNotEmpty()
         if (prev.isNotEmpty() && targetLayer == null) targetLayer = controller.doc.activeLayer
         changed()
+    }
+
+    /**
+     * Appends an anchor at [p] and selects it (numeric entry). Returns false when the active
+     * layer can't be edited.
+     */
+    fun addAnchor(p: Vec2): Boolean {
+        if (anchors.isEmpty() && !controller.checkEditable()) return false
+        val lim = ShapeSettings.MAX_LENGTH
+        pushHistory()
+        if (targetLayer == null) targetLayer = controller.doc.activeLayer
+        anchors = anchors + CurveAnchor(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), sharp = polyline)
+        selected = anchors.lastIndex
+        changed()
+        return true
     }
 
     fun select(index: Int) {
@@ -174,22 +198,25 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         changed()
     }
 
-    /** Moves anchor [index] to [p] (numeric entry). */
+    /** Moves anchor [index] to [p] (numeric entry; edits of the same anchor share one undo step). */
     fun moveAnchor(index: Int, p: Vec2) {
         val a = anchors.getOrNull(index) ?: return
         val lim = ShapeSettings.MAX_LENGTH
         val q = Vec2(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim))
         if (q == a.pos) return
-        pushHistory()
+        pushHistory(NumericKey("move", index))
         replace(index, a.moved(q))
     }
 
-    /** Nudges the selected anchor (or the whole path when none is selected) by the nudge step. */
+    /**
+     * Nudges the selected anchor (or the whole path when none is selected) by the nudge step.
+     * A run of nudges of the same target is one undo step.
+     */
     fun nudge(dx: Int, dy: Int) {
         if (anchors.isEmpty()) return
         val step = settings.nudgeStepPx
         val d = Vec2(dx * step, dy * step)
-        pushHistory()
+        pushHistory(NumericKey("nudge", selected))
         anchors = if (selected in anchors.indices) {
             anchors.mapIndexed { i, a -> if (i == selected) a.moved(a.pos + d) else a }
         } else {
@@ -297,6 +324,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             anchors = gestureStart
             selected = gestureSelected
             while (history.size > gestureHistorySize) history.removeLast()
+            historyKey = null
             canUndoStep = history.isNotEmpty()
             if (anchors.isEmpty()) targetLayer = null
         }
@@ -399,6 +427,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         anchors = emptyList()
         selected = -1
         history.clear()
+        historyKey = null
         canUndoStep = false
         drag = Drag.NONE
         targetLayer = null
