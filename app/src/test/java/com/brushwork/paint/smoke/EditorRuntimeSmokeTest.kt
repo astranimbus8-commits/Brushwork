@@ -6,7 +6,16 @@ import android.graphics.Paint
 import android.view.MotionEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
+import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.EditorSession
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.segmentation.SegTestImages
+import com.brushwork.paint.segmentation.SmartTarget
+import com.brushwork.paint.storage.NewCanvasSpec
+import com.brushwork.paint.tools.select.SelectionEdits
+import kotlinx.coroutines.runBlocking
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SelectionMode
@@ -464,6 +473,119 @@ class EditorRuntimeSmokeTest {
         c.undo()
         assertFalse("undo drops the unfinished polygon", lasso.hasPendingWork)
         lasso.setPolygonMode(false)
+    }
+
+    // ================================================================== smart select
+
+    @Test
+    fun smartSelectFallsBackToTheHeuristicsAndSelectionEditsRunInTheBackground() {
+        val doc = Smoke.document(160, 120, layers = 1)
+        BitmapUtils.writePixelBuffer(doc.layers[0].bitmap, SegTestImages.skyOverFoliage(160, 120))
+        val sc = Smoke.controller(activity, doc)
+        try {
+            SelectionEdits.smartSelect(sc, SmartTarget.SKY, SelectionMode.REPLACE)
+            assertEquals("Selecting sky…", sc.busyMessage)
+            assertTrue("smart select finished", Smoke.pumpUntil(90_000) { sc.busyMessage == null })
+            assertNull("no failure message", sc.message)
+            val sky = sc.selection ?: throw AssertionError("nothing selected; message: ${sc.message}")
+            assertEquals("Select sky", sc.undoManager.undoLabel)
+            assertTrue("the sky (top) is selected", sky.mask.getPixel(80, 15) ushr 24 > 200)
+            assertTrue("the foliage (bottom) is not", sky.mask.getPixel(80, 105) ushr 24 < 50)
+            Smoke.assertQuiet(sc, "smart select sky")
+
+            SelectionEdits.smartSelect(sc, SmartTarget.SUBJECT, SelectionMode.ADD)
+            assertTrue(Smoke.pumpUntil(90_000) { sc.busyMessage == null })
+            assertTrue("subject: a result or a clear message, never a failure: ${sc.message}", sc.message == null || !sc.message!!.contains("failed"))
+            Smoke.assertQuiet(sc, "smart select subject")
+
+            // Grow / feather run on a background thread and come back as one undo step each.
+            val before = sc.undoManager.undoCount
+            SelectionEdits.growOrShrink(sc, 3)
+            assertTrue(Smoke.pumpUntil { sc.busyMessage == null })
+            SelectionEdits.feather(sc, 2f)
+            assertTrue(Smoke.pumpUntil { sc.busyMessage == null })
+            assertEquals(before + 2, sc.undoManager.undoCount)
+            assertEquals("Feather selection", sc.undoManager.undoLabel)
+            assertNull(sc.message)
+            Smoke.assertQuiet(sc, "grow + feather")
+        } finally {
+            sc.dispose()
+        }
+    }
+
+    // ================================================================== autosave
+
+    @Test
+    fun editorSessionSavesAndReloadsWhatWasEdited() {
+        val app = ApplicationProvider.getApplicationContext<BrushworkApp>()
+        app.settings.autosaveSeconds = 45
+        val id = runBlocking { app.repository.create(NewCanvasSpec("Round trip", 320, 240, 300f)) }
+        val session = app.openEditor(id)
+        assertTrue("loaded", Smoke.pumpUntil { session.state is EditorSession.State.Ready })
+        val ec = (session.state as EditorSession.State.Ready).controller
+        assertEquals(2, ec.doc.layers.size)
+        assertEquals(-1, ec.doc.layers[0].bitmap.getPixel(10, 10)) // white background layer
+
+        // Edit through a real canvas view: strokes on the top layer, then layer structure/props.
+        val v = CanvasView(activity, ec)
+        activity.setContentView(v, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        Smoke.pump(100)
+        ec.tools
+        ec.brush = ec.brush.copy(size = 8f, opacity = 1f, hardness = 1f, taperStart = 0f, taperEnd = 0f)
+        ec.color = blue
+        val t = Smoke.Touch(v)
+        fun s(x: Float, y: Float) = ec.viewTransform.docToScreen(x, y).let { it.x to it.y }
+        t.stroke(s(20f, 120f), s(300f, 120f))
+        val top = ec.activeLayer
+        assertEquals(blue, top.bitmap.getPixel(160, 120))
+        val added = ec.addLayer("Extra")!!
+        ec.fillLayer(added, red)
+        ec.setLayerProps(added, added.props().copy(opacity = 0.5f, blendMode = com.brushwork.paint.model.LayerBlendMode.MULTIPLY))
+        ec.selectAll()
+        ec.addMask(added, fromSelection = false)
+        ec.updateGrid(ec.grid.copy(enabled = true, spacingPx = 24f))
+        val expected = ec.doc.layers.map { it.props() to pixels(it.bitmap) }
+        val expectedMask = pixels(added.mask!!)
+
+        // The periodic autosave picks the edits up by itself.
+        Smoke.pump(46_000, stepMs = 1_000)
+        assertTrue("autosaved", Smoke.pumpUntil { ec.doc.layers.all { it.savedVersion == it.contentVersion } })
+        val loaded = runBlocking { app.repository.load(id) }
+        assertEquals(expected.map { it.first }, loaded.layers.map { it.props() })
+        for ((i, l) in loaded.layers.withIndex()) assertTrue("layer $i pixels", expected[i].second.contentEquals(pixels(l.bitmap)))
+        assertTrue("mask pixels", expectedMask.contentEquals(pixels(loaded.layers[2].mask!!)))
+        assertEquals(ec.doc.activeLayerIndex, loaded.activeLayerIndex)
+        assertEquals(ec.grid, loaded.grid)
+
+        // One more edit (the mask is being edited now), then close: saved on the way out.
+        assertTrue(added.editingMask)
+        t.stroke(s(160f, 20f), s(160f, 220f))
+        val lastContent = ec.doc.layers.map { pixels(it.bitmap) }
+        val lastMask = pixels(added.mask!!)
+        assertFalse("the stroke changed the mask", lastMask.contentEquals(expectedMask))
+        var closed = false
+        app.closeEditor { closed = true }
+        assertTrue("closed", Smoke.pumpUntil { closed })
+        assertNull(app.editorSession)
+        assertTrue(session.closed)
+
+        // Reopening shows exactly what was there.
+        val again = app.openEditor(id)
+        assertTrue(Smoke.pumpUntil { again.state is EditorSession.State.Ready })
+        val rc = (again.state as EditorSession.State.Ready).controller
+        assertEquals(3, rc.doc.layers.size)
+        for ((i, l) in rc.doc.layers.withIndex()) assertTrue("reopened layer $i pixels", lastContent[i].contentEquals(pixels(l.bitmap)))
+        assertTrue("the stroke drawn right before closing is in the mask", lastMask.contentEquals(pixels(rc.doc.layers[2].mask!!)))
+        var closed2 = false
+        app.closeEditor { closed2 = true }
+        assertTrue(Smoke.pumpUntil { closed2 })
+
+        // A project that doesn't exist fails cleanly.
+        val missing = app.openEditor("00000000-0000-0000-0000-000000000000")
+        assertTrue(Smoke.pumpUntil { missing.state !is EditorSession.State.Loading })
+        assertTrue(missing.state is EditorSession.State.Failed)
+        app.closeEditor {}
+        Smoke.pump(100)
     }
 
     // ================================================================== helpers
