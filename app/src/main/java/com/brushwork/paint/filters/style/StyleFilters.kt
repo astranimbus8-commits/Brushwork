@@ -2,5 +2,22 @@ package com.brushwork.paint.filters.style
 
 import com.brushwork.paint.filters.Filter
 
-// STUB - replaced by a filter module. Every filter of this category is listed here.
-val styleFilters: List<Filter> = emptyList()
+/** Every filter of the Style category, in menu order (as in ibisPaint's Style list). */
+val styleFilters: List<Filter> = listOf(
+    StrokeBothFilter(),
+    StrokeOuterFilter(),
+    StrokeInnerFilter(),
+    StainedGlassFilter(),
+    StainedGlassCellsFilter(),
+    WetEdgeFilter(),
+    GlowInnerFilter(),
+    GlowOuterFilter(),
+    BevelOuterFilter(),
+    ReliefFilter(),
+    ReliefHQFilter(),
+    WaterdropFilter(),
+    SatinFilter(),
+    DropShadowFilter(),
+    ExtrudeParallelFilter(),
+    GodRaysFilter(),
+)
