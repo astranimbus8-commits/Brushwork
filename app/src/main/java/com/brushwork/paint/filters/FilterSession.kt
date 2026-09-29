@@ -113,6 +113,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     // ------------------------------------------------------------------ preview internals
 
     private var previewSrc: PixelBuffer? = null
+    /** layer.contentVersion when [previewSrc] was read. */
+    private var sourceVersion = Long.MIN_VALUE
     private var previewSel: ByteArray? = null
     /** The selection [previewSel] was built from. */
     private var previewSelSource: Selection? = null
@@ -120,7 +122,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private var previewJob: Job? = null
     private var analysisJob: Job? = null
-    private var selectionWatch: Job? = null
+    private var documentWatch: Job? = null
     private var applyJob: Job? = null
     /** The preview job currently running the filter (null while debouncing / idle). */
     private var computingJob: Job? = null
@@ -183,26 +185,37 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         runCatching { FilterRecents.record(controller.appContext, filter.id) }
         analyzeSourceAsync(firstTime = true)
         if (filter.livePreview) requestPreview(0L)
-        // The selection can change from menus while the session is open: keep the preview in sync.
-        selectionWatch = controller.scope.launch {
-            snapshotFlow { controller.selection }.collect { if (it !== previewSelSource) onSelectionChanged() }
+        // Menus stay usable while the session is open (select all, clear or fill the layer, delete
+        // it...): keep the preview in sync, or close the session if its layer is gone.
+        documentWatch = controller.scope.launch {
+            snapshotFlow { controller.selection to controller.layersVersion }.collect { syncWithDocument() }
         }
     }
 
-    private fun onSelectionChanged() {
-        if (isClosed || isApplying) return
-        val src = previewSrc ?: return
-        try {
-            val sel = controller.selection
-            previewSel = sel?.let { scaledSelectionBytes(it, src.width, src.height) }
-            previewSelSource = sel
-        } catch (e: OutOfMemoryError) {
-            controller.toast("Not enough memory to preview \"${filter.name}\"")
-            return
-        }
-        analyzeSourceAsync(firstTime = false)
+    /** Re-renders the preview if the selection or the layer's pixels changed; cancels if the layer is gone. */
+    private fun syncWithDocument() {
+        if (isClosed || isApplying || previewSrc == null) return
+        if (!checkTarget()) return
+        if (refreshSources() != Refresh.CHANGED) return
         previewStale = true
         if (filter.livePreview) requestPreview(0L)
+    }
+
+    private enum class Refresh { NONE, CHANGED, FAILED }
+
+    /** Rebuilds the preview source and/or selection when the layer pixels or the selection changed. */
+    private fun refreshSources(): Refresh {
+        val contentChanged = layer.contentVersion != sourceVersion
+        val selectionChanged = controller.selection !== previewSelSource
+        if (!contentChanged && !selectionChanged) return Refresh.NONE
+        try {
+            if (contentChanged) buildPreviewSource() else buildPreviewSelection()
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to preview \"${filter.name}\"")
+            return Refresh.FAILED
+        }
+        analyzeSourceAsync(firstTime = false)
+        return Refresh.CHANGED
     }
 
     /** Discards the preview and closes the session; the layer is left untouched. */
@@ -215,7 +228,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         isClosed = true
         previewJob?.cancel(); previewJob = null
         analysisJob?.cancel(); analysisJob = null
-        selectionWatch?.cancel(); selectionWatch = null
+        documentWatch?.cancel(); documentWatch = null
         applyJob?.cancel(); applyJob = null
         computingJob = null
         isRendering = false
@@ -288,20 +301,32 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     // ------------------------------------------------------------------ preview
 
+    /** (Re)reads the downscaled target and selection; the preview bitmap is created once. */
     private fun buildPreviewSource() {
         val w = targetBitmap.width; val h = targetBitmap.height
         val (pw, ph) = FilterSessionMath.previewSize(w, h)
         previewScale = pw.toFloat() / w
+        val version = layer.contentVersion
         val scaled = if (pw == w && ph == h) targetBitmap else Bitmap.createScaledBitmap(targetBitmap, pw, ph, true)
         try {
             previewSrc = BitmapUtils.toPixelBuffer(scaled)
         } finally {
             if (scaled !== targetBitmap) scaled.recycle()
         }
+        sourceVersion = version
+        buildPreviewSelection()
+        val bmp = previewBitmap
+        if (bmp == null || bmp.width != pw || bmp.height != ph) {
+            previewBitmap = BitmapUtils.createLayerBitmap(pw, ph)
+            bmp?.recycle()
+        }
+    }
+
+    private fun buildPreviewSelection() {
+        val src = previewSrc ?: return
         val sel = controller.selection
-        previewSel = sel?.let { scaledSelectionBytes(it, pw, ph) }
+        previewSel = sel?.let { scaledSelectionBytes(it, src.width, src.height) }
         previewSelSource = sel
-        previewBitmap = BitmapUtils.createLayerBitmap(pw, ph)
     }
 
     private fun analyzeSourceAsync(firstTime: Boolean) {
@@ -355,6 +380,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private suspend fun renderOnce(self: Job) {
         if (!checkTarget()) return
+        if (refreshSources() == Refresh.FAILED) return
         val src = previewSrc ?: return
         val sel = previewSel
         val vals = values
@@ -434,6 +460,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         val dpi = controller.doc.dpi
         val svc = services
         val bmp = targetBitmap
+        // The pixels are read in the background; if anything edits them meanwhile, don't overwrite.
+        val version = layer.contentVersion
         isApplying = true
         applyCancelRequested = false
         applyProgress = -1f
@@ -467,7 +495,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
                         ticker.cancel()
                     }
                 }
-                commitResult(outcome)
+                commitResult(outcome, version)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {
@@ -479,8 +507,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
                 isApplying = false
                 applyProgress = -1f
                 if (!isClosed) {
-                    if (controller.selection !== previewSelSource) onSelectionChanged()
-                    else if (droppedPreview) requestPreview(0L)
+                    val stale = controller.selection !== previewSelSource || layer.contentVersion != sourceVersion
+                    if (stale) syncWithDocument() else if (droppedPreview) requestPreview(0L)
                 }
             }
         }
@@ -496,8 +524,12 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         applyJob?.cancel()
     }
 
-    private fun commitResult(outcome: RunResult) {
+    private fun commitResult(outcome: RunResult, version: Long) {
         if (isClosed || !checkTarget()) return
+        if (layer.contentVersion != version) {
+            controller.toast("\"${layer.name}\" changed while ${filter.name} was running, so it wasn't applied")
+            return
+        }
         val changed = outcome.changed
         if (changed == null) {
             controller.toast("${filter.name} didn't change anything here")

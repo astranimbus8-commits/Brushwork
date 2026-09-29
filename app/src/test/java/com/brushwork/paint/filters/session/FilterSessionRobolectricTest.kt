@@ -498,6 +498,52 @@ class FilterSessionRobolectricTest {
     }
 
     @Test
+    fun deletingTheLayerFromAMenuClosesTheSessionRightAway() {
+        val (c, layer) = newController()
+        c.addLayer("Other", index = 0)
+        c.selectLayer(layer)
+        val s = startSession(c, InvertFilter())
+        c.deleteLayer(layer)
+        Snapshot.sendApplyNotifications()
+        waitUntil("session closed") { s.isClosed }
+        assertNull(c.filterSession)
+        assertNull(c.renderOverride)
+    }
+
+    @Test
+    fun layerEditedFromAMenuDuringTheSessionRefreshesThePreview() {
+        val (c, layer) = newController()
+        val s = startSession(c, InvertFilter())
+        assertEquals(INVERTED_BLUE, onScreen(c).getPixel(1, 1))
+        c.fillLayer(layer, RED)
+        Snapshot.sendApplyNotifications()
+        waitUntil("preview of the new pixels") { !s.isRendering && !s.previewStale && onScreen(c).getPixel(1, 1) == INVERTED_RED }
+        s.apply()
+        waitUntil("apply") { c.filterSession == null && c.busyMessage == null }
+        assertEquals(INVERTED_RED, layer.bitmap.getPixel(1, 1))
+        c.undo()
+        assertEquals(RED, layer.bitmap.getPixel(1, 1))
+    }
+
+    @Test
+    fun layerEditedWhileApplyingIsNotOverwritten() {
+        val (c, layer) = newController()
+        val filter = BlockingFilter()
+        val s = startSession(c, filter)
+        filter.armed = true
+        s.apply()
+        waitUntil("apply running") { s.isApplying && c.busyMessage != null }
+        layer.bitmap.eraseColor(RED)
+        layer.markChanged()
+        filter.armed = false
+        waitUntil("apply finished") { !s.isApplying && c.busyMessage == null }
+        assertTrue(pixels(layer.bitmap).all { it == RED })
+        assertFalse(c.canUndo)
+        assertSame("the session stays open", s, c.filterSession)
+        assertNotNull(c.message)
+    }
+
+    @Test
     fun lockedLayerCannotBeFiltered() {
         val (c, layer) = newController()
         layer.locked = true
@@ -509,6 +555,7 @@ class FilterSessionRobolectricTest {
     private companion object {
         const val BLUE = 0xFF2040C0.toInt()
         const val INVERTED_BLUE = 0xFFDFBF3F.toInt()
+        const val INVERTED_RED = 0xFF00FFFF.toInt()
         const val GREEN = 0xFF00FF00.toInt()
         const val RED = 0xFFFF0000.toInt()
     }
