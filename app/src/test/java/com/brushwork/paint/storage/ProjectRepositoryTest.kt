@@ -55,6 +55,21 @@ class ProjectRepositoryTest {
         context = ApplicationProvider.getApplicationContext()
         File(context.filesDir, "projects").deleteRecursively()
         repo = ProjectRepository(context)
+        clearFileProviderCache()
+    }
+
+    /**
+     * androidx FileProvider caches its root paths in a static map per authority. Robolectric gives
+     * every test a new temporary cacheDir but keeps statics across test classes, so a share done
+     * by an earlier test (e.g. the editor smoke test) would leave a stale root behind and make
+     * getUriForFile reject the new cache path. On a device the cache dir never changes.
+     */
+    private fun clearFileProviderCache() {
+        for (f in androidx.core.content.FileProvider::class.java.declaredFields) {
+            if (!java.lang.reflect.Modifier.isStatic(f.modifiers) || !Map::class.java.isAssignableFrom(f.type)) continue
+            f.isAccessible = true
+            (f.get(null) as? MutableMap<*, *>)?.let { synchronized(it) { it.clear() } }
+        }
     }
 
     private fun dirOf(id: String) = File(context.filesDir, "projects/$id")
