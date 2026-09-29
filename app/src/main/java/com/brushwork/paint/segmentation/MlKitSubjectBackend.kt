@@ -30,12 +30,13 @@ import kotlin.math.min
 /**
  * Subject segmentation with Google ML Kit (Play services module "subject_segment").
  *
- * The module is installed on demand through [ModuleInstallClient] (and prefetched when the
- * service is created). A call waits up to [INSTALL_WAIT_MS] for a download while it makes
- * progress; a download that has shown no progress for [STALL_MS] (offline, queued) is not waited
- * for, and the install continues in the background (a listener flips [moduleReady]). Failures (no
- * Play services, no network, errors) make the backend return null — the pipeline then falls back
- * to the scene model and saliency — and are retried after [RETRY_AFTER_MS].
+ * The module is installed on demand through [ModuleInstallClient] (and scheduled as a deferred,
+ * idle-time install when the service is created). A call waits up to [INSTALL_WAIT_MS] for a
+ * download while it makes progress; a download that has shown no progress for [STALL_MS]
+ * (offline, queued) is not waited for, and the install continues in the background (a listener
+ * flips [moduleReady]). Failures (no Play services, no network, errors) make the backend return
+ * null — the pipeline then falls back to the scene model and saliency — and are retried after
+ * [RETRY_AFTER_MS]. An input ML Kit rejects only fails that one call.
  */
 internal class MlKitSubjectBackend private constructor(private val appContext: Context) : SubjectBackend {
     private val lock = ReentrantLock()
@@ -45,6 +46,7 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
     private class PendingInstall(val startedAt: Long) {
         val done = CountDownLatch(1)
         @Volatile var lastActivityAt: Long = startedAt
+        @Volatile var listener: InstallStatusListener? = null
     }
 
     @Volatile private var moduleReady = false
@@ -80,19 +82,32 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
     }
 
     /**
-     * Starts the module download without waiting for it (call from a background thread). Does
-     * nothing if a segmentation is running (it requests the module itself).
+     * Requests the module without waiting for the download (call from a background thread).
+     * [urgent] starts the download now (the user is about to segment); otherwise Play services
+     * installs it when the device is idle on an unmetered network. Does nothing if a
+     * segmentation is running (it requests the module itself).
      */
-    fun requestModule() {
+    fun requestModule(urgent: Boolean) {
         if (moduleReady || Looper.getMainLooper().isCurrentThread || !usable()) return
         if (!lock.tryLock()) return
         try {
-            ensureModuleLocked(segmenterLocked(), waitMs = 0L)
+            val seg = segmenterLocked()
+            if (urgent) {
+                ensureModuleLocked(seg, waitMs = 0L)
+            } else if (pendingInstall == null) {
+                val client = ModuleInstall.getClient(appContext)
+                if (modulesAvailable(client, seg)) {
+                    moduleReady = true
+                } else {
+                    Tasks.await(client.deferredInstall(seg), REQUEST_TIMEOUT_S, TimeUnit.SECONDS)
+                }
+            }
         } catch (e: InterruptedException) {
             Thread.currentThread().interrupt()
         } catch (e: Exception) {
             Log.w(TAG, "ML Kit module request failed", e)
-            backOff()
+            // A failed background request must not keep the user's first SUBJECT call from trying.
+            if (urgent) backOff()
         } finally {
             lock.unlock()
         }
@@ -132,6 +147,8 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
             if (SystemClock.elapsedRealtime() - pending.startedAt < PENDING_EXPIRY_MS) return false
             Log.i(TAG, "ML Kit module install made no progress; requesting it again")
             if (pendingInstall === pending) pendingInstall = null
+            pending.listener?.let { client.unregisterListener(it) }
+            pending.listener = null
         }
         if (modulesAvailable(client, seg)) {
             moduleReady = true
@@ -164,9 +181,11 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
                 if (ok) moduleReady = true else backOff()
                 if (pendingInstall === pending) pendingInstall = null
                 client.unregisterListener(this)
+                pending.listener = null
                 pending.done.countDown()
             }
         }
+        pending.listener = listener
         pendingInstall = pending
         val request = ModuleInstallRequest.newBuilder()
             .addApi(seg)
@@ -216,13 +235,20 @@ internal class MlKitSubjectBackend private constructor(private val appContext: C
             return null
         } catch (e: ExecutionException) {
             val cause = e.cause
-            if (cause is MlKitException && cause.errorCode == MlKitException.UNAVAILABLE) {
-                // The module went away (e.g. Play services update): check again next time.
-                moduleReady = false
-                Log.w(TAG, "ML Kit module not available", cause)
-            } else {
-                Log.w(TAG, "ML Kit subject segmentation failed", cause ?: e)
-                backOff()
+            val code = (cause as? MlKitException)?.errorCode
+            when (code) {
+                MlKitException.UNAVAILABLE -> {
+                    // The module went away (e.g. Play services update): check again next time.
+                    moduleReady = false
+                    Log.w(TAG, "ML Kit module not available", cause)
+                }
+                // Only this input is at fault (e.g. an extreme aspect ratio): keep ML Kit enabled.
+                MlKitException.INVALID_ARGUMENT ->
+                    Log.w(TAG, "ML Kit rejected a ${image.width}x${image.height} input", cause)
+                else -> {
+                    Log.w(TAG, "ML Kit subject segmentation failed", cause ?: e)
+                    backOff()
+                }
             }
             return null
         }

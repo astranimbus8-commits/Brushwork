@@ -341,7 +341,8 @@ object MaskOps {
         return best
     }
 
-    fun clamp01(v: Float): Float = if (v < 0f) 0f else if (v > 1f) 1f else v
+    /** [v] clamped to 0..1; NaN becomes 0 so a bad model value cannot poison later filtering. */
+    fun clamp01(v: Float): Float = if (v >= 0f) (if (v <= 1f) v else 1f) else 0f
 
     fun smoothstep(e0: Float, e1: Float, x: Float): Float {
         val t = clamp01((x - e0) / (e1 - e0))

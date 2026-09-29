@@ -27,7 +27,8 @@ enum class SmartTarget(val label: String) {
  * On-device segmentation. All methods are BLOCKING and must be called off the main thread.
  * Results are per-pixel confidences 0..1 with the same size as the input.
  *
- * - SUBJECT uses ML Kit Subject Segmentation (Play services module, installed on demand);
+ * - SUBJECT uses ML Kit Subject Segmentation (Play services module: scheduled for a background
+ *   download by [get], installed immediately on the first SUBJECT request if still missing);
  *   BACKGROUND is its complement. Without ML Kit: scene-model people ∪ a saliency heuristic.
  * - SKY / NATURE / BUILDINGS / PEOPLE / WATER use the bundled Autoseg-EdgeTPU scene parser
  *   (LiteRT). Without it: color/texture heuristics ([SceneHeuristics]).
@@ -59,6 +60,9 @@ class SegmentationService(private val context: Context) {
             }
         } catch (e: CancellationException) {
             // The calling thread was interrupted (e.g. the user stopped a cancellable busy task).
+            // Parallel loops clear the interrupt flag when they turn it into this exception, so
+            // restore it for the caller.
+            Thread.currentThread().interrupt()
             Log.d(TAG, "segment($target) cancelled")
             null
         } catch (e: OutOfMemoryError) {
@@ -77,15 +81,16 @@ class SegmentationService(private val context: Context) {
     }
 
     /**
-     * Non-blocking warm-up: loads the scene model and starts the ML Kit module download on a
-     * background thread, so the first [segment] call is fast. Safe to call any number of times.
+     * Non-blocking warm-up for when the user is about to segment (e.g. opens a smart-selection
+     * panel): loads the scene model and starts the ML Kit module download now, on a background
+     * thread, so the first [segment] call is fast. Safe to call any number of times.
      */
     fun prepare() {
         if (!prepared.compareAndSet(false, true)) return
         thread(name = "bw-seg-prepare", isDaemon = true, priority = Thread.MIN_PRIORITY) {
             try {
                 sceneParser.warmUp()
-                subjectBackend.requestModule()
+                subjectBackend.requestModule(urgent = true)
             } catch (t: Throwable) {
                 Log.w(TAG, "segmentation warm-up failed", t)
             }
@@ -127,11 +132,15 @@ class SegmentationService(private val context: Context) {
         }
     }
 
-    /** Starts the ML Kit module download early (cheap; nothing is loaded into memory). */
+    /**
+     * Asks Play services to fetch the ML Kit module in the background when convenient (device
+     * idle, unmetered network), so it is usually present before the first SUBJECT request.
+     * Nothing is loaded into memory. A SUBJECT request made before then installs it right away.
+     */
     private fun prefetchSubjectModule() {
         thread(name = "bw-seg-module", isDaemon = true, priority = Thread.MIN_PRIORITY) {
             try {
-                subjectBackend.requestModule()
+                subjectBackend.requestModule(urgent = false)
             } catch (t: Throwable) {
                 Log.w(TAG, "ML Kit module prefetch failed", t)
             }
@@ -143,7 +152,7 @@ class SegmentationService(private val context: Context) {
 
         @Volatile private var instance: SegmentationService? = null
 
-        /** The process-wide service (cheap to call; also starts the ML Kit module download). */
+        /** The process-wide service (cheap to call; also schedules the ML Kit module download). */
         fun get(context: Context): SegmentationService =
             instance ?: synchronized(this) {
                 instance ?: SegmentationService(context.applicationContext).also {

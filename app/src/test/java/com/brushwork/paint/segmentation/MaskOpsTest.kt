@@ -119,6 +119,15 @@ class MaskOpsTest {
     }
 
     @Test
+    fun clamp01MapsNaNToZero() {
+        assertEquals(0f, MaskOps.clamp01(Float.NaN), 0f)
+        assertEquals(0f, MaskOps.clamp01(-0.5f), 0f)
+        assertEquals(1f, MaskOps.clamp01(1.5f), 0f)
+        assertEquals(1f, MaskOps.clamp01(Float.POSITIVE_INFINITY), 0f)
+        assertEquals(0.3f, MaskOps.clamp01(0.3f), 0f)
+    }
+
+    @Test
     fun contentHashSeesEveryPixel() {
         val a = PixelBuffer.filled(50, 40, 0xFF102030.toInt())
         val b = a.copy().also { it[49, 39] = 0xFF102031.toInt() }

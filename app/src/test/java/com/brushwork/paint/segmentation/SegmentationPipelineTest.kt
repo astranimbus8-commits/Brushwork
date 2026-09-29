@@ -176,6 +176,37 @@ class SegmentationPipelineTest {
     }
 
     @Test
+    fun sliversAreNotSentToTheSubjectBackend() {
+        // ML Kit may reject a 1280x1 input; it must not be asked (and the call still succeeds).
+        val subject = DiscSubject()
+        val pipeline = SegmentationPipeline(null, subject)
+        for (img in listOf(
+            PixelBuffer.filled(4000, 2, SegTestImages.RED),
+            PixelBuffer.filled(2, 1500, SegTestImages.GRAY_BG),
+            PixelBuffer.filled(1280, 20, SegTestImages.RED),
+        )) {
+            val m = pipeline.segment(img, SmartTarget.SUBJECT)
+            assertNotNull(m)
+            assertEquals(img.size, m!!.size)
+        }
+        assertEquals(0, subject.calls)
+        pipeline.segment(SegTestImages.disc(200, 150, SegTestImages.GRAY_BG, SegTestImages.RED), SmartTarget.SUBJECT)
+        assertEquals(1, subject.calls)
+    }
+
+    @Test
+    fun nanFromTheSubjectBackendIsTreatedAsBackground() {
+        val w = 640; val h = 480
+        val img = SegTestImages.disc(w, h, SegTestImages.GRAY_BG, SegTestImages.RED, 0.25f)
+        val disc = DiscSubject()
+        val noisy = SubjectBackend { im -> disc.subjectMask(im).also { m -> for (i in m.indices step 7) m[i] = Float.NaN } }
+        val fg = SegmentationPipeline(null, noisy).segment(img, SmartTarget.SUBJECT)!!
+        assertTrue(fg.all { it in 0f..1f }) // false for NaN
+        assertTrue("center ${fg[240 * w + 320]}", fg[240 * w + 320] > 0.7f)
+        assertTrue(mean(fg, w, 0, 0, 60, 60) < 0.02f)
+    }
+
+    @Test
     fun analysisIsSharedBetweenTargetsOfTheSameImage() {
         val parser = ColorParser()
         val pipeline = SegmentationPipeline(parser, null)

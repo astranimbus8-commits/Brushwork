@@ -68,7 +68,8 @@ class SegmentationServiceRobolectricTest {
             val cancelled = pool.submit<Boolean> {
                 Thread.currentThread().interrupt()
                 try {
-                    service.segment(img, SmartTarget.SKY) == null
+                    // Null result, and the interrupt stays visible to the caller.
+                    service.segment(img, SmartTarget.SKY) == null && Thread.currentThread().isInterrupted
                 } finally {
                     Thread.interrupted()
                 }

@@ -36,6 +36,31 @@ class SceneHeuristicsTest {
     }
 
     @Test
+    fun sharpEdgedCloudsAreSky() {
+        // Large (well above the small-hole limit) white clouds with hard edges stop the
+        // color-continuous flood; they must still be sky, enclosed or touching a side edge.
+        val w = 200; val h = 150
+        val cloud = SegTestImages.rgb(245, 245, 248)
+        for (cx in listOf(0.5f, 0.97f)) {
+            val img = SegTestImages.skyOverFoliage(w, h)
+            val disc = SegTestImages.disc(w, h, 0, cloud, 0.15f, cx = cx, cy = 0.22f)
+            for (i in img.pixels.indices) if (disc.pixels[i] != 0) img.pixels[i] = disc.pixels[i]
+            val sky = SceneHeuristics.sky(img)
+            val x = (w * cx).toInt()
+            assertTrue("cloud at cx=$cx: ${sky[33 * w + x]}", sky[33 * w + x] > 0.9f)
+            assertTrue("sky around cx=$cx", mean(sky, w, 0, 0, 40, 60) > 0.9f)
+            assertTrue("ground cx=$cx", mean(sky, w, 0, h / 2 + 2, w, h) < 0.05f)
+        }
+        // A saturated object floating in the sky (a balloon) is not sky.
+        val img = SegTestImages.skyOverFoliage(w, h)
+        val balloon = SegTestImages.disc(w, h, 0, SegTestImages.RED, 0.15f, cy = 0.22f)
+        for (i in img.pixels.indices) if (balloon.pixels[i] != 0) img.pixels[i] = balloon.pixels[i]
+        val sky = SceneHeuristics.sky(img)
+        assertTrue("balloon ${sky[33 * w + 100]}", sky[33 * w + 100] < 0.05f)
+        assertTrue(mean(sky, w, 0, 0, 40, 60) > 0.9f)
+    }
+
+    @Test
     fun greenTextureIsVegetation() {
         val w = 200; val h = 150
         val img = SegTestImages.skyOverFoliage(w, h)

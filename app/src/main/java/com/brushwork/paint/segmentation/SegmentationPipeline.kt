@@ -2,7 +2,9 @@ package com.brushwork.paint.segmentation
 
 import com.brushwork.paint.core.PixelBuffer
 import java.util.concurrent.CancellationException
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Scene-parsing backend (the bundled LiteRT model on device, fakes in tests). */
@@ -176,16 +178,25 @@ class SegmentationPipeline(
             return MaskOps.resizeBilinear(mask, cw, ch, w, h)
         }
 
-        private val subjectLock = Any()
+        /** Interruptible: the holder may spend a long time in ML Kit (module download). */
+        private val subjectLock = ReentrantLock()
         private var subject: FloatArray? = null
 
         /** Subject confidence at working resolution; failures are retried on the next call. */
         fun subjectMask(): FloatArray? {
-            synchronized(subjectLock) {
+            try {
+                subjectLock.lockInterruptibly()
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw CancellationException("segmentation interrupted")
+            }
+            try {
                 subject?.let { return it }
                 val backend = subjectBackend ?: return null
                 // ML Kit wants at least ~512 px; small images use the (enlarged) letterbox content.
                 val input = if (max(w, h) >= letterbox.size) work else content
+                // A sliver (e.g. 1280x1) has no subject to find, and ML Kit may reject it.
+                if (min(input.width, input.height) < MIN_SUBJECT_SIDE) return null
                 val raw = try {
                     backend.subjectMask(input)
                 } catch (e: Exception) {
@@ -199,6 +210,8 @@ class SegmentationPipeline(
                 val clamped = FloatArray(raw.size) { MaskOps.clamp01(raw[it]) }
                 val m = if (input === work) clamped else MaskOps.resizeBilinear(clamped, input.width, input.height, w, h)
                 return m.also { subject = it }
+            } finally {
+                subjectLock.unlock()
             }
         }
 
@@ -228,6 +241,9 @@ class SegmentationPipeline(
     companion object {
         /** Long side of the working resolution: models and filters run here, output is upsampled. */
         const val WORK_MAX_SIDE = 1280
+
+        /** Shortest side worth sending to the subject backend (thinner inputs use the fallback). */
+        const val MIN_SUBJECT_SIDE = 32
 
         private val EMPTY = Plan(FloatArray(0), 0, 1f)
     }

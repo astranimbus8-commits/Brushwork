@@ -19,7 +19,8 @@ object SceneHeuristics {
 
     /**
      * Sky: bright, low-texture, blue / gray / white pixels that are connected to the top edge.
-     * Small enclosed holes (birds, cloud edges) are filled.
+     * Small enclosed holes (birds, wires) are filled, and so are cloud-like regions of any size
+     * that the color-edge barrier cut off but that do not reach the bottom edge.
      */
     fun sky(img: PixelBuffer): FloatArray {
         val f = Features(img)
@@ -48,8 +49,40 @@ object SceneHeuristics {
         val px = f.px
         val colorEdge = { a: Int, b: Int -> colorStep(px[a], px[b]) < SKY_MAX_STEP }
         val sky = Regions.floodFrom(passable, w, h, colorEdge) { x, y -> y < seedRows && cand[y * w + x] > 0.4f }
-        Regions.fillHoles(sky, w, h, maxHoleSize = n / 200)
+        fillSkyGaps(sky, cand, w, h)
         return soften(FloatArray(n) { if (sky[it]) 1f else 0f }, w, h)
+    }
+
+    /**
+     * Adds to [sky] (in place) the non-sky regions (4-connected) that are either small holes
+     * enclosed by sky, or cloud-like on average ([cand] = the sky candidate score) and not
+     * touching the bottom edge. A sharp-edged cloud stops the color-continuous flood, but it
+     * floats in the sky; ground, buildings and trees reach the bottom of the frame.
+     */
+    private fun fillSkyGaps(sky: BooleanArray, cand: FloatArray, w: Int, h: Int) {
+        val n = w * h
+        if (sky.none { it }) return
+        val lab = Regions.label(BooleanArray(n) { !sky[it] }, w, h, eightConnected = false)
+        if (lab.count == 0) return
+        val onBorder = BooleanArray(lab.count + 1)
+        val onBottom = BooleanArray(lab.count + 1)
+        val candSum = DoubleArray(lab.count + 1)
+        for (y in 0 until h) {
+            val edgeRow = y == 0 || y == h - 1
+            for (x in 0 until w) {
+                val id = lab.ids[y * w + x]
+                if (id == 0) continue
+                candSum[id] += cand[y * w + x]
+                if (edgeRow || x == 0 || x == w - 1) onBorder[id] = true
+                if (y == h - 1) onBottom[id] = true
+            }
+        }
+        val maxHole = n / 200
+        val fill = BooleanArray(lab.count + 1) { id ->
+            id > 0 && ((!onBorder[id] && lab.sizes[id] <= maxHole) ||
+                (!onBottom[id] && candSum[id] >= CLOUD_MIN_SCORE * lab.sizes[id]))
+        }
+        for (i in 0 until n) if (fill[lab.ids[i]]) sky[i] = true
     }
 
     /** Vegetation: excess green (2G - R - B, chromatic) in the green hue range, boosted by local texture. */
@@ -280,6 +313,9 @@ object SceneHeuristics {
 
     /** Largest per-channel change allowed between neighbouring sky pixels (0..1). */
     private const val SKY_MAX_STEP = 0.1f
+
+    /** Mean sky-candidate score above which a region cut off from the sky counts as cloud. */
+    private const val CLOUD_MIN_SCORE = 0.45f
 
     /** Largest per-channel difference of two colors, 0..1. */
     internal fun colorStep(a: Int, b: Int): Float {
