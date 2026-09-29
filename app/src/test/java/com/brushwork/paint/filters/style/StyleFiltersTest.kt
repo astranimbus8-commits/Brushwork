@@ -362,6 +362,24 @@ class StyleFiltersTest {
     }
 
     @Test
+    fun previewScaleShrinksOffsetsAndDepths() {
+        val half = FilterContext(scale = 0.5f)
+        val shadow = DropShadowFilter()
+        val full = shadow.run(disc(100, 100, 40f, 40f, 10f), "angle" to 0f, "distance" to 20f, "output" to 1)
+        val small = shadow.run(disc(50, 50, 20f, 20f, 5f), "angle" to 0f, "distance" to 20f, "output" to 1, context = half)
+        assertEquals(40f + 20f, StyleTestImages.alphaCentroid(full)!![0] + 0.5f, 0.3f)
+        assertEquals(20f + 10f, StyleTestImages.alphaCentroid(small)!![0] + 0.5f, 0.3f)
+        // Extrusion depth: rightmost covered column of the side walls.
+        fun rightmost(img: PixelBuffer, y: Int) = (img.width - 1 downTo 0).first { alpha(img[it, y]) > 127 }
+        val extrude = ExtrudeParallelFilter()
+        val deep = extrude.run(disc(120, 60, 30f, 30f, 10f), "angle" to 0f, "depth" to 40f, "output" to 1)
+        val shallow = extrude.run(disc(60, 30, 15f, 15f, 5f), "angle" to 0f, "depth" to 40f, "output" to 1, context = half)
+        // The walls end `depth` px right of the disc's right edge (x = 40, or 20 at half scale).
+        assertEquals(40f, rightmost(deep, 30) + 1f - 40f, 1.01f)
+        assertEquals(20f, rightmost(shallow, 15) + 1f - 20f, 1.01f)
+    }
+
+    @Test
     fun extrusionGrowsAlongTheDirectionOnly() {
         val src = disc(120, 100, 40f, 50f, 15f)
         val only = ExtrudeParallelFilter().run(src, "angle" to 0f, "depth" to 30f, "side_shading" to 0f, "output" to 1)
