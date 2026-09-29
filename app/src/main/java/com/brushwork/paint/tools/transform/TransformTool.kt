@@ -46,6 +46,8 @@ import kotlin.math.floor
  * content cropped to its bounds (or the layer mask when editing it). While the transform is
  * pending the layer bitmap is untouched; the preview goes through `controller.renderOverride`.
  * [commit] bakes it with one undo step (the selection moves along); [discard] leaves no trace.
+ * Changing the selection while a transform is pending applies it and lifts again with the new
+ * selection.
  */
 class TransformTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TRANSFORM
@@ -83,8 +85,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Unit used by the Numbers sheet. */
     var unit by mutableStateOf(LengthUnit.PX)
 
-    /** Distance moved by one nudge-pad press, in document pixels. */
-    var nudgeStepPx by mutableDoubleStateOf(1.0)
+    private var nudgeStepState by mutableDoubleStateOf(1.0)
+
+    /** Distance moved by one nudge-pad press, in document pixels (finite and > 0; other values are ignored). */
+    var nudgeStepPx: Double
+        get() = nudgeStepState
+        set(v) { if (v.isFinite() && v > 0.0) nudgeStepState = v }
 
     /** The pending transform, or null when nothing is being transformed. */
     var transformState by mutableStateOf<TransformState?>(null)
@@ -128,7 +134,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         /** Selection the content was lifted with; it moves along on commit. */
         val selection: Selection?,
         /** Value vacated mask pixels get (the mask's background). */
-        val maskBackground: Int,
+        maskBackground: Int,
         val initial: TransformState,
         val placement: Boolean,
     ) {
@@ -140,6 +146,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         var drawSource: Bitmap = floating
         /** Maps [drawSource] pixels -> document. */
         val drawMatrix = Matrix()
+
+        /** Fills vacated mask pixels with the background, weighted by an ALPHA_8 selection. */
+        val maskFill = Paint().apply { color = maskBackground }
+        /** Overwrites vacated mask pixels with the background. */
+        val maskReplace = Paint().apply { color = maskBackground; xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
 
         /** Level 0 = [floating]; level k = half the size of level k-1 (box-filtered). */
         private val levels = arrayListOf(floating)
@@ -164,16 +175,18 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
     }
 
-    /** Draws the layer with the lifted area removed plus the transformed floating bitmap. */
+    /**
+     * Draws the layer with the lifted area removed plus the transformed floating bitmap: exactly
+     * what [commit] will write, even if the layer was changed from a menu meanwhile.
+     */
     private inner class Preview(private val s: Session) : LayerRenderOverride {
         override val layer: Layer get() = s.layer
 
         override fun drawContent(canvas: Canvas): Boolean {
             if (s.target != EditTarget.CONTENT) return false
-            // Without a selection the whole content was lifted, so nothing else remains.
-            if (s.placement || s.selection != null) canvas.drawBitmap(s.layer.bitmap, 0f, 0f, null)
-            if (!s.placement) s.selection?.let { canvas.drawBitmap(it.mask, 0f, 0f, dstOutPaint) }
-            canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
+            canvas.drawBitmap(s.layer.bitmap, 0f, 0f, null)
+            clearSource(canvas, s)
+            drawFloating(canvas)
             return true
         }
 
@@ -184,9 +197,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val save = canvas.saveLayer(null, maskPaint)
             canvas.drawBitmap(mask, 0f, 0f, null)
             clearSource(canvas, s)
-            canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
+            drawFloating(canvas)
             canvas.restoreToCount(save)
             return true
+        }
+
+        private fun drawFloating(canvas: Canvas) {
+            // The caller of startPlacement() may have recycled the picture: never crash drawing.
+            if (!s.drawSource.isRecycled) canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
         }
     }
 
@@ -199,8 +217,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private var liftJob: Job? = null
     private var placementEditCount = -1
 
-    private val dstOutPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+    /** True while this tool itself changes controller.selection (ignored by [onSelectionChanged]). */
+    private var ownSelectionChange = false
+
     private val dstInPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    private val dstOutPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
     private val clearPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
     private var previewPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
 
@@ -223,23 +244,55 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /**
+     * The selection changed from outside (menu, selection panel) while this tool is current.
+     * A pending transform is applied where it is (the new selection is kept as the user set it,
+     * not moved along) and the content is lifted again with the new selection. Placements are
+     * not tied to the selection and stay as they are.
+     */
+    override fun onSelectionChanged() {
+        if (ownSelectionChange) return
+        val s = session
+        when {
+            s != null -> {
+                if (s.placement) return
+                applyPending(s, moveSelection = false)
+                if (session == null) beginLift()
+            }
+            liftJob != null -> {
+                cancelJobs()
+                beginLift()
+            }
+        }
+    }
+
+    /**
      * Places [image] (e.g. an imported picture) onto the empty [layer] with transform handles.
      * It starts centered, shrunk to fit the canvas (with a small margin) when larger. Commit
-     * draws it with the label "Import picture"; discarding removes the layer again.
+     * draws it with the label "Import picture"; discarding removes the layer again. An
+     * ARGB_8888 [image] is used directly until the placement ends, so the caller must not
+     * recycle it before that.
      */
     fun startPlacement(layer: Layer, image: Bitmap) {
         if (controller.activeToolId != ToolId.TRANSFORM) controller.selectTool(ToolId.TRANSFORM)
         cancelJobs()
         if (session != null) commit()
-        if (controller.doc.indexOf(layer) < 0 || image.isRecycled || image.width <= 0 || image.height <= 0) return
+        placementEditCount = controller.editCount
+        if (controller.doc.indexOf(layer) < 0) return
         // Hardware / other configs can't be drawn into a software canvas: work on an ARGB copy.
-        val converted: Bitmap? = if (image.config == Bitmap.Config.ARGB_8888) image else {
-            try { image.copy(Bitmap.Config.ARGB_8888, false) } catch (e: OutOfMemoryError) { null }
+        val usable = !image.isRecycled && image.width > 0 && image.height > 0
+        val floating: Bitmap? = when {
+            !usable -> null
+            image.config == Bitmap.Config.ARGB_8888 -> image
+            else -> try { image.copy(Bitmap.Config.ARGB_8888, false) } catch (e: OutOfMemoryError) { null }
         }
-        val floating = converted ?: run { controller.toast("Not enough memory to place the picture"); return }
+        if (floating == null) {
+            controller.toast(if (usable) "Not enough memory to place the picture" else "The picture could not be placed")
+            // Don't leave the empty layer behind when it is clearly the one just added for this.
+            if (isFreshImportLayer(layer)) controller.undo()
+            return
+        }
         val doc = controller.doc
         val initial = TransformState.placement(floating.width, floating.height, doc.width, doc.height)
-        placementEditCount = controller.editCount
         startSession(
             Session(layer, EditTarget.CONTENT, layer.bitmap, floating, floating !== image, null, null, 0, initial, placement = true),
             initial,
@@ -247,47 +300,18 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Lifts the active layer / selection now (same as touching the canvas while idle). */
-    fun start() { if (session == null) beginLift() }
+    fun start() { if (liveSession() == null) beginLift() }
 
     override fun commit() {
         cancelJobs()
         val s = session ?: return
-        val st = transformState ?: return endSession(s)
-        val doc = controller.doc
-        val valid = doc.indexOf(s.layer) >= 0 &&
-            targetBitmapOf(s.layer, s.target) === s.targetBitmap &&
-            s.targetBitmap.width == doc.width && s.targetBitmap.height == doc.height
-        // Nothing to bake: unchanged, or the layer/bitmap went away underneath us.
-        if (!valid || (!s.placement && st.sameGeometry(s.initial))) return endSession(s)
-        val label = if (s.placement) IMPORT_LABEL else TRANSFORM_LABEL
-        val bmp = s.targetBitmap
-        val rec = controller.beginEdit(s.layer, s.target)
-        try {
-            s.liftRect?.let { rec.touch(it) }
-            val newRect = docRect(st)
-            if (newRect.intersect(0, 0, bmp.width, bmp.height)) rec.touch(newRect)
-            val canvas = Canvas(bmp)
-            clearSource(canvas, s)
-            canvas.drawBitmap(s.drawSource, s.drawMatrix, drawPaint(s, forPreview = false))
-        } catch (e: OutOfMemoryError) {
-            // Undo snapshots of a huge area didn't fit: put everything back as it was.
-            rec.abort()
-            endSession(s)
-            controller.toast("Not enough memory to apply the transform")
-            return
-        }
-        val extras = moveSelection(s, label)
-        endSession(s)
-        controller.commitEdit(rec, label, extras)
+        applyPending(s, moveSelection = true)
     }
 
     override fun discard() {
         cancelJobs()
         val s = session ?: return
-        endSession(s)
-        // Deferred: discard() is also called from inside controller.deleteLayer(), which removes
-        // a layer by a precomputed index right after — changing the list now would break it.
-        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer) }
+        cancelSession(s)
     }
 
     // ------------------------------------------------------------------ input
@@ -298,7 +322,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     override fun onDown(p: ToolPoint) {
         gesture = null
-        if (session == null && !beginLift()) return
+        if (liveSession() == null && !beginLift()) return
         val st = transformState ?: return
         val t = controller.viewTransform
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density)
@@ -310,6 +334,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     override fun onMove(p: ToolPoint) {
         val g = gesture ?: return
         if (session == null) { gesture = null; return }
+        if (!p.x.isFinite() || !p.y.isFinite()) return
         val to = Vec2(p.x, p.y)
         val distort = mode == Mode.DISTORT
         val next = when (g.hit.kind) {
@@ -346,24 +371,38 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     // ------------------------------------------------------------------ commands (options strip / Numbers)
 
     /** Moves by a document-pixel offset. */
-    fun moveBy(dx: Float, dy: Float) = update { it.translated(dx, dy) }
+    fun moveBy(dx: Float, dy: Float) {
+        if (dx.isFinite() && dy.isFinite()) update { it.translated(dx, dy) }
+    }
 
     /** One nudge-pad press: moves by [nudgeStepPx] in the given direction (-1, 0, 1). */
     fun nudge(dx: Int, dy: Int) = moveBy((dx * nudgeStepPx).toFloat(), (dy * nudgeStepPx).toFloat())
 
-    /** Places the bounds' left/top edge (document pixels; null = unchanged). */
-    fun setPosition(left: Double? = null, top: Double? = null) =
-        update { it.withPosition(left?.toFloat(), top?.toFloat()) }
+    /** Places the bounds' left/top edge (document pixels; null = unchanged). Non-finite values are ignored. */
+    fun setPosition(left: Double? = null, top: Double? = null) {
+        val l = left?.takeIf { it.isFinite() }
+        val t = top?.takeIf { it.isFinite() }
+        if (l == null && t == null) return
+        update { it.withPosition(l?.toFloat(), t?.toFloat()) }
+    }
 
-    /** Sets width and/or height (document pixels), honoring [keepAspect]. */
-    fun setSize(width: Double? = null, height: Double? = null) =
-        update { it.withSize(width?.toFloat(), height?.toFloat(), keepAspect) }
+    /** Sets width and/or height (document pixels), honoring [keepAspect]. Non-finite values are ignored. */
+    fun setSize(width: Double? = null, height: Double? = null) {
+        val w = width?.takeIf { it.isFinite() }
+        val h = height?.takeIf { it.isFinite() }
+        if (w == null && h == null) return
+        update { it.withSize(w?.toFloat(), h?.toFloat(), keepAspect) }
+    }
 
     /** Sets the absolute rotation in degrees (around the center). */
-    fun setRotation(degrees: Double) = update { it.withRotation(degrees.toFloat()) }
+    fun setRotation(degrees: Double) {
+        if (degrees.isFinite()) update { it.withRotation(degrees.toFloat()) }
+    }
 
     /** Sets a uniform scale relative to the original size (100 = original), around the center. */
-    fun setScalePercent(percent: Double) = update { it.withScalePercent(percent.toFloat()) }
+    fun setScalePercent(percent: Double) {
+        if (percent.isFinite()) update { it.withScalePercent(percent.toFloat()) }
+    }
 
     /** Mirrors along the content's own axes. */
     fun flip(horizontal: Boolean) = update { it.flipped(horizontal) }
@@ -373,7 +412,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /** Back to where the transform started (the original position, or the initial placement). */
     fun reset() {
-        val s = session ?: return
+        val s = liveSession() ?: return
         update { s.initial }
     }
 
@@ -381,8 +420,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     fun fitToCanvas() = update { it.fittedTo(controller.doc.width, controller.doc.height) }
 
     private inline fun update(f: (TransformState) -> TransformState) {
+        if (liveSession() == null || gesture != null) return
         val st = transformState ?: return
-        if (session == null || gesture != null) return
         val next = f(st)
         if (next != st) applyState(next)
     }
@@ -413,7 +452,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val r = ContentBounds.of(bmp, empty) ?: return nothingToTransform(target)
             return lift(layer, target, bmp, r, null, bg)
         }
-        // Large layer: find the content bounds off the main thread, then lift.
+        // Large layer: find the content bounds off the main thread, then lift. The bitmap is only
+        // read; the result is thrown away if the layer changed meanwhile (contentVersion).
         val version = layer.contentVersion
         isPreparing = true
         liftJob = controller.scope.launch(Dispatchers.Main) {
@@ -467,19 +507,64 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         applyState(state)
     }
 
+    // ------------------------------------------------------------------ finishing
+
+    /**
+     * Bakes the pending transform into the layer with ONE undo step. With [moveSelection] the
+     * selection the content was lifted with moves along (same step); otherwise the current
+     * selection is left alone (it was just replaced by the user).
+     */
+    private fun applyPending(s: Session, moveSelection: Boolean) {
+        val st = transformState ?: return endSession(s)
+        // The layer/bitmap went away underneath us (deleted, canvas resized...): nothing to bake.
+        if (!isValid(s)) return cancelSession(s)
+        if (s.layer.locked) {
+            controller.toast("Layer \"${s.layer.name}\" is locked, so the transform was not applied")
+            return cancelSession(s)
+        }
+        // Unchanged: nothing to record.
+        if (!s.placement && st.sameGeometry(s.initial)) return endSession(s)
+        val label = if (s.placement) IMPORT_LABEL else TRANSFORM_LABEL
+        val bmp = s.targetBitmap
+        val rec = controller.beginEdit(s.layer, s.target)
+        try {
+            s.liftRect?.let { rec.touch(it) }
+            val newRect = docRect(st)
+            if (newRect.intersect(0, 0, bmp.width, bmp.height)) rec.touch(newRect)
+            val canvas = Canvas(bmp)
+            clearSource(canvas, s)
+            canvas.drawBitmap(s.drawSource, s.drawMatrix, drawPaint(s, forPreview = false))
+        } catch (e: OutOfMemoryError) {
+            // Undo snapshots of a huge area didn't fit: put everything back as it was.
+            rec.abort()
+            endSession(s)
+            controller.toast("Not enough memory to apply the transform")
+            return
+        }
+        val extras = if (moveSelection) moveSelection(s, st, label) else emptyList()
+        endSession(s)
+        controller.commitEdit(rec, label, extras)
+    }
+
+    /** Ends the session without changes; a discarded placement also removes its empty layer. */
+    private fun cancelSession(s: Session) {
+        endSession(s)
+        // Deferred: discard() is also called from inside controller.deleteLayer(), which removes
+        // a layer by a precomputed index right after — changing the list now would break it.
+        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer) }
+    }
+
     /** Clears the session (no pixel changes) and redraws what the preview covered. */
     private fun endSession(s: Session) {
         gesture = null
         session = null
         if (controller.renderOverride === s.preview) controller.renderOverride = null
-        val dirty = Rect()
-        lastBounds?.let { dirty.union(it) }
-        s.liftRect?.let { dirty.union(it) }
+        val last = lastBounds
         lastBounds = null
         transformState = null
         isPlacement = false
         numbersOpen = false
-        if (dirty.isEmpty) controller.invalidateOverlay() else controller.invalidateDoc(dirty)
+        invalidateBoth(last, s.liftRect)
         s.releaseLevels()
         if (s.ownsFloating) s.floating.recycle()
     }
@@ -495,9 +580,43 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // A transform started meanwhile: undo()/deleteLayer() would discard it, so leave the layer.
         if (controller.doc.indexOf(layer) < 0 || session != null) return
         // Nothing was recorded since the layer was added: undo its AddLayerAction so no
-        // history entry remains. Otherwise delete it as a regular step.
-        if (controller.editCount == placementEditCount && controller.undoManager.undoLabel == IMPORT_LABEL) controller.undo()
+        // history entry remains (Redo can still bring the empty layer back: the controller has
+        // no way to drop a redo entry). Otherwise delete it as a regular step.
+        if (isFreshImportLayer(layer)) controller.undo()
         else controller.deleteLayer(layer)
+    }
+
+    /**
+     * True when the newest undo step is the "Import picture" AddLayerAction of [layer]: nothing
+     * was recorded since the placement started and the layer was never painted.
+     */
+    private fun isFreshImportLayer(layer: Layer): Boolean =
+        controller.doc.indexOf(layer) >= 0 && controller.editCount == placementEditCount &&
+            controller.undoManager.undoLabel == IMPORT_LABEL && layer.contentVersion == 0L
+
+    /** The session's layer and bitmaps are still the ones it was started on. */
+    private fun isValid(s: Session): Boolean {
+        val doc = controller.doc
+        val bmp = s.targetBitmap
+        return doc.indexOf(s.layer) >= 0 && targetBitmapOf(s.layer, s.target) === bmp && !bmp.isRecycled &&
+            bmp.width == doc.width && bmp.height == doc.height && !s.floating.isRecycled
+    }
+
+    /**
+     * The pending session, or null. A session whose layer or bitmap was replaced from elsewhere
+     * is dropped; a lost preview override (e.g. reset by the controller) is put back.
+     */
+    private fun liveSession(): Session? {
+        val s = session ?: return null
+        if (!isValid(s)) {
+            cancelSession(s)
+            return null
+        }
+        if (controller.renderOverride !== s.preview) {
+            controller.renderOverride = s.preview
+            lastBounds?.let { controller.invalidateDoc(it) }
+        }
+        return s
     }
 
     private fun applyState(new: TransformState) {
@@ -514,16 +633,26 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             s.matrix.setValues(new.affineValues())
         }
         // Bilinear alone aliases below 50 %: draw from a pre-halved copy for strong downscales.
-        val level = if (interpolation == Interpolation.SMOOTH) new.minificationLevel() else 0
+        val level = if (interpolation == Interpolation.SMOOTH && !s.floating.isRecycled) new.minificationLevel() else 0
         val src = s.level(level)
         s.drawSource = src
         s.drawMatrix.set(s.matrix)
         if (src !== s.floating) s.drawMatrix.preScale(s.floating.width.toFloat() / src.width, s.floating.height.toFloat() / src.height)
         val nb = docRect(new)
-        val dirty = Rect(nb)
-        lastBounds?.let { dirty.union(it) }
+        val old = lastBounds
         lastBounds = nb
-        controller.invalidateDoc(dirty)
+        invalidateBoth(old, nb)
+    }
+
+    /** Redraws two document areas: as one when they overlap, else separately (a long move doesn't redraw everything between). */
+    private fun invalidateBoth(a: Rect?, b: Rect?) {
+        when {
+            a == null && b == null -> controller.invalidateOverlay()
+            a == null -> controller.invalidateDoc(b)
+            b == null -> controller.invalidateDoc(a)
+            Rect.intersects(a, b) -> controller.invalidateDoc(Rect(a).apply { union(b) })
+            else -> { controller.invalidateDoc(a); controller.invalidateDoc(b) }
+        }
     }
 
     // ------------------------------------------------------------------ pixel helpers
@@ -543,14 +672,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val r = s.liftRect ?: return
         val sel = s.selection
         if (s.target == EditTarget.MASK) {
-            val p = Paint().apply { color = s.maskBackground }
             if (sel == null) {
-                p.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
-                canvas.drawRect(r, p)
+                canvas.drawRect(r, s.maskReplace)
             } else {
                 // Selected pixels fade towards the background by their selection alpha.
                 canvas.save(); canvas.clipRect(r)
-                canvas.drawBitmap(sel.mask, 0f, 0f, p)
+                canvas.drawBitmap(sel.mask, 0f, 0f, s.maskFill)
                 canvas.restore()
             }
         } else if (sel == null) {
@@ -563,7 +690,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Moves the selection that was lifted together with the pixels; returns its undo action. */
-    private fun moveSelection(s: Session, label: String): List<UndoAction> {
+    private fun moveSelection(s: Session, st: TransformState, label: String): List<UndoAction> {
         val sel = s.selection ?: return emptyList()
         val r = s.liftRect ?: return emptyList()
         val before = controller.selection
@@ -574,12 +701,20 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val p = Paint().apply { isFilterBitmap = smooth; isAntiAlias = smooth }
             Canvas(out).drawBitmap(crop, s.matrix, p)
             if (crop !== sel.mask) crop.recycle()
-            Selection.wrap(out)
+            // Selected pixels can only be inside the transformed area: find the tight bounds
+            // there instead of rescanning the whole document.
+            val bounds = ContentBounds.of(out, region = docRect(st)) ?: Rect()
+            Selection.wrap(out, bounds)
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to move the selection")
             return emptyList()
         }
-        controller.setSelection(moved, recordUndo = false)
+        ownSelectionChange = true
+        try {
+            controller.setSelection(moved, recordUndo = false)
+        } finally {
+            ownSelectionChange = false
+        }
         val after = controller.selection
         return if (before === after) emptyList() else listOf(SelectionAction(before, after, label))
     }
@@ -675,10 +810,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             canvas.drawCircle(e.x, e.y, er, accentStroke)
         }
         val cr = t.dp(7f)
+        whiteStroke.strokeWidth = t.dp(2f)
         for (p in c) {
             if (mode == Mode.DISTORT) {
                 // Round, filled corners signal "moves freely".
-                whiteStroke.strokeWidth = t.dp(2f)
                 canvas.drawCircle(p.x, p.y, cr + t.dp(1f), shadowStroke)
                 canvas.drawCircle(p.x, p.y, cr, accentFill)
                 canvas.drawCircle(p.x, p.y, cr, whiteStroke)

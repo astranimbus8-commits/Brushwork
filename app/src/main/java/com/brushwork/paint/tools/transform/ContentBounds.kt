@@ -17,12 +17,15 @@ object ContentBounds {
 
     /**
      * Bounds of [bitmap]'s content, or null when empty. [emptyColor] null = "transparent is
-     * empty"; otherwise pixels equal to it (ARGB, as returned by getPixels) are empty.
+     * empty" (also works for ALPHA_8 bitmaps); otherwise pixels equal to it (ARGB, as returned by
+     * getPixels) are empty. Only [region] (clamped to the bitmap; null = everything) is scanned.
      * [cancelled] is polled between strips.
      */
-    fun of(bitmap: Bitmap, emptyColor: Int? = null, cancelled: () -> Boolean = { false }): Rect? {
-        val w = bitmap.width
-        val h = bitmap.height
+    fun of(bitmap: Bitmap, emptyColor: Int? = null, region: Rect? = null, cancelled: () -> Boolean = { false }): Rect? {
+        val area = Rect(0, 0, bitmap.width, bitmap.height)
+        if (region != null && !area.intersect(region)) return null
+        val w = area.width()
+        val h = area.height()
         if (w <= 0 || h <= 0) return null
         val stripRows = max(1, min(h, STRIP_PIXELS / w))
         val strips = (h + stripRows - 1) / stripRows
@@ -37,12 +40,13 @@ object ContentBounds {
                 if (cancelled()) break
                 val y0 = s * stripRows
                 val rows = min(stripRows, h - y0)
-                bitmap.getPixels(buf, 0, w, 0, y0, w, rows)
+                bitmap.getPixels(buf, 0, w, area.left, area.top + y0, w, rows)
                 scanStrip(buf, w, rows, y0, alphaMode, empty, acc)
             }
             synchronized(lock) { merge(total, acc) }
         }
-        return if (total[2] < 0) null else Rect(total[0], total[1], total[2] + 1, total[3] + 1)
+        if (total[2] < 0) return null
+        return Rect(total[0], total[1], total[2] + 1, total[3] + 1).apply { offset(area.left, area.top) }
     }
 
     /** [minX, minY, maxX, maxY] (inclusive), "nothing found" = maxX < 0. */

@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,7 +46,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  */
 @Composable
 fun TransformToolOptions(tool: TransformTool) {
-    if (tool.transformState == null) {
+    // transformState changes on every drag frame; the strip only cares whether one exists.
+    val active by remember(tool) { derivedStateOf { tool.transformState != null } }
+    if (!active) {
         Text(
             tool.statusText,
             style = MaterialTheme.typography.bodySmall,
