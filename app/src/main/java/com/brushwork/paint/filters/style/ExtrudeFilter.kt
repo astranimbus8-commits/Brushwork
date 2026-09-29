@@ -100,6 +100,7 @@ private class ExtrudeSweep(
     }
 
     fun run(ctx: FilterContext): PixelBuffer {
+        sd = StyleMath.signedDistance(img, ctx)
         val out = if (only) PixelBuffer(w, h) else img.copy()
         val span = slope * (nu - 1)
         val rLo = floor(-max(0.0, span)).toInt()
@@ -126,20 +127,21 @@ private class ExtrudeSweep(
 
     private fun alphaAt(u: Int, v: Int): Float = if (v < 0 || v >= nv) 0f else (px[index(u, v)] ushr 24) / 255f
 
-    private fun alphaXY(x: Int, y: Int): Float =
-        if (x < 0 || y < 0 || x >= w || y >= h) 0f else (px[y * w + x] ushr 24) / 255f
+    /** Signed distance to the silhouette: its gradient is a smooth outward normal even on jaggy edges. */
+    private lateinit var sd: FloatArray
 
     /** Outward silhouette normal at pixel (u, v) dotted with the light direction, in -1..1. */
     private fun wallShade(u: Int, v: Int): Float {
+        if (v < 0 || v >= nv) return 0f
         val x = if (majorX) u else v
         val y = if (majorX) v else u
-        val gx = (alphaXY(x + 1, y - 1) + 2f * alphaXY(x + 1, y) + alphaXY(x + 1, y + 1)) -
-            (alphaXY(x - 1, y - 1) + 2f * alphaXY(x - 1, y) + alphaXY(x - 1, y + 1))
-        val gy = (alphaXY(x - 1, y + 1) + 2f * alphaXY(x, y + 1) + alphaXY(x + 1, y + 1)) -
-            (alphaXY(x - 1, y - 1) + 2f * alphaXY(x, y - 1) + alphaXY(x + 1, y - 1))
+        val xl = max(0, x - 1); val xr = min(w - 1, x + 1)
+        val yu = max(0, y - 1); val yd = min(h - 1, y + 1)
+        val gx = sd[y * w + xr] - sd[y * w + xl]
+        val gy = sd[yd * w + x] - sd[yu * w + x]
         val len = sqrt(gx * gx + gy * gy)
-        if (len < 1e-3f) return 0f
-        return -(gx * lightX + gy * lightY) / len
+        if (!(len > 1e-4f) || len > 1e5f) return 0f
+        return (gx * lightX + gy * lightY) / len
     }
 
     private fun cap(k: Float): Float = (depth - k + 0.5f).coerceIn(0f, 1f)

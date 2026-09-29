@@ -477,7 +477,9 @@ internal object StyleMath {
         // Inside distances are bounded by the image size (-FAR means "no background at all").
         val limit = min(half - 1f, (w + h).toFloat())
         for (i in sd.indices) { val v = sd[i]; sd[i] = if (!(v < 0f)) 0f else max(v, -limit) }
-        val flat = 1f / (1f - flatness.coerceIn(0f, 0.95f))
+        val f = flatness.coerceIn(0f, 0.95f)
+        val flat = 1f / (1f - f)
+        val knee = min(0.5f, f)
         val stack = IntStack()
         for (i in sd.indices) {
             val v = sd[i]
@@ -496,10 +498,16 @@ internal object StyleMath {
                 val d = -sd[j] - visited
                 val t = (d / radius).coerceIn(0f, 1f)
                 val u = 1f - t
-                val prof = min(1f, sqrt(max(0f, 1f - u * u)) * flat)
-                sd[j] = prof * radius * heightScale
+                sd[j] = softMin(sqrt(max(0f, 1f - u * u)) * flat, 1f, knee) * radius * heightScale
             }
         }
+    }
+
+    /** Polynomial smooth minimum: like min(a, b) but rounded over a band of width [k] (0 = hard). */
+    fun softMin(a: Float, b: Float, k: Float): Float {
+        if (k <= 0f) return min(a, b)
+        val hh = max(k - kotlin.math.abs(a - b), 0f) / k
+        return min(a, b) - hh * hh * k * 0.25f
     }
 
     /** Growable int stack for flood fills. */

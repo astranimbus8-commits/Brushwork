@@ -59,11 +59,26 @@ internal object Relief {
         return z
     }
 
-    /** Linear color -> tone mapped (ACES filmic fit) or clamped, as an sRGB byte. */
-    fun encode(l: Float, realistic: Boolean): Int {
-        if (!realistic) return StyleMath.linearToSrgb(l)
-        val x = max(0f, l)
-        return StyleMath.linearToSrgb((x * (2.51f * x + 0.03f)) / (x * (2.43f * x + 0.59f) + 0.14f))
+    private const val KNEE = 0.85f
+
+    /**
+     * Linear RGB -> opaque sRGB pixel (alpha bits left 0). With [realistic] tone, values above a
+     * knee are compressed smoothly toward 1 with the hue preserved, and over-exposed highlights
+     * desaturate toward white like film; otherwise channels are simply clipped.
+     */
+    fun encode(r0: Float, g0: Float, b0: Float, realistic: Boolean): Int {
+        var r = max(0f, r0); var g = max(0f, g0); var b = max(0f, b0)
+        if (realistic) {
+            val m = max(r, max(g, b))
+            if (m > KNEE) {
+                val mm = KNEE + (1f - KNEE) * (1f - kotlin.math.exp(-(m - KNEE) / (1f - KNEE)))
+                val s = mm / m
+                r *= s; g *= s; b *= s
+                val white = ((m - 1f) / 3f).coerceIn(0f, 0.85f)
+                r += (mm - r) * white; g += (mm - g) * white; b += (mm - b) * white
+            }
+        }
+        return (StyleMath.linearToSrgb(r) shl 16) or (StyleMath.linearToSrgb(g) shl 8) or StyleMath.linearToSrgb(b)
     }
 }
 
@@ -299,10 +314,7 @@ class ReliefHQFilter : Filter("style.relief_hq", "Relief HQ", FilterCategory.STY
                     val outR = ((1f - fr) * diff * br + specCommon * fr * PI.toFloat()) * lit + ambR
                     val outG = ((1f - fg) * diff * bg + specCommon * fg * PI.toFloat()) * lit + ambG
                     val outB = ((1f - fb) * diff * bb + specCommon * fb * PI.toFloat()) * lit + ambB
-                    (c and 0xFF000000.toInt()) or
-                        (Relief.encode(outR, realistic) shl 16) or
-                        (Relief.encode(outG, realistic) shl 8) or
-                        Relief.encode(outB, realistic)
+                    (c and 0xFF000000.toInt()) or Relief.encode(outR, outG, outB, realistic)
                 }
             }
         }
@@ -356,7 +368,7 @@ class WaterdropFilter : Filter("style.waterdrop", "Waterdrop (Rounded)", FilterC
                     val nxy = sqrt(nx * nx + ny * ny)
                     val lxy = sqrt(vx * vx + vy * vy)
                     val facing = if (nxy > 1e-4f && lxy > 1e-4f) (nx * vx + ny * vy) / (nxy * lxy) else 0f
-                    val rimDark = (steep * 2.2f).coerceIn(0f, 1f) * (0.45f + 0.55f * max(0f, facing))
+                    val rimDark = smoothstep(0.12f, 0.6f, steep) * (0.35f + 0.65f * max(0f, facing))
                     val band = smoothstep(0.04f, 0.25f, steep) * (1f - smoothstep(0.45f, 0.85f, steep))
                     val caustic = max(0f, -facing) * band * highlight
                     val spec = (StyleMath.ppow(nh, 70f) + 0.25f * StyleMath.ppow(nh, 8f)) * highlight
