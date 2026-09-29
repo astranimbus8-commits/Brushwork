@@ -71,6 +71,8 @@ object LayerOps {
      * both are clipped to the shared base, and the merged layer stays clipped to it.
      */
     fun mergeDown(c: EditorController, layer: Layer) {
+        // First: committing may insert a layer, which would change the layer below.
+        commitPendingWork(c)
         val idx = c.doc.indexOf(layer)
         if (idx <= 0) { c.toast("There is no layer below to merge into"); return }
         val lower = c.doc.layers[idx - 1]

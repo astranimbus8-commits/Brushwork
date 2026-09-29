@@ -25,7 +25,8 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * Real Skia (Robolectric NATIVE graphics): thumbnails, row snapshots and the panel's layer
- * operations against a real [EditorController]. Tests avoid controller calls that activate tools.
+ * operations against a real [EditorController]. Several operations read `controller.currentTool`
+ * (to commit pending tool work), which builds every tool through ToolFactory.
  */
 @RunWith(RobolectricTestRunner::class)
 class LayersRobolectricTest {
