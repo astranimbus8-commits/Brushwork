@@ -29,8 +29,6 @@ internal object Lab {
     private const val EPS = 216f / 24389f
     private const val KAPPA = 24389f / 27f
 
-    fun linear(v8: Int): Float = toLinear[v8]
-
     /** Linear 0..1 to an 8-bit sRGB value (clamped). */
     fun encode(linear: Float): Int {
         if (!(linear > 0f)) return 0
@@ -40,7 +38,7 @@ internal object Lab {
 
     private fun f(t: Float): Float = if (t > EPS) Math.cbrt(t.toDouble()).toFloat() else (KAPPA * t + 16f) / 116f
 
-    /** Writes L, a, b of the RGB part of [c] into [out] at [o]. */
+    /** Writes L, a, b of the 8-bit sRGB color (r8, g8, b8) into [out] at [o]. */
     fun fromRgb(r8: Int, g8: Int, b8: Int, out: FloatArray, o: Int = 0) {
         val r = toLinear[r8]; val g = toLinear[g8]; val b = toLinear[b8]
         val x = (0.4124564f * r + 0.3575761f * g + 0.1804375f * b) / XN
@@ -53,17 +51,6 @@ internal object Lab {
     }
 
     private fun finv(t: Float): Float = if (t > 6f / 29f) t * t * t else (116f * t - 16f) / KAPPA
-
-    /** Converts Lab to linear RGB (unclamped) into [out]. */
-    fun toLinearRgb(l: Float, a: Float, b: Float, out: FloatArray) {
-        val fy = (l + 16f) / 116f
-        val x = XN * finv(fy + a / 500f)
-        val y = finv(fy)
-        val z = ZN * finv(fy - b / 200f)
-        out[0] = 3.2404542f * x - 1.5371385f * y - 0.4985314f * z
-        out[1] = -0.9692660f * x + 1.8760108f * y + 0.0415560f * z
-        out[2] = 0.0556434f * x - 0.2040259f * y + 1.0572252f * z
-    }
 
     /** Lab to RGB bits (alpha byte 0) with clamping; allocation free. */
     fun toRgb(l: Float, a: Float, b: Float): Int {
