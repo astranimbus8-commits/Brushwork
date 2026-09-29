@@ -245,6 +245,118 @@ internal object Stylize {
         }
     }
 
+    /**
+     * Deterministic k-means in Lab over the working planes [L, a, b, alpha]. Samples sit on a
+     * fixed grid of relative positions, so a preview-sized working copy finds (almost) the same
+     * centers as the full-resolution one. Returns up to k*3 center coordinates.
+     */
+    fun kMeans(work: Planes, k: Int, seed: Int, ctx: FilterContext): FloatArray {
+        val ww = work.w; val wh = work.h
+        val lp = work[0]; val ap = work[1]; val bp = work[2]; val alpha = work[3]
+        val sm = FloatArray(KMEANS_GRID * KMEANS_GRID * 3)
+        var count = 0
+        for (j in 0 until KMEANS_GRID) {
+            val y = min(wh - 1, ((j + 0.5f) * wh / KMEANS_GRID).toInt())
+            for (i in 0 until KMEANS_GRID) {
+                val o = y * ww + min(ww - 1, ((i + 0.5f) * ww / KMEANS_GRID).toInt())
+                if (alpha[o] <= 0.1f) continue
+                sm[count * 3] = lp[o]; sm[count * 3 + 1] = ap[o]; sm[count * 3 + 2] = bp[o]
+                count++
+            }
+        }
+        if (count == 0) return floatArrayOf(100f, 0f, 0f)
+        val kk = max(1, min(k, count))
+        val centers = FloatArray(kk * 3)
+        // Farthest-point initialisation from a seeded first pick.
+        val first = kotlin.random.Random(seed).nextInt(count)
+        for (c in 0..2) centers[c] = sm[first * 3 + c]
+        val best = FloatArray(count) { Float.MAX_VALUE }
+        for (ci in 1 until kk) {
+            var far = 0; var farD = -1f
+            for (i in 0 until count) {
+                val d = dist2(sm, i, centers, ci - 1)
+                if (d < best[i]) best[i] = d
+                if (best[i] > farD) { farD = best[i]; far = i }
+            }
+            for (c in 0..2) centers[ci * 3 + c] = sm[far * 3 + c]
+        }
+        val sums = FloatArray(kk * 3); val counts = IntArray(kk)
+        repeat(8) {
+            ctx.checkCancelled()
+            sums.fill(0f); counts.fill(0)
+            for (i in 0 until count) {
+                val ci = nearest(sm[i * 3], sm[i * 3 + 1], sm[i * 3 + 2], centers, kk)
+                counts[ci]++
+                for (c in 0..2) sums[ci * 3 + c] += sm[i * 3 + c]
+            }
+            for (ci in 0 until kk) if (counts[ci] > 0) for (c in 0..2) centers[ci * 3 + c] = sums[ci * 3 + c] / counts[ci]
+        }
+        return centers
+    }
+
+    /**
+     * Pulls every working pixel of [L, a, b] towards its k-means center by [amount] (lightness
+     * by [amount] * [lightWeight]). With [softness] > 0 (Delta E) the target blends the nearby
+     * centers with gaussian weights, so a smooth gradient between two clusters does not break
+     * into a hard seam.
+     */
+    fun quantizeTowards(
+        work: Planes, centers: FloatArray, amount: Float, ctx: FilterContext,
+        lightWeight: Float = 1f, softness: Float = 0f,
+    ) {
+        val k = centers.size / 3
+        val lp = work[0]; val ap = work[1]; val bp = work[2]
+        val w = work.w
+        val inv2s2 = if (softness > 0f) 1f / (2f * softness * softness) else 0f
+        val amountL = amount * lightWeight
+        Parallel.forRows(work.h) { y0, y1 ->
+            ctx.checkCancelled()
+            val d2 = FloatArray(k)
+            for (i in y0 * w until y1 * w) {
+                val l = lp[i]; val a = ap[i]; val b = bp[i]
+                var bestD = Float.MAX_VALUE; var best = 0
+                for (ci in 0 until k) {
+                    val dl = l - centers[ci * 3]; val da = a - centers[ci * 3 + 1]; val db = b - centers[ci * 3 + 2]
+                    val d = dl * dl + da * da + db * db
+                    d2[ci] = d
+                    if (d < bestD) { bestD = d; best = ci }
+                }
+                var tl = centers[best * 3]; var ta = centers[best * 3 + 1]; var tb = centers[best * 3 + 2]
+                if (inv2s2 > 0f && k > 1) {
+                    var sw = 0f; var sl = 0f; var sa = 0f; var sb = 0f
+                    for (ci in 0 until k) {
+                        val e = (d2[ci] - bestD) * inv2s2
+                        if (e > 9f) continue
+                        val wt = exp(-e)
+                        sw += wt; sl += wt * centers[ci * 3]; sa += wt * centers[ci * 3 + 1]; sb += wt * centers[ci * 3 + 2]
+                    }
+                    tl = sl / sw; ta = sa / sw; tb = sb / sw
+                }
+                lp[i] = l + (tl - l) * amountL
+                ap[i] = a + (ta - a) * amount
+                bp[i] = b + (tb - b) * amount
+            }
+        }
+    }
+
+    private fun nearest(l: Float, a: Float, b: Float, centers: FloatArray, k: Int): Int {
+        var best = 0; var bestD = Float.MAX_VALUE
+        for (ci in 0 until k) {
+            val dl = l - centers[ci * 3]; val da = a - centers[ci * 3 + 1]; val db = b - centers[ci * 3 + 2]
+            val d = dl * dl + da * da + db * db
+            if (d < bestD) { bestD = d; best = ci }
+        }
+        return best
+    }
+
+    private fun dist2(sm: FloatArray, i: Int, centers: FloatArray, ci: Int): Float {
+        val dl = sm[i * 3] - centers[ci * 3]; val da = sm[i * 3 + 1] - centers[ci * 3 + 1]; val db = sm[i * 3 + 2] - centers[ci * 3 + 2]
+        return dl * dl + da * da + db * db
+    }
+
+    /** k-means samples per axis (110 x 110 = 12100 samples at most). */
+    private const val KMEANS_GRID = 110
+
     /** Difference of gaussians G(sigma) - G(1.6 sigma) of a plane (negative on the dark side of edges). */
     fun dog(plane: FloatArray, w: Int, h: Int, sigma: Float, ctx: FilterContext): FloatArray {
         val s = max(0.35f, sigma)

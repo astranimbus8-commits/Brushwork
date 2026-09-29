@@ -1,6 +1,5 @@
 package com.brushwork.paint.filters.draw
 
-import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterCategory
@@ -9,8 +8,6 @@ import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import kotlin.math.max
-import kotlin.math.min
-import kotlin.random.Random
 
 /**
  * Photo -> watercolor painting: edge-preserving smoothing and color simplification form flat
@@ -46,8 +43,8 @@ class WatercolorFilter : Filter("draw.watercolor", "Watercolor", FilterCategory.
         val simplify = values.float("simplify").coerceIn(0f, 100f) / 100f
         if (simplify > 0f) {
             val k = (24 - 18 * simplify).toInt().coerceIn(2, 24)
-            val centers = kMeans(work, k, seed, ctx)
-            quantizeTowards(work, centers, simplify * 0.75f, ctx)
+            val centers = Stylize.kMeans(work, k, seed, ctx)
+            Stylize.quantizeTowards(work, centers, simplify * 0.75f, ctx)
         }
         ctx.progress(0.55f)
         // Wet-edge pigment pooling: strength from the lightness gradient of the washes.
@@ -110,78 +107,6 @@ class WatercolorFilter : Filter("draw.watercolor", "Watercolor", FilterCategory.
     private fun pigment(v: Int, density: Float, shade: Float): Int {
         val absorb = (255 - v) * density
         return ((255f - absorb) * shade).toInt().coerceIn(0, 255)
-    }
-
-    /** Deterministic k-means in Lab on a subsample of opaque working pixels; returns k*3 centers. */
-    private fun kMeans(work: Planes, k: Int, seed: Int, ctx: FilterContext): FloatArray {
-        val n = work.w * work.h
-        val stride = max(1, n / 12000)
-        val lp = work[0]; val ap = work[1]; val bp = work[2]; val alpha = work[3]
-        var count = 0
-        for (i in 0 until n step stride) if (alpha[i] > 0.1f) count++
-        if (count == 0) return FloatArray(3) { if (it == 0) 100f else 0f }
-        val sm = FloatArray(count * 3)
-        var s = 0
-        for (i in 0 until n step stride) if (alpha[i] > 0.1f) {
-            sm[s * 3] = lp[i]; sm[s * 3 + 1] = ap[i]; sm[s * 3 + 2] = bp[i]; s++
-        }
-        val kk = min(k, count)
-        val centers = FloatArray(kk * 3)
-        // Farthest-point initialisation from a seeded first pick.
-        val first = Random(seed).nextInt(count)
-        for (c in 0..2) centers[c] = sm[first * 3 + c]
-        val best = FloatArray(count) { Float.MAX_VALUE }
-        for (ci in 1 until kk) {
-            var far = 0; var farD = -1f
-            for (i in 0 until count) {
-                val d = dist2(sm, i, centers, ci - 1)
-                if (d < best[i]) best[i] = d
-                if (best[i] > farD) { farD = best[i]; far = i }
-            }
-            for (c in 0..2) centers[ci * 3 + c] = sm[far * 3 + c]
-        }
-        val sums = FloatArray(kk * 3); val counts = IntArray(kk)
-        repeat(8) {
-            ctx.checkCancelled()
-            sums.fill(0f); counts.fill(0)
-            for (i in 0 until count) {
-                val ci = nearest(sm[i * 3], sm[i * 3 + 1], sm[i * 3 + 2], centers, kk)
-                counts[ci]++
-                for (c in 0..2) sums[ci * 3 + c] += sm[i * 3 + c]
-            }
-            for (ci in 0 until kk) if (counts[ci] > 0) for (c in 0..2) centers[ci * 3 + c] = sums[ci * 3 + c] / counts[ci]
-        }
-        return centers
-    }
-
-    private fun quantizeTowards(work: Planes, centers: FloatArray, amount: Float, ctx: FilterContext) {
-        val k = centers.size / 3
-        val lp = work[0]; val ap = work[1]; val bp = work[2]
-        val w = work.w
-        Parallel.forRows(work.h) { y0, y1 ->
-            ctx.checkCancelled()
-            for (i in y0 * w until y1 * w) {
-                val ci = nearest(lp[i], ap[i], bp[i], centers, k) * 3
-                lp[i] += (centers[ci] - lp[i]) * amount
-                ap[i] += (centers[ci + 1] - ap[i]) * amount
-                bp[i] += (centers[ci + 2] - bp[i]) * amount
-            }
-        }
-    }
-
-    private fun nearest(l: Float, a: Float, b: Float, centers: FloatArray, k: Int): Int {
-        var best = 0; var bestD = Float.MAX_VALUE
-        for (ci in 0 until k) {
-            val dl = l - centers[ci * 3]; val da = a - centers[ci * 3 + 1]; val db = b - centers[ci * 3 + 2]
-            val d = dl * dl + da * da + db * db
-            if (d < bestD) { bestD = d; best = ci }
-        }
-        return best
-    }
-
-    private fun dist2(sm: FloatArray, i: Int, centers: FloatArray, ci: Int): Float {
-        val dl = sm[i * 3] - centers[ci * 3]; val da = sm[i * 3 + 1] - centers[ci * 3 + 1]; val db = sm[i * 3 + 2] - centers[ci * 3 + 2]
-        return dl * dl + da * da + db * db
     }
 
     private companion object { const val WORK_LONG = 1280 }

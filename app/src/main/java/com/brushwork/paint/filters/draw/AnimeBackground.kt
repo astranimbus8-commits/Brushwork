@@ -15,14 +15,16 @@ import kotlin.math.sqrt
 
 /**
  * Photo -> anime-style background: edge-preserving smoothing flattens texture into clean
- * areas, lightness is softly quantized into cel-like bands, colors are made more vivid (with an
- * optional clean-blue sky push) and thin dark outlines are added along strong edges.
+ * areas, colors are simplified towards a small palette (soft k-means), lightness is softly
+ * quantized into cel-like bands, colors are made more vivid (with an optional clean-blue sky
+ * push) and thin dark outlines are added along strong edges.
  * Sizes are relative to the image, so the preview matches the full-resolution result.
  */
 class AnimeBackgroundFilter : Filter("draw.anime_background", "Anime Background", FilterCategory.DRAW) {
 
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("smoothing", "Smoothing", 0f, 100f, 60f, 1f, "%"),
+        FilterParam.Slider("colors", "Color simplification", 0f, 100f, 50f, 1f, "%"),
         FilterParam.Slider("levels", "Shading levels", 2f, 16f, 7f, 1f),
         FilterParam.Slider("brightness", "Brightness", -100f, 100f, 5f, 1f),
         FilterParam.Slider("contrast", "Contrast", -100f, 100f, 10f, 1f),
@@ -41,7 +43,15 @@ class AnimeBackgroundFilter : Filter("draw.anime_background", "Anime Background"
         Stylize.bilateral(work, 3, 3, u * (1.5f + 5f * smooth), 5f + 9f * smooth, iterations, ctx)
         ctx.progress(0.6f)
         val outline = values.float("outline").coerceIn(0f, 100f) / 100f
+        // Outlines follow the smoothed photo, not the boundaries the palette step creates.
         val dog = if (outline > 0f) Stylize.dog(work[0], work.w, work.h, 0.9f * u, ctx) else null
+        val colors = values.float("colors").coerceIn(0f, 100f) / 100f
+        if (colors > 0f) {
+            // Hue and chroma snap to a palette of 28..6 colors; lightness is only pulled halfway
+            // because the shading bands below quantize it anyway.
+            val centers = Stylize.kMeans(work, (28 - 22 * colors).toInt().coerceIn(2, 28), PALETTE_SEED, ctx)
+            Stylize.quantizeTowards(work, centers, 0.9f * colors, ctx, lightWeight = 0.5f, softness = 6f)
+        }
         // Edges need a lightness drop of about 4..12 L units to be outlined.
         val eps = 1.4f - 1.0f * outline
         val inkGain = 1.2f
@@ -92,6 +102,7 @@ class AnimeBackgroundFilter : Filter("draw.anime_background", "Anime Background"
 
     private companion object {
         const val WORK_LONG = 1280
+        const val PALETTE_SEED = 1
         /** Lab hue (degrees) of a clean, slightly cyan anime sky blue. */
         const val SKY_HUE = 262f
     }

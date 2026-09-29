@@ -7,6 +7,7 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
+import java.lang.ref.SoftReference
 import java.util.concurrent.CancellationException
 import kotlin.math.max
 import kotlin.math.min
@@ -31,8 +32,11 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
 
     private class CachedMask(val w: Int, val h: Int, val hash: Long, val mask: FloatArray)
 
-    /** Last preview-sized segmentation, keyed by content (parameter changes reuse it). */
-    @Volatile private var cache: CachedMask? = null
+    /**
+     * Last preview-sized segmentation, keyed by content (parameter changes reuse it). Softly
+     * referenced: this filter instance lives as long as the app, the mask can be megabytes.
+     */
+    @Volatile private var cache: SoftReference<CachedMask>? = null
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val w = src.width; val h = src.height
@@ -71,7 +75,7 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
         // Only preview-sized results are cached: the full-resolution one is used once.
         val cacheable = src.size <= CACHE_MAX_PIXELS
         val hash = if (cacheable) contentHash(src.pixels) else 0L
-        if (cacheable) cache?.let { c ->
+        if (cacheable) cache?.get()?.let { c ->
             if (c.w == src.width && c.h == src.height && c.hash == hash) return c.mask
         }
         val mask = try {
@@ -82,7 +86,7 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
             null
         } ?: return null
         if (mask.size != src.size) return null
-        if (cacheable) cache = CachedMask(src.width, src.height, hash, mask)
+        if (cacheable) cache = SoftReference(CachedMask(src.width, src.height, hash, mask))
         return mask
     }
 
@@ -133,6 +137,7 @@ class BackgroundRemovalFilter : Filter("ai.background_removal", "Background Remo
         val limit = min(255, ((tol + band) * 4f).toInt())
         val reached = if (contiguous) floodFromBorder(dist, w, h, limit, ctx) else null
         Parallel.forRows(h) { y0, y1 ->
+            ctx.checkCancelled()
             for (i in y0 * w until y1 * w) {
                 if (reached != null && reached[i].toInt() == 0) continue
                 val d = (dist[i].toInt() and 0xFF) / 4f

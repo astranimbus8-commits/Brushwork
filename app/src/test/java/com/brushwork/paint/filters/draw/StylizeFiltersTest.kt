@@ -91,6 +91,55 @@ class StylizeFiltersTest {
     }
 
     @Test
+    fun animeColorSimplificationReducesThePalette() {
+        val f = AnimeBackgroundFilter()
+        val src = PixelBuffer(360, 90)
+        for (y in 0 until 90) for (x in 0 until 360) src[x, y] = ColorUtils.hsvToColor(x.toFloat(), 0.7f, 0.85f)
+        val base = f.defaultValues().set("smoothing", 0f).set("outline", 0f).set("sky", 0f)
+            .set("saturation", 0f).set("contrast", 0f).set("brightness", 0f).set("levels", 16f)
+        // Fraction of columns whose hue/chroma (Lab a, b) matches the column 4 px further on:
+        // a smooth rainbow changes everywhere, a simplified one is made of flat color runs.
+        fun flatRuns(img: PixelBuffer): Double {
+            val lab = FloatArray(3)
+            val ab = (0 until 360).map { val c = img[it, 45]; Lab.fromRgb(r(c), g(c), b(c), lab); lab[1] to lab[2] }
+            return (0 until 356).count { val (a0, b0) = ab[it]; val (a1, b1) = ab[it + 4]; kotlin.math.hypot(a1 - a0, b1 - b0) < 1.5f } / 356.0
+        }
+        val smooth = flatRuns(f.apply(src, base.copy().set("colors", 0f), ctx))
+        val simple = flatRuns(f.apply(src, base.copy().set("colors", 100f), ctx))
+        assertTrue("smooth=$smooth simple=$simple", smooth < 0.2 && simple > 0.6)
+        // Flat input stays flat at any simplification.
+        val flat = f.apply(PixelBuffer.filled(30, 20, 0xFF668844.toInt()), base.copy().set("colors", 100f), ctx)
+        assertTrue(flat.pixels.all { it == flat.pixels[0] })
+    }
+
+    @Test
+    fun paletteCentersMatchBetweenPreviewAndFullSize() {
+        // Patchwork of 12 colors with grain: the palette found on a 4x smaller working copy
+        // (as in the live preview) is the one found at full size.
+        val src = PixelBuffer(400, 300)
+        val tiles = intArrayOf(
+            0xFFB03030.toInt(), 0xFF30A040.toInt(), 0xFF3050C0.toInt(), 0xFFE0C040.toInt(),
+            0xFF804020.toInt(), 0xFF20A0A0.toInt(), 0xFFA040A0.toInt(), 0xFFF0F0F0.toInt(),
+            0xFF202020.toInt(), 0xFF808080.toInt(), 0xFFF08040.toInt(), 0xFF90C0F0.toInt(),
+        )
+        for (y in 0 until 300) for (x in 0 until 400) {
+            val t = tiles[(y / 100) * 4 + x / 100]
+            val n = ((Noise.hash(x, y, 5) and 0xFF) - 128) * 12 / 128
+            src[x, y] = ColorUtils.argb(255, r(t) + n, g(t) + n, b(t) + n)
+        }
+        val full = Stylize.kMeans(Stylize.downsampleLab(src, 400, 300, ctx), 12, 1, ctx)
+        val small = Stylize.kMeans(Stylize.downsampleLab(src, 100, 75, ctx), 12, 1, ctx)
+        assertEquals(full.size, small.size)
+        for (i in 0 until small.size / 3) {
+            val d = (0 until full.size / 3).minOf { j ->
+                val dl = small[i * 3] - full[j * 3]; val da = small[i * 3 + 1] - full[j * 3 + 1]; val db = small[i * 3 + 2] - full[j * 3 + 2]
+                kotlin.math.sqrt(dl * dl + da * da + db * db)
+            }
+            assertTrue("center $i is $d from the full-size palette", d < 3f)
+        }
+    }
+
+    @Test
     fun animeOutlinesDarkenStrongEdges() {
         val f = AnimeBackgroundFilter()
         val src = PixelBuffer.filled(400, 400, -1)
