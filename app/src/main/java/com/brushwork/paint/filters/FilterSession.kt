@@ -67,7 +67,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     // ------------------------------------------------------------------ observable state
 
     /** Current values. Replaced (never mutated) on every change: safe to hand to background jobs. */
-    var values: FilterValues by mutableStateOf(filter.defaultValues())
+    var values: FilterValues by mutableStateOf(sessionDefaults())
         private set
 
     /** A preview render is scheduled or running. */
@@ -128,6 +128,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     private var rerunRequested = false
     private var lastRenderMs = 0L
     @Volatile private var rawApplyProgress = -1f
+    /** Stop was requested for the current apply (possibly before its coroutine started). */
+    private var applyCancelRequested = false
 
     /** Debounce before a preview render starts (tests set 0). */
     internal var debounceMs: Long = 80L
@@ -166,12 +168,16 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Builds the preview source and renders the first preview. Called by EditorController.startFilter(). */
     fun start() {
         if (isClosed) return
+        values = sessionDefaults()
         try {
             buildPreviewSource()
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to preview \"${filter.name}\"")
-            // startFilter() assigns controller.filterSession after start() returns: close later.
-            controller.scope.launch(Dispatchers.Main) { cancel() }
+            close()
+            // startFilter() assigns controller.filterSession after start() returns: clear it right after.
+            controller.scope.launch(Dispatchers.Main) {
+                if (controller.filterSession === this@FilterSession) controller.filterSession = null
+            }
             return
         }
         runCatching { FilterRecents.record(controller.appContext, filter.id) }
@@ -234,17 +240,28 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         onValuesChanged()
     }
 
-    /** Restores every parameter to its default. */
+    /** Restores every parameter to its default (drawing-color parameters to the current drawing color). */
     fun reset() {
         if (isClosed || isApplying) return
-        values = filter.defaultValues()
+        values = sessionDefaults()
         onValuesChanged()
     }
 
     /** Restores one parameter to its default. */
     fun resetParam(key: String) {
         val p = filter.params.firstOrNull { it.key == key } ?: return
-        update(key, p.defaultValue())
+        update(key, sessionDefault(p))
+    }
+
+    /** Default of [p] in this session: [FilterParam.Color.useDrawingColor] means the current drawing color. */
+    private fun sessionDefault(p: FilterParam): Any =
+        if (p is FilterParam.Color && p.useDrawingColor) controller.color else p.defaultValue()
+
+    /** The filter's defaults with drawing-color parameters set to the current drawing color. */
+    private fun sessionDefaults(): FilterValues {
+        val v = filter.defaultValues()
+        for (p in filter.params) if (p is FilterParam.Color && p.useDrawingColor) v.set(p.key, controller.color)
+        return v
     }
 
     /** Renders the preview now (the "Preview" button of filters without live preview). */
@@ -418,12 +435,14 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         val svc = services
         val bmp = targetBitmap
         isApplying = true
+        applyCancelRequested = false
         applyProgress = -1f
         rawApplyProgress = -1f
-        controller.runBusy(filter.name) {
-            if (isClosed) { isApplying = false; return@runBusy } // cancelled before the job started
+        controller.runBusy(filter.name, onCancel = { cancelApply() }) {
             applyJob = currentCoroutineContext().job
             try {
+                // Closed or stopped before this coroutine got to run.
+                if (isClosed || applyCancelRequested) return@runBusy
                 val outcome = coroutineScope {
                     val ticker = launch {
                         while (true) {
@@ -467,8 +486,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         }
     }
 
-    /** Stops a running apply; the session stays open with its preview. */
+    /**
+     * Stops a running apply; the session stays open with its preview. Also offered by the
+     * editor's busy overlay (controller.busyCancel).
+     */
     fun cancelApply() {
+        if (!isApplying) return
+        applyCancelRequested = true
         applyJob?.cancel()
     }
 

@@ -77,6 +77,16 @@ class FilterSessionRobolectricTest {
         override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext) = src.copy()
     }
 
+    /** Fills with the "tint" color, which starts at the drawing color. */
+    private class TintFilter : Filter("test_tint", "Test tint", FilterCategory.DRAW) {
+        override val params = listOf(
+            FilterParam.Color("tint", "Tint", 0xFF123456.toInt(), useDrawingColor = true),
+            FilterParam.Color("other", "Other", 0xFF654321.toInt()),
+        )
+        override val generatesContent = true
+        override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext) = PixelBuffer.filled(src.width, src.height, values.color("tint"))
+    }
+
     /** Throws (an exception or out-of-memory) when [armed]. */
     private class FailingFilter(private val oom: Boolean) : Filter("test_fail", "Test fail", FilterCategory.STYLE) {
         @Volatile var armed = true
@@ -400,7 +410,7 @@ class FilterSessionRobolectricTest {
     }
 
     @Test
-    fun longApplyCanBeStopped() {
+    fun longApplyCanBeStoppedFromTheBusyOverlay() {
         val (c, layer) = newController()
         val before = pixels(layer.bitmap)
         val filter = BlockingFilter()
@@ -408,12 +418,57 @@ class FilterSessionRobolectricTest {
         filter.armed = true
         s.apply()
         waitUntil("apply running") { s.isApplying && c.busyMessage != null }
-        s.cancelApply()
+        val stop = c.busyCancel
+        assertNotNull("the busy overlay must offer Stop", stop)
+        stop!!.invoke()
         waitUntil("apply stopped") { !s.isApplying && c.busyMessage == null }
+        assertNull(c.busyCancel)
         assertSame(s, c.filterSession)
         assertFalse(c.canUndo)
         assertArrayEquals(before, pixels(layer.bitmap))
         filter.armed = false
+    }
+
+    @Test
+    fun stopRequestedBeforeTheApplyStartsAppliesNothing() {
+        val (c, layer) = newController()
+        val before = pixels(layer.bitmap)
+        val s = startSession(c, InvertFilter())
+        s.apply()
+        s.cancelApply() // the busy coroutine hasn't run yet
+        waitUntil("apply stopped") { !s.isApplying && c.busyMessage == null }
+        assertSame(s, c.filterSession)
+        assertFalse(c.canUndo)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        assertNotNull("the preview stays", c.renderOverride)
+        // A later apply still works.
+        s.apply()
+        waitUntil("apply") { c.filterSession == null && c.busyMessage == null }
+        assertEquals(INVERTED_BLUE, layer.bitmap.getPixel(0, 0))
+    }
+
+    @Test
+    fun drawingColorParametersStartAtTheDrawingColorAndResetToIt() {
+        val (c, _) = newController()
+        c.color = RED
+        val s = startSession(c, TintFilter())
+        assertEquals(RED, s.values.color("tint"))
+        assertEquals(0xFF654321.toInt(), s.values.color("other"))
+        assertEquals(RED, onScreen(c).getPixel(1, 1))
+
+        s.update("tint", GREEN)
+        s.update("other", GREEN)
+        c.color = BLUE
+        s.resetParam("tint")
+        assertEquals("reset uses the drawing color at reset time", BLUE, s.values.color("tint"))
+        assertEquals(GREEN, s.values.color("other"))
+
+        c.color = 0xFF808080.toInt()
+        s.reset()
+        assertEquals(0xFF808080.toInt(), s.values.color("tint"))
+        assertEquals(0xFF654321.toInt(), s.values.color("other"))
+        waitUntil("re-render after reset") { !s.isRendering && !s.previewStale }
+        assertEquals(0xFF808080.toInt(), onScreen(c).getPixel(1, 1))
     }
 
     @Test
