@@ -7,4 +7,9 @@ val artFilters: List<Filter> = listOf(
     ChromaticAberrationMovingFilter(),
     ChromaticAberrationZoomingFilter(),
     NoiseFilter(),
+    SheerFilter(SheerShape.CROSS),
+    SheerFilter(SheerShape.LINE),
+    SheerFilter(SheerShape.SQUARE),
+    SheerFilter(SheerShape.HEX),
+    SheerFilter(SheerShape.CIRCLE),
 )
