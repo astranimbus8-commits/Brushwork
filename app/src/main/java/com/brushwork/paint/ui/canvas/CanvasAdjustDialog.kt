@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -76,6 +78,21 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
                     unselectedContentColor = BrushworkColors.OnChromeDim,
                 )
             }
+        }
+        if (busy) {
+            // The rotate tab stays open while it works; show the editor's busy state here too.
+            val progress = controller.busyProgress
+            if (progress >= 0f) {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = BrushworkColors.Accent)
+            }
+            Text(
+                controller.busyMessage ?: "",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
         Column(
             Modifier

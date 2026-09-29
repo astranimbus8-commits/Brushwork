@@ -22,7 +22,7 @@ import kotlin.math.roundToInt
 
 /** Resampling method for [CanvasOps.resizeImage]. */
 enum class Resample(val label: String, val description: String) {
-    NEAREST("Nearest", "Hard pixel edges. Best for pixel art and exact 200%/400% enlargements."),
+    NEAREST("Nearest (pixel art)", "Hard pixel edges. Best for pixel art and exact 200%/400% enlargements."),
     BILINEAR("Bilinear", "Smooth linear interpolation; averages pixels when shrinking."),
     HIGH_QUALITY("High quality", "Sharp bicubic interpolation with antialiased, multi-step shrinking."),
 }
