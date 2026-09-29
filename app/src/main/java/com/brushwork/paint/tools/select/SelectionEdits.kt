@@ -1,10 +1,13 @@
 package com.brushwork.paint.tools.select
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
+import android.graphics.Shader
+import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.AddLayerAction
@@ -97,7 +100,10 @@ object SelectionEdits {
             controller.toast("Not enough memory to select the layer")
             return
         }
-        SelectionJobs.applyAsync(controller, "Select layer opacity", mode, "Selecting…") { Selection.wrap(alpha) }
+        val name = controller.activeLayer.name
+        SelectionJobs.applyAsync(controller, "Select layer opacity", mode, "Selecting…", emptyMessage = "\"$name\" has no painted pixels to select") {
+            Selection.wrap(alpha)
+        }
     }
 
     /**
@@ -164,12 +170,19 @@ object SelectionEdits {
         return controller.commitEdit(rec, "Fill selection")
     }
 
-    /** Erases the selected area of the active layer (on a mask: hides it by painting black). */
+    /**
+     * Erases the selected area of the active layer (on a mask: hides it by painting black).
+     * Refused on an alpha-locked layer, whose transparency must not change.
+     */
     fun clearSelection(controller: EditorController): Boolean {
         val sel = controller.selection ?: return false
         val layer = controller.activeLayer
         if (!controller.checkEditable(layer)) return false
         val target = controller.editTargetOf(layer)
+        if (target == EditTarget.CONTENT && layer.alphaLocked) {
+            controller.toast("Can't clear: transparency is locked on \"${layer.name}\"")
+            return false
+        }
         val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
         val rec = controller.beginEdit(layer, target)
         rec.touch(sel.bounds)
@@ -210,9 +223,16 @@ object SelectionEdits {
         return layer
     }
 
-    /** Core of [cutToNewLayer] (no tool callbacks). */
+    /**
+     * Core of [cutToNewLayer] (no tool callbacks). Refused on an alpha-locked layer. In grayscale
+     * / monochrome documents both halves are constrained, so soft selection edges split cleanly.
+     */
     internal fun cut(controller: EditorController, src: Layer, sel: Selection): Layer? {
         val doc = controller.doc
+        if (src.alphaLocked) {
+            controller.toast("Can't cut: transparency is locked on \"${src.name}\". Use Copy to new layer instead.")
+            return null
+        }
         val bmp = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height)
         } catch (e: OutOfMemoryError) {
@@ -220,12 +240,14 @@ object SelectionEdits {
             return null
         }
         drawSelected(Canvas(bmp), src.bitmap, sel)
+        ColorModeOps.constrain(bmp, sel.bounds, doc.colorMode)
         val rec = controller.beginEdit(src, EditTarget.CONTENT)
         rec.touch(sel.bounds)
         Canvas(src.bitmap).apply {
             clipRect(sel.bounds)
             drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
         }
+        ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode)
         val pixels = rec.finish("Cut to new layer")
         src.markChanged()
         val layer = Layer(doc.newLayerId(), uniqueLayerName(controller, "${src.name} cut"), bmp)
@@ -238,11 +260,16 @@ object SelectionEdits {
         return layer
     }
 
+    /**
+     * Draws [src] × selection coverage into [c]. Skia draws an ALPHA_8 bitmap as COVERAGE of the
+     * paint, so "src then mask with DST_IN" would be a no-op; painting the source (as a shader)
+     * through the mask gives the masked pixels instead.
+     */
     private fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
+        val paint = Paint().apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
         c.save()
         c.clipRect(sel.bounds)
-        c.drawBitmap(src, 0f, 0f, null)
-        c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
+        c.drawBitmap(sel.mask, 0f, 0f, paint)
         c.restore()
     }
 

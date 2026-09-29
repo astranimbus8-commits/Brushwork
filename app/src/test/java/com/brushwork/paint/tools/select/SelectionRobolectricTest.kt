@@ -15,6 +15,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.model.SelectionMode
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -201,6 +202,26 @@ class SelectionRobolectricTest {
     }
 
     @Test
+    fun fillIsCroppedAndSkipsTransparentAreasUnderAlphaLock() {
+        val bmp = BitmapUtils.createLayerBitmap(32, 32)
+        drawBox(bmp)
+        val hard = RegionParams(tolerance = 20, antiAlias = false)
+        // Without alpha lock the region is cropped to the pixels that change.
+        val inside = FillTool.computeFill(bmp, 16, 16, hard, null, null)!!
+        assertEquals(Rect(10, 10, 22, 22), Rect(inside.x0, inside.y0, inside.x1, inside.y1))
+        // Clipped by a selection: only the selected part remains.
+        val sel = Selection.fromBytes(ByteArray(32 * 32) { i -> if (i % 32 < 14) -1 else 0 }, 32, 32)
+        val clipped = FillTool.computeFill(bmp, 12, 16, hard, sel, null)!!
+        assertEquals(Rect(10, 10, 14, 22), Rect(clipped.x0, clipped.y0, clipped.x1, clipped.y1))
+        // Alpha lock: nothing can change inside the transparent box, the line itself can.
+        val lock = SelectionEdits.alphaMask(bmp)
+        assertNull(FillTool.computeFill(bmp, 16, 16, hard, null, lock))
+        val line = FillTool.computeFill(bmp, 9, 16, RegionParams(tolerance = 20, antiAlias = true), null, lock)!!
+        assertEquals(Rect(8, 8, 24, 24), Rect(line.x0, line.y0, line.x1, line.y1))
+        assertEquals(0, line.at(16, 16))
+    }
+
+    @Test
     fun eyedropperSamplesCompositeAndAverages() {
         val (c, layer) = controllerFor(16, 16)
         layer.bitmap.eraseColor(0xFF000000.toInt())
@@ -258,6 +279,84 @@ class SelectionRobolectricTest {
         c.undoManager.undo(c)
         assertEquals(1, c.doc.layers.size)
         assertEquals(red, layer.bitmap.getPixel(2, 2))
+    }
+
+    @Test
+    fun clearAndCutRespectAlphaLock() {
+        val (c, layer) = controllerFor(20, 20)
+        layer.bitmap.eraseColor(0xFF00FF00.toInt())
+        layer.alphaLocked = true
+        val sel = Selection.fromBytes(ByteArray(400) { i -> if (i % 20 < 10) -1 else 0 }, 20, 20)
+        c.setSelection(sel, recordUndo = false)
+        assertTrue(!SelectionEdits.clearSelection(c))
+        assertNull(SelectionEdits.cut(c, layer, sel))
+        assertEquals(0xFF00FF00.toInt(), layer.bitmap.getPixel(2, 2))
+        assertEquals(1, c.doc.layers.size)
+        assertTrue(!c.canUndo)
+        // Filling still works (and keeps the transparency).
+        assertTrue(SelectionEdits.fillSelection(c, red))
+        assertEquals(red, layer.bitmap.getPixel(2, 2))
+    }
+
+    @Test
+    fun cutInMonochromeSplitsSoftEdgesCleanly() {
+        val (c, layer) = controllerFor(20, 20)
+        c.doc.colorMode = ColorMode.MONOCHROME
+        layer.bitmap.eraseColor(black)
+        // Soft selection: full on columns 0..4, 60 on column 5, 200 on column 6.
+        val sel = Selection.fromBytes(ByteArray(400) { i ->
+            when (i % 20) { in 0..4 -> -1; 5 -> 60; 6 -> 200.toByte().toInt(); else -> 0 }.toByte()
+        }, 20, 20)
+        val cut = SelectionEdits.cut(c, layer, sel)!!
+        for (x in 0..8) {
+            val a = cut.bitmap.getPixel(x, 3) ushr 24
+            val b = layer.bitmap.getPixel(x, 3) ushr 24
+            assertTrue("x=$x alphas $a / $b must be 0 or 255", (a == 0 || a == 255) && (b == 0 || b == 255))
+            assertEquals("x=$x belongs to exactly one layer", 255, a + b)
+        }
+        assertEquals(255, cut.bitmap.getPixel(6, 3) ushr 24)
+        assertEquals(255, layer.bitmap.getPixel(5, 3) ushr 24)
+    }
+
+    @Test
+    fun copyAndCutFollowTheSelectionShapeNotItsBounds() {
+        val (c, layer) = controllerFor(40, 40)
+        layer.bitmap.eraseColor(0xFF00FF00.toInt())
+        val sel = Selection.fromPath(MarqueeTool.shapePath(RectF(0f, 0f, 40f, 40f), MarqueeShape.ELLIPSE), 40, 40, antiAlias = true)
+        assertEquals(0, sel.alphaAt(1, 1))
+        val cut = SelectionEdits.cut(c, layer, sel)!!
+        // Corners of the bounding box are outside the ellipse: they stay on the source layer.
+        assertEquals(0, cut.bitmap.getPixel(1, 1) ushr 24)
+        assertEquals(255, layer.bitmap.getPixel(1, 1) ushr 24)
+        assertEquals(255, cut.bitmap.getPixel(20, 20) ushr 24)
+        assertEquals(0, layer.bitmap.getPixel(20, 20) ushr 24)
+        // Soft edge pixels are split between the two layers.
+        for (y in 0 until 40) for (x in 0 until 40) {
+            val sum = (cut.bitmap.getPixel(x, y) ushr 24) + (layer.bitmap.getPixel(x, y) ushr 24)
+            assertTrue("($x,$y) sum $sum", abs(sum - 255) <= 2)
+        }
+    }
+
+    @Test
+    fun intersectModeKeepsOnlyTheOverlap() {
+        val w = 20; val h = 20
+        val left = Selection.fromBytes(ByteArray(w * h) { i -> if (i % w < 10) -1 else 0 }, w, h)
+        val top = Selection.fromBytes(ByteArray(w * h) { i -> if (i / w < 6) -1 else if (i / w == 6) 100 else 0 }, w, h)
+        val both = SelectionMasks.combine(left, top, SelectionMode.INTERSECT)!!
+        assertEquals(Rect(0, 0, 10, 7), both.bounds)
+        assertEquals(255, both.alphaAt(3, 3))
+        assertEquals(100, both.alphaAt(3, 6))
+        assertEquals(0, both.alphaAt(15, 3))
+        assertEquals(0, both.alphaAt(3, 10))
+        val none = SelectionMasks.combine(left, Selection.fromBytes(ByteArray(w * h) { i -> if (i % w >= 12) -1 else 0 }, w, h), SelectionMode.INTERSECT)!!
+        assertTrue(none.isEmpty)
+        // Add / subtract behave as expected too.
+        val add = SelectionMasks.combine(left, top, SelectionMode.ADD)!!
+        assertEquals(Rect(0, 0, 20, 20), add.bounds)
+        assertEquals(255, add.alphaAt(15, 3)); assertEquals(0, add.alphaAt(15, 10)); assertEquals(255, add.alphaAt(3, 10))
+        val sub = SelectionMasks.combine(left, top, SelectionMode.SUBTRACT)!!
+        assertEquals(Rect(0, 6, 10, 20), sub.bounds)
+        assertTrue(abs(sub.alphaAt(3, 6) - 155) <= 1)
     }
 
     @Test

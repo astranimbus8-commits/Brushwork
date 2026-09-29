@@ -174,6 +174,22 @@ class RegionFillTest {
     }
 
     @Test
+    fun trimCropsToCoverageAndAppliesKeepMask() {
+        val w = 6; val h = 5
+        val cov = ByteArray(w * h)
+        cov[1 * w + 2] = -1; cov[3 * w + 4] = 90; cov[2 * w + 1] = 40
+        val r = RegionFill.trim(Region(10, 20, 10 + w, 20 + h, cov.copyOf()))!!
+        assertEquals(11, r.x0); assertEquals(21, r.y0); assertEquals(15, r.x1); assertEquals(24, r.y1)
+        assertEquals(255, r.at(12, 21)); assertEquals(90, r.at(14, 23)); assertEquals(40, r.at(11, 22))
+        // keep = 0 removes coverage; only (4, 3) survives.
+        val keep = ByteArray(w * h).also { it[3 * w + 4] = 1 }
+        val k = RegionFill.trim(Region(0, 0, w, h, cov.copyOf()), keep)!!
+        assertEquals(4, k.x0); assertEquals(3, k.y0); assertEquals(1, k.width); assertEquals(1, k.height)
+        assertEquals(90, k.at(4, 3))
+        assertNull(RegionFill.trim(Region(0, 0, w, h, cov.copyOf()), ByteArray(w * h)))
+    }
+
+    @Test
     fun largeCanvasFloodFillIsFast() {
         val w = 4000; val h = 4000
         val map = ByteArray(w * h) { RegionFill.PASSABLE.toByte() }

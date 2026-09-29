@@ -14,6 +14,7 @@ import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -66,12 +67,17 @@ class FillTool(controller: EditorController) : Tool(controller) {
         val target = controller.editTargetOf(layer)
         val targetBitmap = targetBitmap(layer, target) ?: return
         val s = settings
+        var lockAlpha: Bitmap? = null
         val snapshot: Bitmap = try {
+            // Under alpha lock only painted pixels can change: remember where they are.
+            if (target == EditTarget.CONTENT && layer.alphaLocked) lockAlpha = SelectionEdits.alphaMask(layer.bitmap)
             PixelSnapshot.take(controller, s.source, targetBitmap)
         } catch (e: OutOfMemoryError) {
+            lockAlpha?.recycle()
             controller.toast("Not enough memory to fill")
             return
         }
+        val keep = lockAlpha
         val version = layer.contentVersion
         val color = controller.color
         val w = doc.width; val h = doc.height
@@ -82,14 +88,16 @@ class FillTool(controller: EditorController) : Tool(controller) {
             try {
                 val region = withContext(Dispatchers.Default) {
                     try {
-                        val cancelled = { self?.isActive == false }
-                        val clip = sel?.toBytes()
-                        val map = PixelSnapshot.similarityMap(snapshot, ix, iy, s.tolerance, clip, cancelled) ?: return@withContext null
-                        RegionFill.compute(map, w, h, ix, iy, params, clip, cancelled)
+                        computeFill(snapshot, ix, iy, params, sel, keep) { self?.isActive == false }
                     } finally {
                         snapshot.recycle()
+                        keep?.recycle()
                     }
-                } ?: return@launch
+                }
+                if (region == null) {
+                    if (keep != null) controller.toast("Nothing to fill: transparency is locked on \"${layer.name}\" and this area is empty")
+                    return@launch
+                }
                 val stale = doc.indexOf(layer) < 0 || layer.contentVersion != version ||
                     targetBitmap(layer, target) !== targetBitmap || doc.width != w || doc.height != h
                 if (stale) {
@@ -130,5 +138,25 @@ class FillTool(controller: EditorController) : Tool(controller) {
         Canvas(bmp).drawBitmap(coverage, rect.left.toFloat(), rect.top.toFloat(), paint)
         coverage.recycle()
         return controller.commitEdit(rec, "Fill")
+    }
+
+    companion object {
+        /**
+         * The fill region for a tap at ([x], [y]) of [snapshot] (blocking; any thread), clipped to
+         * [sel] and, when [lockAlpha] (ALPHA_8 of the target layer) is given, to its painted
+         * pixels. Cropped to the pixels that actually change; null if none (or [cancelled]).
+         */
+        internal fun computeFill(
+            snapshot: Bitmap, x: Int, y: Int, params: RegionParams, sel: Selection?, lockAlpha: Bitmap?,
+            cancelled: () -> Boolean = { false },
+        ): Region? {
+            val w = snapshot.width; val h = snapshot.height
+            val clip = sel?.toBytes()
+            val map = PixelSnapshot.similarityMap(snapshot, x, y, params.tolerance, clip, cancelled) ?: return null
+            val region = RegionFill.compute(map, w, h, x, y, params, clip, cancelled) ?: return null
+            if (cancelled()) return null
+            val keep = lockAlpha?.let { SelectionMasks.crop(it, Rect(region.x0, region.y0, region.x1, region.y1)) }
+            return RegionFill.trim(region, keep)
+        }
     }
 }

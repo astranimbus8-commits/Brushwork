@@ -51,7 +51,12 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         sampleAt(p)
         active = false
         controller.invalidateOverlay()
-        val c = sampled ?: return
+        val c = sampled
+        if (c == null) {
+            val where = if (settings.source == SampleSource.LAYER) "on this layer" else "on the canvas"
+            controller.toast("Nothing to pick here: the area is transparent $where")
+            return
+        }
         controller.color = c or 0xFF000000.toInt()
         if (settings.returnToBrush) controller.selectTool(controller.lastPaintTool)
     }

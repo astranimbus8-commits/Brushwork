@@ -71,7 +71,24 @@ internal object SelectionMasks {
     fun combine(base: Selection?, new: Selection, mode: SelectionMode): Selection? = when {
         mode == SelectionMode.REPLACE -> new
         base == null -> if (mode == SelectionMode.ADD) new else null
+        mode == SelectionMode.INTERSECT -> intersect(base, new)
         else -> base.combine(new, mode)
+    }
+
+    /**
+     * [a] × [b] per pixel. Done on bytes because Skia draws an ALPHA_8 bitmap as coverage, which
+     * makes a DST_IN draw of one mask onto the other (Selection.combine) a no-op.
+     */
+    fun intersect(a: Selection, b: Selection): Selection {
+        val r = Rect(a.bounds)
+        if (!r.intersect(b.bounds)) return Selection.empty(a.width, a.height)
+        val x = crop(a.mask, r)
+        val y = crop(b.mask, r)
+        for (i in x.indices) {
+            val p = (x[i].toInt() and 0xFF) * (y[i].toInt() and 0xFF)
+            x[i] = ((p + 127) / 255).toByte()
+        }
+        return fromWindow(x, r.left, r.top, r.width(), r.height(), a.width, a.height)
     }
 }
 
@@ -115,13 +132,15 @@ internal object SelectionJobs {
     /**
      * Runs [build] on Dispatchers.Default and publishes its result combined (by [mode]) with the
      * selection that is current when it finishes. Undoable (setSelection records it). [build]
-     * returns null to change nothing. [onFinished] runs on the main thread in every case.
+     * returns null to change nothing. If [emptyMessage] is given, an empty result shows it
+     * instead of changing the selection. [onFinished] runs on the main thread in every case.
      */
     fun applyAsync(
         controller: EditorController,
         label: String,
         mode: SelectionMode,
         busyLabel: String,
+        emptyMessage: String? = null,
         onFinished: () -> Unit = {},
         build: (cancelled: () -> Boolean) -> Selection?,
     ): Job {
@@ -132,9 +151,14 @@ internal object SelectionJobs {
             try {
                 val (fresh, combined) = withContext(Dispatchers.Default) {
                     val s = build { self?.isActive == false } ?: return@withContext null to null
+                    if (s.isEmpty && emptyMessage != null) return@withContext s to null
                     s to SelectionMasks.combine(base, s, mode)
                 }
                 if (fresh == null) return@launch
+                if (fresh.isEmpty && emptyMessage != null) {
+                    controller.toast(emptyMessage)
+                    return@launch
+                }
                 if (controller.doc.width != docW || controller.doc.height != docH) return@launch
                 val current = controller.selection
                 val result = if (current === base) combined else SelectionMasks.combine(current, fresh, mode)

@@ -199,6 +199,8 @@ class LassoTool(controller: EditorController) : Tool(controller) {
 /** Growable list of float points (no boxing). */
 internal class PointList {
     private var data = FloatArray(256)
+    /** Reused for screen mapping so drawing a long stroke doesn't allocate every frame. */
+    private var scratch = FloatArray(0)
     var size = 0
         private set
 
@@ -239,11 +241,12 @@ internal class PointList {
     fun toScreenPath(t: ViewTransform, out: Path, close: Boolean) {
         out.reset()
         if (size == 0) return
-        val pts = data.copyOf(2 * size)
-        t.matrix.mapPoints(pts)
+        if (scratch.size < 2 * size) scratch = FloatArray(data.size)
+        val pts = scratch
+        t.matrix.mapPoints(pts, 0, data, 0, size)
         out.moveTo(pts[0], pts[1])
         var k = 2
-        while (k < pts.size) { out.lineTo(pts[k], pts[k + 1]); k += 2 }
+        while (k < 2 * size) { out.lineTo(pts[k], pts[k + 1]); k += 2 }
         if (close) out.close()
     }
 }

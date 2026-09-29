@@ -300,6 +300,35 @@ object RegionFill {
         return if (maxX < 0) null else intArrayOf(minX, minY, maxX + 1, maxY + 1)
     }
 
+    /**
+     * [region] cropped to its non-zero coverage, after zeroing the coverage wherever [keep]
+     * (optional, same window layout as the coverage) is 0 — e.g. transparent pixels of an
+     * alpha-locked layer. Modifies [region]'s coverage in place; null when nothing is left.
+     */
+    fun trim(region: Region, keep: ByteArray? = null): Region? {
+        val w = region.width; val h = region.height
+        val cov = region.coverage
+        var minX = w; var minY = h; var maxX = -1; var maxY = -1
+        for (y in 0 until h) {
+            val row = y * w
+            for (x in 0 until w) {
+                val i = row + x
+                if (cov[i].toInt() == 0) continue
+                if (keep != null && keep[i].toInt() == 0) { cov[i] = 0; continue }
+                if (x < minX) minX = x
+                if (x > maxX) maxX = x
+                if (y < minY) minY = y
+                maxY = y
+            }
+        }
+        if (maxX < 0) return null
+        if (minX == 0 && minY == 0 && maxX == w - 1 && maxY == h - 1) return region
+        val nw = maxX - minX + 1; val nh = maxY - minY + 1
+        val out = ByteArray(nw * nh)
+        for (y in 0 until nh) System.arraycopy(cov, (minY + y) * w + minX, out, y * nw, nw)
+        return Region(region.x0 + minX, region.y0 + minY, region.x0 + maxX + 1, region.y0 + maxY + 1, out)
+    }
+
     /** Turns the flagged pixels into soft coverage with expand / anti-alias / clip applied. */
     private fun rasterize(
         map: ByteArray, w: Int, h: Int, b: IntArray, bit: Int, params: RegionParams,
