@@ -153,6 +153,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     private var grabDx = 0f
     private var grabDy = 0f
+    /** Value of the dragged point before the gesture (restored if the gesture is cancelled). */
+    private var dragStartValue: FloatArray? = null
 
     private val override = object : LayerRenderOverride {
         override val layer: Layer get() = this@FilterSession.layer
@@ -667,6 +669,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Returns true (and takes the gesture) if the filter has point parameters to drag. */
     fun onPointerDown(p: ToolPoint): Boolean {
         if (isClosed || isApplying || pointParams.isEmpty()) return false
+        if (draggingPoint != null) onPointerCancel() // the previous gesture never ended
         val t = controller.viewTransform
         val finger = t.docToScreen(p.x, p.y)
         var best = pointParams.first()
@@ -681,6 +684,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         val (bx, by) = pointPosition(best.key)
         if (bestDist <= t.dp(HANDLE_GRAB_DP)) { grabDx = bx - p.x; grabDy = by - p.y } else { grabDx = 0f; grabDy = 0f }
         draggingPoint = best.key
+        dragStartValue = values.point(best.key).copyOf()
         movePointTo(p)
         controller.invalidateOverlay()
         return true
@@ -694,6 +698,20 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (draggingPoint == null) return
         movePointTo(p)
         draggingPoint = null
+        dragStartValue = null
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * The canvas gesture was cancelled (a second finger landed for pinch-zoom or a two-finger
+     * tap): the dragged point goes back to where it was before the gesture.
+     */
+    fun onPointerCancel() {
+        val key = draggingPoint ?: return
+        val start = dragStartValue
+        draggingPoint = null
+        dragStartValue = null
+        if (start != null && !values.point(key).contentEquals(start)) update(key, start)
         controller.invalidateOverlay()
     }
 
@@ -711,6 +729,9 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Crosshair handles for point parameters, in screen space. */
     fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         if (isClosed || pointParams.isEmpty()) return
+        // EditorController.pointerCancel() doesn't notify the session, so a drag that ended
+        // without onPointerUp was cancelled: undo its move before drawing the handles.
+        if (draggingPoint != null && !controller.isInteracting) onPointerCancel()
         val r = t.dp(11f)
         for (pp in pointParams) {
             val (dx, dy) = pointPosition(pp.key)

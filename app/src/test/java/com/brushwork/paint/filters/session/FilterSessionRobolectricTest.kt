@@ -372,6 +372,42 @@ class FilterSessionRobolectricTest {
     }
 
     @Test
+    fun cancelledCanvasGestureLeavesThePointWhereItWas() {
+        val (c, _) = newController()
+        c.viewTransform.set(Matrix().apply { setScale(10f, 10f) })
+        val s = startSession(c, PointFilter())
+        val overlay = Canvas(BitmapUtils.createLayerBitmap(400, 300))
+
+        // First finger of a pinch: the nearest point jumps there, then the view cancels the gesture.
+        c.pointerDown(ToolPoint(5f, 5f))
+        assertArrayEquals(floatArrayOf(5f / 40f, 5f / 30f), s.values.point("center"), 1e-4f)
+        c.pointerCancel()
+        s.drawOverlay(overlay, c.viewTransform)
+        assertNull(s.draggingPoint)
+        assertArrayEquals(floatArrayOf(0.5f, 0.5f), s.values.point("center"), 0f)
+
+        // The explicit hook does the same.
+        assertTrue(s.onPointerDown(ToolPoint(5f, 5f)))
+        s.onPointerCancel()
+        assertArrayEquals(floatArrayOf(0.5f, 0.5f), s.values.point("center"), 0f)
+
+        // A new gesture after an unnoticed cancel restores first, then drags normally.
+        c.pointerDown(ToolPoint(5f, 5f))
+        c.pointerCancel()
+        c.pointerDown(ToolPoint(37f, 28f)) // on the "focus" handle
+        assertEquals("focus", s.draggingPoint)
+        c.pointerUp(ToolPoint(37f, 28f))
+        assertArrayEquals(floatArrayOf(0.5f, 0.5f), s.values.point("center"), 0f)
+        assertArrayEquals(floatArrayOf(0.9f, 0.9f), s.values.point("focus"), 1e-4f)
+        // A finished drag is not undone by later overlay draws.
+        c.pointerDown(ToolPoint(21f, 15f))
+        c.pointerMove(ToolPoint(11f, 5f))
+        c.pointerUp(ToolPoint(11f, 5f))
+        s.drawOverlay(overlay, c.viewTransform)
+        assertArrayEquals(floatArrayOf(10f / 40f, 5f / 30f), s.values.point("center"), 1e-4f)
+    }
+
+    @Test
     fun filterErrorsKeepTheSessionOpen() {
         val (c, layer) = newController()
         val before = pixels(layer.bitmap)
