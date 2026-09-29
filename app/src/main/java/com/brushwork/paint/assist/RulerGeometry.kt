@@ -126,6 +126,51 @@ object RulerGeometry {
         r.copy(centerX = width / 2f, centerY = height / 2f)
 
     /**
+     * True for a ruler that was never placed (the model's default center, -1/-1). Other negative
+     * centers are real positions left of / above the canvas (e.g. an off-canvas vanishing point),
+     * so they must not be treated as "unplaced".
+     */
+    fun isUnplaced(r: RulerSettings): Boolean = r.centerX == UNPLACED && r.centerY == UNPLACED
+
+    /** [r], centered on the canvas if it was never placed. */
+    fun resolved(r: RulerSettings, width: Int, height: Int): RulerSettings =
+        if (isUnplaced(r)) centered(r, width, height) else r
+
+    /**
+     * [r] with every number finite and in a usable range for a [width] x [height] canvas: the
+     * center within [MAX_REACH] canvas sizes of the canvas (float precision of the snapping math
+     * degrades far away), radii within [MIN_RADIUS, MAX_RADIUS] canvas sizes, the angle in
+     * (-180, 180], a positive nudge step. Non-finite values fall back to defaults.
+     */
+    fun sanitize(r: RulerSettings, width: Int, height: Int): RulerSettings {
+        val extent = maxOf(width, height, 1).toFloat()
+        val reach = extent * MAX_REACH
+        val maxRadius = extent * MAX_RADIUS
+        val d = reset(r, width, height)
+        fun pos(v: Float, size: Int, default: Float) = if (v.isFinite()) v.coerceIn(-reach, size + reach) else default
+        fun rad(v: Float, default: Float) = if (v.isFinite()) v.coerceIn(MIN_RADIUS, maxRadius) else default
+        val s = r.copy(
+            centerX = pos(r.centerX, width, d.centerX),
+            centerY = pos(r.centerY, height, d.centerY),
+            angleDeg = if (r.angleDeg.isFinite()) normalizeAngle(r.angleDeg) else 0f,
+            radius = rad(r.radius, d.radius),
+            radiusX = rad(r.radiusX, d.radiusX),
+            radiusY = rad(r.radiusY, d.radiusY),
+            radialLines = r.radialLines.coerceIn(MIN_RADIAL_LINES, MAX_RADIAL_LINES),
+            nudgeStep = if (r.nudgeStep.isFinite() && r.nudgeStep > 0f) r.nudgeStep else r.unit.defaultStep.toFloat(),
+        )
+        return if (s == r) r else s
+    }
+
+    private const val UNPLACED = -1f
+    /** How far (in canvas sizes) the ruler center may be from the canvas. */
+    private const val MAX_REACH = 10f
+    /** Largest radius / semi-axis, in canvas sizes. */
+    private const val MAX_RADIUS = 20f
+    const val MIN_RADIAL_LINES = 2
+    const val MAX_RADIAL_LINES = 360
+
+    /**
      * [r] with its geometry reset to defaults sized for a [width] x [height] canvas (type, snap
      * mode, unit, nudge step and on/off state are kept).
      */

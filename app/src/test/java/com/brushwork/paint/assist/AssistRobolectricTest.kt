@@ -15,14 +15,17 @@ import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.RulerSettings
+import com.brushwork.paint.model.RulerSnap
 import com.brushwork.paint.model.RulerType
 import com.brushwork.paint.model.StabilizerMode
 import com.brushwork.paint.model.StabilizerSettings
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -177,6 +180,8 @@ class AssistRobolectricTest {
         c.updateRuler(RulerSettings(enabled = false, type = RulerType.STRAIGHT, centerX = 500f, centerY = 500f))
         val tool = RulerTool(c)
         tool.onActivate()
+        assertFalse(c.ruler.enabled) // activation alone (e.g. a layer change) does not switch it on
+        tool.onSelected()
         assertTrue(c.ruler.enabled)
         assertFalse(tool.hasPendingWork)
 
@@ -194,5 +199,64 @@ class AssistRobolectricTest {
         tool.onCancel()
         assertEquals(before, c.ruler)
         assertEquals(before, c.doc.ruler)
+    }
+
+    @Test
+    fun pickingTheRulerToolSwitchesTheRulerOnButLayerChangesDoNot() {
+        val c = controller()
+        c.updateRuler(c.ruler.copy(enabled = false))
+        c.selectTool(ToolId.RULER)
+        assertTrue(c.ruler.enabled)
+        // Switched off in the Numbers sheet while the ruler tool stays active, then layers change.
+        c.updateRuler(c.ruler.copy(enabled = false))
+        assertNotNull(c.addLayer())
+        c.selectLayer(c.doc.layers.first())
+        assertEquals(ToolId.RULER, c.activeToolId)
+        assertFalse(c.ruler.enabled)
+    }
+
+    @Test
+    fun offCanvasRulerCenterIsDrawnWhereStrokesSnap() {
+        // A vertical straight ruler left of the canvas (x = -50): guide and snapping agree.
+        val c = controller(200, 200)
+        c.viewTransform.set(Matrix().apply { setTranslate(100f, 0f) })
+        c.viewTransform.density = 1f
+        c.updateRuler(RulerSettings(enabled = true, type = RulerType.STRAIGHT, centerX = -50f, centerY = 100f, angleDeg = 90f, snap = RulerSnap.ON_RULER))
+        val bmp = Bitmap.createBitmap(400, 200, Bitmap.Config.ARGB_8888)
+        RulerRenderer.draw(Canvas(bmp), c.viewTransform, c.doc, c.ruler, editing = false)
+        assertTrue(inkNear(bmp, 50, 20) > 0)   // screen x = -50 + 100
+        assertEquals(0, alphaAt(bmp, 200, 20))  // not at the canvas center
+        val s = c.strokeAssist.down(ToolPoint(30f, 40f))
+        assertEquals(-50f, s.x, 1e-3f)
+        c.strokeAssist.cancel()
+        // Picking the tool keeps that position (it is not mistaken for "never placed").
+        c.selectTool(ToolId.RULER)
+        assertEquals(-50f, c.ruler.centerX, 0f)
+    }
+
+    @Test(timeout = 20_000)
+    fun hugeGridOffsetsNeitherHangNorShiftThePattern() {
+        val d = doc(200, 100)
+        for (offset in floatArrayOf(1e12f, -1e30f)) {
+            val bmp = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888)
+            // Spacing 16 / period 64 divide both offsets exactly: lines stay on multiples of 16.
+            val grid = GridSettings(enabled = true, spacingPx = 16f, majorEvery = 4, offsetXPx = offset, offsetYPx = offset, color = red, opacity = 1f)
+            GridRenderer.draw(Canvas(bmp), transform(1f), d, grid)
+            assertEquals("offset $offset", 255, inkNear(bmp, 64, 50))
+            assertEquals("offset $offset", 128f, inkNear(bmp, 16, 50).toFloat(), 2f)
+            assertEquals("offset $offset", 0, alphaAt(bmp, 24, 50))
+        }
+    }
+
+    @Test
+    fun straightRulerTicksShowEvenWhenTheCenterIsFarAway() {
+        // 800% zoom, center 20000 doc px left of the view: ticks at |k| ~ 10000 steps must draw.
+        val d = doc(1000, 1000)
+        val t = ViewTransform().apply { set(Matrix().apply { setScale(8f, 8f); postTranslate(0f, 50f - 800f) }); density = 1f }
+        val r = RulerSettings(enabled = true, type = RulerType.STRAIGHT, centerX = -20000f, centerY = 100f)
+        val bmp = Bitmap.createBitmap(200, 100, Bitmap.Config.ARGB_8888)
+        RulerRenderer.draw(Canvas(bmp), t, d, r, editing = false)
+        assertTrue(inkedColumns(bmp, 50) > 190)  // the guide line itself
+        assertTrue(inkedColumns(bmp, 45) > 0)    // tick marks above it
     }
 }

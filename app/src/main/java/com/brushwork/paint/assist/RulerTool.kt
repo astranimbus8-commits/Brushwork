@@ -24,13 +24,14 @@ class RulerTool(controller: EditorController) : Tool(controller) {
     private val pts = FloatArray(2)
     private val highlight = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xCCFFFFFF.toInt() }
 
-    /** Editing the ruler implies using it: switch it on (and place it) when the tool is picked. */
-    override fun onActivate() {
+    /**
+     * Editing the ruler implies using it: switch it on (and place it) when the user picks the
+     * tool. Not done in onActivate, which also fires on layer changes and would turn a ruler
+     * back on that the user had just switched off.
+     */
+    override fun onSelected() {
         val r = controller.ruler
-        if (!r.enabled || r.centerX < 0f || r.centerY < 0f) {
-            val placed = if (r.centerX < 0f || r.centerY < 0f) RulerGeometry.centered(r, controller.doc.width, controller.doc.height) else r
-            controller.updateRuler(placed.copy(enabled = true))
-        }
+        controller.updateRuler(RulerGeometry.resolved(r, controller.doc.width, controller.doc.height).copy(enabled = true))
     }
 
     override fun onDeactivate() {
@@ -39,7 +40,7 @@ class RulerTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onDown(p: ToolPoint) {
-        val r = controller.ruler
+        val r = RulerGeometry.resolved(controller.ruler, controller.doc.width, controller.doc.height)
         start = r
         downX = p.x; downY = p.y
         handle = RulerGeometry.hitHandle(r, p.x, p.y, docPerDp(controller.viewTransform))
@@ -48,7 +49,8 @@ class RulerTool(controller: EditorController) : Tool(controller) {
 
     override fun onMove(p: ToolPoint) {
         val s = start ?: return
-        controller.updateRuler(RulerGeometry.drag(s, handle, downX, downY, p.x, p.y))
+        val d = controller.doc
+        controller.updateRuler(RulerGeometry.sanitize(RulerGeometry.drag(s, handle, downX, downY, p.x, p.y), d.width, d.height))
     }
 
     override fun onUp(p: ToolPoint) {

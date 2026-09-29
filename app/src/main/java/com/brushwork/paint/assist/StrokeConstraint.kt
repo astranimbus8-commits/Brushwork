@@ -88,8 +88,52 @@ sealed class StrokeConstraint {
         private val cr = cos(rotation)
         private val sr = sin(rotation)
 
-        override fun project(x: Float, y: Float): Vec2 =
-            Geometry.projectOnEllipse(Vec2(x, y), Vec2(cx, cy), rx, ry, rotation)
+        /**
+         * Closest point of the ellipse. The single-start Newton projection of core/Geometry can
+         * converge to a wrong (even far-side) point for positions well inside an eccentric
+         * ellipse, which would sweep the stroke around half the curve, so it is compared with
+         * guarded Newton runs from the curve points straight across from p along each axis and
+         * the closest candidate wins.
+         */
+        override fun project(x: Float, y: Float): Vec2 {
+            val p = Vec2(x, y)
+            var best = Geometry.projectOnEllipse(p, Vec2(cx, cy), rx, ry, rotation)
+            var bestD = best.distanceTo(p)
+            val vx = x - cx; val vy = y - cy
+            val lx = vx * cr + vy * sr
+            val ly = -vx * sr + vy * cr
+            val ux = (lx / rx).coerceIn(-1f, 1f)
+            val uy = (ly / ry).coerceIn(-1f, 1f)
+            for (i in 0 until 3) {
+                val start = when (i) {
+                    0 -> atan2(ly / ry, lx / rx)
+                    1 -> atan2(signOf(ly) * sqrt(1f - ux * ux), ux)
+                    else -> atan2(uy, signOf(lx) * sqrt(1f - uy * uy))
+                }
+                val q = pointAt(refine(start, lx, ly))
+                val d = q.distanceTo(p)
+                if (d < bestD) { best = q; bestD = d }
+            }
+            return best
+        }
+
+        /** Newton on the squared distance to local point (lx, ly); stops where it isn't convex. */
+        private fun refine(theta: Float, lx: Float, ly: Float): Float {
+            var t = theta
+            repeat(8) {
+                val c = cos(t); val s = sin(t)
+                val ex = rx * c - lx; val ey = ry * s - ly
+                val f = -ex * rx * s + ey * ry * c
+                val df = rx * rx * s * s - ex * rx * c + ry * ry * c * c - ey * ry * s
+                if (df <= 1e-6f) return t
+                val step = f / df
+                t -= step
+                if (abs(step) < 1e-6f) return t
+            }
+            return t
+        }
+
+        private fun signOf(v: Float): Float = if (v < 0f) -1f else 1f
 
         /** Parametric angle of a point (eccentric anomaly) in the ellipse's local frame. */
         private fun param(p: Vec2): Float {
@@ -162,11 +206,14 @@ object RulerSnapping {
             RulerType.ELLIPSE -> {
                 val rx = r.radiusX; val ry = r.radiusY
                 if (rx < MIN_RADIUS || ry < MIN_RADIUS) return null
-                val onCurve = Geometry.projectOnEllipse(Vec2(sx, sy), Vec2(cx, cy), rx, ry, rot)
-                val onRuler = r.snap == RulerSnap.ON_RULER || onCurve.distanceTo(Vec2(sx, sy)) <= snapDistance
+                val ruler = StrokeConstraint.Ellipse(cx, cy, rx, ry, rot)
+                val onRuler = r.snap == RulerSnap.ON_RULER || ruler.project(sx, sy).distanceTo(Vec2(sx, sy)) <= snapDistance
                 val k = if (onRuler) 1f else ellipseScale(r, sx, sy)
-                if (k * minOf(rx, ry) < MIN_RADIUS) null
-                else StrokeConstraint.Ellipse(cx, cy, rx * k, ry * k, rot)
+                when {
+                    onRuler -> ruler
+                    k * minOf(rx, ry) < MIN_RADIUS -> null
+                    else -> StrokeConstraint.Ellipse(cx, cy, rx * k, ry * k, rot)
+                }
             }
             RulerType.RADIAL -> radialThrough(cx, cy, sx, sy, maxOf(minRadialDistance, MIN_RADIUS))
         }

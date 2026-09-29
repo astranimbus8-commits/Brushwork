@@ -50,6 +50,8 @@ private class LineBuffer(initial: Int = 512) {
 object GridRenderer {
     /** Lines closer than this on screen (px) are skipped (level of detail). */
     const val MIN_SCREEN_SPACING = 6f
+    /** Spacings below this (document px; the panel allows >= 1) are treated as invalid. */
+    private const val MIN_SPACING = 0.01f
     private const val MINOR_ALPHA = 0.5f
     private val SQRT3_2 = (sqrt(3.0) / 2.0).toFloat()
 
@@ -115,9 +117,13 @@ object GridRenderer {
      * part of the canvas. Minor lines are skipped when denser than [MIN_SCREEN_SPACING]; major
      * lines (or all lines without majors) are thinned by powers of two until they are not.
      */
-    private fun family(canvas: Canvas, nx: Float, ny: Float, spacing: Float, c0: Float, grid: GridSettings, zoom: Float, alpha: Float) {
+    private fun family(canvas: Canvas, nx: Float, ny: Float, spacing: Float, offset: Float, grid: GridSettings, zoom: Float, alpha: Float) {
         val screen = spacing * zoom
-        if (screen <= 0f || screen.isNaN()) return
+        if (!(spacing >= MIN_SPACING) || !screen.isFinite() || !offset.isFinite()) return
+        // The pattern repeats every spacing * majorEvery: reduce the offset into one period so
+        // huge offsets can neither overflow the line indices (an endless loop) nor lose precision.
+        val period = spacing.toDouble() * max(grid.majorEvery, 1)
+        val c0 = (offset - floor(offset / period) * period).toFloat()
         val v = visible
         val a = nx * v.left + ny * v.top
         val b = nx * v.right + ny * v.top
@@ -189,6 +195,8 @@ object RulerRenderer {
     private const val GUIDE_FAINT = 0xA04DA3FF.toInt()
     private const val SHADOW = 0x8C000000.toInt()
     private const val SHADOW_FAINT = 0x59000000
+    /** Safety cap on generated tick marks (a view shows ~100 at most). */
+    private const val MAX_TICKS = 5000L
 
     private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
@@ -205,10 +213,9 @@ object RulerRenderer {
         val zoom = hypot(values[Matrix.MSCALE_X], values[Matrix.MSKEW_Y])
         if (zoom < 1e-6f) return
         if (!canvas.getClipBounds(clip)) return
-        val cx = if (ruler.centerX < 0f) doc.width / 2f else ruler.centerX
-        val cy = if (ruler.centerY < 0f) doc.height / 2f else ruler.centerY
-        val r = if (cx == ruler.centerX && cy == ruler.centerY) ruler else ruler.copy(centerX = cx, centerY = cy)
-        mapPoint(t, cx, cy)
+        // Same resolution as the snapping math (StrokeAssist) so the guide is where strokes go.
+        val r = RulerGeometry.resolved(ruler, doc.width, doc.height)
+        mapPoint(t, r.centerX, r.centerY)
         val sx = pts[0]; val sy = pts[1]
         when (r.type) {
             RulerType.STRAIGHT -> drawStraight(canvas, t, r, sx, sy, zoom)
@@ -252,21 +259,36 @@ object RulerRenderer {
     private fun drawStraight(canvas: Canvas, t: ViewTransform, r: RulerSettings, sx: Float, sy: Float, zoom: Float) {
         mapDirection(t, r.angleDeg)
         val vx = pts[2]; val vy = pts[3]
-        val ext = reach(sx, sy)
-        stroke(canvas, t, sx - vx * ext, sy - vy * ext, sx + vx * ext, sy + vy * ext)
+        // Visible stretch of the line: the clip corners projected onto it (screen px from the center).
+        var lo = Float.MAX_VALUE
+        var hi = -Float.MAX_VALUE
+        for (i in 0 until 4) {
+            val px = (if (i and 1 == 0) clip.left else clip.right) - sx
+            val py = (if (i < 2) clip.top else clip.bottom) - sy
+            val d = px * vx + py * vy
+            if (d < lo) lo = d
+            if (d > hi) hi = d
+        }
+        val margin = t.dp(8f)
+        lo -= margin; hi += margin
+        stroke(canvas, t, sx + vx * lo, sy + vy * lo, sx + vx * hi, sy + vy * hi)
 
-        // Tick marks measured from the center: minor every "nice" step >= 10dp, longer every 5 and 10.
+        // Tick marks measured from the center: minor every "nice" step >= 10dp, longer every 5 and
+        // 10. Only the visible ones are generated, however far away the center is.
         val stepDoc = niceStep(t.dp(10f) / zoom)
         val stepScreen = stepDoc * zoom
-        val kMax = (ext / stepScreen).toInt().coerceAtMost(4000)
+        val kLo = ceil(lo / stepScreen).toLong()
+        val kHi = floor(hi / stepScreen).toLong()
+        if (kHi - kLo > MAX_TICKS) return
         val nx = -vy; val ny = vx
         buffer.clear()
-        for (k in -kMax..kMax) {
-            val px = sx + vx * k * stepScreen
-            val py = sy + vy * k * stepScreen
-            if (px < clip.left - 20 || px > clip.right + 20 || py < clip.top - 20 || py > clip.bottom + 20) continue
-            val len = t.dp(if (k % 10 == 0) 7f else if (k % 5 == 0) 4.5f else 2.5f)
+        var k = kLo
+        while (k <= kHi) {
+            val px = sx + vx * (k * stepScreen)
+            val py = sy + vy * (k * stepScreen)
+            val len = t.dp(if (k % 10L == 0L) 7f else if (k % 5L == 0L) 4.5f else 2.5f)
             buffer.add(px - nx * len, py - ny * len, px + nx * len, py + ny * len)
+            k++
         }
         shadow.color = SHADOW; shadow.strokeWidth = t.dp(2.5f)
         buffer.draw(canvas, shadow)

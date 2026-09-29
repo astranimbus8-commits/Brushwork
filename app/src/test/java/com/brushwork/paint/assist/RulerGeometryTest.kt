@@ -3,7 +3,10 @@ package com.brushwork.paint.assist
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.RulerType
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RulerGeometryTest {
@@ -74,5 +77,37 @@ class RulerGeometryTest {
         assertEquals(500f, reset.centerX, 0f)
         assertEquals(0f, reset.angleDeg, 0f)
         assertEquals(RulerType.ELLIPSE, reset.type)
+    }
+
+    @Test
+    fun sanitizeKeepsNumbersFiniteAndInRange() {
+        val ok = RulerSettings(enabled = true, centerX = -300f, centerY = 1200f, angleDeg = 30f)
+        assertSame(ok, RulerGeometry.sanitize(ok, 1000, 800)) // off-canvas but sane: untouched
+        val bad = ok.copy(
+            centerX = Float.NaN, centerY = 1e20f, angleDeg = Float.POSITIVE_INFINITY,
+            radius = 0f, radiusX = 1e12f, radiusY = Float.NaN, radialLines = 5000, nudgeStep = 0f,
+        )
+        val s = RulerGeometry.sanitize(bad, 1000, 800)
+        assertEquals(500f, s.centerX, 0f)                    // NaN -> canvas center
+        assertEquals(800f + 10 * 1000f, s.centerY, 0f)       // clamped to 10 canvas sizes away
+        assertEquals(0f, s.angleDeg, 0f)
+        assertEquals(RulerGeometry.MIN_RADIUS, s.radius, 0f)
+        assertEquals(20 * 1000f, s.radiusX, 0f)
+        assertTrue(s.radiusY.isFinite() && s.radiusY > 0f)
+        assertEquals(RulerGeometry.MAX_RADIAL_LINES, s.radialLines)
+        assertEquals(1f, s.nudgeStep, 0f)
+        assertEquals(10f, RulerGeometry.sanitize(ok.copy(angleDeg = 370f), 1000, 800).angleDeg, 1e-4f)
+    }
+
+    @Test
+    fun onlyTheDefaultCenterCountsAsUnplaced() {
+        assertTrue(RulerGeometry.isUnplaced(RulerSettings()))
+        val placed = RulerGeometry.resolved(RulerSettings(), 1000, 600)
+        assertEquals(500f, placed.centerX, 0f)
+        assertEquals(300f, placed.centerY, 0f)
+        // An off-canvas vanishing point up-left of the canvas is a real position.
+        val vp = RulerSettings(type = RulerType.RADIAL, centerX = -400f, centerY = -20f)
+        assertFalse(RulerGeometry.isUnplaced(vp))
+        assertSame(vp, RulerGeometry.resolved(vp, 1000, 600))
     }
 }

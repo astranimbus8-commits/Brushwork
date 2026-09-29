@@ -64,7 +64,7 @@ class StrokeAssist(private val controller: EditorController) {
         val zoom = t.zoom.coerceAtLeast(1e-4f)
         val docPerDp = t.dp(1f) / zoom
         return StrokePipeline.Params(
-            ruler = controller.ruler.takeIf { it.enabled },
+            ruler = controller.ruler.takeIf { it.enabled }?.let { RulerGeometry.resolved(it, controller.doc.width, controller.doc.height) },
             mode = s.mode,
             catchUp = s.catchUp,
             snapDistance = SNAP_DISTANCE_DP * docPerDp,

@@ -27,6 +27,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,7 +57,6 @@ import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LabeledSlider
-import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
@@ -65,6 +65,7 @@ import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.abs
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------------------- ruler
@@ -87,19 +88,19 @@ fun RulerPanel(controller: EditorController, onDismiss: () -> Unit) {
 private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Unit) {
     val ruler = controller.ruler
     val doc = controller.doc
-    val dpi = doc.dpi.toDouble()
+    val dpi = safeDpi(doc.dpi)
     val unit = ruler.unit
     val step = ruler.nudgeStep.toDouble()
-    // Always derive from the latest state: hold-to-repeat buttons fire between recompositions.
-    fun update(block: (RulerSettings) -> RulerSettings) = controller.updateRuler(block(controller.ruler))
+    // Always derive from the latest state (hold-to-repeat buttons fire between recompositions)
+    // and keep every number finite and in range whatever was typed.
+    fun update(block: (RulerSettings) -> RulerSettings) =
+        controller.updateRuler(RulerGeometry.sanitize(block(RulerGeometry.resolved(controller.ruler, doc.width, doc.height)), doc.width, doc.height))
 
     ToggleRow(
         label = "Use ruler",
         checked = ruler.enabled,
-        onCheckedChange = { on ->
-            update { r -> (if (r.centerX < 0f || r.centerY < 0f) RulerGeometry.centered(r, doc.width, doc.height) else r).copy(enabled = on) }
-        },
-        description = "Brush, eraser, smudge and blur strokes follow the ruler",
+        onCheckedChange = { on -> update { it.copy(enabled = on) } },
+        description = "Painting strokes follow the ruler",
     )
 
     SectionHeader("Type")
@@ -135,20 +136,20 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
     NumberField(
         label = "Nudge step",
         value = step,
-        onValueChange = { v -> update { it.copy(nudgeStep = v.toFloat()) } },
+        onValueChange = { v -> if (v.isFinite()) update { it.copy(nudgeStep = v.toFloat()) } },
         modifier = Modifier.fillMaxWidth(),
-        decimals = unit.decimals + 1,
+        decimals = exactDecimals(unit),
         suffix = unit.short,
-        min = 0.001,
+        min = minStep(unit),
     )
-    LengthField("Center X", ruler.centerX.toDouble(), { v -> update { it.copy(centerX = v.toFloat()) } }, unit, dpi, Modifier.fillMaxWidth(), step = step)
-    LengthField("Center Y", ruler.centerY.toDouble(), { v -> update { it.copy(centerY = v.toFloat()) } }, unit, dpi, Modifier.fillMaxWidth(), step = step)
+    ExactLengthField("Center X", ruler.centerX, { v -> update { it.copy(centerX = v) } }, unit, dpi, step = step)
+    ExactLengthField("Center Y", ruler.centerY, { v -> update { it.copy(centerY = v) } }, unit, dpi, step = step)
     when (ruler.type) {
         RulerType.CIRCLE ->
-            LengthField("Radius", ruler.radius.toDouble(), { v -> update { it.copy(radius = v.toFloat()) } }, unit, dpi, Modifier.fillMaxWidth(), step = step, minPx = MIN_RADIUS_PX)
+            ExactLengthField("Radius", ruler.radius, { v -> update { it.copy(radius = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
         RulerType.ELLIPSE -> {
-            LengthField("Radius X", ruler.radiusX.toDouble(), { v -> update { it.copy(radiusX = v.toFloat()) } }, unit, dpi, Modifier.fillMaxWidth(), step = step, minPx = MIN_RADIUS_PX)
-            LengthField("Radius Y", ruler.radiusY.toDouble(), { v -> update { it.copy(radiusY = v.toFloat()) } }, unit, dpi, Modifier.fillMaxWidth(), step = step, minPx = MIN_RADIUS_PX)
+            ExactLengthField("Radius X", ruler.radiusX, { v -> update { it.copy(radiusX = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
+            ExactLengthField("Radius Y", ruler.radiusY, { v -> update { it.copy(radiusY = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
         }
         else -> {}
     }
@@ -156,7 +157,7 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
         NumberField(
             label = "Angle",
             value = ruler.angleDeg.toDouble(),
-            onValueChange = { v -> update { it.copy(angleDeg = RulerGeometry.normalizeAngle(v.toFloat())) } },
+            onValueChange = { v -> if (v.isFinite()) update { it.copy(angleDeg = RulerGeometry.normalizeAngle(v.toFloat())) } },
             modifier = Modifier.fillMaxWidth(),
             decimals = 2,
             suffix = "°",
@@ -177,11 +178,11 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
         NumberField(
             label = "Guide lines",
             value = ruler.radialLines.toDouble(),
-            onValueChange = { v -> update { it.copy(radialLines = v.roundToInt().coerceIn(MIN_RADIAL_LINES, MAX_RADIAL_LINES)) } },
+            onValueChange = { v -> if (v.isFinite()) update { it.copy(radialLines = v.roundToInt()) } },
             modifier = Modifier.fillMaxWidth(),
             decimals = 0,
-            min = MIN_RADIAL_LINES.toDouble(),
-            max = MAX_RADIAL_LINES.toDouble(),
+            min = RulerGeometry.MIN_RADIAL_LINES.toDouble(),
+            max = RulerGeometry.MAX_RADIAL_LINES.toDouble(),
             step = 1.0,
         )
     }
@@ -208,7 +209,45 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
 }
 
 private fun formatStep(r: RulerSettings): String =
-    "${Units.formatNumber(r.nudgeStep.toDouble(), r.unit.decimals + 1)} ${r.unit.short}"
+    "${Units.formatNumber(r.nudgeStep.toDouble(), exactDecimals(r.unit))} ${r.unit.short}"
+
+/** One decimal more than the unit's default, so sub-pixel values show (e.g. 0.25 px nudges). */
+private fun exactDecimals(unit: LengthUnit): Int = unit.decimals + 1
+
+/** Smallest nudge step that is still visible with [exactDecimals]. */
+private fun minStep(unit: LengthUnit): Double = 1.0 / 10.0.pow(exactDecimals(unit))
+
+private fun safeDpi(dpi: Float): Double = if (dpi.isFinite() && dpi >= 1f) dpi.toDouble() else 72.0
+
+/**
+ * A length stored in document px (Float), edited in [unit] at [dpi] with [exactDecimals], so the
+ * numbers match what is on the canvas. Non-finite input is ignored; values below [minPx] clamp.
+ */
+@Composable
+private fun ExactLengthField(
+    label: String,
+    px: Float,
+    onPxChange: (Float) -> Unit,
+    unit: LengthUnit,
+    dpi: Double,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+    step: Double? = unit.defaultStep,
+    minPx: Float = Float.NEGATIVE_INFINITY,
+) {
+    NumberField(
+        label = label,
+        value = unit.fromPx(px.toDouble(), dpi),
+        onValueChange = { v ->
+            val out = unit.toPx(v, dpi).toFloat()
+            if (out.isFinite()) onPxChange(out.coerceAtLeast(minPx))
+        },
+        modifier = modifier,
+        decimals = exactDecimals(unit),
+        suffix = unit.short,
+        min = if (minPx.isFinite()) unit.fromPx(minPx.toDouble(), dpi) else Double.NEGATIVE_INFINITY,
+        step = step,
+    )
+}
 
 /**
  * Options strip of the ruler tool: ruler type, a "Numbers" sheet (the full [RulerPanel]) and
@@ -217,15 +256,19 @@ private fun formatStep(r: RulerSettings): String =
 @Composable
 fun RulerToolOptions(tool: RulerTool) {
     val controller = tool.controller
-    val ruler = controller.ruler
+    // Only the type is shown here: don't recompose on every frame of an on-canvas drag.
+    val currentType by remember(controller) { derivedStateOf { controller.ruler.type } }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     Row(verticalAlignment = Alignment.CenterVertically) {
         for (type in RulerType.entries) {
             ToolIconButton(
                 icon = AssistIcons.of(type),
                 contentDescription = "${type.label} ruler",
-                onClick = { controller.updateRuler(controller.ruler.copy(type = type, enabled = true)) },
-                selected = ruler.type == type,
+                onClick = {
+                    val d = controller.doc
+                    controller.updateRuler(RulerGeometry.resolved(controller.ruler, d.width, d.height).copy(type = type, enabled = true))
+                },
+                selected = currentType == type,
                 size = 40.dp,
             )
         }
@@ -261,7 +304,7 @@ private val GRID_PRESETS = listOf(
 @Composable
 fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
     val grid = controller.grid
-    val dpi = controller.doc.dpi.toDouble()
+    val dpi = safeDpi(controller.doc.dpi)
     var pickColor by rememberSaveable { mutableStateOf(false) }
     fun update(block: (GridSettings) -> GridSettings) = controller.updateGrid(block(controller.grid))
 
@@ -283,14 +326,14 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
         if (grid.type == GridType.SQUARE || grid.type == GridType.ISOMETRIC) {
             SectionHeader(if (grid.type == GridType.ISOMETRIC) "Triangle size" else "Cell size")
             Row(verticalAlignment = Alignment.CenterVertically) {
-                LengthField(
+                ExactLengthField(
                     label = "Spacing",
-                    px = grid.spacingPx.toDouble(),
-                    onPxChange = { v -> update { it.copy(spacingPx = v.toFloat(), enabled = true) } },
+                    px = grid.spacingPx,
+                    onPxChange = { v -> update { it.copy(spacingPx = v.coerceAtMost(MAX_GRID_PX), enabled = true) } },
                     unit = grid.unit,
                     dpi = dpi,
                     modifier = Modifier.weight(1f),
-                    minPx = 1.0,
+                    minPx = MIN_GRID_SPACING_PX,
                 )
                 UnitSelector(grid.unit, { u -> update { it.copy(unit = u) } })
             }
@@ -308,7 +351,7 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
             NumberField(
                 label = "Bold line every",
                 value = grid.majorEvery.toDouble(),
-                onValueChange = { v -> update { it.copy(majorEvery = v.roundToInt().coerceIn(0, MAX_MAJOR_EVERY)) } },
+                onValueChange = { v -> if (v.isFinite()) update { it.copy(majorEvery = v.roundToInt().coerceIn(0, MAX_MAJOR_EVERY)) } },
                 modifier = Modifier.fillMaxWidth(),
                 decimals = 0,
                 suffix = "lines",
@@ -318,8 +361,8 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
             )
             Hint("0 or 1 draws every line the same.")
             SectionHeader("Offset")
-            LengthField("Offset X", grid.offsetXPx.toDouble(), { v -> update { it.copy(offsetXPx = v.toFloat()) } }, grid.unit, dpi, Modifier.fillMaxWidth())
-            LengthField("Offset Y", grid.offsetYPx.toDouble(), { v -> update { it.copy(offsetYPx = v.toFloat()) } }, grid.unit, dpi, Modifier.fillMaxWidth())
+            ExactLengthField("Offset X", grid.offsetXPx, { v -> update { it.copy(offsetXPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi)
+            ExactLengthField("Offset Y", grid.offsetYPx, { v -> update { it.copy(offsetYPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi)
         }
 
         SectionHeader("Appearance")
@@ -338,7 +381,7 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
             label = "Snap to grid",
             checked = grid.snap,
             onCheckedChange = { on -> update { it.copy(snap = on) } },
-            description = "Shape and selection tools snap points to grid intersections",
+            description = "Tools that place points or shapes snap them to grid intersections",
         )
 
         if (pickColor) {
@@ -439,9 +482,9 @@ private fun PanelButton(text: String, icon: ImageVector, onClick: () -> Unit) {
 private fun chipColors() = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White)
 
 private const val OPAQUE = 0xFF000000.toInt()
-private const val MIN_RADIUS_PX = 1.0
-private const val MIN_RADIAL_LINES = 2
-private const val MAX_RADIAL_LINES = 360
+private const val MIN_GRID_SPACING_PX = 1f
+/** Limit for grid spacing / offsets (document px); far beyond any canvas. */
+private const val MAX_GRID_PX = 1_000_000f
 private const val MAX_MAJOR_EVERY = 100
 private const val MIN_ROPE_DP = 5f
 private const val MAX_ROPE_DP = 200f

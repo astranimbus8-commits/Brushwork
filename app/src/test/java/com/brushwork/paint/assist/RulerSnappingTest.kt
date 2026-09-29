@@ -141,6 +141,33 @@ class RulerSnappingTest {
     }
 
     @Test
+    fun ellipseProjectionFindsTheClosestPointOnEccentricEllipses() {
+        // Flat ellipses (perspective circles) with points inside, outside and near the center:
+        // the projection must be (nearly) as close as the best of a dense sampling of the curve.
+        for ((rx, ry, deg) in listOf(Triple(400f, 8f, 20f), Triple(300f, 40f, -65f), Triple(50f, 250f, 0f))) {
+            val e = StrokeConstraint.Ellipse(center, center, rx, ry, deg * Geometry.DEG)
+            val samples = (0 until 20000).map { i ->
+                val a = i * (2 * Math.PI / 20000).toFloat()
+                val lx = rx * cos(a); val ly = ry * sin(a)
+                val r = deg * Geometry.DEG
+                Pair(center + lx * cos(r) - ly * sin(r), center + lx * sin(r) + ly * cos(r))
+            }
+            var seed = 7L
+            repeat(400) {
+                seed = (seed * 6364136223846793005L + 1442695040888963407L)
+                val u = ((seed ushr 33) % 10000) / 10000f
+                val v = ((seed ushr 13) % 10000) / 10000f
+                val px = center + (u - 0.5f) * 2.4f * maxOf(rx, ry)
+                val py = center + (v - 0.5f) * 2.4f * maxOf(rx, ry)
+                val q = e.project(px, py)
+                assertEquals(1f, ellipseValue(ToolPoint(q.x, q.y), rx, ry, deg), 1e-3f)
+                val best = samples.minOf { (sx, sy) -> hypot(sx - px, sy - py) }
+                assertTrue("($px, $py) on $rx x $ry: ${hypot(q.x - px, q.y - py)} vs $best", hypot(q.x - px, q.y - py) <= best + 0.1f)
+            }
+        }
+    }
+
+    @Test
     fun radialFollowsLineThroughCenterAndStart() {
         val r = ruler(RulerType.RADIAL, angle = 10f)
         val path = wobble(center + 150f, center - 80f)
