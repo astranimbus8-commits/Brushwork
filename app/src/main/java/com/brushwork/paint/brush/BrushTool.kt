@@ -2,6 +2,8 @@ package com.brushwork.paint.brush
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.Rect
@@ -10,6 +12,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
@@ -209,13 +212,19 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             grain = preset.grain,
         )
 
+        /** 1-bit documents: the preview is thresholded like the commit will be (no gray edges). */
+        private val monochrome: Paint? =
+            if (!maskTarget && controller.doc.colorMode == ColorMode.MONOCHROME) Paint().apply { colorFilter = MONOCHROME_FILTER } else null
+
         private val override = object : LayerRenderOverride {
             override val layer: Layer get() = this@BufferStroke.layer
 
             override fun drawContent(canvas: Canvas): Boolean {
                 if (maskTarget) return false
+                val save = monochrome?.let { canvas.saveLayer(null, it) }
                 canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
                 res.painter.draw(canvas, coverage, bounds, style, selection?.mask)
+                if (save != null) canvas.restoreToCount(save)
                 return true
             }
 
@@ -422,5 +431,28 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     private companion object {
         /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
         const val COMMIT_TILE = 256
+
+        /**
+         * Same result as `ColorModeOps` MONOCHROME on (unpremultiplied) pixels: alpha >= 128 ->
+         * opaque else transparent, luminance >= 128 -> white else black. A steep linear ramp
+         * clamped to 0..255 acts as the threshold.
+         */
+        val MONOCHROME_FILTER: ColorMatrixColorFilter by lazy {
+            val k = 65536f
+            val lr = 0.299f * k
+            val lg = 0.587f * k
+            val lb = 0.114f * k
+            val off = -127.5f * k
+            ColorMatrixColorFilter(
+                ColorMatrix(
+                    floatArrayOf(
+                        lr, lg, lb, 0f, off,
+                        lr, lg, lb, 0f, off,
+                        lr, lg, lb, 0f, off,
+                        0f, 0f, 0f, k, off,
+                    )
+                )
+            )
+        }
     }
 }

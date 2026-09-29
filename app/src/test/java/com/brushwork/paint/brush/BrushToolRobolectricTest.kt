@@ -436,6 +436,32 @@ class BrushToolRobolectricTest {
     }
 
     @Test
+    fun monochromePreviewIsThresholdedLikeTheCommit() {
+        val c = newController(300, 200)
+        c.doc.colorMode = ColorMode.MONOCHROME
+        c.color = 0xFF202020.toInt() // becomes black
+        val tool = c.tool(ToolId.BRUSH)
+        c.brush = BrushLibrary.byId("softround")!!.copy(size = 50f, flow = 0.6f, pressureOpacity = false)
+        tool.line(20f, 100f, 280f, 100f, steps = 30, up = false)
+        val preview = BitmapUtils.createLayerBitmap(300, 200)
+        c.compositor.drawDocument(Canvas(preview), null)
+        tool.onUp(ToolPoint(280f, 100f))
+        val a = preview.pixels()
+        val b = c.activeLayer.bitmap.pixels()
+        // The preview is already 1-bit: transparent or opaque black.
+        assertTrue(a.all { it == 0 || it == 0xFF000000.toInt() })
+        var painted = 0
+        var mismatched = 0
+        for (i in a.indices) {
+            if (i % 300 > 230) continue // the curve's tail is only drawn on release
+            if (b[i] != 0) painted++
+            if (a[i] != b[i]) mismatched++
+        }
+        assertTrue(painted > 3000)
+        assertTrue("mismatched $mismatched of $painted", mismatched <= painted / 200)
+    }
+
+    @Test
     fun nanStylusPressureStillPaints() {
         val c = newController()
         val tool = c.tool(ToolId.BRUSH)
