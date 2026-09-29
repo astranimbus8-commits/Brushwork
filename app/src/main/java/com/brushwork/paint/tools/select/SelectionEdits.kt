@@ -1,0 +1,252 @@
+package com.brushwork.paint.tools.select
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.engine.AddLayerAction
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.CompositeAction
+import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
+import com.brushwork.paint.model.SelectionMode
+import com.brushwork.paint.segmentation.SegmentationService
+import com.brushwork.paint.segmentation.SmartTarget
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+
+/**
+ * Operations of the selection menu. Entry points taking an [EditorController] must be called on
+ * the main thread; the `…ed` functions are the blocking cores (any thread) used by them.
+ */
+object SelectionEdits {
+
+    // ------------------------------------------------------------------ blocking cores
+
+    /** [sel] grown by [radius] px (null if empty or cancelled). */
+    fun grown(sel: Selection, radius: Int, cancelled: () -> Boolean = { false }): Selection? =
+        morph(sel, MaskMath.growMargin(radius), cancelled) { m, w, h -> MaskMath.grow(m, w, h, radius, cancelled) }
+
+    /** [sel] shrunk by [radius] px; canvas edges are not treated as selection edges. */
+    fun shrunk(sel: Selection, radius: Int, cancelled: () -> Boolean = { false }): Selection? =
+        // A 1 px ring around the bounds provides the unselected pixels the distance is measured to.
+        morph(sel, 1, cancelled) { m, w, h -> MaskMath.shrink(m, w, h, radius, cancelled) }
+
+    /** [sel] with its edge softened by a gaussian of [radius] px. */
+    fun feathered(sel: Selection, radius: Float, cancelled: () -> Boolean = { false }): Selection? =
+        morph(sel, MaskMath.featherMargin(radius), cancelled) { m, w, h -> MaskMath.feather(m, w, h, radius, cancelled) }
+
+    private inline fun morph(sel: Selection, margin: Int, noinline cancelled: () -> Boolean, op: (ByteArray, Int, Int) -> ByteArray): Selection? {
+        if (sel.isEmpty) return null
+        val win = SelectionMasks.window(sel.bounds, margin, sel.width, sel.height)
+        val bytes = SelectionMasks.crop(sel.mask, win)
+        val out = op(bytes, win.width(), win.height())
+        if (cancelled()) return null
+        return SelectionMasks.fromWindow(out, win.left, win.top, win.width(), win.height(), sel.width, sel.height)
+    }
+
+    /** A new ALPHA_8 bitmap holding [bitmap]'s alpha channel (call where [bitmap] may be read). */
+    fun alphaMask(bitmap: Bitmap): Bitmap {
+        val alpha = bitmap.extractAlpha()
+        if (alpha.config == Bitmap.Config.ALPHA_8 && alpha.width == bitmap.width && alpha.height == bitmap.height) return alpha
+        alpha.recycle()
+        val m = Bitmap.createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ALPHA_8)
+        Canvas(m).drawBitmap(bitmap, 0f, 0f, Paint())
+        return m
+    }
+
+    // ------------------------------------------------------------------ selection edits (undoable)
+
+    /** Grows (positive) or shrinks (negative) the selection by [px]. */
+    fun growOrShrink(controller: EditorController, px: Int) {
+        val sel = controller.selection ?: return
+        val r = kotlin.math.abs(px).coerceIn(1, MaskMath.MAX_RADIUS)
+        val grow = px > 0
+        replaceAsync(controller, sel, if (grow) "Grow selection" else "Shrink selection", if (grow) "Growing selection…" else "Shrinking selection…") {
+            if (grow) grown(sel, r) else shrunk(sel, r)
+        }
+    }
+
+    fun feather(controller: EditorController, px: Float) {
+        val sel = controller.selection ?: return
+        val r = px.coerceIn(0.5f, MaskMath.MAX_RADIUS.toFloat())
+        replaceAsync(controller, sel, "Feather selection", "Feathering selection…") { feathered(sel, r) }
+    }
+
+    private fun replaceAsync(controller: EditorController, sel: Selection, label: String, busy: String, op: () -> Selection?) {
+        controller.runBusy(busy) {
+            val result = withContext(Dispatchers.Default) { op() }
+            // Only apply if nobody changed the selection meanwhile (e.g. undo).
+            if (result != null && controller.selection === sel) controller.setSelection(result, label = label)
+        }
+    }
+
+    /** Selects the active layer's opaque pixels (alpha = selection strength), combined by [mode]. */
+    fun selectLayerOpacity(controller: EditorController, mode: SelectionMode) {
+        val alpha = try {
+            alphaMask(controller.activeLayer.bitmap)
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to select the layer")
+            return
+        }
+        SelectionJobs.applyAsync(controller, "Select layer opacity", mode, "Selecting…") { Selection.wrap(alpha) }
+    }
+
+    /**
+     * Smart select: segments the flattened canvas on-device and turns the confidences into a
+     * selection combined by [mode].
+     */
+    fun smartSelect(controller: EditorController, target: SmartTarget, mode: SelectionMode) {
+        val name = shortName(target)
+        controller.runBusy("Selecting $name…") {
+            val doc = controller.doc
+            val w = doc.width; val h = doc.height
+            val base = controller.selection
+            val flat = controller.compositor.renderFlattened(background = 0xFFFFFFFF.toInt())
+            val (fresh, combined) = withContext(Dispatchers.Default) {
+                val buffer = try { BitmapUtils.toPixelBuffer(flat) } finally { flat.recycle() }
+                val conf = SegmentationService.get(controller.appContext).segment(buffer, target)
+                if (conf == null || conf.size != w * h) return@withContext null to null
+                val s = Selection.fromFloats(conf, w, h)
+                s to (if (s.isEmpty) null else SelectionMasks.combine(base, s, mode))
+            }
+            when {
+                fresh == null -> controller.toast("Smart select ($name) isn't available on this device")
+                fresh.isEmpty -> controller.toast("No $name found in this picture")
+                doc.width != w || doc.height != h -> {}
+                else -> {
+                    val current = controller.selection
+                    val result = if (current === base) combined else SelectionMasks.combine(current, fresh, mode)
+                    controller.setSelection(result, label = "Select $name")
+                }
+            }
+        }
+    }
+
+    /** Lower-case name used in messages ("Selecting sky…"). */
+    fun shortName(target: SmartTarget): String = when (target) {
+        SmartTarget.SUBJECT -> "subject"
+        SmartTarget.BACKGROUND -> "background"
+        SmartTarget.SKY -> "sky"
+        SmartTarget.NATURE -> "nature"
+        SmartTarget.BUILDINGS -> "buildings"
+        SmartTarget.PEOPLE -> "people"
+        SmartTarget.WATER -> "water"
+    }
+
+    // ------------------------------------------------------------------ pixel edits (undoable)
+
+    /**
+     * Fills the selected area of the active layer with [color] (alpha lock respected; on a mask,
+     * the color's luminance). Returns false if nothing was done.
+     */
+    fun fillSelection(controller: EditorController, color: Int): Boolean {
+        val sel = controller.selection ?: return false
+        val layer = controller.activeLayer
+        if (!controller.checkEditable(layer)) return false
+        val target = controller.editTargetOf(layer)
+        val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
+        val rec = controller.beginEdit(layer, target)
+        rec.touch(sel.bounds)
+        val paint = Paint().apply {
+            this.color = if (target == EditTarget.MASK) ColorUtils.gray(ColorUtils.luminance(color)) else color or 0xFF000000.toInt()
+            if (target == EditTarget.CONTENT && layer.alphaLocked) xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_ATOP)
+        }
+        Canvas(bmp).apply { clipRect(sel.bounds); drawBitmap(sel.mask, 0f, 0f, paint) }
+        return controller.commitEdit(rec, "Fill selection")
+    }
+
+    /** Erases the selected area of the active layer (on a mask: hides it by painting black). */
+    fun clearSelection(controller: EditorController): Boolean {
+        val sel = controller.selection ?: return false
+        val layer = controller.activeLayer
+        if (!controller.checkEditable(layer)) return false
+        val target = controller.editTargetOf(layer)
+        val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
+        val rec = controller.beginEdit(layer, target)
+        rec.touch(sel.bounds)
+        val paint = Paint().apply {
+            if (target == EditTarget.MASK) color = 0xFF000000.toInt() else xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+        }
+        Canvas(bmp).apply { clipRect(sel.bounds); drawBitmap(sel.mask, 0f, 0f, paint) }
+        return controller.commitEdit(rec, "Clear selection")
+    }
+
+    /** New layer (above the active one) with the selected pixels of the active layer. */
+    fun copyToNewLayer(controller: EditorController): Layer? {
+        val sel = controller.selection ?: return null
+        val src = controller.activeLayer
+        controller.currentTool.onDeactivate()
+        val layer = try {
+            controller.addLayerWithContent("${src.name} copy", "Copy to new layer") { c -> drawSelected(c, src.bitmap, sel) }
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory for another layer")
+            null
+        }
+        controller.currentTool.onActivate()
+        return layer
+    }
+
+    /**
+     * Moves the selected pixels of the active layer to a new layer above it, as ONE undo step
+     * (pixel edit + added layer).
+     */
+    fun cutToNewLayer(controller: EditorController): Layer? {
+        val sel = controller.selection ?: return null
+        val src = controller.activeLayer
+        if (!controller.checkEditable(src)) return null
+        if (!controller.canAddLayer) { controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size"); return null }
+        controller.currentTool.onDeactivate()
+        val layer = cut(controller, src, sel)
+        controller.currentTool.onActivate()
+        return layer
+    }
+
+    /** Core of [cutToNewLayer] (no tool callbacks). */
+    internal fun cut(controller: EditorController, src: Layer, sel: Selection): Layer? {
+        val doc = controller.doc
+        val bmp = try {
+            BitmapUtils.createLayerBitmap(doc.width, doc.height)
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory for another layer")
+            return null
+        }
+        drawSelected(Canvas(bmp), src.bitmap, sel)
+        val rec = controller.beginEdit(src, EditTarget.CONTENT)
+        rec.touch(sel.bounds)
+        Canvas(src.bitmap).apply {
+            clipRect(sel.bounds)
+            drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
+        }
+        val pixels = rec.finish("Cut to new layer")
+        src.markChanged()
+        val layer = Layer(doc.newLayerId(), uniqueLayerName(controller, "${src.name} cut"), bmp)
+        val at = doc.indexOf(src) + 1
+        controller.structural {
+            doc.layers.add(at, layer)
+            doc.activeLayerIndex = at
+        }
+        controller.pushUndo(CompositeAction("Cut to new layer", listOfNotNull(pixels, AddLayerAction(layer, at, "Cut to new layer"))))
+        return layer
+    }
+
+    private fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
+        c.save()
+        c.clipRect(sel.bounds)
+        c.drawBitmap(src, 0f, 0f, null)
+        c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) })
+        c.restore()
+    }
+
+    private fun uniqueLayerName(controller: EditorController, base: String): String {
+        val names = controller.doc.layers.map { it.name }.toSet()
+        if (base !in names) return base
+        var n = 2
+        while ("$base $n" in names) n++
+        return "$base $n"
+    }
+}
