@@ -23,11 +23,20 @@ object FrameRenderer {
     /** Tile size of [renderChangedTiles]; matches the undo recorder's tiles. */
     private const val TILE = 256
 
-    /** A model with its panel paths built once (outer edge + inner edge of the border ring). */
+    /** A model with its panel paths and paints built once (outer edge + inner edge of the border ring). */
     class Prepared(val model: FrameModel) {
         internal val outer: List<Path> = model.panels.map { pathOf(it.points) }
         internal val inner: List<Path?> = model.panels.map { p ->
             if (model.style.borderWidth > 0f) FrameMath.inset(p.points, model.style.borderWidth)?.let { pathOf(it) } else null
+        }
+        internal val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = model.style.borderColor
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
+        }
+        internal val clear = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
         }
     }
 
@@ -42,21 +51,12 @@ object FrameRenderer {
         val style = prepared.model.style
         canvas.drawColor(0, PorterDuff.Mode.CLEAR)
         if (style.fillOutside) canvas.drawColor(OUTSIDE_COLOR, PorterDuff.Mode.SRC)
-        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.style = Paint.Style.FILL
-            color = style.borderColor
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
-        }
-        val clear = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            this.style = Paint.Style.FILL
-            xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR)
-        }
         for (i in prepared.outer.indices) {
             if (style.borderWidth > 0f) {
-                canvas.drawPath(prepared.outer[i], border)
-                prepared.inner[i]?.let { canvas.drawPath(it, clear) }
+                canvas.drawPath(prepared.outer[i], prepared.border)
+                prepared.inner[i]?.let { canvas.drawPath(it, prepared.clear) }
             } else {
-                canvas.drawPath(prepared.outer[i], clear)
+                canvas.drawPath(prepared.outer[i], prepared.clear)
             }
         }
     }
@@ -69,46 +69,73 @@ object FrameRenderer {
      */
     fun renderChangedTiles(target: Bitmap, model: FrameModel, area: Rect, colorMode: ColorMode, beforeWrite: (Rect) -> Unit): Rect {
         val changed = Rect()
+        val dst = Canvas(target)
+        forEachChangedTile(target, model, area, colorMode) { fresh, local, tile ->
+            beforeWrite(tile)
+            dst.drawBitmap(fresh, local, tile, BitmapUtils.srcPaint)
+            changed.union(tile)
+            true
+        }
+        return changed
+    }
+
+    /** True when [target] already holds exactly the rendering of [model] (read-only check). */
+    fun matches(target: Bitmap, model: FrameModel, colorMode: ColorMode): Boolean {
+        var same = true
+        forEachChangedTile(target, model, Rect(0, 0, target.width, target.height), colorMode) { _, _, _ ->
+            same = false
+            false
+        }
+        return same
+    }
+
+    /**
+     * Renders [model] into a scratch tile for every tile of [target] overlapping [area], compares it
+     * with the current pixels (native memcmp via [Bitmap.sameAs]) and calls [onChanged] with the
+     * fresh tile, its valid sub-rect and the tile rect in [target] when they differ. Stops when
+     * [onChanged] returns false. Two 256² scratch bitmaps are the only allocations.
+     */
+    private fun forEachChangedTile(
+        target: Bitmap,
+        model: FrameModel,
+        area: Rect,
+        colorMode: ColorMode,
+        onChanged: (fresh: Bitmap, local: Rect, tile: Rect) -> Boolean,
+    ) {
         val a = Rect(area)
-        if (!a.intersect(0, 0, target.width, target.height)) return changed
+        if (!a.intersect(0, 0, target.width, target.height)) return
         val prepared = Prepared(model)
-        val scratch = BitmapUtils.createLayerBitmap(TILE, TILE)
+        val fresh = BitmapUtils.createLayerBitmap(TILE, TILE)
+        val current = BitmapUtils.createLayerBitmap(TILE, TILE)
         try {
-            val sc = Canvas(scratch)
-            val dst = Canvas(target)
-            val fresh = IntArray(TILE * TILE)
-            val current = IntArray(TILE * TILE)
+            val fc = Canvas(fresh)
+            val cc = Canvas(current)
+            val local = Rect()
+            val tile = Rect()
             for (row in a.top / TILE..(a.bottom - 1) / TILE) {
                 for (col in a.left / TILE..(a.right - 1) / TILE) {
                     val x = col * TILE
                     val y = row * TILE
                     val w = min(TILE, target.width - x)
                     val h = min(TILE, target.height - y)
-                    val save = sc.save()
-                    sc.translate(-x.toFloat(), -y.toFloat())
-                    render(sc, prepared)
-                    sc.restoreToCount(save)
-                    val local = Rect(0, 0, w, h)
-                    if (colorMode != ColorMode.RGB) ColorModeOps.constrain(scratch, local, colorMode)
-                    scratch.getPixels(fresh, 0, w, 0, 0, w, h)
-                    target.getPixels(current, 0, w, x, y, w, h)
-                    if (!sameRange(fresh, current, w * h)) {
-                        val r = Rect(x, y, x + w, y + h)
-                        beforeWrite(r)
-                        dst.drawBitmap(scratch, local, r, BitmapUtils.srcPaint)
-                        changed.union(r)
-                    }
+                    // Edge tiles only use part of the scratch: keep the rest identical (transparent).
+                    if (w < TILE || h < TILE) { fresh.eraseColor(0); current.eraseColor(0) }
+                    local.set(0, 0, w, h)
+                    tile.set(x, y, x + w, y + h)
+                    val save = fc.save()
+                    fc.clipRect(local)
+                    fc.translate(-x.toFloat(), -y.toFloat())
+                    render(fc, prepared)
+                    fc.restoreToCount(save)
+                    if (colorMode != ColorMode.RGB) ColorModeOps.constrain(fresh, local, colorMode)
+                    cc.drawBitmap(target, tile, local, BitmapUtils.srcPaint)
+                    if (!fresh.sameAs(current) && !onChanged(fresh, local, Rect(tile))) return
                 }
             }
         } finally {
-            scratch.recycle()
+            fresh.recycle()
+            current.recycle()
         }
-        return changed
-    }
-
-    private fun sameRange(a: IntArray, b: IntArray, n: Int): Boolean {
-        for (i in 0 until n) if (a[i] != b[i]) return false
-        return true
     }
 
     fun pathOf(points: List<Vec2>): Path = Path().apply {

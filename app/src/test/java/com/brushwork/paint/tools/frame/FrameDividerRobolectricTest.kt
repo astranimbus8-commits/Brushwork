@@ -6,6 +6,7 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
@@ -186,6 +187,88 @@ class FrameDividerRobolectricTest {
         val expected = BitmapUtils.createLayerBitmap(w, h)
         FrameRenderer.render(android.graphics.Canvas(expected), split)
         assertTrue(expected.sameAs(layer))
+    }
+
+    @Test
+    fun undoingAnExternalEditMakesTheFrameUsableAgain() {
+        val (c, tool, layer) = setup()
+        drag(c, 200f, 10f, 200f, 290f)
+        c.editWholeLayer(layer, "Scribble", EditTarget.CONTENT) { it.eraseColor(0xFFFF0000.toInt()) }
+        assertEquals(FrameDividerTool.Status.OUT_OF_SYNC, tool.status())
+        assertFalse(tool.refreshSync())                 // the pixels really differ
+        assertEquals(FrameDividerTool.Status.OUT_OF_SYNC, tool.status())
+        c.undo()                                        // scribble undone: pixels match the model again
+        assertEquals(FrameDividerTool.Status.OUT_OF_SYNC, tool.status())
+        assertTrue(tool.refreshSync())
+        assertEquals(FrameDividerTool.Status.READY, tool.status())
+        val edits = c.editCount
+        drag(c, 5f, 150f, 395f, 150f)                   // cutting works again without a redraw
+        assertEquals(4, tool.model!!.panels.size)
+        assertEquals(edits + 1, c.editCount)
+    }
+
+    @Test
+    fun frameInGrayscaleDocumentIsGrayAndStaysInSync() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val doc = Document("t", "t", 300, 270) // not a multiple of the 256 px tiles
+        doc.colorMode = ColorMode.GRAYSCALE
+        doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(300, 270))
+        val c = EditorController(ctx, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(ctx))
+        c.selectTool(ToolId.FRAME_DIVIDER)
+        val tool = c.tools.getValue(ToolId.FRAME_DIVIDER) as FrameDividerTool
+        tool.settings = tool.settings.withUniformMargin(20f).copy(borderWidth = 6f, borderColor = 0xFF2080F0.toInt(), gutterH = 20f, gutterV = 10f)
+        assertTrue(tool.createFrameLayer())
+        val layer = c.doc.layers[1]
+        val border = layer.bitmap.getPixel(22, 135)
+        assertEquals(255, border ushr 24)
+        val r = (border shr 16) and 0xFF; val g = (border shr 8) and 0xFF; val b = border and 0xFF
+        assertTrue("border $r,$g,$b must be gray", r == g && g == b)
+        // The tile renderer applies the same conversion: a mask change keeps the frame usable.
+        c.addMask(layer, fromSelection = false)
+        assertEquals(FrameDividerTool.Status.OUT_OF_SYNC, tool.status())
+        assertTrue(tool.refreshSync())
+        val version = layer.contentVersion
+        drag(c, 150f, 5f, 150f, 265f)
+        assertEquals(2, tool.model!!.panels.size)
+        assertTrue(layer.contentVersion > version)
+        assertEquals(FrameDividerTool.Status.READY, tool.status())
+        val px = IntArray(300 * 270)
+        layer.bitmap.getPixels(px, 0, 300, 0, 0, 300, 270)
+        assertTrue(px.all { ((it shr 16) and 0xFF) == ((it shr 8) and 0xFF) && ((it shr 8) and 0xFF) == (it and 0xFF) })
+    }
+
+    @Test
+    fun matchesDetectsSinglePixelDifferences() {
+        val style = FrameStyle(3f, black, fillOutside = true)
+        val area = FrameRect(10f, 10f, 290f, 530f)
+        val model = FrameModel(area, FrameMath.grid(area, 3, 2, 12f, 8f)!!, style)
+        val bmp = BitmapUtils.createLayerBitmap(300, 540)
+        FrameRenderer.render(android.graphics.Canvas(bmp), model)
+        assertTrue(FrameRenderer.matches(bmp, model, com.brushwork.paint.model.ColorMode.RGB))
+        bmp.setPixel(299, 539, 0xFF000001.toInt()) // bottom-right edge tile
+        assertFalse(FrameRenderer.matches(bmp, model, com.brushwork.paint.model.ColorMode.RGB))
+        // Rewriting only the changed tiles restores the exact rendering.
+        val touched = mutableListOf<android.graphics.Rect>()
+        FrameRenderer.renderChangedTiles(bmp, model, android.graphics.Rect(0, 0, 300, 540), com.brushwork.paint.model.ColorMode.RGB) { touched += it }
+        assertEquals(listOf(android.graphics.Rect(256, 512, 300, 540)), touched)
+        assertTrue(FrameRenderer.matches(bmp, model, com.brushwork.paint.model.ColorMode.RGB))
+    }
+
+    @Test
+    fun tapsWithoutAFrameDoNothing() {
+        val ctx = ApplicationProvider.getApplicationContext<Context>()
+        val doc = Document("t", "t", 200, 200)
+        doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(200, 200))
+        val c = EditorController(ctx, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(ctx))
+        c.selectTool(ToolId.FRAME_DIVIDER)
+        c.message = null
+        c.pointerDown(ToolPoint(100f, 100f))
+        c.pointerUp(ToolPoint(101f, 100f))
+        assertEquals(null, c.message)                   // a tap is not nagged about
+        c.pointerDown(ToolPoint(100f, 10f))
+        c.pointerUp(ToolPoint(100f, 190f))
+        assertTrue(c.message != null)                   // a cut explains that a frame layer is needed
+        assertEquals(1, c.doc.layers.size)
     }
 
     @Test

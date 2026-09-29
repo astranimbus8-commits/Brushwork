@@ -254,6 +254,42 @@ class TextToolRobolectricTest {
     }
 
     @Test
+    fun dragWithoutTextCreatesNothing() {
+        val (c, tool) = newController()
+        c.pointerDown(ToolPoint(20f, 20f))
+        c.pointerMove(ToolPoint(120f, 100f))
+        c.pointerUp(ToolPoint(120f, 100f))
+        assertNull(tool.item)
+        assertFalse(tool.editorOpen)
+    }
+
+    @Test
+    fun noTextIsStartedAtTheLayerLimit() {
+        val (c, tool) = newController(40, 30)
+        while (c.canAddLayer) c.doc.layers += Layer(c.doc.newLayerId(), "L${c.doc.layers.size}", BitmapUtils.createLayerBitmap(40, 30))
+        c.message = null
+        tap(c, 20f, 15f)
+        assertNull(tool.item)
+        assertFalse(tool.editorOpen)
+        assertNotNull(c.message)
+    }
+
+    @Test
+    fun monochromeCommitIsPureBlackAndWhite() {
+        val (c, tool) = newController()
+        c.doc.colorMode = ColorMode.MONOCHROME
+        tool.startTextAt(120f, 80f)
+        tool.setText("Mono")
+        tool.updateSpec { it.copy(sizePx = 50f, color = 0xFF3050A0.toInt()) }
+        tool.confirmEditor()
+        assertTrue(tool.commitItem())
+        val px = IntArray(c.doc.width * c.doc.height)
+        c.doc.layers[1].bitmap.getPixels(px, 0, c.doc.width, 0, 0, c.doc.width, c.doc.height)
+        assertTrue(px.any { it == 0xFF000000.toInt() })
+        assertTrue(px.all { it == 0 || it == 0xFF000000.toInt() || it == 0xFFFFFFFF.toInt() })
+    }
+
+    @Test
     fun tapAwayCommitsAndStartsANewText() {
         val (c, tool) = newController()
         tool.startTextAt(60f, 40f)

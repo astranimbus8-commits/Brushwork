@@ -7,12 +7,10 @@ import android.graphics.Rect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
-import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -83,8 +81,15 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ editing API (UI)
 
-    /** Creates a new, empty text centered at ([x], [y]) and opens the editor. */
+    /**
+     * Creates a new, empty text centered at ([x], [y]) and opens the editor. Refused (with a
+     * message) at the layer limit, so nothing is typed that could not be committed.
+     */
     fun startTextAt(x: Float, y: Float) {
+        if (!controller.canAddLayer) {
+            controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size: delete or merge a layer to add text")
+            return
+        }
         item = TextItem("", specForNewText(), x.coerceIn(0f, doc.width.toFloat()), y.coerceIn(0f, doc.height.toFloat()))
         editorBackup = null
         editingNew = true
@@ -192,6 +197,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
         editorOpen = false
         numbersOpen = false
         editorBackup = null
+        // addLayerWithContent applies the color mode and handles a failed layer allocation itself;
+        // the catch covers its grayscale/1-bit conversion, which allocates a canvas-sized buffer.
         val layer = try {
             controller.addLayerWithContent(cur.layerName(), "Add text") { c ->
                 c.clipRect(rect)
@@ -204,12 +211,6 @@ class TextTool(controller: EditorController) : Tool(controller) {
         if (layer == null) {
             item = cur
             return false
-        }
-        if (doc.colorMode != ColorMode.RGB) {
-            ColorModeOps.constrain(layer.bitmap, rect, doc.colorMode)
-            layer.markChanged()
-            controller.invalidateDoc(rect)
-            controller.notifyLayersChanged()
         }
         nextSpec = cur.spec
         controller.invalidateOverlay()
@@ -286,8 +287,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         gestureStart = null
         when {
-            m == Mode.CREATE -> startTextAt(p.x, p.y)
             moved -> {}
+            m == Mode.CREATE -> startTextAt(p.x, p.y)
             m == Mode.MOVE && downInside -> openEditor()
             // Tap away from the text: place it and start a new one there.
             m == Mode.MOVE -> if (commitItem()) startTextAt(p.x, p.y)

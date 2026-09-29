@@ -23,6 +23,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +66,10 @@ fun FrameDividerOptions(tool: FrameDividerTool) {
     // The frame status depends on layer contents that aren't Compose state: key it on the
     // counters that change with them (tool edits, any undoable edit / undo, layer changes).
     val status = remember(tool.revision, c.layersVersion, c.editCount) { tool.status() }
+    // After an undo/redo or layer change, an "edited" frame may match its model again.
+    LaunchedEffect(status, c.layersVersion, c.editCount) {
+        if (status == FrameDividerTool.Status.OUT_OF_SYNC) tool.refreshSync()
+    }
     Row(verticalAlignment = Alignment.CenterVertically) {
         when (status) {
             FrameDividerTool.Status.NONE -> {

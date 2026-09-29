@@ -9,14 +9,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.ViewTransform
-import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -57,7 +55,23 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     var revision by mutableIntStateOf(0)
         private set
 
-    private class FrameRecord(var model: FrameModel, var version: Long)
+    /** Panel model of one frame layer and the layer version it was rendered at. */
+    private class FrameRecord(model: FrameModel, version: Long) {
+        var model = model
+            private set
+        var version = version
+            private set
+        /** A later layer version already compared with [model] and found different. */
+        var mismatchVersion = NEVER_IN_SYNC
+
+        fun set(model: FrameModel, version: Long) {
+            this.model = model
+            this.version = version
+            mismatchVersion = NEVER_IN_SYNC
+        }
+
+        fun adoptVersion(version: Long) { this.version = version }
+    }
 
     // Weak keys: a frame layer dropped from the document and from the undo history is freed.
     private val frames = WeakHashMap<Layer, FrameRecord>()
@@ -84,6 +98,32 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     /** Model of the target frame layer (may be out of sync, see [status]). */
     val model: FrameModel? get() = targetLayer()?.let { frames[it]?.model }
 
+    /**
+     * Re-checks an out-of-sync frame layer against its model without changing it. When the pixels
+     * match (an unrelated edit was undone, only the mask changed, ...) the frame is usable again.
+     * Each layer version is compared at most once. Returns true if the frame became ready.
+     */
+    fun refreshSync(): Boolean {
+        val layer = targetLayer() ?: return false
+        val rec = frames[layer] ?: return false
+        val v = layer.contentVersion
+        if (rec.version == v || rec.mismatchVersion == v) return false
+        val same = try {
+            FrameRenderer.matches(layer.bitmap, rec.model, doc.colorMode)
+        } catch (e: OutOfMemoryError) {
+            false
+        }
+        if (!same) {
+            rec.mismatchVersion = v
+            return false
+        }
+        rec.adoptVersion(v)
+        revision++
+        return true
+    }
+
+    override fun onActivate() { refreshSync() }
+
     private fun minPieceSize(style: FrameStyle) = max(4f, style.borderWidth * 2f + 2f)
 
     // ------------------------------------------------------------------ operations (UI)
@@ -97,18 +137,14 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         if (panels == null) { controller.toast("The gutters are too wide for ${s.rows} × ${s.cols} panels"); return false }
         val model = FrameModel(area, panels, FrameStyle(s.borderWidth, s.borderColor, s.fillOutside))
         cancelCut()
+        // addLayerWithContent applies the color mode and handles a failed layer allocation itself;
+        // the catch covers its grayscale/1-bit conversion, which allocates a canvas-sized buffer.
         val layer = try {
             controller.addLayerWithContent("Frame", "New frame layer") { c -> FrameRenderer.render(c, model) }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for another layer")
             null
         } ?: return false
-        if (doc.colorMode != ColorMode.RGB) {
-            ColorModeOps.constrain(layer.bitmap, doc.bounds, doc.colorMode)
-            layer.markChanged()
-            controller.invalidateDoc(null)
-            controller.notifyLayersChanged()
-        }
         frames[layer] = FrameRecord(model, layer.contentVersion)
         lastFrame = WeakReference(layer)
         removeMode = false
@@ -170,15 +206,13 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         val pixels = recorder.finish(label)
         if (pixels == null) {
             // Pixels already match (e.g. redrawing an unchanged frame): just adopt the model.
-            rec.model = newModel
-            rec.version = layer.contentVersion
+            rec.set(newModel, layer.contentVersion)
             lastFrame = WeakReference(layer)
             revision++
             return true
         }
         layer.markChanged()
-        rec.model = newModel
-        rec.version = layer.contentVersion
+        rec.set(newModel, layer.contentVersion)
         lastFrame = WeakReference(layer)
         controller.pushUndo(FrameEditAction(label, pixels, this, layer, before, beforeInSync, newModel))
         controller.notifyLayersChanged()
@@ -194,8 +228,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     private fun syncModel(layer: Layer, model: FrameModel, inSync: Boolean) {
         val version = if (inSync) layer.contentVersion else NEVER_IN_SYNC
         val rec = frames[layer]
-        if (rec == null) frames[layer] = FrameRecord(model, version)
-        else { rec.model = model; rec.version = version }
+        if (rec == null) frames[layer] = FrameRecord(model, version) else rec.set(model, version)
         lastFrame = WeakReference(layer)
         revision++
     }
@@ -241,6 +274,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
 
     override fun onDown(p: ToolPoint) {
         gestureActive = true
+        refreshSync()
         cutAllowed = status() == Status.READY
         cutStart = Vec2(p.x, p.y)
         cutEnd = cutStart
@@ -269,6 +303,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         val t = controller.viewTransform
         val raw = Vec2(p.x, p.y)
         val isTap = t.docToScreen(raw).distanceTo(t.docToScreen(a)) < t.dp(MIN_CUT_DP)
+        if (isTap && !removeMode) return
         when (status()) {
             Status.NONE -> { controller.toast("Create a frame layer first (\"New frame layer\")"); return }
             Status.OUT_OF_SYNC -> { controller.toast("The frame layer was edited: redraw it or start a new frame layer"); return }
@@ -283,7 +318,6 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
             applyModel(layer, rec, rec.model.copy(panels = rec.model.panels.filterIndexed { j, _ -> j != i }), "Remove panel", incremental = true)
             return
         }
-        if (isTap) return
         val b = FrameMath.snapCut(a, raw)
         val s = settings
         val result = FrameMath.divide(rec.model.panels, a, b, s.gutterH, s.gutterV, minPieceSize(rec.model.style))
