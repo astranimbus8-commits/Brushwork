@@ -414,93 +414,119 @@ internal object StyleMath {
 
     /**
      * Gaussian blur of a plane IN PLACE (edges clamped). Small sigmas use an exact kernel, larger
-     * ones three box passes (O(n) regardless of sigma). Allocates one temporary plane.
+     * ones three box passes (O(n) regardless of sigma). Works through per-worker row and column-strip
+     * buffers, so it never allocates a second full-size plane (they are 80 MB at 20 MP).
      */
     fun gaussianInPlace(plane: FloatArray, w: Int, h: Int, sigma: Float, ctx: FilterContext) {
         if (!(sigma >= 0.35f)) return
-        val tmp = FloatArray(plane.size)
         if (sigma < 2.5f) {
             val k = FilterMath.gaussianKernel(sigma)
-            convH(plane, tmp, w, h, k, ctx)
-            convV(tmp, plane, w, h, k, ctx)
+            convH(plane, w, h, k, ctx)
+            convV(plane, w, h, k, ctx)
             return
         }
         val s = min(sigma, 1.0e5f)
         for (b in FilterMath.boxesForGauss(s, 3)) {
             val r = (b - 1) / 2
             if (r <= 0) continue
-            boxH(plane, tmp, w, h, r, ctx)
-            boxV(tmp, plane, w, h, r, ctx)
+            boxH(plane, w, h, r, ctx)
+            boxV(plane, w, h, r, ctx)
         }
     }
 
-    private fun convH(src: FloatArray, dst: FloatArray, w: Int, h: Int, k: FloatArray, ctx: FilterContext) {
+    /** Columns per strip of the in-place vertical passes (strip buffer = h * STRIP floats). */
+    private const val STRIP = 64
+
+    private fun convH(plane: FloatArray, w: Int, h: Int, k: FloatArray, ctx: FilterContext) {
         val r = k.size / 2
         Parallel.forRows(h) { y0, y1 ->
             ctx.checkCancelled()
+            val line = FloatArray(w)
             for (y in y0 until y1) {
                 val row = y * w
+                System.arraycopy(plane, row, line, 0, w)
                 for (x in 0 until w) {
                     var acc = 0f
-                    for (j in -r..r) acc += src[row + (x + j).coerceIn(0, w - 1)] * k[j + r]
-                    dst[row + x] = acc
+                    for (j in -r..r) acc += line[(x + j).coerceIn(0, w - 1)] * k[j + r]
+                    plane[row + x] = acc
                 }
             }
         }
     }
 
-    private fun convV(src: FloatArray, dst: FloatArray, w: Int, h: Int, k: FloatArray, ctx: FilterContext) {
+    private fun convV(plane: FloatArray, w: Int, h: Int, k: FloatArray, ctx: FilterContext) {
         val r = k.size / 2
-        Parallel.forRows(h) { y0, y1 ->
-            ctx.checkCancelled()
-            for (y in y0 until y1) {
-                val row = y * w
-                for (j in -r..r) {
-                    val sRow = (y + j).coerceIn(0, h - 1) * w
-                    val kv = k[j + r]
-                    if (j == -r) for (x in 0 until w) dst[row + x] = src[sRow + x] * kv
-                    else for (x in 0 until w) dst[row + x] += src[sRow + x] * kv
+        Parallel.forRange(w, STRIP) { c0, c1 ->
+            val buf = FloatArray(h * min(STRIP, c1 - c0))
+            var x0 = c0
+            while (x0 < c1) {
+                ctx.checkCancelled()
+                val n = min(STRIP, c1 - x0)
+                copyStrip(plane, buf, w, h, x0, n)
+                for (y in 0 until h) {
+                    val row = y * w + x0
+                    for (j in -r..r) {
+                        val sRow = (y + j).coerceIn(0, h - 1) * n
+                        val kv = k[j + r]
+                        if (j == -r) for (i in 0 until n) plane[row + i] = buf[sRow + i] * kv
+                        else for (i in 0 until n) plane[row + i] += buf[sRow + i] * kv
+                    }
                 }
+                x0 += n
             }
         }
     }
 
-    private fun boxH(src: FloatArray, dst: FloatArray, w: Int, h: Int, r: Int, ctx: FilterContext) {
+    private fun boxH(plane: FloatArray, w: Int, h: Int, r: Int, ctx: FilterContext) {
         val norm = 1.0 / (2 * r + 1)
         Parallel.forRows(h) { y0, y1 ->
             ctx.checkCancelled()
+            val line = FloatArray(w)
             for (y in y0 until y1) {
                 val row = y * w
+                System.arraycopy(plane, row, line, 0, w)
                 var acc = 0.0
-                for (j in -r..r) acc += src[row + j.coerceIn(0, w - 1)]
+                for (j in -r..r) acc += line[j.coerceIn(0, w - 1)]
                 for (x in 0 until w) {
-                    dst[row + x] = (acc * norm).toFloat()
-                    acc += src[row + min(w - 1, x + r + 1)] - src[row + max(0, x - r)]
+                    plane[row + x] = (acc * norm).toFloat()
+                    acc += line[min(w - 1, x + r + 1)] - line[max(0, x - r)]
                 }
             }
         }
     }
 
-    private fun boxV(src: FloatArray, dst: FloatArray, w: Int, h: Int, r: Int, ctx: FilterContext) {
+    private fun boxV(plane: FloatArray, w: Int, h: Int, r: Int, ctx: FilterContext) {
         val norm = 1.0 / (2 * r + 1)
-        Parallel.forRange(w, 64) { x0, x1 ->
-            ctx.checkCancelled()
-            val n = x1 - x0
-            val acc = DoubleArray(n)
-            for (j in -r..r) {
-                val base = j.coerceIn(0, h - 1) * w + x0
-                for (i in 0 until n) acc[i] += src[base + i]
-            }
-            for (y in 0 until h) {
-                val row = y * w + x0
-                val add = min(h - 1, y + r + 1) * w + x0
-                val sub = max(0, y - r) * w + x0
-                for (i in 0 until n) {
-                    dst[row + i] = (acc[i] * norm).toFloat()
-                    acc[i] += src[add + i] - src[sub + i]
+        Parallel.forRange(w, STRIP) { c0, c1 ->
+            val buf = FloatArray(h * min(STRIP, c1 - c0))
+            val acc = DoubleArray(STRIP)
+            var x0 = c0
+            while (x0 < c1) {
+                ctx.checkCancelled()
+                val n = min(STRIP, c1 - x0)
+                copyStrip(plane, buf, w, h, x0, n)
+                acc.fill(0.0)
+                for (j in -r..r) {
+                    val base = j.coerceIn(0, h - 1) * n
+                    for (i in 0 until n) acc[i] += buf[base + i]
                 }
+                for (y in 0 until h) {
+                    val row = y * w + x0
+                    val add = min(h - 1, y + r + 1) * n
+                    val sub = max(0, y - r) * n
+                    for (i in 0 until n) {
+                        plane[row + i] = (acc[i] * norm).toFloat()
+                        acc[i] += buf[add + i] - buf[sub + i]
+                    }
+                }
+                x0 += n
             }
         }
+    }
+
+    /** Copies columns `[x0, x0 + n)` of every row of [plane] into [buf] (row-major, n floats per row). */
+    private fun copyStrip(plane: FloatArray, buf: FloatArray, w: Int, h: Int, x0: Int, n: Int) {
+        for (y in 0 until h) System.arraycopy(plane, y * w + x0, buf, y * n, n)
     }
 
     // ------------------------------------------------------------------ sampling
@@ -558,9 +584,9 @@ internal object StyleMath {
         val knee = min(0.5f, f)
         val stack = IntStack()
         for (i in sd.indices) {
+            if (i % w == 0) ctx.checkCancelled()
             val v = sd[i]
             if (!(v < 0f && v > -half)) continue
-            if (i % w == 0) ctx.checkCancelled()
             // Pass 1: mark the region and find its deepest point.
             var rm = 0f
             floodFill(i, w, h, stack, { sd[it] < 0f && sd[it] > -half }) { j ->

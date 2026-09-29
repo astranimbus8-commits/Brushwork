@@ -139,7 +139,8 @@ class StainedGlassCellsFilter : Filter("style.stained_glass_cells", "Stained Gla
         val only = values.choice("output") == 1
         return StyleMath.aroundContent(src, StyleMath.margin(half + 1f)) { img, offX, offY ->
             val w = img.width; val h = img.height
-            val sd = if (outline) StyleMath.signedDistance(img, ctx) else null
+            // Non-null array even without the outline, so the pixel loop never boxes a Float?.
+            val sd = if (outline) StyleMath.signedDistance(img, ctx) else FloatArray(0)
             // Grid cells overlapping the crop, plus a two-cell ring for neighbour searches.
             val gx0 = floor(offX / cell).toInt() - 2
             val gy0 = floor(offY / cell).toInt() - 2
@@ -182,12 +183,11 @@ class StainedGlassCellsFilter : Filter("style.stained_glass_cells", "Stained Gla
                     val dist = ((x - (mx + siteX[k]) * 0.5f) * ex + (y - (my + siteY[k]) * 0.5f) * ey) / -el
                     if (dist < edge) edge = dist
                 }
-                val s = sd?.get(y * w + x)
                 val a = c ushr 24
                 // With the outline, lead follows the silhouette (straddling it) as well as the cell
                 // borders inside; without it, lead stays on the painted pixels.
                 val lineDist = when {
-                    s != null -> if (s > 0f) s else min(edge, -s)
+                    outline -> { val s = sd[y * w + x]; if (s > 0f) s else min(edge, -s) }
                     a == 0 -> Float.MAX_VALUE
                     else -> edge
                 }

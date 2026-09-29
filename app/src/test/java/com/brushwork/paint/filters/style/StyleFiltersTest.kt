@@ -79,6 +79,40 @@ class StyleFiltersTest {
         }
     }
 
+    /**
+     * NaN canary: StyleMath.pack and ColorUtils.clamp255 turn NaN into 0, so a NaN in a coverage
+     * or shading term shows up as a hole in the artwork rather than an exception. With the
+     * combined output (and the alpha-reducing options neutral) no opaque pixel may lose alpha, at
+     * every slider's minimum and maximum.
+     */
+    @Test
+    fun extremeParametersNeverPunchHolesIntoOpaqueArtwork() {
+        val src = centredDisc(25f)
+        for (f in styleFilters) for (pickMax in listOf(false, true)) {
+            val v = f.defaultValues()
+            for (p in f.params) when (p) {
+                is FilterParam.Slider -> v.set(p.key, if (pickMax) p.max else p.min)
+                is FilterParam.Toggle -> v.set(p.key, pickMax)
+                is FilterParam.Point -> v.set(p.key, if (pickMax) floatArrayOf(1f, 1f) else floatArrayOf(0f, 0f))
+                is FilterParam.Choice -> if (p.key != "output") v.set(p.key, if (pickMax) p.options.lastIndex else 0)
+                else -> {}
+            }
+            if (f.params.any { it.key == "output" }) v.set("output", 0)
+            if (f is WetEdgeFilter) v.set("interior", 0f)
+            if (f is WaterdropFilter) v.set("transparency", 0f)
+            val out = f.apply(src, v, ctx)
+            for (i in src.pixels.indices) {
+                if (alpha(src.pixels[i]) == 255) {
+                    assertEquals("${f.id} (${if (pickMax) "max" else "min"}) alpha at $i", 255, alpha(out.pixels[i]))
+                }
+            }
+            if (f is ReliefFilter || f is ReliefHQFilter) {
+                // Shading may darken the orange disc but never to black (a NaN factor would).
+                assertTrue("${f.id} (${if (pickMax) "max" else "min"}) went black", red(out[50, 50]) > 0 && red(out[40, 45]) > 0)
+            }
+        }
+    }
+
     // ------------------------------------------------------------------ strokes
 
     @Test

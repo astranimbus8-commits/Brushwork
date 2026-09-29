@@ -102,6 +102,67 @@ class StyleMathTest {
     }
 
     @Test
+    fun inPlaceBlurMatchesTwoPlaneReference() {
+        // Widths above one 64-column strip (and a remainder strip), a tiny image, and sigmas on
+        // both the exact-kernel and the box-pass paths, including a box wider than the image.
+        for ((w, h) in listOf(150 to 41, 300 to 70, 1 to 1, 3 to 200)) {
+            val rnd = java.util.Random(w * 31L + h)
+            val base = FloatArray(w * h) { rnd.nextFloat() }
+            for (sigma in floatArrayOf(0.2f, 0.8f, 2.4f, 6f, 40f, 150f)) {
+                val expected = base.copyOf().also { referenceGaussian(it, w, h, sigma) }
+                val actual = base.copyOf().also { StyleMath.gaussianInPlace(it, w, h, sigma, ctx) }
+                for (i in expected.indices) {
+                    assertEquals("${w}x$h sigma $sigma at $i", expected[i], actual[i], 0f)
+                }
+            }
+        }
+    }
+
+    /** The previous two-plane implementation of [StyleMath.gaussianInPlace], kept as the reference. */
+    private fun referenceGaussian(plane: FloatArray, w: Int, h: Int, sigma: Float) {
+        if (!(sigma >= 0.35f)) return
+        val tmp = FloatArray(plane.size)
+        if (sigma < 2.5f) {
+            val k = com.brushwork.paint.filters.FilterMath.gaussianKernel(sigma)
+            val r = k.size / 2
+            for (y in 0 until h) for (x in 0 until w) {
+                var acc = 0f
+                for (j in -r..r) acc += plane[y * w + (x + j).coerceIn(0, w - 1)] * k[j + r]
+                tmp[y * w + x] = acc
+            }
+            for (y in 0 until h) for (j in -r..r) {
+                val sRow = (y + j).coerceIn(0, h - 1) * w
+                for (x in 0 until w) {
+                    if (j == -r) plane[y * w + x] = tmp[sRow + x] * k[j + r] else plane[y * w + x] += tmp[sRow + x] * k[j + r]
+                }
+            }
+            return
+        }
+        for (b in com.brushwork.paint.filters.FilterMath.boxesForGauss(kotlin.math.min(sigma, 1.0e5f), 3)) {
+            val r = (b - 1) / 2
+            if (r <= 0) continue
+            val norm = 1.0 / (2 * r + 1)
+            for (y in 0 until h) {
+                val row = y * w
+                var acc = 0.0
+                for (j in -r..r) acc += plane[row + j.coerceIn(0, w - 1)]
+                for (x in 0 until w) {
+                    tmp[row + x] = (acc * norm).toFloat()
+                    acc += plane[row + kotlin.math.min(w - 1, x + r + 1)] - plane[row + max(0, x - r)]
+                }
+            }
+            for (x in 0 until w) {
+                var acc = 0.0
+                for (j in -r..r) acc += tmp[j.coerceIn(0, h - 1) * w + x]
+                for (y in 0 until h) {
+                    plane[y * w + x] = (acc * norm).toFloat()
+                    acc += tmp[kotlin.math.min(h - 1, y + r + 1) * w + x] - tmp[max(0, y - r) * w + x]
+                }
+            }
+        }
+    }
+
+    @Test
     fun compositingHelpers() {
         val red = 0xFFFF0000.toInt()
         val blue = 0xFF0000FF.toInt()
