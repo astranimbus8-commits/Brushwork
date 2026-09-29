@@ -87,7 +87,8 @@ private val MAX_LEN = ShapeSettings.MAX_LENGTH.toDouble()
 fun ShapeToolOptions(tool: ShapeTool) {
     val s = tool.settings
     val controller = tool.controller
-    val dpi = controller.doc.dpi
+    // docVersion bumps when the document size / dpi change, so the width label follows the dpi.
+    val dpi = remember(controller.docVersion) { controller.doc.dpi }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     fun set(f: (ShapeSettings) -> ShapeSettings) = tool.update(f)

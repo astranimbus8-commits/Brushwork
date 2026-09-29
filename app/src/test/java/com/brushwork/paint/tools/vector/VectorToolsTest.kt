@@ -11,6 +11,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import kotlinx.coroutines.CoroutineScope
@@ -473,6 +474,43 @@ class VectorToolsTest {
         c.doc.activeLayer.locked = true
         assertFalse(tool.ensurePending())
         assertFalse(tool.hasPendingWork)
+    }
+
+    /** Stands in for the brush module: records what the curve tool feeds the painting tool. */
+    private class RecordingTool(c: EditorController) : Tool(c) {
+        override val id = ToolId.BRUSH
+        val events = ArrayList<Pair<Char, ToolPoint>>()
+        override fun onDown(p: ToolPoint) { events += 'd' to p }
+        override fun onMove(p: ToolPoint) { events += 'm' to p }
+        override fun onUp(p: ToolPoint) { events += 'u' to p }
+    }
+
+    @Test
+    fun brushStrokeDrivesTheLastPaintToolAlongThePath() {
+        val c = controller()
+        val brush = RecordingTool(c)
+        @Suppress("UNCHECKED_CAST")
+        (c.tools as MutableMap<ToolId, Tool>)[ToolId.BRUSH] = brush
+        val tool = curveTool(c, polyline = true)
+        tool.update { it.copy(stroke = CurveStroke.BRUSH, taper = true, taperPercent = 25f, fill = false) }
+        c.tap(20f, 100f); c.tap(180f, 100f)
+        tool.commit()
+        val ev = brush.events
+        assertEquals('d', ev.first().first)
+        assertEquals('u', ev.last().first)
+        assertTrue(ev.drop(1).dropLast(1).all { it.first == 'm' })
+        val pts = ev.map { it.second }
+        assertEquals(20f, pts.first().x, 1e-3f)
+        assertEquals(180f, pts.last().x, 1e-3f)
+        assertTrue(pts.all { it.isStylus && it.y == 100f })
+        // Even spacing (the last gap may be shorter) and increasing time stamps.
+        pts.zipWithNext().dropLast(1).forEach { (a, b) -> assertEquals(0.75f, b.x - a.x, 1e-3f) }
+        assertTrue(pts.zipWithNext().all { (a, b) -> b.time > a.time })
+        // Tapered: thin at both ends, full pressure in the middle.
+        assertTrue(pts.first().pressure < 0.2f && pts.last().pressure < 0.2f)
+        assertEquals(1f, pts[pts.size / 2].pressure, 1e-4f)
+        assertFalse(tool.hasPendingWork)
+        assertFalse(c.canUndo) // the curve tool itself recorded nothing (no fill / plain line)
     }
 
     @Test
