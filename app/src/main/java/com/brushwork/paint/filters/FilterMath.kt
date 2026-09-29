@@ -292,7 +292,8 @@ object FilterMath {
         var h = x * 374761393 + y * 668265263 + seed * 1442695041
         h = (h xor (h ushr 13)) * 1274126177
         h = h xor (h ushr 16)
-        return (h and 0x7FFFFFFF) / 2147483648f
+        // 24 random bits: exactly representable as Float, so the result is always < 1f.
+        return ((h and 0x7FFFFFFF) ushr 7) / 16777216f
     }
 
     /** Smooth value noise in [0,1] at continuous coordinates (for clouds, glitch, etc.). */
