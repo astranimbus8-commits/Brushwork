@@ -28,15 +28,12 @@ object ContentAwareFill {
     fun plan(mask: HoleMask, params: InpaintParams = InpaintParams()): InpaintPlan? {
         val imgW = mask.imageWidth; val imgH = mask.imageHeight
         val e = params.expand.coerceIn(0, InpaintParams.MAX_EXPAND)
-        val area = mask.rect.expand(e + 1).clip(imgW, imgH)
-        if (area.isEmpty) return null
+        // Only the covered part of the mask matters (a whole-image mask may hold a small hole).
+        val tight = HoleOps.bounds(mask.alpha, mask.rect.width, mask.rect.height) ?: return null
+        val holeRect = IRect(mask.rect.left + tight.left, mask.rect.top + tight.top, mask.rect.left + tight.right, mask.rect.top + tight.bottom)
+        val area = holeRect.expand(e + 1).clip(imgW, imgH)
         // The region read must hold the hole's box: refuse early, before allocating for it.
-        if (area.area > params.maxRoiPixels) {
-            var n = 0L
-            for (b in mask.alpha) if (b.toInt() != 0) n++
-            if (n == 0L) return null
-            throw InpaintException(TOO_LARGE)
-        }
+        if (area.area > params.maxRoiPixels) throw InpaintException(TOO_LARGE)
         val aw = area.width; val ah = area.height
         val soft = HoleOps.crop(mask.alpha, mask.rect, area)
 

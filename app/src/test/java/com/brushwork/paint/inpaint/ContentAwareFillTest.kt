@@ -66,6 +66,34 @@ class ContentAwareFillTest {
     }
 
     @Test
+    fun horizonContinuesThroughAnObjectOnIt() {
+        // A round object sitting on the horizon: sky must fill its top, grass its bottom.
+        val w = 240; val h = 180
+        val horizon = 90
+        val src = InpaintTestImages.landscape(w, h, horizon)
+        val cx = 120; val cy = 92; val rad = 34
+        val mask = ByteArray(w * h)
+        val img = src.copy()
+        for (y in 0 until h) for (x in 0 until w) {
+            if ((x - cx) * (x - cx) + (y - cy) * (y - cy) <= rad * rad) { mask[y * w + x] = -1; img[x, y] = magenta }
+        }
+        val result = ContentAwareFill.fill(img, mask)!!
+        val out = ContentAwareFill.apply(img, result)
+        dump("horizon", out)
+        var sky = 0; var grass = 0; var nSky = 0; var nGrass = 0
+        for (y in 0 until h) for (x in 0 until w) {
+            if (mask[y * w + x].toInt() == 0) continue
+            val c = out[x, y]
+            assertTrue("magenta came back at $x,$y", channelDiff(c, magenta) > 60)
+            // Two rows of slack around the horizon.
+            if (y < horizon - 2) { nSky++; if (channelDiff(c, InpaintTestImages.skyColor(y, horizon)) <= 30) sky++ }
+            if (y > horizon + 1) { nGrass++; if (InpaintTestImages.isGrass(c)) grass++ }
+        }
+        assertTrue("sky above the horizon: $sky / $nSky", sky >= nSky * 0.9)
+        assertTrue("grass below the horizon: $grass / $nGrass", grass >= nGrass * 0.9)
+    }
+
+    @Test
     fun colorAdaptationRepairsAGradientThatCanNotBeCopied() {
         // A diagonal ramp: the exact colors inside the hole exist nowhere else near it.
         val w = 160; val h = 160

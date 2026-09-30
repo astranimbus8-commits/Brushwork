@@ -38,6 +38,34 @@ internal object InpaintTestImages {
         return PixelBuffer(w, h, px)
     }
 
+    /**
+     * A landscape: a sky gradient above the row [horizon], a noisy grass texture below it (a
+     * straight structure the fill must carry across a hole).
+     */
+    fun landscape(w: Int, h: Int, horizon: Int, seed: Int = 4): PixelBuffer {
+        val px = IntArray(w * h)
+        var s = seed * 0x9E3779B1.toInt() + 7
+        for (y in 0 until h) for (x in 0 until w) {
+            s = s xor (s shl 13); s = s xor (s ushr 17); s = s xor (s shl 5)
+            px[y * w + x] = if (y < horizon) skyColor(y, horizon) else {
+                val n = (s ushr 24) and 0x1F
+                argb(255, 40 + n, 110 + n * 2, 30 + n / 2)
+            }
+        }
+        return PixelBuffer(w, h, px)
+    }
+
+    fun skyColor(y: Int, horizon: Int): Int {
+        val t = y * 255 / maxOf(1, horizon - 1)
+        return argb(255, 90 + t * 100 / 255, 150 + t * 80 / 255, 235)
+    }
+
+    /** True if [c] looks like the grass of [landscape] (green dominates, darker than the sky). */
+    fun isGrass(c: Int): Boolean {
+        val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
+        return g > r + 30 && g > b + 30 && b < 120
+    }
+
     /** A 0 / 255 mask with [rect] set. */
     fun rectMask(w: Int, h: Int, rect: IRect): ByteArray {
         val m = ByteArray(w * h)
