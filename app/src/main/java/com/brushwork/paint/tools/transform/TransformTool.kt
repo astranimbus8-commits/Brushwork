@@ -16,6 +16,7 @@ import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
@@ -396,6 +397,135 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         controller.invalidateOverlay()
     }
 
+    // ------------------------------------------------------------------ two-finger pinch
+
+    /**
+     * Two fingers scaling / rotating / moving the content. [focus] is their midpoint when the
+     * pinch started (document px); the cumulative change reported by the canvas is applied to
+     * [start] (see [TransformHandles.pinch]).
+     */
+    private class Pinch(val focus: Vec2) {
+        /** State when the pinch started; null while the content is still being lifted (large layers). */
+        var start: TransformState? = null
+        var translation: Vec2 = Vec2.ZERO
+        var scale: Float = 1f
+        var rotationDeg: Float = 0f
+        /** The fingers lifted (not cancelled) before the lift finished: apply as soon as it lands. */
+        var ended: Boolean = false
+    }
+
+    private var pinch: Pinch? = null
+
+    /**
+     * Takes a two-finger gesture that starts on the content being transformed (the midpoint or
+     * either finger inside the box, with a little tolerance), including an imported or pasted
+     * picture being placed. Nothing lifted yet: the content is lifted first when the fingers are
+     * on it. Anywhere else the canvas zooms the view as usual.
+     */
+    override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        pinch = null
+        val pts = listOf(focus, a, b)
+        if (pts.any { !it.x.isFinite() || !it.y.isFinite() }) return false
+        val t = controller.viewTransform
+        val tol = t.screenToDocLength(t.dp(PINCH_TOLERANCE_DP))
+        if (liveSession() == null && !liftForPinch(pts, tol)) return false
+        val p = Pinch(focus)
+        val st = transformState
+        if (session != null && st != null) {
+            if (pts.none { onQuad(st, it, tol) }) return false
+            p.start = st
+        }
+        // else: the content under the fingers is being lifted in the background (startSession
+        // hands it to the pinch).
+        gesture = null
+        pinch = p
+        controller.invalidateOverlay()
+        return true
+    }
+
+    override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        val p = pinch ?: return
+        if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || !rotationDeg.isFinite()) return
+        p.translation = translation
+        p.scale = scale
+        p.rotationDeg = rotationDeg
+        applyPinch(p)
+    }
+
+    override fun onTwoFingerEnd(cancelled: Boolean) {
+        val p = pinch ?: return
+        if (p.start == null) {
+            // Still lifting: a finished pinch is applied when the content lands.
+            if (cancelled || liftJob == null) pinch = null else p.ended = true
+            return
+        }
+        finishPinch(p, cancelled)
+    }
+
+    private fun applyPinch(p: Pinch) {
+        val start = p.start ?: return
+        if (liveSession() == null) { pinch = null; return }
+        val next = TransformHandles.pinch(start, p.focus, p.translation, p.scale, p.rotationDeg)
+        if (next != transformState) applyState(next)
+    }
+
+    /** Ends the pinch: [cancelled] goes back to where it started, else it settles on whole pixels. */
+    private fun finishPinch(p: Pinch, cancelled: Boolean) {
+        if (pinch === p) pinch = null
+        val start = p.start ?: return
+        if (liveSession() == null) return
+        val st = transformState ?: return
+        val end = if (cancelled) start else st.snappedToPixels()
+        if (end != st) applyState(end)
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * Nothing is lifted yet: lifts the active layer / selection when the fingers are on its
+     * content. True when a transform is now in progress, or being prepared in the background
+     * for content right under the fingers (large layers).
+     */
+    private fun liftForPinch(pts: List<Vec2>, tol: Float): Boolean {
+        val src = liftSource(report = false) ?: return false
+        // Already being prepared (the first finger's touch started it): the pixels under the
+        // fingers tell whether they are on the content.
+        if (liftJob != null) return probe(src, pts, tol)
+        val sel = controller.selection
+        if (sel != null) {
+            if (pts.none { near(sel.bounds, it, tol) }) return false
+            return lift(src, sel.bounds, sel)
+        }
+        if (isSmall(src.bitmap)) {
+            val r = ContentBounds.of(src.bitmap, src.empty) ?: return false
+            if (pts.none { near(r, it, tol) }) return false
+            return lift(src, r, null)
+        }
+        if (!probe(src, pts, tol)) return false
+        beginLift()
+        return session != null || liftJob != null
+    }
+
+    /** True when [src] has content within [tol] (capped) of one of [pts]: a few small reads, no full scan. */
+    private fun probe(src: LiftSource, pts: List<Vec2>, tol: Float): Boolean {
+        val r = tol.coerceIn(1f, MAX_PROBE_RADIUS)
+        val area = Rect()
+        return pts.any { p ->
+            area.set(floor(p.x - r).toInt(), floor(p.y - r).toInt(), ceil(p.x + r).toInt() + 1, ceil(p.y + r).toInt() + 1)
+            ContentBounds.of(src.bitmap, src.empty, region = area) != null
+        }
+    }
+
+    private fun near(r: Rect, p: Vec2, tol: Float): Boolean =
+        p.x >= r.left - tol && p.x <= r.right + tol && p.y >= r.top - tol && p.y <= r.bottom + tol
+
+    /** [p] inside the transformed quad or within [tol] of its outline (document px). */
+    private fun onQuad(st: TransformState, p: Vec2, tol: Float): Boolean {
+        val c = st.corners()
+        if (Geometry.pointInPolygon(p, c)) return true
+        for (i in 0 until 4) if (Geometry.distanceToSegment(p, c[i], c[(i + 1) % 4]) <= tol) return true
+        return false
+    }
+
     // ------------------------------------------------------------------ commands (options strip / Numbers)
 
     /** Moves by a document-pixel offset. */
@@ -448,7 +578,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     fun fitToCanvas() = update { it.fittedTo(controller.doc.width, controller.doc.height) }
 
     private inline fun update(f: (TransformState) -> TransformState) {
-        if (liveSession() == null || gesture != null) return
+        if (liveSession() == null || gesture != null || pinch != null) return
         val st = transformState ?: return
         val next = f(st)
         if (next != st) applyState(next)
@@ -464,30 +594,23 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun beginLift(): Boolean {
         if (session != null) return true
         if (liftJob != null) return false
-        val layer = controller.activeLayer
-        if (!controller.checkEditable(layer)) return false
-        val target = controller.editTargetOf(layer)
-        if (target == EditTarget.CONTENT && layer.alphaLocked) {
-            controller.toast("Transparency is locked on \"${layer.name}\". Unlock it to transform.")
-            return false
-        }
-        val bmp = targetBitmapOf(layer, target) ?: return false
-        val bg = if (target == EditTarget.MASK) maskBackground(bmp) else 0
+        val src = liftSource(report = true) ?: return false
         val sel = controller.selection
-        if (sel != null) return lift(layer, target, bmp, sel.bounds, sel, bg)
-        val empty: Int? = if (target == EditTarget.MASK) bg else null
-        if (bmp.width.toLong() * bmp.height <= SYNC_SCAN_PIXELS) {
-            val r = ContentBounds.of(bmp, empty) ?: return nothingToTransform(target)
-            return lift(layer, target, bmp, r, null, bg)
+        if (sel != null) return lift(src, sel.bounds, sel)
+        val bmp = src.bitmap
+        if (isSmall(bmp)) {
+            val r = ContentBounds.of(bmp, src.empty) ?: return nothingToTransform(src.target)
+            return lift(src, r, null)
         }
         // Large layer: find the content bounds off the main thread, then lift. The bitmap is only
         // read; the result is thrown away if the layer changed meanwhile (contentVersion).
+        val layer = src.layer
         val version = layer.contentVersion
         isPreparing = true
         liftJob = controller.scope.launch(Dispatchers.Main) {
             val me = coroutineContext[Job]
             val r = try {
-                withContext(Dispatchers.Default) { ContentBounds.of(bmp, empty) { !isActive } }
+                withContext(Dispatchers.Default) { ContentBounds.of(bmp, src.empty) { !isActive } }
             } finally {
                 if (liftJob === me) { liftJob = null; isPreparing = false }
             }
@@ -497,19 +620,54 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             when {
                 !stillWanted -> {}
                 layer.contentVersion != version -> beginLift() // changed meanwhile (e.g. undo): rescan
-                r == null -> nothingToTransform(target)
-                else -> lift(layer, target, bmp, r, null, bg)
+                r == null -> nothingToTransform(src.target)
+                else -> lift(src, r, null)
             }
+            // A pinch that waited for this lift and already ended has nothing to apply to now.
+            if (session == null && liftJob == null) pinch?.let { if (it.start == null && it.ended) pinch = null }
         }
         return false
     }
+
+    /** What a lift takes: the active layer's content (or mask) bitmap and its "empty" value. */
+    private class LiftSource(val layer: Layer, val target: EditTarget, val bitmap: Bitmap, val maskBackground: Int) {
+        /** Empty pixels for [ContentBounds] (null = transparent). */
+        val empty: Int? get() = if (target == EditTarget.MASK) maskBackground else null
+    }
+
+    /**
+     * The active layer as a lift source, or null when it can't be transformed now (locked,
+     * hidden, transparency locked). [report] explains why with a message.
+     */
+    private fun liftSource(report: Boolean): LiftSource? {
+        val layer = controller.activeLayer
+        if (report) {
+            if (!controller.checkEditable(layer)) return null
+        } else if (layer.locked || !layer.visible) {
+            return null
+        }
+        val target = controller.editTargetOf(layer)
+        if (target == EditTarget.CONTENT && layer.alphaLocked) {
+            if (report) controller.toast("Transparency is locked on \"${layer.name}\". Unlock it to transform.")
+            return null
+        }
+        val bmp = targetBitmapOf(layer, target) ?: return null
+        return LiftSource(layer, target, bmp, if (target == EditTarget.MASK) maskBackground(bmp) else 0)
+    }
+
+    /** Small enough to find the content bounds on the main thread. */
+    private fun isSmall(bmp: Bitmap) = bmp.width.toLong() * bmp.height <= SYNC_SCAN_PIXELS
 
     private fun nothingToTransform(target: EditTarget): Boolean {
         controller.toast(if (target == EditTarget.MASK) "Nothing to transform on this mask" else "Nothing to transform on this layer")
         return false
     }
 
-    private fun lift(layer: Layer, target: EditTarget, bmp: Bitmap, rect: Rect, sel: Selection?, bg: Int): Boolean {
+    private fun lift(src: LiftSource, rect: Rect, sel: Selection?): Boolean {
+        val layer = src.layer
+        val target = src.target
+        val bmp = src.bitmap
+        val bg = src.maskBackground
         val r = Rect(rect)
         if (!r.intersect(0, 0, bmp.width, bmp.height)) return false
         val floating = try {
@@ -533,6 +691,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         controller.renderOverride = s.preview
         lastBounds = s.liftRect?.let { Rect(it) }
         applyState(state)
+        // A pinch that began while this content was being lifted in the background takes over.
+        pinch?.let { p ->
+            if (p.start != null) return@let
+            p.start = state
+            applyPinch(p)
+            if (p.ended) finishPinch(p, cancelled = false)
+        }
     }
 
     // ------------------------------------------------------------------ finishing
@@ -586,6 +751,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Clears the session (no pixel changes) and redraws what the preview covered. */
     private fun endSession(s: Session) {
         gesture = null
+        pinch = null
         session = null
         if (controller.renderOverride === s.preview) controller.renderOverride = null
         val last = lastBounds
@@ -602,6 +768,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         activationJob?.cancel(); activationJob = null
         liftJob?.cancel(); liftJob = null
         isPreparing = false
+        // A pinch still waiting for its lift has nothing to act on any more.
+        if (pinch?.start == null) pinch = null
     }
 
     /** Removes the (still empty) layer of a discarded placement. */
@@ -893,6 +1061,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
         /** Layers up to this many pixels are scanned for content bounds on the main thread. */
         private const val SYNC_SCAN_PIXELS = 2_000_000L
+        /** How far outside the box (screen dp) a pinch still grabs the content. */
+        private const val PINCH_TOLERANCE_DP = 16f
+        /** Largest neighborhood (document px, each way) read to tell whether a finger is on content. */
+        private const val MAX_PROBE_RADIUS = 64f
         private const val LIMIT = 1e8f
         private const val ACCENT = 0xFF4DA3FF.toInt()
     }

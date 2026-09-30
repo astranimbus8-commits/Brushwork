@@ -88,6 +88,41 @@ object TransformHandles {
         return start.withCorners(pts)
     }
 
+    /**
+     * Two-finger pinch: the content scales UNIFORMLY about [focus] (the fingers' midpoint when
+     * the pinch started) by [scale], turns about it by [rotationDeg] (snapped, see
+     * [pinchRotation]) and moves by [translation] — all relative to [start], so the content
+     * under the fingers follows them. A distorted quad is transformed as a whole (every corner
+     * moves), keeping its perspective. Sides never collapse below [TransformState.MIN_SIZE].
+     */
+    fun pinch(start: TransformState, focus: Vec2, translation: Vec2, scale: Float, rotationDeg: Float): TransformState {
+        val k = start.clampUniform(if (scale.isFinite() && scale > 0f) scale else 1f)
+        val delta = pinchRotation(start.rotationDeg, if (rotationDeg.isFinite()) rotationDeg else 0f)
+        val tx = if (translation.x.isFinite()) translation.x else 0f
+        val ty = if (translation.y.isFinite()) translation.y else 0f
+        return start.scaledAbout(focus, k, k).rotatedAbout(focus, delta).translated(tx, ty)
+    }
+
+    /**
+     * Rotation a pinch applies when the fingers turned by [deltaDeg] from an object at
+     * [startDeg]. Fingers always turn a little while pinching to scale, so small turns keep the
+     * original angle; the result also snaps to multiples of [stepDeg]. Both within
+     * [toleranceDeg]. Returns the (normalized) change to apply.
+     */
+    fun pinchRotation(startDeg: Float, deltaDeg: Float, stepDeg: Float = 45f, toleranceDeg: Float = PINCH_SNAP_DEG): Float {
+        val d = TransformState.normalizeDeg(deltaDeg)
+        if (abs(d) <= toleranceDeg) return 0f
+        if (stepDeg > 0f) {
+            val target = startDeg + d
+            val nearest = TransformState.roundHalfUp(target / stepDeg) * stepDeg
+            if (abs(target - nearest) <= toleranceDeg) return TransformState.normalizeDeg(nearest - startDeg)
+        }
+        return d
+    }
+
+    /** Snap zone of [pinchRotation], degrees. */
+    const val PINCH_SNAP_DEG = 4f
+
     private fun mid(a: Vec2, b: Vec2) = Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f)
 
     private fun ratio(n: Float, d: Float): Float = if (abs(d) < 1e-3f) 1f else n / d

@@ -89,6 +89,30 @@ data class TextItem(
         return Vec2(x * c - y * s + w / 2f, x * s + y * c + h / 2f)
     }
 
+    /**
+     * This text after a two-finger pinch that started with the fingers' midpoint at [focus]
+     * (document px): the font size and outline scale by [scale] (the size clamped to
+     * [TextSpec.MIN_SIZE_PX]..[maxSizePx]), the text turns by [deltaDeg] about [focus] and moves
+     * by [translation], so it follows the fingers.
+     */
+    fun pinched(focus: Vec2, translation: Vec2, scale: Float, deltaDeg: Float, maxSizePx: Float): TextItem {
+        val k0 = if (scale.isFinite() && scale > 0f) scale else 1f
+        val size = (spec.sizePx * k0).coerceIn(TextSpec.MIN_SIZE_PX, maxOf(TextSpec.MIN_SIZE_PX, maxSizePx))
+        val k = if (spec.sizePx > 0f) size / spec.sizePx else 1f
+        val d = if (deltaDeg.isFinite()) deltaDeg else 0f
+        val r = Math.toRadians(d.toDouble())
+        val c = cos(r).toFloat(); val s = sin(r).toFloat()
+        val dx = (cx - focus.x) * k; val dy = (cy - focus.y) * k
+        val tx = if (translation.x.isFinite()) translation.x else 0f
+        val ty = if (translation.y.isFinite()) translation.y else 0f
+        return copy(
+            cx = focus.x + tx + dx * c - dy * s,
+            cy = focus.y + ty + dx * s + dy * c,
+            rotationDeg = normalizeDegrees(rotationDeg + d),
+            spec = spec.copy(sizePx = size, strokeWidthPx = spec.strokeWidthPx * k),
+        )
+    }
+
     /** Corners of the (optionally [pad]-expanded) block in document space: TL, TR, BR, BL. */
     fun corners(w: Float, h: Float, pad: Float = 0f): List<Vec2> = listOf(
         localToDoc(-pad, -pad, w, h),

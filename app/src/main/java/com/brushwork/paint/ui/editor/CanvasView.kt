@@ -19,7 +19,10 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.ui.theme.BrushworkColors
 import java.util.WeakHashMap
 import kotlin.math.abs
@@ -37,7 +40,9 @@ internal object ViewportStore {
 /**
  * The drawing surface: renders the document tiles under the view transform plus overlays, and
  * turns touch/stylus input into tool input (document coordinates) or pan/zoom/rotate gestures,
- * two-finger-tap undo, three-finger-tap redo and long press.
+ * two-finger-tap undo, three-finger-tap redo and long press. A two-finger gesture is offered to
+ * the current tool first (controller.twoFingerStart: e.g. pinching the picture being placed);
+ * only when the tool declines does it move the view.
  */
 @SuppressLint("ViewConstructor")
 class CanvasView(context: Context, private val controller: EditorController) : View(context) {
@@ -91,6 +96,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         val delta = abs(left - insetLeft) + abs(top - insetTop) + abs(right - insetRight) + abs(bottom - insetBottom)
         if (delta == 0f) return
         insetLeft = left; insetTop = top; insetRight = right; insetBottom = bottom
+        // The color-pick preview square must not end up under the top bar or the hotbar.
+        (controller.tools[ToolId.EYEDROPPER] as? EyedropperTool)?.setChromeInsets(left, top, right, bottom)
         // Refit only for real layout changes (first measurement, filter panel shown/hidden), never
         // mid-gesture, and only while the user hasn't adjusted the view since the last fit. Small
         // changes (tool option strips of different heights) must not make the canvas jump.
@@ -140,6 +147,12 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * another finger): drop the stroke instead of letting it jump across the canvas.
      */
     private fun interruptStroke() {
+        if (mode == Mode.TOOL || mode == Mode.TOOL_REST) {
+            // Same for two fingers driving the tool: keep what they did, ignore the rest.
+            endToolGesture(cancelled = false)
+            mode = Mode.IGNORE
+            return
+        }
         if (mode != Mode.DRAW) return
         cancelPendingLongPress()
         controller.pointerCancel()
@@ -216,6 +229,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         removeCallbacks(longPressRunnable)
         if (mode == Mode.DRAW) controller.pointerCancel()
         if (mode == Mode.TRANSFORM) endTransform()
+        endToolGesture(cancelled = true)
         mode = Mode.NONE
         if (controller.onInvalidate === invalidator) controller.onInvalidate = null
         super.onDetachedFromWindow()
@@ -270,13 +284,22 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     // ------------------------------------------------------------------ input
 
-    private enum class Mode { NONE, DRAW, TRANSFORM, IGNORE }
+    /**
+     * DRAW: one pointer feeds the tool. TRANSFORM: fingers pan/zoom/rotate the view. TOOL: two
+     * fingers drive the current tool (controller.twoFingerStart accepted them, e.g. pinching the
+     * picture being placed). TOOL_REST: one finger of such a gesture lifted and the other is still
+     * down; the tool gesture may still be open, waiting to see whether it was a two-finger tap.
+     * IGNORE: the rest of the gesture does nothing.
+     */
+    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, IGNORE }
 
     private var mode = Mode.NONE
     private var drawPointerId = -1
     private var drawIsStylus = false
     private var gestureHadStylus = false
     private var enteredTransform = false
+    /** The view gesture has had two or more fingers (it stays a view gesture, see onPointerDown). */
+    private var viewPinched = false
     private var startState: Viewport.State? = null
     private var startAdjusted = false
     /** Pointer ids treated as palm / leftover contacts for the rest of the gesture. */
@@ -288,6 +311,14 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private val gy = FloatArray(MAX_GESTURE_POINTERS)
 
     private var lastPoint: ToolPoint? = null
+
+    // Two-finger gesture handed to the tool (Mode.TOOL / TOOL_REST).
+    private val toolIds = IntArray(2)
+    /** Finger positions (DOCUMENT coordinates: ax, ay, bx, by) when the tool gesture started / now. */
+    private val toolStart = FloatArray(4)
+    private val toolNow = FloatArray(4)
+    /** The tool still expects controller.twoFingerEnd() for the current gesture. */
+    private var toolGestureOpen = false
 
     private fun bit(id: Int): Long = if (id in 0..63) 1L shl id else 0L
     private fun isIgnored(id: Int) = ignoredMask and bit(id) != 0L
@@ -320,9 +351,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         // A missed UP/CANCEL (should not happen): close the previous gesture cleanly.
         if (mode == Mode.DRAW) controller.pointerCancel()
         if (mode == Mode.TRANSFORM) endTransform()
+        endToolGesture(cancelled = true)
         cancelPendingLongPress()
         ignoredMask = 0L
         enteredTransform = false
+        viewPinched = false
         gestureHadStylus = false
         startState = viewport.snapshot()
         startAdjusted = viewport.userAdjusted
@@ -353,6 +386,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             when (mode) {
                 Mode.DRAW -> { cancelPendingLongPress(); controller.pointerCancel() }
                 Mode.TRANSFORM -> endTransform()
+                // The fingers were probably a resting hand: take back what they did to the tool.
+                Mode.TOOL, Mode.TOOL_REST -> endToolGesture(cancelled = true)
                 else -> {}
             }
             // The pen takes over: every other contact is now a resting palm, and recognition
@@ -366,12 +401,33 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         classifier.down(id, e.getX(idx), e.getY(idx), e.eventTime)
         when (mode) {
             Mode.DRAW -> {
-                // A second finger turns the stroke into a view gesture; the tool drops the stroke.
+                // A second finger drops the stroke; the two fingers then drive the tool if it
+                // wants them (pinching the picture being placed), else the view.
                 cancelPendingLongPress()
                 controller.pointerCancel()
+                if (!startToolGesture(e)) restartTransform(e, -1)
+            }
+            Mode.TRANSFORM -> {
+                // A finger panning the view (stylus-only drawing) joined by a second one: the pair
+                // is offered to the tool too. A gesture that already zoomed the view with two or
+                // more fingers keeps doing that when a finger comes back (re-grip), even onto the
+                // picture being placed.
+                val offer = transformCount == 1 && !viewPinched && classifier.maxPointers == 2
+                if (offer && startToolGesture(e)) endTransform() else restartTransform(e, -1)
+            }
+            Mode.TOOL -> {
+                // A third finger takes the tool gesture back; the fingers now move the view (or
+                // tap to redo).
+                endToolGesture(cancelled = true)
                 restartTransform(e, -1)
             }
-            Mode.TRANSFORM -> restartTransform(e, -1)
+            Mode.TOOL_REST -> {
+                // A finger back down after one lifted (re-grip): keep the result so far and start
+                // over with the new pair. Never a tap any more.
+                endToolGesture(cancelled = false)
+                classifier.invalidate()
+                if (!startToolGesture(e)) restartTransform(e, -1)
+            }
             else -> {}
         }
     }
@@ -399,6 +455,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 applyTransform()
                 if (n >= 2) onViewGesture?.invoke(ViewGestureInfo(viewport.scale, viewport.rotation))
             }
+            Mode.TOOL -> feedToolGesture(e)
+            // The remaining finger moved or waited too long: that was no tap, the pinch stands.
+            Mode.TOOL_REST -> if (toolGestureOpen && !classifier.tapStillPossible(e.eventTime)) endToolGesture(cancelled = false)
             else -> {}
         }
     }
@@ -406,7 +465,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private fun onPointerUp(e: MotionEvent, idx: Int) {
         val id = e.getPointerId(idx)
         if (isIgnored(id)) { ignoredMask = ignoredMask and bit(id).inv(); return }
-        classifier.up(id, e.eventTime)
+        val tap = classifier.up(id, e.eventTime)
         when (mode) {
             Mode.DRAW -> if (id == drawPointerId) {
                 cancelPendingLongPress()
@@ -414,6 +473,17 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 mode = Mode.IGNORE
             }
             Mode.TRANSFORM -> restartTransform(e, idx)
+            Mode.TOOL -> if (id == toolIds[0] || id == toolIds[1]) {
+                feedToolGesture(e) // the lift-off event carries the final positions
+                mode = Mode.TOOL_REST
+                // Still a possible two-finger tap: decided when the other finger lifts.
+                if (!classifier.tapStillPossible(e.eventTime)) endToolGesture(cancelled = false)
+            }
+            // The last active finger lifted while palm contacts stay down.
+            Mode.TOOL_REST -> if (classifier.activePointers == 0) {
+                finishToolGesture(tap)
+                mode = Mode.IGNORE
+            }
             else -> {}
         }
     }
@@ -431,6 +501,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 endTransform()
                 if (enteredTransform && !gestureHadStylus) handleTap(tap)
             }
+            Mode.TOOL, Mode.TOOL_REST -> finishToolGesture(tap)
             else -> {}
         }
         mode = Mode.NONE
@@ -470,6 +541,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         }
         mode = Mode.TRANSFORM
         enteredTransform = true
+        if (transformCount >= 2) viewPinched = true
         cancelPendingLongPress()
         viewport.beginGesture(gx, gy, transformCount)
     }
@@ -478,11 +550,72 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         onViewGesture?.invoke(null)
     }
 
+    // ------------------------------------------------------------------ two-finger tool gestures
+
+    /**
+     * Offers the gesture to the current tool when exactly two fingers are down (palms and pens
+     * don't count): e.g. the transform tool scales/rotates the picture when the fingers are on it.
+     * Returns true if the tool took it; the view then stays still (Mode.TOOL).
+     */
+    private fun startToolGesture(e: MotionEvent): Boolean {
+        var n = 0
+        for (i in 0 until e.pointerCount) {
+            val id = e.getPointerId(i)
+            if (isIgnored(id) || isStylusType(e.getToolType(i))) continue
+            if (n == 2) return false
+            toolIds[n] = id
+            toolStart[2 * n] = e.getX(i)
+            toolStart[2 * n + 1] = e.getY(i)
+            n++
+        }
+        if (n != 2) return false
+        controller.viewTransform.inverse.mapPoints(toolStart)
+        val a = Vec2(toolStart[0], toolStart[1])
+        val b = Vec2(toolStart[2], toolStart[3])
+        if (!controller.twoFingerStart(Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f), a, b)) return false
+        mode = Mode.TOOL
+        toolGestureOpen = true
+        cancelPendingLongPress()
+        return true
+    }
+
+    /** Reports the change since the tool gesture started (document units, see [TwoFingerChange]). */
+    private fun feedToolGesture(e: MotionEvent) {
+        if (!toolGestureOpen) return
+        val ia = e.findPointerIndex(toolIds[0])
+        val ib = e.findPointerIndex(toolIds[1])
+        if (ia < 0 || ib < 0) return
+        toolNow[0] = e.getX(ia); toolNow[1] = e.getY(ia)
+        toolNow[2] = e.getX(ib); toolNow[3] = e.getY(ib)
+        controller.viewTransform.inverse.mapPoints(toolNow)
+        // Fingers closer than a dp at the start give no usable spread (and never happen for real).
+        val change = TwoFingerChange.between(toolStart, toolNow, minSpread = density / viewport.scale)
+        controller.twoFingerGesture(change.translation, change.scale, change.rotationDeg)
+    }
+
+    private fun endToolGesture(cancelled: Boolean) {
+        if (!toolGestureOpen) return
+        toolGestureOpen = false
+        controller.twoFingerEnd(cancelled)
+    }
+
+    /**
+     * The last finger of a tool gesture lifted. A quick two-finger tap takes back the few pixels
+     * the tool moved (like the view is restored for a tap) and then undoes; anything else keeps
+     * the result.
+     */
+    private fun finishToolGesture(tap: TouchGestureClassifier.Tap) {
+        val isTap = tap != TouchGestureClassifier.Tap.NONE && !gestureHadStylus
+        endToolGesture(cancelled = isTap)
+        if (isTap) handleTap(tap)
+    }
+
     private fun abortGesture() {
         cancelPendingLongPress()
         when (mode) {
             Mode.DRAW -> controller.pointerCancel()
             Mode.TRANSFORM -> endTransform()
+            Mode.TOOL, Mode.TOOL_REST -> endToolGesture(cancelled = true)
             else -> {}
         }
         classifier.cancel()
