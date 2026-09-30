@@ -247,11 +247,13 @@ class TransformToolRobolectricTest {
         assertEquals(0, placed.bitmap.getPixel(2, 50))
         assertEquals(0, placed.bitmap.getPixel(50, 20))
         assertEquals(TransformTool.IMPORT_LABEL, c.undoManager.undoLabel)
-        c.undo() // pixels
-        assertEquals(0, placed.bitmap.getPixel(50, 50))
-        assertEquals(2, c.doc.layers.size)
-        c.undo() // the layer
+        // Adding the layer and placing the picture are ONE undo step.
+        c.undo()
         assertEquals(1, c.doc.layers.size)
+        assertFalse(c.canUndo)
+        c.redo()
+        assertEquals(2, c.doc.layers.size)
+        assertEquals(BLUE, c.doc.activeLayer.bitmap.getPixel(50, 50))
     }
 
     @Test

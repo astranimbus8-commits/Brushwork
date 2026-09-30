@@ -74,5 +74,17 @@ background or the user returns to the gallery.
 
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
-sliders, numeric/length fields with units, nudge pad, chips, swatches) — use them everywhere.
-Panels are bottom sheets (`BwSheet`). Tool option strips live under the top bar (`ToolOptionsBar`).
+sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, nudge pad, chips,
+swatches) — use them everywhere.
+
+Editor layout (`ui/editor`): top bar (panels + overflow menu), tool options strip
+(`ToolOptionsBar`), floating selection bar (copy / cut / paste / deselect…) while a selection or
+clipboard exists, the canvas, the brush size/opacity slider bar (values can be tapped and typed)
+and the hotbar at the bottom. Panels are half-height, translucent bottom sheets (`BwSheet`); the
+layers panel is a non-modal floating window in the bottom-right corner.
+
+Gestures (`CanvasView`): one finger → the current tool (via the controller); two fingers → first
+offered to the tool (`Tool.onTwoFingerStart`, e.g. pinch-scaling a transformed image, text or
+shape), otherwise pan/zoom/rotate the view; two-finger tap = undo (tools with steps take back one
+step via `Tool.undoStep`), three-finger tap = redo; holding still with a color tool picks a color
+(`EditorController.pointerLongPress` → temporary eyedropper with a preview square).

@@ -736,8 +736,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             return
         }
         val extras = if (moveSelection) moveSelection(s, st, label) else emptyList()
+        // A placement on the layer that was just added for it: adding the layer and placing the
+        // pixels become ONE undo step (undo removes the picture and its layer together).
+        val foldWithAdd = s.placement && isFreshImportLayer(s.layer, s.placementLabel)
         endSession(s)
-        controller.commitEdit(rec, label, extras)
+        if (controller.commitEdit(rec, label, extras) && foldWithAdd) controller.mergeLastUndo(2, label)
     }
 
     /** Ends the session without changes; a discarded placement also removes its empty layer. */

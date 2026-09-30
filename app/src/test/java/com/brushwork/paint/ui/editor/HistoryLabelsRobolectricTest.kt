@@ -107,6 +107,7 @@ class HistoryLabelsRobolectricTest {
         val corners = object : Tool(c) {
             override val id = ToolId.LASSO
             override val hasPendingWork: Boolean get() = true
+            override val canUndoStep: Boolean get() = true
         }
         assertEquals("last corner", HistoryLabels.undoStepName(corners))
         val shapeLike = object : Tool(c) {

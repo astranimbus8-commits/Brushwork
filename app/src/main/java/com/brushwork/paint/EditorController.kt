@@ -207,6 +207,13 @@ class EditorController(
         }
     }
 
+    /** Folds the newest [count] undo steps into one step named [label] (no-op if fewer exist). */
+    fun mergeLastUndo(count: Int, label: String) {
+        if (count < 2 || undoManager.undoCount < count) return
+        val actions = undoManager.takeSince(undoManager.undoCount - count)
+        undoManager.pushRaw(CompositeAction(label, actions))
+    }
+
     /**
      * Removes the newest undo step WITHOUT undoing it and without leaving it on the redo stack.
      * The caller must already have reverted its effect (e.g. a discarded picture placement).
@@ -392,6 +399,7 @@ class EditorController(
         if (gestureToFilter) return false
         val tool = gestureTool ?: return false
         if (tool.onLongPress(p)) return true
+        // (Tools with grabbable handles/points claim the long press themselves in onLongPress.)
         if (holdPicking || !settings.longPressEyedropper || activeToolId !in HOLD_PICK_TOOLS) return false
         val picker = tools[ToolId.EYEDROPPER] ?: return false
         if (gestureAssisted) strokeAssist.cancel()

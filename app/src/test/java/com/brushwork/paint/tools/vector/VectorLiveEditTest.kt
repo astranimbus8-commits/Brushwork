@@ -459,10 +459,10 @@ class VectorLiveEditTest {
         c.tap(20f, 100f); c.tap(100f, 40f); c.tap(180f, 100f)
         assertTrue(tool.canUndoStep)
         // What the two-finger tap / undo button shows: one point, not the whole curve.
-        assertEquals("Undo: Curve point", HistoryLabels.undo(c))
+        assertEquals("Undo: last point", HistoryLabels.undo(c))
         c.undo()
         assertEquals(2, tool.anchors.size)
-        assertEquals("Redo: Curve point", HistoryLabels.redo(c))
+        assertEquals("Redo: last point", HistoryLabels.redo(c))
         c.redo()
         assertEquals(3, tool.anchors.size)
         assertEquals("Apply or discard the curve edit first", HistoryLabels.redo(c))
