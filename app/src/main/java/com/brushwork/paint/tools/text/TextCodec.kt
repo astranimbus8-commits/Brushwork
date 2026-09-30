@@ -16,8 +16,12 @@ data class TextLayerData(
 
 /** JSON encoding of [TextItem]s for text layers (pure Kotlin). */
 object TextCodec {
-    /** Current format version (1 = v1.2: box, vertical style, text path). */
-    const val VERSION = 1
+    /**
+     * Current format version (1 = v1.2: box, vertical style, text path; 2 = v1.3: imported fonts
+     * `fontId` / `fontName`, box `minHeight` / `minWidth`). Version 1 data reads as is (the new
+     * fields take their defaults); v1.2 apps ignore the new fields and draw the built-in font.
+     */
+    const val VERSION = 2
 
     private val json = Json {
         ignoreUnknownKeys = true

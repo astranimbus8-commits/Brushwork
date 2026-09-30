@@ -20,7 +20,8 @@ import org.robolectric.annotation.Config
 /**
  * The text tool's strip and editor sheet in a real activity, operated through their semantics:
  * "Edit text" for the active text layer, the box presets and fixed width, the vertical style,
- * the empty-text question, and the disabled box / vertical options while a path is active.
+ * an emptied text deleting its layer without a question, and the disabled box / vertical
+ * options while a path is active.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
@@ -73,15 +74,7 @@ class TextEditUiRobolectricTest {
         assertTrue(tool.item!!.spec.box.height > 0f)
         assertTrue(SmokeUi.has("Box height", exact = true))
 
-        // Emptying the text asks before the layer is deleted; "keep" brings the old text back.
-        SmokeUi.field("Text").type("")
-        SmokeUi.settle()
         SmokeUi.click("OK", exact = true)
-        assertTrue(tool.emptyTextPrompt)
-        assertTrue(SmokeUi.has("Delete the text layer?", exact = true))
-        SmokeUi.click("Keep old text", exact = true)
-        assertFalse(tool.emptyTextPrompt)
-        assertEquals("Caption", tool.item!!.text)
         tool.commit()
         SmokeUi.settle()
         val stored = TextCodec.decode(c.activeLayer.textData)!!
@@ -89,6 +82,21 @@ class TextEditUiRobolectricTest {
         assertTrue(stored.spec.vertical && stored.spec.columnsLeftToRight && stored.spec.box.roundness == 1f)
         assertEquals(VerticalStyle.MIXED, stored.spec.verticalStyle)
         Smoke.assertQuiet(c, "text edited")
+
+        // Emptying the text deletes the layer at once (no question); undo brings it back.
+        SmokeUi.click("Edit text", exact = true)
+        assertTrue(tool.editorOpen)
+        SmokeUi.field("Text").type("")
+        SmokeUi.settle()
+        SmokeUi.click("OK", exact = true)
+        assertFalse(SmokeUi.has("Delete the text layer?"))
+        assertEquals(1, c.doc.layers.size)
+        assertEquals(null, tool.item)
+        Smoke.assertQuiet(c, "emptied text deleted")
+        c.undo()
+        SmokeUi.settle()
+        assertEquals(2, c.doc.layers.size)
+        assertEquals("Caption", TextCodec.decode(c.activeLayer.textData)!!.text)
 
         // Text on a shape: box and vertical options are off (their values are kept).
         assertTrue(tool.editLayer(c.activeLayer, openEditor = true))

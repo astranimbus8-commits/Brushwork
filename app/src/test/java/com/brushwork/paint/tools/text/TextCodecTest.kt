@@ -16,7 +16,11 @@ class TextCodecTest {
             align = TextAlign.END, letterSpacing = 0.25f, lineSpacing = 1.7f, vertical = true,
             strokeWidthPx = 3.5f, strokeColor = 0xFF00FF00.toInt(), antiAlias = false,
             verticalStyle = VerticalStyle.MIXED, columnsLeftToRight = true,
-            box = TextBoxSpec(width = 120f, height = 300f, padding = 8f, fill = true, fillColor = 0x7F102030, borderWidth = 2f, borderColor = 0xFF0000FF.toInt(), roundness = 0.6f),
+            box = TextBoxSpec(
+                width = 120f, height = 300f, padding = 8f, fill = true, fillColor = 0x7F102030, borderWidth = 2f,
+                borderColor = 0xFF0000FF.toInt(), roundness = 0.6f, minHeight = 90f, minWidth = 60f,
+            ),
+            fontId = "00ff00ff00ff00ff00ff00ff00ff00ff", fontName = "Comic Bubble",
         ),
         cx = 123.25f, cy = -40f, rotationDeg = -33f,
         path = TextPathSpec(
@@ -38,6 +42,35 @@ class TextCodecTest {
         assertTrue(plain.contains("\"box\""))
         assertTrue(plain.contains("\"path\""))
         assertEquals(TextItem("x"), TextCodec.decode(plain))
+    }
+
+    @Test
+    fun importedFontsRoundTripAndOlderTextsStillLoad() {
+        val id = "0123456789abcdef0123456789abcdef"
+        val item = TextItem("Hi", TextSpec(font = TextFont.SERIF, fontId = id, fontName = "Comic Pop", box = TextBoxSpec(width = 200f, minHeight = 150f)))
+        val json = TextCodec.encode(item)
+        assertTrue(json, json.contains("\"fontId\":\"$id\"") && json.contains("\"fontName\":\"Comic Pop\""))
+        assertTrue(json.contains("\"version\":2"))
+        assertEquals(item, TextCodec.decode(json))
+        assertEquals("Comic Pop", item.spec.fontLabel)
+        assertTrue(item.spec.usesImportedFont)
+        assertEquals("Serif", TextSpec(font = TextFont.SERIF).fontLabel)
+        // A v1.2 text layer (format 1, no imported font, no box minimum) loads as it was.
+        val old = TextCodec.decode("""{"version":1,"item":{"text":"Old","spec":{"font":"CASUAL","sizePx":30,"box":{"width":120,"fill":true}}}}""")!!
+        assertNull(old.spec.fontId)
+        assertNull(old.spec.fontName)
+        assertEquals(TextFont.CASUAL, old.spec.font)
+        assertEquals(TextBoxSpec(width = 120f, fill = true), old.spec.box)
+        // The id names a file: a damaged or crafted one is dropped (the built-in font is used).
+        val evil = TextCodec.decode("""{"item":{"text":"x","spec":{"font":"SERIF","fontId":"../../databases/x","fontName":"Evil"}}}""")!!
+        assertNull(evil.spec.fontId)
+        assertNull(evil.spec.fontName)
+        assertEquals(TextFont.SERIF, evil.spec.font)
+        // Box minimums are scaled with the text and sanitized.
+        assertEquals(300f, item.spec.scaled(2f).box.minHeight, 0f)
+        val bad = TextCodec.decode(TextCodec.encode(TextItem("x", TextSpec(box = TextBoxSpec(minHeight = Float.NaN, minWidth = -5f)))))!!
+        assertEquals(0f, bad.spec.box.minHeight, 0f)
+        assertEquals(0f, bad.spec.box.minWidth, 0f)
     }
 
     @Test

@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.fonts.FontOpenIntent
 import com.brushwork.paint.ui.editor.EditorScreen
 import com.brushwork.paint.ui.gallery.GalleryScreen
 import com.brushwork.paint.ui.theme.BrushworkTheme
@@ -33,6 +34,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // "Open with Brushwork" on a font file (.ttf / .otf / dafont .zip): import it and close.
+        if (savedInstanceState == null && FontOpenIntent.handle(this, intent)) return
         enableEdgeToEdge()
         setContent {
             BrushworkTheme {

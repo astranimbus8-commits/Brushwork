@@ -5,12 +5,14 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Selection
 import kotlin.math.ceil
@@ -101,15 +103,20 @@ class PreparedText internal constructor(
     val block: TextBlock?,
     internal val paints: PathPaints?,
     private val pathBounds: RectF?,
+    /** [FontStore.generation] when this was laid out (imported fonts may come and go). */
+    internal val fontGeneration: Int = FontStore.generation,
 ) {
     val onPath: Boolean get() = block == null
 
     /** True when nothing would be drawn. */
     val isEmpty: Boolean get() = block?.isEmpty ?: (text.isEmpty() || pathBounds == null || pathBounds.isEmpty)
 
+    /** False when this uses an imported font and fonts were imported or deleted since. */
+    internal val fontsCurrent: Boolean get() = spec.fontId == null || fontGeneration == FontStore.generation
+
     /** Whether this can draw [item] (position and rotation of straight text don't matter). */
     fun matches(item: TextItem): Boolean {
-        if (item.text != text || item.spec != spec) return false
+        if (item.text != text || item.spec != spec || !fontsCurrent) return false
         return if (block != null) !item.path.isActive else item.path == path
     }
 
@@ -120,7 +127,7 @@ class PreparedText internal constructor(
     internal fun translatedTo(item: TextItem, dx: Float, dy: Float): PreparedText {
         if (block != null) return this
         val b = RectF(pathBounds ?: RectF()).apply { if (!isEmpty) offset(dx, dy) }
-        return PreparedText(item.text, item.spec, item.path, null, paints, b)
+        return PreparedText(item.text, item.spec, item.path, null, paints, b, fontGeneration)
     }
 
     /** Whether the document point [p] is on [item] (its box, or its path bounds), with [tolerance] px. */
@@ -139,6 +146,7 @@ class PreparedText internal constructor(
 /** Builds [TextBlock]s (StaticLayout for horizontal text, manual glyph placement for vertical). */
 object TextRenderer {
 
+    /** Typeface of [spec]: its font (imported or built-in) in its bold / italic style. */
     fun typeface(spec: TextSpec): Typeface {
         val style = when {
             spec.bold && spec.italic -> Typeface.BOLD_ITALIC
@@ -146,7 +154,20 @@ object TextRenderer {
             spec.italic -> Typeface.ITALIC
             else -> Typeface.NORMAL
         }
-        return Typeface.create(Typeface.create(spec.font.family, Typeface.NORMAL), style)
+        return Typeface.create(baseTypeface(spec), style)
+    }
+
+    /**
+     * Plain typeface of [spec]'s font: the imported font [TextSpec.fontId], or the built-in
+     * family [TextSpec.font] (also while the imported font is missing).
+     */
+    fun baseTypeface(spec: TextSpec): Typeface =
+        spec.fontId?.let { FontStore.typefaceFor(it) } ?: FontStore.builtIn(spec.font)
+
+    /** True when [spec] asks for an imported font that isn't on this device (drawn with [TextSpec.font]). */
+    fun isFontMissing(spec: TextSpec): Boolean {
+        val id = spec.fontId ?: return false
+        return FontStore.typefaceFor(id) == null
     }
 
     private fun newPaint(spec: TextSpec): TextPaint = TextPaint().apply {
@@ -188,12 +209,13 @@ object TextRenderer {
      */
     fun prepare(item: TextItem, reuse: PreparedText? = null): PreparedText {
         if (reuse != null && reuse.matches(item)) return reuse
+        val sameLook = reuse != null && reuse.spec == item.spec && reuse.fontsCurrent
         return if (item.path.isActive) {
-            val paints = reuse?.paints?.takeIf { reuse.spec == item.spec } ?: pathPaints(item.spec)
+            val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
             val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
             PreparedText(item.text, item.spec, item.path, null, paints, b)
         } else {
-            val block = reuse?.block?.takeIf { reuse.text == item.text && reuse.spec == item.spec } ?: layout(item.text, item.spec)
+            val block = reuse?.block?.takeIf { sameLook && reuse.text == item.text } ?: layout(item.text, item.spec)
             PreparedText(item.text, item.spec, item.path, block, null, null)
         }
     }
@@ -204,32 +226,65 @@ object TextRenderer {
 
     private fun inkPad(spec: TextSpec) = spec.strokeWidthPx + spec.sizePx * (if (spec.italic || spec.font == TextFont.CURSIVE) 0.5f else 0.3f) + 2f
 
-    private fun block(spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, glyphs: ((Canvas, TextPaint) -> Unit)?): TextBlock {
+    /**
+     * [overflow]: how far measured ink reaches outside the text area (imported fonts only: script
+     * and display fonts from dafont often have swashes far beyond their letter cells, which the
+     * fixed allowance of the built-in fonts would cut off when the text is committed).
+     */
+    private fun block(spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, overflow: Float = 0f, glyphs: ((Canvas, TextPaint) -> Unit)?): TextBlock {
         val inset = spec.box.inset
-        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, inkPad(spec), lines, spec, paint, glyphs)
+        val pad = max(inkPad(spec), spec.strokeWidthPx + overflow + 2f)
+        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, glyphs)
     }
 
     private fun layoutHorizontal(text: String, spec: TextSpec): TextBlock {
         val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
         val fm = paint.fontMetrics
         val wrap = spec.box.width
+        // A fixed-size text box (width x height): the area stays at least this tall.
+        val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
         if (text.isEmpty()) {
             val w = if (wrap > 0f) wrap else spec.sizePx * 0.6f
-            return block(spec, w, (fm.descent - fm.ascent) * max(1f, spec.lineSpacing), 0, paint, null)
+            return block(spec, w, max((fm.descent - fm.ascent) * max(1f, spec.lineSpacing), minHeight), 0, paint, glyphs = null)
         }
+        val layout = staticLayout(text, spec, paint)
+        val width = layout.width.toFloat()
+        val height = max(max(1f, layout.height.toFloat()), minHeight)
+        val overflow = if (spec.fontId != null) horizontalOverflow(layout, text, paint, width, height) else 0f
+        return block(spec, width, height, layout.lineCount, paint, overflow) { c, _ -> layout.draw(c) }
+    }
+
+    private fun staticLayout(text: String, spec: TextSpec, paint: TextPaint): StaticLayout {
+        val wrap = spec.box.width
         val width = if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1
         val align = when (spec.align) {
             TextAlign.START -> Layout.Alignment.ALIGN_NORMAL
             TextAlign.CENTER -> Layout.Alignment.ALIGN_CENTER
             TextAlign.END -> Layout.Alignment.ALIGN_OPPOSITE
         }
-        val layout = StaticLayout.Builder.obtain(text, 0, text.length, paint, width.coerceAtLeast(1))
+        return StaticLayout.Builder.obtain(text, 0, text.length, paint, width.coerceAtLeast(1))
             .setAlignment(align)
             .setLineSpacing(0f, spec.lineSpacing)
             .setIncludePad(false)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
-        return block(spec, width.coerceAtLeast(1).toFloat(), max(1f, layout.height.toFloat()), layout.lineCount, paint) { c, _ -> layout.draw(c) }
+    }
+
+    /** How far the glyphs of [layout] reach outside (0, 0) - ([w], [h]) (0 when they don't). */
+    private fun horizontalOverflow(layout: StaticLayout, text: String, paint: TextPaint, w: Float, h: Float): Float {
+        val r = Rect()
+        var over = 0f
+        for (i in 0 until layout.lineCount) {
+            val s = layout.getLineStart(i)
+            val e = layout.getLineEnd(i)
+            if (e <= s) continue
+            paint.getTextBounds(text, s, e, r)
+            if (r.isEmpty) continue
+            val x = layout.getLineLeft(i)
+            val y = layout.getLineBaseline(i).toFloat()
+            over = max(over, max(max(-(x + r.left), x + r.right - w), max(-(y + r.top), y + r.bottom - h)))
+        }
+        return max(0f, over)
     }
 
     private fun layoutVertical(text: String, spec: TextSpec): TextBlock {
@@ -243,7 +298,10 @@ object TextRenderer {
             leftToRight = spec.columnsLeftToRight,
         )
         val height = if (res.height > 0f) res.height else em
-        if (res.glyphs.isEmpty()) return block(spec, res.width, height, 0, paint, null)
+        // A fixed-size text box: at least this wide; columns start at its right (or left) edge.
+        val width = max(res.width, if (spec.box.height > 0f) spec.box.minWidth else 0f)
+        val shift = if (spec.columnsLeftToRight) 0f else width - res.width
+        if (res.glyphs.isEmpty()) return block(spec, width, height, 0, paint, glyphs = null)
         val fm = paint.fontMetrics
         val baseline = -(fm.ascent + fm.descent) / 2f
         val glyphs = res.glyphs
@@ -254,7 +312,10 @@ object TextRenderer {
         }
         val punct = VerticalTextLayout.PUNCTUATION_SHIFT * em
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
-        return block(spec, res.width, height, res.columns, paint) { c, p ->
+        val overflow = if (spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
+        return block(spec, width, height, res.columns, paint, overflow) { c, p ->
+            val s0 = c.save()
+            if (shift != 0f) c.translate(shift, 0f)
             for (i in glyphs.indices) {
                 val g = glyphs[i]
                 when (g.kind) {
@@ -277,7 +338,37 @@ object TextRenderer {
                     }
                 }
             }
+            c.restoreToCount(s0)
         }
+    }
+
+    /** Like [horizontalOverflow] for the cells of vertical text (drawn as in [layoutVertical]). */
+    private fun verticalOverflow(
+        glyphs: List<VerticalGlyph>, paint: TextPaint, baseline: Float, tcyScale: FloatArray,
+        punct: Float, small: Float, shift: Float, w: Float, h: Float,
+    ): Float {
+        val r = Rect()
+        var over = 0f
+        fun extend(l: Float, t: Float, rt: Float, b: Float) {
+            over = max(over, max(max(-(l + shift), rt + shift - w), max(-t, b - h)))
+        }
+        for (i in glyphs.indices) {
+            val g = glyphs[i]
+            paint.getTextBounds(g.text, 0, g.text.length, r)
+            if (r.isEmpty) continue
+            // Centered text: the ink relative to the drawing point.
+            val half = paint.measureText(g.text) / 2f
+            val l = r.left - half; val rt = r.right - half
+            when (g.kind) {
+                VerticalGlyphKind.UPRIGHT -> extend(g.cx + l, g.cy + baseline + r.top, g.cx + rt, g.cy + baseline + r.bottom)
+                VerticalGlyphKind.PUNCTUATION -> extend(g.cx + punct + l, g.cy + baseline - punct + r.top, g.cx + punct + rt, g.cy + baseline - punct + r.bottom)
+                VerticalGlyphKind.SMALL_KANA -> extend(g.cx + small + l, g.cy + baseline - small + r.top, g.cx + small + rt, g.cy + baseline - small + r.bottom)
+                // Turned 90° clockwise about the cell center: (x, y) -> (-y, x).
+                VerticalGlyphKind.ROTATED -> extend(g.cx - (baseline + r.bottom), g.cy + l, g.cx - (baseline + r.top), g.cy + rt)
+                VerticalGlyphKind.TATE_CHU_YOKO -> extend(g.cx + l * tcyScale[i], g.cy + baseline + r.top, g.cx + rt * tcyScale[i], g.cy + baseline + r.bottom)
+            }
+        }
+        return max(0f, over)
     }
 
     /** Block-local -> document matrix of [item] (rotation around the block center). */
