@@ -66,6 +66,15 @@ filter is unit-tested on the JVM (`AllFiltersTest` runs all of them). Parameters
 downscaled copy, applies at full resolution in the background, respects the selection and records
 undo. `FilterMath` has shared helpers (blur, distance transform, noise, LUTs, parallel loops).
 
+## Text layers (`tools/text/`)
+A text layer is a normal raster layer whose `Layer.textData` holds the serialized text object
+(`TextCodec`: content, style, box, vertical mode, position, path). The text tool re-opens it for
+editing (tap its text, or "Edit text" in the layers window) and re-renders the same layer with
+`EditorController.updateTextLayer` (one undo step). Any other pixel edit rasterizes the layer
+(`textData` cleared, undoably). Text on a path (`TextPathSpec`, `TextOnPath`, `TextPathGeometry`)
+lays one line of text along a line, circle, rectangle or cubic curve, either bending the glyph
+outlines along the path or rotating each letter rigidly.
+
 ## Storage (`storage/`)
 Each project is a folder in app-private storage: `project.json` (document + layer properties),
 one compressed raw pixel file per layer/mask, and `thumb.png`. Saves are incremental (only layers
