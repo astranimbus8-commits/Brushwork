@@ -20,7 +20,9 @@ import android.view.View
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.ui.theme.BrushworkColors
 import java.util.WeakHashMap
 import kotlin.math.abs
@@ -94,6 +96,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         val delta = abs(left - insetLeft) + abs(top - insetTop) + abs(right - insetRight) + abs(bottom - insetBottom)
         if (delta == 0f) return
         insetLeft = left; insetTop = top; insetRight = right; insetBottom = bottom
+        // The color-pick preview square must not end up under the top bar or the hotbar.
+        (controller.tools[ToolId.EYEDROPPER] as? EyedropperTool)?.setChromeInsets(left, top, right, bottom)
         // Refit only for real layout changes (first measurement, filter panel shown/hidden), never
         // mid-gesture, and only while the user hasn't adjusted the view since the last fit. Small
         // changes (tool option strips of different heights) must not make the canvas jump.
@@ -294,6 +298,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private var drawIsStylus = false
     private var gestureHadStylus = false
     private var enteredTransform = false
+    /** The view gesture has had two or more fingers (it stays a view gesture, see onPointerDown). */
+    private var viewPinched = false
     private var startState: Viewport.State? = null
     private var startAdjusted = false
     /** Pointer ids treated as palm / leftover contacts for the rest of the gesture. */
@@ -349,6 +355,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         cancelPendingLongPress()
         ignoredMask = 0L
         enteredTransform = false
+        viewPinched = false
         gestureHadStylus = false
         startState = viewport.snapshot()
         startAdjusted = viewport.userAdjusted
@@ -401,10 +408,12 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 if (!startToolGesture(e)) restartTransform(e, -1)
             }
             Mode.TRANSFORM -> {
-                // A finger panning the view (stylus-only drawing, or one left after a pinch) joined
-                // by a second one: the pair is offered to the tool too, never after a third finger.
-                val offer = transformCount == 1 && classifier.maxPointers == 2
-                if (!(offer && startToolGesture(e))) restartTransform(e, -1)
+                // A finger panning the view (stylus-only drawing) joined by a second one: the pair
+                // is offered to the tool too. A gesture that already zoomed the view with two or
+                // more fingers keeps doing that when a finger comes back (re-grip), even onto the
+                // picture being placed.
+                val offer = transformCount == 1 && !viewPinched && classifier.maxPointers == 2
+                if (offer && startToolGesture(e)) endTransform() else restartTransform(e, -1)
             }
             Mode.TOOL -> {
                 // A third finger takes the tool gesture back; the fingers now move the view (or
@@ -532,6 +541,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         }
         mode = Mode.TRANSFORM
         enteredTransform = true
+        if (transformCount >= 2) viewPinched = true
         cancelPendingLongPress()
         viewport.beginGesture(gx, gy, transformCount)
     }

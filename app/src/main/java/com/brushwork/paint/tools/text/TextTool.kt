@@ -19,8 +19,9 @@ import kotlin.math.max
 
 /**
  * Text tool: tap the canvas to place a text object, type in the editor dialog, then move it
- * (drag), rotate it (top handle) or resize it (corner handle, or pinch it with two fingers) before committing it with ✓ into a
- * new layer. Supports horizontal and vertical (manga) text, outline, spacing and alignment.
+ * (drag), rotate it (top handle) or resize it (corner handle), or pinch it with two fingers,
+ * before committing it with ✓ into a new layer. Supports horizontal and vertical (manga) text,
+ * outline, spacing and alignment.
  *
  * The editor dialog and the "Numbers" sheet are hosted by `TextToolOptions` and driven by the
  * Compose state here ([item], [editorOpen], [numbersOpen]).
@@ -296,6 +297,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
             m == Mode.MOVE -> if (commitItem()) startTextAt(p.x, p.y)
         }
         controller.invalidateOverlay()
+    }
+
+    /**
+     * A finger resting on the pending text or on one of its handles is about to drag it: the
+     * gesture stays a move/rotate/resize instead of turning into the long-press color pick (which
+     * still happens away from the text).
+     */
+    override fun onLongPress(p: ToolPoint): Boolean {
+        if (item == null || editorOpen || gestureStart == null) return false
+        return mode == Mode.ROTATE || mode == Mode.SCALE || (mode == Mode.MOVE && downInside)
     }
 
     override fun onCancel() {

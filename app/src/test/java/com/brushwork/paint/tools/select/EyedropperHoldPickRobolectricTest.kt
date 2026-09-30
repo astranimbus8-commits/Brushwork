@@ -158,6 +158,46 @@ class EyedropperHoldPickRobolectricTest {
     }
 
     @Test
+    fun previewSquareStaysBetweenTheBars() {
+        val d = 2.75f // the user's phone
+        val top = 130f * d // status bar + top bar + tool options
+        val bottom = 2408f - 120f * d // slider bar + hotbar
+        val area = RectF(0f, top, 1080f, bottom)
+        val r = RectF()
+        // Just below the top bar: there is no room above the finger, so it goes beside it.
+        EyedropperTool.placePreview(700f, top + 40f * d, area, d, r)
+        assertTrue("below the top bar", r.top >= top)
+        assertTrue("beside the finger, towards the middle", r.right < 700f)
+        // Lower down it sits above the finger as usual.
+        EyedropperTool.placePreview(540f, 1200f, area, d, r)
+        assertEquals(1200f - EyedropperTool.PREVIEW_OFFSET_DP * d, r.centerY(), 1e-3f)
+        // A finger dragged under the top bar keeps the square in the free area.
+        EyedropperTool.placePreview(100f, top - 30f, area, d, r)
+        assertTrue(r.top >= top && r.left > 100f)
+        // Next to the hotbar it never goes into it.
+        EyedropperTool.placePreview(540f, bottom + 50f, area, d, r)
+        assertTrue(r.bottom <= bottom)
+    }
+
+    @Test
+    fun previewAvoidsTheChromeReportedByTheCanvas() {
+        c.selectTool(ToolId.BRUSH)
+        c.viewTransform.density = 1f
+        eyedropper().setChromeInsets(0f, 120f, 0f, 20f)
+        c.pointerDown(ToolPoint(300f, 150f))
+        assertTrue(c.pointerLongPress(ToolPoint(300f, 150f)))
+        val out = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)
+        c.drawOverlays(Canvas(out), 0f)
+        val box = RectF()
+        EyedropperTool.placePreview(300f, 150f, RectF(0f, 120f, 400f, 280f), 1f, box)
+        assertTrue(box.top >= 120f)
+        assertEquals(GREEN, out.getPixel(box.centerX().toInt(), (box.top + box.height() / 4f).toInt()))
+        assertEquals(RED, out.getPixel(box.centerX().toInt(), (box.bottom - box.height() / 4f).toInt()))
+        c.pointerUp(ToolPoint(300f, 150f))
+        assertEquals(GREEN, c.color)
+    }
+
+    @Test
     fun previewShowsTheNewColorOverTheCurrentOne() {
         c.selectTool(ToolId.BRUSH)
         c.viewTransform.density = 1f

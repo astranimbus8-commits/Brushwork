@@ -144,11 +144,23 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val box = RectF()
+    private val area = RectF()
     private val half = RectF()
     private val topPath = Path()
     private val radii = FloatArray(8)
     private var checkerPaint: Paint? = null
     private var checkerCell = 0f
+
+    /** Screen px of the canvas view hidden by the editor chrome at each edge (left, top, right, bottom). */
+    private val chromeInsets = RectF()
+
+    /**
+     * The editor's bars cover these edges of the canvas view (screen px, e.g. the top bar with the
+     * tool options and the bottom hotbar): the preview square stays in the area between them.
+     */
+    fun setChromeInsets(left: Float, top: Float, right: Float, bottom: Float) {
+        chromeInsets.set(left.coerceAtLeast(0f), top.coerceAtLeast(0f), right.coerceAtLeast(0f), bottom.coerceAtLeast(0f))
+    }
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         if (!active) return
@@ -156,7 +168,13 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         val fx = at.x
         val fy = at.y
         if (!fx.isFinite() || !fy.isFinite()) return
-        placePreview(fx, fy, canvas.width.toFloat(), canvas.height.toFloat(), t.density, box)
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        area.set(chromeInsets.left, chromeInsets.top, w - chromeInsets.right, h - chromeInsets.bottom)
+        // Chrome so tall that the square can't fit between it (tiny window): use the whole view.
+        val need = (PREVIEW_SIZE_DP + 2 * PREVIEW_MARGIN_DP) * t.density
+        if (area.width() < need || area.height() < need) area.set(0f, 0f, w, h)
+        placePreview(fx, fy, area, t.density, box)
         drawPreview(canvas, t)
         drawMarker(canvas, t, fx, fy)
     }
@@ -233,25 +251,32 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         private const val PREVIEW_MARGIN_DP = 8f
         private const val MARKER_RADIUS_DP = 9f
 
+        /** [placePreview] in a whole [viewW] x [viewH] view (nothing covers its edges). */
+        fun placePreview(fx: Float, fy: Float, viewW: Float, viewH: Float, density: Float, out: RectF) =
+            placePreview(fx, fy, RectF(0f, 0f, max(0f, viewW), max(0f, viewH)), density, out)
+
         /**
-         * Where the preview square goes for a finger at ([fx], [fy]) in a [viewW] x [viewH]
-         * view (screen px; [density] px per dp): centered [PREVIEW_OFFSET_DP] above the finger so
-         * the finger doesn't hide it; beside it (on the roomier side) when there is no room above,
-         * never below (the hand is there). Always kept inside the view. Written into [out].
+         * Where the preview square goes for a finger at ([fx], [fy]) (screen px; [density] px per
+         * dp) when it must stay inside [area] (the part of the view not covered by the editor's
+         * bars; an empty extent is not clamped): centered [PREVIEW_OFFSET_DP] above the finger so
+         * the finger doesn't hide it; beside it (towards the middle of the area) when there is no
+         * room above, never below (the hand is there). Written into [out].
          */
-        fun placePreview(fx: Float, fy: Float, viewW: Float, viewH: Float, density: Float, out: RectF) {
+        fun placePreview(fx: Float, fy: Float, area: RectF, density: Float, out: RectF) {
             val size = PREVIEW_SIZE_DP * density
             val halfSize = size / 2f
             val offset = PREVIEW_OFFSET_DP * density
             val margin = PREVIEW_MARGIN_DP * density
+            val hasW = area.width() > 0f
+            val hasH = area.height() > 0f
             var cx = fx
             var cy = fy - offset
-            if (cy - halfSize < margin) {
+            if (cy - halfSize < (if (hasH) area.top else 0f) + margin) {
                 cy = fy
-                cx = if (viewW <= 0f || fx < viewW / 2f) fx + offset else fx - offset
+                cx = if (!hasW || fx < area.centerX()) fx + offset else fx - offset
             }
-            if (viewW > 0f) cx = cx.coerceIn(margin + halfSize, max(margin + halfSize, viewW - margin - halfSize))
-            if (viewH > 0f) cy = cy.coerceIn(margin + halfSize, max(margin + halfSize, viewH - margin - halfSize))
+            if (hasW) cx = cx.coerceIn(area.left + margin + halfSize, max(area.left + margin + halfSize, area.right - margin - halfSize))
+            if (hasH) cy = cy.coerceIn(area.top + margin + halfSize, max(area.top + margin + halfSize, area.bottom - margin - halfSize))
             out.set(cx - halfSize, cy - halfSize, cx + halfSize, cy + halfSize)
         }
 

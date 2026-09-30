@@ -246,6 +246,22 @@ class TransformPinchRobolectricTest {
         assertFalse(tool.hasUserChanges)
     }
 
+    @Test
+    fun largeLayerPinchAtTheCanvasEdgeWithAFingerOutside() {
+        // Content along the left edge of a large layer; one finger lands off the canvas.
+        val (c, _) = setup(1500, 1500, Rect(0, 600, 300, 900), zoom = 0.5f)
+        c.selectTool(ToolId.TRANSFORM)
+        val tool = tool(c)
+        assertFalse("off the canvas and beside the content: the view zooms", startAt(c, 10f, 200f, half = 60f))
+        assertFalse(tool.isPreparing)
+        assertTrue("one finger on the content, the other outside the canvas", startAt(c, 10f, 750f, half = 60f))
+        c.twoFingerGesture(Vec2.ZERO, 0.5f, 0f)
+        c.twoFingerEnd(cancelled = false)
+        assertTrue(pumpUntil { tool.transformState != null && !tool.isPreparing })
+        assertEquals(150f, tool.transformState!!.width, 1e-3f)
+        tool.discard()
+    }
+
     private companion object {
         const val RED = 0xFFFF0000.toInt()
     }

@@ -380,6 +380,106 @@ class CanvasToolGestureRobolectricTest {
     }
 
     @Test
+    fun aViewPinchStaysAViewPinchWhenAFingerComesBackOnThePicture() {
+        val st0 = pasteBlock()
+        val tool = transformTool()
+        val z0 = c.viewTransform.zoom
+        // Zoom the view beside the picture (right of it, well outside the grab tolerance).
+        val spot = screen(260f, 140f)
+        val a0 = around(spot, -15f, 0f); val b0 = around(spot, 15f, 0f)
+        val a1 = around(spot, -30f, 0f); val b1 = around(spot, 30f, 0f)
+        touch.idle(200)
+        touch.send(MotionEvent.ACTION_DOWN, P(0, a0.first, a0.second))
+        touch.idle(10)
+        touch.send(MotionEvent.ACTION_POINTER_DOWN, P(0, a0.first, a0.second), P(1, b0.first, b0.second), index = 1)
+        for (k in 1..6) {
+            touch.idle(40)
+            val f = k / 6f
+            touch.send(MotionEvent.ACTION_MOVE, P(0, a0.first + (a1.first - a0.first) * f, a0.second), P(1, b0.first + (b1.first - b0.first) * f, b0.second))
+        }
+        val z1 = c.viewTransform.zoom
+        assertEquals(z0 * 2f, z1, 0.02f)
+        // Re-grip: one finger lifts and comes back down right on the picture, then they spread.
+        touch.idle(40)
+        touch.send(MotionEvent.ACTION_POINTER_UP, P(0, a1.first, a1.second), P(1, b1.first, b1.second), index = 1)
+        touch.idle(40)
+        val on = screen(150f, 140f)
+        touch.send(MotionEvent.ACTION_POINTER_DOWN, P(0, a1.first, a1.second), P(2, on.first, on.second), index = 1)
+        for (k in 1..6) {
+            touch.idle(40)
+            touch.send(MotionEvent.ACTION_MOVE, P(0, a1.first + 5f * k, a1.second), P(2, on.first - 5f * k, on.second))
+        }
+        touch.idle(40)
+        touch.send(MotionEvent.ACTION_POINTER_UP, P(0, a1.first + 30f, a1.second), P(2, on.first - 30f, on.second), index = 0)
+        touch.send(MotionEvent.ACTION_UP, P(2, on.first - 30f, on.second))
+        Smoke.pump(50)
+        assertTrue("the view kept zooming", c.viewTransform.zoom > z1 * 1.05f)
+        assertEquals("the picture was not grabbed mid-gesture", st0, tool.transformState)
+        tool.discard()
+        Smoke.pump(50)
+    }
+
+    @Test
+    fun stylusOnlyPanJoinedByASecondFingerOnThePicturePinchesIt() {
+        c.settings.stylusOnlyDrawing = true
+        val st0 = pasteBlock()
+        val tool = transformTool()
+        var chipShown = false
+        view.onViewGesture = { chipShown = it != null }
+        val m0 = Matrix(c.viewTransform.matrix)
+        val s = screen(150f, 140f)
+        val a0 = around(s, -20f, 0f); val b0 = around(s, 20f, 0f)
+        touch.idle(200)
+        // The first finger pans the view (fingers don't draw)...
+        touch.send(MotionEvent.ACTION_DOWN, P(0, a0.first, a0.second))
+        touch.idle(40)
+        // ...and the second one makes it a pinch of the picture under them.
+        touch.send(MotionEvent.ACTION_POINTER_DOWN, P(0, a0.first, a0.second), P(1, b0.first, b0.second), index = 1)
+        for (k in 1..5) {
+            touch.idle(40)
+            touch.send(MotionEvent.ACTION_MOVE, P(0, a0.first - 4f * k, a0.second), P(1, b0.first + 4f * k, b0.second))
+        }
+        touch.idle(40)
+        touch.send(MotionEvent.ACTION_POINTER_UP, P(0, a0.first - 20f, a0.second), P(1, b0.first + 20f, b0.second), index = 0)
+        touch.send(MotionEvent.ACTION_UP, P(1, b0.first + 20f, b0.second))
+        Smoke.pump(50)
+        assertEquals(m0, c.viewTransform.matrix)
+        assertEquals(st0.width * 2f, tool.transformState!!.width, 0.6f)
+        assertFalse("no zoom chip left on screen", chipShown)
+        tool.discard()
+        Smoke.pump(50)
+    }
+
+    @Test
+    fun colorPickPreviewStaysOutOfTheTopBar() {
+        val density = activity.resources.displayMetrics.density
+        // Tall chrome at the top (top bar + tool options); the canvas refits below it.
+        val top = 400f * density
+        view.setFitInsets(0f, top, 0f, 0f)
+        Smoke.pump(20)
+        fill(c.activeLayer, 0f, 0f, 400f, 300f, BLUE)
+        // A finger near the top of the picture, just below the chrome.
+        val p = screen(200f, 6f)
+        assertTrue("finger just below the chrome", p.second > top && p.second < top + 80f * density)
+        touch.idle(200)
+        touch.send(MotionEvent.ACTION_DOWN, P(0, p.first, p.second))
+        touch.idle(700)
+        assertTrue(c.holdPicking)
+        val out = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        view.draw(Canvas(out))
+        val box = RectF()
+        EyedropperTool.placePreview(p.first, p.second, RectF(0f, top, view.width.toFloat(), view.height.toFloat()), density, box)
+        assertTrue("the square is below the chrome", box.top >= top)
+        assertTrue("and not under the finger", box.right < p.first - 20f * density || box.left > p.first + 20f * density || box.bottom < p.second)
+        assertEquals("drawn there: the picked color", BLUE, out.getPixel(box.centerX().toInt(), (box.top + box.height() / 4f).toInt()))
+        assertEquals("over the current one", RED, out.getPixel(box.centerX().toInt(), (box.bottom - box.height() / 4f).toInt()))
+        touch.send(MotionEvent.ACTION_UP, P(0, p.first, p.second))
+        Smoke.pump(50)
+        assertEquals(BLUE, c.color)
+        assertEquals(ToolId.BRUSH, c.activeToolId)
+    }
+
+    @Test
     fun rotatedViewPinchTurnsTheContentByTheFingerAngle() {
         val st0 = pasteBlock()
         val tool = transformTool()
