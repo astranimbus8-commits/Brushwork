@@ -233,6 +233,65 @@ data class TransformState(
         return scaledAbout(center(), s / abs(sx), s / abs(sy)).snappedToPixels()
     }
 
+    // ------------------------------------------------------------------ reference point (anchored) edits
+
+    /** Position of [anchor] on the current axis-aligned bounds (document px). */
+    fun anchorPoint(anchor: TransformAnchor): Vec2 = anchor.pointOn(bounds())
+
+    /** Moves so [anchor] of the bounds lands at ([x], [y]) (null = unchanged on that axis). */
+    fun withAnchorAt(anchor: TransformAnchor, x: Float? = null, y: Float? = null): TransformState {
+        val p = anchorPoint(anchor)
+        return translated(if (x != null) x - p.x else 0f, if (y != null) y - p.y else 0f)
+    }
+
+    /**
+     * Sets the box size (document pixels; null = unchanged) keeping [pivot] in place: the box
+     * scales along its own axes around it (e.g. its center to scale from the center). With
+     * [keepAspect] the other side follows proportionally.
+     */
+    fun withSizeAbout(pivot: Vec2, width: Float? = null, height: Float? = null, keepAspect: Boolean = false): TransformState {
+        if (width == null && height == null) return this
+        var kx = if (width != null) max(MIN_SIZE, width) / this.width else 1f
+        var ky = if (height != null) max(MIN_SIZE, height) / this.height else 1f
+        if (keepAspect) {
+            if (width != null) ky = kx else kx = ky
+            val k = clampUniform(kx)
+            kx = k; ky = k
+        }
+        return scaledAbout(pivot, kx, ky).pixelSettled()
+    }
+
+    /** Sets a uniform scale relative to the source size (100 = original) keeping [pivot] in place. */
+    fun withScalePercentAbout(pivot: Vec2, percent: Float): TransformState {
+        val minScale = MIN_SIZE / min(srcW, srcH)
+        val s = max(minScale, percent / 100f)
+        return scaledAbout(pivot, s / abs(sx), s / abs(sy)).pixelSettled()
+    }
+
+    /** Sets the absolute rotation (degrees), turning around [pivot]. */
+    fun withRotationAbout(pivot: Vec2, deg: Float): TransformState =
+        rotatedAbout(pivot, normalizeDeg(deg) - rotationDeg).snappedToPixels()
+
+    /** True when the content keeps its original pixel size (an axis-aligned result then copies pixels exactly). */
+    val isUnscaled: Boolean
+        get() = distortion == null && abs(abs(sx) - 1f) < UNSCALED_EPS && abs(abs(sy) - 1f) < UNSCALED_EPS
+
+    /**
+     * Unscaled axis-aligned results are moved onto whole pixels (a pixel-exact copy instead of a
+     * resampled one); anything else is left exactly where it is.
+     */
+    fun pixelSettled(): TransformState = if (isUnscaled) snappedToPixels() else this
+
+    /**
+     * For axis-aligned results: scales by [kx] / [ky] along the DOCUMENT axes around [pivot] (a
+     * quarter-turned box scales its own axes the other way round). Others are returned as they are.
+     */
+    fun scaledAlongDocAxes(pivot: Vec2, kx: Float, ky: Float): TransformState {
+        if (!isAxisAligned) return this
+        val quarter = abs(roundHalfUp(rotationDeg / 90f).toInt()) % 2 == 1
+        return if (quarter) scaledAbout(pivot, ky, kx) else scaledAbout(pivot, kx, ky)
+    }
+
     /** Uniformly scaled to fit the document exactly, centered, rotation/distortion cleared, flips kept. */
     fun fittedTo(docW: Int, docH: Int): TransformState =
         fitted(srcW, srcH, docW, docH, 1f, onlyShrink = false).let {
@@ -277,6 +336,9 @@ data class TransformState(
 
         /** Smallest allowed side, document pixels. */
         const val MIN_SIZE = 1f
+
+        /** Scale factors this close to 1 count as the original size. */
+        private const val UNSCALED_EPS = 1e-4f
 
         /** Untransformed placement of a bitmap lifted from ([left], [top]). */
         fun identity(left: Int, top: Int, width: Int, height: Int): TransformState =

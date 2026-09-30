@@ -15,13 +15,14 @@ object TransformHandles {
         start.translated(TransformState.roundHalfUp(to.x - from.x), TransformState.roundHalfUp(to.y - from.y))
 
     /**
-     * Free-transform corner drag: scales along the box axes around the opposite corner.
+     * Free-transform corner drag: scales along the box axes around the opposite corner, or
+     * around the center with [fromCenter] (the opposite corner mirrors the dragged one).
      * [keepAspect] scales both axes by the finger's projection on the diagonal. Dragging past
      * the anchor mirrors.
      */
-    fun corner(start: TransformState, index: Int, from: Vec2, to: Vec2, keepAspect: Boolean): TransformState {
+    fun corner(start: TransformState, index: Int, from: Vec2, to: Vec2, keepAspect: Boolean, fromCenter: Boolean = false): TransformState {
         val q = start.corner(index)
-        val a = start.corner((index + 2) % 4)
+        val a = fixedPoint(start, HandleKind.CORNER, index, fromCenter)
         val target = snapTarget(start, q + (to - from))
         val lq = start.toLocalAxes(q - a)
         val lt = start.toLocalAxes(target - a)
@@ -36,11 +37,12 @@ object TransformHandles {
 
     /**
      * Free-transform edge drag (edge i joins corners i and i+1: 0 top, 1 right, 2 bottom,
-     * 3 left): scales one axis around the opposite edge.
+     * 3 left): scales one axis around the opposite edge, or around the center with
+     * [fromCenter] (the opposite edge moves the other way).
      */
-    fun edge(start: TransformState, edge: Int, from: Vec2, to: Vec2): TransformState {
-        val q = mid(start.corner(edge), start.corner((edge + 1) % 4))
-        val a = mid(start.corner((edge + 2) % 4), start.corner((edge + 3) % 4))
+    fun edge(start: TransformState, edge: Int, from: Vec2, to: Vec2, fromCenter: Boolean = false): TransformState {
+        val q = handlePoint(start, HandleKind.EDGE, edge)
+        val a = fixedPoint(start, HandleKind.EDGE, edge, fromCenter)
         val target = snapTarget(start, q + (to - from))
         val lq = start.toLocalAxes(q - a)
         val lt = start.toLocalAxes(target - a)
@@ -122,6 +124,20 @@ object TransformHandles {
 
     /** Snap zone of [pinchRotation], degrees. */
     const val PINCH_SNAP_DEG = 4f
+
+    /** Document position of a corner (index 0..3) or edge-midpoint (edge 0..3) handle of [st]. */
+    fun handlePoint(st: TransformState, kind: HandleKind, index: Int): Vec2 =
+        if (kind == HandleKind.EDGE) mid(st.corner(index), st.corner((index + 1) % 4)) else st.corner(index)
+
+    /**
+     * The point a corner / edge drag scales around: the opposite corner / edge, or the center
+     * with [fromCenter]. It stays in place during the drag.
+     */
+    fun fixedPoint(st: TransformState, kind: HandleKind, index: Int, fromCenter: Boolean): Vec2 = when {
+        fromCenter -> st.center()
+        kind == HandleKind.EDGE -> mid(st.corner((index + 2) % 4), st.corner((index + 3) % 4))
+        else -> st.corner((index + 2) % 4)
+    }
 
     private fun mid(a: Vec2, b: Vec2) = Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f)
 

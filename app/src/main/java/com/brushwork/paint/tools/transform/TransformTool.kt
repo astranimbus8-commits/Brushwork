@@ -15,13 +15,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.core.content.edit
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.ViewTransform
@@ -33,11 +36,15 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Move / scale / rotate / flip / distort the active layer or the selected pixels, and place
@@ -50,6 +57,15 @@ import kotlin.math.floor
  * [commit] bakes it with one undo step (the selection moves along); [discard] leaves no trace.
  * Changing the selection while a transform is pending applies it and lifts again with the new
  * selection.
+ *
+ * Smart guides ([snapToObjects], on by default): while dragging, resizing or nudging, the box's
+ * left / center / right and top / center / bottom lines snap to the canvas edges and center, the
+ * content bounds of the other visible layers (found in the background by [LayerBoundsCache]),
+ * the selection while placing a picture and, with grid snapping on, the grid; the guides are
+ * drawn by [SnapGuideRenderer] (the math is the reusable [SnapGuides]). The Numbers sheet's
+ * reference point ([anchor]) is what typed sizes, scales and rotations keep in place;
+ * [scaleFromCenter] makes the handles scale around the center. [deleteContent] deletes what is
+ * being transformed.
  */
 class TransformTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TRANSFORM
@@ -66,8 +82,62 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Free transform (scale/rotate handles) or distort (corners move freely, perspective). */
     var mode by mutableStateOf(Mode.FREE)
 
+    private var keepAspectState by mutableStateOf(true)
+
     /** Corner handles keep the aspect ratio (free mode); also links width/height in the Numbers sheet. */
-    var keepAspect by mutableStateOf(true)
+    var keepAspect: Boolean
+        get() = keepAspectState
+        set(v) {
+            if (v == keepAspectState) return
+            keepAspectState = v
+            numericEdit = null // the next typed size starts from what is shown now
+        }
+
+    private val prefs get() = controller.settings.prefs
+
+    private var fromCenterState by mutableStateOf(prefs.getBoolean(PREF_FROM_CENTER, false))
+
+    /** Corner / edge handles scale around the center (the opposite side mirrors the dragged one). Remembered. */
+    var scaleFromCenter: Boolean
+        get() = fromCenterState
+        set(v) {
+            if (v == fromCenterState) return
+            fromCenterState = v
+            prefs.edit { putBoolean(PREF_FROM_CENTER, v) }
+        }
+
+    private var snapState by mutableStateOf(prefs.getBoolean(PREF_SNAP, true))
+
+    /**
+     * Smart guides: while dragging, resizing or nudging, the box's left / center / right and top /
+     * center / bottom lines snap to the canvas edges and center, the content of the other
+     * visible layers (the selection too while placing a picture) and, when grid snapping is on,
+     * the grid. Remembered; on by default.
+     */
+    var snapToObjects: Boolean
+        get() = snapState
+        set(v) {
+            if (v == snapState) return
+            snapState = v
+            prefs.edit { putBoolean(PREF_SNAP, v) }
+            if (!v) clearGuides()
+            else liveSession()?.let { requestSnapBounds(it) }
+        }
+
+    private var anchorState by mutableStateOf(TransformAnchor.byName(prefs.getString(PREF_ANCHOR, null)) ?: TransformAnchor.CENTER)
+
+    /**
+     * Reference point: stays in place when a size, scale or rotation is typed or slid in the
+     * Numbers sheet, and its position is what X / Y show. Remembered; the center by default.
+     */
+    var anchor: TransformAnchor
+        get() = anchorState
+        set(v) {
+            if (v == anchorState) return
+            anchorState = v
+            numericEdit = null
+            prefs.edit { putString(PREF_ANCHOR, v.name) }
+        }
 
     private var interpolationState by mutableStateOf(Interpolation.SMOOTH)
 
@@ -229,6 +299,39 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     private var session: Session? = null
 
+    // ------------------------------------------------------------------ smart guides state
+
+    /** Content bounds of the other layers (what the box snaps to), computed in the background. */
+    private val layerBounds = LayerBoundsCache(controller.scope) {
+        snapTargetsVersion++
+        if (gesture != null) controller.invalidateOverlay()
+    }
+
+    /** Bumped when new layer bounds arrive (a gesture's snap targets are then rebuilt). */
+    private var snapTargetsVersion = 0
+
+    /** Guides shown on the canvas right now (document px); empty when nothing is aligned. */
+    private var guides: List<SnapGuide> = emptyList()
+
+    /** The smart guides currently shown (while a drag / resize is snapped, or briefly after a nudge). */
+    val activeGuides: List<SnapGuide> get() = guides
+
+    /** True while the content bounds of other (large) layers are still being found for snapping. */
+    val isFindingSnapTargets: Boolean get() = layerBounds.isBusy
+
+    /** Hides the guides a nudge showed after a moment. */
+    private var guidesJob: Job? = null
+
+    /**
+     * The typed / slid size, scale or rotation in progress (see [endNumericEdit]): the state it
+     * started from and the reference point, which stays in place. Every value of the edit is
+     * applied to [start] (not to the previous value), so sliding back and forth or typing a
+     * number digit by digit never accumulates rounding or size clamping.
+     */
+    private class NumericEdit(val kind: NumericKind, val start: TransformState, val pivot: Vec2)
+
+    private var numericEdit: NumericEdit? = null
+
     /** Document area of the last preview (invalidated together with the next one). */
     private var lastBounds: Rect? = null
 
@@ -259,6 +362,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     override fun onDeactivate() {
         cancelJobs()
         if (hasPendingWork) commit()
+        // Nothing to snap until the next transform (what is known stays cached).
+        layerBounds.cancel()
+    }
+
+    override fun onDispose() {
+        cancelJobs()
+        layerBounds.clear()
     }
 
     /**
@@ -313,7 +423,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (floating == null) {
             controller.toast(if (usable) "Not enough memory to place the picture" else "The picture could not be placed")
             // Don't leave the empty layer behind when it is clearly the one just added for this.
-            if (isFreshImportLayer(layer, label)) controller.undo()
+            if (isFreshImportLayer(layer, label)) dropFreshLayer(layer)
             return
         }
         val doc = controller.doc
@@ -345,47 +455,84 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ input
 
-    private class Gesture(val hit: HandleHit, val start: TransformState, val from: Vec2, val pivot: Vec2, val rotateEdge: Int)
+    private class Gesture(val hit: HandleHit, val start: TransformState, val from: Vec2, val pivot: Vec2, val rotateEdge: Int) {
+        /** What the box snaps to during this gesture (built on the first move; rebuilt when layer bounds arrive). */
+        var targets: SnapTargets? = null
+        var targetsVersion = -1
+        /** The last move snapped the box to a guide (release keeps that exact place). */
+        var snapped = false
+        /**
+         * The finger has travelled more than [SNAP_SLOP_DP] from where it went down (latched):
+         * only then does the box snap, so a tap or a resting finger's jitter never jumps it
+         * onto a nearby guide.
+         */
+        var dragging = false
+    }
 
     private var gesture: Gesture? = null
 
     override fun onDown(p: ToolPoint) {
         gesture = null
+        clearGuides()
+        numericEdit = null
         if (liveSession() == null && !beginLift()) return
         val st = transformState ?: return
         val t = controller.viewTransform
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density)
         val hit = layout.hitTest(t.docToScreen(Vec2(p.x, p.y)))
         gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge)
+        session?.let { if (snapToObjects && hit.kind != HandleKind.ROTATE) requestSnapBounds(it) }
         controller.invalidateOverlay()
     }
 
     override fun onMove(p: ToolPoint) {
         val g = gesture ?: return
-        if (session == null) { gesture = null; return }
+        val s = session
+        if (s == null) { gesture = null; return }
         if (!p.x.isFinite() || !p.y.isFinite()) return
         val to = Vec2(p.x, p.y)
         val distort = mode == Mode.DISTORT
+        if (!g.dragging) {
+            val t = controller.viewTransform
+            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) g.dragging = true
+        }
+        // Every frame snaps what the finger alone gives (never the last snapped state), so
+        // moving farther than the snap distance lets go of a guide.
+        val snap = if (g.dragging) snapContext(g, s) else null
+        val hadGuides = guides.isNotEmpty()
+        guides = emptyList()
+        g.snapped = false
         val next = when (g.hit.kind) {
-            HandleKind.MOVE -> TransformHandles.move(g.start, g.from, to)
+            HandleKind.MOVE -> snapMove(g, TransformHandles.move(g.start, g.from, to), snap)
             HandleKind.ROTATE -> TransformHandles.rotate(g.start, g.pivot, g.from, to)
             HandleKind.CORNER ->
-                if (distort) TransformHandles.distortCorner(g.start, g.hit.index, g.from, to)
-                else TransformHandles.corner(g.start, g.hit.index, g.from, to, keepAspect)
+                if (distort) distortCornerSnapped(g, to, snap)
+                else snapResize(g, TransformHandles.corner(g.start, g.hit.index, g.from, to, keepAspect, scaleFromCenter), snap)
             HandleKind.EDGE ->
-                if (distort) TransformHandles.distortEdge(g.start, g.hit.index, g.from, to)
-                else TransformHandles.edge(g.start, g.hit.index, g.from, to)
-        } ?: return // an invalid (non-convex) distort keeps the last valid shape
+                if (distort) distortEdgeSnapped(g, to, snap)
+                else snapResize(g, TransformHandles.edge(g.start, g.hit.index, g.from, to, scaleFromCenter), snap)
+        }
+        if (next == null) {
+            // An invalid (non-convex) distort keeps the last valid shape, which is not on the guides.
+            guides = emptyList()
+            g.snapped = false
+        }
+        if (hadGuides || guides.isNotEmpty()) controller.invalidateOverlay()
+        next ?: return
         if (next != transformState) applyState(next)
     }
 
     override fun onUp(p: ToolPoint) {
-        if (gesture == null) return
+        val g = gesture ?: return
         onMove(p)
         gesture = null
+        clearGuides()
         transformState?.let { st ->
-            val snapped = st.snappedToPixels()
-            if (snapped != st) applyState(snapped)
+            // A guide the box snapped to keeps it exactly there, and so does a mere tap (a scaled
+            // box aligned to a guide earlier must not be nudged off it); a drag settles on whole
+            // pixels.
+            val end = if (g.snapped || !g.dragging) st.pixelSettled() else st.snappedToPixels()
+            if (end != st) applyState(end)
         }
         controller.invalidateOverlay()
     }
@@ -393,9 +540,223 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     override fun onCancel() {
         val g = gesture ?: return
         gesture = null
+        clearGuides()
         if (session != null && transformState != g.start) applyState(g.start)
         controller.invalidateOverlay()
     }
+
+    // ------------------------------------------------------------------ smart guides
+
+    /** Snap targets and distance (document px) for one frame of a gesture, or null when snapping is off. */
+    private class SnapContext(val targets: SnapTargets, val threshold: Float)
+
+    private fun snapContext(g: Gesture, s: Session): SnapContext? {
+        if (!snapToObjects) return null
+        val t = controller.viewTransform
+        val threshold = t.screenToDocLength(t.dp(SNAP_DISTANCE_DP))
+        if (!threshold.isFinite() || threshold <= 0f) return null
+        var targets = g.targets
+        if (targets == null || g.targetsVersion != snapTargetsVersion) {
+            targets = buildSnapTargets(s)
+            g.targets = targets
+            g.targetsVersion = snapTargetsVersion
+        }
+        return SnapContext(targets, threshold)
+    }
+
+    /**
+     * What the transformed box aligns to: the canvas edges and center, the content bounds of the
+     * other visible layers (top-most first), the selection while placing a picture, and the grid
+     * when grid snapping is on.
+     */
+    private fun buildSnapTargets(s: Session): SnapTargets {
+        val doc = controller.doc
+        val boxes = ArrayList<SnapBox>()
+        if (s.placement) controller.selection?.bounds?.takeIf { !it.isEmpty }?.let { boxes += SnapBox(it.toDocBox(), "Selection", SnapSource.SELECTION) }
+        for (layer in doc.layers.asReversed()) {
+            if (layer === s.layer || !layer.visible || layer.opacity <= 0f) continue
+            layerBounds.bounds(layer)?.let { boxes += SnapBox(it.toDocBox(), layer.name, SnapSource.OBJECT) }
+        }
+        val grid = controller.grid.takeIf { it.snap }?.let { SnapGuides.gridLines(it, doc.width, doc.height) }
+        return SnapTargets.build(doc.width.toFloat(), doc.height.toFloat(), boxes, grid)
+    }
+
+    /** Starts finding the content bounds of the layers the box of [s] can snap to (cached). */
+    private fun requestSnapBounds(s: Session) {
+        val layers = controller.doc.layers
+        layerBounds.request(layers.filter { it !== s.layer && it.visible && it.opacity > 0f }, layers)
+    }
+
+    /** A dragged box: moved onto the closest guide within reach (unscaled content stays on whole pixels). */
+    private fun snapMove(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
+        if (snap == null) return raw
+        val r = SnapGuides.snapMove(raw.bounds(), snap.targets, snap.threshold)
+        if (!r.snappedX && !r.snappedY) {
+            guides = r.guides
+            return raw
+        }
+        val st = raw.translated(r.dx, r.dy).pixelSettled()
+        g.snapped = true
+        // Half-pixel lines (odd centers) settle half a pixel away: still show them as aligned.
+        guides = SnapGuides.guidesFor(st.bounds(), snap.targets, GUIDE_EPS)
+        return st
+    }
+
+    /**
+     * A corner / edge drag of an axis-aligned box: the dragged side snaps to the closest guide
+     * within reach (both sides for corners; with keep-aspect only the closer one, the other side
+     * follows the ratio). The fixed side / center stays where it is. Rotated boxes: see
+     * [snapResizeOneFactor].
+     */
+    private fun snapResize(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
+        if (snap == null) return raw
+        val kind = g.hit.kind
+        val fixed = TransformHandles.fixedPoint(g.start, kind, g.hit.index, scaleFromCenter)
+        if (!raw.isAxisAligned || !g.start.isAxisAligned) return snapResizeOneFactor(g, raw, snap, fixed)
+        val h = TransformHandles.handlePoint(raw, kind, g.hit.index)
+        val movesX = abs(h.x - fixed.x) > 1e-3f
+        val movesY = abs(h.y - fixed.y) > 1e-3f
+        val hx = if (movesX) SnapGuides.snapValue(h.x, SnapAxis.X, snap.targets, snap.threshold) else null
+        val hy = if (movesY) SnapGuides.snapValue(h.y, SnapAxis.Y, snap.targets, snap.threshold) else null
+        if (hx == null && hy == null) return raw
+        fun factor(target: Float, now: Float, pivot: Float): Float? {
+            val k = (target - pivot) / (now - pivot)
+            return k.takeIf { it.isFinite() && it > 0f }
+        }
+        val uniform = kind == HandleKind.CORNER && keepAspect
+        val snapped = if (uniform) {
+            // One ratio for both axes: the closer guide decides.
+            val k = if (hx != null && (hy == null || hx.distance <= hy.distance)) factor(hx.pos, h.x, fixed.x)
+            else hy?.let { factor(it.pos, h.y, fixed.y) }
+            k?.let { raw.scaledAbout(fixed, raw.clampUniform(it), raw.clampUniform(it)) }
+        } else {
+            val kx = hx?.let { factor(it.pos, h.x, fixed.x) } ?: 1f
+            val ky = hy?.let { factor(it.pos, h.y, fixed.y) } ?: 1f
+            raw.scaledAlongDocAxes(fixed, kx, ky)
+        } ?: return raw
+        if (snapped.width < TransformState.MIN_SIZE || snapped.height < TransformState.MIN_SIZE) return raw
+        g.snapped = true
+        // Guides only for the dragged sides.
+        val hs = TransformHandles.handlePoint(snapped, kind, g.hit.index)
+        val xEdges = if (movesX) listOf(if (hs.x < fixed.x) SnapEdge.START else SnapEdge.END) else emptyList()
+        val yEdges = if (movesY) listOf(if (hs.y < fixed.y) SnapEdge.START else SnapEdge.END) else emptyList()
+        guides = SnapGuides.guidesFor(snapped.bounds(), snap.targets, GUIDE_EPS, xEdges, yEdges)
+        return snapped
+    }
+
+    /**
+     * Resizing a rotated (or perspective) box where ONE factor drives the change around the fixed
+     * point: a corner handle keeping the aspect ratio (both axes) or a side handle (one axis).
+     * Each line of its bounds then moves piecewise linearly with that factor, so the closest
+     * moving line within reach of a guide is solved for (on the line through the current state
+     * and a slightly larger one, plus one secant step when another corner takes over that side)
+     * and kept only when it really lands on the guide. Corner handles without the aspect lock
+     * move two factors at once and stay free.
+     */
+    private fun snapResizeOneFactor(g: Gesture, raw: TransformState, snap: SnapContext, fixed: Vec2): TransformState {
+        val kind = g.hit.kind
+        if (kind == HandleKind.CORNER && !keepAspect) return raw
+        if (kind != HandleKind.CORNER && kind != HandleKind.EDGE) return raw
+        fun scaled(k: Float): TransformState = when {
+            kind == HandleKind.CORNER -> raw.clampUniform(k).let { raw.scaledAbout(fixed, it, it) }
+            g.hit.index % 2 == 0 -> raw.scaledAbout(fixed, 1f, raw.clampY(k))
+            else -> raw.scaledAbout(fixed, raw.clampX(k), 1f)
+        }
+        val b0 = raw.bounds()
+        val b1 = scaled(1f + PROBE_FACTOR).bounds()
+        val xEdges = ArrayList<SnapEdge>(3)
+        val yEdges = ArrayList<SnapEdge>(3)
+        var best: TransformState? = null
+        var bestD = Float.POSITIVE_INFINITY
+        for (axis in SnapAxis.entries) {
+            for (e in SnapEdge.entries) {
+                val v0 = SnapGuides.feature(b0, axis, e)
+                val slope = (SnapGuides.feature(b1, axis, e) - v0) / PROBE_FACTOR
+                // Lines through the fixed point stay put: they are not what the finger drags.
+                if (!(abs(slope) >= MIN_LINE_SLOPE)) continue
+                if (axis == SnapAxis.X) xEdges += e else yEdges += e
+                val hit = SnapGuides.snapValue(v0, axis, snap.targets, snap.threshold) ?: continue
+                if (hit.distance >= bestD) continue
+                var k = 1f + (hit.pos - v0) / slope
+                if (!k.isFinite() || k <= 0f) continue
+                var cand = scaled(k)
+                var v = SnapGuides.feature(cand.bounds(), axis, e)
+                if (abs(v - hit.pos) > GUIDE_EPS && abs(k - 1f) > 1e-6f) {
+                    val s2 = (v - v0) / (k - 1f)
+                    if (!(abs(s2) >= MIN_LINE_SLOPE)) continue
+                    k = 1f + (hit.pos - v0) / s2
+                    if (!k.isFinite() || k <= 0f) continue
+                    cand = scaled(k)
+                    v = SnapGuides.feature(cand.bounds(), axis, e)
+                }
+                if (abs(v - hit.pos) > GUIDE_EPS) continue
+                if (cand.width < TransformState.MIN_SIZE || cand.height < TransformState.MIN_SIZE) continue
+                best = cand
+                bestD = hit.distance
+            }
+        }
+        val snapped = best ?: return raw
+        g.snapped = true
+        guides = SnapGuides.guidesFor(snapped.bounds(), snap.targets, GUIDE_EPS, xEdges, yEdges)
+        return snapped
+    }
+
+    /** A distort corner drag: the corner snaps to guides on both axes. */
+    private fun distortCornerSnapped(g: Gesture, to: Vec2, snap: SnapContext?): TransformState? {
+        var target = to
+        if (snap != null) {
+            val q = g.start.corner(g.hit.index) + (to - g.from)
+            val (p, gs) = SnapGuides.snapPoint(q, snap.targets, snap.threshold)
+            target = to + (p - q)
+            guides = gs
+            g.snapped = gs.isNotEmpty()
+        }
+        return TransformHandles.distortCorner(g.start, g.hit.index, g.from, target)
+    }
+
+    /**
+     * A distort edge drag (both corners of the edge move together): the edge's ends and middle
+     * snap like a thin box being moved.
+     */
+    private fun distortEdgeSnapped(g: Gesture, to: Vec2, snap: SnapContext?): TransformState? {
+        var target = to
+        if (snap != null) {
+            val d = to - g.from
+            val a = g.start.corner(g.hit.index) + d
+            val b = g.start.corner((g.hit.index + 1) % 4) + d
+            val seg = DocBox(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
+            val r = SnapGuides.snapMove(seg, snap.targets, snap.threshold)
+            if (r.snappedX || r.snappedY) {
+                target = to + Vec2(r.dx, r.dy)
+                guides = r.guides
+                g.snapped = true
+            }
+        }
+        return TransformHandles.distortEdge(g.start, g.hit.index, g.from, target)
+    }
+
+    /** Shows [list] for a moment (after a nudge). */
+    private fun showGuidesBriefly(list: List<SnapGuide>) {
+        guidesJob?.cancel()
+        guides = list
+        controller.invalidateOverlay()
+        if (list.isEmpty()) return
+        guidesJob = controller.scope.launch(Dispatchers.Main) {
+            delay(NUDGE_GUIDES_MS)
+            guides = emptyList()
+            controller.invalidateOverlay()
+        }
+    }
+
+    private fun clearGuides() {
+        guidesJob?.cancel()
+        guidesJob = null
+        if (guides.isEmpty()) return
+        guides = emptyList()
+        controller.invalidateOverlay()
+    }
+
+    private fun Rect.toDocBox() = DocBox(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
 
     // ------------------------------------------------------------------ two-finger pinch
 
@@ -438,6 +799,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // else: the content under the fingers is being lifted in the background (startSession
         // hands it to the pinch).
         gesture = null
+        numericEdit = null
+        clearGuides()
         pinch = p
         controller.invalidateOverlay()
         return true
@@ -528,13 +891,36 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ commands (options strip / Numbers)
 
-    /** Moves by a document-pixel offset. */
+    /** Moves by a document-pixel offset (exactly: no snapping). */
     fun moveBy(dx: Float, dy: Float) {
         if (dx.isFinite() && dy.isFinite()) update { it.translated(dx, dy) }
     }
 
-    /** One nudge-pad press: moves by [nudgeStepPx] in the given direction (-1, 0, 1). */
-    fun nudge(dx: Int, dy: Int) = moveBy((dx * nudgeStepPx).toFloat(), (dy * nudgeStepPx).toFloat())
+    /**
+     * One nudge-pad press: moves by [nudgeStepPx] in the given direction (-1, 0, 1). With
+     * [snapToObjects] a nudge that would jump over a guide stops on it (so repeated presses
+     * land on alignments), and the guides the box then lines up with show for a moment.
+     */
+    fun nudge(dx: Int, dy: Int) {
+        val mx = (dx * nudgeStepPx).toFloat()
+        val my = (dy * nudgeStepPx).toFloat()
+        if (!mx.isFinite() || !my.isFinite()) return
+        val s = liveSession() ?: return
+        if (!snapToObjects) { moveBy(mx, my); return }
+        requestSnapBounds(s)
+        var shown: List<SnapGuide> = emptyList()
+        update { st ->
+            val targets = buildSnapTargets(s)
+            val r = SnapGuides.snapNudge(st.bounds(), mx, my, targets)
+            val moved = st.translated(r.dx, r.dy)
+            // Stopped on a guide (maybe a half-pixel one): unscaled content stays on whole pixels.
+            // A full step moves by exactly the step, as without snapping.
+            val next = if (r.dx != mx || r.dy != my) moved.pixelSettled() else moved
+            shown = SnapGuides.guidesFor(next.bounds(), targets, GUIDE_EPS)
+            next
+        }
+        showGuidesBriefly(shown)
+    }
 
     /** Places the bounds' left/top edge (document pixels; null = unchanged). Non-finite values are ignored. */
     fun setPosition(left: Double? = null, top: Double? = null) {
@@ -544,22 +930,129 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         update { it.withPosition(l?.toFloat(), t?.toFloat()) }
     }
 
-    /** Sets width and/or height (document pixels), honoring [keepAspect]. Non-finite values are ignored. */
+    /** Places the [anchor] point of the bounds (document pixels; null = unchanged). Non-finite values are ignored. */
+    fun setAnchorPosition(x: Double? = null, y: Double? = null) {
+        val ax = x?.takeIf { it.isFinite() }
+        val ay = y?.takeIf { it.isFinite() }
+        if (ax == null && ay == null) return
+        update { it.withAnchorAt(anchor, ax?.toFloat(), ay?.toFloat()) }
+    }
+
+    /** Position of the [anchor] point of the current bounds (document px), or null when nothing is transformed. */
+    val anchorPosition: Vec2? get() = transformState?.anchorPoint(anchor)
+
+    /**
+     * Sets width and/or height (document pixels), honoring [keepAspect]; the [anchor] point stays
+     * in place. Non-finite values are ignored.
+     */
     fun setSize(width: Double? = null, height: Double? = null) {
         val w = width?.takeIf { it.isFinite() }
         val h = height?.takeIf { it.isFinite() }
         if (w == null && h == null) return
-        update { it.withSize(w?.toFloat(), h?.toFloat(), keepAspect) }
+        val kind = when {
+            w != null && h != null -> NumericKind.SIZE
+            w != null -> NumericKind.WIDTH
+            else -> NumericKind.HEIGHT
+        }
+        numeric(kind) { e -> e.start.withSizeAbout(e.pivot, w?.toFloat(), h?.toFloat(), keepAspect) }
     }
 
-    /** Sets the absolute rotation in degrees (around the center). */
+    /** Sets the absolute rotation in degrees, turning around the [anchor] point. */
     fun setRotation(degrees: Double) {
-        if (degrees.isFinite()) update { it.withRotation(degrees.toFloat()) }
+        if (degrees.isFinite()) numeric(NumericKind.ROTATION) { e -> e.start.withRotationAbout(e.pivot, degrees.toFloat()) }
     }
 
-    /** Sets a uniform scale relative to the original size (100 = original), around the center. */
+    /** Sets a uniform scale relative to the original size (100 = original), keeping the [anchor] point in place. */
     fun setScalePercent(percent: Double) {
-        if (percent.isFinite()) update { it.withScalePercent(percent.toFloat()) }
+        if (percent.isFinite()) numeric(NumericKind.SCALE) { e -> e.start.withScalePercentAbout(e.pivot, percent.toFloat()) }
+    }
+
+    /**
+     * A typed or slid size / scale / rotation is complete: the next one starts from the state and
+     * reference point shown then. Until then every value of the edit is applied to the state it
+     * started from, around the reference point as it was then, so sliding back and forth returns
+     * exactly to the same place and typing "1", "10", "100" ends where typing "100" does.
+     */
+    fun endNumericEdit() { numericEdit = null }
+
+    private enum class NumericKind { WIDTH, HEIGHT, SIZE, ROTATION, SCALE }
+
+    /**
+     * Applies one value of a numeric edit of [kind]. An edit of another kind (a different field,
+     * e.g. its +/- buttons pressed while another field still has the focus) starts over from the
+     * current state, so it never undoes what that field did.
+     */
+    private fun numeric(kind: NumericKind, f: (NumericEdit) -> TransformState) {
+        update(numeric = true) { st ->
+            val e = numericEdit?.takeIf { it.kind == kind } ?: NumericEdit(kind, st, st.anchorPoint(anchor)).also { numericEdit = it }
+            f(e)
+        }
+    }
+
+    /**
+     * Deletes what is being transformed as ONE undo step "Delete": lifted pixels are removed
+     * from the layer (the area they were lifted from is cleared and nothing is put back; a
+     * lifted selection stays where it is), and a picture being placed is removed together with
+     * its new layer (undoing the step brings the layer back with the picture on it). Returns
+     * false if nothing was deleted (nothing lifted, the layer is locked...).
+     */
+    fun deleteContent(): Boolean {
+        val s = liveSession() ?: return false
+        gesture = null
+        pinch = null
+        numericEdit = null
+        clearGuides()
+        return if (s.placement) deletePlacement(s) else deleteLifted(s)
+    }
+
+    private fun deleteLifted(s: Session): Boolean {
+        val layer = s.layer
+        if (layer.locked) {
+            controller.toast("Layer \"${layer.name}\" is locked")
+            return false
+        }
+        if (s.target == EditTarget.CONTENT && layer.alphaLocked) {
+            controller.toast("Transparency is locked on \"${layer.name}\". Unlock it to delete.")
+            return false
+        }
+        val area = s.liftRect ?: return false
+        val rec = controller.beginEdit(layer, s.target)
+        try {
+            rec.touch(area)
+            clearSource(Canvas(s.targetBitmap), s)
+        } catch (e: OutOfMemoryError) {
+            rec.abort()
+            controller.toast("Not enough memory to delete this")
+            return false
+        }
+        endSession(s)
+        return controller.commitEdit(rec, DELETE_LABEL)
+    }
+
+    private fun deletePlacement(s: Session): Boolean {
+        val doc = controller.doc
+        val layer = s.layer
+        if (doc.layers.size <= 1) {
+            // Its layer is the only one left (the others were deleted meanwhile) and a drawing
+            // needs one: just drop the picture.
+            cancelSession(s)
+            return true
+        }
+        // Place the picture first (the import / paste step), so undoing the delete brings it back.
+        val placed = applyPending(s, moveSelection = false)
+        val idx = doc.indexOf(layer)
+        if (idx < 0) return placed
+        if (!placed) {
+            // Nothing was drawn (e.g. the picture lies off the canvas): the empty layer just goes.
+            if (!layer.locked) removePlacementLayer(layer, s.placementLabel)
+            return doc.indexOf(layer) < 0
+        }
+        controller.structural {
+            doc.layers.removeAt(idx)
+            doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
+        }
+        controller.pushUndo(RemoveLayerAction(layer, idx, DELETE_LABEL))
+        return true
     }
 
     /** Mirrors along the content's own axes. */
@@ -577,9 +1070,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Scales uniformly to fit the canvas, centered, straightened (flips are kept). */
     fun fitToCanvas() = update { it.fittedTo(controller.doc.width, controller.doc.height) }
 
-    private inline fun update(f: (TransformState) -> TransformState) {
+    /**
+     * Applies a command to the pending transform (not while a finger is moving it). Anything but
+     * a [numeric] size / scale / rotation edit starts the next numeric edit from a fresh
+     * reference point, and any command hides the guides.
+     */
+    private inline fun update(numeric: Boolean = false, f: (TransformState) -> TransformState) {
         if (liveSession() == null || gesture != null || pinch != null) return
         val st = transformState ?: return
+        if (!numeric) numericEdit = null
+        clearGuides()
         val next = f(st)
         if (next != st) applyState(next)
     }
@@ -690,7 +1190,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         rebuildPreviewPaint()
         controller.renderOverride = s.preview
         lastBounds = s.liftRect?.let { Rect(it) }
+        numericEdit = null
         applyState(state)
+        // Find what it can snap to before the first drag (cached per layer content).
+        if (snapToObjects) requestSnapBounds(s)
         // A pinch that began while this content was being lifted in the background takes over.
         pinch?.let { p ->
             if (p.start != null) return@let
@@ -705,18 +1208,20 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /**
      * Bakes the pending transform into the layer with ONE undo step. With [moveSelection] the
      * selection the content was lifted with moves along (same step); otherwise the current
-     * selection is left alone (it was just replaced by the user).
+     * selection is left alone (it was just replaced by the user). Returns true when a step was
+     * recorded.
      */
-    private fun applyPending(s: Session, moveSelection: Boolean) {
-        val st = transformState ?: return endSession(s)
+    private fun applyPending(s: Session, moveSelection: Boolean): Boolean {
+        val st = transformState ?: run { endSession(s); return false }
         // The layer/bitmap went away underneath us (deleted, canvas resized...): nothing to bake.
-        if (!isValid(s)) return cancelSession(s)
+        if (!isValid(s)) { cancelSession(s); return false }
         if (s.layer.locked) {
             controller.toast("Layer \"${s.layer.name}\" is locked, so the transform was not applied")
-            return cancelSession(s)
+            cancelSession(s)
+            return false
         }
         // Unchanged: nothing to record.
-        if (!s.placement && st.sameGeometry(s.initial)) return endSession(s)
+        if (!s.placement && st.sameGeometry(s.initial)) { endSession(s); return false }
         val label = if (s.placement) s.placementLabel else TRANSFORM_LABEL
         val bmp = s.targetBitmap
         val rec = controller.beginEdit(s.layer, s.target)
@@ -733,14 +1238,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             rec.abort()
             cancelSession(s)
             controller.toast("Not enough memory to apply the transform")
-            return
+            return false
         }
         val extras = if (moveSelection) moveSelection(s, st, label) else emptyList()
         // A placement on the layer that was just added for it: adding the layer and placing the
         // pixels become ONE undo step (undo removes the picture and its layer together).
         val foldWithAdd = s.placement && isFreshImportLayer(s.layer, s.placementLabel)
         endSession(s)
-        if (controller.commitEdit(rec, label, extras) && foldWithAdd) controller.mergeLastUndo(2, label)
+        val recorded = controller.commitEdit(rec, label, extras)
+        if (recorded && foldWithAdd) controller.mergeLastUndo(2, label)
+        return recorded
     }
 
     /** Ends the session without changes; a discarded placement also removes its empty layer. */
@@ -756,6 +1263,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         gesture = null
         pinch = null
         session = null
+        numericEdit = null
+        clearGuides()
         if (controller.renderOverride === s.preview) controller.renderOverride = null
         val last = lastBounds
         lastBounds = null
@@ -777,14 +1286,38 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /** Removes the (still empty) layer of a discarded placement. */
     private fun removePlacementLayer(layer: Layer, label: String) {
-        // A transform started meanwhile: undo()/deleteLayer() would discard it, so leave the layer.
-        if (controller.doc.indexOf(layer) < 0 || session != null) return
-        // Nothing was recorded since the layer was added: undo its AddLayerAction so no
-        // history entry remains (Redo can still bring the empty layer back: the controller has
-        // no way to drop a redo entry). Otherwise delete it as a regular step.
-        if (isFreshImportLayer(layer, label)) controller.undo()
-        else if (controller.doc.layers.size > 1) controller.deleteLayer(layer)
-        // else: it is the only layer left (the others were deleted meanwhile); a drawing needs one.
+        val doc = controller.doc
+        // A transform started meanwhile: deleteLayer() would discard it, so leave the layer.
+        if (doc.indexOf(layer) < 0 || session != null) return
+        // It is the only layer left (the others were deleted meanwhile): a drawing needs one.
+        if (doc.layers.size <= 1) return
+        // Nothing was recorded since the layer was added: it goes without a trace. Otherwise it
+        // is deleted as a regular step.
+        if (isFreshImportLayer(layer, label)) dropFreshLayer(layer)
+        else controller.deleteLayer(layer)
+    }
+
+    /**
+     * Takes away [layer], added for a placement with nothing recorded since (see
+     * [isFreshImportLayer]), together with its AddLayerAction: no history entry is left and Redo
+     * can't bring the empty layer back. The layer that was active before it (right below it)
+     * is active again, and the change counts as an edit (autosave must not keep the layer).
+     */
+    private fun dropFreshLayer(layer: Layer) {
+        val doc = controller.doc
+        val idx = doc.indexOf(layer)
+        if (idx < 0 || doc.layers.size <= 1) return
+        controller.structural {
+            doc.layers.removeAt(idx)
+            doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)
+        }
+        controller.dropLastUndo()
+        // An empty step pushed and dropped again: counts as an edit, leaves no history. (The push
+        // also clears the redo stack, which is empty here anyway: the AddLayerAction was the
+        // newest step, see isFreshImportLayer, and pushing it cleared redo; the controller keeps
+        // redo waiting while a placement is pending.)
+        controller.pushUndo(LambdaAction(label = "", onUndo = {}, onRedo = {}))
+        controller.dropLastUndo()
     }
 
     /**
@@ -1010,6 +1543,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val st = transformState ?: return
+        // Smart guides under the box and its handles.
+        if (guides.isNotEmpty()) SnapGuideRenderer.draw(canvas, t, guides, controller.doc.width.toFloat(), controller.doc.height.toFloat(), st.bounds())
         drawMovedSelectionOutline(canvas, t, st)
         val g = gesture
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, g?.rotateEdge?.takeIf { g.hit.kind == HandleKind.ROTATE })
@@ -1061,6 +1596,27 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     companion object {
         const val TRANSFORM_LABEL = "Transform"
         const val IMPORT_LABEL = "Import picture"
+        const val DELETE_LABEL = "Delete"
+
+        /** How close (screen dp) a box line must come to a guide to snap to it. */
+        const val SNAP_DISTANCE_DP = 8f
+        /**
+         * How far (screen dp) the finger must travel before a drag snaps (like the shape and
+         * curve tools' touch slop), so a tap or a resting finger never jumps the box onto a guide.
+         */
+        const val SNAP_SLOP_DP = 6f
+        /** A settled box within this many document px of a guide still shows it (half-pixel centers). */
+        private const val GUIDE_EPS = 0.51f
+        /** Relative factor change used to see how fast each line of a rotated box's bounds moves. */
+        private const val PROBE_FACTOR = 0.01f
+        /** Bounds lines moving less than this (document px per 100 % of scale) count as fixed. */
+        private const val MIN_LINE_SLOPE = 0.5f
+        /** How long a nudge shows the guides it lined up with. */
+        private const val NUDGE_GUIDES_MS = 1200L
+
+        private const val PREF_SNAP = "transform.snapToObjects"
+        private const val PREF_FROM_CENTER = "transform.scaleFromCenter"
+        private const val PREF_ANCHOR = "transform.anchor"
 
         /** Layers up to this many pixels are scanned for content bounds on the main thread. */
         private const val SYNC_SCAN_PIXELS = 2_000_000L
