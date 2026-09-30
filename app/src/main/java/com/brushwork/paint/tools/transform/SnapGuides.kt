@@ -123,11 +123,18 @@ data class SnapGuide(
     val source: SnapSource,
 )
 
-/** Result of a snap: move the box by ([dx], [dy]) and show [guides]. */
-data class SnapResult(val dx: Float, val dy: Float, val guides: List<SnapGuide>) {
-    val snappedX: Boolean get() = dx != 0f
-    val snappedY: Boolean get() = dy != 0f
-}
+/**
+ * Result of a snap: move the box by ([dx], [dy]) and show [guides]. [snappedX] / [snappedY] tell
+ * whether a line was within reach on that axis: true with a zero offset when the box already sits
+ * exactly on a line (it must then stay exactly there, e.g. not be rounded to whole pixels).
+ */
+data class SnapResult(
+    val dx: Float,
+    val dy: Float,
+    val guides: List<SnapGuide>,
+    val snappedX: Boolean = dx != 0f,
+    val snappedY: Boolean = dy != 0f,
+)
 
 /** A value that snapped to [line] (its position is [line].pos). */
 data class SnapHit(val line: SnapLine, val distance: Float) {
@@ -139,9 +146,11 @@ data class SnapHit(val line: SnapLine, val distance: Float) {
  * tool that moves a box (transform, text, shapes) can reuse it:
  *  1. build [SnapTargets] from the canvas, the other objects' bounds (e.g. layer content
  *     bounds) and optionally the grid ([gridLines]);
- *  2. while dragging, snap the box the finger alone would give (never the previously snapped
- *     one, so moving the finger farther than the threshold releases the snap) with [snapMove],
- *     resize handles with [snapValue], free points with [snapPoint], nudges with [snapNudge];
+ *  2. once the finger has really started dragging (past a few dp of touch slop, so a tap never
+ *     jumps the box onto a guide), snap the box the finger alone would give (never the
+ *     previously snapped one, so moving the finger farther than the threshold releases the
+ *     snap) with [snapMove], resize handles with [snapValue], free points with [snapPoint],
+ *     nudges with [snapNudge];
  *  3. draw the returned [SnapGuide]s (e.g. with SnapGuideRenderer) until the finger lifts.
  *
  * Any of the moving box's left / center / right lines snaps to any vertical target line within
@@ -197,24 +206,45 @@ object SnapGuides {
     /**
      * Snaps a moving [box]: the closest of its left / center / right lines to a vertical target
      * line within [threshold], and likewise top / center / bottom. Returns the offset to apply
-     * (0 on an axis that didn't snap) and the guides of the snapped box.
+     * (0 on an axis that didn't snap, or that is already exactly on a line: see
+     * [SnapResult.snappedX]) and the guides of the snapped box.
      */
     fun snapMove(box: DocBox, targets: SnapTargets, threshold: Float): SnapResult {
         val dx = bestOffset(box, SnapAxis.X, targets, threshold)
         val dy = bestOffset(box, SnapAxis.Y, targets, threshold)
-        val moved = box.offset(dx, dy)
-        return SnapResult(dx, dy, guidesFor(moved, targets))
+        val moved = box.offset(dx ?: 0f, dy ?: 0f)
+        return SnapResult(dx ?: 0f, dy ?: 0f, guidesFor(moved, targets), snappedX = dx != null, snappedY = dy != null)
     }
 
-    private fun bestOffset(box: DocBox, axis: SnapAxis, targets: SnapTargets, threshold: Float): Float {
-        var bestD = Float.POSITIVE_INFINITY
-        var offset = 0f
+    /**
+     * Offset that puts the closest of the box's lines on its target line, or null when none is
+     * within reach. When two of the box's lines are equally close (e.g. its top and its center
+     * straddle the canvas center), a like-for-like pairing wins (center to center, top to top...),
+     * then the box's center.
+     */
+    private fun bestOffset(box: DocBox, axis: SnapAxis, targets: SnapTargets, threshold: Float): Float? {
+        var best: SnapHit? = null
+        var bestEdge = SnapEdge.START
+        var offset: Float? = null
         for (e in SnapEdge.entries) {
             val v = feature(box, axis, e)
             val hit = snapValue(v, axis, targets, threshold) ?: continue
-            if (hit.distance < bestD) { bestD = hit.distance; offset = hit.pos - v }
+            if (best == null || isBetter(hit, e, best, bestEdge)) {
+                best = hit
+                bestEdge = e
+                offset = hit.pos - v
+            }
         }
         return offset
+    }
+
+    /** Whether [hit] of the box's line [edge] beats [other] of its line [otherEdge] (see [bestOffset]). */
+    private fun isBetter(hit: SnapHit, edge: SnapEdge, other: SnapHit, otherEdge: SnapEdge): Boolean {
+        if (abs(hit.distance - other.distance) > TIE_EPS) return hit.distance < other.distance
+        val like = hit.line.edge == edge
+        val otherLike = other.line.edge == otherEdge
+        if (like != otherLike) return like
+        return edge == SnapEdge.CENTER && otherEdge != SnapEdge.CENTER
     }
 
     /**
@@ -340,6 +370,9 @@ object SnapGuides {
 
     /** Grid spacings below this (document px) are not snapped to (every position would snap). */
     private const val MIN_GRID_SPACING = 0.5f
+
+    /** Distances this close (document px) count as a tie between two of the box's lines. */
+    private const val TIE_EPS = 1e-3f
 }
 
 /** [this] moved by ([dx], [dy]). */

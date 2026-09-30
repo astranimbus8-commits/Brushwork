@@ -273,11 +273,92 @@ class TransformSnapDeleteRobolectricTest {
         // Raw box (233, 187)-(273, 207): its center is 3 px off the canvas center both ways.
         drag(c, Vec2(40f, 30f), Vec2(253f, 197f))
         assertEquals(DocBox(230f, 190f, 270f, 210f), bounds(t))
+        // Dragged 6 / 5 px away from the center (past the touch slop): pulled back onto it.
         c.pointerDown(ToolPoint(250f, 200f))
-        c.pointerMove(ToolPoint(250f, 200f))
+        c.pointerMove(ToolPoint(256f, 205f))
+        assertEquals(DocBox(230f, 190f, 270f, 210f), bounds(t))
         assertTrue(t.activeGuides.any { it.axis == SnapAxis.X && it.label == "Canvas center" })
         assertTrue(t.activeGuides.any { it.axis == SnapAxis.Y && it.label == "Canvas center" })
-        c.pointerUp(ToolPoint(250f, 200f))
+        c.pointerUp(ToolPoint(256f, 205f))
+        assertEquals(DocBox(230f, 190f, 270f, 210f), bounds(t))
+    }
+
+    @Test
+    fun aTapOrAJitteringFingerNeverJumpsTheBoxOntoAGuide() {
+        val (c, _) = twoObjects()
+        val t = activate(c)
+        // Box left 297: 3 px from the other layer's left edge (300), within the snap distance.
+        t.moveBy(277f, 0f)
+        val start = DocBox(297f, 20f, 337f, 40f)
+        assertEquals(start, bounds(t))
+        // A tap inside the box.
+        c.pointerDown(ToolPoint(317f, 30f))
+        c.pointerUp(ToolPoint(317f, 30f))
+        assertEquals(start, bounds(t))
+        // A finger that jitters a pixel or two (less than the touch slop) and lifts.
+        c.pointerDown(ToolPoint(317f, 30f))
+        c.pointerMove(ToolPoint(318f, 31f))
+        assertTrue("no guides before the finger really drags", t.activeGuides.isEmpty())
+        c.pointerMove(ToolPoint(317f, 30f))
+        c.pointerUp(ToolPoint(317f, 30f))
+        assertEquals(start, bounds(t))
+        // A tap on a resize handle: the bottom-right corner, 3 px from the other layer's left
+        // edge, must not resize the box onto it.
+        t.moveBy(-40f, 0f)
+        val box = DocBox(257f, 20f, 297f, 40f)
+        assertEquals(box, bounds(t))
+        c.pointerDown(ToolPoint(297f, 40f))
+        c.pointerUp(ToolPoint(297f, 40f))
+        assertEquals(box, bounds(t))
+        // A real drag of that corner does snap.
+        c.pointerDown(ToolPoint(297f, 40f))
+        c.pointerMove(ToolPoint(290f, 40f))
+        c.pointerMove(ToolPoint(298f, 40f))
+        assertEquals(300f, bounds(t).right, 1e-3f)
+        c.pointerUp(ToolPoint(298f, 40f))
+        assertEquals(300f, bounds(t).right, 1e-3f)
+        assertFalse(c.canUndo) // all of it is still the pending transform
+    }
+
+    @Test
+    fun aBoxAlreadyOnAGuideStaysExactlyOnItWhenDraggedAlongIt() {
+        val (c, _) = twoObjects()
+        val t = activate(c)
+        // 40 x 20 -> 21 x 10.5: an odd width, so the center line puts the left edge on a half pixel.
+        t.setScalePercent(52.5)
+        t.endNumericEdit()
+        assertEquals(21f, bounds(t).width, 1e-3f)
+        // Center x 349 -> snaps onto the other layer's center line (350).
+        drag(c, Vec2(40f, 30f), Vec2(349f, 60f))
+        assertEquals(350f, (bounds(t).left + bounds(t).right) / 2f, 1e-3f)
+        assertEquals(339.5f, bounds(t).left, 1e-3f)
+        // Straight down, along that line: it stays exactly on it (not rounded to 340 on release).
+        c.pointerDown(ToolPoint(350f, 60f))
+        c.pointerMove(ToolPoint(350f, 75f))
+        assertTrue(t.activeGuides.any { it.axis == SnapAxis.X && it.pos == 350f && it.label == "Layer 1 center" })
+        c.pointerUp(ToolPoint(350f, 75f))
+        assertEquals(350f, (bounds(t).left + bounds(t).right) / 2f, 1e-3f)
+        // A tap leaves the fractional place alone as well.
+        c.pointerDown(ToolPoint(350f, 75f))
+        c.pointerUp(ToolPoint(350f, 75f))
+        assertEquals(339.5f, bounds(t).left, 1e-3f)
+    }
+
+    @Test
+    fun distortEdgesSnapToo() {
+        val c = setup(500, 400, layers = 2)
+        fill(c.doc.layers[0].bitmap, Rect(300, 100, 400, 160), BLUE)
+        c.doc.layers[0].markChanged()
+        fill(c.doc.layers[1].bitmap, Rect(20, 20, 120, 80), RED)
+        c.doc.layers[1].markChanged()
+        val t = activate(c)
+        t.mode = TransformTool.Mode.DISTORT
+        // The right edge (x = 120) dragged to x = 297: 3 px short of the other layer's left edge.
+        drag(c, Vec2(120f, 50f), Vec2(200f, 50f), Vec2(297f, 50f))
+        assertTrue(t.transformState!!.isDistorted || t.transformState!!.isAxisAligned)
+        assertEquals(300f, t.transformState!!.corner(1).x, 1e-2f)
+        assertEquals(300f, t.transformState!!.corner(2).x, 1e-2f)
+        assertEquals(20f, t.transformState!!.corner(0).x, 1e-2f)
     }
 
     @Test

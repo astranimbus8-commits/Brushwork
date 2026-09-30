@@ -96,7 +96,7 @@ fun TransformToolOptions(tool: TransformTool) {
     FilterChip(
         selected = tool.snapToObjects,
         onClick = { tool.snapToObjects = !tool.snapToObjects },
-        label = { Text("Snap") },
+        label = { Text("Snap to objects") },
         leadingIcon = { Icon(Icons.Filled.AlignHorizontalCenter, contentDescription = null, modifier = Modifier.size(18.dp)) },
         colors = chipColors(),
         modifier = Modifier

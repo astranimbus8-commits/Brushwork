@@ -55,13 +55,13 @@ class TransformOptionsUiRobolectricTest {
         Smoke.pump(100)
         SmokeUi.settle()
         assertTrue("lifted", tool.hasPendingWork)
-        for (label in listOf("Delete", "From center", "Snap", "Numbers")) assertTrue("\"$label\" in the strip", SmokeUi.has(label, exact = true))
+        for (label in listOf("Delete", "From center", "Snap to objects", "Numbers")) assertTrue("\"$label\" in the strip", SmokeUi.has(label, exact = true))
 
         // Strip toggles.
         assertTrue(tool.snapToObjects)
-        SmokeUi.click("Snap", exact = true)
+        SmokeUi.click("Snap to objects", exact = true)
         assertFalse(tool.snapToObjects)
-        SmokeUi.click("Snap", exact = true)
+        SmokeUi.click("Snap to objects", exact = true)
         assertTrue(tool.snapToObjects)
         assertFalse(tool.scaleFromCenter)
         SmokeUi.click("From center", exact = true)

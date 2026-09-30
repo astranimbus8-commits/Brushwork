@@ -42,6 +42,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -80,8 +81,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Free transform (scale/rotate handles) or distort (corners move freely, perspective). */
     var mode by mutableStateOf(Mode.FREE)
 
+    private var keepAspectState by mutableStateOf(true)
+
     /** Corner handles keep the aspect ratio (free mode); also links width/height in the Numbers sheet. */
-    var keepAspect by mutableStateOf(true)
+    var keepAspect: Boolean
+        get() = keepAspectState
+        set(v) {
+            if (v == keepAspectState) return
+            keepAspectState = v
+            numericEdit = null // the next typed size starts from what is shown now
+        }
 
     private val prefs get() = controller.settings.prefs
 
@@ -125,7 +134,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         set(v) {
             if (v == anchorState) return
             anchorState = v
-            numericPivot = null
+            numericEdit = null
             prefs.edit { putString(PREF_ANCHOR, v.name) }
         }
 
@@ -312,8 +321,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Hides the guides a nudge showed after a moment. */
     private var guidesJob: Job? = null
 
-    /** Point that stays in place during the current typed / slid size, scale or rotation (see [endNumericEdit]). */
-    private var numericPivot: Vec2? = null
+    /**
+     * The typed / slid size, scale or rotation in progress (see [endNumericEdit]): the state it
+     * started from and the reference point, which stays in place. Every value of the edit is
+     * applied to [start] (not to the previous value), so sliding back and forth or typing a
+     * number digit by digit never accumulates rounding or size clamping.
+     */
+    private class NumericEdit(val kind: NumericKind, val start: TransformState, val pivot: Vec2)
+
+    private var numericEdit: NumericEdit? = null
 
     /** Document area of the last preview (invalidated together with the next one). */
     private var lastBounds: Rect? = null
@@ -444,6 +460,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         var targetsVersion = -1
         /** The last move snapped the box to a guide (release keeps that exact place). */
         var snapped = false
+        /**
+         * The finger has travelled more than [SNAP_SLOP_DP] from where it went down (latched):
+         * only then does the box snap, so a tap or a resting finger's jitter never jumps it
+         * onto a nearby guide.
+         */
+        var dragging = false
     }
 
     private var gesture: Gesture? = null
@@ -451,7 +473,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     override fun onDown(p: ToolPoint) {
         gesture = null
         clearGuides()
-        numericPivot = null
+        numericEdit = null
         if (liveSession() == null && !beginLift()) return
         val st = transformState ?: return
         val t = controller.viewTransform
@@ -469,9 +491,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (!p.x.isFinite() || !p.y.isFinite()) return
         val to = Vec2(p.x, p.y)
         val distort = mode == Mode.DISTORT
+        if (!g.dragging) {
+            val t = controller.viewTransform
+            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) > t.dp(SNAP_SLOP_DP)) g.dragging = true
+        }
         // Every frame snaps what the finger alone gives (never the last snapped state), so
         // moving farther than the snap distance lets go of a guide.
-        val snap = snapContext(g, s)
+        val snap = if (g.dragging) snapContext(g, s) else null
         val hadGuides = guides.isNotEmpty()
         guides = emptyList()
         g.snapped = false
@@ -482,11 +508,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
                 if (distort) distortCornerSnapped(g, to, snap)
                 else snapResize(g, TransformHandles.corner(g.start, g.hit.index, g.from, to, keepAspect, scaleFromCenter), snap)
             HandleKind.EDGE ->
-                if (distort) TransformHandles.distortEdge(g.start, g.hit.index, g.from, to)
+                if (distort) distortEdgeSnapped(g, to, snap)
                 else snapResize(g, TransformHandles.edge(g.start, g.hit.index, g.from, to, scaleFromCenter), snap)
         }
+        if (next == null) {
+            // An invalid (non-convex) distort keeps the last valid shape, which is not on the guides.
+            guides = emptyList()
+            g.snapped = false
+        }
         if (hadGuides || guides.isNotEmpty()) controller.invalidateOverlay()
-        next ?: return // an invalid (non-convex) distort keeps the last valid shape
+        next ?: return
         if (next != transformState) applyState(next)
     }
 
@@ -496,8 +527,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         gesture = null
         clearGuides()
         transformState?.let { st ->
-            // A guide the box snapped to keeps it exactly there; otherwise settle on whole pixels.
-            val end = if (g.snapped) st.pixelSettled() else st.snappedToPixels()
+            // A guide the box snapped to keeps it exactly there, and so does a mere tap (a scaled
+            // box aligned to a guide earlier must not be nudged off it); a drag settles on whole
+            // pixels.
+            val end = if (g.snapped || !g.dragging) st.pixelSettled() else st.snappedToPixels()
             if (end != st) applyState(end)
         }
         controller.invalidateOverlay()
@@ -621,6 +654,27 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         return TransformHandles.distortCorner(g.start, g.hit.index, g.from, target)
     }
 
+    /**
+     * A distort edge drag (both corners of the edge move together): the edge's ends and middle
+     * snap like a thin box being moved.
+     */
+    private fun distortEdgeSnapped(g: Gesture, to: Vec2, snap: SnapContext?): TransformState? {
+        var target = to
+        if (snap != null) {
+            val d = to - g.from
+            val a = g.start.corner(g.hit.index) + d
+            val b = g.start.corner((g.hit.index + 1) % 4) + d
+            val seg = DocBox(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
+            val r = SnapGuides.snapMove(seg, snap.targets, snap.threshold)
+            if (r.snappedX || r.snappedY) {
+                target = to + Vec2(r.dx, r.dy)
+                guides = r.guides
+                g.snapped = true
+            }
+        }
+        return TransformHandles.distortEdge(g.start, g.hit.index, g.from, target)
+    }
+
     /** Shows [list] for a moment (after a nudge). */
     private fun showGuidesBriefly(list: List<SnapGuide>) {
         guidesJob?.cancel()
@@ -685,7 +739,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // else: the content under the fingers is being lifted in the background (startSession
         // hands it to the pinch).
         gesture = null
-        numericPivot = null
+        numericEdit = null
         clearGuides()
         pinch = p
         controller.invalidateOverlay()
@@ -835,26 +889,45 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val w = width?.takeIf { it.isFinite() }
         val h = height?.takeIf { it.isFinite() }
         if (w == null && h == null) return
-        update(numeric = true) { it.withSizeAbout(pivotFor(it), w?.toFloat(), h?.toFloat(), keepAspect) }
+        val kind = when {
+            w != null && h != null -> NumericKind.SIZE
+            w != null -> NumericKind.WIDTH
+            else -> NumericKind.HEIGHT
+        }
+        numeric(kind) { e -> e.start.withSizeAbout(e.pivot, w?.toFloat(), h?.toFloat(), keepAspect) }
     }
 
     /** Sets the absolute rotation in degrees, turning around the [anchor] point. */
     fun setRotation(degrees: Double) {
-        if (degrees.isFinite()) update(numeric = true) { it.withRotationAbout(pivotFor(it), degrees.toFloat()) }
+        if (degrees.isFinite()) numeric(NumericKind.ROTATION) { e -> e.start.withRotationAbout(e.pivot, degrees.toFloat()) }
     }
 
     /** Sets a uniform scale relative to the original size (100 = original), keeping the [anchor] point in place. */
     fun setScalePercent(percent: Double) {
-        if (percent.isFinite()) update(numeric = true) { it.withScalePercentAbout(pivotFor(it), percent.toFloat()) }
+        if (percent.isFinite()) numeric(NumericKind.SCALE) { e -> e.start.withScalePercentAbout(e.pivot, percent.toFloat()) }
     }
 
     /**
-     * A typed or slid size / scale / rotation is complete. Until then the reference point stays
-     * where it was when the edit began, so sliding back and forth returns to the same place.
+     * A typed or slid size / scale / rotation is complete: the next one starts from the state and
+     * reference point shown then. Until then every value of the edit is applied to the state it
+     * started from, around the reference point as it was then, so sliding back and forth returns
+     * exactly to the same place and typing "1", "10", "100" ends where typing "100" does.
      */
-    fun endNumericEdit() { numericPivot = null }
+    fun endNumericEdit() { numericEdit = null }
 
-    private fun pivotFor(st: TransformState): Vec2 = numericPivot ?: st.anchorPoint(anchor).also { numericPivot = it }
+    private enum class NumericKind { WIDTH, HEIGHT, SIZE, ROTATION, SCALE }
+
+    /**
+     * Applies one value of a numeric edit of [kind]. An edit of another kind (a different field,
+     * e.g. its +/- buttons pressed while another field still has the focus) starts over from the
+     * current state, so it never undoes what that field did.
+     */
+    private fun numeric(kind: NumericKind, f: (NumericEdit) -> TransformState) {
+        update(numeric = true) { st ->
+            val e = numericEdit?.takeIf { it.kind == kind } ?: NumericEdit(kind, st, st.anchorPoint(anchor)).also { numericEdit = it }
+            f(e)
+        }
+    }
 
     /**
      * Deletes what is being transformed as ONE undo step "Delete": lifted pixels are removed
@@ -867,7 +940,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val s = liveSession() ?: return false
         gesture = null
         pinch = null
-        numericPivot = null
+        numericEdit = null
         clearGuides()
         return if (s.placement) deletePlacement(s) else deleteLifted(s)
     }
@@ -945,7 +1018,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private inline fun update(numeric: Boolean = false, f: (TransformState) -> TransformState) {
         if (liveSession() == null || gesture != null || pinch != null) return
         val st = transformState ?: return
-        if (!numeric) numericPivot = null
+        if (!numeric) numericEdit = null
         clearGuides()
         val next = f(st)
         if (next != st) applyState(next)
@@ -1057,7 +1130,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         rebuildPreviewPaint()
         controller.renderOverride = s.preview
         lastBounds = s.liftRect?.let { Rect(it) }
-        numericPivot = null
+        numericEdit = null
         applyState(state)
         // Find what it can snap to before the first drag (cached per layer content).
         if (snapToObjects) requestSnapBounds(s)
@@ -1130,7 +1203,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         gesture = null
         pinch = null
         session = null
-        numericPivot = null
+        numericEdit = null
         clearGuides()
         if (controller.renderOverride === s.preview) controller.renderOverride = null
         val last = lastBounds
@@ -1443,6 +1516,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
         /** How close (screen dp) a box line must come to a guide to snap to it. */
         const val SNAP_DISTANCE_DP = 8f
+        /**
+         * How far (screen dp) the finger must travel before a drag snaps (like the shape and
+         * curve tools' touch slop), so a tap or a resting finger never jumps the box onto a guide.
+         */
+        const val SNAP_SLOP_DP = 6f
         /** A settled box within this many document px of a guide still shows it (half-pixel centers). */
         private const val GUIDE_EPS = 0.51f
         /** How long a nudge shows the guides it lined up with. */

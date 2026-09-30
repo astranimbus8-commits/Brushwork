@@ -183,4 +183,28 @@ class SnapGuidesTest {
         val r = SnapGuides.snapNudge(DocBox(0f, 0f, 1f, 1f), Float.NaN, 0f, t)
         assertTrue(r.dx.isNaN()) // passed through: the caller ignores non-finite moves
     }
+
+    @Test
+    fun equallyCloseLinesPreferLikeForLikeThenTheCenter() {
+        // The box's top (195) and center (205) are both 5 px from the canvas center (200): the
+        // centers line up rather than the top jumping onto the canvas center.
+        val canvas = SnapTargets.build(400f, 400f, emptyList())
+        var r = SnapGuides.snapMove(box(20f, 195f, 40f, 20f), canvas, 8f)
+        assertEquals(-5f, r.dy, eps)
+        assertEquals(listOf("Canvas center"), r.guides.filter { it.axis == SnapAxis.Y }.map { it.label })
+        // Top (95) and center (105) both 5 px from the other object's top (100): top meets top.
+        r = SnapGuides.snapMove(box(20f, 95f, 40f, 20f), targets, 8f)
+        assertEquals(5f, r.dy, eps)
+        assertTrue(r.guides.any { it.axis == SnapAxis.Y && it.label == "Layer 2 top" })
+    }
+
+    @Test
+    fun aBoxExactlyOnALineReportsTheSnapWithoutMoving() {
+        // Left edge exactly on the other object's left: snapped on X, nothing to move.
+        val r = SnapGuides.snapMove(box(200f, 300f, 30f, 20f), targets, 8f)
+        assertEquals(0f, r.dx, 0f)
+        assertTrue(r.snappedX)
+        assertFalse(r.snappedY)
+        assertTrue(r.guides.any { it.axis == SnapAxis.X && it.label == "Layer 2 left" })
+    }
 }
