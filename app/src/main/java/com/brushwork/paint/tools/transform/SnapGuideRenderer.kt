@@ -24,16 +24,28 @@ object SnapGuideRenderer {
     private val labelText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = -1; typeface = Typeface.DEFAULT_BOLD }
     private val clip = Rect()
     private val box = RectF()
+    /** Where labels may go (screen px): the canvas as shown, within the view. */
+    private val labelArea = RectF()
 
     /**
      * Draws [guides] on a [docW] x [docH] canvas. [moving] (the box being moved, document px)
      * keeps the labels away from it and its handles: each goes at the far end of its guide.
+     * Labels stay on the canvas as shown (around a canvas fit to the screen the rest of the view
+     * is covered by the editor's bars) and within the view.
      */
     fun draw(canvas: Canvas, t: ViewTransform, guides: List<SnapGuide>, docW: Float, docH: Float, moving: DocBox? = null) {
         if (guides.isEmpty()) return
         across.strokeWidth = t.dp(1f)
         strong.strokeWidth = t.dp(1.5f)
         shadow.strokeWidth = t.dp(3f)
+        labelArea.set(0f, 0f, docW, docH)
+        t.matrix.mapRect(labelArea)
+        if (canvas.getClipBounds(clip) &&
+            !labelArea.intersect(clip.left.toFloat(), clip.top.toFloat(), clip.right.toFloat(), clip.bottom.toFloat())
+        ) {
+            labelArea.set(clip)
+        }
+        labelArea.inset(t.dp(4f), t.dp(4f))
         val m = t.dp(4f)
         for (g in guides) {
             // Faint line across the canvas.
@@ -73,17 +85,16 @@ object SnapGuideRenderer {
         // Just beyond that end, along the guide, kept on screen.
         var away = (anchor - other).normalized()
         if (away.lengthSq < 0.5f) away = if (g.axis == SnapAxis.X) Vec2(0f, -1f) else Vec2(-1f, 0f)
-        var cx = anchor.x + away.x * (w / 2f + t.dp(6f))
-        var cy = anchor.y + away.y * (h / 2f + t.dp(6f))
-        if (canvas.getClipBounds(clip)) {
-            val pad = t.dp(4f)
-            cx = cx.coerceIn(clip.left + w / 2f + pad, maxOf(clip.left + w / 2f + pad, clip.right - w / 2f - pad))
-            cy = cy.coerceIn(clip.top + h / 2f + pad, maxOf(clip.top + h / 2f + pad, clip.bottom - h / 2f - pad))
-        }
+        val cx = fit(anchor.x + away.x * (w / 2f + t.dp(6f)), w / 2f, labelArea.left, labelArea.right)
+        val cy = fit(anchor.y + away.y * (h / 2f + t.dp(6f)), h / 2f, labelArea.top, labelArea.bottom)
         box.set(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f)
         val r = t.dp(6f)
         canvas.drawRoundRect(box, r, r, labelFill)
         val fm = labelText.fontMetrics
         canvas.drawText(text, box.left + t.dp(6f), cy - (fm.ascent + fm.descent) / 2f, labelText)
     }
+
+    /** [c] moved so that [c] ± [half] lies within [lo]..[hi] (centered there when it can't fit). */
+    private fun fit(c: Float, half: Float, lo: Float, hi: Float): Float =
+        if (!(hi - lo >= 2f * half)) (lo + hi) / 2f else c.coerceIn(lo + half, hi - half)
 }

@@ -144,7 +144,8 @@ fun TransformNumbersSheet(tool: TransformTool) {
                     maxPx = maxOf(doc.width, doc.height).toDouble(),
                 )
                 Text(
-                    "Each arrow moves by ${Units.format(tool.nudgeStepPx, unit, dpi)}",
+                    "Each arrow moves by ${Units.format(tool.nudgeStepPx, unit, dpi)}" +
+                        if (tool.snapToObjects) ", stopping where it lines up with something on the way" else "",
                     style = MaterialTheme.typography.bodySmall,
                     color = BrushworkColors.OnChromeDim,
                     modifier = Modifier.padding(top = 4.dp),
