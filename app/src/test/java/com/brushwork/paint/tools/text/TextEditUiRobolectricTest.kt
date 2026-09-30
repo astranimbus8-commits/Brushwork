@@ -15,13 +15,16 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /**
  * The text tool's strip and editor sheet in a real activity, operated through their semantics:
  * "Edit text" for the active text layer, the box presets and fixed width, the vertical style,
  * the empty-text question, and the disabled box / vertical options while a path is active.
  */
+// Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.tools.text.editsheetsandbox"])
 class TextEditUiRobolectricTest {
 
     @Test

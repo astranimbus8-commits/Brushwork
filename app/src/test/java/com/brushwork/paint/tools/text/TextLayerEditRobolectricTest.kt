@@ -198,6 +198,26 @@ class TextLayerEditRobolectricTest {
     }
 
     @Test
+    fun oldPixelsAreClearedEvenWhereTheyDifferFromTheComputedText() {
+        val (c, tool) = newController(400, 300)
+        val layer = addText(c, tool, "Font", 200f, 150f)
+        val black = 0xFF000000.toInt()
+        val ink = inkBounds(layer.bitmap)
+        // As if another device's font had drawn the text differently: ink a bit beyond the
+        // computed box, and a long run reaching far out.
+        layer.bitmap.setPixel(ink.right + 20, ink.centerY(), black)
+        for (x in ink.right until 398) layer.bitmap.setPixel(x, ink.top, black)
+        assertTrue(tool.editLayer(layer))
+        tool.setText("x")
+        assertTrue(tool.commitItem())
+        assertEquals(0, layer.bitmap.getPixel(ink.right + 20, ink.centerY()))
+        assertEquals(0, layer.bitmap.getPixel(397, ink.top))
+        c.undo()
+        assertEquals(black, layer.bitmap.getPixel(397, ink.top))
+        assertEquals(black, layer.bitmap.getPixel(ink.right + 20, ink.centerY()))
+    }
+
+    @Test
     fun reEditingIgnoresALeftoverSelection() {
         val (c, tool) = newController()
         val layer = addText(c, tool, "MMMM", 150f, 100f, size = 40f)

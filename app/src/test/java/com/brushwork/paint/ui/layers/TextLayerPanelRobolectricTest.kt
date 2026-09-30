@@ -20,9 +20,12 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 /** Text layers in the layers window: "T" badge, "Edit text" in the ⋮ menu, double-tap on the row. */
+// Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.layers.textpanelsandbox"])
 class TextLayerPanelRobolectricTest {
 
     @Test

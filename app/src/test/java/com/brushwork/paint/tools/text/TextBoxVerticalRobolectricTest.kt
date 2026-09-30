@@ -185,6 +185,33 @@ class TextBoxVerticalRobolectricTest {
         assertEquals(0f, tool.item!!.spec.box.width, 0f)
     }
 
+    @Test
+    fun aTextPathKeepsTheBoxAndVerticalSettingsForLater() {
+        val (c, tool) = newController()
+        tool.startTextAt(200f, 200f)
+        tool.setText("Round")
+        tool.updateSpec { it.copy(vertical = true, box = TextBoxSpec(width = 80f, fill = true)) }
+        tool.confirmEditor()
+        tool.setPath(TextPathSpec(type = TextPathType.CIRCLE))
+        val item = tool.item!!
+        assertEquals(TextPathType.CIRCLE, item.path.type)
+        assertTrue("kept", item.spec.vertical && item.spec.box.fill && item.spec.box.width == 80f)
+        // Drawing the guide / handles and moving work whatever the path engine measures.
+        val screen = Bitmap.createBitmap(400, 400, Bitmap.Config.ARGB_8888)
+        tool.drawOverlay(Canvas(screen), c.viewTransform)
+        tool.nudge(10f, 0f)
+        assertEquals(210f, tool.item!!.cx, 0f)
+        tool.setRotation(30f)
+        assertEquals(30f, tool.item!!.rotationDeg, 0f)
+        tool.drawOverlay(Canvas(screen), c.viewTransform)
+        // Back to straight text: the shape's settings stay for later.
+        tool.setPath(tool.item!!.path.copy(type = TextPathType.NONE))
+        assertFalse(tool.item!!.path.isActive)
+        assertTrue(tool.blockFor(tool.item!!).lineCount >= 1)
+        tool.discard()
+        assertEquals(1, c.doc.layers.size)
+    }
+
     // ------------------------------------------------------------------ vertical text
 
     @Test

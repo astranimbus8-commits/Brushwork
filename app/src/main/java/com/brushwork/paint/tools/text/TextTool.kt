@@ -159,9 +159,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         controller.selectLayer(layer)
         editingLayer = layer
         loadedItem = loaded
-        // The old pixels as they really are (fonts may differ from the device that drew them).
-        val ink = try { ContentBounds.of(layer.bitmap) } catch (e: OutOfMemoryError) { null }
-        loadedInk = ink ?: rectOf(loaded)
+        loadedInk = inkOf(layer, loaded)
         item = loaded
         editingNew = false
         editorBackup = null
@@ -375,6 +373,32 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onDispose() {
         layerTexts.clear()
         prepared = null
+    }
+
+    /**
+     * Where the pixels of the text layer [layer] (drawn from [item]) really are: fonts may differ
+     * from the device that drew them, so the pixels are scanned. Only the area around the
+     * computed bounds is read, unless the ink reaches its edge (then the whole layer is).
+     */
+    private fun inkOf(layer: Layer, item: TextItem): Rect? {
+        val guess = rectOf(item)
+        return try {
+            if (guess != null) {
+                val margin = max(64, max(guess.width(), guess.height()) / 4)
+                val region = Rect(guess).apply { inset(-margin, -margin) }
+                if (region.intersect(0, 0, layer.width, layer.height)) {
+                    val ink = ContentBounds.of(layer.bitmap, region = region)
+                    val atEdge = ink != null && (
+                        (ink.left <= region.left && region.left > 0) || (ink.top <= region.top && region.top > 0) ||
+                            (ink.right >= region.right && region.right < layer.width) || (ink.bottom >= region.bottom && region.bottom < layer.height)
+                        )
+                    if (ink != null && !atEdge) return ink
+                }
+            }
+            ContentBounds.of(layer.bitmap) ?: guess
+        } catch (e: OutOfMemoryError) {
+            guess
+        }
     }
 
     /** Pixel rect (rounded out) of everything [t] paints, or null when it paints nothing. */
@@ -722,6 +746,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x99000000.toInt() }
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = ACCENT }
     private val dashPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = ACCENT }
+    private var dashDensity = 0f
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val boxPath = Path()
     private val guideScreen = Path()
@@ -788,7 +813,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
         guideScreen.transform(t.matrix)
         haloPaint.strokeWidth = t.dp(3f)
         dashPaint.strokeWidth = t.dp(1.5f)
-        dashPaint.pathEffect = DashPathEffect(floatArrayOf(t.dp(6f), t.dp(4f)), 0f)
+        if (dashDensity != t.density) {
+            dashDensity = t.density
+            dashPaint.pathEffect = DashPathEffect(floatArrayOf(t.dp(6f), t.dp(4f)), 0f)
+        }
         canvas.drawPath(guideScreen, haloPaint)
         canvas.drawPath(guideScreen, dashPaint)
         for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
