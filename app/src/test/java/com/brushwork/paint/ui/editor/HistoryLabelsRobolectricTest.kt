@@ -101,7 +101,7 @@ class HistoryLabelsRobolectricTest {
      * usable while it is shown or minimized): undo then must not throw the typed text away.
      */
     @Test
-    fun anOpenTextEditorKeepsItsTextFromUndo() {
+    fun anOpenTextEditorKeepsItsTextFromUndoAndRedo() {
         val c = controller()
         c.pushUndo(LambdaAction("Brush", onUndo = {}, onRedo = {}))
         c.selectTool(ToolId.TEXT)
@@ -109,22 +109,35 @@ class HistoryLabelsRobolectricTest {
         text.startTextAt(30f, 20f)
         text.setText("Typed")
         assertTrue(text.editorOpen)
-        assertEquals(HistoryLabels.UNDO_BLOCKED_BY_TEXT, HistoryLabels.undoBlocked(c))
-        assertEquals(HistoryLabels.UNDO_BLOCKED_BY_TEXT, HistoryLabels.performUndo(c))
+        assertEquals(HistoryLabels.BLOCKED_BY_TEXT_EDITOR, HistoryLabels.historyBlocked(c))
+        assertEquals(HistoryLabels.BLOCKED_BY_TEXT_EDITOR, HistoryLabels.performUndo(c))
         assertEquals("the typed text stays", "Typed", text.item?.text)
         assertTrue("the editor stays open", text.editorOpen)
         assertEquals("history untouched", 1, c.undoManager.undoCount)
         // Once the editor is closed (OK), undo takes the pending text back as before.
         text.confirmEditor()
-        assertNull(HistoryLabels.undoBlocked(c))
+        assertNull(HistoryLabels.historyBlocked(c))
         assertEquals("Undo: Text (discarded)", HistoryLabels.performUndo(c))
         assertFalse(text.hasPendingWork)
         assertEquals(1, c.undoManager.undoCount)
         // Other tools are never blocked.
         c.selectTool(ToolId.BRUSH)
-        assertNull(HistoryLabels.undoBlocked(c))
+        assertNull(HistoryLabels.historyBlocked(c))
         assertEquals("Undo: Brush", HistoryLabels.performUndo(c))
         assertEquals(0, c.undoManager.undoCount)
+
+        // Redo neither closes an open editor (an untouched edit would be dropped by redo)...
+        c.selectTool(ToolId.TEXT)
+        text.startTextAt(30f, 20f)
+        assertTrue(text.editorOpen)
+        assertEquals(HistoryLabels.BLOCKED_BY_TEXT_EDITOR, HistoryLabels.performRedo(c))
+        assertTrue("the editor stays open", text.editorOpen)
+        assertEquals("nothing redone", 0, c.undoManager.undoCount)
+        // ...and works as before once it is closed.
+        text.cancelEditor()
+        c.selectTool(ToolId.BRUSH)
+        assertEquals("Redo: Brush", HistoryLabels.performRedo(c))
+        assertEquals(1, c.undoManager.undoCount)
     }
 
     /**

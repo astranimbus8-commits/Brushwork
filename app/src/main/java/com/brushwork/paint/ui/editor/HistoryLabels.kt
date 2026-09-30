@@ -13,26 +13,35 @@ import com.brushwork.paint.tools.vector.CurveTool
  */
 internal object HistoryLabels {
     /**
-     * Why undo must wait right now, or null. While the text editor is open (shown, or minimized
-     * to its pill while the canvas is used: the hotbar and the canvas stay usable) the text being
-     * typed is not history yet; undo would throw the whole text away, so the editor's OK / Cancel
-     * finish it first. (Redo already does nothing while there is pending text.)
+     * Why undo / redo must wait right now, or null. While the text editor is open (shown, or
+     * minimized to its pill while the canvas is used: the hotbar and the canvas stay usable) the
+     * text being typed is not history yet: undo would throw the whole text away, and redo would
+     * drop an untouched edit and close the editor under the user. The editor's OK / Cancel
+     * finish it first.
      */
-    fun undoBlocked(c: EditorController): String? {
+    fun historyBlocked(c: EditorController): String? {
         val text = c.currentTool as? TextTool ?: return null
-        return if (text.editorOpen && c.filterSession == null) UNDO_BLOCKED_BY_TEXT else null
+        return if (text.editorOpen && c.filterSession == null) BLOCKED_BY_TEXT_EDITOR else null
     }
 
-    const val UNDO_BLOCKED_BY_TEXT = "Finish the text first: OK or Cancel"
+    const val BLOCKED_BY_TEXT_EDITOR = "Finish the text first: OK or Cancel"
 
     /**
-     * Undoes (see [EditorController.undo]) unless [undoBlocked]; returns the feedback text either
-     * way. Used by the hotbar's Undo and the canvas' two-finger tap.
+     * Undoes (see [EditorController.undo]) unless [historyBlocked]; returns the feedback text
+     * either way. Used by the hotbar's Undo and the canvas' two-finger tap.
      */
     fun performUndo(c: EditorController): String {
-        undoBlocked(c)?.let { return it }
+        historyBlocked(c)?.let { return it }
         val label = undo(c)
         c.undo()
+        return label
+    }
+
+    /** Redo counterpart of [performUndo] (the hotbar's Redo, the three-finger tap). */
+    fun performRedo(c: EditorController): String {
+        historyBlocked(c)?.let { return it }
+        val label = redo(c)
+        c.redo()
         return label
     }
 

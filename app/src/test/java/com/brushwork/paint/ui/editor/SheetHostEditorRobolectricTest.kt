@@ -327,7 +327,7 @@ class SheetHostEditorRobolectricTest {
         click("Undo", exact = true)
         assertTrue(text.editorOpen)
         assertEquals("Hello", text.item?.text)
-        assertTrue("it says why", has(HistoryLabels.UNDO_BLOCKED_BY_TEXT, exact = true))
+        assertTrue("it says why", has(HistoryLabels.BLOCKED_BY_TEXT_EDITOR, exact = true))
         // Zooming the canvas minimizes the editor; the text and the editor stay.
         val z0 = s.c.viewTransform.zoom
         s.pinchAt(s.freeCanvasSpot(SmokeUi.sheetPanel()!!.bounds.top))

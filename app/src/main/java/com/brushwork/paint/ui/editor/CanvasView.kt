@@ -772,8 +772,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             }
             TouchGestureClassifier.Tap.THREE_FINGER -> if (settings.threeFingerRedo) {
                 revertView()
-                val label = HistoryLabels.redo(controller)
-                controller.redo()
+                val label = HistoryLabels.performRedo(controller)
                 onTapAction?.invoke(label)
             }
             TouchGestureClassifier.Tap.NONE -> {}

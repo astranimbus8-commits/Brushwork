@@ -251,9 +251,7 @@ fun Hotbar(
                 Icons.AutoMirrored.Filled.Redo, "Redo",
                 {
                     controller.endCanvasGesture()
-                    val label = HistoryLabels.redo(controller)
-                    controller.redo()
-                    onHistory(label)
+                    onHistory(HistoryLabels.performRedo(controller))
                 },
                 enabled = redoEnabled,
             )
