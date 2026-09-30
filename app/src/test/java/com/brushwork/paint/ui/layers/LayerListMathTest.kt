@@ -8,6 +8,26 @@ import org.junit.Test
 class LayerListMathTest {
 
     @Test
+    fun layersWindowIsSmallInPortraitAndWideOnShortScreens() {
+        // The user's phone (ZTE Axon 50 Lite, ~392 x 875 dp): 300 dp wide, half the height.
+        assertEquals(WindowDp(300, 438), LayerListMath.windowSize(392, 875))
+        // A 360 dp phone: 78 % of the width.
+        assertEquals(WindowDp(281, 380), LayerListMath.windowSize(360, 760))
+        // Tablets get a slightly wider window.
+        assertEquals(WindowDp(360, 640), LayerListMath.windowSize(800, 1280))
+        assertEquals(WindowDp(360, 400), LayerListMath.windowSize(1280, 800))
+        // A phone in landscape: short, so wider and as tall as the chrome allows (the host clamps).
+        assertTrue(LayerListMath.isShortScreen(392))
+        assertEquals(WindowDp(520, 392), LayerListMath.windowSize(875, 392))
+        assertEquals(WindowDp(494, 360), LayerListMath.windowSize(760, 360))
+        assertEquals("never narrower than the side-by-side layout", 380, LayerListMath.windowSize(500, 320).width)
+        assertEquals("but never wider than the screen", 300, LayerListMath.windowSize(300, 300).width)
+        // Degenerate sizes don't crash.
+        assertTrue(LayerListMath.windowSize(0, 0).width > 0)
+        assertEquals(240, LayerListMath.windowSize(360, 480).height)
+    }
+
+    @Test
     fun displayAndDocumentIndicesAreMirrored() {
         val n = 5
         assertEquals(4, LayerListMath.displayToDoc(0, n)) // top row = last document layer

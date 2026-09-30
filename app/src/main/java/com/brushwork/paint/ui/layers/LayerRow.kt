@@ -54,9 +54,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
 /** Height of every layer row (uniform so drag-reorder index math stays simple). */
-internal val LAYER_ROW_HEIGHT = 60.dp
-internal val THUMB_SIZE = 48.dp
-private val CLIP_GUTTER = 22.dp
+internal val LAYER_ROW_HEIGHT = 52.dp
+internal val THUMB_SIZE = 40.dp
+private val CLIP_GUTTER = 16.dp
 
 /**
  * Immutable snapshot of what a row shows. Layer objects are mutable and not observable (and
@@ -139,7 +139,7 @@ internal fun LayerRow(
             .background(background)
             .then(if (row.active) Modifier.border(1.dp, BrushworkColors.Accent.copy(alpha = 0.7f), shape) else Modifier)
             .clickable(onClickLabel = "Select layer", onClick = onSelect)
-            .padding(start = 4.dp),
+            .padding(start = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (row.clip.clipped) ClipBracket(row.clip, Modifier.width(CLIP_GUTTER).fillMaxHeight())
@@ -157,7 +157,7 @@ internal fun LayerRow(
             if (row.hasMask) {
                 val maskImage = thumbs.mask(row.layer)
                 if (maskImage != null) {
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(2.dp))
                     Thumbnail(
                         image = maskImage,
                         aspect = docAspect,
@@ -170,7 +170,7 @@ internal fun LayerRow(
                 }
             }
         }
-        Spacer(Modifier.width(8.dp))
+        Spacer(Modifier.width(6.dp))
         Column(Modifier.weight(1f).alpha(dim), verticalArrangement = Arrangement.Center) {
             Text(
                 row.name,
@@ -182,7 +182,7 @@ internal fun LayerRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     "${row.blendMode.label} · ${(row.opacity * 100f).roundToInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
                     color = BrushworkColors.OnChromeDim,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -206,7 +206,7 @@ internal fun LayerRow(
                 }
             }
         }
-        IconButton(onClick = onToggleVisible, modifier = Modifier.size(44.dp)) {
+        IconButton(onClick = onToggleVisible, modifier = Modifier.size(40.dp)) {
             Icon(
                 if (row.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
                 contentDescription = if (row.visible) "Hide layer" else "Show layer",

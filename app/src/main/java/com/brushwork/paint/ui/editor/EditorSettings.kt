@@ -22,6 +22,7 @@ class EditorPrefs(private val settings: AppSettings) {
     private var _threeFingerRedo by mutableStateOf(settings.threeFingerRedo)
     private var _stylusOnly by mutableStateOf(settings.stylusOnlyDrawing)
     private var _leftHanded by mutableStateOf(settings.leftHanded)
+    private var _holdToPick by mutableStateOf(settings.longPressEyedropper)
     private var _autosave by mutableIntStateOf(settings.autosaveSeconds)
 
     var twoFingerUndo: Boolean
@@ -36,10 +37,15 @@ class EditorPrefs(private val settings: AppSettings) {
         get() = _stylusOnly
         set(v) { _stylusOnly = v; settings.stylusOnlyDrawing = v }
 
-    /** Side sliders on the right edge. */
+    /** Slider values and the eyedropper on the left of the slider bar. */
     var leftHanded: Boolean
         get() = _leftHanded
         set(v) { _leftHanded = v; settings.leftHanded = v }
+
+    /** Holding a finger still on the canvas picks the color under it (color tools). */
+    var longPressEyedropper: Boolean
+        get() = _holdToPick
+        set(v) { _holdToPick = v; settings.longPressEyedropper = v }
 
     var autosaveSeconds: Int
         get() = _autosave
@@ -63,12 +69,18 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit) {
             { prefs.stylusOnlyDrawing = it },
             description = "Fingers pan, zoom and rotate; only a stylus paints. Resting your palm never draws.",
         )
+        ToggleRow(
+            "Hold finger to pick color",
+            prefs.longPressEyedropper,
+            { prefs.longPressEyedropper = it },
+            description = "With the brush, bucket, shapes, curves or text, keep a finger still on the canvas to pick the color under it",
+        )
         SectionHeader("Layout")
         ToggleRow(
             "Left-handed layout",
             prefs.leftHanded,
             { prefs.leftHanded = it },
-            description = "Brush size and opacity sliders on the right edge",
+            description = "Brush size and opacity values and the eyedropper on the left of the slider bar",
         )
         SectionHeader("Autosave every")
         val choices = EditorPrefs.AUTOSAVE_CHOICES

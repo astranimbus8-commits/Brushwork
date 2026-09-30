@@ -13,7 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
@@ -28,6 +27,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.CenterFocusStrong
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CropRotate
 import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FitScreen
@@ -86,16 +87,19 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/** Sheets and dialogs the editor can show (one at a time). */
-enum class EditorPanel { TOOLS, BRUSH, COLOR, LAYERS, FILTERS, SELECTION, CANVAS, RULER, GRID, STABILIZER, SETTINGS }
+/** Sheets and dialogs the editor can show (one at a time; the layers window is separate). */
+enum class EditorPanel { TOOLS, BRUSH, COLOR, FILTERS, SELECTION, CANVAS, RULER, GRID, STABILIZER, SETTINGS }
 
 /** Panels that edit the document, the selection, the active layer or the tool: closed while a filter is previewed. */
 private val PANELS_BLOCKED_BY_FILTER = setOf(
-    EditorPanel.TOOLS, EditorPanel.BRUSH, EditorPanel.COLOR, EditorPanel.LAYERS,
+    EditorPanel.TOOLS, EditorPanel.BRUSH, EditorPanel.COLOR,
     EditorPanel.FILTERS, EditorPanel.SELECTION, EditorPanel.CANVAS,
 )
 
-/** The painting screen: canvas view, hotbar, top bar, side sliders, menus, panels. */
+/**
+ * The painting screen: canvas view, top bar + tool options, the brush slider bar above the
+ * hotbar, the floating selection bar and layers window, menus and panels.
+ */
 @Composable
 fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: () -> Unit) {
     val context = LocalContext.current
@@ -103,6 +107,13 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     val prefs = remember(controller) { EditorPrefs(controller.settings) }
     val actions = remember(controller, context) { EditorActions(controller, context) }
     var panel by rememberSaveable { mutableStateOf<EditorPanel?>(null) }
+    // The layers window is not modal (the canvas stays usable), so it lives beside [panel]; it
+    // hides while a sheet or dialog is up and comes back when that closes.
+    var layersOpen by rememberSaveable { mutableStateOf(false) }
+    // Typed brush size / opacity (tapping a value of the slider bar).
+    var editingValue by remember { mutableStateOf<SliderKind?>(null) }
+    // The clipboard content whose paste bar the user hid (shown again for a new copy).
+    var hiddenClipboard by remember { mutableStateOf<EditorController.ClipboardImage?>(null) }
     // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
     val canvasRef = remember { arrayOfNulls<CanvasView>(1) }
     val closePanel = { panel = null }
@@ -123,17 +134,20 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         }
     }
 
-    // Chrome sizes (px), reported to the canvas so the initial fit centers between them.
+    // Chrome sizes (px), reported to the canvas so the initial fit centers between them. The
+    // bottom one is the slider bar + hotbar (never the floating ✓/✕ buttons, which come and go).
     var topChromePx by remember { mutableIntStateOf(0) }
     var bottomChromePx by remember { mutableIntStateOf(0) }
+    var selectionBarPx by remember { mutableIntStateOf(0) }
 
-    // Undo/redo tap feedback (texts are kept while the chips fade out).
+    // Undo/redo feedback (canvas taps and hotbar buttons; texts are kept while the chips fade out).
     var tapText by remember { mutableStateOf("") }
     var tapVisible by remember { mutableStateOf(false) }
     var tapSerial by remember { mutableIntStateOf(0) }
     LaunchedEffect(tapSerial) {
         if (tapSerial > 0) { delay(1200); tapVisible = false }
     }
+    val showFeedback: (String) -> Unit = { text -> tapText = text; tapVisible = true; tapSerial++ }
     // Zoom/rotation readout while pinching, lingering briefly afterwards.
     var gestureInfo by remember { mutableStateOf(ViewGestureInfo(1f, 0f)) }
     var gestureActive by remember { mutableStateOf(false) }
@@ -203,11 +217,27 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     // active layer (or exports without the preview) waits until it is applied or cancelled.
     val docActionsEnabled = session == null
     LaunchedEffect(session) {
-        if (session != null && panel in PANELS_BLOCKED_BY_FILTER) panel = null
+        if (session != null) {
+            if (panel in PANELS_BLOCKED_BY_FILTER) panel = null
+            layersOpen = false
+            editingValue = null
+        }
     }
     // Back stops a cancellable operation; otherwise it waits for the operation to finish.
     BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
+    // The layers window is not a dialog: Back closes it before leaving the editor.
+    BackHandler(enabled = busy == null && session == null && layersOpen && panel == null) { layersOpen = false }
+
+    val tool = controller.currentTool
+    val pendingWork = session == null && tool.hasPendingWork
+    val clipboard = controller.clipboard
+    val hasSelection = controller.selection != null
+    val layersVisible = layersOpen && session == null && panel == null
+    // The selection bar steps aside for tool work in progress (its ✓/✕ come first), filters,
+    // long operations and the selection menu itself.
+    val selectionBarVisible = session == null && busy == null && !tool.hasPendingWork && panel != EditorPanel.SELECTION &&
+        (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
 
     Box(Modifier.fillMaxSize().background(BrushworkColors.CanvasBackdrop)) {
         // ------------------------------------------------------------ canvas (full bleed)
@@ -216,7 +246,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                 factory = { ctx -> CanvasView(ctx, controller).also { canvasRef[0] = it } },
                 modifier = Modifier.fillMaxSize(),
                 update = { v ->
-                    v.onTapAction = { text -> tapText = text; tapVisible = true; tapSerial++ }
+                    v.onTapAction = showFeedback
                     v.onViewGesture = { info ->
                         if (info != null) {
                             gestureInfo = info; gestureActive = true; gestureVisible = true
@@ -237,6 +267,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                 Modifier
                     .fillMaxWidth()
                     .background(BrushworkColors.Chrome)
+                    .blockCanvasTouches()
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)),
             ) {
                 controller.docVersion // size changes (canvas resize) refresh the subtitle
@@ -254,7 +285,15 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                         BarAction("Stabilizer", Icons.Filled.Draw, selected = stabilizerOn) { panel = EditorPanel.STABILIZER },
                     ),
                     menu = listOf(
-                        MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled) { launchImport() },
+                        MenuEntry(if (hasSelection) "Copy selection" else "Copy layer", Icons.Filled.ContentCopy, enabled = docActionsEnabled) {
+                            controller.endCanvasGesture()
+                            controller.copySelection()
+                        },
+                        MenuEntry("Paste", Icons.Filled.ContentPaste, enabled = docActionsEnabled && clipboard != null) {
+                            controller.endCanvasGesture()
+                            controller.paste()
+                        },
+                        MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled, dividerBefore = true) { launchImport() },
                         MenuEntry("Export PNG", Icons.Filled.SaveAlt, enabled = docActionsEnabled) { requestExport(ExportFormat.PNG) },
                         MenuEntry("Export JPG", Icons.Filled.Image, enabled = docActionsEnabled) { requestExport(ExportFormat.JPEG) },
                         MenuEntry("Share", Icons.Filled.Share, enabled = docActionsEnabled) { actions.share() },
@@ -278,6 +317,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                     Modifier
                         .fillMaxWidth()
                         .background(BrushworkColors.Chrome.copy(alpha = 0.82f))
+                        .blockCanvasTouches()
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                 ) {
                     ToolOptionsBar(controller, Modifier.fillMaxWidth())
@@ -287,35 +327,11 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
 
         val topDp = with(density) { topChromePx.toDp() }
         val bottomDp = with(density) { bottomChromePx.toDp() }
-
-        // ------------------------------------------------------------ side sliders
-        if (session == null) {
-            BoxWithConstraints(
-                Modifier
-                    .fillMaxSize()
-                    .padding(top = topDp + 8.dp, bottom = bottomDp + 76.dp)
-                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
-            ) {
-                // Two sliders + labels + eyedropper need ~130dp besides the tracks.
-                val stacked = (maxHeight - 130.dp) / 2
-                val sideBySide = stacked < 90.dp
-                val length = if (sideBySide) (maxHeight - 90.dp).coerceIn(60.dp, 200.dp) else stacked.coerceAtMost(190.dp)
-                SideSliders(
-                    controller = controller,
-                    sliderLength = length,
-                    sideBySide = sideBySide,
-                    onDragChange = { draggingSlider = it },
-                    modifier = Modifier
-                        .align(if (prefs.leftHanded) Alignment.CenterEnd else Alignment.CenterStart)
-                        .padding(horizontal = 6.dp),
-                )
-            }
-        }
+        val selectionBarDp = if (selectionBarVisible) with(density) { selectionBarPx.toDp() } + 6.dp else 0.dp
 
         // ------------------------------------------------------------ bottom chrome
         Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            val tool = controller.currentTool
-            if (session == null && tool.hasPendingWork) {
+            if (pendingWork && !layersVisible) {
                 PendingWorkBar(controller, tool, Modifier.padding(bottom = 12.dp))
             }
             if (session != null) {
@@ -329,20 +345,73 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
                     FilterSessionPanel(session, Modifier.fillMaxWidth())
                 }
             } else {
-                Hotbar(
+                Column(Modifier.fillMaxWidth().onSizeChanged { bottomChromePx = it.height }) {
+                    // Brush size + opacity directly above the hotbar.
+                    BrushSliderBar(
+                        controller = controller,
+                        leftHanded = prefs.leftHanded,
+                        onDragChange = { draggingSlider = it },
+                        onEditValue = { kind -> controller.endCanvasGesture(); editingValue = kind },
+                    )
+                    Hotbar(
+                        controller = controller,
+                        onToolPicker = { panel = EditorPanel.TOOLS },
+                        onBrushPanel = { panel = EditorPanel.BRUSH },
+                        onColorPanel = { panel = EditorPanel.COLOR },
+                        onLayersPanel = { layersOpen = !layersVisible },
+                        layersOpen = layersVisible,
+                        onHistory = showFeedback,
+                    )
+                }
+            }
+        }
+
+        // ------------------------------------------------------------ selection actions
+        if (selectionBarVisible) {
+            SelectionActionBar(
+                controller = controller,
+                onMore = { panel = EditorPanel.SELECTION },
+                onHide = if (hasSelection) null else ({ hiddenClipboard = controller.clipboard }),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(top = topDp + 6.dp, start = 8.dp, end = 8.dp)
+                    .onSizeChanged { selectionBarPx = it.height },
+            )
+        }
+
+        // ------------------------------------------------------------ layers window (non-modal)
+        if (layersVisible) {
+            // Only the window itself takes touches: the canvas around it keeps working.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(top = topDp + selectionBarDp + 8.dp, bottom = bottomDp + 8.dp, end = 8.dp),
+            ) {
+                LayersPanel(
                     controller = controller,
-                    onToolPicker = { panel = EditorPanel.TOOLS },
-                    onBrushPanel = { panel = EditorPanel.BRUSH },
-                    onColorPanel = { panel = EditorPanel.COLOR },
-                    onLayersPanel = { panel = EditorPanel.LAYERS },
-                    modifier = Modifier.onSizeChanged { bottomChromePx = it.height },
+                    onDismiss = { layersOpen = false },
+                    onImportPicture = { launchImport() },
+                    modifier = Modifier.align(Alignment.BottomEnd),
+                )
+            }
+            if (pendingWork) {
+                // The window covers the middle of the bottom: the ✓/✕ move to the free left edge.
+                PendingWorkBar(
+                    controller, tool,
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                        .padding(start = 10.dp, bottom = bottomDp + 12.dp),
+                    vertical = true,
                 )
             }
         }
 
         // ------------------------------------------------------------ transient feedback
         Column(
-            Modifier.align(Alignment.TopCenter).padding(top = topDp + 12.dp),
+            Modifier.align(Alignment.TopCenter).padding(top = topDp + selectionBarDp + 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             AnimatedVisibility(visible = tapVisible, enter = fadeIn(), exit = fadeOut()) { InfoChip(tapText) }
@@ -370,7 +439,6 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         EditorPanel.TOOLS -> ToolPickerSheet(controller, closePanel)
         EditorPanel.BRUSH -> BrushPanel(controller, closePanel)
         EditorPanel.COLOR -> ColorPickerPanel(controller, closePanel)
-        EditorPanel.LAYERS -> LayersPanel(controller, closePanel, onImportPicture = { panel = null; launchImport() })
         EditorPanel.FILTERS -> FilterBrowser(controller, closePanel)
         EditorPanel.SELECTION -> SelectionPanel(controller, closePanel)
         EditorPanel.CANVAS -> CanvasAdjustDialog(controller, closePanel)
@@ -380,4 +448,6 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel)
         null -> {}
     }
+    editingValue?.let { kind -> BrushValueDialog(controller, kind) { editingValue = null } }
 }
+

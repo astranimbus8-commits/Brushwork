@@ -5,7 +5,7 @@ import kotlin.math.ln
 import kotlin.math.exp
 import kotlin.math.roundToInt
 
-/** Value mappings and labels for the editor's side sliders and size readouts. */
+/** Value mappings, labels and typed-value parsing for the editor's brush sliders and readouts. */
 object SliderMath {
     const val MIN_BRUSH_SIZE = 0.5f
     const val MAX_BRUSH_SIZE = 1000f
@@ -25,7 +25,8 @@ object SliderMath {
     /** 0.1 px steps below 10 px, whole pixels above. */
     fun roundSize(size: Float): Float = if (size < 10f) (size * 10f).roundToInt() / 10f else size.roundToInt().toFloat()
 
-    fun formatSize(size: Float): String = Units.formatNumber(size.toDouble(), if (size < 10f) 1 else 0)
+    /** "2.5", "12", "12.5" (a typed size keeps its tenth), "120". */
+    fun formatSize(size: Float): String = Units.formatNumber(size.toDouble(), 1)
 
     fun formatPercent(fraction: Float): String = "${(fraction.coerceIn(0f, 1f) * 100f).roundToInt()}%"
 
@@ -33,5 +34,51 @@ object SliderMath {
     fun formatZoom(scale: Float): String {
         val pct = scale * 100f
         return if (pct < 10f) "${Units.formatNumber(pct.toDouble(), 1)}%" else "${pct.roundToInt()}%"
+    }
+
+    // ------------------------------------------------------------------ typed values
+
+    /**
+     * Parses a number the user typed ("12.5", "12,5", "12.5 px", "85 %"), clamped to
+     * [min]..[max]. Null for anything that is not a finite number (the input is then ignored).
+     */
+    fun parseValue(text: String, min: Double, max: Double): Double? {
+        val cleaned = text.trim().removeSuffix("%").removeSuffix("px").removeSuffix("PX").trim()
+        if (cleaned.isEmpty()) return null
+        val v = Units.parse(cleaned)?.takeIf { it.isFinite() } ?: return null
+        return v.coerceIn(min, max)
+    }
+
+    /** A typed brush size in px (clamped, to the tenth of a pixel), or null for invalid text. */
+    fun parseSize(text: String): Float? =
+        parseValue(text, MIN_BRUSH_SIZE.toDouble(), MAX_BRUSH_SIZE.toDouble())
+            ?.let { ((it * 10.0).roundToInt() / 10f).coerceIn(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE) }
+
+    /** A typed opacity in percent ("85" or "85%") as a 0..1 fraction in whole percents, or null. */
+    fun parsePercent(text: String): Float? = parseValue(text, 0.0, 100.0)?.let { it.roundToInt() / 100f }
+
+    /**
+     * The next brush size for a -/+ button: steps that grow with the size (0.1 px for tiny
+     * brushes, 5 px for huge ones), always landing on a multiple of the step.
+     */
+    fun stepSize(size: Float, up: Boolean): Float {
+        val s = size.coerceIn(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE)
+        // Going down, the step of the range just below applies (100 -> 99, not 95).
+        val probe = if (up) s else s - 0.0001f
+        val step = when {
+            probe < 2f -> 0.1f
+            probe < 10f -> 0.5f
+            probe < 100f -> 1f
+            else -> 5f
+        }
+        val k = s / step
+        val next = if (up) (kotlin.math.floor(k + 1e-3f) + 1f) * step else (kotlin.math.ceil(k - 1e-3f) - 1f) * step
+        return roundSize(next).coerceIn(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE)
+    }
+
+    /** The next opacity (0..1) for a -/+ button: whole 1 % steps. */
+    fun stepPercent(fraction: Float, up: Boolean): Float {
+        val pct = (fraction.coerceIn(0f, 1f) * 100f).roundToInt()
+        return ((pct + if (up) 1 else -1).coerceIn(0, 100)) / 100f
     }
 }
