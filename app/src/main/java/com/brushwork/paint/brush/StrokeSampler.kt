@@ -38,6 +38,33 @@ class StrokeSampler(
     private var midP = 1f
     private var toNext = 0f
 
+    /** Everything the sampler carries from one input point to the next (see [snapshot]). */
+    class State internal constructor(
+        internal val length: Float,
+        internal val lastSampleDistance: Float,
+        internal val isStarted: Boolean,
+        internal val lastX: Float,
+        internal val lastY: Float,
+        internal val lastP: Float,
+        internal val midX: Float,
+        internal val midY: Float,
+        internal val midP: Float,
+        internal val toNext: Float,
+    )
+
+    /** The current state; [restore] brings it back (a stroke re-rendered from a point on). */
+    fun snapshot(): State = State(length, lastSampleDistance, isStarted, lastX, lastY, lastP, midX, midY, midP, toNext)
+
+    /** Returns to a [snapshot] of this sampler: later input continues exactly as it did then. */
+    fun restore(s: State) {
+        length = s.length
+        lastSampleDistance = s.lastSampleDistance
+        isStarted = s.isStarted
+        lastX = s.lastX; lastY = s.lastY; lastP = s.lastP
+        midX = s.midX; midY = s.midY; midP = s.midP
+        toNext = s.toNext
+    }
+
     /** Starts a stroke; emits the first sample at the start point. */
     fun begin(x: Float, y: Float, pressure: Float) {
         isStarted = true

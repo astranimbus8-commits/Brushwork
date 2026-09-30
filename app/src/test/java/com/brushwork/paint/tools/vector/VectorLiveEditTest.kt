@@ -285,7 +285,7 @@ class VectorLiveEditTest {
         layer.bitmap.eraseColor(red)
         val preview = BrushStrokePreview(c) { ToolId.ERASER }
         val path = VectorPath.polyline(listOf(Vec2(20f, 100f), Vec2(180f, 100f)))
-        preview.request(path.ops) { brushStrokePoints(path) }
+        preview.request(path.ops) { brushStrokeInput(path, out = it) }
         preview.flush()
         assertTrue(preview.isLive)
         assertNotNull(c.renderOverride)
@@ -294,9 +294,9 @@ class VectorLiveEditTest {
         preview.cancel()
         assertNull(c.renderOverride)
         assertEquals(red, c.composite().getPixel(100, 100))
-        preview.request(path.ops) { brushStrokePoints(path) }
+        preview.request(path.ops) { brushStrokeInput(path, out = it) }
         preview.flush()
-        assertTrue(preview.commit(path.ops) { brushStrokePoints(path) })
+        assertTrue(preview.commit(path.ops) { brushStrokeInput(path, out = it) })
         assertEquals(0, alpha(layer.bitmap.getPixel(100, 100)))
         assertEquals(red, layer.bitmap.getPixel(100, 150))
         assertEquals(1, c.undoManager.undoCount)
@@ -314,16 +314,16 @@ class VectorLiveEditTest {
         fun pixels() = IntArray(200 * 200).also { layer.bitmap.getPixels(it, 0, 200, 0, 0, 200, 200) }
         val preview = BrushStrokePreview(c) { ToolId.SMUDGE }
         val path = VectorPath.polyline(listOf(Vec2(60f, 100f), Vec2(160f, 100f)))
-        preview.request(path.ops) { brushStrokePoints(path) }
+        preview.request(path.ops) { brushStrokeInput(path, out = it) }
         preview.flush()
         assertTrue(preview.isLive)
         assertFalse("smudge previews in the pixels", before.contentEquals(pixels()))
         preview.cancel()
         assertTrue("cancel leaves no trace", before.contentEquals(pixels()))
         assertFalse(c.canUndo)
-        preview.request(path.ops) { brushStrokePoints(path) }
+        preview.request(path.ops) { brushStrokeInput(path, out = it) }
         preview.flush()
-        assertTrue(preview.commit(path.ops) { brushStrokePoints(path) })
+        assertTrue(preview.commit(path.ops) { brushStrokeInput(path, out = it) })
         assertEquals(1, c.undoManager.undoCount)
         c.undo()
         assertTrue(before.contentEquals(pixels()))

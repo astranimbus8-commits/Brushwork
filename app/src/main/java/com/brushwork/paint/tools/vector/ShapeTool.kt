@@ -268,6 +268,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             started = true
             if (mode == Mode.CREATE && box == null) targetLayer = controller.doc.activeLayer
+            // A brush outline follows the finger as a light draft until it lifts.
+            brushPreview.interacting = true
         }
         when (mode) {
             Mode.NONE -> return
@@ -331,9 +333,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         startBox = null
         handle = null
+        // The drag is over: the final shape's brush outline is refined once it rests a moment.
+        brushPreview.interacting = false
     }
 
     override fun onCancel() {
+        brushPreview.interacting = false
         when (mode) {
             Mode.CREATE -> creatingBox = null
             Mode.NONE -> {}
@@ -362,6 +367,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         pinchStart = bx
         pinchFocus = focus
+        brushPreview.interacting = true
         return true
     }
 
@@ -375,10 +381,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val start = pinchStart ?: return
         pinchStart = null
-        if (cancelled) {
-            box = start
-            refreshPreview()
-        }
+        brushPreview.interacting = false
+        if (cancelled) box = start
+        refreshPreview()
     }
 
     /**
@@ -505,7 +510,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushBox, brush = true))
             val path = brushOutline(brushBox)
             if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
-            brushPreview.request(path.ops) { brushStrokePoints(path) }
+            brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
@@ -542,7 +547,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 brushPreview.cancel()
                 VectorCommit.commit(controller, layer, listOf(spec), "Shape")
             }
-            if (path != null) brushPreview.commit(path.ops) { brushStrokePoints(path) }
+            if (path != null) brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) }
         }
         brushPreview.end()
         controller.invalidateOverlay()

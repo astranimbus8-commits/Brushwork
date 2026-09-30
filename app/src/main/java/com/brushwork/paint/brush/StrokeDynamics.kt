@@ -61,7 +61,16 @@ class StrokeDynamics(
     seed: Long,
     sizeOverride: Float? = null,
 ) {
-    private val rng = Random(seed)
+    private val rng = CountingRandom(seed)
+
+    /** Random values drawn so far (see [restoreRandom]). */
+    val randomDraws: Long get() = rng.draws
+
+    /**
+     * Puts the random sequence back to where it was after [draws] values, so dabs created from
+     * there on get exactly the random values they got the first time.
+     */
+    fun restoreRandom(draws: Long) = rng.restore(draws)
     private val variants = TipShapes.variants(preset.tip)
     private val randomRotation = TipShapes.isTextured(preset.tip)
 
@@ -147,6 +156,34 @@ class StrokeDynamics(
         }
         dab.diameter = d
         dab.alpha = a.coerceIn(0f, 1f)
+    }
+
+    /**
+     * `Random(seed)` that counts its draws and can go back to an earlier position. Every value
+     * of kotlin.random.Random comes from [nextBits], and the seeded generator advances one step
+     * per call whatever the bit count, so the sequence is exactly that of `Random(seed)`.
+     */
+    private class CountingRandom(private val seed: Long) : Random() {
+        private var inner = Random(seed)
+        var draws = 0L
+            private set
+
+        override fun nextBits(bitCount: Int): Int {
+            draws++
+            return inner.nextBits(bitCount)
+        }
+
+        fun restore(target: Long) {
+            val n = target.coerceAtLeast(0L)
+            if (n < draws) {
+                inner = Random(seed)
+                draws = 0L
+            }
+            while (draws < n) {
+                inner.nextInt()
+                draws++
+            }
+        }
     }
 
     companion object {

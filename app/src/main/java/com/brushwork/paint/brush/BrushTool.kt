@@ -18,8 +18,12 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import kotlin.math.ceil
 import kotlin.math.hypot
+import kotlin.math.log2
 import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.pow
 
 /**
  * Painting tool for BRUSH, ERASER, SMUDGE and BLUR (preset = controller.presetFor(id)).
@@ -48,27 +52,98 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     /** True while a stroke is in progress. */
     val isStroking: Boolean get() = stroke != null
 
+    /**
+     * True while the stroke in progress is a path stroke ([beginPath]) with parts drawn as a
+     * draft (fewer dabs, see [updatePath]); an exact update or [onUp] makes it exact.
+     */
+    val isDraft: Boolean get() = (stroke as? BufferStroke)?.isDraft == true
+
     override fun onDown(p: ToolPoint) {
+        val s = start(p, System.nanoTime() xor (++strokeCounter * -0x61c8864680b583ebL)) ?: return
+        s.begin(p)
+    }
+
+    /** Cancels any stroke and creates a new one starting at [p] (null when the layer refuses). */
+    private fun start(p: ToolPoint, seed: Long): Stroke? {
         stroke?.let { stroke = null; it.cancel() }
         val layer = controller.activeLayer
-        if (!controller.checkEditable(layer)) return
+        if (!controller.checkEditable(layer)) return null
         val preset = preset.sanitized()
         val kind = StrokeKind.of(id, preset)
         val maskTarget = controller.editTargetOf(layer) == EditTarget.MASK
         if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget) {
             controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
-            return
+            return null
         }
-        val seed = System.nanoTime() xor (++strokeCounter * -0x61c8864680b583ebL)
         val s = try {
             if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget)
             else BufferStroke(layer, preset, kind, p, seed, maskTarget)
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for this brush")
-            return
+            return null
         }
         stroke = s
-        s.begin(p)
+        return s
+    }
+
+    // ------------------------------------------------------------------ path strokes
+
+    /**
+     * Starts an unfinished stroke along [input] (stylus points, so their pressure is honored),
+     * like [onDown] + [onMove] for every point, as the live preview of a vector path. [seed]
+     * fixes the random values of the dabs, so the same input always gives the same pixels;
+     * [updatePath] changes the path later and [onUp] finishes the stroke (one undo step) or
+     * [onCancel] drops it without a trace.
+     *
+     * With a [draftBudget] (> 0, in [dabCost] units) a long path is drawn with fewer dabs
+     * while a finger drags it (see [updatePath]). Returns false when nothing was started
+     * (fewer than two points, or the layer refused with a message).
+     */
+    fun beginPath(input: PathStrokeInput, seed: Long, draftBudget: Float = 0f): Boolean {
+        if (input.size < 2) return false
+        val first = ToolPoint(input.x[0], input.y[0], input.pressure[0], isStylus = true)
+        val s = start(first, seed) ?: return false
+        if (s is BufferStroke) {
+            s.startPath(input, draftBudget)
+        } else {
+            // Smudge / blur / watercolor dabs change the pixels as they go: no rewinding.
+            s.begin(first)
+            for (i in 1 until input.size) s.move(input.x[i], input.y[i], s.pressureOf(input.pressure[i]))
+        }
+        return true
+    }
+
+    /**
+     * Makes the stroke in progress (started by [beginPath]) follow [input] instead, re-rendering
+     * only from the first point that changed: the part before it is kept as it is on screen, so
+     * editing the end of a long path costs only its end. The result is exactly the stroke
+     * [beginPath] would draw for [input] with the same seed.
+     *
+     * With [draftBudget] > 0 (a finger is dragging) the re-rendered part is a draft whose dabs
+     * are spaced further apart (at most half the brush width; the flow compensates)
+     * when drawing it exactly would cost more than [draftBudget] ([dabCost] units per dab); an
+     * update with no budget, or [onUp], redraws the draft parts exactly.
+     *
+     * Returns false when the stroke can't be updated (no path stroke in progress, or a
+     * smudge / blur / watercolor stroke): the caller cancels it and starts again.
+     */
+    fun updatePath(input: PathStrokeInput, draftBudget: Float = 0f): Boolean {
+        val s = stroke as? BufferStroke ?: return false
+        if (!s.isPath || input.size < 2) return false
+        s.updatePath(input, draftBudget)
+        return true
+    }
+
+    /**
+     * Redraws the next part of a draft path stroke exactly, doing about [budget] ([pathDabCost]
+     * units) of work: the draft stays on screen beyond it, so a long stroke becomes exact over a
+     * few frames without stalling one. Once every part is exact the stroke is exactly the one
+     * [beginPath] draws. Returns true while parts are still drafts.
+     */
+    fun refinePath(budget: Float): Boolean {
+        val s = stroke as? BufferStroke ?: return false
+        if (!s.isPath) return false
+        return s.refine(budget)
     }
 
     override fun onMove(p: ToolPoint) {
@@ -128,11 +203,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val dynamics = StrokeDynamics(preset, isStylus, seed)
         val selection: Selection? = controller.selection
         val dirty = Rect()
-        private var spacingScale = 1f
-        private var lastX = first.x
-        private var lastY = first.y
+        protected var spacingScale = 1f
+        /** Draft spacing multiplier of a path stroke (see [updatePath]); 1 = exact. */
+        protected var draftScale = 1f
+        protected var lastX = first.x
+        protected var lastY = first.y
         val sampler = StrokeSampler(
-            spacingAt = { pr, d -> dynamics.spacing(pr, d) * spacingScale },
+            spacingAt = { pr, d -> dynamics.spacing(pr, d) * spacingScale * draftScale },
             onSample = { x, y, pr, d -> onDab(dynamics.newDab(x, y, pr, d)) },
         )
 
@@ -142,24 +219,31 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         /** Approximate pixel operations of one dab of diameter [d]. */
         open fun dabCost(d: Float): Float = d * d
 
-        fun pressureOf(p: ToolPoint): Float =
-            if (isStylus && !p.pressure.isNaN()) p.pressure.coerceIn(0f, 1f) else 1f
+        fun pressureOf(p: ToolPoint): Float = pressureOf(p.pressure)
 
-        fun begin(p: ToolPoint) {
-            sampler.begin(p.x, p.y, pressureOf(p))
+        fun pressureOf(pressure: Float): Float =
+            if (isStylus && !pressure.isNaN()) pressure.coerceIn(0f, 1f) else 1f
+
+        fun begin(p: ToolPoint) = begin(p.x, p.y, pressureOf(p))
+
+        fun begin(x: Float, y: Float, pressure: Float) {
+            sampler.begin(x, y, pressure)
             afterEvent()
         }
 
-        fun move(p: ToolPoint) {
-            limitCost(p)
-            sampler.add(p.x, p.y, pressureOf(p))
+        fun move(p: ToolPoint) = move(p.x, p.y, pressureOf(p))
+
+        /** Adds an input point ([pressure] already resolved by [pressureOf]). */
+        fun move(x: Float, y: Float, pressure: Float) {
+            limitCost(x, y)
+            sampler.add(x, y, pressure)
             afterEvent()
         }
 
         /** Ends the stroke (adding [p] as the last point) and commits it. */
-        fun finish(p: ToolPoint?) {
+        open fun finish(p: ToolPoint?) {
             if (p != null) {
-                limitCost(p)
+                limitCost(p.x, p.y)
                 sampler.add(p.x, p.y, pressureOf(p))
             }
             sampler.end()
@@ -167,10 +251,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
 
         /** Very large brushes on fast strokes would stall a frame: space their dabs further apart. */
-        private fun limitCost(p: ToolPoint) {
-            val len = hypot(p.x - lastX, p.y - lastY)
-            lastX = p.x
-            lastY = p.y
+        private fun limitCost(x: Float, y: Float) {
+            val len = hypot(x - lastX, y - lastY)
+            lastX = x
+            lastY = y
             val d = max(1f, dynamics.size)
             val nominal = max(StrokeDynamics.MIN_SPACING_PX, preset.spacing * d)
             val cost = len / nominal * dabCost(d)
@@ -252,9 +336,282 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         override fun onDab(dab: Dab) {
             dynamics.resolve(dab, null)
-            res.stamper.stamp(canvas, preset, dab)
+            // Spread draft dabs each lay down as much paint as the dabs they stand for together.
+            if (drafting && draftScale > 1f) dab.alpha = 1f - (1f - dab.alpha).pow(draftScale)
+            res.stamper.stamp(canvas, preset, dab, draft = drafting)
             dabs += dab
             addBounds(dab)
+        }
+
+        // ---------------------------------------------------------- path strokes
+
+        /** True for a stroke started by [beginPath] (it can be rewound and re-rendered). */
+        var isPath = false
+            private set
+
+        /** The input points fed so far, exactly as given. */
+        private var input = PathStrokeInput(0)
+        private val checkpoints = ArrayList<Checkpoint>()
+        /**
+         * First input point rendered as a draft (Int.MAX_VALUE: everything is exact). Drafts
+         * are always the end of the stroke: the dabs from [draftDabFrom] on.
+         */
+        private var draftFrom = Int.MAX_VALUE
+        private var draftDabFrom = Int.MAX_VALUE
+        /** New dabs are drafts (while [feedPlanned] feeds a draft). */
+        private var drafting = false
+        val isDraft: Boolean get() = draftFrom != Int.MAX_VALUE
+        /** Cells cleared by a rewind. */
+        private var cleared: CellGrid? = null
+        /** Cells to redraw on screen after an update. */
+        private var dirtyCells: CellGrid? = null
+        private val runRect = Rect()
+
+        fun startPath(points: PathStrokeInput, draftBudget: Float) {
+            isPath = true
+            val cs = cellSizeFor(dynamics.size)
+            cleared = CellGrid(docW, docH, cs)
+            dirtyCells = CellGrid(docW, docH, cs)
+            input = PathStrokeInput(max(256, points.size))
+            checkpoints += Checkpoint(-1, 0, sampler.snapshot(), 0L, points.x[0], points.y[0], 1f)
+            feedPlanned(points, 0, draftPlan(points, 0, draftBudget, mustDraft = false))
+            flushCells()
+        }
+
+        fun updatePath(points: PathStrokeInput, draftBudget: Float) {
+            val n = points.size
+            val old = input.size
+            val lim = min(n, old)
+            val ox = input.x; val oy = input.y; val op = input.pressure
+            val nx = points.x; val ny = points.y; val np = points.pressure
+            var i = 0
+            while (i < lim && ox[i] == nx[i] && oy[i] == ny[i] && op[i] == np[i]) i++
+            val exact = draftBudget <= 0f
+            if (i == n && n == old && (!exact || !isDraft)) return
+            // Everything up to the point before the first change stays (for an exact update:
+            // also before the first draft point); restart from the closest state kept for it.
+            var target = i - 1
+            if (exact) target = min(target, draftFrom - 1)
+            var k = checkpoints.lastIndex
+            while (k > 0 && checkpoints[k].input > target) k--
+            val cp = checkpoints[k]
+            // Drafts stay the end of the stroke: after a kept draft part, the rest is one too.
+            val plan = if (exact) null else draftPlan(points, cp.input + 1, draftBudget, mustDraft = draftFrom <= cp.input)
+            rewind(cp)
+            if (draftFrom > cp.input) {
+                // Every draft dab was removed.
+                draftFrom = Int.MAX_VALUE
+                draftDabFrom = Int.MAX_VALUE
+            }
+            feedPlanned(points, cp.input + 1, plan)
+            flushCells()
+        }
+
+        /** Feeds [points] from [from] on: exactly (null [plan]) or as a draft with that spacing multiplier. */
+        private fun feedPlanned(points: PathStrokeInput, from: Int, plan: Float?) {
+            if (plan != null && draftFrom == Int.MAX_VALUE) {
+                draftFrom = from
+                draftDabFrom = dabs.size
+            }
+            drafting = plan != null
+            draftScale = plan ?: 1f
+            try {
+                feed(points, from)
+            } finally {
+                drafting = false
+                draftScale = 1f
+            }
+        }
+
+        /**
+         * Feeds input points [from] until [until] of [points], recording a checkpoint every few
+         * points; [record] adds them to the stroke's input (false: they are already there).
+         */
+        private fun feed(points: PathStrokeInput, from: Int, until: Int = points.size, record: Boolean = true) {
+            for (i in from until until) {
+                val x = points.x[i]
+                val y = points.y[i]
+                val p = pressureOf(points.pressure[i])
+                if (i == 0) {
+                    lastX = x; lastY = y; spacingScale = 1f
+                    begin(x, y, p)
+                } else {
+                    move(x, y, p)
+                }
+                if (record) input.add(x, y, points.pressure[i])
+                if (i % CHECKPOINT_EVERY == 0) {
+                    checkpoints += Checkpoint(i, dabs.size, sampler.snapshot(), dynamics.randomDraws, lastX, lastY, spacingScale)
+                }
+            }
+        }
+
+        /**
+         * Goes back to the state after input point [Checkpoint.input]: the dabs drawn since are
+         * removed (see [removeDabs]), then the stroke continues from there.
+         */
+        private fun rewind(cp: Checkpoint) {
+            removeDabs(cp.dabCount, dabs.size)
+            restoreState(cp)
+            input.truncate(cp.input + 1)
+            while (checkpoints.last().input > cp.input) checkpoints.removeAt(checkpoints.lastIndex)
+        }
+
+        private fun restoreState(cp: Checkpoint) {
+            sampler.restore(cp.sampler)
+            dynamics.restoreRandom(cp.draws)
+            lastX = cp.lastX
+            lastY = cp.lastY
+            spacingScale = cp.spacingScale
+        }
+
+        /**
+         * Removes dabs [from] until [until] from the list and the coverage buffer: the cells
+         * they touched are cleared, then the other dabs reaching into those cells are redrawn
+         * there (clipped to them, in their order, drafts as drafts), so every pixel ends up as if
+         * the removed dabs had never been drawn.
+         */
+        private fun removeDabs(from: Int, until: Int) {
+            if (from >= until) return
+            val grid = cleared!!
+            val screen = dirtyCells!!
+            grid.clear()
+            for (k in from until until) {
+                val d = dabs[k]
+                if (d.hasBounds) grid.mark(d.left, d.top, d.right, d.bottom)
+            }
+            grid.forEachRun { row, c0, c1 ->
+                grid.runRect(row, c0, c1, runRect)
+                canvas.save()
+                canvas.clipRect(runRect)
+                canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+                canvas.restore()
+                screen.mark(runRect)
+            }
+            val cs = grid.cellSize
+            for (k in dabs.indices) {
+                if (k in from until until) continue
+                val d = dabs[k]
+                if (!d.hasBounds) continue
+                val l = max(0, d.left); val t = max(0, d.top)
+                val r = min(docW, d.right); val b = min(docH, d.bottom)
+                if (r <= l || b <= t) continue
+                val c0 = l / cs
+                val c1 = (r - 1) / cs
+                for (row in t / cs..(b - 1) / cs) {
+                    grid.forEachRunIn(row, c0, c1) { a, e ->
+                        grid.runRect(row, a, e, runRect)
+                        canvas.save()
+                        canvas.clipRect(runRect)
+                        res.stamper.stamp(canvas, preset, d, draft = k >= draftDabFrom)
+                        canvas.restore()
+                    }
+                }
+            }
+            dabs.subList(from, until).clear()
+        }
+
+        /**
+         * Redraws the first part of the draft exactly (about [budget] of work, see
+         * [BrushTool.refinePath]); returns true while a draft part remains.
+         *
+         * The draft dabs of that part are removed and exact dabs drawn in their place, from the
+         * exact state at the start of the draft, and put before the remaining draft dabs in the
+         * list. The pixels are right once the whole draft is replaced: every cell a draft dab
+         * touched is cleared when that dab is removed and redrawn from the dabs in list order,
+         * and new exact dabs only ever come after the exact dabs before them.
+         */
+        fun refine(budget: Float): Boolean {
+            if (!isDraft) return false
+            val e = draftFrom
+            val n = input.size
+            // The part: from the start of the draft to about [budget] of exact work further, up
+            // to a draft checkpoint (whose dab count tells where its draft dabs end).
+            val d = max(1f, dynamics.size)
+            val perPx = pathDabCost(d) / max(StrokeDynamics.MIN_SPACING_PX, preset.spacing * d)
+            var j = max(e, 1)
+            var len = 0f
+            while (j < n && len * perPx < budget) {
+                len += hypot(input.x[j] - input.x[j - 1], input.y[j] - input.y[j - 1])
+                j++
+            }
+            var end = -1
+            for (k in checkpoints.indices) {
+                val c = checkpoints[k]
+                if (c.input >= e && c.input >= j - 1) { end = k; break }
+            }
+            if (end < 0 || checkpoints[end].input >= n - 1) {
+                // The last part: an exact update from the start of the draft.
+                updatePath(PathStrokeInput(n).also { it.set(input) }, 0f)
+                return false
+            }
+            val cpEnd = checkpoints[end]
+            val f = cpEnd.input + 1
+            var startIdx = checkpoints.lastIndex
+            while (startIdx > 0 && checkpoints[startIdx].input > e - 1) startIdx--
+            val cpStart = checkpoints[startIdx]
+            if (cpStart.input != e - 1) {
+                // (Never expected: the exact state at the start of the draft is always kept.)
+                updatePath(PathStrokeInput(n).also { it.set(input) }, 0f)
+                return false
+            }
+            val dStart = draftDabFrom
+            val dEnd = cpEnd.dabCount
+            val restCps = ArrayList(checkpoints.subList(end + 1, checkpoints.size))
+            // The part's draft dabs leave; the draft beyond the part stays on screen and is set
+            // aside while the part is redrawn exactly in front of it.
+            removeDabs(dStart, dEnd)
+            val restDabs = ArrayList(dabs.subList(dStart, dabs.size))
+            dabs.subList(dStart, dabs.size).clear()
+            while (checkpoints.last().input > cpStart.input) checkpoints.removeAt(checkpoints.lastIndex)
+            restoreState(cpStart)
+            feed(input, e, f, record = false)
+            val delta = dabs.size - dEnd
+            draftDabFrom = dabs.size
+            dabs.addAll(restDabs)
+            for (c in restCps) {
+                c.dabCount += delta
+                checkpoints += c
+            }
+            draftFrom = f
+            flushCells()
+            return true
+        }
+
+        /**
+         * How to re-render [points] from index [from] on within [budget] ([pathDabCost] units):
+         * null = exactly, when that fits (and no draft part is kept before it: [mustDraft]);
+         * otherwise as a draft ([DabStamper.stamp]) whose dabs are spread by the returned
+         * multiplier when even that doesn't fit, in steps of a fourth of an octave (so the dabs
+         * don't shimmer while a drag changes the length a little) and at most up to a spacing
+         * that still looks solid.
+         */
+        private fun draftPlan(points: PathStrokeInput, from: Int, budget: Float, mustDraft: Boolean): Float? {
+            if (budget <= 0f) return null
+            var len = 0f
+            for (j in max(1, from) until points.size) len += hypot(points.x[j] - points.x[j - 1], points.y[j] - points.y[j - 1])
+            val d = max(1f, dynamics.size)
+            val nominal = max(StrokeDynamics.MIN_SPACING_PX, preset.spacing * d)
+            val count = len / nominal
+            if (!mustDraft && count * pathDabCost(d) <= budget) return null
+            val cost = count * (DRAFT_DAB_OVERHEAD + d * d)
+            if (cost <= budget) return 1f
+            // Pixel brushes keep their (1 px) dabs touching.
+            val cap = if (!preset.antiAlias) 1f else d * DRAFT_SPACING
+            val maxScale = max(1f, cap / nominal)
+            val steps = ceil(4f * log2(cost / budget))
+            return min(2f.pow(steps / 4f), maxScale)
+        }
+
+        private fun flushCells() {
+            val grid = dirtyCells ?: return
+            grid.forEachRun { row, c0, c1 -> controller.invalidateDoc(grid.runRect(row, c0, c1, runRect)) }
+            grid.clear()
+        }
+
+        /** Ends a path stroke: a draft is redrawn exactly first. */
+        override fun finish(p: ToolPoint?) {
+            if (isPath && isDraft) updatePath(PathStrokeInput(input.size).also { it.set(input) }, 0f)
+            super.finish(p)
         }
 
         private fun addBounds(dab: Dab) {
@@ -268,7 +625,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             bounds.union(l, t, r, b)
         }
 
-        override fun afterEvent() = flushDirty()
+        override fun afterEvent() {
+            if (!isPath) { flushDirty(); return }
+            // A path is redrawn on screen once per update, cell by cell.
+            if (dirty.isEmpty) return
+            dirtyCells?.mark(dirty)
+            dirty.setEmpty()
+        }
 
         /**
          * Re-renders the part of the stroke whose dabs change once the final length is known
@@ -353,8 +716,22 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         override fun cancel() = release()
 
         private fun release() {
-            res.clear(bounds)
             if (controller.renderOverride === override) controller.renderOverride = null
+            val grid = cleared
+            if (isPath && grid != null) {
+                // Only the cells under the current dabs hold coverage (rewinds cleared the rest):
+                // a long path doesn't clear and redraw its whole bounding box.
+                grid.clear()
+                for (d in dabs) if (d.hasBounds) grid.mark(d.left, d.top, d.right, d.bottom)
+                grid.forEachRun { row, c0, c1 ->
+                    grid.runRect(row, c0, c1, runRect)
+                    res.clear(runRect)
+                    controller.invalidateDoc(runRect)
+                }
+                grid.clear()
+                return
+            }
+            res.clear(bounds)
             if (!bounds.isEmpty) controller.invalidateDoc(bounds)
         }
     }
@@ -462,16 +839,60 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
     }
 
-    private companion object {
+    /** State of a path stroke after one of its input points (see [BufferStroke.updatePath]). */
+    private class Checkpoint(
+        val input: Int,
+        var dabCount: Int,
+        val sampler: StrokeSampler.State,
+        val draws: Long,
+        val lastX: Float,
+        val lastY: Float,
+        val spacingScale: Float,
+    )
+
+    companion object {
         /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
-        const val COMMIT_TILE = 256
+        private const val COMMIT_TILE = 256
+
+        /** A path stroke keeps its state every this many input points (to restart from there). */
+        private const val CHECKPOINT_EVERY = 32
+
+        /**
+         * Largest draft dab spacing, as a fraction of the diameter: the edge of a hard tip
+         * ripples by about an eighth of its radius (half a pixel for the default pen) while the
+         * finger drags; the exact stroke replaces the draft when it lifts.
+         */
+        private const val DRAFT_SPACING = 0.5f
+
+        /**
+         * Fixed cost of drawing one dab, in the units of [pathDabCost] (about a nanosecond of
+         * pixel work each): small dabs cost mostly this, whatever their size.
+         */
+        const val DAB_OVERHEAD = 5000f
+
+        /** The same for a draft dab (no anti-aliased box edge: several times cheaper). */
+        private const val DRAFT_DAB_OVERHEAD = 1000f
+
+        /** Approximate cost of one dab of [diameter] px (the unit of draft budgets). */
+        fun pathDabCost(diameter: Float): Float = DAB_OVERHEAD + diameter * diameter
+
+        /**
+         * Cells of a path stroke's redraw grid: about three dabs wide (at least 32 px). Where a
+         * path is re-rendered, the kept dabs in the cells it touches are redrawn, so small cells
+         * redraw little; each dab is redrawn once per row of cells it overlaps.
+         */
+        private fun cellSizeFor(size: Float): Int {
+            var cs = 32
+            while (cs < 3f * size && cs < 1024) cs *= 2
+            return cs
+        }
 
         /**
          * Same result as `ColorModeOps` MONOCHROME on (unpremultiplied) pixels: alpha >= 128 ->
          * opaque else transparent, luminance >= 128 -> white else black. A steep linear ramp
          * clamped to 0..255 acts as the threshold.
          */
-        val MONOCHROME_FILTER: ColorMatrixColorFilter by lazy {
+        private val MONOCHROME_FILTER: ColorMatrixColorFilter by lazy {
             val k = 65536f
             val lr = 0.299f * k
             val lg = 0.587f * k
