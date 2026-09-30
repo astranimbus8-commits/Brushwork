@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -111,7 +112,8 @@ private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enable
     Column(
         Modifier
             .width(46.dp)
-            .height(46.dp)
+            // Grows (rather than clipping) the two-line label under a large system font.
+            .heightIn(min = 46.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
