@@ -322,13 +322,6 @@ internal class BrushStrokePreview(
     }
 
     /**
-     * Work allowed for one replay ([BrushTool.pathDabCost] units): what this device draws in
-     * about [TARGET_REPLAY_NS] (see [measure]), within [MIN_BUDGET]..[MAX_BUDGET]. Beyond it a
-     * re-render is a draft, and a draft is refined by parts of this size.
-     */
-    private fun budget(): Float = (TARGET_REPLAY_NS / nsPerUnit).toFloat().coerceIn(MIN_BUDGET, MAX_BUDGET)
-
-    /**
      * Learns this device's speed from a replay of [tool] that took [ns] and started when the
      * tool's [BrushTool.dabWork] was [work0]. Replays that did little are not a fair sample
      * (their fixed costs dominate).
@@ -535,6 +528,13 @@ internal class BrushStrokePreview(
          */
         @Volatile
         var nsPerUnit = 1.0
+
+        /**
+         * Work allowed for one replay ([BrushTool.pathDabCost] units): what this device draws in
+         * about [TARGET_REPLAY_NS] (see [measure]), within [MIN_BUDGET]..[MAX_BUDGET]. Beyond it a
+         * re-render is a draft, and a draft is refined by parts of this size.
+         */
+        fun budget(): Float = (TARGET_REPLAY_NS / nsPerUnit).toFloat().coerceIn(MIN_BUDGET, MAX_BUDGET)
 
         private var seeds = 0L
 

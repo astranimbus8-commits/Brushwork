@@ -47,12 +47,17 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         /** Display tiles re-rendered (each one is re-uploaded to the GPU on the phone). */
         var tiles = 0L
         var allocBytes = 0L
+        /** Allocations of the touch input, the looper (the live replay) and the tile update. */
+        var allocInput = 0L
+        var allocLooper = 0L
+        var allocTiles = 0L
         /** The release (finger up + looper + draw) after the drag: total and its worst frame. */
         var releaseNs = 0L
         var releaseMaxFrameNs = 0L
         var releaseStamps = 0L
 
         private fun ms(ns: Long) = ns / 1e6
+        private fun kb(bytes: Long) = bytes / 1024.0 / max(1, frames)
         val avgFrameMs: Double get() = ms(inputNs + looperNs + drawNs) / max(1, frames)
         val maxFrameMs: Double get() = ms(maxFrameNs)
         val stampsPerFrame: Double get() = stamps.toDouble() / max(1, frames)
@@ -60,12 +65,14 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         val allocKbPerFrame: Double get() = allocBytes / 1024.0 / max(1, frames)
 
         val tilesPerFrame: Double get() = tiles.toDouble() / max(1, frames)
+        val releaseMaxFrameMs: Double get() = ms(releaseMaxFrameNs)
 
         override fun toString(): String = String.format(
             java.util.Locale.ROOT,
-            "[perf] %-34s frames=%d avg=%.2fms (input %.2f, looper %.2f, tiles %.2f) max=%.2fms screen=%.2fms dabs/frame=%.0f dirty=%.2fMpx/frame tiles/frame=%.1f alloc=%.0fKB/frame release=%.2fms (worst frame %.2fms, %d dabs)",
+            "[perf] %-34s frames=%d avg=%.2fms (input %.2f, looper %.2f, tiles %.2f) max=%.2fms screen=%.2fms dabs/frame=%.0f dirty=%.2fMpx/frame tiles/frame=%.1f alloc=%.0fKB/frame (input %.0f, looper %.0f, tiles %.0f) release=%.2fms (worst frame %.2fms, %d dabs)",
             name, frames, avgFrameMs, ms(inputNs) / max(1, frames), ms(looperNs) / max(1, frames), ms(drawNs) / max(1, frames),
-            maxFrameMs, ms(screenNs) / max(1, frames), stampsPerFrame, dirtyMpxPerFrame, tilesPerFrame, allocKbPerFrame, ms(releaseNs), ms(releaseMaxFrameNs), releaseStamps,
+            maxFrameMs, ms(screenNs) / max(1, frames), stampsPerFrame, dirtyMpxPerFrame, tilesPerFrame, allocKbPerFrame,
+            kb(allocInput), kb(allocLooper), kb(allocTiles), ms(releaseNs), ms(releaseMaxFrameNs), releaseStamps,
         )
     }
 
@@ -121,16 +128,22 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         val t0 = System.nanoTime()
         input()
         val t1 = System.nanoTime()
+        val a1 = threads.getThreadAllocatedBytes(tid)
         idle(16)
         val t2 = System.nanoTime()
+        val a2 = threads.getThreadAllocatedBytes(tid)
         val dirty = dirtyPixels()
         val dirtyTiles = dirtyTiles()
         // The view's onDraw starts with this; done here to time it on its own.
         c.tiles.update(c.compositor)
         val t3 = System.nanoTime()
+        val a3 = threads.getThreadAllocatedBytes(tid)
         draw()
         val t4 = System.nanoTime()
         if (s == null) return
+        s.allocInput += a1 - a0
+        s.allocLooper += a2 - a1
+        s.allocTiles += a3 - a2
         s.frames++
         s.inputNs += t1 - t0
         s.looperNs += t2 - t1

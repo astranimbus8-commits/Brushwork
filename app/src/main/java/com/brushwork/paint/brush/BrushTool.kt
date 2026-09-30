@@ -529,9 +529,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                     }
                 }
             }
-            val removed = dabs.subList(from, until)
-            pool.addAll(removed)
-            removed.clear()
+            for (k in from until until) pool.add(dabs[k])
+            dabs.subList(from, until).clear()
         }
 
         /**
