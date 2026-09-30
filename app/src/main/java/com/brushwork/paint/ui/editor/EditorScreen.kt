@@ -111,7 +111,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     // hides while a sheet or dialog is up and comes back when that closes.
     var layersOpen by rememberSaveable { mutableStateOf(false) }
     // Typed brush size / opacity (tapping a value of the slider bar).
-    var editingValue by remember { mutableStateOf<SliderKind?>(null) }
+    var editingValue by rememberSaveable { mutableStateOf<SliderKind?>(null) }
     // The clipboard content whose paste bar the user hid (shown again for a new copy).
     var hiddenClipboard by remember { mutableStateOf<EditorController.ClipboardImage?>(null) }
     // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
@@ -236,9 +236,11 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     LaunchedEffect(clipboard) { if (clipboard !== hiddenClipboard) hiddenClipboard = null }
     val hasSelection = controller.selection != null
     val layersVisible = layersOpen && session == null && panel == null
-    // The selection bar steps aside for tool work in progress (its ✓/✕ come first), filters,
-    // long operations and the selection menu itself.
-    val selectionBarVisible = session == null && busy == null && !tool.hasPendingWork && panel != EditorPanel.SELECTION &&
+    // The selection bar steps aside for the user's tool work in progress (its ✓/✕ come first:
+    // a paste being placed, curve points...), filters, long operations and the selection menu
+    // itself. The transform tool's own untouched lift doesn't count: selecting it to move the
+    // selection keeps Copy / Deselect at hand.
+    val selectionBarVisible = session == null && busy == null && !tool.hasUserChanges && panel != EditorPanel.SELECTION &&
         (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
 
     Box(Modifier.fillMaxSize().background(BrushworkColors.CanvasBackdrop)) {

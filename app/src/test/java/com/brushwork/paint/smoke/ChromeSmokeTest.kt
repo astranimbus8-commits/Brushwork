@@ -368,6 +368,16 @@ class ChromeSmokeTest {
         val sel = c.selection!!
         assertTrue("selection bar shown", has("Copy selection") && has("Clear the selection"))
 
+        // Picking the transform tool to move the selection keeps the bar: its lift is untouched.
+        c.selectTool(ToolId.TRANSFORM)
+        Smoke.pump(100)
+        settle()
+        assertTrue("the transform tool lifted the selection", c.currentTool.hasPendingWork)
+        assertTrue("bar stays for an untouched lift", has("Copy selection") && has("Clear the selection"))
+        c.selectTool(ToolId.MARQUEE)
+        settle()
+        assertEquals("the selection survived", sel.bounds, c.selection?.bounds)
+
         // Copy, then paste: a "Pasted" layer at the same place, being placed with the transform tool.
         click("Copy", exact = true)
         val clip = c.clipboard ?: throw AssertionError("nothing copied; message ${c.message}")
