@@ -6,6 +6,7 @@ import android.view.MotionEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.brush.StrokeResources
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Layer
@@ -18,7 +19,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -165,6 +165,9 @@ class PointEditingTouchTest {
         val shown = c.renderOverride
         assertNotNull(shown)
         val z0 = c.viewTransform.zoom
+        // Dabs drawn so far (a replay draws dabs; the stroke keeps its render override).
+        val stamper = StrokeResources.of(c).stamper
+        val stamps = stamper.stampCount
 
         // The first finger of a pinch lands on empty canvas and adds a point under it...
         touch.idle(200)
@@ -173,7 +176,8 @@ class PointEditingTouchTest {
         touch.send(MotionEvent.ACTION_DOWN, P(0, ax, ay))
         touch.idle(60)
         assertEquals(3, tool.anchors.size)
-        assertSame("the stroke does not jump to that point yet", shown, c.renderOverride)
+        assertSame(shown, c.renderOverride)
+        assertEquals("the stroke does not jump to that point yet", stamps, stamper.stampCount)
         // ...which the second finger takes back.
         touch.send(MotionEvent.ACTION_POINTER_DOWN, P(0, ax, ay), P(1, bx, by), index = 1)
         assertEquals(2, tool.anchors.size)
@@ -188,12 +192,16 @@ class PointEditingTouchTest {
         touch.idle(300)
         assertTrue("the view zoomed", c.viewTransform.zoom > z0 * 1.2f)
         assertEquals(2, tool.anchors.size)
-        assertSame("the brush stroke was never replayed", shown, c.renderOverride)
+        assertSame(shown, c.renderOverride)
+        assertEquals("the brush stroke was never replayed", stamps, stamper.stampCount)
 
-        // A plain tap keeps its point, and the stroke follows right away.
+        // A plain tap keeps its point, and the stroke follows right away (only its new end is
+        // drawn: the stroke up to the old end point stays as it is).
         tapDoc(200f, 200f)
         assertEquals(3, tool.anchors.size)
-        assertNotSame("replayed promptly after the tap", shown, c.renderOverride)
+        assertTrue("replayed promptly after the tap", stamper.stampCount > stamps)
+        assertTrue("the new end is shown", alphaAt(composite(), 200, 200) > 200)
+        assertEquals(0, painted(c.activeLayer))
         tool.discard()
         assertEquals(0, painted(c.activeLayer))
     }

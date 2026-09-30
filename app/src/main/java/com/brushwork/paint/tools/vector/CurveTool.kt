@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.brush.PathStrokeInput
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
@@ -358,6 +359,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                 if (!moved && pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                 if (!moved && drag == Drag.ANCHOR) pushHistory()
                 moved = true
+                // The preview follows the finger as cheaply as possible until it lifts.
+                setDragging(true)
                 val a = anchors.getOrNull(dragIndex) ?: return
                 replace(dragIndex, a.moved(controller.snapToGrid(pt)))
             }
@@ -366,6 +369,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                 if (!moved) {
                     if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                     pushHistory(); moved = true
+                    setDragging(true)
                 }
                 val (hIn, hOut) = handlesOf(dragIndex)
                 val v = pt - a.pos
@@ -395,10 +399,14 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             Drag.NONE, Drag.IGNORE -> {}
         }
         drag = Drag.NONE
+        // The drag is over: a plain line / fill goes back into the layer, a brush stroke is drawn
+        // exactly once the path rests a moment.
+        setDragging(false)
         controller.invalidateOverlay()
     }
 
     override fun onCancel() {
+        setDragging(false)
         if (drag != Drag.NONE && drag != Drag.IGNORE) {
             anchors = gestureStart
             selected = gestureSelected
@@ -428,6 +436,15 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         }
         Drag.HANDLE_IN, Drag.HANDLE_OUT -> true
         else -> false
+    }
+
+    /**
+     * A finger starts / stops dragging the path: while it drags, the brush stroke follows as a
+     * light draft and a plain line / fill is drawn in the overlay (no canvas recomposition).
+     */
+    private fun setDragging(on: Boolean) {
+        brushPreview.interacting = on
+        preview.interacting = on
     }
 
     private fun nearestAnchor(p: Vec2, tol: Float): Int {
@@ -460,7 +477,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private fun brushGeometry(path: VectorPath, s: CurveSettings) =
         BrushGeometry(path.ops, if (s.taper) s.taperPercent / 100f else 0f)
 
-    private fun brushPoints(path: VectorPath, g: BrushGeometry): List<ToolPoint> = brushStrokePoints(path, g.taperFraction)
+    private fun brushPoints(path: VectorPath, g: BrushGeometry, out: PathStrokeInput) {
+        brushStrokeInput(path, g.taperFraction, out)
+    }
 
     /**
      * Rebuilds the guide path and the preview, then redraws. A plain line / fill goes through the
@@ -478,7 +497,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             overlaySpecs = specs
             if (specs.isNotEmpty()) specOverlay.setBand(docPath, controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
             val g = brushGeometry(path, settings)
-            brushPreview.request(g, brushDelayMs) { brushPoints(path, g) }
+            brushPreview.request(g, brushDelayMs) { brushPoints(path, g, it) }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
@@ -518,7 +537,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                 }
                 VectorCommit.commit(controller, layer, specs, label)
             }
-            if (brush) brushPreview.commit(g) { brushPoints(path, g) }
+            if (brush) brushPreview.commit(g) { brushPoints(path, g, it) }
         }
         brushPreview.end()
         controller.invalidateOverlay()
@@ -543,6 +562,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         docPath.rewind()
         overlaySpecs = emptyList()
         preview.release()
+        preview.interacting = false
     }
 
     private fun clear() {
@@ -595,6 +615,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val list = anchors
         if (list.isEmpty()) return
+        preview.drawOverlay(canvas, t)
         if (overlaySpecs.isNotEmpty()) {
             specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
         }

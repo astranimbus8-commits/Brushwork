@@ -268,6 +268,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             started = true
             if (mode == Mode.CREATE && box == null) targetLayer = controller.doc.activeLayer
+            // The preview follows the finger as cheaply as possible until it lifts.
+            setDragging(true)
         }
         when (mode) {
             Mode.NONE -> return
@@ -331,9 +333,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         startBox = null
         handle = null
+        // The drag is over: a plain shape goes back into the layer, a brush outline is refined
+        // once it rests a moment.
+        setDragging(false)
     }
 
     override fun onCancel() {
+        setDragging(false)
         when (mode) {
             Mode.CREATE -> creatingBox = null
             Mode.NONE -> {}
@@ -344,6 +350,15 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         handle = null
         if (box == null) targetLayer = null
         refreshPreview()
+    }
+
+    /**
+     * A finger (or a pinch) starts / stops dragging the shape: while it drags, a brush outline
+     * follows as a light draft and a plain shape is drawn in the overlay (no canvas recomposition).
+     */
+    private fun setDragging(on: Boolean) {
+        brushPreview.interacting = on
+        preview.interacting = on
     }
 
     /**
@@ -362,6 +377,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         pinchStart = bx
         pinchFocus = focus
+        setDragging(true)
         return true
     }
 
@@ -375,10 +391,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val start = pinchStart ?: return
         pinchStart = null
-        if (cancelled) {
-            box = start
-            refreshPreview()
-        }
+        setDragging(false)
+        if (cancelled) box = start
+        refreshPreview()
     }
 
     /**
@@ -505,7 +520,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushBox, brush = true))
             val path = brushOutline(brushBox)
             if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
-            brushPreview.request(path.ops) { brushStrokePoints(path) }
+            brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
@@ -535,6 +550,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         pinchStart = null
         overlaySpecs = emptyList()
         preview.release()
+        preview.interacting = false
         // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
         controller.undoStepNamed("Shape") {
             if (spec != null) {
@@ -542,7 +558,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 brushPreview.cancel()
                 VectorCommit.commit(controller, layer, listOf(spec), "Shape")
             }
-            if (path != null) brushPreview.commit(path.ops) { brushStrokePoints(path) }
+            if (path != null) brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) }
         }
         brushPreview.end()
         controller.invalidateOverlay()
@@ -557,6 +573,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         pinchStart = null
         overlaySpecs = emptyList()
         preview.release()
+        preview.interacting = false
         brushPreview.end()
         controller.invalidateOverlay()
     }
@@ -593,6 +610,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (hasPendingWork) discard()
         overlaySpecs = emptyList()
         preview.release()
+        preview.interacting = false
         brushPreview.end()
     }
 
@@ -609,6 +627,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val creating = creatingBox
         val b = creating ?: box ?: return
+        preview.drawOverlay(canvas, t)
         if (overlaySpecs.isNotEmpty()) {
             specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
         }

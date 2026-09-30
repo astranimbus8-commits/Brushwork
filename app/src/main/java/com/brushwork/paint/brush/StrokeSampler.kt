@@ -14,11 +14,24 @@ import kotlin.math.max
  *
  * Dabs are emitted every `spacingAt(pressure, distance)` document px (sub-pixel positions),
  * with pressure interpolated along the path. Pure Kotlin (no Android dependencies).
+ *
+ * The callbacks are primitive-typed interfaces (Kotlin function types would box every float of
+ * every dab: a long path re-rendered on each frame would allocate megabytes per second).
  */
 class StrokeSampler(
-    private val spacingAt: (pressure: Float, distance: Float) -> Float,
-    private val onSample: (x: Float, y: Float, pressure: Float, distance: Float) -> Unit,
+    private val spacingAt: Spacing,
+    private val onSample: Sink,
 ) {
+    /** Distance to the next dab after one at ([pressure], [distance]). */
+    fun interface Spacing {
+        fun spacing(pressure: Float, distance: Float): Float
+    }
+
+    /** Receives each dab position. */
+    fun interface Sink {
+        fun sample(x: Float, y: Float, pressure: Float, distance: Float)
+    }
+
     /** Length of the smoothed path walked so far (document px). */
     var length = 0f
         private set
@@ -37,6 +50,33 @@ class StrokeSampler(
     private var midY = 0f
     private var midP = 1f
     private var toNext = 0f
+
+    /** Everything the sampler carries from one input point to the next (see [snapshot]). */
+    class State internal constructor(
+        internal val length: Float,
+        internal val lastSampleDistance: Float,
+        internal val isStarted: Boolean,
+        internal val lastX: Float,
+        internal val lastY: Float,
+        internal val lastP: Float,
+        internal val midX: Float,
+        internal val midY: Float,
+        internal val midP: Float,
+        internal val toNext: Float,
+    )
+
+    /** The current state; [restore] brings it back (a stroke re-rendered from a point on). */
+    fun snapshot(): State = State(length, lastSampleDistance, isStarted, lastX, lastY, lastP, midX, midY, midP, toNext)
+
+    /** Returns to a [snapshot] of this sampler: later input continues exactly as it did then. */
+    fun restore(s: State) {
+        length = s.length
+        lastSampleDistance = s.lastSampleDistance
+        isStarted = s.isStarted
+        lastX = s.lastX; lastY = s.lastY; lastP = s.lastP
+        midX = s.midX; midY = s.midY; midP = s.midP
+        toNext = s.toNext
+    }
 
     /** Starts a stroke; emits the first sample at the start point. */
     fun begin(x: Float, y: Float, pressure: Float) {
@@ -72,15 +112,15 @@ class StrokeSampler(
         midX = lastX; midY = lastY; midP = lastP
         if (closeGap) {
             val gap = length - lastSampleDistance
-            if (gap > 0.35f * max(MIN_SPACING, spacingAt(lastP, length))) emit(lastX, lastY, lastP, length)
+            if (gap > 0.35f * max(MIN_SPACING, spacingAt.spacing(lastP, length))) emit(lastX, lastY, lastP, length)
         }
         isStarted = false
     }
 
     private fun emit(x: Float, y: Float, p: Float, d: Float) {
         lastSampleDistance = d
-        onSample(x, y, p, d)
-        toNext = max(MIN_SPACING, spacingAt(p, d))
+        onSample.sample(x, y, p, d)
+        toNext = max(MIN_SPACING, spacingAt.spacing(p, d))
     }
 
     private fun curve(x0: Float, y0: Float, p0: Float, cx: Float, cy: Float, cp: Float, x1: Float, y1: Float, p1: Float) {

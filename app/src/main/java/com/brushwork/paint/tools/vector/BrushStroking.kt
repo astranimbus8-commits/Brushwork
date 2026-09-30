@@ -3,6 +3,8 @@ package com.brushwork.paint.tools.vector
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Handler
@@ -11,6 +13,7 @@ import android.os.SystemClock
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushTool
+import com.brushwork.paint.brush.PathStrokeInput
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.ViewTransform
@@ -21,6 +24,10 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import kotlin.math.ceil
+import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.sqrt
 
 /*
  * Painting a vector path with a painting tool (brush / eraser / smudge / blur), and showing that
@@ -30,37 +37,156 @@ import com.brushwork.paint.tools.ToolPoint
 /** Distance between the points fed to the painting tool (document px). */
 internal const val BRUSH_SAMPLE_SPACING = 0.75f
 
+/** Flattening tolerance of the path a brush follows (document px). */
+private const val BRUSH_FLATTEN_TOLERANCE = 0.1f
+
 /**
- * Input points for painting [path] (its first sub-path) with a brush: even samples, stylus
- * points so the given pressure (1, or a taper ramp over [taperFraction] of the length at each
- * end) is honored, and increasing time stamps starting at [t0].
+ * Input points for painting [path] (its first sub-path) with a brush, into [out]: even samples
+ * [BRUSH_SAMPLE_SPACING] px apart (first and last points included, a closed path ends back at
+ * its start) with pressure 1, or a taper ramp over [taperFraction] of the length at each end.
+ *
+ * Exactly the points of `CurveGeometry.sample(path, BRUSH_SAMPLE_SPACING)` (same float
+ * operations in the same order), computed without an object per point: this runs for every
+ * live replay of a long path.
  */
-internal fun brushStrokePoints(path: VectorPath, taperFraction: Float = 0f, t0: Long = SystemClock.uptimeMillis()): List<ToolPoint> {
-    val samples = CurveGeometry.sample(path, BRUSH_SAMPLE_SPACING)
-    if (samples.size < 2) return emptyList()
-    val total = VectorPath.length(samples)
+internal fun brushStrokeInput(path: VectorPath, taperFraction: Float = 0f, out: PathStrokeInput = PathStrokeInput()): PathStrokeInput {
+    out.clear()
+    val flat = FlatScratch.flattenFirst(path, BRUSH_FLATTEN_TOLERANCE)
+    FlatScratch.resample(flat, BRUSH_SAMPLE_SPACING, out)
+    val n = out.size
+    if (n < 2) { out.clear(); return out }
+    val xs = out.x; val ys = out.y; val ps = out.pressure
+    var total = 0f
+    for (i in 1 until n) total += hypot(xs[i - 1] - xs[i], ys[i - 1] - ys[i])
     val taperLen = total * taperFraction.coerceIn(0f, 0.5f)
-    val out = ArrayList<ToolPoint>(samples.size)
     var dist = 0f
-    for (i in samples.indices) {
-        if (i > 0) dist += samples[i].distanceTo(samples[i - 1])
-        val pressure = if (taperLen > 0f) CurveGeometry.taperPressure(dist, total, taperLen) else 1f
-        out += ToolPoint(samples[i].x, samples[i].y, pressure, t0 + i, isStylus = true)
+    for (i in 0 until n) {
+        if (i > 0) dist += hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
+        ps[i] = if (taperLen > 0f) CurveGeometry.taperPressure(dist, total, taperLen) else 1f
     }
     return out
 }
 
 /**
- * Drives a painting tool along a path through the generic [Tool] API, and keeps the stroke
- * UNFINISHED (onDown + onMove, no onUp) as a live preview while the path is being edited: the
- * painting tool then shows it itself (through its render override, or directly in the pixels for
- * smudge / blur) exactly as it will be painted.
+ * Array versions of `VectorPath.flatten` (first sub-path) and `VectorPath.resample`, with the
+ * same arithmetic so the samples are bit-identical. Main thread only (shared scratch arrays).
+ */
+private object FlatScratch {
+    /** The flattened first sub-path: [n] points in [x] / [y]. */
+    class Flat {
+        var x = FloatArray(512)
+        var y = FloatArray(512)
+        var n = 0
+        var closed = false
+
+        fun add(px: Float, py: Float) {
+            if (n == x.size) { x = x.copyOf(n * 2); y = y.copyOf(n * 2) }
+            x[n] = px; y[n] = py; n++
+        }
+    }
+
+    private val flat = Flat()
+
+    fun flattenFirst(path: VectorPath, tolerance: Float): Flat {
+        val f = flat
+        f.n = 0
+        f.closed = false
+        var started = false
+        var sx = 0f; var sy = 0f
+        var lx = 0f; var ly = 0f
+        loop@ for (op in path.ops) {
+            when (op) {
+                is PathOp.MoveTo -> {
+                    if (started) break@loop
+                    started = true
+                    f.add(op.p.x, op.p.y)
+                    sx = op.p.x; sy = op.p.y; lx = sx; ly = sy
+                }
+                is PathOp.LineTo -> {
+                    if (!started) { started = true; f.add(lx, ly); sx = lx; sy = ly }
+                    f.add(op.p.x, op.p.y)
+                    lx = op.p.x; ly = op.p.y
+                }
+                is PathOp.CubicTo -> {
+                    if (!started) { started = true; f.add(lx, ly); sx = lx; sy = ly }
+                    flattenCubic(lx, ly, op.c1.x, op.c1.y, op.c2.x, op.c2.y, op.p.x, op.p.y, tolerance, f)
+                    lx = op.p.x; ly = op.p.y
+                }
+                PathOp.Close -> {
+                    if (started) { f.closed = true; break@loop }
+                    lx = sx; ly = sy
+                }
+            }
+        }
+        return f
+    }
+
+    /** `VectorPath.flattenCubic` on floats. */
+    private fun flattenCubic(p0x: Float, p0y: Float, c1x: Float, c1y: Float, c2x: Float, c2y: Float, p1x: Float, p1y: Float, tolerance: Float, out: Flat) {
+        val dd = max(hypot(p0x - c1x * 2f + c2x, p0y - c1y * 2f + c2y), hypot(c1x - c2x * 2f + p1x, c1y - c2y * 2f + p1y))
+        val n = ceil(sqrt(0.75f * dd / tolerance.coerceAtLeast(1e-3f))).toInt().coerceIn(1, 2000)
+        for (i in 1..n) {
+            val t = i.toFloat() / n
+            val u = 1f - t
+            val a = u * u * u; val b = 3f * u * u * t; val c = 3f * u * t * t; val d = t * t * t
+            out.add(a * p0x + b * c1x + c * c2x + d * p1x, a * p0y + b * c1y + c * c2y + d * p1y)
+        }
+    }
+
+    /** `VectorPath.resample(points, spacing, closed)` into [out] (pressure left at 1). */
+    fun resample(f: Flat, spacing: Float, out: PathStrokeInput) {
+        var n = f.n
+        if (n == 0) return
+        val xs = f.x; val ys = f.y
+        // A closed path returns to its first point.
+        if (f.closed && n > 1 && (xs[0].compareTo(xs[n - 1]) != 0 || ys[0].compareTo(ys[n - 1]) != 0)) {
+            f.add(xs[0], ys[0])
+            n = f.n
+        }
+        val px = f.x; val py = f.y
+        val step = spacing.coerceAtLeast(1e-3f)
+        out.add(px[0], py[0], 1f)
+        var carry = 0f
+        for (i in 1 until n) {
+            val ax = px[i - 1]; val ay = py[i - 1]
+            val bx = px[i]; val by = py[i]
+            val seg = hypot(ax - bx, ay - by)
+            if (seg <= 0f) continue
+            var d = step - carry
+            while (d <= seg) {
+                val t = d / seg
+                out.add(ax + (bx - ax) * t, ay + (by - ay) * t, 1f)
+                d += step
+            }
+            carry = seg - (d - step)
+        }
+        val ex = px[n - 1]; val ey = py[n - 1]
+        val last = out.size - 1
+        if (out.size > 1 && hypot(out.x[last] - ex, out.y[last] - ey) <= 1e-3f) {
+            out.x[last] = ex; out.y[last] = ey
+        } else if (out.x[last].compareTo(ex) != 0 || out.y[last].compareTo(ey) != 0) {
+            out.add(ex, ey, 1f)
+        }
+    }
+}
+
+/**
+ * Drives a painting tool along a path and keeps the stroke UNFINISHED (no onUp) as a live
+ * preview while the path is being edited: the painting tool then shows it itself (through its
+ * render override, or directly in the pixels for smudge / blur) exactly as it will be painted.
  *
  * Every change calls [request]; replays are coalesced on the main looper (at most one per
- * frame, and further apart when a replay is expensive so dragging stays smooth) and skipped when
- * nothing that affects the stroke changed. A replay first cancels the previous preview
- * (`onCancel` leaves no trace), then feeds the new points. [commit] finishes the stroke (onUp)
- * as a real edit; [cancel] / [end] drop it.
+ * frame, further apart when a replay is expensive) and skipped when nothing that affects the
+ * stroke changed. With the brush / eraser a replay only re-renders the stroke from the first
+ * point that changed ([BrushTool.updatePath]), and while a finger drags the path
+ * ([interacting]) a long re-render is a lighter draft that is redrawn exactly, part by part,
+ * once the finger lifts and the path rests. The work of one replay is capped by a budget
+ * measured on this device ([budget]), so dragging stays smooth on a slow phone too. Other
+ * painting tools (smudge / blur / watercolor, or any [Tool]) are replayed from scratch: the
+ * previous preview is cancelled (`onCancel` leaves no trace), then the new points are fed
+ * through onDown + onMove (while a finger drags, only if that fits in a frame; otherwise once
+ * the drag ends). [commit] finishes the stroke (onUp) as a real edit, always exact;
+ * [cancel] / [end] drop it.
  *
  * Main thread only.
  */
@@ -70,10 +196,10 @@ internal class BrushStrokePreview(
     private val paintToolId: () -> ToolId = { controller.lastPaintTool },
 ) {
     /** A replay waiting to run: [key] identifies the geometry, [points] computes the input. */
-    private class Request(val key: Any, val points: () -> List<ToolPoint>)
+    private class Request(val key: Any, val points: (PathStrokeInput) -> Unit)
 
-    /** The unfinished stroke on screen. */
-    private class Live(val tool: Tool, val key: Key, val last: ToolPoint)
+    /** The unfinished stroke on screen; [exact] is false for a draft ([BrushTool.isDraft]). */
+    private class Live(val tool: Tool, val key: Key, val request: Request, val exact: Boolean, val last: ToolPoint)
 
     /**
      * Everything that changes how the stroke looks: the geometry plus the painting tool, its
@@ -90,7 +216,12 @@ internal class BrushStrokePreview(
         val target: EditTarget,
         val selection: Selection?,
         val colorMode: ColorMode,
-    )
+    ) {
+        /** Same stroke apart from the path: an update of the live stroke can follow it. */
+        fun sameStroke(o: Key): Boolean =
+            toolId == o.toolId && tool === o.tool && preset == o.preset && color == o.color && layer === o.layer &&
+                props == o.props && target == o.target && selection == o.selection && colorMode == o.colorMode
+    }
 
     private val handler = Handler(Looper.getMainLooper())
     private val runnable = Runnable { scheduled = false; flush() }
@@ -105,12 +236,56 @@ internal class BrushStrokePreview(
     private var shownToast: String? = null
     private var lastRunAt = Long.MIN_VALUE / 2
     private var lastCostMs = 0L
+    /**
+     * Uptime of the last change of the stroke ([request]) or of the end of a drag ([interacting]):
+     * a draft is refined once the path has rested [REFINE_DELAY_MS] since then.
+     */
+    private var restingSince = Long.MIN_VALUE / 2
+    /** Time the last replay from scratch took (ms). */
+    private var fullReplayMs = 0L
+    /** Replays from scratch slower than this (ms) wait for the end of a drag (tests lower it). */
+    internal var dragReplayLimitMs = MAX_DRAG_REPLAY_MS
+    /** The waiting replay is held back until the drag ends (see [flush]). */
+    private var deferred = false
+    /** Random values of the brush for this editing session: a replay never changes its texture. */
+    private var seed = newSeed()
+    private val input = PathStrokeInput(1024)
 
     /** True while an unfinished preview stroke is shown. */
     val isLive: Boolean get() = live != null
 
+    /** True while the stroke on screen is a draft (see [interacting]). */
+    val isDraft: Boolean get() = live?.exact == false
+
     /** True while a replay is waiting to run. */
     val hasPending: Boolean get() = pending != null
+
+    /**
+     * True while a finger drags the path: the stroke then follows it as a draft (see
+     * [BrushTool.updatePath]) and is not refined; a stroke replayed from scratch that takes
+     * longer than a frame waits for the drag to end. Set back to false when the finger lifts: a
+     * draft on screen is refined once the path has rested for [REFINE_DELAY_MS].
+     */
+    var interacting = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) return
+            restingSince = SystemClock.uptimeMillis()
+            if (deferred) {
+                // The stroke held back during the drag follows now.
+                deferred = false
+                pending?.let { schedule(it, 0L) }
+                return
+            }
+            val cur = live
+            // A waiting replay (the last position of the drag) runs as scheduled; a draft
+            // already on screen is refined once the path rests.
+            if (pending == null && cur != null && !cur.exact) schedule(cur.request, REFINE_DELAY_MS)
+        }
+
+    /** How long a refinement still waits for the path to rest (ms). */
+    private fun refineDelay(): Long = (restingSince + REFINE_DELAY_MS - SystemClock.uptimeMillis()).coerceAtLeast(0L)
 
     private fun paintTool(): Pair<ToolId, Tool>? {
         val id = paintToolId()
@@ -128,24 +303,42 @@ internal class BrushStrokePreview(
 
     /**
      * Shows the stroke for [geometry] (compared with equals: pass immutable data such as the
-     * path's ops). [points] must compute the input from captured, immutable values; it runs when
-     * the coalesced replay happens, not before [minDelayMs] from now (a point added under a
-     * finger that may still turn into a two-finger tap or pinch waits for that to be ruled out).
+     * path's ops). [points] must fill its argument with the input computed from captured,
+     * immutable values; it runs when the coalesced replay happens, not before [minDelayMs] from
+     * now (a point added under a finger that may still turn into a two-finger tap or pinch waits
+     * for that to be ruled out).
      */
-    fun request(geometry: Any, minDelayMs: Long = 0L, points: () -> List<ToolPoint>) {
+    fun request(geometry: Any, minDelayMs: Long = 0L, points: (PathStrokeInput) -> Unit) {
         val cur = live
         val tool = paintTool()
-        if (cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)) {
-            // Already shown (e.g. a tap that only selected a point, or a cancelled touch).
-            pending = null
-            unschedule()
+        val req = Request(geometry, points)
+        val shown = cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)
+        // The stroke changes (also without a finger on the canvas: nudge arrows held down, numeric
+        // fields scrubbed, sliders): a draft is only refined once the changes stop for a moment,
+        // instead of refining parts that the next change throws away again.
+        if (!shown) restingSince = SystemClock.uptimeMillis()
+        if (deferred && interacting) {
+            // Held back until the drag ends: only the latest geometry is kept.
+            pending = req
             return
         }
-        pending = Request(geometry, points)
+        if (shown) {
+            // Already shown (e.g. a tap that only selected a point, or a cancelled touch)...
+            pending = null
+            unschedule()
+            // ...as a draft: its refinement goes on once the path rests.
+            if (!cur.exact && !interacting) schedule(req, refineDelay())
+            return
+        }
+        schedule(req, minDelayMs)
+    }
+
+    private fun schedule(req: Request, minDelayMs: Long) {
+        pending = req
         val now = SystemClock.uptimeMillis()
-        // The replay's own time, plus about as much again for redrawing the tiles it touched,
-        // must leave the main thread free most of the time.
-        val interval = (lastCostMs * 3).coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
+        // The replay's own time, plus about half as much again for redrawing the tiles it
+        // touched, must leave the main thread time for input and drawing.
+        val interval = (lastCostMs * 3 / 2).coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
         val delay = maxOf((lastRunAt + interval - now).coerceIn(0L, interval), minDelayMs)
         if (scheduled) {
             // Keeps the scheduled time unless this request may run sooner.
@@ -157,78 +350,172 @@ internal class BrushStrokePreview(
         handler.postDelayed(runnable, delay)
     }
 
-    /** Runs a waiting replay now (tests; the looper does it otherwise). */
+    /**
+     * Learns this device's speed from a replay of [tool] that took [ns] and started when the
+     * tool's [BrushTool.dabWork] was [work0]. Replays that did little are not a fair sample
+     * (their fixed costs dominate).
+     */
+    private fun measure(tool: BrushTool, work0: Double, ns: Long) {
+        val work = tool.dabWork - work0
+        if (work < MIN_SAMPLE_WORK || ns <= 0L) return
+        val sample = (ns / work).coerceIn(MIN_NS_PER_UNIT, MAX_NS_PER_UNIT)
+        nsPerUnit += (sample - nsPerUnit) * SPEED_SMOOTHING
+    }
+
+    /**
+     * Runs a waiting replay now (tests; the looper does it otherwise). A replay never does much
+     * more than [budget] of dab work: a longer re-render is a draft, and a draft on screen is
+     * refined part by part on the following frames once no finger drags the path.
+     */
     fun flush() {
         unschedule()
         val req = pending ?: return
         pending = null
         val (id, tool) = paintTool() ?: run { cancelLive(); return }
         val key = keyFor(req.key, id, tool)
-        if (live?.key == key || (live == null && key == refusedKey)) return
-        cancelLive()
+        val cur = live
+        if (cur != null && cur.key == key) {
+            if (cur.exact || interacting) return
+            if (tool is BrushTool && cur.tool === tool && tool.isStroking) {
+                // This very path as a draft: the next part of it becomes exact.
+                val t0 = SystemClock.uptimeMillis()
+                val n0 = System.nanoTime()
+                val w0 = tool.dabWork
+                val more = tool.refinePath(budget())
+                measure(tool, w0, System.nanoTime() - n0)
+                live = Live(tool, key, req, exact = !tool.isDraft, last = cur.last)
+                ran(t0)
+                if (more) schedule(req, 0L)
+                return
+            }
+        }
+        if (cur == null && key == refusedKey) return
         refusedKey = null
         val layer = key.layer
         // The painting tool would refuse with a message on every replay: no preview instead
         // (committing still reports it).
-        if (layer.locked || !layer.visible) { refusedKey = key; return }
-        val pts = req.points()
-        if (pts.size < 2) return
+        if (layer.locked || !layer.visible) { cancelLive(); refusedKey = key; return }
+        input.clear()
+        req.points(input)
+        if (input.size < 2) { cancelLive(); return }
         val t0 = SystemClock.uptimeMillis()
-        val before = controller.message
-        tool.onDown(pts[0])
-        val msg = controller.message
-        if (msg !== before && msg != null) {
-            // Say it once per editing session, not on every replay.
-            if (msg == shownToast) controller.message = before else shownToast = msg
+        val n0 = System.nanoTime()
+        val w0 = (tool as? BrushTool)?.dabWork ?: 0.0
+        val budget = budget()
+        val updated = cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking &&
+            cur.key.sameStroke(key) && tool.updatePath(input, budget)
+        if (!updated) {
+            if (interacting && cur != null && fullReplayMs > dragReplayLimitMs) {
+                // Smudge / blur / watercolor strokes are replayed from scratch: when that takes
+                // longer than a frame, the stroke waits for the drag to end (the guide path
+                // follows the finger) instead of stalling every frame of it.
+                pending = req
+                deferred = true
+                return
+            }
+            cancelLive()
+            if (!start(tool, key, budget)) return
+            fullReplayMs = SystemClock.uptimeMillis() - t0
         }
-        if (tool is BrushTool && !tool.isStroking) {
-            refusedKey = key
-            return
-        }
-        for (i in 1 until pts.size) tool.onMove(pts[i])
-        live = Live(tool, key, pts.last())
+        if (tool is BrushTool) measure(tool, w0, System.nanoTime() - n0)
+        val exact = !(tool is BrushTool && tool.isDraft)
+        live = Live(tool, key, req, exact = exact, last = lastPoint(t0))
+        ran(t0)
+        // Refined part by part once the path rests (not while a finger drags it).
+        if (!exact && !interacting) schedule(req, refineDelay())
+    }
+
+    private fun ran(t0: Long) {
         val t1 = SystemClock.uptimeMillis()
         lastCostMs = t1 - t0
         lastRunAt = t1
     }
 
+    /** Starts the stroke for [input] from scratch; false when the painting tool refused. */
+    private fun start(tool: Tool, key: Key, budget: Float): Boolean {
+        val before = controller.message
+        if (tool is BrushTool) tool.beginPath(input, seed, budget)
+        else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
+        val msg = controller.message
+        if (msg !== before && msg != null) {
+            // Say it once per editing session, not on every replay.
+            if (msg == shownToast) controller.message = before else shownToast = msg
+        }
+        if (tool is BrushTool) {
+            if (!tool.isStroking) { refusedKey = key; return false }
+        } else {
+            val t0 = SystemClock.uptimeMillis()
+            for (i in 1 until input.size) tool.onMove(ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true))
+        }
+        return true
+    }
+
+    private fun lastPoint(t0: Long): ToolPoint {
+        val i = input.size - 1
+        return ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true)
+    }
+
     /**
      * Paints the stroke for real (one undo step made by the painting tool). When the preview on
-     * screen is exactly this stroke it is finished as is (identical result, no second pass);
-     * otherwise the path is replayed from scratch. Returns false if there was nothing to paint.
+     * screen is this stroke it is finished as is (a draft is redrawn exactly first; identical
+     * result, no second pass); otherwise the live stroke follows the path first, or the path is
+     * painted from scratch. Returns false if there was nothing to paint.
      */
-    fun commit(geometry: Any, points: () -> List<ToolPoint>): Boolean {
+    fun commit(geometry: Any, points: (PathStrokeInput) -> Unit): Boolean {
         pending = null
+        deferred = false
         unschedule()
         val (id, tool) = paintTool() ?: run { cancelLive(); return false }
         val key = keyFor(geometry, id, tool)
         val cur = live
         if (cur != null && cur.key == key) {
+            if (!cur.exact && tool is BrushTool) {
+                input.clear()
+                points(input)
+                if (input.size >= 2) tool.updatePath(input, 0f)
+            }
             live = null
             tool.onUp(cur.last.copy(time = cur.last.time + 1))
             return true
         }
+        input.clear()
+        points(input)
+        if (input.size < 2) { cancelLive(); return false }
+        val t0 = SystemClock.uptimeMillis()
+        if (cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking && cur.key.sameStroke(key) && tool.updatePath(input, 0f)) {
+            live = null
+            tool.onUp(lastPoint(t0))
+            return true
+        }
         cancelLive()
-        val pts = points()
-        if (pts.size < 2) return false
-        tool.onDown(pts[0])
-        for (i in 1 until pts.lastIndex) tool.onMove(pts[i])
-        tool.onUp(pts.last())
+        if (tool is BrushTool) {
+            if (tool.beginPath(input, seed)) tool.onUp(lastPoint(t0))
+        } else {
+            tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true))
+            for (i in 1 until input.size - 1) tool.onMove(ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true))
+            tool.onUp(lastPoint(t0))
+        }
         return true
     }
 
     /** Drops the preview (the painting tool leaves no trace) and any waiting replay. */
     fun cancel() {
         pending = null
+        deferred = false
         unschedule()
         cancelLive()
         refusedKey = null
     }
 
-    /** [cancel], and forgets the messages shown during this editing session. */
+    /**
+     * [cancel], and ends this editing session: forgets the messages shown and the random values
+     * of the brush, and the finger is no longer [interacting].
+     */
     fun end() {
         cancel()
+        interacting = false
         shownToast = null
+        seed = newSeed()
     }
 
     private fun cancelLive() {
@@ -243,10 +530,61 @@ internal class BrushStrokePreview(
         scheduled = false
     }
 
-    private companion object {
-        /** Minimum time between two replays (ms); three times the last replay's cost if larger. */
-        const val MIN_INTERVAL_MS = 32L
-        const val MAX_INTERVAL_MS = 250L
+    internal companion object {
+        /** Minimum time between two replays (one frame); 1.5 times the last replay's cost if larger. */
+        private const val MIN_INTERVAL_MS = 16L
+        private const val MAX_INTERVAL_MS = 250L
+
+        /** How long a draft waits after a drag before it is refined (ms): the finger may grab again. */
+        const val REFINE_DELAY_MS = 200L
+
+        /**
+         * A stroke that is replayed from scratch (smudge / blur / watercolor) and took longer
+         * than this (ms) waits for the end of a drag instead of following the finger.
+         */
+        const val MAX_DRAG_REPLAY_MS = 16L
+
+        /**
+         * Time one replay may take (ns): about a third of a 60 Hz frame, leaving the rest for the
+         * touch input and for redrawing the tiles the replay changed.
+         */
+        private const val TARGET_REPLAY_NS = 6_000_000.0
+
+        /**
+         * Largest work of one replay ([BrushTool.pathDabCost] units: about 500 dabs of a small
+         * brush, or 2 to 3 ms on a desktop computer), also on devices faster than that.
+         */
+        const val MAX_BUDGET = 2_500_000f
+
+        /** Smallest work of one replay, however slow the device seems (drafts can't go sparser). */
+        const val MIN_BUDGET = 250_000f
+
+        /** Replays that did less work than this are not used to measure the speed. */
+        private const val MIN_SAMPLE_WORK = 150_000.0
+        private const val MIN_NS_PER_UNIT = 0.05
+        private const val MAX_NS_PER_UNIT = 50.0
+
+        /** Weight of a new speed sample (the rest is the running average). */
+        private const val SPEED_SMOOTHING = 0.3
+
+        /**
+         * Measured nanoseconds per unit of dab work on this device, shared by every preview (the
+         * device doesn't change from one tool to the next). Starts at a desktop computer's speed:
+         * a slow phone lowers it within a few replays.
+         */
+        @Volatile
+        var nsPerUnit = 1.0
+
+        /**
+         * Work allowed for one replay ([BrushTool.pathDabCost] units): what this device draws in
+         * about [TARGET_REPLAY_NS] (see [measure]), within [MIN_BUDGET]..[MAX_BUDGET]. Beyond it a
+         * re-render is a draft, and a draft is refined by parts of this size.
+         */
+        fun budget(): Float = (TARGET_REPLAY_NS / nsPerUnit).toFloat().coerceIn(MIN_BUDGET, MAX_BUDGET)
+
+        private var seeds = 0L
+
+        private fun newSeed(): Long = System.nanoTime() xor (++seeds * -0x61c8864680b583ebL)
     }
 }
 
@@ -258,6 +596,8 @@ internal class BrushStrokePreview(
  *
  * The overlay is above the live brush stroke, while the committed stroke is painted OVER the
  * fill: the band the brush covers ([setBand]) is kept free so the whole stroke stays visible.
+ * The band is erased from the items by stroking the path (no outline of the stroke is computed
+ * on the CPU, which would cost milliseconds per frame while a long path is dragged).
  */
 internal class SpecOverlay {
     private val renderer = VectorRenderer()
@@ -267,16 +607,15 @@ internal class SpecOverlay {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     }
     private val bandSource = Path()
-    private val band = Path()
     private var bandWidth = 0f
     private var hasBand = false
-    private var bandDirty = false
 
     /**
      * The live brush stroke follows [outline] (document px) with a brush [width] px wide; null
-     * (or no width) removes the band. The band's outline is computed lazily when drawn.
+     * (or no width) removes the band.
      */
     fun setBand(outline: Path?, width: Float) {
         if (outline == null || outline.isEmpty || !width.isFinite() || width <= 0f) {
@@ -286,7 +625,6 @@ internal class SpecOverlay {
         bandSource.set(outline)
         bandWidth = width
         hasBand = true
-        bandDirty = true
     }
 
     /** Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. */
@@ -301,19 +639,16 @@ internal class SpecOverlay {
         canvas.save()
         canvas.concat(t.matrix)
         val alpha = (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
-        val save = if (alpha < 255) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
+        val band = keepBandFree && hasBand
+        // The band is erased inside an isolated layer (from the items only, not the canvas).
+        val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
         canvas.clipRect(clip)
-        if (keepBandFree && hasBand) {
-            if (bandDirty) {
-                band.rewind()
-                bandPaint.strokeWidth = bandWidth
-                bandPaint.getFillPath(bandSource, band)
-                bandDirty = false
-            }
-            canvas.clipOutPath(band)
-        }
         val sel = controller.selection
         for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
+        if (band) {
+            bandPaint.strokeWidth = bandWidth
+            canvas.drawPath(bandSource, bandPaint)
+        }
         canvas.restoreToCount(save)
         canvas.restore()
     }
