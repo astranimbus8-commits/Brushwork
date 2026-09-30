@@ -101,17 +101,14 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
 
     /**
      * Selects the object under [prompt] (document coordinates). Ignored while busy, and when no
-     * point of the prompt is on the canvas (points outside are pulled onto its edge).
+     * point of the prompt is on the canvas; a scribble that leaves the canvas keeps its longest
+     * part on it ([onCanvas]).
      */
     fun selectWith(prompt: ObjectPrompt) {
         if (busy) return
         val doc = controller.doc
         val w = doc.width; val h = doc.height
-        val inside = (0 until prompt.count).any { prompt.x(it) >= 0f && prompt.y(it) >= 0f && prompt.x(it) < w && prompt.y(it) < h }
-        if (!inside) return
-        val clamped = ObjectPrompt(FloatArray(prompt.points.size) { i ->
-            if (i % 2 == 0) prompt.points[i].coerceIn(0f, w - 0.01f) else prompt.points[i].coerceIn(0f, h - 0.01f)
-        })
+        val target = onCanvas(prompt, w, h) ?: return
         val s = settings
         val snapshot: Bitmap = try {
             PixelSnapshot.take(controller, s.source, controller.activeLayer.bitmap)
@@ -123,7 +120,7 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
         val failed = AtomicBoolean(false)
         val service = SegmentationService.get(controller.appContext)
         busy = true
-        pending = clamped
+        pending = target
         controller.invalidateOverlay()
         job = SelectionJobs.applyAsync(
             controller, "Object select", mode, "Selecting object…",
@@ -147,7 +144,7 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
                 snapshot.recycle()
             }
             if (cancelled()) return@applyAsync null
-            val r = service.selectObject(buffer, clamped, s.refineEdges, cancelled)
+            val r = service.selectObject(buffer, target, s.refineEdges, cancelled)
             if (r == null) {
                 if (!cancelled()) failed.set(true)
                 return@applyAsync null
@@ -211,5 +208,30 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
         const val TAP_SLOP_DP = 16f
 
         private const val ACCENT = 0xFF4DA3FF.toInt()
+
+        /**
+         * The part of [prompt] that is on a [w]x[h] canvas: its longest run of consecutive points
+         * inside it. A scribble that leaves the canvas is cut there instead of being pulled along
+         * the canvas edge (which would ask the model for whatever lies on the edge). Null when no
+         * point is on the canvas.
+         */
+        internal fun onCanvas(prompt: ObjectPrompt, w: Int, h: Int): ObjectPrompt? {
+            val pts = prompt.points
+            val n = prompt.count
+            var bestStart = 0; var bestLen = 0
+            var start = -1
+            for (i in 0..n) {
+                val inside = i < n && pts[2 * i] >= 0f && pts[2 * i + 1] >= 0f && pts[2 * i] < w && pts[2 * i + 1] < h
+                if (inside) {
+                    if (start < 0) start = i
+                } else if (start >= 0) {
+                    if (i - start > bestLen) { bestLen = i - start; bestStart = start }
+                    start = -1
+                }
+            }
+            if (bestLen == 0) return null
+            if (bestLen == n) return prompt
+            return ObjectPrompt(pts.copyOfRange(bestStart * 2, (bestStart + bestLen) * 2))
+        }
     }
 }

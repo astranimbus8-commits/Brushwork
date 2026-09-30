@@ -61,6 +61,24 @@ class InteractiveSegmenterTest {
     }
 
     @Test
+    fun priorIgnoresPromptPointsOutsideTheCrop() {
+        val crop = InteractiveSegmenter.Crop(100, 50, 300, 250) // 200 px -> 512: 2.56x
+        // A scribble that leaves the crop on the right, runs down outside it and comes back.
+        val scribble = ObjectPrompt(floatArrayOf(200f, 100f, 360f, 100f, 360f, 200f, 200f, 200f))
+        val prior = InteractiveSegmenter.renderPrior(scribble, crop)
+        // Inside the crop the stroke is drawn...
+        assertEquals(1f, prior[128 * n + 400], 0f)
+        assertEquals(1f, prior[384 * n + 400], 0f)
+        // ...but the part outside must not be pulled onto the crop's right edge.
+        val edge = (0 until n).count { prior[it * n + n - 1] > 0f }
+        assertTrue("edge pixels marked: $edge", edge <= 2 * (2 * InteractiveSegmenter.PRIOR_RADIUS.toInt() + 1))
+        // A tap outside the crop marks nothing.
+        assertTrue(InteractiveSegmenter.renderPrior(ObjectPrompt.tap(20f, 20f), crop).all { it == 0f })
+        assertFalse(InteractiveSegmenter.touches(ObjectPrompt.tap(20f, 20f), crop))
+        assertTrue(InteractiveSegmenter.touches(scribble, crop))
+    }
+
+    @Test
     fun firstCropIsTheWholeImageUnlessItIsVeryLong() {
         val c = InteractiveSegmenter.firstCrop(1280, 960, 10f, 10f)
         assertEquals(0, c.x0); assertEquals(1280, c.x1); assertEquals(960, c.y1)
@@ -112,6 +130,32 @@ class InteractiveSegmenterTest {
             if (dx * dx + dy * dy <= (r - 2) * (r - 2)) { inDisc++; if (p[y * w + x] >= 0.5f) hit++ }
         }
         assertTrue("$hit / $inDisc", hit > 0.97f * inDisc)
+    }
+
+    @Test
+    fun zoomedAnswerThatGrabsSomethingElseIsIgnored() {
+        val w = 1200; val h = 900
+        val img = twoDiscs(w, h)
+        val flood = FloodModel()
+        var calls = 0
+        // First pass: the tapped disc. Zoomed pass: "everything" (a confused model).
+        val confused = InteractiveModel { rgb, prior ->
+            calls++
+            if (calls == 1) flood.run(rgb, prior) else FloatArray(rgb.size) { 0.97f }
+        }
+        val p = InteractiveSegmenter.segment(img, img, ObjectPrompt.tap(360f, 450f), confused) {}!!
+        assertEquals("the zoom pass ran", 2, calls)
+        assertTrue(p[450 * w + 360] > 0.9f)
+        // Inside the zoom window but off the disc (radius 63): still background.
+        assertTrue("off the disc: ${p[450 * w + 360 + 75]}", p[450 * w + 360 + 75] < 0.1f)
+        assertTrue(p[(450 - 75) * w + 360] < 0.1f)
+        // IoU helper.
+        val a = BooleanArray(100) { it % 10 < 5 }
+        val b = BooleanArray(100) { it % 10 < 5 && it / 10 < 5 }
+        val all = InteractiveSegmenter.Crop(0, 0, 10, 10)
+        assertEquals(0.5f, InteractiveSegmenter.overlap(a, b, 10, all), 1e-6f)
+        assertEquals(1f, InteractiveSegmenter.overlap(a, b, 10, InteractiveSegmenter.Crop(0, 0, 10, 5)), 1e-6f)
+        assertEquals(0f, InteractiveSegmenter.overlap(BooleanArray(100), BooleanArray(100), 10, all), 0f)
     }
 
     @Test

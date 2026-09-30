@@ -39,7 +39,8 @@ class ObjectPrompt(val points: FloatArray) {
  *    square model input, like MediaPipe feeds whole frames).
  * 2. The connected object under the tap is kept; a second pass zooms on its bounding box (from
  *    the full-resolution image when it has more detail), which gives the model 2-8x more pixels
- *    on the object; the zoomed answer replaces the first inside the box, feathered at its sides.
+ *    on the object; the zoomed answer replaces the first inside the box, feathered at its sides,
+ *    when it found the same object ([MIN_ZOOM_AGREEMENT]).
  * 3. Again only the object under the tap is kept (soft edges preserved).
  *
  * The result is a soft probability at WORKING resolution; edge refinement (matting, color
@@ -56,6 +57,12 @@ internal object InteractiveSegmenter {
 
     /** The zoom pass runs when it magnifies the object at least this much. */
     const val MIN_ZOOM_GAIN = 1.4f
+
+    /**
+     * The zoomed answer is used only if its object overlaps the first pass's object by at least
+     * this intersection-over-union inside the zoom window.
+     */
+    const val MIN_ZOOM_AGREEMENT = 0.5f
 
     /** A crop rectangle in working-image pixels (may extend past the image: edges repeat). */
     class Crop(val x0: Int, val y0: Int, val x1: Int, val y1: Int) {
@@ -79,10 +86,15 @@ internal object InteractiveSegmenter {
         val comp = componentAt(p1, w, h, prompt) ?: return FloatArray(w * h)
         val zoom = zoomCrop(comp, w, h)
         var merged = p1
-        if (zoom != null && first.long.toFloat() / zoom.long >= MIN_ZOOM_GAIN) {
+        if (zoom != null && first.long.toFloat() / zoom.long >= MIN_ZOOM_GAIN && touches(prompt, zoom)) {
             val p2 = pass(work, full, zoom, prompt, model)
             checkCancelled()
-            if (p2 != null && componentAt(p2, w, h, prompt) != null) merged = blendZoom(p1, p2, w, h, zoom)
+            val comp2 = p2?.let { componentAt(it, w, h, prompt) }
+            // The zoomed answer only refines the same object: one that grabbed something else
+            // (e.g. the whole crop) is ignored.
+            if (p2 != null && comp2 != null && overlap(comp, comp2, w, zoom) >= MIN_ZOOM_AGREEMENT) {
+                merged = blendZoom(p1, p2, w, h, zoom)
+            }
         }
         val keep = componentAt(merged, w, h, prompt) ?: return FloatArray(w * h)
         return keepComponent(merged, keep, w, h)
@@ -204,9 +216,9 @@ internal object InteractiveSegmenter {
             val dx = x + 0.5f - cx; val dy = y + 0.5f - cy
             if (dx * dx + dy * dy <= r * r) prior[y * MODEL_SIZE + x] = 1f
         }
-        // A point between pixel centers still marks its nearest pixel.
-        val nx = cx.toInt().coerceIn(0, MODEL_SIZE - 1); val ny = cy.toInt().coerceIn(0, MODEL_SIZE - 1)
-        prior[ny * MODEL_SIZE + nx] = 1f
+        // A point between pixel centers still marks its nearest pixel, but only a point that is
+        // in the model input: a scribble point outside the crop must not mark the crop's edge.
+        if (cx >= 0f && cy >= 0f && cx < MODEL_SIZE && cy < MODEL_SIZE) prior[cy.toInt() * MODEL_SIZE + cx.toInt()] = 1f
     }
 
     /**
@@ -243,6 +255,25 @@ internal object InteractiveSegmenter {
             picked[best] = true
         }
         return BooleanArray(w * h) { picked[lab.ids[it]] }
+    }
+
+    /** True if at least one point of [prompt] lies inside [crop] (the model would see the tap). */
+    fun touches(prompt: ObjectPrompt, crop: Crop): Boolean = (0 until prompt.count).any { i ->
+        prompt.x(i) >= crop.x0 && prompt.y(i) >= crop.y0 && prompt.x(i) < crop.x1 && prompt.y(i) < crop.y1
+    }
+
+    /** Intersection over union of the masks [a] and [b] (w wide) inside [window]; 0 if both are empty. */
+    fun overlap(a: BooleanArray, b: BooleanArray, w: Int, window: Crop): Float {
+        require(a.size == b.size && w > 0)
+        val h = a.size / w
+        var inter = 0; var union = 0
+        for (y in max(0, window.y0) until min(h, window.y1)) for (x in max(0, window.x0) until min(w, window.x1)) {
+            val i = y * w + x
+            val u = a[i]; val v = b[i]
+            if (u && v) inter++
+            if (u || v) union++
+        }
+        return if (union == 0) 0f else inter.toFloat() / union
     }
 
     /**

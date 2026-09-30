@@ -12,6 +12,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
+import com.brushwork.paint.segmentation.ObjectPrompt
 import com.brushwork.paint.tools.ToolPoint
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -129,6 +130,39 @@ class ObjectSelectToolRobolectricTest {
         assertFalse(tool.busy)
         shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(200))
         assertNull(c.selection)
+    }
+
+    @Test
+    fun aScribbleThatLeavesTheCanvasIsCutNotDraggedAlongTheEdge() {
+        // Points outside the canvas used to be pulled onto its edge: the white paper along the
+        // right edge became part of the prompt and the whole background was selected.
+        val c = controller()
+        val tool = ObjectSelectTool(c)
+        tool.onDown(ToolPoint(175f, 150f))
+        tool.onMove(ToolPoint(225f, 150f))
+        tool.onMove(ToolPoint(480f, 150f)) // off the 400 px wide canvas
+        tool.onMove(ToolPoint(480f, 20f))
+        tool.onUp(ToolPoint(470f, 20f))
+        assertTrue(pumpUntil { !tool.busy })
+        assertEquals(255, alpha(c.selection, 200, 150))
+        assertEquals(0, alpha(c.selection, 395, 150))
+        assertEquals(0, alpha(c.selection, 10, 10))
+        assertTrue(errors.isEmpty())
+    }
+
+    @Test
+    fun promptIsCutToItsLongestRunOnTheCanvas() {
+        val all = ObjectPrompt(floatArrayOf(10f, 10f, 20f, 20f))
+        assertTrue(ObjectSelectTool.onCanvas(all, 100, 100) === all)
+        assertNull(ObjectSelectTool.onCanvas(ObjectPrompt(floatArrayOf(-1f, 5f, 150f, 5f)), 100, 100))
+        assertNull(ObjectSelectTool.onCanvas(ObjectPrompt.tap(Float.NaN, 5f), 100, 100))
+        // In (2 points), out, in again (3 points): the second run wins.
+        val zigzag = ObjectPrompt(floatArrayOf(10f, 10f, 20f, 10f, 120f, 10f, 50f, 50f, 60f, 50f, 70f, 50f))
+        val cut = ObjectSelectTool.onCanvas(zigzag, 100, 100)!!
+        assertEquals(listOf(50f, 50f, 60f, 50f, 70f, 50f), cut.points.toList())
+        // The right and bottom edges are outside (pixel centers run up to w - 0.5).
+        assertNull(ObjectSelectTool.onCanvas(ObjectPrompt.tap(100f, 50f), 100, 100))
+        assertEquals(1, ObjectSelectTool.onCanvas(ObjectPrompt.tap(99.9f, 0f), 100, 100)!!.count)
     }
 
     @Test

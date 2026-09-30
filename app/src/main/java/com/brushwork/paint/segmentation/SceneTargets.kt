@@ -13,7 +13,8 @@ import kotlin.math.sqrt
  * - WATER = P(water) + P(sea), plus "other" regions below the horizon that look like the water
  *   and touch it (the 32-class model has no river / lake / pool class).
  * - NATURE = P(tree) + P(grass) + P(plant) + P(field), plus "other" regions enclosed by
- *   vegetation or green and textured (flower beds, palms, bushes the model calls "other").
+ *   vegetation that show some green, or bordering it and green (flower beds, palms, bushes the
+ *   model calls "other"; not a dog or a bench on the lawn).
  * - BUILDINGS = P(building) + P(house), plus windows / doors attached to them.
  * - PEOPLE = P(person).
  */
@@ -102,8 +103,10 @@ internal object SceneTargets {
 
     /**
      * Adds connected "other" regions (argmax) that are enclosed by the target (at least 70 % of
-     * their outer boundary is the target and they do not touch the image edge), or that border
-     * it and look like vegetation (mean heuristic score >= 0.5).
+     * their outer boundary is the target and they do not touch the image edge) AND show some
+     * vegetation (mean heuristic score >= [ENCLOSED_MIN_VEGETATION]: a flower bed, not a dog, a
+     * bench or a rock on the lawn), or that border it and look like vegetation (mean score >=
+     * 0.5). Without a vegetation score only tiny enclosed specks (<= [SPECK_CELLS]) are adopted.
      */
     internal fun adoptEnclosedOther(probs: FloatArray, base: FloatArray, w: Int, h: Int, vegetation: FloatArray?): FloatArray {
         val n = w * h
@@ -133,8 +136,9 @@ internal object SceneTargets {
         val adopt = BooleanArray(lab.count + 1) { id ->
             if (id == 0 || border[id] == 0) return@BooleanArray false
             val frac = borderTarget[id].toFloat() / border[id]
-            val enclosed = !touchesEdge[id] && frac >= 0.7f
-            val green = vegetation != null && frac >= 0.25f && vegSum[id] / lab.sizes[id] >= 0.5f
+            val veg = if (vegetation != null) vegSum[id] / lab.sizes[id] else 0f
+            val enclosed = !touchesEdge[id] && frac >= 0.7f && (veg >= ENCLOSED_MIN_VEGETATION || lab.sizes[id] <= SPECK_CELLS)
+            val green = vegetation != null && frac >= 0.25f && veg >= 0.5f
             enclosed || green
         }
         for (i in 0 until n) {
@@ -143,6 +147,12 @@ internal object SceneTargets {
         }
         return out
     }
+
+    /** Least mean vegetation score of an enclosed "other" region that NATURE adopts. */
+    const val ENCLOSED_MIN_VEGETATION = 0.2f
+
+    /** Enclosed "other" specks up to this many cells are adopted whatever their color (gaps). */
+    const val SPECK_CELLS = 4
 
     // ------------------------------------------------------------------ buildings
 

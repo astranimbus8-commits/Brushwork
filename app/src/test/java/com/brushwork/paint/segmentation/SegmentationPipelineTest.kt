@@ -206,6 +206,44 @@ class SegmentationPipelineTest {
     }
 
     @Test
+    fun modelLoadingDoesNotCountAsAPass() {
+        // A model that takes ~900 ms to load (interpreter + self-test) and then answers at once.
+        // The first selection after a cold start must still get every pass the budget allows
+        // (letterbox + 2 crops + mirrored for 4:3), not the letterbox alone.
+        class ColdModel : SceneParser {
+            var loads = 0
+            var calls = 0
+            private var loaded = false
+            override fun prepare() {
+                if (!loaded) { Thread.sleep(900); loaded = true; loads++ }
+            }
+            override fun run(input: PixelBuffer): SceneScores {
+                prepare()
+                calls++
+                return SceneScores.Labels(input.width, ByteArray(input.size) { i ->
+                    val c = input.pixels[i]
+                    (if (c == ScenePasses.PAD) SceneClasses.OTHER else if ((c and 0xFF) > 150) SceneClasses.SKY else SceneClasses.TREE).toByte()
+                })
+            }
+        }
+        val model = ColdModel()
+        val w = 800; val h = 600
+        val sky = SegmentationPipeline(model, null, passBudgetMs = 750).segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY)!!
+        assertEquals(1, model.loads)
+        assertEquals(4, model.calls)
+        assertTrue(mean(sky, w, 0, 0, w, h / 2 - 10) > 0.97f)
+        // A model whose warm-up fails still runs (the pass itself reports the failure).
+        val flaky = object : SceneParser {
+            override fun prepare() = throw IllegalStateException("no native runtime")
+            override fun run(input: PixelBuffer): SceneScores? = null
+        }
+        val logged = mutableListOf<String>()
+        val fallback = SegmentationPipeline(flaky, null, log = { msg, _ -> logged += msg }).segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY)!!
+        assertTrue(mean(fallback, w, 0, 0, w, h / 2 - 10) > 0.9f) // heuristics
+        assertTrue(logged.any { "warm-up" in it })
+    }
+
+    @Test
     fun buildingsIncludeFacadeWindows() {
         val w = 512; val h = 384
         val img = SegTestImages.facade(w, h)

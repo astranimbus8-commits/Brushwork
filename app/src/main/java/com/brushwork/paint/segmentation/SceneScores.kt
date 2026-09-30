@@ -13,6 +13,13 @@ fun interface SceneParser {
      * picture with mid-gray padding, or a crop), or null if the model is unavailable.
      */
     fun run(input: PixelBuffer): SceneScores?
+
+    /**
+     * Loads the model now if it is not loaded yet (and whatever one-time checks it needs), so
+     * that the next [run] costs one inference. Called before the pipeline times its first pass:
+     * a cold start must not make the pass plan think every pass is that slow.
+     */
+    fun prepare() {}
 }
 
 /** What a scene model produced for one input. */

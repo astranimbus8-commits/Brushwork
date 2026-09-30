@@ -68,22 +68,40 @@ class SceneTargetsTest {
     }
 
     @Test
-    fun natureAdoptsOtherRegionsEnclosedByVegetation() {
+    fun natureAdoptsGreenOtherRegionsEnclosedByVegetationButNotObjectsOnTheLawn() {
         val w = 16; val h = 16
-        // A flower bed ("other") in the middle of grass, and an "other" object touching the edge.
+        fun flowers(x: Int, y: Int) = x in 2..5 && y in 6..9
+        fun dog(x: Int, y: Int) = x in 9..12 && y in 9..12
+        fun gap(x: Int, y: Int) = x == 7 && y == 3
+        fun edgeThing(x: Int, y: Int) = x >= 13 && y < 4
+        // In the grass: a flower bed and a dog (both "other" to the model), a one-cell gap, and an
+        // "other" object touching the image edge.
         val probs = grid(w, h) { x, y ->
+            if (flowers(x, y) || dog(x, y) || gap(x, y) || edgeThing(x, y)) mapOf(SceneClasses.OTHER to 0.9f)
+            else mapOf(SceneClasses.GRASS to 0.9f)
+        }
+        // Vegetation heuristic: the flower bed's leaves are partly green, the dog is not.
+        val veg = FloatArray(w * h) { i ->
+            val x = i % w; val y = i / w
             when {
-                x in 6..9 && y in 6..9 -> mapOf(SceneClasses.OTHER to 0.9f)
-                x >= 13 && y < 4 -> mapOf(SceneClasses.OTHER to 0.9f)
-                else -> mapOf(SceneClasses.GRASS to 0.9f)
+                flowers(x, y) -> 0.35f
+                dog(x, y) || gap(x, y) || edgeThing(x, y) -> 0f
+                else -> 0.9f
             }
         }
-        val p = SceneTargets.probability(probs, w, h, SmartTarget.NATURE, null)
-        assertTrue(p[7 * w + 7] > 0.9f)
+        val p = SceneTargets.probability(probs, w, h, SmartTarget.NATURE, null, veg)
+        assertTrue("flower bed", p[7 * w + 3] > 0.9f)
+        assertTrue("a dog on the lawn is not nature", p[10 * w + 10] < 0.1f)
+        assertTrue("gap", p[3 * w + 7] > 0.9f)
         assertTrue("touches the edge, not green", p[1 * w + 14] < 0.1f)
-        // With a vegetation score, an edge-touching green "other" region bordering grass is adopted.
-        val veg = FloatArray(w * h) { if (it % w >= 13 && it / w < 4) 0.8f else 0f }
-        val p2 = SceneTargets.probability(probs, w, h, SmartTarget.NATURE, null, veg)
+        // Without a vegetation score only the tiny gap is adopted.
+        val bare = SceneTargets.probability(probs, w, h, SmartTarget.NATURE, null)
+        assertTrue(bare[7 * w + 3] < 0.1f)
+        assertTrue(bare[10 * w + 10] < 0.1f)
+        assertTrue(bare[3 * w + 7] > 0.9f)
+        // An edge-touching green "other" region bordering grass is adopted.
+        val greenEdge = FloatArray(w * h) { if (edgeThing(it % w, it / w)) 0.8f else veg[it] }
+        val p2 = SceneTargets.probability(probs, w, h, SmartTarget.NATURE, null, greenEdge)
         assertTrue(p2[1 * w + 14] > 0.9f)
     }
 

@@ -35,6 +35,12 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
     private var modelBuffer: ByteBuffer? = null
     private var unavailable = false
     private val broken = HashSet<Variant>()
+
+    /** Variants that passed the full self-test in this process (not re-checked after a release). */
+    private val verified = HashSet<Variant>()
+
+    /** The untouched model's class ids for the self-test image (computed once per process). */
+    private var referenceIds: ByteArray? = null
     private var inputBuffer: ByteBuffer? = null
     private var outputBuffer: ByteBuffer? = null
     private var inputBytes: ByteArray? = null
@@ -76,6 +82,9 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
     fun warmUp() {
         synchronized(lock) { obtainLocked() }
     }
+
+    /** Called by the pipeline before it times its passes: loading is not part of a pass. */
+    override fun prepare() = warmUp()
 
     /** Frees the interpreter and its buffers; the next [run] recreates them. */
     fun release() {
@@ -242,35 +251,49 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
      * the reference cannot run (or its answer is too mottled to judge), the sky half and the
      * ground half must at least get different classes. Catches a rewired graph that runs but
      * yields garbage.
+     *
+     * The inference also warms the interpreter up (delegate preparation happens on the first
+     * run), so it runs for every newly created interpreter; the comparison with the reference
+     * runs once per variant and process (a re-creation after a memory trim only re-checks that
+     * the logits are finite).
      */
     private fun selfTest(interp: Interpreter, v: Variant): Boolean {
-        if (v == Variant.ARGMAX) return true
         val img = SceneSelfTest.image(SIZE)
-        val scores = infer(interp, v, img) as SceneScores.Logits
+        val scores = infer(interp, v, img)
+        if (v == Variant.ARGMAX) return true
+        scores as SceneScores.Logits
         var lo = Float.POSITIVE_INFINITY; var hi = Float.NEGATIVE_INFINITY
         for (x in scores.values) {
             if (!x.isFinite()) { Log.w(TAG, "self-test: non-finite logits ($v)"); return false }
             if (x < lo) lo = x
             if (x > hi) hi = x
         }
+        if (v in verified) return true
         if (hi - lo <= 1f) {
             Log.w(TAG, "self-test failed ($v): logit range ${hi - lo}")
             return false
         }
         val agreement = referenceLabels(img)?.let { SceneSelfTest.argmaxAgreement(scores, it, SIZE) }
-        if (agreement != null) {
-            val ok = agreement >= SceneSelfTest.MIN_AGREEMENT
-            if (ok) Log.i(TAG, "self-test ($v): logits argmax agrees with the argmax model on ${(agreement * 100).roundToInt()} % of cells")
-            else Log.w(TAG, "self-test failed ($v): logits argmax agrees with the argmax model on only ${(agreement * 100).roundToInt()} % of cells")
-            return ok
+        val ok = if (agreement != null) {
+            (agreement >= SceneSelfTest.MIN_AGREEMENT).also { ok ->
+                if (ok) Log.i(TAG, "self-test ($v): logits argmax agrees with the argmax model on ${(agreement * 100).roundToInt()} % of cells")
+                else Log.w(TAG, "self-test failed ($v): logits argmax agrees with the argmax model on only ${(agreement * 100).roundToInt()} % of cells")
+            }
+        } else {
+            SceneSelfTest.halvesDiffer(scores).also { ok ->
+                if (!ok) Log.w(TAG, "self-test failed ($v): the sky and ground halves got the same class")
+            }
         }
-        val ok = SceneSelfTest.halvesDiffer(scores)
-        if (!ok) Log.w(TAG, "self-test failed ($v): the sky and ground halves got the same class")
+        if (ok) verified += v
         return ok
     }
 
+    /** The self-test reference for [img], kept once computed (null if it cannot run now). */
+    private fun referenceLabels(img: PixelBuffer): ByteArray? =
+        referenceIds ?: computeReferenceLabels(img)?.also { referenceIds = it }
+
     /** Class ids of the untouched fused-argmax model for [img] (the self-test reference), or null. */
-    private fun referenceLabels(img: PixelBuffer): ByteArray? {
+    private fun computeReferenceLabels(img: PixelBuffer): ByteArray? {
         var ref: Interpreter? = null
         return try {
             ref = Interpreter(mapModel(), Interpreter.Options().setNumThreads(NUM_THREADS))

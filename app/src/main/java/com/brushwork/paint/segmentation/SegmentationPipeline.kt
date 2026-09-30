@@ -250,6 +250,16 @@ class SegmentationPipeline(
             val (fw, fh) = SceneFusion.gridSize(w, h).let { it[0] to it[1] }
             val fusion = SceneFusion(w, h, fw, fh)
             val global = ScenePasses.global(w, h)
+            // Model loading (and its self-test) is not a pass: timing it would make the first
+            // selection after a cold start run the letterbox pass alone.
+            try {
+                parser.prepare()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                log("scene parser warm-up failed", e)
+            }
+            check()
             val t0 = System.nanoTime()
             val first = runPass(parser, ScenePasses.renderGlobal(work, global), global) ?: return null
             fusion.add(first, global)
