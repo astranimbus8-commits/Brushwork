@@ -222,7 +222,8 @@ fun Hotbar(
             ToolIconButton(
                 Icons.AutoMirrored.Filled.Redo, "Redo",
                 { controller.endCanvasGesture(); controller.redo() },
-                enabled = controller.canRedo && !userWork && session == null,
+                // A pending curve / polygon redoes its own points first (see Tool.canRedoStep).
+                enabled = (controller.canRedo && !userWork || tool.canRedoStep) && session == null,
             )
         }
     }

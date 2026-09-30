@@ -113,6 +113,9 @@ abstract class Tool(val controller: EditorController) {
      */
     open fun undoStep(): Boolean = false
 
+    /** True when [undoStep] would take back one step (Compose state; undo feedback text). */
+    open val canUndoStep: Boolean get() = false
+
     /** Redo one step previously taken back by [undoStep]. Return true if something was redone. */
     open fun redoStep(): Boolean = false
 

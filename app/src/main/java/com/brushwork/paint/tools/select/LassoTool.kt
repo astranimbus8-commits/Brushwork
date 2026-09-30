@@ -216,7 +216,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     fun corner(i: Int): Pair<Float, Float> = vertices.x(i) to vertices.y(i)
 
     /** True when there is a corner to take back (Compose state through [vertexCount]). */
-    val canUndoStep: Boolean get() = vertexCount > 0
+    override val canUndoStep: Boolean get() = vertexCount > 0
 
     /** The in-tool undo button: the last corner edit, or the whole polygon if its history ran out. */
     fun undoLastCorner() {

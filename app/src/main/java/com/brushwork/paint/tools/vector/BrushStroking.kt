@@ -1,6 +1,8 @@
 package com.brushwork.paint.tools.vector
 
 import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Handler
@@ -9,6 +11,7 @@ import android.os.SystemClock
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushTool
+import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
@@ -243,13 +246,42 @@ internal class BrushStrokePreview(
  * one render override can exist and the brush preview uses it, so these items are shown on top
  * of the canvas instead of inside the layer: with the layer's opacity, the selection and the
  * color mode, but without its blend mode.
+ *
+ * The overlay is above the live brush stroke, while the committed stroke is painted OVER the
+ * fill: the band the brush covers ([setBand]) is kept free so the whole stroke stays visible.
  */
 internal class SpecOverlay {
     private val renderer = VectorRenderer()
     private val clip = Rect()
     private val bounds = RectF()
+    private val bandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val bandSource = Path()
+    private val band = Path()
+    private var bandWidth = 0f
+    private var hasBand = false
+    private var bandDirty = false
 
-    fun draw(canvas: Canvas, t: ViewTransform, controller: EditorController, layer: Layer, specs: List<VectorPaintSpec>) {
+    /**
+     * The live brush stroke follows [outline] (document px) with a brush [width] px wide; null
+     * (or no width) removes the band. The band's outline is computed lazily when drawn.
+     */
+    fun setBand(outline: Path?, width: Float) {
+        if (outline == null || outline.isEmpty || !width.isFinite() || width <= 0f) {
+            hasBand = false
+            return
+        }
+        bandSource.set(outline)
+        bandWidth = width
+        hasBand = true
+        bandDirty = true
+    }
+
+    /** Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. */
+    fun draw(canvas: Canvas, t: ViewTransform, controller: EditorController, layer: Layer, specs: List<VectorPaintSpec>, keepBandFree: Boolean = false) {
         if (specs.isEmpty() || !layer.visible) return
         val doc = controller.doc
         val maskMode = controller.editTargetOf(layer) == EditTarget.MASK
@@ -262,9 +294,38 @@ internal class SpecOverlay {
         val alpha = (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
         val save = if (alpha < 255) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
         canvas.clipRect(clip)
+        if (keepBandFree && hasBand) {
+            if (bandDirty) {
+                band.rewind()
+                bandPaint.strokeWidth = bandWidth
+                bandPaint.getFillPath(bandSource, band)
+                bandDirty = false
+            }
+            canvas.clipOutPath(band)
+        }
         val sel = controller.selection
         for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
         canvas.restoreToCount(save)
         canvas.restore()
+    }
+}
+
+/**
+ * Runs [block] and folds every undo action it pushes into ONE step named [label], also when it
+ * pushes a single one: a curve / shape painted with the brush is undone as "Curve" / "Shape",
+ * not as the painting tool's own "Brush" step.
+ */
+internal fun EditorController.undoStepNamed(label: String, block: () -> Unit) {
+    val um = undoManager
+    val mark = um.undoCount
+    try {
+        block()
+    } finally {
+        val added = um.takeSince(mark)
+        when {
+            added.isEmpty() -> {}
+            added.size == 1 && added[0].label == label -> um.pushRaw(added[0])
+            else -> um.pushRaw(CompositeAction(label, added))
+        }
     }
 }

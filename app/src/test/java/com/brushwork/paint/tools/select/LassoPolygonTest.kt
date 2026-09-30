@@ -10,6 +10,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.editor.HistoryLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -56,10 +57,13 @@ class LassoPolygonTest {
         val tool = lasso(c)
         c.tap(50f, 50f); c.tap(150f, 50f); c.tap(150f, 150f)
         assertEquals(3, tool.vertexCount)
+        // The feedback of the two-finger tap / undo button names one point, not the polygon.
+        assertEquals("Undo: Lasso point", HistoryLabels.undo(c))
         c.undo()
         assertEquals("only the last corner is gone", 2, tool.vertexCount)
         assertTrue(tool.hasPendingWork)
         assertTrue(tool.canRedoStep)
+        assertEquals("Redo: Lasso point", HistoryLabels.redo(c))
         c.redo()
         assertEquals(3, tool.vertexCount)
         assertEquals(150f to 150f, tool.corner(2))

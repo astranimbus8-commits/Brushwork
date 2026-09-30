@@ -86,7 +86,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         private set
 
     /** True when [undoStep] can go back. */
-    var canUndoStep by mutableStateOf(false)
+    override var canUndoStep by mutableStateOf(false)
         private set
 
     /** Number of edits [redoStep] can bring back (Compose state; the in-tool redo button). */
@@ -469,6 +469,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         if (path != null && settings.stroke == CurveStroke.BRUSH && layer === controller.doc.activeLayer) {
             preview.release()
             overlaySpecs = specs
+            if (specs.isNotEmpty()) specOverlay.setBand(docPath, controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
             val g = brushGeometry(path, settings)
             brushPreview.request(g) { brushPoints(path, g) }
         } else {
@@ -495,8 +496,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val brush = s.stroke == CurveStroke.BRUSH && layer === controller.doc.activeLayer
         val g = brushGeometry(path, s)
         resetPath()
-        // Fill and brush stroke are ONE undo step.
-        controller.groupUndo(if (polyline) "Polyline" else "Curve") {
+        // Fill and brush stroke are ONE undo step, named after the tool (a plain line / fill
+        // alone keeps its own name).
+        val step: (String, () -> Unit) -> Unit = if (brush) controller::undoStepNamed else controller::groupUndo
+        step(if (polyline) "Polyline" else "Curve") {
             if (specs.isNotEmpty()) {
                 // The fill goes under the stroke, so the stroke is painted after it (smudge /
                 // blur previews edit the pixels: they are restored first).
@@ -585,7 +588,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val list = anchors
         if (list.isEmpty()) return
-        if (overlaySpecs.isNotEmpty()) specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs)
+        if (overlaySpecs.isNotEmpty()) {
+            specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
+        }
         if (list.size >= 2) painter.path(canvas, t, docPath)
         val sel = selected
         if (!polyline && sel in list.indices && !list[sel].sharp) {

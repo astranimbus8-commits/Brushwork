@@ -15,6 +15,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.editor.HistoryLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -445,6 +446,111 @@ class VectorLiveEditTest {
         assertFalse(c.twoFingerStart(Vec2(20f, 20f), Vec2(10f, 20f), Vec2(30f, 20f)))
         assertFalse(c.canUndo)
         assertTrue(start != b)
+    }
+
+    // ------------------------------------------------------------------ review fixes
+
+    @Test
+    fun undoFeedbackNamesTheSinglePointItTakesBack() {
+        val c = controller()
+        val tool = curveTool(c, polyline = false)
+        tool.update { it.copy(stroke = CurveStroke.PLAIN) }
+        assertEquals("Nothing to undo", HistoryLabels.undo(c))
+        c.tap(20f, 100f); c.tap(100f, 40f); c.tap(180f, 100f)
+        assertTrue(tool.canUndoStep)
+        // What the two-finger tap / undo button shows: one point, not the whole curve.
+        assertEquals("Undo: Curve point", HistoryLabels.undo(c))
+        c.undo()
+        assertEquals(2, tool.anchors.size)
+        assertEquals("Redo: Curve point", HistoryLabels.redo(c))
+        c.redo()
+        assertEquals(3, tool.anchors.size)
+        assertEquals("Apply or discard the curve edit first", HistoryLabels.redo(c))
+        tool.discard()
+        // Tools without steps still say that undo throws their pending work away.
+        val shape = shapeTool(c)
+        c.drag(40f to 40f, 160f to 160f)
+        assertTrue(shape.hasPendingWork)
+        assertEquals("Undo: Shape (discarded)", HistoryLabels.undo(c))
+        c.undo()
+        assertFalse(shape.hasPendingWork)
+    }
+
+    @Test
+    fun brushPaintedCurvesAndShapesAreUndoneUnderTheirOwnName() {
+        val c = controller()
+        val tool = curveTool(c, polyline = false)
+        tool.update { it.copy(stroke = CurveStroke.BRUSH, fill = false) }
+        c.tap(20f, 100f); c.tap(180f, 100f)
+        tool.flushPreview()
+        tool.commit()
+        assertEquals(1, c.undoManager.undoCount)
+        assertEquals("Curve", c.undoManager.undoLabel)
+        assertEquals("Undo: Curve", HistoryLabels.undo(c))
+        c.undo()
+        assertEquals(0, alpha(c.doc.activeLayer.bitmap.getPixel(100, 100)))
+        c.redo()
+        assertTrue(alpha(c.doc.activeLayer.bitmap.getPixel(100, 100)) > 200)
+        // A fill-only path keeps its own name.
+        tool.update { it.copy(stroke = CurveStroke.NONE, fill = true) }
+        c.tap(20f, 20f); c.tap(60f, 20f); c.tap(40f, 60f)
+        tool.commit()
+        assertEquals("Fill path", c.undoManager.undoLabel)
+        // A shape outlined with the brush is one "Shape" step.
+        val shape = shapeTool(c)
+        shape.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, strokeWith = ShapeStroke.BRUSH) }
+        c.drag(100f to 120f, 180f to 190f)
+        shape.flushPreview()
+        shape.commit()
+        assertEquals(3, c.undoManager.undoCount)
+        assertEquals("Shape", c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun fillPreviewLeavesTheWholeLiveBrushStrokeVisible() {
+        val blue = 0xFF0000FF.toInt()
+        val c = controller()
+        c.brush = c.brush.copy(size = 10f)
+        val tool = curveTool(c, polyline = true)
+        tool.update { it.copy(stroke = CurveStroke.BRUSH, fill = true, fillColor = blue, closed = true) }
+        c.tap(40f, 40f); c.tap(160f, 40f); c.tap(160f, 160f); c.tap(40f, 160f)
+        tool.flushPreview()
+        val shot = c.composite()
+        val over = c.overlay()
+        // The inner half of the stroke (y 40..45, under the thin guide line at 40) is not covered
+        // by the fill drawn on top.
+        for (y in listOf(43, 44)) {
+            assertEquals("no fill over the stroke at y=$y", 0, alpha(over.getPixel(100, y)))
+            assertTrue("stroke visible at y=$y", alpha(shot.getPixel(100, y)) > 200)
+        }
+        assertEquals("the fill shows inside", blue, over.getPixel(100, 100))
+        assertEquals(blue, over.getPixel(100, 50))
+        // The band follows the path when a point moves.
+        c.drag(160f to 40f, 160f to 70f)
+        tool.flushPreview()
+        // (120, 64) is inside the new fill, 4 px from the new top edge.
+        assertEquals(0, alpha(c.overlay().getPixel(120, 64)))
+        assertEquals(blue, c.overlay().getPixel(100, 100))
+        // After ✓ the stroke is painted over the fill, as previewed.
+        tool.commit()
+        val layer = c.doc.activeLayer
+        assertEquals("the new top edge passes (100, 55)", red, layer.bitmap.getPixel(100, 55))
+        assertEquals(red, layer.bitmap.getPixel(120, 61))
+        assertEquals(blue, layer.bitmap.getPixel(100, 100))
+        assertEquals(0, alpha(c.overlay().getPixel(100, 100)))
+
+        // Same for a filled shape outlined with the brush.
+        val c2 = controller()
+        c2.brush = c2.brush.copy(size = 10f)
+        val shape = shapeTool(c2)
+        shape.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE_FILL, strokeWith = ShapeStroke.BRUSH, fillColor = blue) }
+        c2.drag(40f to 60f, 100f to 100f, 160f to 140f)
+        shape.flushPreview()
+        val over2 = c2.overlay()
+        // 3 px inside the top edge (away from the handles and the dashed box).
+        assertEquals(0, alpha(over2.getPixel(70, 63)))
+        assertTrue(alpha(c2.composite().getPixel(70, 63)) > 200)
+        assertEquals(blue, over2.getPixel(100, 100))
     }
 
     @Test

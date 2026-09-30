@@ -132,6 +132,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     private val painter = OverlayPainter()
     private val boxPath = Path()
+    private val bandPath = Path()
     private val pts = FloatArray(2)
 
     // ------------------------------------------------------------------ settings
@@ -503,6 +504,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             val older = box?.takeIf { it !== brushBox }
             overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushBox, brush = true))
             val path = brushOutline(brushBox)
+            if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
             brushPreview.request(path.ops) { brushStrokePoints(path) }
         } else {
             brushPreview.cancel()
@@ -533,8 +535,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         pinchStart = null
         overlaySpecs = emptyList()
         preview.release()
-        // Fill (plain) and outline (brush) are ONE undo step.
-        controller.groupUndo("Shape") {
+        // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
+        controller.undoStepNamed("Shape") {
             if (spec != null) {
                 // The fill goes under the brush stroke: a live stroke is restarted after it.
                 brushPreview.cancel()
@@ -607,7 +609,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val creating = creatingBox
         val b = creating ?: box ?: return
-        if (overlaySpecs.isNotEmpty()) specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs)
+        if (overlaySpecs.isNotEmpty()) {
+            specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
+        }
         if (settings.type.isLineLike) {
             if (creating != null) return
             map(t, b.start).let { painter.handle(canvas, t, it[0], it[1]) }
