@@ -19,6 +19,7 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.vector.CurveAnchor
 import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.tools.vector.VectorPath
+import com.brushwork.paint.ui.editor.HistoryLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -260,6 +261,48 @@ class LassoCurveTest {
         assertEquals(4, tool.curve.count)
         tool.discard()
         assertFalse(tool.hasPendingWork)
+    }
+
+    @Test
+    fun undoRedoFeedbackNamesPointsInCurveModeAndCornersForThePolygon() {
+        val c = controller()
+        val tool = lasso(c)
+        c.tap(50f, 50f); c.tap(150f, 50f); c.tap(150f, 150f)
+        // What the two-finger tap / undo button shows before it takes the point back.
+        assertEquals("Undo: last point", HistoryLabels.undo(c))
+        c.undo()
+        assertEquals("Redo: last point", HistoryLabels.redo(c))
+        tool.discard()
+        tool.setKind(LassoKind.POLYGON)
+        c.tap(50f, 50f); c.tap(150f, 50f)
+        assertEquals("the polygon keeps its wording", "Undo: last corner", HistoryLabels.undo(c))
+        tool.discard()
+    }
+
+    @Test
+    fun nonFiniteTouchesAddNothing() {
+        val c = controller()
+        val tool = lasso(c)
+        c.tap(50f, 50f); c.tap(150f, 50f); c.tap(150f, 150f)
+        c.tap(Float.NaN, 20f)
+        c.tap(Float.POSITIVE_INFINITY, Float.NaN)
+        assertEquals(3, tool.curve.count)
+        // A bad sample in the middle of a drag or at lift-off keeps the last good position.
+        c.pointerDown(ToolPoint(40f, 170f))
+        c.pointerMove(ToolPoint(45f, 175f))
+        c.pointerMove(ToolPoint(Float.NaN, Float.NaN))
+        c.pointerUp(ToolPoint(Float.NaN, 180f))
+        assertEquals(4, tool.curve.count)
+        assertEquals(Vec2(45f, 175f), tool.curve.anchors[3].pos)
+        c.drag(150f to 150f, 160f to 165f, 170f to 170f)
+        c.pointerDown(ToolPoint(170f, 170f))
+        c.pointerMove(ToolPoint(180f, 185f))
+        c.pointerUp(ToolPoint(Float.NaN, Float.NaN))
+        assertEquals(Vec2(180f, 185f), tool.curve.anchors[2].pos)
+        assertTrue(tool.curve.anchors.all { it.x.isFinite() && it.y.isFinite() })
+        tool.commit()
+        awaitSelection(c, tool)
+        assertEquals(255, c.selection!!.alphaAt(120, 100))
     }
 
     @Test

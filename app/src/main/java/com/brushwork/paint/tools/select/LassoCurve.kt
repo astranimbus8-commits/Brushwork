@@ -186,6 +186,8 @@ class LassoCurve internal constructor(
 
     fun onDown(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
+        // A degenerate view transform could map the finger to NaN: such a touch does nothing.
+        if (!pt.x.isFinite() || !pt.y.isFinite()) { drag = Drag.NONE; return }
         downPoint = pt
         moved = false
         longPressed = false
@@ -211,6 +213,7 @@ class LassoCurve internal constructor(
 
     fun onMove(p: ToolPoint) {
         val pt = Vec2(p.x, p.y)
+        if (!pt.x.isFinite() || !pt.y.isFinite()) return
         when (drag) {
             Drag.NONE -> return
             Drag.ANCHOR -> {
@@ -229,7 +232,9 @@ class LassoCurve internal constructor(
     }
 
     fun onUp(p: ToolPoint) {
-        val pt = Vec2(p.x, p.y)
+        // (A non-finite lift-off sample keeps the last good position.)
+        val pt = Vec2(p.x, p.y).takeIf { it.x.isFinite() && it.y.isFinite() }
+            ?: floating ?: anchors.getOrNull(dragIndex)?.pos ?: downPoint
         val d = drag
         drag = Drag.NONE
         when (d) {
