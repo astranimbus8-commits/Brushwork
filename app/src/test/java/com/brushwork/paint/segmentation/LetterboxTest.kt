@@ -63,35 +63,4 @@ class LetterboxTest {
         assertEquals((-128).toByte(), unquantized[0])
         assertEquals(127.toByte(), unquantized[255])
     }
-
-    @Test
-    fun fillInputPadsWithGrayAndCentersContent() {
-        val lb = Letterbox(4, 2, size = 8)
-        assertEquals(8, lb.contentWidth); assertEquals(4, lb.contentHeight); assertEquals(2, lb.offsetY)
-        val content = PixelBuffer.filled(8, 4, 0xFFFF0000.toInt())
-        content[3, 1] = 0x00000000 // transparent -> white
-        val lut = Letterbox.quantLut(0.007843138f, -1, signed = true)
-        val out = ByteArray(8 * 8 * 3)
-        lb.fillInput(content, lut, out)
-        for (y in 0 until 8) for (x in 0 until 8) {
-            val o = (y * 8 + x) * 3
-            if (y < 2 || y >= 6) {
-                assertEquals(0.toByte(), out[o]); assertEquals(0.toByte(), out[o + 1]); assertEquals(0.toByte(), out[o + 2])
-            } else if (x == 3 && y == 3) {
-                assertEquals(127.toByte(), out[o]); assertEquals(127.toByte(), out[o + 1]); assertEquals(127.toByte(), out[o + 2])
-            } else {
-                assertEquals(127.toByte(), out[o]); assertEquals((-128).toByte(), out[o + 1]); assertEquals((-128).toByte(), out[o + 2])
-            }
-        }
-    }
-
-    @Test
-    fun cropReturnsOnlyContent() {
-        val lb = Letterbox(3, 6, size = 8) // content 4x8 at x = 2
-        assertEquals(4, lb.contentWidth); assertEquals(8, lb.contentHeight); assertEquals(2, lb.offsetX)
-        val map = ByteArray(64) { i -> if (lb.isContent(i % 8, i / 8)) (i % 8).toByte() else 99 }
-        val crop = lb.crop(map)
-        assertEquals(32, crop.size)
-        for (y in 0 until 8) for (x in 0 until 4) assertEquals((x + 2).toByte(), crop[y * 4 + x])
-    }
 }

@@ -43,7 +43,8 @@ object SceneClasses {
 
     /**
      * Classes that belong to [target] only where they touch its primary classes: windows and
-     * doors are part of a building facade, but not when they are seen indoors.
+     * doors are part of a building facade, but not when they are seen indoors
+     * ([SceneTargets.attach]).
      */
     fun attachedClassesFor(target: SmartTarget): IntArray = when (target) {
         SmartTarget.BUILDINGS -> intArrayOf(WINDOWPANE, DOOR)
@@ -52,47 +53,4 @@ object SceneClasses {
 
     /** True if [target] is answered by the scene parser. */
     fun isSceneTarget(target: SmartTarget): Boolean = classesFor(target).isNotEmpty()
-
-    /**
-     * Binary mask (1f/0f) of [target] over a [w]x[h] class map. Attached classes (see
-     * [attachedClassesFor]) are included per 8-connected component when any pixel of the
-     * component is 8-adjacent to a primary-class pixel.
-     */
-    fun targetMask(classes: ByteArray, w: Int, h: Int, target: SmartTarget): FloatArray {
-        require(classes.size == w * h)
-        val primary = lookup(classesFor(target))
-        val attached = lookup(attachedClassesFor(target))
-        val out = FloatArray(w * h)
-        var anyAttached = false
-        for (i in classes.indices) {
-            val c = classes[i].toInt() and 0xFF
-            if (c < COUNT) {
-                if (primary[c]) out[i] = 1f else if (attached[c]) anyAttached = true
-            }
-        }
-        if (!anyAttached) return out
-        val isAttached = BooleanArray(w * h) { val c = classes[it].toInt() and 0xFF; c < COUNT && attached[c] }
-        val lab = Regions.label(isAttached, w, h, eightConnected = true)
-        val touches = BooleanArray(lab.count + 1)
-        for (y in 0 until h) for (x in 0 until w) {
-            val id = lab.ids[y * w + x]
-            if (id == 0 || touches[id]) continue
-            loop@ for (dy in -1..1) {
-                val ny = y + dy
-                if (ny < 0 || ny >= h) continue
-                for (dx in -1..1) {
-                    val nx = x + dx
-                    if (nx < 0 || nx >= w) continue
-                    if (out[ny * w + nx] == 1f && lab.ids[ny * w + nx] == 0) { touches[id] = true; break@loop }
-                }
-            }
-        }
-        for (i in out.indices) {
-            val id = lab.ids[i]
-            if (id != 0 && touches[id]) out[i] = 1f
-        }
-        return out
-    }
-
-    private fun lookup(ids: IntArray): BooleanArray = BooleanArray(COUNT).also { t -> ids.forEach { t[it] = true } }
 }

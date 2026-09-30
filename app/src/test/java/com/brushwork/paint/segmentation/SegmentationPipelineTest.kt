@@ -11,19 +11,21 @@ import org.junit.Test
 class SegmentationPipelineTest {
 
     /**
-     * Fake scene model: labels each content pixel by its color (like a perfect but coarse model)
-     * and fills the letterbox padding with SKY so that a missing crop would show up.
+     * Fake scene model: labels each input pixel by its color (like a perfect argmax model) and
+     * calls the letterbox padding (exact mid gray) SKY, so that padding leaking into a result
+     * would show up.
      */
     private class ColorParser : SceneParser {
         var calls = 0
-        override fun parse(content: PixelBuffer, letterbox: Letterbox): ByteArray {
+        override fun run(input: PixelBuffer): SceneScores {
             calls++
-            val s = letterbox.size
-            val out = ByteArray(s * s) { SceneClasses.SKY.toByte() }
-            for (y in 0 until letterbox.contentHeight) for (x in 0 until letterbox.contentWidth) {
-                out[(y + letterbox.offsetY) * s + x + letterbox.offsetX] = classify(content[x, y]).toByte()
+            assertEquals(Letterbox.MODEL_SIZE, input.width)
+            assertEquals(Letterbox.MODEL_SIZE, input.height)
+            val ids = ByteArray(input.size) { i ->
+                val c = input.pixels[i]
+                (if (c == ScenePasses.PAD) SceneClasses.SKY else classify(c)).toByte()
             }
-            return out
+            return SceneScores.Labels(input.width, ids)
         }
 
         private fun classify(c: Int): Int {
@@ -83,7 +85,7 @@ class SegmentationPipelineTest {
     @Test
     fun modelThatFindsNothingWinsOverHeuristics() {
         val img = SegTestImages.skyOverFoliage(300, 200)
-        val nothing = SceneParser { _, lb -> ByteArray(lb.size * lb.size) }
+        val nothing = SceneParser { input -> SceneScores.Labels(input.width, ByteArray(input.size)) }
         val sky = SegmentationPipeline(nothing, null).segment(img, SmartTarget.SKY)!!
         assertTrue(sky.all { it == 0f })
     }
@@ -105,13 +107,13 @@ class SegmentationPipelineTest {
     fun parserErrorsFallBackToHeuristics() {
         val w = 300; val h = 200
         val logged = mutableListOf<String>()
-        val broken = SceneParser { _, _ -> throw IllegalStateException("boom") }
+        val broken = SceneParser { _ -> throw IllegalStateException("boom") }
         val pipeline = SegmentationPipeline(broken, null, log = { msg, _ -> logged += msg })
         val sky = pipeline.segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY)!!
         assertTrue(mean(sky, w, 0, 0, w, h / 2 - 10) > 0.9f)
         assertTrue(logged.isNotEmpty())
         // Wrong output size is rejected too.
-        val short = SceneParser { _, _ -> ByteArray(10) }
+        val short = SceneParser { _ -> SceneScores.Labels(Letterbox.MODEL_SIZE, ByteArray(10)) }
         assertNotNull(SegmentationPipeline(short, null).segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY))
     }
 
@@ -127,6 +129,118 @@ class SegmentationPipelineTest {
         assertTrue(mean(nature, w, 0, (h * 0.43f).toInt(), w, (h * 0.52f).toInt()) > 0.9f)
         val people = pipeline.segment(img, SmartTarget.PEOPLE)!!
         assertTrue(people.all { it == 0f })
+    }
+
+    @Test
+    fun logitsModelsAreFusedAsProbabilitiesAndClassesAreSummed() {
+        // A logits model (64x64 grid, like the rewired Autoseg) that is torn on the sea: water
+        // 0.32, sea 0.32, floor 0.36. An argmax would say floor; the WATER union (0.64) wins.
+        val c = SceneClasses.COUNT
+        var calls = 0
+        val parser = SceneParser { input ->
+            calls++
+            val g = 64; val s = input.width / g
+            val values = FloatArray(g * g * c) { -8f }
+            for (cy in 0 until g) for (cx in 0 until g) {
+                var r = 0; var gg = 0; var b = 0
+                for (y in cy * s until (cy + 1) * s) for (x in cx * s until (cx + 1) * s) {
+                    val p = input[x, y]
+                    r += (p shr 16) and 0xFF; gg += (p shr 8) and 0xFF; b += p and 0xFF
+                }
+                val k = s * s; r /= k; gg /= k; b /= k
+                val o = (cy * g + cx) * c
+                when {
+                    b > 200 -> values[o + SceneClasses.SKY] = 4f
+                    b > 120 && r < 70 -> {
+                        values[o + SceneClasses.WATER] = kotlin.math.ln(0.32f)
+                        values[o + SceneClasses.SEA] = kotlin.math.ln(0.32f)
+                        values[o + 4] = kotlin.math.ln(0.36f) // floor
+                    }
+                    gg > r + 30 -> values[o + SceneClasses.TREE] = 4f
+                    else -> values[o + SceneClasses.OTHER] = 4f
+                }
+            }
+            SceneScores.Logits(g, g, values)
+        }
+        val w = 800; val h = 600
+        val img = SegTestImages.seascape(w, h)
+        val pipeline = SegmentationPipeline(parser, null)
+        val water = pipeline.segment(img, SmartTarget.WATER)!!
+        assertTrue(mean(water, w, 0, (h * 0.62f).toInt(), w, h) > 0.95f)
+        assertTrue(mean(water, w, 0, 0, w, (h * 0.5f).toInt()) < 0.02f)
+        val sky = pipeline.segment(img, SmartTarget.SKY)!!
+        assertTrue(mean(sky, w, 0, 0, w, (h * 0.37f).toInt()) > 0.97f)
+        // 4:3 image: letterbox + 2 aspect-fill crops + mirrored letterbox, run once for both targets.
+        assertEquals(4, calls)
+    }
+
+    @Test
+    fun slowModelsRunFewerButBalancedPasses() {
+        // Each pass takes ~300 ms. With room for ONE more pass after the letterbox, a 16:9
+        // picture must get the mirrored letterbox (padding rows, mirrored content), not the
+        // left of its two crops; with room for two, both crops.
+        val w = 1280; val h = 720
+        val img = SegTestImages.skyOverFoliage(w, h)
+        val inputs = mutableListOf<PixelBuffer>()
+        val slow = SceneParser { input ->
+            inputs += input.copy()
+            Thread.sleep(300)
+            SceneScores.Labels(input.width, ByteArray(input.size) { i ->
+                val c = input.pixels[i]
+                (if (c == ScenePasses.PAD) SceneClasses.OTHER else if ((c and 0xFF) > 150) SceneClasses.SKY else SceneClasses.TREE).toByte()
+            })
+        }
+        val sky = SegmentationPipeline(slow, null, passBudgetMs = 750).segment(img, SmartTarget.SKY)!!
+        assertEquals(2, inputs.size)
+        val second = inputs[1]
+        assertEquals(ScenePasses.PAD, second[256, 10]) // letterbox padding above the picture
+        assertEquals(ScenePasses.PAD, second[256, 501])
+        assertTrue(mean(sky, w, 0, 0, w, h / 2 - 10) > 0.97f)
+        assertTrue(mean(sky, w, 0, h / 2 + 10, w, h) < 0.03f)
+
+        inputs.clear()
+        SegmentationPipeline(slow, null, passBudgetMs = 1050).segment(img, SmartTarget.SKY)
+        assertEquals(3, inputs.size)
+        // Crops fill the whole input: no padding anywhere.
+        for (k in 1..2) assertTrue(inputs[k].pixels.none { it == ScenePasses.PAD })
+    }
+
+    @Test
+    fun modelLoadingDoesNotCountAsAPass() {
+        // A model that takes ~900 ms to load (interpreter + self-test) and then answers at once.
+        // The first selection after a cold start must still get every pass the budget allows
+        // (letterbox + 2 crops + mirrored for 4:3), not the letterbox alone.
+        class ColdModel : SceneParser {
+            var loads = 0
+            var calls = 0
+            private var loaded = false
+            override fun prepare() {
+                if (!loaded) { Thread.sleep(900); loaded = true; loads++ }
+            }
+            override fun run(input: PixelBuffer): SceneScores {
+                prepare()
+                calls++
+                return SceneScores.Labels(input.width, ByteArray(input.size) { i ->
+                    val c = input.pixels[i]
+                    (if (c == ScenePasses.PAD) SceneClasses.OTHER else if ((c and 0xFF) > 150) SceneClasses.SKY else SceneClasses.TREE).toByte()
+                })
+            }
+        }
+        val model = ColdModel()
+        val w = 800; val h = 600
+        val sky = SegmentationPipeline(model, null, passBudgetMs = 750).segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY)!!
+        assertEquals(1, model.loads)
+        assertEquals(4, model.calls)
+        assertTrue(mean(sky, w, 0, 0, w, h / 2 - 10) > 0.97f)
+        // A model whose warm-up fails still runs (the pass itself reports the failure).
+        val flaky = object : SceneParser {
+            override fun prepare() = throw IllegalStateException("no native runtime")
+            override fun run(input: PixelBuffer): SceneScores? = null
+        }
+        val logged = mutableListOf<String>()
+        val fallback = SegmentationPipeline(flaky, null, log = { msg, _ -> logged += msg }).segment(SegTestImages.skyOverFoliage(w, h), SmartTarget.SKY)!!
+        assertTrue(mean(fallback, w, 0, 0, w, h / 2 - 10) > 0.9f) // heuristics
+        assertTrue(logged.any { "warm-up" in it })
     }
 
     @Test
@@ -211,16 +325,20 @@ class SegmentationPipelineTest {
         val parser = ColorParser()
         val pipeline = SegmentationPipeline(parser, null)
         val img = SegTestImages.seascape(320, 240)
-        for (t in listOf(SmartTarget.SKY, SmartTarget.NATURE, SmartTarget.BUILDINGS, SmartTarget.WATER, SmartTarget.PEOPLE)) {
+        pipeline.segment(img, SmartTarget.SKY)
+        // One image = one set of passes (letterbox + mirrored letterbox for this 4:3 image).
+        val perImage = parser.calls
+        assertEquals(2, perImage)
+        for (t in listOf(SmartTarget.NATURE, SmartTarget.BUILDINGS, SmartTarget.WATER, SmartTarget.PEOPLE)) {
             pipeline.segment(img, t)
         }
-        assertEquals(1, parser.calls)
+        assertEquals(perImage, parser.calls)
         val edited = img.copy().also { it[5, 5] = 0xFFFF0000.toInt() }
         pipeline.segment(edited, SmartTarget.SKY)
-        assertEquals(2, parser.calls)
+        assertEquals(2 * perImage, parser.calls)
         pipeline.clearCache()
         pipeline.segment(edited, SmartTarget.SKY)
-        assertEquals(3, parser.calls)
+        assertEquals(3 * perImage, parser.calls)
     }
 
     @Test

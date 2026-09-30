@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.segmentation.SegTestImages.mean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -79,6 +80,29 @@ class SegmentationServiceRobolectricTest {
         } finally {
             pool.shutdownNow()
         }
+    }
+
+    @Test
+    fun objectSelectionFallsBackToColorsWithoutTheNativeModel() {
+        val service = SegmentationService(context)
+        service.prepareObjectSelect()
+        val w = 300; val h = 200
+        val img = SegTestImages.disc(w, h, SegTestImages.GRAY_BG, SegTestImages.RED, 0.3f)
+        val pool = Executors.newSingleThreadExecutor()
+        try {
+            val r = pool.submit<SegmentationService.ObjectSelection?> { service.selectObject(img, ObjectPrompt.tap(150f, 100f)) }.get(60, TimeUnit.SECONDS)
+            assertNotNull(r)
+            assertTrue(!r!!.usedModel)
+            assertEquals(w * h, r.mask.size)
+            assertTrue(r.mask[100 * w + 150] > 0.95f)
+            assertTrue(r.mask[5 * w + 5] < 0.05f)
+            // Cancelled: null, and the service keeps working.
+            assertNull(pool.submit<SegmentationService.ObjectSelection?> { service.selectObject(img, ObjectPrompt.tap(150f, 100f)) { true } }.get(60, TimeUnit.SECONDS))
+            assertNotNull(pool.submit<SegmentationService.ObjectSelection?> { service.selectObject(img, ObjectPrompt.tap(150f, 100f)) }.get(60, TimeUnit.SECONDS))
+        } finally {
+            pool.shutdownNow()
+        }
+        service.releaseMemory()
     }
 
     @Test

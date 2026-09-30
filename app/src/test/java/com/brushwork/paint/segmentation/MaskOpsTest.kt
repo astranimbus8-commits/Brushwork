@@ -71,51 +71,39 @@ class MaskOpsTest {
     }
 
     @Test
-    fun guidedUpsampleEvaluatesAtFullResolution() {
-        // Identity coefficients (a = 1, b = 0) reproduce the full-resolution luma exactly.
-        val img = PixelBuffer(6, 4)
-        for (y in 0 until 4) for (x in 0 until 6) img[x, y] = SegTestImages.rgb(x * 40, x * 40, x * 40)
-        val q = MaskOps.guidedUpsample(img, FloatArray(6) { 1f }, FloatArray(6) { 0f }, 3, 2)
-        assertEquals(24, q.size)
-        for (y in 0 until 4) for (x in 0 until 6) assertEquals(x * 40 / 255f, q[y * 6 + x], 1e-3f)
-        // Clamped to 0..1.
-        val clamped = MaskOps.guidedUpsample(img, FloatArray(6) { 5f }, FloatArray(6) { -0.5f }, 3, 2)
-        assertTrue(clamped.all { it in 0f..1f })
+    fun resampleSmoothEnlargesBilinearlyAndShrinksByArea() {
+        val src = PixelBuffer(2, 1)
+        src[0, 0] = 0xFF000000.toInt(); src[1, 0] = 0xFFC8C8C8.toInt()
+        val up = MaskOps.resampleSmooth(src, 8, 1)
+        // A ramp, not two blocks: strictly increasing in the middle.
+        val reds = IntArray(8) { (up[it, 0] shr 16) and 0xFF }
+        assertEquals(0, reds[0]); assertEquals(200, reds[7])
+        for (x in 2..5) assertTrue("x=$x ${reds.toList()}", reds[x] > reds[x - 1])
+        // Shrinking is the area average (same as resample).
+        val big = PixelBuffer(4, 2, IntArray(8) { if (it % 2 == 0) 0xFF000000.toInt() else -1 })
+        assertArrayEquals(MaskOps.resample(big, 2, 1).pixels, MaskOps.resampleSmooth(big, 2, 1).pixels)
+        // Transparent pixels are white paper here too.
+        assertEquals(-1, MaskOps.resampleSmooth(PixelBuffer.filled(1, 1, 0), 3, 3)[1, 1])
     }
 
     @Test
-    fun refineBandMovesAMisalignedBoundaryToTheColorEdge() {
-        val w = 96; val h = 32
-        val blue = SegTestImages.rgb(40, 90, 200); val green = SegTestImages.rgb(40, 160, 60)
-        val img = PixelBuffer(w, h)
-        for (y in 0 until h) for (x in 0 until w) img[x, y] = if (x < 40) blue else green
-        // Coarse mask of "blue" that overshoots by 6 px.
-        val m = FloatArray(w * h) { if (it % w < 46) 1f else 0f }
-        val refined = MaskOps.refineBand(img, m, radius = 8)
-        for (y in 0 until h) {
-            for (x in 0 until 38) assertEquals("x=$x", 1f, refined[y * w + x], 0.02f)
-            for (x in 40 until 46) assertTrue("x=$x ${refined[y * w + x]}", refined[y * w + x] < 0.1f)
-            for (x in 56 until w) assertEquals(0f, refined[y * w + x], 1e-6f)
-        }
+    fun cropRepeatsEdgesOutsideTheImage() {
+        val src = PixelBuffer(3, 2, IntArray(6) { i -> SegTestImages.rgb(i * 10, 0, 0) })
+        val c = MaskOps.crop(src, -1, 0, 4, 2)
+        assertEquals(5, c.width); assertEquals(2, c.height)
+        assertEquals(src[0, 0], c[0, 0]) // repeated left edge
+        assertEquals(src[0, 0], c[1, 0])
+        assertEquals(src[2, 1], c[4, 1]) // repeated right edge
+        val plane = FloatArray(12) { it.toFloat() }
+        assertArrayEquals(floatArrayOf(5f, 6f, 9f, 10f), MaskOps.cropPlane(plane, 4, 1, 1, 3, 3), 0f)
     }
 
     @Test
-    fun refineBandKeepsTheMaskWhenColorsDoNotDiffer() {
-        val w = 64; val h = 8
-        val img = PixelBuffer.filled(w, h, 0xFF808080.toInt())
-        val m = FloatArray(w * h) { if (it % w < 30) 1f else 0f }
-        assertArrayEquals(m, MaskOps.refineBand(img, m, radius = 6), 1e-6f)
-    }
-
-    @Test
-    fun refineBandFusesExtraEvidenceOnlyNearTheBoundary() {
-        val w = 64; val h = 8
-        val img = PixelBuffer.filled(w, h, 0xFF808080.toInt())
-        val m = FloatArray(w * h) { if (it % w < 30) 1f else 0f }
-        val extra = FloatArray(w * h) { 1f } // e.g. a heuristic that says "everything"
-        val out = MaskOps.refineBand(img, m, radius = 4, extra = extra)
-        assertTrue(out[4 * w + 32] > 0.9f) // inside the band: added
-        assertEquals(0f, out[4 * w + 50], 0f) // far away: untouched
+    fun resizeAreaAveragesBlocks() {
+        val src = floatArrayOf(0f, 1f, 1f, 1f, 0f, 0f, 1f, 1f)
+        assertArrayEquals(floatArrayOf(0.25f, 1f), MaskOps.resizeArea(src, 4, 2, 2, 1), 1e-6f)
+        // Enlarging falls back to bilinear.
+        assertArrayEquals(floatArrayOf(0f, 0.25f, 0.75f, 1f), MaskOps.resizeArea(floatArrayOf(0f, 1f), 2, 1, 4, 1), 1e-6f)
     }
 
     @Test
@@ -134,5 +122,10 @@ class MaskOpsTest {
         assertEquals(MaskOps.contentHash(a), MaskOps.contentHash(a.copy()))
         assertNotEquals(MaskOps.contentHash(a), MaskOps.contentHash(b))
         assertNotEquals(MaskOps.contentHash(PixelBuffer(10, 20)), MaskOps.contentHash(PixelBuffer(20, 10)))
+        // Segmentation treats transparency as white paper: same pixels to it, same key.
+        val clear = a.copy().also { it[3, 3] = 0x00000000; it[4, 4] = 0x80FF0000.toInt() }
+        val white = a.copy().also { it[3, 3] = -1; it[4, 4] = MaskOps.flattenOverWhite(0x80FF0000.toInt()) }
+        assertEquals(MaskOps.contentHash(white), MaskOps.contentHash(clear))
+        assertNotEquals(MaskOps.contentHash(a), MaskOps.contentHash(clear))
     }
 }
