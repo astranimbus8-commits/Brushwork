@@ -83,6 +83,12 @@ fun SelectionPanel(controller: EditorController, onDismiss: () -> Unit) {
     var mode by rememberSaveable { mutableStateOf(SelectionMode.REPLACE) }
     var pickFillColor by remember { mutableStateOf(false) }
     var contentAwareOpen by remember { mutableStateOf(false) }
+    // Load the scene model (and its self-test) in the background while the user reads the menu,
+    // so the first smart select doesn't pay for it.
+    val appContext = controller.appContext
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        com.brushwork.paint.segmentation.SegmentationService.get(appContext).prepare()
+    }
 
     /** Closes the sheet, then runs [action] (the editor shows its progress / messages). */
     fun closeThen(action: () -> Unit) {

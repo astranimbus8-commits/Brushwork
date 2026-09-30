@@ -89,8 +89,16 @@ swatches) — use them everywhere.
 Editor layout (`ui/editor`): top bar (panels + overflow menu), tool options strip
 (`ToolOptionsBar`), floating selection bar (copy / cut / paste / deselect…) while a selection or
 clipboard exists, the canvas, the brush size/opacity slider bar (values can be tapped and typed)
-and the hotbar at the bottom. Panels are half-height, translucent bottom sheets (`BwSheet`); the
-layers panel is a non-modal floating window in the bottom-right corner.
+and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent; inside the editor
+they are drawn by a non-modal `SheetHost` (ui/common/SheetHost.kt): touching the canvas minimizes
+the top panel to a pill and the touch reaches the canvas, so the view and objects stay editable.
+The layers panel is a non-modal floating window in the bottom-right corner (a tap outside closes it).
+
+Other packages: `fonts/` (imported fonts: zip/ttf/otf import, name-table parsing, favorites),
+`inpaint/` (content-aware fill: multi-scale PatchMatch completion, used by the selection bar and
+the Remove tool), `segmentation/` (smart select: ML Kit subject, Autoseg scene parser with
+per-class probabilities, tiled + flipped passes, colour-guided refinement and band matting;
+MagicTouch for the Object select tool).
 
 Gestures (`CanvasView`): one finger → the current tool (via the controller); two fingers → first
 offered to the tool (`Tool.onTwoFingerStart`, e.g. pinch-scaling a transformed image, text or

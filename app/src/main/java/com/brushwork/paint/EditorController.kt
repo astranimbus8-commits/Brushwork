@@ -657,14 +657,19 @@ class EditorController(
 
     fun deleteLayer(layer: Layer = activeLayer) {
         if (doc.layers.size <= 1) { toast("A drawing needs at least one layer"); return }
-        val idx = doc.indexOf(layer)
-        if (idx < 0) return
-        currentTool.discard()
-        structural {
-            doc.layers.removeAt(idx)
-            doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
+        if (doc.indexOf(layer) < 0) return
+        // Layers are deleted without a confirmation, so pending tool work (a shape, text or
+        // transform) is committed first rather than silently thrown away; undo restores both.
+        withToolPaused {
+            // Resolve the index after committing: committing text can insert a layer.
+            val idx = doc.indexOf(layer)
+            if (idx < 0 || doc.layers.size <= 1) return@withToolPaused
+            structural {
+                doc.layers.removeAt(idx)
+                doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
+            }
+            pushUndo(RemoveLayerAction(layer, idx))
         }
-        pushUndo(RemoveLayerAction(layer, idx))
     }
 
     /**

@@ -33,7 +33,10 @@ Requires Android 8.0 or newer. Every release is signed with the same key, so a n
 - Add, delete, duplicate, reorder by dragging, merge down, flip horizontal/vertical, opacity, 17 blend modes, clipping masks, layer masks, lock and alpha lock, import picture.
 
 **Tools**
-- Magic wand, lasso (freehand/polygon), rectangle/ellipse selection, bucket fill (tolerance, gap closing), text (horizontal and vertical manga text), manga frame divider, transform (move/scale/rotate/distort, numeric).
+- Magic wand, lasso (freehand / polygon / curve), rectangle/ellipse selection, Object select (tap an object), copy / cut / paste, bucket fill (tolerance, gap closing), manga frame divider.
+- Transform: move/scale/rotate/distort with two-finger pinch, exact numbers with a reference point (scale from the center), delete, and Illustrator-style smart guides that snap to other layers and the canvas.
+- Content-aware fill for selections and a Remove brush that fills what you paint over from its surroundings.
+- Text: editable text layers, text boxes with wrapping / background / border, upright vertical text, text on a line / circle / square / curve (bending or rotating letters), placeholder text, imported fonts (dafont .zip / .ttf / .otf) with favorites.
 - Shapes: line, rectangle, ellipse/circle, polygon with any number of sides, star, arrow; sharp, round, bevel or inverted corners like Illustrator; exact numeric editing.
 - Bezier curve tool (tap to add points, long-press a point to make it a sharp corner) and polyline tool.
 - Smart selection: subject, background, sky, nature, buildings, people, water (on-device).
