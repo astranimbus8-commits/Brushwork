@@ -36,9 +36,11 @@ import org.robolectric.shadows.ShadowLog
  * The editor's non-modal menus and its layers window on the user's phone (392 x 873 dp), in the
  * real [EditorScreen]:
  * - a panel is drawn in the editor's own window right above the hotbar; touching the canvas
- *   folds it into a pill and the touch works on the canvas (pinch zoom, strokes, the text being
- *   edited stays); the pill brings it back as it was (same scroll position);
- * - stacked panels, the minimize button, the panel's own button, Back;
+ *   folds it into a pill and the touch works on the canvas (pinch zoom, strokes; the text being
+ *   edited stays and can be dragged and pinched meanwhile); the pill brings it back as it was
+ *   (same scroll position);
+ * - stacked panels, the minimize button, the panel's own button (also when a tool's sheet covers
+ *   the panel), Back;
  * - the layers window closes on a tap outside it (the tap does nothing else) but not on a pinch
  *   or a stroke, and deletes layers without asking, with Undo in the message.
  *
@@ -155,7 +157,8 @@ class SheetHostEditorRobolectricTest {
         section("a stroke on the canvas goes through and minimizes") { strokeThrough() }
         section("minimize button, the panel's own button, Back") { buttonsAndBack() }
         section("stacked panels") { stackedPanels() }
-        section("the text editor minimizes and keeps its text") { textEditor() }
+        section("the text editor minimizes; its text can be moved and pinched meanwhile") { textEditor() }
+        section("a panel's button brings it back on top of a tool's sheet") { panelButtonUnderToolSheet() }
         section("the Layers button makes room; the pill comes back") { layersButtonWithPanel() }
         section("layers window: tap outside closes, pinch and strokes don't") { layersTapOutside() }
         section("layers are deleted without asking, Undo in the message") { deleteWithoutDialog() }
@@ -315,6 +318,8 @@ class SheetHostEditorRobolectricTest {
         settle()
         assertTrue("editor open", text.editorOpen)
         SmokeUi.assertPanelShown("Add text")
+        // The host's focus handling leaves a new text's field focused (keyboard up at once).
+        assertEquals("the text field has the focus", true, SmokeUi.field("Text").node.config.getOrNull(SemanticsProperties.Focused))
         SmokeUi.field("Text").type("Hello")
         settle()
         assertEquals("Hello", text.item?.text)
@@ -326,16 +331,87 @@ class SheetHostEditorRobolectricTest {
         assertTrue("still editing", text.editorOpen)
         assertEquals("Hello", text.item?.text)
         assertFalse("its pill has no ✕: Cancel / OK finish it", has("Close Add text"))
+
+        // While the editor waits in its pill, the text itself can be moved: a drag on it...
+        val z1 = s.c.viewTransform.zoom
+        val undo0 = s.c.undoManager.undoCount
+        val layers0 = s.c.doc.layers.size
+        val t0 = requireNotNull(text.item)
+        val from = s.screen(t0.cx, t0.cy)
+        s.touch.idle(300)
+        s.touch.stroke(from, from.first + 40f * s.density to from.second + 20f * s.density)
+        settle()
+        val t1 = requireNotNull(text.item)
+        assertTrue("dragged: (${t0.cx}, ${t0.cy}) -> (${t1.cx}, ${t1.cy})", t1.cx > t0.cx + 5f && t1.cy > t0.cy + 2f)
+        assertEquals("the text didn't change", "Hello", t1.text)
+        assertTrue("still editing after the drag", text.editorOpen)
+        assertEquals(listOf("Add text"), pillTitles())
+        // ...a tap away from it neither places it nor starts another text...
+        val here = s.screen(t1.cx, t1.cy)
+        s.touch.idle(300)
+        s.touch.tap(here.first, here.second + 100f * s.density)
+        settle()
+        assertTrue("still editing after a tap", text.editorOpen)
+        assertEquals("the tap changed nothing", t1, text.item)
+        assertEquals("nothing placed", layers0, s.c.doc.layers.size)
+        assertEquals(undo0, s.c.undoManager.undoCount)
+        // ...and two fingers on it scale it (the view stays).
+        val size0 = t1.spec.sizePx
+        val d = s.density
+        s.touch.idle(300)
+        s.touch.pinch(here.first - 8f * d to here.second, here.first + 8f * d to here.second, here.first - 16f * d to here.second, here.first + 16f * d to here.second)
+        settle()
+        val t2 = requireNotNull(text.item)
+        assertTrue("pinched bigger: $size0 -> ${t2.spec.sizePx}", t2.spec.sizePx > size0 * 1.5f)
+        assertEquals("the view didn't zoom", z1, s.c.viewTransform.zoom, 0.01f)
+        assertTrue(text.editorOpen)
+        assertEquals(listOf("Add text"), pillTitles())
+
         click("Show Add text")
         SmokeUi.assertPanelShown("Add text")
         assertEquals("the typed text is still there", "Hello", SmokeUi.field("Text").text)
         click("OK", exact = true)
         assertFalse(text.editorOpen)
         assertEquals("Hello", text.item?.text)
+        assertEquals("OK keeps the moved, bigger text", t2, text.item)
         text.discard()
         s.c.selectTool(ToolId.BRUSH)
         settle()
         Smoke.assertQuiet(s.c, "text editor")
+    }
+
+    private fun panelButtonUnderToolSheet() {
+        val s = editor()
+        click("Open color picker")
+        SmokeUi.assertPanelShown("Color")
+        s.c.selectTool(ToolId.TEXT)
+        settle()
+        val text = s.c.tools.getValue(ToolId.TEXT) as TextTool
+        // A tap on the canvas folds the Color panel away and starts a text: its editor on top.
+        val spot = s.freeCanvasSpot(SmokeUi.sheetPanel()!!.bounds.top)
+        s.touch.idle(300)
+        s.touch.tap(spot.first, spot.second)
+        settle()
+        assertTrue(text.editorOpen)
+        SmokeUi.assertPanelShown("Add text")
+        // The Color button brings the Color panel back on top of it (not the text editor).
+        click("Open color picker")
+        SmokeUi.assertPanelShown("Color")
+        assertTrue("the text editor waits below", text.editorOpen)
+        click("Minimize", exact = true)
+        assertEquals(listOf("Color"), pillTitles())
+        assertTrue(has("1 more below"))
+        // Closing Color leaves the text editor.
+        click("Close Color", exact = true)
+        assertEquals(listOf("Add text"), pillTitles())
+        click("Show Add text")
+        SmokeUi.assertPanelShown("Add text")
+        click("Cancel", exact = true)
+        assertFalse(text.editorOpen)
+        assertFalse(SmokeUi.menuOpen())
+        s.c.selectTool(ToolId.BRUSH)
+        settle()
+        Smoke.assertQuiet(s.c, "panel button under a tool sheet")
     }
 
     private fun layersButtonWithPanel() {
@@ -361,6 +437,15 @@ class SheetHostEditorRobolectricTest {
         assertEquals(listOf("Brush"), pillTitles())
         assertFalse("no window popping up in the panel's place", has("Close layers", exact = true))
         click("Close Brush", exact = true)
+        // So does the panel's minimize button: the pill shows, not the window.
+        click("Open layers")
+        click("Open brush settings")
+        SmokeUi.assertPanelShown("Brush")
+        click("Minimize", exact = true)
+        assertEquals(listOf("Brush"), pillTitles())
+        assertFalse("minimized to see the canvas: the hidden window stays closed", has("Close layers", exact = true))
+        click("Close Brush", exact = true)
+        assertFalse(has("Close layers", exact = true))
         assertFalse(SmokeUi.menuOpen())
         Smoke.assertQuiet(s.c, "layers button")
     }

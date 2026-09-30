@@ -4,6 +4,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.CompositionLocalProvider
@@ -38,8 +42,10 @@ import org.robolectric.shadows.ShadowLog
 /**
  * [SheetHost] on its own: BwSheets register with the host provided by [LocalSheetHost] and are
  * drawn by it in the same window; the newest is shown, the others (and a minimized one) keep
- * their state; the host always uses a sheet's latest arguments; closing, Back ([dismissTop])
- * and the pill; without a host, or from another window, BwSheet is a modal sheet.
+ * their state; the host always uses a sheet's latest arguments; a group ([LocalSheetGroup]) is
+ * brought back on top; a field of a sheet that is covered or minimized loses the focus; closing,
+ * Back ([dismissTop]) and the pill; without a host, or from another window, BwSheet is a modal
+ * sheet.
  *
  * One test in its own sandbox: Compose's frame clock only serves the first test of a sandbox.
  */
@@ -62,6 +68,8 @@ class SheetHostRobolectricTest {
         var withoutHost by mutableStateOf(false)
         var dismissedA = 0
         var dismissedB = 0
+        var alphaField: FocusRequester? = null
+        var alphaFocused = false
         activity.setContent {
             BrushworkTheme {
                 val h = rememberSheetHostState().also { host = it }
@@ -70,18 +78,29 @@ class SheetHostRobolectricTest {
                         SheetHost(h, bottomInset = 56.dp)
                         SheetPill(h, Modifier.align(Alignment.BottomCenter))
                     }
-                    if (showA) {
-                        BwSheet(title = titleA, onDismiss = { dismissedA++; showA = false }) {
-                            var taps by remember { mutableIntStateOf(0) }
-                            Text("Alpha taps $taps")
-                            TextButton(onClick = { taps++ }) { Text("Tap alpha") }
-                            if (nestedInA) {
-                                BwSheet(title = "Nested", onDismiss = { nestedInA = false }) { Text("Nested body") }
+                    // Group "A": Alpha and the sheet opened from it.
+                    CompositionLocalProvider(LocalSheetGroup provides "A") {
+                        if (showA) {
+                            BwSheet(title = titleA, onDismiss = { dismissedA++; showA = false }) {
+                                var taps by remember { mutableIntStateOf(0) }
+                                val requester = remember { FocusRequester() }.also { alphaField = it }
+                                Text("Alpha taps $taps")
+                                TextButton(onClick = { taps++ }) { Text("Tap alpha") }
+                                BasicTextField(
+                                    value = "",
+                                    onValueChange = {},
+                                    modifier = Modifier.focusRequester(requester).onFocusChanged { alphaFocused = it.isFocused },
+                                )
+                                if (nestedInA) {
+                                    BwSheet(title = "Nested", onDismiss = { nestedInA = false }) { Text("Nested body") }
+                                }
                             }
                         }
                     }
                     if (showB) {
-                        BwSheet(title = "Beta", onDismiss = { dismissedB++; showB = false }, showClose = false) { Text("Beta body") }
+                        CompositionLocalProvider(LocalSheetGroup provides "B") {
+                            BwSheet(title = "Beta", onDismiss = { dismissedB++; showB = false }, showClose = false) { Text("Beta body") }
+                        }
                     }
                     if (fromDialog) {
                         Dialog(onDismissRequest = { fromDialog = false }) {
@@ -111,6 +130,10 @@ class SheetHostRobolectricTest {
         click("Tap alpha", exact = true)
         click("Tap alpha", exact = true)
         assertTrue(has("Alpha taps 2", exact = true))
+        // Typing in the sheet's field.
+        requireNotNull(alphaField).requestFocus()
+        settle()
+        assertTrue("the field has the focus", alphaFocused)
 
         // The host follows the call's latest arguments.
         titleA = "Alpha 2"
@@ -123,6 +146,26 @@ class SheetHostRobolectricTest {
         assertEquals(listOf("Beta"), sheetTitles())
         assertFalse("the lower sheet is hidden", has("Alpha taps 2", exact = true))
         assertEquals(2, h.entries.size)
+        assertFalse("a covered sheet's field lost the focus: keys never go to a hidden field", alphaFocused)
+
+        // A group comes back on top as it was (a panel's button while a tool's sheet covers it),
+        // shown even when minimized.
+        h.minimize()
+        h.bringToFront("A")
+        settle()
+        assertFalse(h.minimized)
+        assertEquals(listOf("Alpha 2"), sheetTitles())
+        assertTrue("its state is kept", has("Alpha taps 2", exact = true))
+        assertEquals(listOf("Beta", "Alpha 2"), h.entries.map { it.title.value })
+        h.bringToFront("B")
+        settle()
+        assertEquals(listOf("Beta"), sheetTitles())
+        assertEquals(listOf("Alpha 2", "Beta"), h.entries.map { it.title.value })
+        // A group without sheets: the top one is just shown again.
+        h.minimize()
+        h.bringToFront("nobody")
+        settle()
+        assertEquals(listOf("Beta"), sheetTitles())
 
         // Minimized: a pill with the top one's title, no ✕ for a sheet without one.
         h.minimize()
@@ -143,9 +186,14 @@ class SheetHostRobolectricTest {
         assertEquals(listOf("Alpha 2"), sheetTitles())
         assertTrue("state kept under the other sheet", has("Alpha taps 2", exact = true))
 
-        // Minimized and restored: still the same state.
+        // Minimized and restored: still the same state. Minimizing takes the focus away (the
+        // typed value commits, the keyboard goes down).
+        requireNotNull(alphaField).requestFocus()
+        settle()
+        assertTrue(alphaFocused)
         h.minimize()
         settle()
+        assertFalse("no focus in a minimized sheet", alphaFocused)
         assertFalse(has("Alpha taps 2", exact = true))
         assertEquals(listOf("Alpha 2"), pillTitles())
         h.restore()
@@ -154,6 +202,17 @@ class SheetHostRobolectricTest {
 
         // A sheet opened from inside a sheet's content stacks on top of it.
         nestedInA = true
+        settle()
+        assertEquals(listOf("Nested"), sheetTitles())
+        // It belongs to Alpha's group: brought back on top together, in their order.
+        showB = true
+        settle()
+        assertEquals(listOf("Beta"), sheetTitles())
+        h.bringToFront("A")
+        settle()
+        assertEquals(listOf("Nested"), sheetTitles())
+        assertEquals(listOf("Beta", "Alpha 2", "Nested"), h.entries.map { it.title.value })
+        showB = false
         settle()
         assertEquals(listOf("Nested"), sheetTitles())
         click("Close", exact = true)

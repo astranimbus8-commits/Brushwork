@@ -88,6 +88,7 @@ import com.brushwork.paint.ui.assist.StabilizerPanel
 import com.brushwork.paint.ui.brush.BrushPanel
 import com.brushwork.paint.ui.canvas.CanvasAdjustDialog
 import com.brushwork.paint.ui.color.ColorPickerPanel
+import com.brushwork.paint.ui.common.LocalSheetGroup
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
@@ -126,7 +127,8 @@ private val PANELS_BLOCKED_BY_FILTER = setOf(
  * restores it. The layers window is closed by a tap outside it (that tap does nothing else);
  * drawing and pinching outside it keep working with it open. Layers window and panels share the
  * bottom of the screen: an open panel hides the window (it comes back when the panel is closed,
- * not when it is minimized by touching the canvas), and the Layers button minimizes the panels.
+ * not when the panel is minimized to use the canvas), and the Layers button minimizes the panels.
+ * A panel's button brings that panel back on top, also when a tool's sheet covers it.
  */
 @Composable
 fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: () -> Unit) {
@@ -153,8 +155,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
     val canvasRef = remember { arrayOfNulls<CanvasView>(1) }
     val closePanel = { panel = null }
-    // The button of a panel that is already open (minimized to its pill) brings it back.
-    val openPanel = { p: EditorPanel -> if (panel == p) sheetHost.restore() else panel = p }
+    // The button of a panel that is already open (minimized to its pill, or covered by a tool's
+    // sheet) brings it back on top, as it was.
+    val openPanel = { p: EditorPanel -> if (panel == p) sheetHost.bringToFront(p) else panel = p }
 
     // The editor chrome is always dark: light system bar icons whatever the system theme
     // (edge-to-edge picks them from it), restored when the editor closes.
@@ -299,7 +302,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     val closeLayers: () -> Unit = remember { { layersOpen = false } }
     // A touch on the canvas while a panel is up: the panel folds into its pill so the canvas can
     // be used (the touch goes on to the canvas). The layers window hidden under the panel is
-    // closed too, or it would pop up in its place.
+    // closed too, or it would pop up in its place. The panel's own minimize button does the same.
     val onCanvasTouch: () -> Unit = remember(sheetHost) {
         {
             if (sheetHost.hasExpanded) {
@@ -535,7 +538,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         // ------------------------------------------------------------ panels (non-modal)
         // Right above the hotbar (over the slider bar), or above the filter panel.
         val panelBottom = with(density) { (if (session != null || hotbarPx == 0) bottomChromePx else hotbarPx).toDp() }
-        SheetHost(sheetHost, bottomInset = panelBottom, modifier = Modifier.padding(top = topDp))
+        SheetHost(sheetHost, bottomInset = panelBottom, modifier = Modifier.padding(top = topDp), onMinimize = onCanvasTouch)
 
         // ------------------------------------------------------------ transient feedback
         Column(
@@ -571,18 +574,21 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     }
 
     // ---------------------------------------------------------------- panels
-    when (panel) {
-        EditorPanel.TOOLS -> ToolPickerSheet(controller, closePanel)
-        EditorPanel.BRUSH -> BrushPanel(controller, closePanel)
-        EditorPanel.COLOR -> ColorPickerPanel(controller, closePanel)
-        EditorPanel.FILTERS -> FilterBrowser(controller, closePanel)
-        EditorPanel.SELECTION -> SelectionPanel(controller, closePanel)
-        EditorPanel.CANVAS -> CanvasAdjustDialog(controller, closePanel)
-        EditorPanel.RULER -> RulerPanel(controller, closePanel)
-        EditorPanel.GRID -> GridPanel(controller, closePanel)
-        EditorPanel.STABILIZER -> StabilizerPanel(controller, closePanel)
-        EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel)
-        null -> {}
+    // Grouped by panel, so the panel's button brings it (and the sheets it opened) back on top.
+    CompositionLocalProvider(LocalSheetGroup provides panel) {
+        when (panel) {
+            EditorPanel.TOOLS -> ToolPickerSheet(controller, closePanel)
+            EditorPanel.BRUSH -> BrushPanel(controller, closePanel)
+            EditorPanel.COLOR -> ColorPickerPanel(controller, closePanel)
+            EditorPanel.FILTERS -> FilterBrowser(controller, closePanel)
+            EditorPanel.SELECTION -> SelectionPanel(controller, closePanel)
+            EditorPanel.CANVAS -> CanvasAdjustDialog(controller, closePanel)
+            EditorPanel.RULER -> RulerPanel(controller, closePanel)
+            EditorPanel.GRID -> GridPanel(controller, closePanel)
+            EditorPanel.STABILIZER -> StabilizerPanel(controller, closePanel)
+            EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel)
+            null -> {}
+        }
     }
     editingValue?.let { kind -> BrushValueDialog(controller, kind) { editingValue = null } }
 }

@@ -94,6 +94,14 @@ import kotlin.math.roundToInt
 /** The editor's sheet host, or null where sheets are modal. */
 val LocalSheetHost = staticCompositionLocalOf<SheetHostState?> { null }
 
+/**
+ * The group of the sheets composed under it: any key, e.g. the editor panel whose composable
+ * opens them (a color picker opened from a panel belongs to the panel's group). The host can
+ * bring a group back on top ([SheetHostState.bringToFront]), e.g. when the panel's button is
+ * pressed while another sheet covers it.
+ */
+val LocalSheetGroup = staticCompositionLocalOf<Any?> { null }
+
 /** Semantics of a hosted sheet panel (its title), for tests and tools that look for open menus. */
 val BwSheetTitleKey = SemanticsPropertyKey<String>("BwSheetTitle")
 private var SemanticsPropertyReceiver.bwSheetTitle by BwSheetTitleKey
@@ -119,6 +127,8 @@ class SheetEntry internal constructor(
     internal val content: State<@Composable ColumnScope.() -> Unit>,
     /** CompositionLocals of the BwSheet call site, provided around the content in the host. */
     internal val locals: State<CompositionLocalContext>,
+    /** [LocalSheetGroup] at the call site. */
+    internal val group: State<Any?>,
 )
 
 /**
@@ -166,6 +176,20 @@ class SheetHostState(internal val view: View?) {
         minimized = false
     }
 
+    /**
+     * Shows the sheets of [group] (see [LocalSheetGroup]): they move on top of the others,
+     * keeping their order and state, and the top one is shown. Without such sheets it is
+     * [restore].
+     */
+    fun bringToFront(group: Any) {
+        val mine = stack.filter { it.group.value == group }
+        if (mine.isNotEmpty() && stack.subList(stack.size - mine.size, stack.size) != mine) {
+            stack.removeAll(mine)
+            stack.addAll(mine)
+        }
+        minimized = false
+    }
+
     /** Closes the top sheet the way its ✕ / Back would (asks its caller to close it). */
     fun dismissTop() {
         stack.lastOrNull()?.onDismiss?.value?.invoke()
@@ -205,8 +229,9 @@ internal fun HostedBwSheet(
     val footerState = rememberUpdatedState(footer)
     val contentState = rememberUpdatedState(content)
     val localsState = rememberUpdatedState(currentCompositionLocalContext)
+    val groupState = rememberUpdatedState(LocalSheetGroup.current)
     val entry = remember {
-        SheetEntry(titleState, dismissState, modifierState, scrollableState, fractionState, closeState, actionsState, footerState, contentState, localsState)
+        SheetEntry(titleState, dismissState, modifierState, scrollableState, fractionState, closeState, actionsState, footerState, contentState, localsState, groupState)
     }
     DisposableEffect(host, entry) {
         host.register(entry)
@@ -225,15 +250,19 @@ private val MinHostedPanel = 184.dp
  * bottom of this box, [bottomInset] above its bottom edge (the chrome it must not cover) or above
  * the keyboard, whichever is higher. Place it over the canvas, filling the area a panel may
  * cover; outside the panel it takes no touches. Every other sheet (and the top one while
- * minimized) stays composed but hidden, so it comes back unchanged.
+ * minimized) stays composed but hidden, so it comes back unchanged. [onMinimize] runs for the
+ * panel's own minimize button and its drag-down (by default it just minimizes).
  */
 @Composable
-fun SheetHost(state: SheetHostState, bottomInset: Dp, modifier: Modifier = Modifier) {
+fun SheetHost(state: SheetHostState, bottomInset: Dp, modifier: Modifier = Modifier, onMinimize: () -> Unit = state::minimize) {
     val entries = state.entries
     val focusManager = LocalFocusManager.current
     val minimized = state.minimized
-    // A field being typed in commits (and the keyboard goes away) when its panel folds away.
-    LaunchedEffect(minimized) { if (minimized) focusManager.clearFocus() }
+    // A field being typed in commits (and the keyboard goes away) when its panel folds away or
+    // another sheet covers it: keys must never go to a field nobody sees. (Launched before the
+    // content's own effects, so a sheet that focuses its field when it opens still gets it.)
+    val shownEntry = if (minimized) null else entries.lastOrNull()
+    LaunchedEffect(shownEntry) { focusManager.clearFocus() }
     if (entries.isEmpty()) return
     val density = LocalDensity.current
     val imeBottom = with(density) { WindowInsets.ime.getBottom(this).toDp() }
@@ -252,7 +281,7 @@ fun SheetHost(state: SheetHostState, bottomInset: Dp, modifier: Modifier = Modif
                         entry = entry,
                         shown = entry === top && !minimized,
                         screenHeight = screenHeight,
-                        onMinimize = state::minimize,
+                        onMinimize = onMinimize,
                     )
                 }
             }
@@ -274,8 +303,9 @@ private fun BoxScope.HostedPanel(entry: SheetEntry, shown: Boolean, screenHeight
             .align(Alignment.BottomCenter)
             .widthIn(max = HostedSheetMaxWidth)
             .fillMaxWidth()
-            // Hidden panels are measured (so they are ready) but never placed: not drawn, no
-            // touches, and no semantics.
+            // Hidden panels stay composed (their state is kept) but are neither measured nor
+            // placed: not drawn, no touches, no semantics, and no layout work while the canvas
+            // is used (a sheet that follows a dragged object recomposes on every move).
             .then(
                 if (shown) {
                     Modifier.semantics { paneTitle = title; bwSheetTitle = title }
@@ -284,11 +314,12 @@ private fun BoxScope.HostedPanel(entry: SheetEntry, shown: Boolean, screenHeight
                 }
             )
             .layout { measurable, constraints ->
+                if (!shown) return@layout layout(0, 0) {}
                 // Half the screen (by default), but never more than the room this box has.
                 val cap = minOf(constraints.maxHeight, wanted.roundToPx())
                     .coerceAtLeast(minOf(MinHostedPanel.roundToPx(), constraints.maxHeight))
                 val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = cap))
-                if (shown) layout(placeable.width, placeable.height) { placeable.place(0, 0) } else layout(0, 0) {}
+                layout(placeable.width, placeable.height) { placeable.place(0, 0) }
             }
             .then(entry.modifier.value),
         shape = SheetShape,
