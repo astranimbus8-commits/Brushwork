@@ -25,8 +25,10 @@ import com.brushwork.paint.ui.common.UnitSelector
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
- * "Numbers" sheet of the transform tool: exact position, size, rotation and scale, plus a
- * nudge pad that moves by a chosen step. Values update live while the sheet is open.
+ * "Numbers" sheet of the transform tool: a 3 x 3 reference point (what stays in place when a
+ * size, scale or rotation is typed or slid, e.g. the center to scale from the center) and its
+ * exact position, size, rotation and scale, a nudge pad that moves by a chosen step, snapping
+ * options and Delete. Values update live while the sheet is open.
  */
 @Composable
 fun TransformNumbersSheet(tool: TransformTool) {
@@ -34,38 +36,58 @@ fun TransformNumbersSheet(tool: TransformTool) {
     val doc = tool.controller.doc
     val dpi = doc.dpi.toDouble()
     val unit = tool.unit
-    val bounds = st.bounds()
+    val anchor = tool.anchor
+    val at = st.anchorPoint(anchor)
     // Slider ranges (document px): positions from one canvas size before the canvas to two
     // after it, sizes up to twice its longer side. Any finite number can still be typed.
     val w = doc.width.toDouble()
     val h = doc.height.toDouble()
     val maxSize = 2.0 * maxOf(w, h, 1.0)
+    val finished = { tool.endNumericEdit() }
     BwSheet(
         title = "Numbers",
         onDismiss = { tool.numbersOpen = false },
         actions = { UnitSelector(unit, onUnitChange = { tool.unit = it }) },
     ) {
-        SectionHeader("Position (top-left)")
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LengthField(
-                "X", bounds.left.toDouble(), { tool.setPosition(left = it) }, unit, dpi, Modifier.weight(1f), step = null,
-                sliderMinPx = -w, sliderMaxPx = 2.0 * w,
-            )
-            LengthField(
-                "Y", bounds.top.toDouble(), { tool.setPosition(top = it) }, unit, dpi, Modifier.weight(1f), step = null,
-                sliderMinPx = -h, sliderMaxPx = 2.0 * h,
-            )
+        SectionHeader("Reference point & position")
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                TransformAnchorPicker(anchor, onSelect = { tool.anchor = it })
+                Text(
+                    anchor.label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = BrushworkColors.OnChromeDim,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                LengthField(
+                    "X", at.x.toDouble(), { tool.setAnchorPosition(x = it) }, unit, dpi, step = null,
+                    sliderMinPx = -w, sliderMaxPx = 2.0 * w,
+                )
+                LengthField(
+                    "Y", at.y.toDouble(), { tool.setAnchorPosition(y = it) }, unit, dpi, step = null,
+                    sliderMinPx = -h, sliderMaxPx = 2.0 * h,
+                )
+            }
         }
+        Text(
+            "The ${anchor.label.lowercase()} point stays in place when you change the size, scale or rotation; X and Y are its position.",
+            style = MaterialTheme.typography.bodySmall,
+            color = BrushworkColors.OnChromeDim,
+            modifier = Modifier.padding(top = 4.dp),
+        )
 
         SectionHeader("Size")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             LengthField(
                 "Width", st.width.toDouble(), { tool.setSize(width = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0,
-                sliderMinPx = 1.0, sliderMaxPx = maxSize,
+                sliderMinPx = 1.0, sliderMaxPx = maxSize, onValueChangeFinished = finished,
             )
             LengthField(
                 "Height", st.height.toDouble(), { tool.setSize(height = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0,
-                sliderMinPx = 1.0, sliderMaxPx = maxSize,
+                sliderMinPx = 1.0, sliderMaxPx = maxSize, onValueChangeFinished = finished,
             )
         }
         ToggleRow("Keep aspect ratio", tool.keepAspect, { tool.keepAspect = it })
@@ -87,6 +109,7 @@ fun TransformNumbersSheet(tool: TransformTool) {
             step = 1.0,
             sliderMin = -180.0,
             sliderMax = 180.0,
+            onValueChangeFinished = finished,
         )
         NumberField(
             label = "Scale",
@@ -102,6 +125,7 @@ fun TransformNumbersSheet(tool: TransformTool) {
             sliderMax = 10000.0,
             logSlider = true,
             modifier = Modifier.padding(top = 4.dp),
+            onValueChangeFinished = finished,
         )
 
         SectionHeader("Nudge")
@@ -127,5 +151,21 @@ fun TransformNumbersSheet(tool: TransformTool) {
                 )
             }
         }
+
+        SectionHeader("Handles & guides")
+        ToggleRow(
+            "Snap to objects",
+            tool.snapToObjects,
+            { tool.snapToObjects = it },
+            description = "While dragging, edges and centers line up with the canvas, other layers and (with grid snapping) the grid",
+        )
+        ToggleRow(
+            "Resize from the center",
+            tool.scaleFromCenter,
+            { tool.scaleFromCenter = it },
+            description = "Corner and side handles scale around the center",
+        )
+
+        TransformDeleteButton(tool, Modifier.padding(top = 8.dp))
     }
 }

@@ -71,6 +71,8 @@ class TransformToolRobolectricTest {
         fill(layer.bitmap, Rect(20, 20, 60, 60), RED)
         c.viewTransform.set(Matrix().apply { setScale(2f, 2f) })
         val tool = activate(c)
+        // A plain drag (the box would otherwise snap its bottom edge to the canvas center, 1 px away).
+        tool.snapToObjects = false
         assertTrue(tool.hasPendingWork)
         assertEquals(DocBox(20f, 20f, 60f, 60f), tool.transformState!!.bounds())
         assertTrue(c.renderOverride != null)
