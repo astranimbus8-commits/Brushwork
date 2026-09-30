@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Apartment
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.BlurOn
 import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.CloseFullscreen
@@ -53,6 +54,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.segmentation.SmartTarget
 import com.brushwork.paint.tools.select.MaskMath
+import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.tools.select.SelectionEdits
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.BwSheet
@@ -60,13 +62,14 @@ import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
 /**
  * The selection menu: copy / cut / paste / deselect, select all / invert, grow / shrink /
  * feather, select from layer opacity, smart select (subject, sky, ...) and edits of the selected
- * pixels.
+ * pixels (fill, clear, copy / cut to a new layer, content-aware fill).
  *
  * Operations that run in the background or may report a problem close the sheet first, so the
  * editor's busy overlay (with its Stop button) and messages are visible.
@@ -79,6 +82,7 @@ fun SelectionPanel(controller: EditorController, onDismiss: () -> Unit) {
     var featherPx by rememberSaveable { mutableStateOf(8.0) }
     var mode by rememberSaveable { mutableStateOf(SelectionMode.REPLACE) }
     var pickFillColor by remember { mutableStateOf(false) }
+    var contentAwareOpen by remember { mutableStateOf(false) }
 
     /** Closes the sheet, then runs [action] (the editor shows its progress / messages). */
     fun closeThen(action: () -> Unit) {
@@ -213,7 +217,14 @@ fun SelectionPanel(controller: EditorController, onDismiss: () -> Unit) {
             ActionTile(Icons.Outlined.ContentCut, "Cut to new layer", enabled = hasSelection) {
                 closeThen { SelectionEdits.cutToNewLayer(controller) }
             }
+            ActionTile(Icons.Outlined.AutoFixHigh, ContentAwareFillJob.FILL_LABEL, enabled = hasSelection) { contentAwareOpen = true }
         }
+    }
+
+    // Its options sheet opens over this one; Fill / Refill close both (the busy overlay shows
+    // the progress), its ✕ returns here.
+    if (contentAwareOpen) {
+        ContentAwareFillSheet(controller, onDismiss = { contentAwareOpen = false }, onStart = { contentAwareOpen = false; onDismiss() })
     }
 
     if (pickFillColor) {
