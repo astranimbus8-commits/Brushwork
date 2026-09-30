@@ -134,7 +134,7 @@ class ObjectSelectTool(controller: EditorController) : Tool(controller) {
                     controller.toast("Object select didn't work on this picture (not enough memory?)")
                 } else if (!usedModel.get() && !toldFallback) {
                     toldFallback = true
-                    controller.toast("The object model can't run on this device: selected similar colors instead")
+                    controller.toast("The object model couldn't run here: selected similar colors instead")
                 }
             },
         ) { cancelled ->

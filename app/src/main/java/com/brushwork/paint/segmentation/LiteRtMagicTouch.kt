@@ -39,19 +39,29 @@ internal class LiteRtMagicTouch private constructor(private val appContext: Cont
         synchronized(lock) {
             val interp = obtainLocked() ?: return null
             return try {
-                infer(interp, rgb, prior)
+                infer(interp, rgb, prior).also { failures = 0 }
             } catch (e: OutOfMemoryError) {
                 Log.w(TAG, "object model out of memory", e)
                 releaseLocked()
                 null
             } catch (e: Exception) {
-                Log.w(TAG, "object model inference failed; using color selection from now on", e)
+                // A native allocation failure under memory pressure also lands here: the first
+                // failure only recreates the interpreter; a second one in a row disables it.
                 releaseLocked()
-                unavailable = true
+                failures++
+                if (failures >= MAX_FAILURES) {
+                    Log.w(TAG, "object model inference failed again; using color selection from now on", e)
+                    unavailable = true
+                } else {
+                    Log.w(TAG, "object model inference failed; the interpreter will be recreated", e)
+                }
                 null
             }
         }
     }
+
+    /** Inference failures in a row (reset by a success). */
+    private var failures = 0
 
     /** Loads the model now (e.g. when the object select tool is picked). */
     fun warmUp() {
@@ -173,6 +183,7 @@ internal class LiteRtMagicTouch private constructor(private val appContext: Cont
         const val MODEL_ASSET = "models/magic_touch.tflite"
         private const val SIZE = InteractiveSegmenter.MODEL_SIZE
         private const val NUM_THREADS = 4
+        private const val MAX_FAILURES = 2
 
         @Volatile private var instance: LiteRtMagicTouch? = null
 

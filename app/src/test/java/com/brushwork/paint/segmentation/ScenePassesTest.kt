@@ -89,7 +89,8 @@ class ScenePassesTest {
 
     @Test
     fun globalGeometryRoundTripsAndMirrors() {
-        for ((w, h) in listOf(1280 to 960, 300 to 1000, 1280 to 1, 7 to 5)) {
+        // 299 x 1000: 153 px wide content, 359 px of padding (odd), so mirroring moves it by 1 px.
+        for ((w, h) in listOf(1280 to 960, 300 to 1000, 299 to 1000, 1280 to 1, 7 to 5)) {
             for (flip in listOf(false, true)) {
                 val g = ScenePasses.global(w, h, flip)
                 for (fx in listOf(0f, 0.25f, 0.5f, 0.99f)) for (fy in listOf(0f, 0.5f, 0.99f)) {
@@ -97,11 +98,20 @@ class ScenePassesTest {
                     assertEquals("$w x $h $flip", x, g.toWorkX(g.toInputX(x)), 1e-2f * maxOf(1f, x))
                     assertEquals(y, g.toWorkY(g.toInputY(y)), 1e-2f * maxOf(1f, y))
                 }
-                // The picture maps onto the valid (content) rectangle.
+                // The picture maps exactly onto the valid (content) rectangle.
                 val x0 = g.toInputX(0f); val x1 = g.toInputX(w.toFloat())
-                assertEquals(g.valid[0], minOf(x0, x1), 0.6f)
-                assertEquals(g.valid[2], maxOf(x0, x1), 0.6f)
+                assertEquals("$w x $h $flip", g.valid[0], minOf(x0, x1), 1e-3f)
+                assertEquals("$w x $h $flip", g.valid[2], maxOf(x0, x1), 1e-3f)
                 if (flip) assertTrue(x0 > x1)
+                // ...and so does the rendered input: content inside [valid], padding outside.
+                val work = PixelBuffer.filled(w, h, SegTestImages.RED)
+                val input = ScenePasses.renderGlobal(work, g)
+                val row = ((g.valid[1] + g.valid[3]) / 2).toInt()
+                val l = g.valid[0].toInt(); val r = g.valid[2].toInt()
+                assertEquals("$w x $h $flip", SegTestImages.RED, input[l, row])
+                assertEquals(SegTestImages.RED, input[r - 1, row])
+                if (l > 0) assertEquals("$w x $h $flip", ScenePasses.PAD, input[l - 1, row])
+                if (r < size) assertEquals(ScenePasses.PAD, input[r, row])
             }
         }
     }

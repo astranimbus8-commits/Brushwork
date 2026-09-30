@@ -29,10 +29,10 @@ import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
- * Object select: selection mode, what to analyse (canvas / layer), edge refinement, then
- * deselect and the selection menu, like the other selection tools. While a selection is being
- * computed the strip STARTS with a spinner and a cancel button, so they are visible on a narrow
- * phone without scrolling the strip; otherwise it ends with a short hint.
+ * Object select: how to use it (or, while a selection is being computed, a spinner and a cancel
+ * button), selection mode, what to analyse (canvas / layer), edge refinement, then deselect and
+ * the selection menu, like the other selection tools. The hint / busy state comes FIRST, like
+ * the lasso's "Tap corners", so it is visible on a narrow phone without scrolling the strip.
  */
 @Composable
 fun ObjectSelectOptions(tool: ObjectSelectTool) {
@@ -42,8 +42,10 @@ fun ObjectSelectOptions(tool: ObjectSelectTool) {
             CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = BrushworkColors.Accent)
             Text("Selecting…", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChrome)
             ToolIconButton(Icons.Filled.Close, "Cancel object select", onClick = { tool.cancel() }, size = 40.dp)
-            Divider()
+        } else {
+            Text("Tap or scribble on an object", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
         }
+        Divider()
         SelectionModeButtons(tool.mode) { tool.mode = it }
         Divider()
         ChoiceChip("Refer", SampleSource.entries, s.source, { it.label }) { tool.settings = tool.settings.copy(source = it) }
@@ -53,10 +55,6 @@ fun ObjectSelectOptions(tool: ObjectSelectTool) {
         ToolIconButton(Icons.Outlined.Deselect, "Deselect", onClick = { tool.controller.deselect() }, enabled = tool.controller.selection != null, size = 40.dp)
         ToolIconButton(Icons.Outlined.HighlightAlt, "Selection menu", onClick = { menu = true }, size = 40.dp)
         if (menu) SelectionPanel(tool.controller) { menu = false }
-        if (!tool.busy) {
-            Divider()
-            Text("Tap or scribble on an object", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
-        }
     }
 }
 

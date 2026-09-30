@@ -72,12 +72,15 @@ internal object ScenePasses {
     /** The whole [w]x[h] working image letterboxed into the model input (optionally mirrored). */
     fun global(w: Int, h: Int, flip: Boolean = false): PassGeometry {
         val lb = Letterbox(w, h, SIZE)
+        // Mirrored, the content sits at SIZE - (offsetX + contentWidth): one pixel away from
+        // offsetX when the horizontal padding is odd.
+        val left = if (flip) SIZE - lb.offsetX - lb.contentWidth else lb.offsetX
         return PassGeometry(
             PassGeometry.Kind.GLOBAL, SIZE,
             sx = lb.contentWidth.toFloat() / w, sy = lb.contentHeight.toFloat() / h,
             tx = lb.offsetX.toFloat(), ty = lb.offsetY.toFloat(), flip = flip,
             region = floatArrayOf(0f, 0f, w.toFloat(), h.toFloat()),
-            valid = floatArrayOf(lb.offsetX.toFloat(), lb.offsetY.toFloat(), (lb.offsetX + lb.contentWidth).toFloat(), (lb.offsetY + lb.contentHeight).toFloat()),
+            valid = floatArrayOf(left.toFloat(), lb.offsetY.toFloat(), (left + lb.contentWidth).toFloat(), (lb.offsetY + lb.contentHeight).toFloat()),
             cutEdges = BooleanArray(4),
         )
     }
@@ -146,7 +149,8 @@ internal object ScenePasses {
             if (!geo.flip) {
                 System.arraycopy(content.pixels, src, out.pixels, dst + x0, cw)
             } else {
-                for (x in 0 until cw) out.pixels[dst + SIZE - 1 - (x0 + x)] = content.pixels[src + x]
+                // [valid] is already mirrored: the picture's left column lands on its right side.
+                for (x in 0 until cw) out.pixels[dst + x0 + cw - 1 - x] = content.pixels[src + x]
             }
         }
         return out
