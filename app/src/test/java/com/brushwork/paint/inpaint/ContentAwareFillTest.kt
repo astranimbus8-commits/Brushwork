@@ -320,6 +320,27 @@ class ContentAwareFillTest {
     }
 
     @Test
+    fun hasSourceLooksOnlyAtTheSamplingAreaOutsideTheHole() {
+        val w = 600; val h = 400
+        val hole = IRect(280, 180, 320, 220)
+        val plan = ContentAwareFill.plan(HoleMask.full(w, h, rectMask(w, h, hole)), InpaintParams())!!
+        fun pixelsWith(vararg opaque: Pair<Int, Int>): PixelBuffer {
+            val img = PixelBuffer(w, h)
+            for ((x, y) in opaque) img[x, y] = 0xFF336699.toInt()
+            return ContentAwareFill.crop(img, plan.roi)
+        }
+        // Only the thing being removed is painted: nothing to fill from.
+        assertFalse(ContentAwareFill.hasSource(plan, InpaintTestImages.paint(PixelBuffer(w, h), hole, magenta).let { ContentAwareFill.crop(it, plan.roi) }))
+        assertFalse(ContentAwareFill.hasSource(plan, pixelsWith()))
+        // A pixel next to the hole is a source.
+        assertTrue(ContentAwareFill.hasSource(plan, pixelsWith(260 to 200)))
+        // One outside the automatic band (the ROI's corner) is not.
+        val corner = plan.roi.left to plan.roi.top
+        assertTrue("corner outside the band", plan.excluded!![0].toInt() != 0)
+        assertFalse(ContentAwareFill.hasSource(plan, pixelsWith(corner)))
+    }
+
+    @Test
     fun wholeImageHoleIsRefused() {
         val w = 50; val h = 40
         try {

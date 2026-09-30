@@ -52,21 +52,24 @@ import kotlin.math.roundToInt
 @Composable
 fun RemoveToolOptions(tool: RemoveTool) {
     val s = tool.settings
+    val size = tool.size
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Size", style = MaterialTheme.typography.labelLarge, color = BrushworkColors.OnChromeDim)
         Slider(
-            value = RemoveSizeScale.toPosition(s.size),
-            onValueChange = { pos -> tool.settings = tool.settings.copy(size = RemoveSizeScale.fromPosition(pos)) },
+            value = RemoveSizeScale.toPosition(size),
+            // Live while dragging (the canvas shows the brush), saved on release.
+            onValueChange = { pos -> tool.previewSize(RemoveSizeScale.fromPosition(pos)) },
+            onValueChangeFinished = { tool.commitSize() },
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
                 .width(150.dp)
                 .semantics {
                     contentDescription = "Remove brush size"
-                    stateDescription = "${s.size.roundToInt()} pixels"
+                    stateDescription = "${size.roundToInt()} pixels"
                 },
         )
         Text(
-            "${s.size.roundToInt()} px",
+            "${size.roundToInt()} px",
             style = MaterialTheme.typography.labelLarge,
             color = BrushworkColors.OnChrome,
             textAlign = TextAlign.End,

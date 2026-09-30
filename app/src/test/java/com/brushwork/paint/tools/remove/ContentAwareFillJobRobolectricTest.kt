@@ -184,15 +184,133 @@ class ContentAwareFillJobRobolectricTest {
         val out = pixels(top)
         assertTrue("the empty top layer got the stripes: ${stripeShare(out)}", stripeShare(out) >= 0.9)
         assertTrue(photoBefore.contentEquals(pixels(photo)))
-        // Sampling only the (empty) top layer gives an empty fill: nothing changes, no step.
+
+        // "Current layer" on a layer that is empty there has nothing to sample: it samples what
+        // is visible instead (a fresh layer for a non-destructive fix) and says so.
         c.undo()
-        val steps = c.undoManager.undoCount
+        assertTrue(pixels(top).all { it == 0 })
+        var steps = c.undoManager.undoCount
         c.message = null
         assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.CURRENT_LAYER, source = CafSource.LAYER)))
         waitIdle()
-        assertTrue(pixels(top).all { it == 0 })
+        Smoke.assertQuiet(c, "after the empty-layer fill")
+        assertTrue("stripes on the empty layer: ${stripeShare(pixels(top))}", stripeShare(pixels(top)) >= 0.9)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertTrue("says all layers were sampled: ${c.message}", c.message.orEmpty().contains("all layers"))
+        assertTrue(photoBefore.contentEquals(pixels(photo)))
+
+        // Something on the layer, but only transparency around the area: nothing changes, no
+        // step, and the message suggests sampling all layers.
+        c.undo()
+        top.bitmap.setPixel(3, 3, 0xFF0000FF.toInt())
+        top.markChanged()
+        val topBefore = pixels(top)
+        steps = c.undoManager.undoCount
+        c.message = null
+        assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.CURRENT_LAYER, source = CafSource.LAYER)))
+        waitIdle()
+        assertTrue(topBefore.contentEquals(pixels(top)))
         assertEquals(steps, c.undoManager.undoCount)
-        assertNotNull("says nothing changed", c.message)
+        assertTrue("suggests all layers: ${c.message}", c.message.orEmpty().contains("all layers"))
+    }
+
+    @Test
+    fun removeOnAnEmptyLayerPatchesItFromAllLayers() {
+        controller(document(extraTopLayer = true))
+        val top = c.activeLayer
+        val photo = c.doc.layers[0]
+        val photoBefore = pixels(photo)
+        removeTool(40f)
+        val steps = c.undoManager.undoCount
+        stroke(70f to 60f, 80f to 60f, 90f to 60f)
+        waitIdle()
+        Smoke.assertQuiet(c, "after Remove on an empty layer")
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(ContentAwareFillJob.REMOVE_LABEL, c.undoManager.undoLabel)
+        assertTrue("the photo is untouched", photoBefore.contentEquals(pixels(photo)))
+        val patch = pixels(top)
+        assertTrue("the patch covers the object: ${stripeShare(patch)}", stripeShare(patch) >= 0.9)
+        assertEquals("nothing far from the stroke", 0, patch[5 * w + 5])
+        c.undo()
+        assertTrue(pixels(top).all { it == 0 })
+    }
+
+    @Test
+    fun pendingTransformIsAppliedFirstAsItsOwnStep() {
+        controller(document())
+        val photo = c.activeLayer
+        select(Rect(63, 43, 97, 77))
+        c.selectTool(ToolId.TRANSFORM)
+        Smoke.pump(100)
+        val transform = c.currentTool as com.brushwork.paint.tools.transform.TransformTool
+        assertTrue("lifted", transform.hasPendingWork)
+        // The user moves the object (the selection moves along when the transform is applied).
+        transform.moveBy(40f, 0f)
+        assertTrue(transform.hasUserChanges)
+        val steps = c.undoManager.undoCount
+        // The selection panel is reachable meanwhile (the floating bar steps aside).
+        assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.CURRENT_LAYER)))
+        waitIdle()
+        Smoke.assertQuiet(c, "after the fill")
+        assertEquals("the transform and the fill are two steps", steps + 2, c.undoManager.undoCount)
+        assertEquals(ContentAwareFillJob.FILL_LABEL, c.undoManager.undoLabel)
+        assertEquals("the fill used the moved selection", Rect(103, 43, 137, 77), c.selection!!.bounds)
+        assertTrue("the moved object was filled", pixels(photo).none { near(it, magenta, 60) })
+        c.undo()
+        assertEquals(com.brushwork.paint.tools.transform.TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+        assertTrue("undo keeps the transform", near(photo.bitmap.getPixel(120, 60), magenta, 10))
+    }
+
+    @Test
+    fun stoppedRefillKeepsThePreviousFill() {
+        controller(document())
+        select(Rect(63, 43, 97, 77))
+        assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.NEW_LAYER)))
+        waitIdle()
+        val first = c.doc.layers[1]
+        val firstPixels = pixels(first)
+        val steps = c.undoManager.undoCount
+        assertTrue(ContentAwareFillJob.canRefill(c))
+
+        assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.NEW_LAYER), refill = true))
+        // The refill took the first fill back to compute a new one; Stop right away.
+        assertEquals(1, c.doc.layers.size)
+        requireNotNull(c.busyCancel).invoke()
+        waitIdle()
+        Smoke.assertQuiet(c, "after the stopped refill")
+        assertEquals("the first fill is back", 2, c.doc.layers.size)
+        assertSame(first, c.doc.layers[1])
+        assertTrue(firstPixels.contentEquals(pixels(first)))
+        assertEquals(steps, c.undoManager.undoCount)
+        assertFalse("nothing left to redo", c.undoManager.canRedo)
+        assertTrue("Refill is still offered", ContentAwareFillJob.canRefill(c))
+
+        // Refill again (to completion) still replaces it.
+        assertTrue(ContentAwareFillJob.fillSelection(c, CafOptions(output = CafOutput.NEW_LAYER), refill = true))
+        waitIdle()
+        assertEquals(2, c.doc.layers.size)
+        assertEquals(steps, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun removeSizePreviewIsSavedOnRelease() {
+        controller(document())
+        val tool = removeTool(40f)
+        tool.previewSize(120f)
+        assertEquals(120f, tool.size, 0f)
+        assertEquals("not saved while dragging", 40f, tool.settings.size, 0f)
+        tool.commitSize()
+        assertNull(tool.liveSize)
+        assertEquals(120f, tool.settings.size, 0f)
+        // Out-of-range values are clamped; a drag left open is kept when the tool is switched.
+        tool.previewSize(5000f)
+        assertEquals(RemoveSettings.MAX_SIZE, tool.size, 0f)
+        c.selectTool(ToolId.BRUSH)
+        assertNull(tool.liveSize)
+        assertEquals(RemoveSettings.MAX_SIZE, tool.settings.size, 0f)
+        // The heap budget of the region a fill may read stays within the engine's limits.
+        val budget = ContentAwareFillJob.roiBudget()
+        assertTrue("budget $budget", budget in 1_000_000..com.brushwork.paint.inpaint.InpaintParams().maxRoiPixels)
     }
 
     @Test

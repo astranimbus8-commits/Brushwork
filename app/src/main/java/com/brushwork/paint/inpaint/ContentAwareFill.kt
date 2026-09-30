@@ -101,6 +101,23 @@ object ContentAwareFill {
     fun run(plan: InpaintPlan, pixels: PixelBuffer, params: InpaintParams = InpaintParams(), monitor: InpaintMonitor = InpaintMonitor()): InpaintResult =
         InpaintEngine(plan, params, monitor).run(pixels)
 
+    /**
+     * True if [pixels] (the [InpaintPlan.roi] of an image) hold something to fill from: a pixel
+     * that is not fully transparent outside the hole and inside the sampling area. Without one
+     * the fill can only be transparent (e.g. a layer that is empty around the area).
+     */
+    fun hasSource(plan: InpaintPlan, pixels: PixelBuffer): Boolean {
+        require(pixels.width == plan.roi.width && pixels.height == plan.roi.height) { "pixels ${pixels.width}x${pixels.height} != roi ${plan.roi}" }
+        val px = pixels.pixels
+        val hole = plan.hole
+        val excluded = plan.excluded
+        for (i in px.indices) {
+            if (px[i] ushr 24 == 0 || hole[i].toInt() != 0) continue
+            if (excluded == null || excluded[i].toInt() == 0) return true
+        }
+        return false
+    }
+
     /** Convenience: plan + run on a whole image in memory (tests, small images). Null for an empty hole. */
     fun fill(image: PixelBuffer, hole: ByteArray, params: InpaintParams = InpaintParams(), monitor: InpaintMonitor = InpaintMonitor()): InpaintResult? {
         require(hole.size == image.size) { "hole size ${hole.size} != image ${image.width}x${image.height}" }

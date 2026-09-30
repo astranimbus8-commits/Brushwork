@@ -58,6 +58,8 @@ object ContentAwareFillJob {
         var options: CafOptions by StoredSetting(settings, "caf.options", CafOptions.serializer(), CafOptions())
         var running by mutableStateOf(false)
         var lastFill: LastFill? = null
+        /** The "layer is empty here, sampled all layers" note was shown (once per editor). */
+        var emptyLayerNoteShown = false
     }
 
     private val states = WeakHashMap<EditorController, State>()
@@ -85,43 +87,67 @@ object ContentAwareFillJob {
      * it. Returns false if nothing was started (a message says why).
      */
     fun fillSelection(controller: EditorController, options: CafOptions, refill: Boolean = false): Boolean {
-        if (controller.busyMessage != null) return false
+        if (controller.busyMessage != null || controller.filterSession != null) return false
         if (controller.isInteracting) controller.pointerCancel()
         val st = state(controller)
+        // Pending tool work (a moved transform, text or a shape being edited) is settled first: it
+        // becomes its own step, and the fill reads the pixels and the selection it leaves behind
+        // (a committed transform moves the selection along).
+        val tool = controller.currentTool
+        tool.onDeactivate()
         var seed = FIRST_SEED
         val last = st.lastFill
+        // The fill Refill took back: put back if the new one doesn't happen (Stop, error).
+        var undone: LastFill? = null
+        var editsAfterUndo = -1
         if (refill && last != null) {
             seed = last.seed + 1
-            val tool = controller.currentTool
-            // Settle pending tool work first, so undo takes back the fill and nothing else.
-            tool.onDeactivate()
-            if (canRefill(controller) && !tool.hasPendingWork && controller.filterSession == null && isTopStep(controller, last.action)) {
+            if (canRefill(controller) && !tool.hasPendingWork && isTopStep(controller, last.action)) {
                 controller.undo()
+                undone = last
+                editsAfterUndo = controller.editCount
             }
-            tool.onActivate()
+        }
+        tool.onActivate()
+        if (refill && last != null) {
             if (controller.doc.indexOf(last.sourceLayer) >= 0 && controller.activeLayer !== last.sourceLayer) controller.selectLayer(last.sourceLayer)
             st.lastFill = null
         }
-        val sel = controller.selection ?: run { controller.toast("Select the area to fill first"); return false }
+        /** Brings the fill Refill took back again (nothing else happened since); false if it can't. */
+        fun restoreUndone() {
+            val u = undone ?: return
+            undone = null
+            val um = controller.undoManager
+            if (controller.editCount != editsAfterUndo || !um.canRedo || um.redoLabel != u.action.label) return
+            controller.redo()
+            st.lastFill = LastFill(u.action, u.sourceLayer, seed, controller.editCount, um.undoCount)
+        }
+        val sel = controller.selection ?: run {
+            restoreUndone(); controller.toast("Select the area to fill first"); return false
+        }
         val layer = controller.activeLayer
-        if (options.output == CafOutput.CURRENT_LAYER && !checkWritable(controller, layer)) return false
+        if (options.output == CafOutput.CURRENT_LAYER && !checkWritable(controller, layer)) { restoreUndone(); return false }
         if (options.output == CafOutput.NEW_LAYER && !controller.canAddLayer) {
+            restoreUndone()
             controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size")
             return false
         }
         val hole = try { holeOf(sel, controller.doc.width, controller.doc.height) } catch (e: OutOfMemoryError) {
-            controller.toast("Not enough memory for $FILL_LABEL"); return false
+            restoreUndone(); controller.toast("Not enough memory for $FILL_LABEL"); return false
         }
         val params = InpaintParams(
             sampling = options.sampling,
             expand = options.expand.coerceIn(0, InpaintParams.MAX_EXPAND),
             colorAdaptation = options.colorAdaptation,
             seed = seed,
+            maxRoiPixels = roiBudget(),
         )
         val req = Request(layer, layer.bitmap, hole, params, options.source, options.output, FILL_LABEL, "Content-aware fill…", clip = null)
         return start(controller, req) { action ->
             if (action != null) {
                 st.lastFill = LastFill(action, layer, seed, controller.editCount, controller.undoManager.undoCount)
+            } else {
+                restoreUndone()
             }
         }
     }
@@ -139,7 +165,7 @@ object ContentAwareFillJob {
         onFinished: (applied: Boolean) -> Unit,
     ): Boolean {
         if (controller.busyMessage != null || !checkWritable(controller, layer)) { onFinished(false); return false }
-        val params = InpaintParams(expand = RemoveSettings.EXPAND, colorAdaptation = settings.colorAdaptation, seed = FIRST_SEED)
+        val params = InpaintParams(expand = RemoveSettings.EXPAND, colorAdaptation = settings.colorAdaptation, seed = FIRST_SEED, maxRoiPixels = roiBudget())
         val req = Request(layer, layer.bitmap, hole, params, settings.source, CafOutput.CURRENT_LAYER, REMOVE_LABEL, "Removing…", clip)
         return start(controller, req) { action -> onFinished(action != null) }
     }
@@ -160,6 +186,20 @@ object ContentAwareFillJob {
 
     /** The layer can be written (not locked or hidden; says why otherwise). */
     private fun checkWritable(controller: EditorController, layer: Layer): Boolean = controller.checkEditable(layer)
+
+    /**
+     * Largest region a fill may read, from the heap that is free now: the engine needs about
+     * [BYTES_PER_ROI_PIXEL] per pixel of it at full resolution (a smaller sampling area beats
+     * running out of memory halfway).
+     */
+    internal fun roiBudget(): Int {
+        val rt = Runtime.getRuntime()
+        val free = rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+        return (free / BYTES_PER_ROI_PIXEL).coerceIn(MIN_ROI_BUDGET, InpaintParams().maxRoiPixels.toLong()).toInt()
+    }
+
+    private const val BYTES_PER_ROI_PIXEL = 32L
+    private const val MIN_ROI_BUDGET = 1_000_000L
 
     /** The selection as a hole mask (its bounding box only). */
     internal fun holeOf(sel: Selection, docW: Int, docH: Int): HoleMask {
@@ -205,7 +245,27 @@ object ContentAwareFillJob {
                 }
                 if (!layerUsable(controller, req)) return@runBusy
                 val version = req.layer.contentVersion
-                val pixels = readSource(controller, req, plan.roi)
+                var source = req.source
+                var pixels = readSource(controller, req.layer, source, plan.roi)
+                if (source == CafSource.LAYER && !ContentAwareFill.hasSource(plan, pixels)) {
+                    // Nothing on the layer around the area (a fresh layer for a non-destructive
+                    // fix, or the previous fill's layer): sample what is visible, not transparency.
+                    val merged = readSource(controller, req.layer, CafSource.ALL_LAYERS, plan.roi)
+                    if (ContentAwareFill.hasSource(plan, merged)) {
+                        source = CafSource.ALL_LAYERS
+                        pixels = merged
+                        if (!st.emptyLayerNoteShown) {
+                            st.emptyLayerNoteShown = true
+                            controller.toast("\"${req.layer.name}\" is empty around this area, so all layers were sampled")
+                        }
+                    }
+                }
+                // On the current layer a transparent fill still erases what is in the area; a
+                // new layer of transparency would be pointless.
+                if (req.output == CafOutput.NEW_LAYER && !ContentAwareFill.hasSource(plan, pixels)) {
+                    controller.toast("There is nothing around this area to fill it from")
+                    return@runBusy
+                }
                 val result = coroutineScope {
                     val ticker = launch {
                         while (true) {
@@ -227,7 +287,7 @@ object ContentAwareFillJob {
                         ticker.cancel()
                     }
                 }
-                applied = apply(controller, req, result, version)
+                applied = apply(controller, req, result, version, source)
             } catch (e: InpaintException) {
                 controller.toast(e.message ?: "${req.label} failed")
             } finally {
@@ -238,11 +298,11 @@ object ContentAwareFillJob {
         return true
     }
 
-    /** The [roi] pixels the fill samples: the layer's own, or all visible layers merged. */
-    private fun readSource(controller: EditorController, req: Request, roi: IRect): PixelBuffer {
+    /** The [roi] pixels the fill samples: [layer]'s own, or all visible layers merged. */
+    private fun readSource(controller: EditorController, layer: Layer, source: CafSource, roi: IRect): PixelBuffer {
         val rect = Rect(roi.left, roi.top, roi.right, roi.bottom)
-        return when (req.source) {
-            CafSource.LAYER -> BitmapUtils.toPixelBuffer(req.layer.bitmap, rect)
+        return when (source) {
+            CafSource.LAYER -> BitmapUtils.toPixelBuffer(layer.bitmap, rect)
             CafSource.ALL_LAYERS -> {
                 val bmp = BitmapUtils.createLayerBitmap(rect.width(), rect.height())
                 try {
@@ -258,8 +318,11 @@ object ContentAwareFillJob {
         }
     }
 
-    /** Writes [result] as ONE undo step; returns that step (null if nothing was applied). */
-    private fun apply(controller: EditorController, req: Request, fill: InpaintResult, version: Long): UndoAction? {
+    /**
+     * Writes [result] as ONE undo step; returns that step (null if nothing was applied). [source]
+     * is what was actually sampled (an empty layer falls back to all layers).
+     */
+    private fun apply(controller: EditorController, req: Request, fill: InpaintResult, version: Long, source: CafSource): UndoAction? {
         if (!layerUsable(controller, req)) return null
         val layer = req.layer
         if (layer.contentVersion != version) {
@@ -269,47 +332,53 @@ object ContentAwareFillJob {
         val r = fill.rect
         val rect = Rect(r.left, r.top, r.right, r.bottom)
         val result = req.clip?.let { fill.clipped(alphaCrop(it.mask, rect)) } ?: fill
-        if (result.isEmpty) return null
+        if (result.isEmpty) {
+            controller.toast("${req.label}: nothing to change inside the selection")
+            return null
+        }
+        // Around a transparent area the fill is transparent too: say how to get pixels instead.
+        val hint = if (source == CafSource.LAYER) " Try sampling all layers." else ""
         val rw = r.width; val rh = r.height
         val um = controller.undoManager
+        // The tool is settled before recording (e.g. the transform tool's automatic lift, which
+        // started again during the fill), so nothing but the fill joins its step; it resumes after.
+        val tool = controller.currentTool
+        tool.onDeactivate()
         val mark = um.undoCount
-        when (req.output) {
-            CafOutput.NEW_LAYER -> {
-                val px = result.layerPixels()
-                if (px.all { it == 0 }) {
-                    controller.toast("${req.label} found only transparent pixels to fill with")
-                    return null
+        try {
+            when (req.output) {
+                CafOutput.NEW_LAYER -> {
+                    val px = result.layerPixels()
+                    if (px.all { it == 0 }) {
+                        controller.toast("${req.label} found only transparent pixels around the area on \"${layer.name}\".$hint")
+                        return null
+                    }
+                    val bmp = BitmapUtils.createLayerBitmap(rw, rh)
+                    try {
+                        bmp.setPixels(px, 0, rw, 0, 0, rw, rh)
+                        controller.addLayerWithContent(FILL_LABEL, req.label) { c -> c.drawBitmap(bmp, r.left.toFloat(), r.top.toFloat(), null) }
+                            ?: return null
+                    } finally {
+                        bmp.recycle()
+                    }
                 }
-                val bmp = BitmapUtils.createLayerBitmap(rw, rh)
-                try {
-                    bmp.setPixels(px, 0, rw, 0, 0, rw, rh)
-                    controller.addLayerWithContent(FILL_LABEL, req.label) { c -> c.drawBitmap(bmp, r.left.toFloat(), r.top.toFloat(), null) }
-                        ?: return null
-                } finally {
-                    bmp.recycle()
-                }
-            }
-            CafOutput.CURRENT_LAYER -> {
-                if (!controller.checkEditable(layer)) return null
-                val original = IntArray(rw * rh)
-                layer.bitmap.getPixels(original, 0, rw, r.left, r.top, rw, rh)
-                val out = result.composite(original, alphaLocked = layer.alphaLocked)
-                if (out.contentEquals(original)) {
-                    controller.toast("${req.label} didn't change anything on \"${layer.name}\"")
-                    return null
-                }
-                // Pending tool work is settled first (like other layer edits) and resumed after.
-                val tool = controller.currentTool
-                tool.onDeactivate()
-                try {
+                CafOutput.CURRENT_LAYER -> {
+                    if (!controller.checkEditable(layer)) return null
+                    val original = IntArray(rw * rh)
+                    layer.bitmap.getPixels(original, 0, rw, r.left, r.top, rw, rh)
+                    val out = result.composite(original, alphaLocked = layer.alphaLocked)
+                    if (out.contentEquals(original)) {
+                        controller.toast("${req.label} didn't change anything on \"${layer.name}\".$hint")
+                        return null
+                    }
                     val rec = controller.beginEdit(layer, EditTarget.CONTENT)
                     rec.touch(rect)
                     layer.bitmap.setPixels(out, 0, rw, r.left, r.top, rw, rh)
                     controller.commitEdit(rec, req.label)
-                } finally {
-                    tool.onActivate()
                 }
             }
+        } finally {
+            tool.onActivate()
         }
         // Everything this fill pushed (layer or pixels, plus e.g. a rasterized text layer) is one step.
         val added = um.takeSince(mark)

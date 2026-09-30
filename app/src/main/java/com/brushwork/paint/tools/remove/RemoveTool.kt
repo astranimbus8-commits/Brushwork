@@ -32,6 +32,30 @@ class RemoveTool(controller: EditorController) : Tool(controller) {
 
     var settings: RemoveSettings by StoredSetting(controller.settings, "remove.settings", RemoveSettings.serializer(), RemoveSettings())
 
+    /**
+     * Brush diameter while its slider is being dragged (not saved yet), else null. The canvas
+     * shows the brush at that size in its middle meanwhile.
+     */
+    var liveSize by mutableStateOf<Float?>(null)
+        private set
+
+    /** Current brush diameter in document pixels. */
+    val size: Float get() = (liveSize ?: settings.size).coerceIn(RemoveSettings.MIN_SIZE, RemoveSettings.MAX_SIZE)
+
+    /** The size slider moved: preview [size] (saved by [commitSize]). */
+    fun previewSize(size: Float) {
+        liveSize = size.coerceIn(RemoveSettings.MIN_SIZE, RemoveSettings.MAX_SIZE)
+        controller.invalidateOverlay()
+    }
+
+    /** The size slider was released: keep the previewed size. */
+    fun commitSize() {
+        val s = liveSize ?: return
+        liveSize = null
+        settings = settings.copy(size = s)
+        controller.invalidateOverlay()
+    }
+
     /** True while a painted area is being filled (a new stroke waits until it is done). */
     var busy by mutableStateOf(false)
         private set
@@ -54,12 +78,13 @@ class RemoveTool(controller: EditorController) : Tool(controller) {
     }
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = -1 }
     private val ringShadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x99000000.toInt() }
+    private val previewFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     override fun onDown(p: ToolPoint) {
         if (busy || controller.busyMessage != null) return
         if (!controller.checkEditable()) return
         stroking = true
-        strokeSize = settings.size.coerceIn(RemoveSettings.MIN_SIZE, RemoveSettings.MAX_SIZE)
+        strokeSize = size
         path.reset()
         path.moveTo(p.x, p.y)
         // A tap removes a round spot: a zero-length line would draw nothing.
@@ -90,16 +115,21 @@ class RemoveTool(controller: EditorController) : Tool(controller) {
     }
 
     /** A running fill keeps going (it is applied to the layer it started on). */
-    override fun onDeactivate() = onCancel()
+    override fun onDeactivate() {
+        // A size slider left mid-drag (the strip went away) keeps its value, not its preview.
+        commitSize()
+        onCancel()
+    }
 
     override fun onDispose() = onCancel()
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        val zoom = t.zoom
+        if (zoom <= 1e-6f) return
+        if (liveSize != null && !stroking) drawSizePreview(canvas, t)
         val shown = if (stroking) path else filling
         val size = if (stroking) strokeSize else fillingSize
         if (shown == null) return
-        val zoom = t.zoom
-        if (zoom <= 1e-6f) return
         canvas.save()
         canvas.concat(t.matrix)
         maskPaint.strokeWidth = size
@@ -113,6 +143,20 @@ class RemoveTool(controller: EditorController) : Tool(controller) {
             canvas.drawCircle(cursorX, cursorY, size / 2f, ringPaint)
         }
         canvas.restore()
+    }
+
+    /** The brush at its on-screen size in the middle of the canvas view (while its slider moves). */
+    private fun drawSizePreview(canvas: Canvas, t: ViewTransform) {
+        val radius = size * t.zoom / 2f
+        val cx = canvas.width / 2f
+        val cy = canvas.height / 2f
+        previewFill.color = OVERLAY_COLOR
+        canvas.drawCircle(cx, cy, radius, previewFill)
+        val w = t.dp(1.5f)
+        ringShadow.strokeWidth = w * 2f
+        ringPaint.strokeWidth = w
+        canvas.drawCircle(cx, cy, radius, ringShadow)
+        canvas.drawCircle(cx, cy, radius, ringPaint)
     }
 
     private fun finishStroke() {

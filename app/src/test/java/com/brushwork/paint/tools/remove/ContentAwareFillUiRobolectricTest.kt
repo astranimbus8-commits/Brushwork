@@ -5,6 +5,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -16,6 +19,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.editor.SelectionActionBar
 import com.brushwork.paint.ui.remove.RemoveSizeScale
 import com.brushwork.paint.ui.remove.RemoveToolOptions
+import com.brushwork.paint.ui.selection.SelectionPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,12 +68,14 @@ class ContentAwareFillUiRobolectricTest {
             val activity = ctl.get()
             val c = Smoke.controller(activity, document())
             val remove = c.tools[ToolId.REMOVE] as RemoveTool
+            var panelOpen by mutableStateOf(false)
             activity.setContent {
                 BrushworkTheme {
                     Column(Modifier.fillMaxSize()) {
                         RemoveToolOptions(remove)
-                        SelectionActionBar(c, onMore = {}, onHide = null)
+                        SelectionActionBar(c, onMore = { panelOpen = true }, onHide = null)
                     }
+                    if (panelOpen) SelectionPanel(c, onDismiss = { panelOpen = false })
                 }
             }
             SmokeUi.settle()
@@ -107,6 +113,19 @@ class ContentAwareFillUiRobolectricTest {
             SmokeUi.settle()
             assertEquals("still one fill layer", 2, c.doc.layers.size)
             assertEquals(steps + 1, c.undoManager.undoCount)
+
+            // The selection menu ("More") has it too: its tile opens the same options over the
+            // menu, and Fill closes both.
+            SmokeUi.click("Selection menu", exact = true)
+            assertTrue("selection menu", panelOpen && SmokeUi.has("Cut to new layer"))
+            SmokeUi.click(ContentAwareFillJob.FILL_LABEL, exact = true)
+            assertTrue("options over the menu", SmokeUi.has("Expand selection"))
+            SmokeUi.click("Fill", exact = true)
+            assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !ContentAwareFillJob.isRunning(c) && c.doc.layers.size == 3 })
+            SmokeUi.settle()
+            assertFalse("the menu closed", panelOpen)
+            assertFalse("the options closed", SmokeUi.has("Expand selection"))
+            assertEquals(steps + 2, c.undoManager.undoCount)
             assertTrue("coroutine errors: ${Smoke.scopeErrors}", Smoke.scopeErrors.isEmpty())
             SmokeUi.assertIdle("after the fills")
         } finally {
