@@ -46,23 +46,19 @@ fun TextToolOptions(tool: TextTool) {
     // The active layer isn't Compose state: follow the counters that change with it.
     val activeText = remember(c.layersVersion, c.editCount) { c.activeLayer.takeIf { it.isTextLayer } }
     val onPath = item?.path?.isActive == true
+    // Buttons first, hints last: on a narrow phone the strip scrolls, and only a hint may be cut.
     Row(verticalAlignment = Alignment.CenterVertically) {
         when {
-            item == null && activeText != null -> {
-                StripButton(Icons.Filled.Edit, "Edit text") { tool.editLayer(activeText, openEditor = true) }
-                Hint("or tap any text to edit it, empty canvas to add")
-            }
+            item == null && activeText != null -> StripButton(Icons.Filled.Edit, "Edit text") { tool.editLayer(activeText, openEditor = true) }
             item == null -> {
                 Icon(Icons.Filled.TextFields, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(20.dp))
-                Spacer(Modifier.width(8.dp))
-                Hint("Tap the canvas to add text, or tap a text to edit it")
+                Spacer(Modifier.width(4.dp))
             }
             else -> {
                 StripButton(Icons.Filled.Edit, "Edit text") { tool.openEditor() }
                 StripButton(Icons.Filled.Tune, "Numbers") { tool.numbersOpen = true }
             }
         }
-        Spacer(Modifier.width(4.dp))
         ToolIconButton(
             icon = if (tool.isVertical) Icons.Filled.TextRotateVertical else Icons.Filled.TextRotationNone,
             contentDescription = if (tool.isVertical) "Vertical text (tap for horizontal)" else "Horizontal text (tap for vertical)",
@@ -70,8 +66,15 @@ fun TextToolOptions(tool: TextTool) {
             selected = tool.isVertical && !onPath,
             enabled = !onPath,
         )
-        if (onPath) Hint("Drag the dots to shape the path, two fingers to scale or turn")
-        else if (item != null) Hint(if (item.spec.vertical) "Bottom handle: box height" else "Side handle: box width")
+        Spacer(Modifier.width(4.dp))
+        Hint(
+            when {
+                onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
+                item != null -> if (item.spec.vertical) "Bottom handle: box height" else "Side handle: box width"
+                activeText != null -> "or tap a text to edit it, empty canvas to add"
+                else -> "Tap the canvas to add text, or a text to edit it"
+            }
+        )
     }
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)

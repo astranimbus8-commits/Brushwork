@@ -55,6 +55,16 @@ class TextLayerEditRobolectricTest {
 
     private fun pixels(b: Bitmap): IntArray = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
 
+    /** The document as the compositor draws it now (tool previews included). */
+    private fun composite(c: EditorController): Bitmap =
+        BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height).also { c.compositor.drawDocument(Canvas(it), null) }
+
+    /** What the screen shows: the display tiles after redrawing whatever was invalidated. */
+    private fun screen(c: EditorController): Bitmap {
+        c.tiles.update(c.compositor)
+        return BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height).also { c.tiles.draw(Canvas(it), null) }
+    }
+
     private fun inkBounds(b: Bitmap): Rect {
         val px = pixels(b)
         val r = Rect()
@@ -98,9 +108,8 @@ class TextLayerEditRobolectricTest {
         assertEquals("Hello", tool.item!!.text)
         assertFalse("loading the text opens no dialog", tool.editorOpen)
         assertSame(layer, c.renderOverride?.layer)
-        val composite = BitmapUtils.createLayerBitmap(300, 200)
-        c.compositor.drawDocument(Canvas(composite), null)
-        assertTrue("the old pixels are hidden while editing", inkBounds(composite).isEmpty)
+        // The layer shows the pending text in place of its pixels (identical while unchanged).
+        assertArrayEquals(oldPixels, pixels(composite(c)))
         assertEquals("nothing recorded yet", undoBefore, c.undoManager.undoCount)
 
         // A tap on the pending text opens the editor; edit and apply.
@@ -110,6 +119,10 @@ class TextLayerEditRobolectricTest {
         tool.setText("Bye")
         tool.updateSpec { it.copy(color = 0xFFFF0000.toInt()) }
         tool.confirmEditor()
+        // Live, before applying: the new text in the layer, the old one hidden.
+        val live = pixels(composite(c)).filter { it ushr 24 == 255 }
+        assertTrue("only the edited (red) text shows", live.isNotEmpty() && live.all { it == 0xFFFF0000.toInt() })
+        assertArrayEquals("the layer itself is untouched until ✓", oldPixels, pixels(layer.bitmap))
         assertTrue(tool.commitItem())
         assertNull(tool.item)
         assertNull(tool.editingLayer)
@@ -135,6 +148,90 @@ class TextLayerEditRobolectricTest {
         tap(c, 150f, 100f)
         assertSame(layer, tool.editingLayer)
         assertEquals("Hello", tool.item!!.text)
+    }
+
+    @Test
+    fun theEditedTextKeepsItsLayersLookWhileEditing() {
+        val (c, tool) = newController()
+        val text = addText(c, tool, "Clip", 150f, 100f, size = 50f)
+        // A layer clipped to the text (a common "gradient in the letters" setup) and a
+        // half-transparent text layer.
+        val tint = c.addLayer("Tint")!!
+        tint.bitmap.eraseColor(0xFF0000FF.toInt())
+        tint.clipping = true
+        text.opacity = 0.5f
+        // Blue letters (black only mixes in at soft edges), at most half opaque.
+        fun looksRight(px: IntArray): Boolean {
+            val ink = px.filter { it ushr 24 != 0 }
+            return ink.isNotEmpty() &&
+                ink.all { (it shr 16 and 0xFF) == 0 && (it shr 8 and 0xFF) == 0 && (it ushr 24) <= 140 } &&
+                ink.any { (it and 0xFF) == 0xFF && (it ushr 24) in 120..135 }
+        }
+        val before = pixels(composite(c))
+        assertTrue("the clipped layer fills the half-transparent letters", looksRight(before))
+
+        assertTrue(tool.editLayer(text))
+        assertSame(text, c.activeLayer)
+        assertArrayEquals("editing doesn't change the look (clipping, opacity, order)", before, pixels(composite(c)))
+
+        // Moved: the letters (still filled by the clipped layer, still half transparent) move.
+        tool.nudge(60f, 0f)
+        val live = composite(c)
+        val ink = inkBounds(live)
+        assertTrue("moved right: $ink", ink.left > inkBounds(text.bitmap).left + 50)
+        assertTrue("still clipped and half transparent", looksRight(pixels(live)))
+        // What was shown live is exactly what ✓ produces.
+        val shown = pixels(live)
+        assertTrue(tool.commitItem())
+        assertArrayEquals(shown, pixels(composite(c)))
+    }
+
+    @Test
+    fun draggingTheEditedTextLeavesNoTrailOnScreen() {
+        val (c, tool) = newController(400, 300)
+        val layer = addText(c, tool, "Drag me", 150f, 150f, size = 36f)
+        val original = pixels(composite(c))
+        screen(c)
+        tap(c, 150f, 150f)
+        assertSame(layer, tool.editingLayer)
+        assertArrayEquals(original, pixels(screen(c)))
+        // Drag the text in steps, redrawing the screen after each like the canvas view does.
+        c.pointerDown(ToolPoint(150f, 150f))
+        for (i in 1..8) {
+            c.pointerMove(ToolPoint(150f + i * 15f, 150f + i * 10f))
+            screen(c)
+        }
+        c.pointerUp(ToolPoint(270f, 230f))
+        assertEquals(270f, tool.item!!.cx, 0.01f)
+        assertArrayEquals("screen == fresh composite (no ghosts)", pixels(composite(c)), pixels(screen(c)))
+        // A new look in the same place is redrawn too.
+        tool.updateSpec { it.copy(color = 0xFF00FF00.toInt()) }
+        assertArrayEquals(pixels(composite(c)), pixels(screen(c)))
+        // ✕: the old text is back where it was, on screen too.
+        tool.discard()
+        assertNull(c.renderOverride)
+        assertArrayEquals(original, pixels(screen(c)))
+    }
+
+    @Test
+    fun theNextNewTextKeepsTheLookButNotTheWrapWidth() {
+        val (c, tool) = newController()
+        addText(c, tool, "Boxed words", 150f, 100f) {
+            it.copy(bold = true, box = TextBoxPreset.CAPTION.applyTo(TextBoxSpec(width = 90f), 40f))
+        }
+        tool.startTextAt(60f, 60f)
+        val spec = tool.item!!.spec
+        assertTrue("the look carries over", spec.bold && spec.box.fill && spec.box.borderWidth > 0f)
+        assertEquals("a new text fits its own words", 0f, spec.box.width, 0f)
+        tool.cancelEditor()
+        // Bad numbers from a field never reach the layout.
+        tool.startTextAt(60f, 60f)
+        tool.setText("n")
+        tool.setSizePx(Float.NaN)
+        tool.setRotation(Float.POSITIVE_INFINITY)
+        assertEquals(40f, tool.item!!.spec.sizePx, 0f)
+        assertEquals(0f, tool.item!!.rotationDeg, 0f)
+        tool.discard()
     }
 
     @Test

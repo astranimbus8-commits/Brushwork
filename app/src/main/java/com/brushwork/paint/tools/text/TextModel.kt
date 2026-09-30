@@ -2,6 +2,7 @@ package com.brushwork.paint.tools.text
 
 import com.brushwork.paint.core.Vec2
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.sin
@@ -98,8 +99,16 @@ enum class TextBoxPreset(val label: String) {
         }
     }
 
-    /** Whether [box] currently looks exactly like this preset at [sizePx]. */
-    fun matches(box: TextBoxSpec, sizePx: Float): Boolean = applyTo(box, sizePx) == box
+    /**
+     * Whether [box] currently looks like this preset at [sizePx] (lengths compared with a tiny
+     * tolerance, so a text resized with the handle or a pinch still shows its preset).
+     */
+    fun matches(box: TextBoxSpec, sizePx: Float): Boolean {
+        val p = applyTo(box, sizePx)
+        fun near(a: Float, b: Float) = abs(a - b) <= 1e-3f * max(1f, max(abs(a), abs(b)))
+        return p.fill == box.fill && p.fillColor == box.fillColor && p.borderColor == box.borderColor &&
+            near(p.padding, box.padding) && near(p.borderWidth, box.borderWidth) && near(p.roundness, box.roundness)
+    }
 
     private companion object {
         const val WHITE = 0xFFFFFFFF.toInt()
@@ -141,20 +150,25 @@ data class TextSpec(
      */
     fun scaled(k: Float): TextSpec = copy(sizePx = sizePx * k, strokeWidthPx = strokeWidthPx * k, box = box.scaled(k))
 
-    /** Non-finite or out-of-range numbers replaced (typed garbage, old or damaged data). */
+    /**
+     * Non-finite or out-of-range numbers replaced (typed garbage, old or damaged data): sizes and
+     * lengths are also capped far above anything a canvas needs, so a damaged value can't make
+     * the layout allocate for billions of pixels.
+     */
     fun sanitized(): TextSpec {
         fun f(v: Float, default: Float) = if (v.isFinite()) v else default
+        fun len(v: Float) = f(v, 0f).coerceIn(0f, MAX_LENGTH_PX)
         val b = box
         return copy(
-            sizePx = f(sizePx, 48f).coerceAtLeast(MIN_SIZE_PX),
+            sizePx = f(sizePx, 48f).coerceIn(MIN_SIZE_PX, MAX_SIZE_PX),
             letterSpacing = f(letterSpacing, 0f).coerceIn(MIN_LETTER_SPACING, MAX_LETTER_SPACING),
             lineSpacing = f(lineSpacing, 1.2f).coerceIn(MIN_LINE_SPACING, MAX_LINE_SPACING),
-            strokeWidthPx = f(strokeWidthPx, 0f).coerceAtLeast(0f),
+            strokeWidthPx = len(strokeWidthPx),
             box = b.copy(
-                width = f(b.width, 0f).coerceAtLeast(0f),
-                height = f(b.height, 0f).coerceAtLeast(0f),
-                padding = f(b.padding, 0f).coerceAtLeast(0f),
-                borderWidth = f(b.borderWidth, 0f).coerceAtLeast(0f),
+                width = len(b.width),
+                height = len(b.height),
+                padding = len(b.padding),
+                borderWidth = len(b.borderWidth),
                 roundness = f(b.roundness, 0f).coerceIn(TextBoxSpec.MIN_ROUNDNESS, TextBoxSpec.MAX_ROUNDNESS),
             ),
         )
@@ -162,6 +176,10 @@ data class TextSpec(
 
     companion object {
         const val MIN_SIZE_PX = 2f
+        /** Upper bound for stored font sizes (the tool itself allows 2 x the canvas' longer side). */
+        const val MAX_SIZE_PX = 100_000f
+        /** Upper bound for stored lengths (box, padding, outline). */
+        const val MAX_LENGTH_PX = 1_000_000f
         const val MIN_LETTER_SPACING = -0.3f
         const val MAX_LETTER_SPACING = 1f
         const val MIN_LINE_SPACING = 0.5f
@@ -242,11 +260,23 @@ data class TextItem(
     /** Non-finite numbers replaced so the item can always be drawn and stored. */
     fun sanitized(): TextItem {
         fun f(v: Float, default: Float) = if (v.isFinite()) v else default
+        val d = TextPathSpec()
+        val p = path
         return copy(
             spec = spec.sanitized(),
             cx = f(cx, 0f),
             cy = f(cy, 0f),
             rotationDeg = normalizeDegrees(f(rotationDeg, 0f)),
+            // The path's own numbers too (its engine can then rely on finite geometry).
+            path = p.copy(
+                x1 = f(p.x1, d.x1), y1 = f(p.y1, d.y1), x2 = f(p.x2, d.x2), y2 = f(p.y2, d.y2),
+                cx1 = f(p.cx1, d.cx1), cy1 = f(p.cy1, d.cy1), cx2 = f(p.cx2, d.cx2), cy2 = f(p.cy2, d.cy2),
+                cx = f(p.cx, d.cx), cy = f(p.cy, d.cy), radius = f(p.radius, d.radius),
+                startAngleDeg = f(p.startAngleDeg, d.startAngleDeg), width = f(p.width, d.width),
+                height = f(p.height, d.height), cornerRadius = f(p.cornerRadius, d.cornerRadius),
+                rotationDeg = f(p.rotationDeg, d.rotationDeg), offset = f(p.offset, d.offset),
+                baselineShift = f(p.baselineShift, d.baselineShift),
+            ),
         )
     }
 

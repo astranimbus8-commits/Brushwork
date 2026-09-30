@@ -43,9 +43,18 @@ import kotlin.math.max
 class TextTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TEXT
 
-    /** The text object being placed or edited, null when there is none. */
-    var item by mutableStateOf<TextItem?>(null)
-        private set
+    private var itemState by mutableStateOf<TextItem?>(null)
+
+    /**
+     * The text object being placed or edited, null when there is none. While a text layer is
+     * edited, every change also redraws that layer's in-place preview (see [LayerPreview]).
+     */
+    var item: TextItem?
+        get() = itemState
+        private set(value) {
+            itemState = value
+            if (layerPreview != null) refreshLayerPreview()
+        }
 
     /** Appearance of the next new text (its color is taken from the drawing color). */
     var nextSpec by mutableStateOf<TextSpec?>(null)
@@ -91,7 +100,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     /** Where the edited layer's old pixels are (hidden while editing). */
     private var loadedInk: Rect? = null
-    private var hideOverride: HideLayerOverride? = null
+    private var layerPreview: LayerPreview? = null
+
+    /** Document area the in-layer preview covered when it was last redrawn (null = nothing). */
+    private var previewRect: Rect? = null
 
     /** Largest font size allowed (twice the canvas' longer side). */
     val maxSizePx: Float get() = 2f * max(doc.width, doc.height)
@@ -104,6 +116,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     /** The spec a new text starts with. */
     fun specForNewText(): TextSpec = (nextSpec ?: TextSpec(sizePx = defaultSizePx)).copy(color = controller.color)
+
+    /**
+     * The look of a placed or edited text, kept for the next new text: everything but the fixed
+     * box width / height, which belonged to that text's words (a new text starts fitting its own).
+     */
+    private fun styleToRemember(spec: TextSpec): TextSpec = spec.copy(box = spec.box.copy(width = 0f, height = 0f))
 
     // ------------------------------------------------------------------ layout cache
 
@@ -160,32 +178,70 @@ class TextTool(controller: EditorController) : Tool(controller) {
         editingLayer = layer
         loadedItem = loaded
         loadedInk = inkOf(layer, loaded)
-        item = loaded
         editingNew = false
         editorBackup = null
         emptyTextPrompt = false
-        hideOverride = HideLayerOverride(layer).also { controller.renderOverride = it }
-        loadedInk?.let { controller.invalidateDoc(it) }
+        // The old pixels are hidden and the pending text is drawn in their place (see LayerPreview).
+        layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
+        loadedInk?.let { controller.tiles.invalidate(it) }
+        item = loaded
         if (openEditor) openEditor()
         controller.invalidateOverlay()
         return true
     }
 
-    /** Hides the pixels of the text layer being edited (the live preview is drawn on top). */
-    private class HideLayerOverride(override val layer: Layer) : LayerRenderOverride {
-        override fun drawContent(canvas: Canvas): Boolean = true
+    /**
+     * Draws the text layer being edited: its old pixels are hidden and the pending text is drawn
+     * in their place THROUGH THE COMPOSITOR, so the layer's order, opacity, blend mode, mask and
+     * the layers clipped to it look exactly like the result while editing (like the vector tools'
+     * previews). The text is already laid out ([preparedFor] cache), so a tile redraw only draws it.
+     */
+    private inner class LayerPreview(override val layer: Layer) : LayerRenderOverride {
+        override fun drawContent(canvas: Canvas): Boolean {
+            val cur = item ?: return true
+            TextRenderer.drawItem(canvas, cur, preparedFor(cur), null, doc.colorMode)
+            return true
+        }
+    }
+
+    /** Whether the edited text layer currently shows the pending text in place (else the overlay does). */
+    private val previewInLayer: Boolean get() = layerPreview.let { it != null && controller.renderOverride === it }
+
+    /**
+     * Redraws the regions the in-layer preview covered before and covers now (separately, so a
+     * big jump doesn't redraw everything between them).
+     */
+    private fun refreshLayerPreview() {
+        val cur = item
+        val now = cur?.let { t ->
+            val prep = preparedFor(t)
+            if (prep.isEmpty) null else Rect().also { r ->
+                prep.docBounds(t).roundOut(r)
+                // A little slack: path bounds come from another engine; never leave a ghost.
+                r.inset(-PREVIEW_SLACK_PX, -PREVIEW_SLACK_PX)
+            }.takeUnless { it.isEmpty }
+        }
+        val before = previewRect
+        previewRect = now
+        // The content may have changed within the same area (color, text of a fixed box...).
+        if (before != null && before != now) controller.tiles.invalidate(before)
+        now?.let { controller.tiles.invalidate(it) }
+        controller.invalidateOverlay()
     }
 
     /** Stops editing a text layer (no pixel change): shows its pixels again. */
     private fun endLayerEdit() {
-        val ov = hideOverride
+        val ov = layerPreview
         if (ov != null && controller.renderOverride === ov) controller.renderOverride = null
-        hideOverride = null
-        loadedInk?.let { controller.invalidateDoc(it) }
+        layerPreview = null
+        previewRect?.let { controller.tiles.invalidate(it) }
+        previewRect = null
+        loadedInk?.let { controller.tiles.invalidate(it) }
         loadedInk = null
         loadedItem = null
         editingLayer = null
         emptyTextPrompt = false
+        controller.invalidateOverlay()
     }
 
     /** Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null. */
@@ -241,7 +297,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         }
         editorOpen = false
         editorBackup = null
-        if (cur == null || cur.text.isBlank()) item = null else nextSpec = cur.spec
+        if (cur == null || cur.text.isBlank()) item = null else nextSpec = styleToRemember(cur.spec)
         controller.invalidateOverlay()
     }
 
@@ -272,23 +328,44 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
 
-    /** Moves the text object (and its path) so its center is at ([x], [y]). */
-    fun setCenter(x: Float, y: Float) = update { translated(it, x - it.cx, y - it.cy) }
+    /**
+     * Where the text object is on the canvas (document px): the center of straight text, or the
+     * center of the text as drawn along its path (its path handles and settings move it, not
+     * [TextItem.cx]/[TextItem.cy]); ([TextItem.cx], [TextItem.cy]) while nothing is measured.
+     * Shown as the position, and the pivot for turning.
+     */
+    fun anchorOf(t: TextItem): Vec2 {
+        if (!t.path.isActive) return Vec2(t.cx, t.cy)
+        val b = preparedFor(t).docBounds(t)
+        return if (b.isEmpty || !b.centerX().isFinite() || !b.centerY().isFinite()) Vec2(t.cx, t.cy) else Vec2(b.centerX(), b.centerY())
+    }
 
-    fun setCenterX(x: Float) = update { translated(it, x - it.cx, 0f) }
+    /** Moves the text object (and its path) so its center ([anchorOf]) is at ([x], [y]). */
+    fun setCenter(x: Float, y: Float) = update { val a = anchorOf(it); translated(it, x - a.x, y - a.y) }
 
-    fun setCenterY(y: Float) = update { translated(it, 0f, y - it.cy) }
+    fun setCenterX(x: Float) = update { translated(it, x - anchorOf(it).x, 0f) }
+
+    fun setCenterY(y: Float) = update { translated(it, 0f, y - anchorOf(it).y) }
 
     fun nudge(dx: Float, dy: Float) = update { translated(it, dx, dy) }
 
-    /** Turns the text object (and its path, around the object's center) to [deg]. */
+    /** Turns the text object (and its path, around the text's center [anchorOf]) to [deg]. */
     fun setRotation(deg: Float) = update {
+        if (!deg.isFinite()) return@update it
         val r = TextItem.normalizeDegrees(deg)
-        val path = if (it.path.isActive) TextOnPath.transformed(it.path, Vec2.ZERO, 1f, r - it.rotationDeg, Vec2(it.cx, it.cy)) else it.path
-        it.copy(rotationDeg = r, path = path)
+        if (!it.path.isActive) return@update it.copy(rotationDeg = r)
+        val pivot = anchorOf(it)
+        val turn = TextItem.normalizeDegrees(r - it.rotationDeg)
+        // The straight position turns along, so going back to straight text stays nearby.
+        val c = Vec2(it.cx, it.cy) - pivot
+        val c2 = c.rotated(Math.toRadians(turn.toDouble()).toFloat()) + pivot
+        it.copy(rotationDeg = r, cx = c2.x, cy = c2.y, path = TextOnPath.transformed(it.path, Vec2.ZERO, 1f, turn, pivot))
     }
 
-    fun setSizePx(px: Float) = updateSpec { it.copy(sizePx = px.coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)) }
+    fun setSizePx(px: Float) {
+        if (!px.isFinite()) return
+        updateSpec { it.copy(sizePx = px.coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)) }
+    }
 
     /** Toggles vertical text on the current text, or for the next one when there is none. */
     fun toggleVertical() {
@@ -328,10 +405,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later.
      */
     fun setPath(spec: TextPathSpec) = update { cur ->
-        val next = if (spec.type != cur.path.type && spec.isActive) {
-            TextOnPath.defaultFor(spec.type, Vec2(cur.cx, cur.cy), TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec)
-        } else spec
-        cur.copy(path = next)
+        if (spec.type == cur.path.type) return@update cur.copy(path = spec)
+        // Where the text is now (along its current path, or straight): the new shape goes there.
+        val at = anchorOf(cur)
+        if (!spec.isActive) {
+            // Back to straight text: it appears where the text along the path was.
+            cur.copy(path = spec, cx = at.x, cy = at.y)
+        } else {
+            val next = TextOnPath.defaultFor(spec.type, at, TextRenderer.lineWidth(cur.text, cur.spec), cur.spec.sizePx, spec)
+            cur.copy(path = next)
+        }
     }
 
     private fun update(transform: (TextItem) -> TextItem) {
@@ -367,7 +450,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onDeactivate() {
         if (hasPendingWork && !commitItem()) discard()
         // Never leave the old pixels of a text layer hidden.
-        if (item == null && hideOverride != null) endLayerEdit()
+        if (item == null && layerPreview != null) endLayerEdit()
     }
 
     override fun onDispose() {
@@ -457,7 +540,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
             item = cur
             return false
         }
-        nextSpec = cur.spec
+        nextSpec = styleToRemember(cur.spec)
         controller.invalidateOverlay()
         return true
     }
@@ -500,7 +583,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         numbersOpen = false
         editorBackup = null
         endLayerEdit()
-        nextSpec = cur.spec
+        nextSpec = styleToRemember(cur.spec)
         controller.invalidateOverlay()
         return true
     }
@@ -708,12 +791,15 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val start = pinchStart ?: return
         // Placed or removed meanwhile (a chrome button): nothing to pinch any more.
         if (item == null || editorOpen) { pinchStart = null; return }
-        val delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg)
+        val delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg).takeIf { it.isFinite() } ?: 0f
         val next = start.pinched(pinchFocus, translation, scale, delta, maxSizePx)
         item = if (start.path.isActive) {
+            // The same motion as the text: scaled (like its size) and turned about the start
+            // focus, then moved with the fingers. Two calls, so the order is unambiguous.
             val k = if (start.spec.sizePx > 0f) next.spec.sizePx / start.spec.sizePx else 1f
             val tr = Vec2(if (translation.x.isFinite()) translation.x else 0f, if (translation.y.isFinite()) translation.y else 0f)
-            next.copy(path = TextOnPath.transformed(start.path, tr, k, next.rotationDeg - start.rotationDeg, pinchFocus))
+            val turned = TextOnPath.transformed(start.path, Vec2.ZERO, k, delta, pinchFocus)
+            next.copy(path = if (tr == Vec2.ZERO) turned else TextOnPath.transformed(turned, tr, 1f, 0f, pinchFocus + tr))
         } else next
         controller.invalidateOverlay()
     }
@@ -757,12 +843,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val cur = item ?: return
         val prep = preparedFor(cur)
-        // Live preview at document scale, clipped to the canvas (and the selection for new text).
-        val save = canvas.save()
-        canvas.concat(t.matrix)
-        canvas.clipRect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())
-        TextRenderer.drawItem(canvas, cur, prep, if (editingLayer != null) null else controller.selection, doc.colorMode)
-        canvas.restoreToCount(save)
+        // An edited text layer shows the text in place (LayerPreview). A new text (or an edit
+        // whose layer preview was replaced) is previewed here at document scale, clipped to the
+        // canvas (and the selection for new text).
+        if (!previewInLayer) {
+            val save = canvas.save()
+            canvas.concat(t.matrix)
+            canvas.clipRect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())
+            TextRenderer.drawItem(canvas, cur, prep, if (editingLayer != null) null else controller.selection, doc.colorMode)
+            canvas.restoreToCount(save)
+        }
 
         haloPaint.strokeWidth = t.dp(3f)
         linePaint.strokeWidth = t.dp(1.5f)
@@ -869,6 +959,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
         private const val BOX_HANDLE_WIDTH_DP = 6f
         /** Tapping this close to a text layer's box still counts as tapping its text. */
         private const val HIT_TOLERANCE_DP = 8f
+        /** Extra document px redrawn around the in-layer preview. */
+        private const val PREVIEW_SLACK_PX = 2
         private const val LAYER_CACHE_SIZE = 16
     }
 }

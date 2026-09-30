@@ -86,6 +86,21 @@ class TextCodecTest {
         assertEquals(1f, back.spec.box.roundness, 0f)
         assertEquals(0f, back.cx, 0f)
         assertEquals(180f, back.rotationDeg, 0f)
+
+        // Absurd sizes (damaged data) are capped; the path's numbers are cleaned up too.
+        val huge = TextItem(
+            "x", TextSpec(sizePx = 1e30f, strokeWidthPx = 1e30f, box = TextBoxSpec(width = 1e30f, height = Float.MAX_VALUE)),
+            path = TextPathSpec(type = TextPathType.CIRCLE, radius = Float.NaN, cx = Float.POSITIVE_INFINITY, x1 = 5f),
+        )
+        val h = TextCodec.decode(TextCodec.encode(huge))!!
+        assertEquals(TextSpec.MAX_SIZE_PX, h.spec.sizePx, 0f)
+        assertEquals(TextSpec.MAX_LENGTH_PX, h.spec.strokeWidthPx, 0f)
+        assertEquals(TextSpec.MAX_LENGTH_PX, h.spec.box.width, 0f)
+        assertEquals(TextSpec.MAX_LENGTH_PX, h.spec.box.height, 0f)
+        assertEquals(TextPathSpec().radius, h.path.radius, 0f)
+        assertEquals(0f, h.path.cx, 0f)
+        assertEquals(5f, h.path.x1, 0f)
+        assertEquals(TextPathType.CIRCLE, h.path.type)
     }
 
     @Test
@@ -103,6 +118,10 @@ class TextCodecTest {
         assertEquals(90f, caption.width, 0f) // the wrap width is kept
         assertTrue(caption.fill && caption.borderWidth > 0f && caption.roundness == 0f)
         assertTrue(TextBoxPreset.CAPTION.matches(caption, 40f))
+        // Still recognised after resizing the text (rounding of the scaled lengths).
+        val resized = TextSpec(sizePx = 40f, box = caption).scaled(1.37f)
+        assertTrue(TextBoxPreset.CAPTION.matches(resized.box, resized.sizePx))
+        assertTrue(!TextBoxPreset.BUBBLE.matches(resized.box, resized.sizePx))
         val bubble = TextBoxPreset.BUBBLE.applyTo(caption, 40f)
         assertEquals(1f, bubble.roundness, 0f)
         assertEquals(TextBoxSpec(width = 90f), TextBoxPreset.PLAIN.applyTo(bubble, 40f).copy(fillColor = TextBoxSpec().fillColor))

@@ -144,6 +144,11 @@ fun TextEditorDialog(tool: TextTool) {
             TextButton(onClick = { style { it.copy(color = tool.controller.color) } }) { Text("Use drawing color") }
         }
 
+        // High up in the sheet: bending text along a shape is one of the main things to find here.
+        SectionHeader("Shape / path")
+        Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
+        TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
+
         if (spec.vertical && !onPath) {
             SectionHeader("Vertical text")
             ChoiceChips(VerticalStyle.entries.map { it.label }, spec.verticalStyle.ordinal, { i -> style { it.copy(verticalStyle = VerticalStyle.entries[i]) } })
@@ -205,10 +210,6 @@ fun TextEditorDialog(tool: TextTool) {
         }
 
         TextBoxSection(tool, onPath, onPickFill = { colorTarget = ColorTarget.BOX_FILL }, onPickBorder = { colorTarget = ColorTarget.BORDER })
-
-        SectionHeader("Shape / path")
-        Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
-        TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
 
         SectionHeader("Edges")
         ToggleRow("Anti-aliasing", spec.antiAlias, { on -> style { it.copy(antiAlias = on) } }, description = "Smooth edges (turn off for crisp 1-bit lettering)")
@@ -358,18 +359,20 @@ fun TextNumbersSheet(tool: TextTool) {
         actions = { UnitSelector(unit, { tool.positionUnit = it }) },
     ) {
         Text(
-            if (item.path.isActive) "Moving or turning the text moves or turns its shape, in document ${unit.label.lowercase()}."
+            if (item.path.isActive) "The center of the text along its shape; moving or turning the text moves or turns the shape. In document ${unit.label.lowercase()}."
             else "The position is the center of the text box, in document ${unit.label.lowercase()}.",
             style = MaterialTheme.typography.bodySmall,
             color = BrushworkColors.OnChromeDim,
         )
+        // Text on a path: where the text is drawn along it (the path's dots move it).
+        val center = tool.anchorOf(item)
         // Sliders span one canvas size before the canvas to two after it; any number can be typed.
         LengthField(
-            "Center X", item.cx.toDouble(), { tool.setCenterX(it.toFloat()) }, unit, dpi, Modifier.padding(top = 8.dp),
+            "Center X", center.x.toDouble(), { tool.setCenterX(it.toFloat()) }, unit, dpi, Modifier.padding(top = 8.dp),
             sliderMinPx = -w, sliderMaxPx = 2.0 * w,
         )
         LengthField(
-            "Center Y", item.cy.toDouble(), { tool.setCenterY(it.toFloat()) }, unit, dpi, Modifier.padding(top = 8.dp),
+            "Center Y", center.y.toDouble(), { tool.setCenterY(it.toFloat()) }, unit, dpi, Modifier.padding(top = 8.dp),
             sliderMinPx = -h, sliderMaxPx = 2.0 * h,
         )
         NumberField(

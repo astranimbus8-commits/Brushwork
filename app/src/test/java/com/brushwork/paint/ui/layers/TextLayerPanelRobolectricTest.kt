@@ -64,11 +64,16 @@ class TextLayerPanelRobolectricTest {
         SmokeUi.settle()
         Smoke.assertQuiet(c, "menu edit")
 
-        // Double-tap on the row does the same.
+        // A single tap on a text row selects it at once (no waiting for a second tap)...
+        c.selectLayer(c.doc.layers[0])
+        SmokeUi.settle()
         val row = SmokeUi.find("Text: Title", exact = true) ?: throw AssertionError("no text row; shown: ${SmokeUi.shown()}")
         val b = row.bounds
         val touch = Smoke.Touch(row.window)
         touch.tap(b.center.x, b.center.y)
+        assertSame("selected right away", textLayer, c.activeLayer)
+        assertEquals(ToolId.BRUSH, c.activeToolId)
+        // ...and a second tap soon after (a double tap) edits its text.
         touch.idle(40)
         touch.tap(b.center.x, b.center.y)
         touch.idle(400)

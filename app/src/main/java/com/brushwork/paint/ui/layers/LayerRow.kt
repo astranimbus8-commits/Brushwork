@@ -4,8 +4,8 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import android.os.SystemClock
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -138,11 +140,21 @@ internal fun LayerRow(
         else -> Color.Transparent
     }
     val dim = if (!row.visible || row.baseHidden) 0.45f else 1f
-    // Only text rows listen for double taps (that makes a single tap wait for the double-tap timeout).
-    val click = if (row.isText && onEditText != null) {
-        Modifier.combinedClickable(onClickLabel = "Select layer", onDoubleClick = onEditText, onClick = onSelect)
-    } else {
-        Modifier.clickable(onClickLabel = "Select layer", onClick = onSelect)
+    // A tap selects at once (selecting again is harmless); a second tap on a text row within the
+    // double-tap time edits its text. (combinedClickable would hold every single tap back.)
+    val doubleTapMs = LocalViewConfiguration.current.doubleTapTimeoutMillis
+    val lastTap = remember(row.layer) { longArrayOf(-1L) }
+    val click = Modifier.clickable(onClickLabel = "Select layer") {
+        val now = SystemClock.uptimeMillis()
+        val edit = onEditText
+        val last = lastTap[0]
+        if (row.isText && edit != null && last >= 0L && now - last <= doubleTapMs) {
+            lastTap[0] = -1L
+            edit()
+        } else {
+            lastTap[0] = now
+            onSelect()
+        }
     }
     Row(
         modifier
