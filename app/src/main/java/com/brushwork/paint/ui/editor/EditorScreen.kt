@@ -232,6 +232,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     val tool = controller.currentTool
     val pendingWork = session == null && tool.hasPendingWork
     val clipboard = controller.clipboard
+    // A new copy shows the paste bar again (and the hidden one's pixels aren't kept alive here).
+    LaunchedEffect(clipboard) { if (clipboard !== hiddenClipboard) hiddenClipboard = null }
     val hasSelection = controller.selection != null
     val layersVisible = layersOpen && session == null && panel == null
     // The selection bar steps aside for tool work in progress (its ✓/✕ come first), filters,
