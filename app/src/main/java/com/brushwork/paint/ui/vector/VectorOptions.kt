@@ -107,7 +107,8 @@ fun ShapeToolOptions(tool: ShapeTool) {
         contentDescription = "Shape type",
     )
     if (s.type.isLineLike) {
-        DropdownChip(
+        // A brush paints its own ends: the line caps only apply to plain lines.
+        if (s.strokeWith == ShapeStroke.PLAIN) DropdownChip(
             label = "${s.lineCap.label} ends",
             options = LineCapStyle.entries,
             selected = s.lineCap,
