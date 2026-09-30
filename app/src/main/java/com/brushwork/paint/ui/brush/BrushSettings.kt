@@ -26,7 +26,51 @@ fun formatSize(size: Float): String = Units.formatNumber(size.toDouble(), if (si
 
 internal fun percent(v: Float): String = "${(v * 100f).roundToInt()}%"
 
-/** Every setting of [preset] as used by [toolId]; controls irrelevant to the tool are hidden. */
+/**
+ * The most used settings, typed or dragged: size (logarithmic slider, -/+ steps) and opacity
+ * (strength for smudge and blur). Shown at the top of the brush panel, above the presets.
+ */
+@Composable
+fun BrushCoreSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modifier: Modifier = Modifier) {
+    val kind = StrokeKind.of(toolId, preset)
+    val done = { onEdit(true) { it } }
+    Column(modifier) {
+        BrushSizeField(preset.size, { v -> onEdit(false) { it.copy(size = v) } }, done)
+        if (kind == StrokeKind.SMUDGE || kind == StrokeKind.BLUR) {
+            PercentField("Strength", preset.mixing, { v -> onEdit(false) { it.copy(mixing = v) } }, done)
+        } else {
+            PercentField(
+                if (kind == StrokeKind.WATERCOLOR) "Opacity" else "Opacity (stroke)",
+                preset.opacity,
+                { v -> onEdit(false) { it.copy(opacity = v) } },
+                done,
+            )
+        }
+    }
+}
+
+/** Brush diameter field: typed, dragged on its logarithmic slider or stepped; [onDone] once a change is complete. */
+@Composable
+fun BrushSizeField(size: Float, onChange: (Float) -> Unit, onDone: () -> Unit, modifier: Modifier = Modifier, label: String = "Size") {
+    NumberField(
+        label = label,
+        value = size.toDouble(),
+        onValueChange = { v -> onChange(v.toFloat()) },
+        modifier = modifier.fillMaxWidth(),
+        decimals = 1,
+        suffix = "px",
+        min = BrushLimits.MIN_SIZE.toDouble(),
+        max = BrushLimits.MAX_SIZE.toDouble(),
+        step = if (size < 10f) 0.5 else 1.0,
+        logSlider = true,
+        onValueChangeFinished = onDone,
+    )
+}
+
+/**
+ * Every other setting of [preset] as used by [toolId] (see [BrushCoreSettings] for size and
+ * opacity); controls irrelevant to the tool are hidden.
+ */
 @Composable
 fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modifier: Modifier = Modifier) {
     val kind = StrokeKind.of(toolId, preset)
@@ -35,39 +79,16 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
     val done = { onEdit(true) { it } }
 
     Column(modifier) {
-        PanelCard {
-            // Typed, dragged on the (logarithmic) slider or stepped; saved once a change is done.
-            NumberField(
-                label = "Size",
-                value = preset.size.toDouble(),
-                onValueChange = { v -> onEdit(false) { it.copy(size = v.toFloat()) } },
-                modifier = Modifier.fillMaxWidth(),
-                decimals = 1,
-                suffix = "px",
-                min = BrushLimits.MIN_SIZE.toDouble(),
-                max = BrushLimits.MAX_SIZE.toDouble(),
-                step = if (preset.size < 10f) 0.5 else 1.0,
-                logSlider = true,
+        // Smudge and blur have no flow; their strength is with the size, in BrushCoreSettings.
+        if (!smudgeOrBlur) PanelCard {
+            LabeledSlider(
+                label = "Flow (per dab)",
+                value = preset.flow,
+                onValueChange = { v -> onEdit(false) { it.copy(flow = v) } },
+                valueRange = 0.01f..1f,
+                valueText = percent(preset.flow),
                 onValueChangeFinished = done,
             )
-            if (smudgeOrBlur) {
-                PercentField("Strength", preset.mixing, { v -> onEdit(false) { it.copy(mixing = v) } }, done)
-            } else {
-                PercentField(
-                    if (kind == StrokeKind.WATERCOLOR) "Opacity" else "Opacity (stroke)",
-                    preset.opacity,
-                    { v -> onEdit(false) { it.copy(opacity = v) } },
-                    done,
-                )
-                LabeledSlider(
-                    label = "Flow (per dab)",
-                    value = preset.flow,
-                    onValueChange = { v -> onEdit(false) { it.copy(flow = v) } },
-                    valueRange = 0.01f..1f,
-                    valueText = percent(preset.flow),
-                    onValueChangeFinished = done,
-                )
-            }
             if (kind == StrokeKind.WATERCOLOR) {
                 LabeledSlider(
                     label = "Color mixing",
@@ -191,7 +212,7 @@ private const val MAX_TAPER_UI = 600f
 
 /** A 0..1 setting shown and typed as a whole percentage, with a slider beside the number. */
 @Composable
-private fun PercentField(label: String, fraction: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
+internal fun PercentField(label: String, fraction: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
     NumberField(
         label = label,
         value = (fraction * 100f).roundToInt().toDouble(),

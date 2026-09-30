@@ -5,6 +5,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
@@ -170,7 +171,14 @@ fun BwSheet(
     ) {
         Column(Modifier.fillMaxWidth().heightIn(max = sheetBodyMaxHeight(screenHeight, maxHeightFraction))) {
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = 16.dp, end = 4.dp),
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    // The first focus target of the sheet: when its window gains focus, focus
+                    // lands here instead of on the first text field (which would open the
+                    // keyboard and scroll the body away from its top).
+                    .focusable()
+                    .padding(start = 16.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(

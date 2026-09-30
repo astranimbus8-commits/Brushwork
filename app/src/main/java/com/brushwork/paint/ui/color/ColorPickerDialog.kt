@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.color
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -7,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -16,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -96,17 +99,43 @@ internal fun ColumnScope.ColorDialogBody(model: ColorDialogModel) {
     val use: (Int) -> Unit = remember(state, showAlpha) { { c -> state.setColor(if (showAlpha) c else c or OPAQUE) } }
     val current: () -> Int = remember(state) { { state.color } }
 
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CompareSwatch(previous = model.start, current = state.color, onRevert = { state.setColor(model.start) }, modifier = Modifier.weight(1f))
-        Spacer(Modifier.width(8.dp))
-        HexField(state, withAlpha = showAlpha, modifier = Modifier.width(if (showAlpha) 152.dp else 128.dp))
+    val hexWidth = if (showAlpha) 152.dp else 128.dp
+    val revert = { state.setColor(model.start) }
+    if (mode == PickerMode.WHEEL) {
+        ModeTabs(mode, onSelect = { store.setPickerMode(it) }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        // The wheel beside the comparison and hex: the biggest wheel whose row (and the opacity
+        // slider under it) fits in the half-height sheet without scrolling.
+        val screenWidth = LocalConfiguration.current.screenWidthDp.dp.coerceAtMost(SheetMaxWidth)
+        val byWidth = screenWidth - 32.dp - hexWidth - 12.dp
+        val byHeight = wheelSizeForSheet(controlsAbove = 60.dp + if (showAlpha) AlphaRowHeight else 0.dp)
+        Row(verticalAlignment = Alignment.Top) {
+            HsbWheel(state, Modifier.size(minOf(byWidth, byHeight).coerceAtLeast(120.dp)))
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                CompareSwatch(previous = model.start, current = state.color, onRevert = revert, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                HexField(state, withAlpha = showAlpha, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            CompareSwatch(previous = model.start, current = state.color, onRevert = revert, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
+            HexField(state, withAlpha = showAlpha, modifier = Modifier.width(hexWidth))
+        }
+        Spacer(Modifier.height(8.dp))
+        ModeTabs(mode, onSelect = { store.setPickerMode(it) }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        PickerBody(state, mode, wheelMaxSize = 240.dp)
     }
-    Spacer(Modifier.height(8.dp))
-    ModeTabs(mode, onSelect = { store.setPickerMode(it) }, modifier = Modifier.fillMaxWidth())
-    Spacer(Modifier.height(8.dp))
-    // Wheel (and the opacity slider under it) fit in the half-height sheet without scrolling.
-    PickerBody(state, mode, wheelMaxSize = wheelSizeForSheet(controlsAbove = 124.dp + if (showAlpha) 48.dp else 0.dp))
     if (showAlpha) AlphaSlider(state, Modifier.padding(top = 4.dp))
     PaletteSection(store, current = current, onUse = use, manage = false)
     RecentColorsSection(store, onUse = use)
 }
+
+/** Widest a bottom sheet gets (Material's default), whatever the screen. */
+private val SheetMaxWidth = 640.dp
+
+/** Height of the opacity row (gradient slider beside its number field). */
+private val AlphaRowHeight = 72.dp

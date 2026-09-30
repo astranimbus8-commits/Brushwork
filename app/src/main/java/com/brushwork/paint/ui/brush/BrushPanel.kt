@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,10 +24,12 @@ import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -84,13 +87,15 @@ fun BrushPanel(controller: EditorController, onDismiss: () -> Unit) {
             }
         },
     ) {
-        BrushStrokePreview(preset, toolId, height = 88.dp, trueScale = true, debounceMs = 90L)
+        BrushStrokePreview(preset, toolId, height = 72.dp, trueScale = true, debounceMs = 90L)
         Text(
             "${preset.name} · ${formatSize(preset.size)}" + if (edited) " · edited" else "",
             style = MaterialTheme.typography.bodySmall,
             color = BrushworkColors.OnChromeDim,
             modifier = Modifier.padding(top = 4.dp),
         )
+        // Size and opacity first: in the half-height sheet they are in view without scrolling.
+        BrushCoreSettings(toolId, preset, onEdit, Modifier.padding(top = 4.dp))
 
         SectionHeader("Presets")
         library.chunked(2).forEach { row ->
@@ -183,6 +188,9 @@ fun BrushToolOptions(tool: BrushTool) {
     val kind = StrokeKind.of(tool.id, preset)
     val strengthLike = kind == StrokeKind.SMUDGE || kind == StrokeKind.BLUR
 
+    val onEdit: PresetEdit = { persist, transform -> store.edit(controller, tool.id, persist, transform) }
+    val done = { onEdit(true) { it } }
+
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         AssistChip(
             onClick = { open = true },
@@ -196,11 +204,18 @@ fun BrushToolOptions(tool: BrushTool) {
             ),
             modifier = Modifier.heightIn(min = 40.dp),
         )
-        Readout(Icons.Filled.LineWeight, formatSize(preset.size), "Brush size") { open = true }
+        // Tapping a number opens a small editor for it: type the value or drag its slider.
+        EditableReadout(Icons.Filled.LineWeight, formatSize(preset.size), "Brush size", onMore = { open = true }, onClose = done) {
+            BrushSizeField(preset.size, { v -> onEdit(false) { it.copy(size = v) } }, done, label = "Brush size")
+        }
         if (strengthLike) {
-            Readout(Icons.Filled.Opacity, percent(preset.mixing), "Strength") { open = true }
+            EditableReadout(Icons.Filled.Opacity, percent(preset.mixing), "Strength", onMore = { open = true }, onClose = done) {
+                PercentField("Strength", preset.mixing, { v -> onEdit(false) { it.copy(mixing = v) } }, done)
+            }
         } else {
-            Readout(Icons.Filled.Opacity, percent(preset.opacity), "Opacity") { open = true }
+            EditableReadout(Icons.Filled.Opacity, percent(preset.opacity), "Opacity", onMore = { open = true }, onClose = done) {
+                PercentField("Opacity", preset.opacity, { v -> onEdit(false) { it.copy(opacity = v) } }, done)
+            }
         }
         ToolIconButton(
             icon = Icons.Filled.Gesture,
@@ -212,6 +227,37 @@ fun BrushToolOptions(tool: BrushTool) {
     }
 
     if (open) BrushPanel(controller, onDismiss = { open = false })
+}
+
+/**
+ * A [Readout] that opens a compact popup with [editor] (a number field with its slider) and a
+ * link to the full brush panel ([onMore]).
+ */
+@Composable
+private fun EditableReadout(
+    icon: ImageVector,
+    text: String,
+    description: String,
+    onMore: () -> Unit,
+    onClose: () -> Unit,
+    editor: @Composable () -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    // Saves whatever was typed but not yet committed with Done.
+    val close = { editing = false; onClose() }
+    Box {
+        Readout(icon, text, description) { editing = true }
+        DropdownMenu(expanded = editing, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+            // Fixed width: the menu measures its content's intrinsic width.
+            Column(Modifier.width(300.dp).padding(horizontal = 12.dp, vertical = 4.dp)) {
+                editor()
+                TextButton(
+                    onClick = { close(); onMore() },
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text("All brush settings") }
+            }
+        }
+    }
 }
 
 @Composable
