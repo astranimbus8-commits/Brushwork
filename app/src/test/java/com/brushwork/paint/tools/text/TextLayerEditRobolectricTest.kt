@@ -214,6 +214,24 @@ class TextLayerEditRobolectricTest {
     }
 
     @Test
+    fun draggingAcrossDisplayTileSeamsLeavesNoTrail() {
+        // Wider than one 512 px display tile: the text crosses the seams at x = 512 and y = 512.
+        val (c, tool) = newController(1100, 700)
+        addText(c, tool, "Seams", 470f, 470f, size = 48f)
+        screen(c)
+        tap(c, 470f, 470f)
+        assertNotNull(tool.editingLayer)
+        c.pointerDown(ToolPoint(470f, 470f))
+        for (i in 1..6) {
+            c.pointerMove(ToolPoint(470f + i * 17f, 470f + i * 13f))
+            assertArrayEquals("step $i", pixels(composite(c)), pixels(screen(c)))
+        }
+        c.pointerUp(ToolPoint(572f, 548f))
+        assertTrue(tool.commitItem())
+        assertArrayEquals(pixels(composite(c)), pixels(screen(c)))
+    }
+
+    @Test
     fun theNextNewTextKeepsTheLookButNotTheWrapWidth() {
         val (c, tool) = newController()
         addText(c, tool, "Boxed words", 150f, 100f) {
