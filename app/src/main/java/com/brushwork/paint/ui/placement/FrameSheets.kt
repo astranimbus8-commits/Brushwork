@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
@@ -53,6 +52,17 @@ fun FrameSettingsSheet(tool: FrameDividerTool, status: FrameDividerTool.Status) 
         title = "Frame layer",
         onDismiss = { tool.settingsOpen = false },
         actions = { UnitSelector(unit, { tool.unit = it }) },
+        // The actions stay in view under the settings, which scroll in the half-height sheet.
+        footer = {
+            Button(onClick = { if (tool.createFrameLayer()) tool.settingsOpen = false }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text("Create frame layer")
+            }
+            if (status == FrameDividerTool.Status.READY) {
+                OutlinedButton(onClick = { if (tool.applyStyleToCurrent()) tool.settingsOpen = false }, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+                    Text("Apply border & fill to current frame")
+                }
+            }
+        },
     ) {
         SectionHeader("Border")
         LengthField("Border width", s.borderWidth.toDouble(), { v -> set { it.copy(borderWidth = v.toFloat()) } }, unit, dpi, minPx = 0.0, maxPx = maxLen)
@@ -95,16 +105,6 @@ fun FrameSettingsSheet(tool: FrameDividerTool, status: FrameDividerTool.Status) 
         SectionHeader("New frame layout")
         NumberField("Rows", s.rows.toDouble(), { v -> set { it.copy(rows = v.roundToInt().coerceIn(1, MAX_GRID)) } }, decimals = 0, min = 1.0, max = MAX_GRID.toDouble(), step = 1.0)
         NumberField("Columns", s.cols.toDouble(), { v -> set { it.copy(cols = v.roundToInt().coerceIn(1, MAX_GRID)) } }, Modifier.padding(top = 8.dp), decimals = 0, min = 1.0, max = MAX_GRID.toDouble(), step = 1.0)
-
-        Spacer(Modifier.height(16.dp))
-        Button(onClick = { if (tool.createFrameLayer()) tool.settingsOpen = false }, modifier = Modifier.fillMaxWidth()) {
-            Text("Create frame layer")
-        }
-        if (status == FrameDividerTool.Status.READY) {
-            OutlinedButton(onClick = { if (tool.applyStyleToCurrent()) tool.settingsOpen = false }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-                Text("Apply border & fill to current frame")
-            }
-        }
     }
 
     if (pickColor) {

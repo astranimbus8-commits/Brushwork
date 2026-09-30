@@ -216,7 +216,7 @@ class HalfHeightSheetsTest {
         check("frame settings") {
             c.selectTool(ToolId.FRAME_DIVIDER)
             open("frame")
-            assertHalfHeight(activity, "Frame layer", "Border width")
+            assertHalfHeight(activity, "Frame layer", "Border width", "Create frame layer")
             shut("frame")
         }
         Smoke.assertQuiet(c, "sheets")
