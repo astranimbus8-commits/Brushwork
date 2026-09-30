@@ -93,10 +93,10 @@ object ContentAwareFillJob {
         if (refill && last != null) {
             seed = last.seed + 1
             val tool = controller.currentTool
+            // Settle pending tool work first, so undo takes back the fill and nothing else.
             tool.onDeactivate()
-            if (canRefill(controller) && isTopStep(controller, last.action)) {
-                controller.undoManager.undo(controller)
-                controller.doc.touch()
+            if (canRefill(controller) && !tool.hasPendingWork && controller.filterSession == null && isTopStep(controller, last.action)) {
+                controller.undo()
             }
             tool.onActivate()
             if (controller.doc.indexOf(last.sourceLayer) >= 0 && controller.activeLayer !== last.sourceLayer) controller.selectLayer(last.sourceLayer)
@@ -158,10 +158,8 @@ object ContentAwareFillJob {
         val clip: Selection?,
     )
 
-    private fun checkWritable(controller: EditorController, layer: Layer): Boolean {
-        if (!controller.checkEditable(layer)) return false
-        return true
-    }
+    /** The layer can be written (not locked or hidden; says why otherwise). */
+    private fun checkWritable(controller: EditorController, layer: Layer): Boolean = controller.checkEditable(layer)
 
     /** The selection as a hole mask (its bounding box only). */
     internal fun holeOf(sel: Selection, docW: Int, docH: Int): HoleMask {

@@ -30,6 +30,13 @@ object ContentAwareFill {
         val e = params.expand.coerceIn(0, InpaintParams.MAX_EXPAND)
         val area = mask.rect.expand(e + 1).clip(imgW, imgH)
         if (area.isEmpty) return null
+        // The region read must hold the hole's box: refuse early, before allocating for it.
+        if (area.area > params.maxRoiPixels) {
+            var n = 0L
+            for (b in mask.alpha) if (b.toInt() != 0) n++
+            if (n == 0L) return null
+            throw InpaintException(TOO_LARGE)
+        }
         val aw = area.width; val ah = area.height
         val soft = HoleOps.crop(mask.alpha, mask.rect, area)
 
@@ -82,15 +89,8 @@ object ContentAwareFill {
             roi = roi.intersect(changed.expand(lo).clip(imgW, imgH))
         }
         val hole = HoleOps.crop(holeArea, area, roi)
-        val excluded = if (params.sampling == SamplingArea.AUTO) {
-            // Only known pixels within `band` of the hole are sources.
-            val d = HoleOps.chamferDistance(hole, roi.width, roi.height)
-            val limit = band * HoleOps.CHAMFER_STEP
-            var any = false
-            val ex = ByteArray(hole.size)
-            for (i in ex.indices) if (d[i] > limit) { ex[i] = 1; any = true }
-            if (any) ex else null
-        } else null
+        // AUTO: only known pixels within `band` of the hole are sources.
+        val excluded = if (params.sampling == SamplingArea.AUTO) bandExclusion(hole, roi.width, roi.height, band) else null
         val w = HoleOps.crop(weight, area, changed)
         return InpaintPlan(imgW, imgH, roi, changed, holePixels, radius, hole, excluded, w)
     }
@@ -128,6 +128,34 @@ object ContentAwareFill {
         for (y in 0 until r.height) System.arraycopy(image.pixels, (r.top + y) * image.width + r.left, out.pixels, y * r.width, r.width)
         return out
     }
+
+    /**
+     * 1 for pixels farther than [band] px from the [hole] ([w] x [h]), null if there are none.
+     * Measured on a 4x coarser grid (the band's exact edge doesn't matter; this keeps planning
+     * cheap on big regions) and rounded towards including more pixels.
+     */
+    private fun bandExclusion(hole: ByteArray, w: Int, h: Int, band: Int): ByteArray? {
+        val sh = BAND_GRID_SHIFT
+        val cw = ((w - 1) shr sh) + 1; val ch = ((h - 1) shr sh) + 1
+        val coarse = ByteArray(cw * ch)
+        for (y in 0 until h) {
+            val row = y * w
+            val crow = (y shr sh) * cw
+            for (x in 0 until w) if (hole[row + x].toInt() != 0) coarse[crow + (x shr sh)] = 1
+        }
+        val d = HoleOps.chamferDistance(coarse, cw, ch)
+        val limit = ((band shr sh) + 1) * HoleOps.CHAMFER_STEP
+        val ex = ByteArray(w * h)
+        var any = false
+        for (y in 0 until h) {
+            val row = y * w
+            val crow = (y shr sh) * cw
+            for (x in 0 until w) if (d[crow + (x shr sh)] > limit) { ex[row + x] = 1; any = true }
+        }
+        return if (any) ex else null
+    }
+
+    private const val BAND_GRID_SHIFT = 2
 
     /** Smallest / largest width of the automatic sampling band (px). */
     const val AUTO_BAND_MIN = 48

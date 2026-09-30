@@ -40,6 +40,16 @@ internal class InpaintEngine(
     private var progressDone = 0.0
     private var progressTotal = 1.0
 
+    private var markNs = System.nanoTime()
+
+    /** Reports the time since the previous mark to [trace] (tests / benchmarks only). */
+    private fun mark(phase: String) {
+        val t = trace ?: return
+        val now = System.nanoTime()
+        t("$phase: ${(now - markNs) / 100_000 / 10.0} ms")
+        markNs = now
+    }
+
     private fun advance(units: Double) {
         progressDone += units
         monitor.progress((progressDone / progressTotal).toFloat())
@@ -59,6 +69,7 @@ internal class InpaintEngine(
             for (i in a until b) full[i] = if (holeMask[i].toInt() != 0) 0 else premul(src[i])
         }
         val fullLevel = Level(rw, rh, full, holeMask, plan.excluded)
+        mark("premultiply")
 
         // Working scale: search downscaled when the hole or the sampling region is big.
         var k = 0
@@ -77,6 +88,7 @@ internal class InpaintEngine(
             base.computeValid(r, if (k == 0) SOURCE_GUARD else 1)
         }
         if (base.validList.isEmpty()) throw InpaintException(NO_SOURCE)
+        mark("working level k=$k")
 
         // Pyramid: about two patch widths of hole at the coarsest level (Newson eq. 12).
         var levelCount = if (radiusW <= THIN_RADIUS) 0 else ceil(ln(2.0 * radiusW / p) / ln(2.0)).toInt().coerceIn(0, MAX_LEVELS)
@@ -91,6 +103,7 @@ internal class InpaintEngine(
             monitor.checkCancelled()
         }
         val top = levels.size - 1
+        mark("pyramid L=$top")
 
         // Texture features at the working level, subsampled to the coarser ones.
         texW = if (params.textureWeight > 0f) max(1, (params.textureWeight * p * p / 9f / 16f).roundToInt()) else 0
@@ -99,6 +112,7 @@ internal class InpaintEngine(
             base.tex = t0
             for (l in 1..top) levels[l].tex = Level.subsampleTexture(base, t0, levels[l], l)
         }
+        mark("texture")
 
         // Progress: EM iterations weighted by the hole size of their level.
         var total = 0.0
@@ -119,6 +133,7 @@ internal class InpaintEngine(
                 val nn = onionPeel(lvl, l)
                 initFromOnion(lvl, n, nn, l)
                 advance(lvl.holeCount * 2.0)
+                mark("onion peel (${lvl.holeCount} px)")
             } else {
                 upsampleNnf(prev, prevLevel!!, n, lvl, 1, l)
                 vote(lvl, n, weighted = false)
@@ -126,12 +141,14 @@ internal class InpaintEngine(
             val nEm = emIterations(l, top)
             for (it in 0 until nEm) {
                 refreshDistances(lvl, n)
+                // Most of the search happens right after the field changed scale; later
+                // iterations only refine a field that is already good.
                 val pmIters = when {
                     l == top && it == 0 -> 4
-                    l == 0 -> 1
-                    else -> 2
+                    it == 0 && l > 0 -> 2
+                    else -> 1
                 }
-                patchMatch(lvl, n, pmIters, max(lvl.w, lvl.h), l, it * 8)
+                patchMatch(lvl, n, pmIters, searchRadius(lvl, l == top), l, it * 8)
                 val change = vote(lvl, n, weighted = true)
                 advance(lvl.holeCount.toDouble())
                 if (it > 0 && change < CONVERGED) {
@@ -142,6 +159,7 @@ internal class InpaintEngine(
             if (prevLevel != null && prevLevel !== base) prevLevel.tex = null
             prev = n
             prevLevel = lvl
+            mark("level $l (${lvl.w}x${lvl.h}, ${n.targetCount} targets)")
         }
         val workNnf = prev!!
 
@@ -149,17 +167,37 @@ internal class InpaintEngine(
         if (!fullPass) {
             refreshDistances(base, workNnf)
             bestPatch(base, workNnf, sources)
+            mark("best patch")
             if (params.colorAdaptation) colorAdapt(base) { x, y -> bestSource(base, workNnf, x, y) }
         } else {
             fullResolutionPass(fullLevel, base, workNnf, k, sources)
         }
+        mark("final")
         monitor.checkCancelled()
         monitor.progress(1f)
         return buildResult(fullLevel, sources)
     }
 
-    /** EM iterations of level [l] (0 = finest) with [top] the coarsest: 12 down to 2 (Barnes). */
-    private fun emIterations(l: Int, top: Int): Int = if (top == 0) 4 else (2 + 10.0 * l / top).roundToInt()
+    /**
+     * EM iterations of level [l] (0 = finest) with [top] the coarsest: 12 down to 2 (Barnes).
+     * Under a deep pyramid the finest level starts from a converged field and is the costliest,
+     * so it gets one iteration before the final best-patch step.
+     */
+    private fun emIterations(l: Int, top: Int): Int = when {
+        top == 0 -> 4
+        l == 0 && top >= 3 -> 1
+        else -> (2 + 10.0 * l / top).roundToInt()
+    }
+
+    /**
+     * Random search window: the whole level at the coarsest one; finer levels start from the
+     * upsampled field, which already holds the structure, and search a quarter of it (at least
+     * [MIN_FINE_RADIUS] px) -- as good in practice, and fewer candidates per pixel.
+     */
+    private fun searchRadius(l: Level, coarsest: Boolean): Int {
+        val full = max(l.w, l.h)
+        return if (coarsest) full else max(MIN_FINE_RADIUS, full / FINE_SEARCH_DIVISOR)
+    }
 
     // ------------------------------------------------------------------ full-resolution pass
 
@@ -839,36 +877,56 @@ internal class InpaintEngine(
         }
         if (ringCount == 0) return
         pullPush(delta, wgt, bw, bh)
-        // Relaxation (Gauss-Seidel, sequential so it stays deterministic) with the ring fixed.
-        val sweeps = (RELAX_BUDGET / max(1, l.holeCount)).coerceIn(2, 30)
+        // Relaxation towards the harmonic membrane with the ring fixed: red-black Gauss-Seidel
+        // (each half sweep only reads the other color), so rows run in parallel deterministically.
+        val sweeps = (RELAX_BUDGET / max(1, l.holeCount)).coerceIn(2, MAX_RELAX_SWEEPS)
+        val d0 = delta[0]; val d1 = delta[1]; val d2 = delta[2]; val d3 = delta[3]
+        // Small regions sweep inline: a parallel dispatch per half sweep would cost more than it saves.
+        val inline = bw.toLong() * bh < PARALLEL_RELAX_PIXELS
         repeat(sweeps) {
             monitor.checkCancelled()
-            for (y in 0 until bh) for (x in 0 until bw) {
-                val j = y * bw + x
-                if (holeCrop[j].toInt() == 0) continue
-                var n = 0
-                var s0 = 0f; var s1 = 0f; var s2 = 0f; var s3 = 0f
-                if (x > 0) { val q = j - 1; s0 += delta[0][q]; s1 += delta[1][q]; s2 += delta[2][q]; s3 += delta[3][q]; n++ }
-                if (x < bw - 1) { val q = j + 1; s0 += delta[0][q]; s1 += delta[1][q]; s2 += delta[2][q]; s3 += delta[3][q]; n++ }
-                if (y > 0) { val q = j - bw; s0 += delta[0][q]; s1 += delta[1][q]; s2 += delta[2][q]; s3 += delta[3][q]; n++ }
-                if (y < bh - 1) { val q = j + bw; s0 += delta[0][q]; s1 += delta[1][q]; s2 += delta[2][q]; s3 += delta[3][q]; n++ }
-                if (n == 0) continue
-                val inv = 1f / n
-                delta[0][j] = s0 * inv; delta[1][j] = s1 * inv; delta[2][j] = s2 * inv; delta[3][j] = s3 * inv
+            for (color in 0..1) {
+                forRowsMaybe(bh, inline) { ya, yb ->
+                    for (y in ya until yb) {
+                        var x = (y + color) and 1
+                        while (x < bw) {
+                            val j = y * bw + x
+                            if (holeCrop[j].toInt() != 0) {
+                                var n = 0
+                                var s0 = 0f; var s1 = 0f; var s2 = 0f; var s3 = 0f
+                                if (x > 0) { val q = j - 1; s0 += d0[q]; s1 += d1[q]; s2 += d2[q]; s3 += d3[q]; n++ }
+                                if (x < bw - 1) { val q = j + 1; s0 += d0[q]; s1 += d1[q]; s2 += d2[q]; s3 += d3[q]; n++ }
+                                if (y > 0) { val q = j - bw; s0 += d0[q]; s1 += d1[q]; s2 += d2[q]; s3 += d3[q]; n++ }
+                                if (y < bh - 1) { val q = j + bw; s0 += d0[q]; s1 += d1[q]; s2 += d2[q]; s3 += d3[q]; n++ }
+                                if (n > 0) {
+                                    val inv = 1f / n
+                                    d0[j] = s0 * inv; d1[j] = s1 * inv; d2[j] = s2 * inv; d3[j] = s3 * inv
+                                }
+                            }
+                            x += 2
+                        }
+                    }
+                }
             }
         }
         // Apply inside the hole (premultiplied: 0 <= rgb <= alpha).
-        for (y in 0 until bh) for (x in 0 until bw) {
-            val j = y * bw + x
-            if (holeCrop[j].toInt() == 0) continue
-            val i = (ry0 + y) * w + rx0 + x
-            val c = l.img[i]
-            val b = ((c and 0xFF) + delta[0][j]).roundToInt()
-            val g = (((c shr 8) and 0xFF) + delta[1][j]).roundToInt()
-            val rr = (((c shr 16) and 0xFF) + delta[2][j]).roundToInt()
-            val a = ((c ushr 24) + delta[3][j]).roundToInt().coerceIn(0, 255)
-            l.img[i] = (a shl 24) or (rr.coerceIn(0, a) shl 16) or (g.coerceIn(0, a) shl 8) or b.coerceIn(0, a)
+        Parallel.forRange(bh, 8) { ya, yb ->
+            for (y in ya until yb) for (x in 0 until bw) {
+                val j = y * bw + x
+                if (holeCrop[j].toInt() == 0) continue
+                val i = (ry0 + y) * w + rx0 + x
+                val c = l.img[i]
+                val b = ((c and 0xFF) + d0[j]).roundToInt()
+                val g = (((c shr 8) and 0xFF) + d1[j]).roundToInt()
+                val rr = (((c shr 16) and 0xFF) + d2[j]).roundToInt()
+                val a = ((c ushr 24) + d3[j]).roundToInt().coerceIn(0, 255)
+                l.img[i] = (a shl 24) or (rr.coerceIn(0, a) shl 16) or (g.coerceIn(0, a) shl 8) or b.coerceIn(0, a)
+            }
         }
+    }
+
+    private inline fun forRowsMaybe(rows: Int, inline: Boolean, crossinline body: (Int, Int) -> Unit) {
+        if (inline) body(0, rows) else Parallel.forRange(rows, 8) { a, b -> body(a, b) }
     }
 
     /**
@@ -963,7 +1021,8 @@ internal class InpaintEngine(
         const val MAX_LEVELS = 7
         const val MAX_WORK_SHIFT = 5
         const val MIN_VALID = 24
-        const val CONVERGED = 0.1
+        /** A level stops early once its fill changes less than this per channel (0..255) and iteration. */
+        const val CONVERGED = 0.2
         const val BAND_ROWS = 12
         const val MAX_BANDS = 24
         const val SIGMA_SAMPLES = 4096
@@ -975,7 +1034,14 @@ internal class InpaintEngine(
         const val RING = 2
         const val MAX_DELTA = 96f
         const val RELAX_BUDGET = 4_000_000
+        const val MAX_RELAX_SWEEPS = 24
+        const val FINE_SEARCH_DIVISOR = 4
+        const val MIN_FINE_RADIUS = 16
+        const val PARALLEL_RELAX_PIXELS = 400_000L
         const val MAX_DIST = Int.MAX_VALUE / 2
+
+        /** Receives phase timings when set (benchmarks, tests); null in the app. */
+        @Volatile internal var trace: ((String) -> Unit)? = null
 
         const val FULL_LEVEL_TAG = 100
         const val ONION_TAG = 1_000L

@@ -69,7 +69,7 @@ import kotlin.math.roundToInt
 /**
  * The selection menu: copy / cut / paste / deselect, select all / invert, grow / shrink /
  * feather, select from layer opacity, smart select (subject, sky, ...) and edits of the selected
- * pixels.
+ * pixels (fill, clear, copy / cut to a new layer, content-aware fill).
  *
  * Operations that run in the background or may report a problem close the sheet first, so the
  * editor's busy overlay (with its Stop button) and messages are visible.

@@ -37,7 +37,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
@@ -93,7 +92,8 @@ internal fun SelectionActionBar(
                 BarItem(Icons.Outlined.DeleteSweep, "Delete", "Delete the selected pixels") {
                     controller.endCanvasGesture(); controller.clearLayer()
                 }
-                BarItem(Icons.Outlined.AutoFixHigh, "Content-aware", ContentAwareFillJob.FILL_LABEL, width = 80.dp) {
+                // Two short lines keep it as narrow as the others: eight items just fit a 392 dp phone.
+                BarItem(Icons.Outlined.AutoFixHigh, "Content\naware", ContentAwareFillJob.FILL_LABEL, lines = 2) {
                     controller.endCanvasGesture(); fillOptionsOpen = true
                 }
                 BarItem(Icons.Outlined.InvertColors, "Invert", "Invert the selection") { controller.endCanvasGesture(); controller.invertSelection() }
@@ -106,11 +106,11 @@ internal fun SelectionActionBar(
 
 /** Icon over a short label; [clickLabel] tells a screen reader what it does. */
 @Composable
-private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, width: Dp = 46.dp, onClick: () -> Unit) {
+private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, lines: Int = 1, onClick: () -> Unit) {
     val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.45f)
     Column(
         Modifier
-            .width(width)
+            .width(46.dp)
             .height(46.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
@@ -119,6 +119,6 @@ private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enable
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, lineHeight = 12.sp, color = tint, maxLines = 1, textAlign = TextAlign.Center)
+        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 10.sp, lineHeight = if (lines > 1) 11.sp else 12.sp, color = tint, maxLines = lines, textAlign = TextAlign.Center)
     }
 }
