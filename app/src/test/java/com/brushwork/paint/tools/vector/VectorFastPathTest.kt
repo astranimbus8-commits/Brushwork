@@ -369,6 +369,47 @@ class VectorFastPathTest {
         assertEquals(1, c.undoManager.undoCount)
     }
 
+    // ------------------------------------------------------------------ smudge / blur
+
+    @Test
+    fun slowFromScratchStrokeWaitsForTheDragToEnd() {
+        val c = controller(200, 200)
+        val layer = c.doc.activeLayer
+        c.editWholeLayer(layer, "Seed") { b ->
+            Canvas(b).drawRect(0f, 0f, 100f, 200f, android.graphics.Paint().apply { color = 0xFFFF0000.toInt() })
+        }
+        c.undoManager.clear()
+        val preview = BrushStrokePreview(c) { ToolId.SMUDGE }
+        // Every replay from scratch counts as "longer than a frame".
+        preview.dragReplayLimitMs = -1L
+        fun line(y: Float) = VectorPath.polyline(listOf(Vec2(60f, y), Vec2(160f, y)))
+        val a = line(60f)
+        preview.request(a.ops) { brushStrokeInput(a, out = it) }
+        preview.flush()
+        assertTrue(preview.isLive)
+        val shownA = layer.bitmap.pixels()
+        // A drag: the smudge stays where it is until the finger lifts...
+        preview.interacting = true
+        for (y in listOf(80f, 100f, 120f)) {
+            val p = line(y)
+            preview.request(p.ops) { brushStrokeInput(p, out = it) }
+            preview.flush()
+            idle(16)
+        }
+        assertTrue("held back while dragging", preview.hasPending)
+        assertTrue(shownA.contentEquals(layer.bitmap.pixels()))
+        // ...then follows the last position.
+        preview.interacting = false
+        idle(16)
+        assertFalse(preview.hasPending)
+        val shownC = layer.bitmap.pixels()
+        assertFalse(shownA.contentEquals(shownC))
+        val last = line(120f)
+        assertTrue(preview.commit(last.ops) { brushStrokeInput(last, out = it) })
+        assertFalse(preview.isLive)
+        assertEquals(1, c.undoManager.undoCount)
+    }
+
     // ------------------------------------------------------------------ replay budget
 
     @Test

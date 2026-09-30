@@ -55,11 +55,21 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         var releaseNs = 0L
         var releaseMaxFrameNs = 0L
         var releaseStamps = 0L
+        /** Most dabs drawn in one frame during / after the drag (the work of the worst frame). */
+        var maxFrameStamps = 0L
+        var releaseMaxFrameStamps = 0L
+        /** Every frame's time (input + looper + tiles) during the drag, and after it. */
+        val frameNs = ArrayList<Long>()
+        val releaseFrameNs = ArrayList<Long>()
 
         private fun ms(ns: Long) = ns / 1e6
         private fun kb(bytes: Long) = bytes / 1024.0 / max(1, frames)
+        private fun p90(list: List<Long>): Double = if (list.isEmpty()) 0.0 else ms(list.sorted()[(list.size * 9) / 10 - (if (list.size >= 10) 1 else 0)])
         val avgFrameMs: Double get() = ms(inputNs + looperNs + drawNs) / max(1, frames)
         val maxFrameMs: Double get() = ms(maxFrameNs)
+        /** 90th percentile of the frame times (a busy machine's hiccups don't count). */
+        val p90FrameMs: Double get() = p90(frameNs)
+        val releaseP90FrameMs: Double get() = p90(releaseFrameNs)
         val stampsPerFrame: Double get() = stamps.toDouble() / max(1, frames)
         val dirtyMpxPerFrame: Double get() = dirtyPx / 1e6 / max(1, frames)
         val allocKbPerFrame: Double get() = allocBytes / 1024.0 / max(1, frames)
@@ -69,10 +79,10 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
 
         override fun toString(): String = String.format(
             java.util.Locale.ROOT,
-            "[perf] %-34s frames=%d avg=%.2fms (input %.2f, looper %.2f, tiles %.2f) max=%.2fms screen=%.2fms dabs/frame=%.0f dirty=%.2fMpx/frame tiles/frame=%.1f alloc=%.0fKB/frame (input %.0f, looper %.0f, tiles %.0f) release=%.2fms (worst frame %.2fms, %d dabs)",
+            "[perf] %-34s frames=%d avg=%.2fms (input %.2f, looper %.2f, tiles %.2f) p90=%.2fms max=%.2fms screen=%.2fms dabs/frame=%.0f (max %d) dirty=%.2fMpx/frame tiles/frame=%.1f alloc=%.0fKB/frame (input %.0f, looper %.0f, tiles %.0f) release=%.2fms (p90 frame %.2fms, worst %.2fms, %d dabs, max %d in a frame)",
             name, frames, avgFrameMs, ms(inputNs) / max(1, frames), ms(looperNs) / max(1, frames), ms(drawNs) / max(1, frames),
-            maxFrameMs, ms(screenNs) / max(1, frames), stampsPerFrame, dirtyMpxPerFrame, tilesPerFrame, allocKbPerFrame,
-            kb(allocInput), kb(allocLooper), kb(allocTiles), ms(releaseNs), ms(releaseMaxFrameNs), releaseStamps,
+            p90FrameMs, maxFrameMs, ms(screenNs) / max(1, frames), stampsPerFrame, maxFrameStamps, dirtyMpxPerFrame, tilesPerFrame, allocKbPerFrame,
+            kb(allocInput), kb(allocLooper), kb(allocTiles), ms(releaseNs), releaseP90FrameMs, ms(releaseMaxFrameNs), releaseStamps, releaseMaxFrameStamps,
         )
     }
 
@@ -150,7 +160,9 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         s.drawNs += t3 - t2
         s.screenNs += t4 - t3
         s.maxFrameNs = max(s.maxFrameNs, t3 - t0)
+        s.frameNs += t3 - t0
         s.stamps += stamper.stampCount - st0
+        s.maxFrameStamps = max(s.maxFrameStamps, stamper.stampCount - st0)
         s.dirtyPx += dirty
         s.tiles += dirtyTiles
         s.allocBytes += threads.getThreadAllocatedBytes(tid) - a0
@@ -178,6 +190,7 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         var total = 0L
         var worst = 0L
         for (f in 0 until 60) {
+            val sf = stamper.stampCount
             val t0 = System.nanoTime()
             if (f == 0) send(MotionEvent.ACTION_UP, screenOf(prev))
             idle(16)
@@ -186,6 +199,8 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
             draw()
             total += t1 - t0
             worst = max(worst, t1 - t0)
+            s.releaseFrameNs += t1 - t0
+            s.releaseMaxFrameStamps = max(s.releaseMaxFrameStamps, stamper.stampCount - sf)
         }
         s.releaseNs = total
         s.releaseMaxFrameNs = worst

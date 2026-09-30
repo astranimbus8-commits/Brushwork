@@ -3,6 +3,8 @@ package com.brushwork.paint.tools.vector
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Handler
@@ -182,7 +184,8 @@ private object FlatScratch {
  * measured on this device ([budget]), so dragging stays smooth on a slow phone too. Other
  * painting tools (smudge / blur / watercolor, or any [Tool]) are replayed from scratch: the
  * previous preview is cancelled (`onCancel` leaves no trace), then the new points are fed
- * through onDown + onMove. [commit] finishes the stroke (onUp) as a real edit, always exact;
+ * through onDown + onMove (while a finger drags, only if that fits in a frame; otherwise once
+ * the drag ends). [commit] finishes the stroke (onUp) as a real edit, always exact;
  * [cancel] / [end] drop it.
  *
  * Main thread only.
@@ -235,6 +238,12 @@ internal class BrushStrokePreview(
     private var lastCostMs = 0L
     /** Uptime at which the finger last stopped dragging the path (see [interacting]). */
     private var restingSince = Long.MIN_VALUE / 2
+    /** Time the last replay from scratch took (ms). */
+    private var fullReplayMs = 0L
+    /** Replays from scratch slower than this (ms) wait for the end of a drag (tests lower it). */
+    internal var dragReplayLimitMs = MAX_DRAG_REPLAY_MS
+    /** The waiting replay is held back until the drag ends (see [flush]). */
+    private var deferred = false
     /** Random values of the brush for this editing session: a replay never changes its texture. */
     private var seed = newSeed()
     private val input = PathStrokeInput(1024)
@@ -250,7 +259,8 @@ internal class BrushStrokePreview(
 
     /**
      * True while a finger drags the path: the stroke then follows it as a draft (see
-     * [BrushTool.updatePath]) and is not refined. Set back to false when the finger lifts: a
+     * [BrushTool.updatePath]) and is not refined; a stroke replayed from scratch that takes
+     * longer than a frame waits for the drag to end. Set back to false when the finger lifts: a
      * draft on screen is refined once the path has rested for [REFINE_DELAY_MS].
      */
     var interacting = false
@@ -259,6 +269,12 @@ internal class BrushStrokePreview(
             field = value
             if (value) return
             restingSince = SystemClock.uptimeMillis()
+            if (deferred) {
+                // The stroke held back during the drag follows now.
+                deferred = false
+                pending?.let { schedule(it, 0L) }
+                return
+            }
             val cur = live
             // A waiting replay (the last position of the drag) runs as scheduled; a draft
             // already on screen is refined once the path rests.
@@ -293,6 +309,11 @@ internal class BrushStrokePreview(
         val cur = live
         val tool = paintTool()
         val req = Request(geometry, points)
+        if (deferred && interacting) {
+            // Held back until the drag ends: only the latest geometry is kept.
+            pending = req
+            return
+        }
         if (cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)) {
             // Already shown (e.g. a tap that only selected a point, or a cancelled touch)...
             pending = null
@@ -376,8 +397,17 @@ internal class BrushStrokePreview(
         val updated = cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking &&
             cur.key.sameStroke(key) && tool.updatePath(input, budget)
         if (!updated) {
+            if (interacting && cur != null && fullReplayMs > dragReplayLimitMs) {
+                // Smudge / blur / watercolor strokes are replayed from scratch: when that takes
+                // longer than a frame, the stroke waits for the drag to end (the guide path
+                // follows the finger) instead of stalling every frame of it.
+                pending = req
+                deferred = true
+                return
+            }
             cancelLive()
             if (!start(tool, key, budget)) return
+            fullReplayMs = SystemClock.uptimeMillis() - t0
         }
         if (tool is BrushTool) measure(tool, w0, System.nanoTime() - n0)
         val exact = !(tool is BrushTool && tool.isDraft)
@@ -425,6 +455,7 @@ internal class BrushStrokePreview(
      */
     fun commit(geometry: Any, points: (PathStrokeInput) -> Unit): Boolean {
         pending = null
+        deferred = false
         unschedule()
         val (id, tool) = paintTool() ?: run { cancelLive(); return false }
         val key = keyFor(geometry, id, tool)
@@ -462,6 +493,7 @@ internal class BrushStrokePreview(
     /** Drops the preview (the painting tool leaves no trace) and any waiting replay. */
     fun cancel() {
         pending = null
+        deferred = false
         unschedule()
         cancelLive()
         refusedKey = null
@@ -497,6 +529,12 @@ internal class BrushStrokePreview(
 
         /** How long a draft waits after a drag before it is refined (ms): the finger may grab again. */
         const val REFINE_DELAY_MS = 200L
+
+        /**
+         * A stroke that is replayed from scratch (smudge / blur / watercolor) and took longer
+         * than this (ms) waits for the end of a drag instead of following the finger.
+         */
+        const val MAX_DRAG_REPLAY_MS = 16L
 
         /**
          * Time one replay may take (ns): about a third of a 60 Hz frame, leaving the rest for the
@@ -550,6 +588,8 @@ internal class BrushStrokePreview(
  *
  * The overlay is above the live brush stroke, while the committed stroke is painted OVER the
  * fill: the band the brush covers ([setBand]) is kept free so the whole stroke stays visible.
+ * The band is erased from the items by stroking the path (no outline of the stroke is computed
+ * on the CPU, which would cost milliseconds per frame while a long path is dragged).
  */
 internal class SpecOverlay {
     private val renderer = VectorRenderer()
@@ -559,16 +599,15 @@ internal class SpecOverlay {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     }
     private val bandSource = Path()
-    private val band = Path()
     private var bandWidth = 0f
     private var hasBand = false
-    private var bandDirty = false
 
     /**
      * The live brush stroke follows [outline] (document px) with a brush [width] px wide; null
-     * (or no width) removes the band. The band's outline is computed lazily when drawn.
+     * (or no width) removes the band.
      */
     fun setBand(outline: Path?, width: Float) {
         if (outline == null || outline.isEmpty || !width.isFinite() || width <= 0f) {
@@ -578,7 +617,6 @@ internal class SpecOverlay {
         bandSource.set(outline)
         bandWidth = width
         hasBand = true
-        bandDirty = true
     }
 
     /** Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. */
@@ -593,19 +631,16 @@ internal class SpecOverlay {
         canvas.save()
         canvas.concat(t.matrix)
         val alpha = (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
-        val save = if (alpha < 255) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
+        val band = keepBandFree && hasBand
+        // The band is erased inside an isolated layer (from the items only, not the canvas).
+        val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
         canvas.clipRect(clip)
-        if (keepBandFree && hasBand) {
-            if (bandDirty) {
-                band.rewind()
-                bandPaint.strokeWidth = bandWidth
-                bandPaint.getFillPath(bandSource, band)
-                bandDirty = false
-            }
-            canvas.clipOutPath(band)
-        }
         val sel = controller.selection
         for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
+        if (band) {
+            bandPaint.strokeWidth = bandWidth
+            canvas.drawPath(bandSource, bandPaint)
+        }
         canvas.restoreToCount(save)
         canvas.restore()
     }

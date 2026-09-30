@@ -366,9 +366,6 @@ internal class PreviewHost(private val controller: EditorController) {
     private var overlayLayer: Layer? = null
     private val overlay = SpecOverlay()
 
-    /** True while the overlay shows the items (tests). */
-    val isInOverlay: Boolean get() = overlaySpecs.isNotEmpty()
-
     /**
      * True while a finger drags the items: they are then shown in the overlay when possible.
      * Setting it back to false puts them back into the layer.

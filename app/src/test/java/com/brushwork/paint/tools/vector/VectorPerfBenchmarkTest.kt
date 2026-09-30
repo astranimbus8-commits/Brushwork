@@ -79,9 +79,13 @@ class VectorPerfBenchmarkTest {
     /** A drag with the live brush stroke: one bounded replay per frame, exact again after the drag. */
     private fun VectorPerfHarness.Stats.withinBrushBudget(): VectorPerfHarness.Stats {
         assertTrue("$name: ${"%.2f".format(avgFrameMs)} ms per frame", avgFrameMs < 25.0)
+        assertTrue("$name: 90th percentile frame ${"%.2f".format(p90FrameMs)} ms", p90FrameMs < 30.0)
         assertTrue("$name: ${"%.0f".format(stampsPerFrame)} dabs per frame", stampsPerFrame < 3500.0)
+        assertTrue("$name: $maxFrameStamps dabs in the worst frame", maxFrameStamps < 4000)
         assertTrue("$name: ${"%.0f".format(allocKbPerFrame)} KB allocated per frame", allocKbPerFrame < 250.0)
-        assertTrue("$name: worst frame after the drag ${"%.2f".format(releaseMaxFrameMs)} ms", releaseMaxFrameMs < 45.0)
+        // After the drag the stroke becomes exact over several frames, not in one long stall.
+        assertTrue("$name: $releaseMaxFrameStamps dabs in one frame after the drag", releaseMaxFrameStamps < 2000)
+        assertTrue("$name: 90th percentile frame after the drag ${"%.2f".format(releaseP90FrameMs)} ms", releaseP90FrameMs < 30.0)
         val brush = c.tools.getValue(ToolId.BRUSH) as BrushTool
         assertTrue("$name: the live stroke is still shown", brush.isStroking)
         assertFalse("$name: the stroke is exact again after the drag", brush.isDraft)
