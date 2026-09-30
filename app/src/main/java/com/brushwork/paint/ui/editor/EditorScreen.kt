@@ -219,7 +219,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     LaunchedEffect(session) {
         if (session != null) {
             if (panel in PANELS_BLOCKED_BY_FILTER) panel = null
-            layersOpen = false
+            // The layers window only hides (see layersVisible): it is back once the filter is
+            // applied or cancelled.
             editingValue = null
         }
     }
@@ -230,7 +231,13 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     BackHandler(enabled = busy == null && session == null && layersOpen && panel == null) { layersOpen = false }
 
     val tool = controller.currentTool
-    val pendingWork = session == null && tool.hasPendingWork
+    // Derived: the tools back these flags with state that changes on every move of a drag (a
+    // transform handle, a curve anchor, a shape edge); reading it here directly would recompose
+    // the whole screen for each touch sample instead of only when a flag flips.
+    val pendingWork by remember(controller) {
+        derivedStateOf { controller.filterSession == null && controller.currentTool.hasPendingWork }
+    }
+    val toolHasUserChanges by remember(controller) { derivedStateOf { controller.currentTool.hasUserChanges } }
     val clipboard = controller.clipboard
     // A new copy shows the paste bar again (and the hidden one's pixels aren't kept alive here).
     LaunchedEffect(clipboard) { if (clipboard !== hiddenClipboard) hiddenClipboard = null }
@@ -240,7 +247,7 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     // a paste being placed, curve points...), filters, long operations and the selection menu
     // itself. The transform tool's own untouched lift doesn't count: selecting it to move the
     // selection keeps Copy / Deselect at hand.
-    val selectionBarVisible = session == null && busy == null && !tool.hasUserChanges && panel != EditorPanel.SELECTION &&
+    val selectionBarVisible = session == null && busy == null && !toolHasUserChanges && panel != EditorPanel.SELECTION &&
         (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
 
     Box(Modifier.fillMaxSize().background(BrushworkColors.CanvasBackdrop)) {
@@ -427,10 +434,17 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
         draggingSlider?.let { kind ->
             SliderPreview(controller, kind, zoom = canvasRef[0]?.zoom ?: 1f, modifier = Modifier.align(Alignment.Center))
         }
-        SnackbarHost(
-            snackbar,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottomDp + 8.dp),
-        ) { data ->
+        // Messages must not land on the layers window (a snackbar would cover its action row and
+        // take its taps): while it is open they show near the top, under the tap feedback chip.
+        val snackbarPlacement = if (layersVisible) {
+            Modifier
+                .align(Alignment.TopCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .padding(top = topDp + selectionBarDp + 52.dp)
+        } else {
+            Modifier.align(Alignment.BottomCenter).padding(bottom = bottomDp + 8.dp)
+        }
+        SnackbarHost(snackbar, modifier = snackbarPlacement) { data ->
             Snackbar(data, containerColor = BrushworkColors.ChromeHigh, contentColor = BrushworkColors.OnChrome, actionColor = BrushworkColors.Accent)
         }
 

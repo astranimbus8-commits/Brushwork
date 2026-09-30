@@ -45,6 +45,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -196,9 +197,14 @@ fun Hotbar(
     val preset = controller.presetFor(controller.sliderToolId)
     controller.layersVersion // observe layer changes for the active layer number
     val layerNumber = controller.doc.activeLayerIndex.coerceIn(0, (controller.doc.layers.size - 1).coerceAtLeast(0)) + 1
-    val tool = controller.currentTool
-    val pending = tool.hasPendingWork
-    val session = controller.filterSession
+    // Derived: the tool state behind these changes on every move of a transform / curve / shape
+    // drag, which must not recompose the bar each time. Undo acts when there is history, the
+    // user's own tool work to take back, or a filter preview to cancel (an untouched automatic
+    // lift alone has nothing to undo).
+    val undoEnabled by remember(controller) {
+        derivedStateOf { controller.canUndo || controller.currentTool.hasUserChanges || controller.filterSession != null }
+    }
+    val redoEnabled by remember(controller) { derivedStateOf { canRedoNow(controller) } }
     Box(
         modifier
             .fillMaxWidth()
@@ -241,7 +247,7 @@ fun Hotbar(
                     controller.undo()
                     onHistory(label)
                 },
-                enabled = controller.canUndo || pending || session != null,
+                enabled = undoEnabled,
             )
             ToolIconButton(
                 Icons.AutoMirrored.Filled.Redo, "Redo",
@@ -251,7 +257,7 @@ fun Hotbar(
                     controller.redo()
                     onHistory(label)
                 },
-                enabled = canRedoNow(controller),
+                enabled = redoEnabled,
             )
         }
     }

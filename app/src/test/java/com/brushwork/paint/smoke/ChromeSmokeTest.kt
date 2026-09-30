@@ -346,6 +346,27 @@ class ChromeSmokeTest {
         assertFalse(c.currentTool.hasPendingWork)
         c.selectTool(ToolId.BRUSH)
         settle()
+
+        // Messages never cover the window (a snackbar would sit on its action row and take its taps).
+        c.toast("Snackbar while the layers window is open")
+        settle()
+        val snack = SmokeUi.find("Snackbar while the layers window is open", exact = true) ?: throw AssertionError("no snackbar")
+        val wb3 = layersWindowBounds() ?: throw AssertionError("layers window gone")
+        assertFalse("snackbar over the layers window: ${snack.bounds} vs $wb3", snack.bounds.overlaps(wb3))
+        // The snackbar's timeout runs on the wall clock.
+        assertTrue("snackbar gone", Smoke.pumpUntil(12_000) { settle(1); !has("Snackbar while the layers window is open") })
+        assertNotNull("the window stays open", layersWindowBounds())
+
+        // A filter preview hides the window; it is back once the filter is cancelled.
+        c.startFilter(com.brushwork.paint.filters.FilterRegistry.all.first())
+        settle()
+        val session = c.filterSession ?: throw AssertionError("no filter session: ${c.message}")
+        assertNull("hidden during the filter", layersWindowBounds())
+        assertTrue("filter preview finished", Smoke.pumpUntil { settle(1); c.filterSession?.let { !it.isRendering } ?: true })
+        session.cancel()
+        settle()
+        assertNull(c.filterSession)
+        assertNotNull("the window is back after the filter", layersWindowBounds())
         Smoke.assertQuiet(c, "layers window done")
     }
 
@@ -374,6 +395,39 @@ class ChromeSmokeTest {
         settle()
         assertTrue("the transform tool lifted the selection", c.currentTool.hasPendingWork)
         assertTrue("bar stays for an untouched lift", has("Copy selection") && has("Clear the selection"))
+        assertFalse("an untouched lift is not the user's work", c.currentTool.hasUserChanges)
+        // The bar's edits work on that lift: ONE undo step each and no stale preview.
+        val lifted = c.activeLayer
+        val n1 = c.undoManager.undoCount
+        click("Delete the selected pixels")
+        Smoke.pump(100)
+        settle()
+        assertEquals("Delete during a lift is one step", n1 + 1, c.undoManager.undoCount)
+        assertEquals("Clear", c.undoManager.undoLabel)
+        assertEquals("selected pixels deleted", 0, lifted.bitmap.getPixel(150, 120))
+        assertEquals("outside the selection untouched", blue, lifted.bitmap.getPixel(230, 180))
+        Smoke.assertQuiet(c, "delete during a lift")
+        c.undo()
+        Smoke.pump(100)
+        settle()
+        assertEquals("undo brought the pixels back", blue, lifted.bitmap.getPixel(150, 120))
+        val tr0 = c.currentTool as TransformTool
+        if (!tr0.hasPendingWork) { tr0.start(); Smoke.pump(100); settle() }
+        assertTrue("lifted again", tr0.hasPendingWork && !tr0.hasUserChanges)
+        val n2 = c.undoManager.undoCount
+        click("Cut selection")
+        Smoke.pump(100)
+        settle()
+        assertEquals("Cut during a lift is one step", n2 + 1, c.undoManager.undoCount)
+        assertEquals("Cut", c.undoManager.undoLabel)
+        assertEquals("cut pixels are gone", 0, lifted.bitmap.getPixel(150, 120))
+        assertEquals("cut pixels are on the clipboard", blue, c.clipboard!!.bitmap.getPixel(150 - sel.bounds.left, 120 - sel.bounds.top))
+        Smoke.assertQuiet(c, "cut during a lift")
+        c.undo()
+        Smoke.pump(100)
+        settle()
+        assertEquals(blue, lifted.bitmap.getPixel(150, 120))
+        Smoke.assertQuiet(c, "undo of the cut")
         c.selectTool(ToolId.MARQUEE)
         settle()
         assertEquals("the selection survived", sel.bounds, c.selection?.bounds)
@@ -488,6 +542,21 @@ class ChromeSmokeTest {
 
     private fun curveUndo() {
         val (_, c) = editor { Smoke.controller(it) }
+        // Undo is off while there is nothing to take back: the transform tool's own untouched
+        // lift is not something the user did.
+        Canvas(c.activeLayer.bitmap).drawRect(50f, 50f, 150f, 150f, Paint().apply { color = blue })
+        c.activeLayer.markChanged()
+        c.invalidateDoc(null)
+        c.selectTool(ToolId.TRANSFORM)
+        Smoke.pump(100)
+        settle()
+        assertTrue("lifted, untouched", c.currentTool.hasPendingWork && !c.currentTool.hasUserChanges)
+        assertFalse(c.canUndo)
+        assertFalse("Undo off for an untouched lift", SmokeUi.isEnabled("Undo"))
+        c.selectTool(ToolId.BRUSH)
+        settle()
+        assertFalse("still nothing to undo", SmokeUi.isEnabled("Undo"))
+
         c.selectTool(ToolId.CURVE)
         settle()
         val curve = c.tools.getValue(ToolId.CURVE) as CurveTool

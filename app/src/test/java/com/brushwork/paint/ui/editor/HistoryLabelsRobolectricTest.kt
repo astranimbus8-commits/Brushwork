@@ -95,17 +95,27 @@ class HistoryLabelsRobolectricTest {
         }
     }
 
-    /** A tool that implements step-wise undo gets a step label; the base class does not. */
+    /**
+     * Step labels are known per tool (no reflection, which a minified release build would break):
+     * polygon lasso corners step back one at a time; other tools' pending work is discarded whole.
+     */
     @Test
-    fun stepLabelsFollowTheToolsUndoStep() {
+    fun stepLabelsAreKnownPerTool() {
         val c = controller()
-        val plain = object : Tool(c) { override val id = ToolId.MARQUEE }
-        assertNull(HistoryLabels.undoStepName(plain))
-        val stepping = object : Tool(c) {
+        val idle = object : Tool(c) { override val id = ToolId.LASSO }
+        assertNull("no corners placed: nothing to step back", HistoryLabels.undoStepName(idle))
+        val corners = object : Tool(c) {
             override val id = ToolId.LASSO
-            override fun undoStep(): Boolean = true
+            override val hasPendingWork: Boolean get() = true
         }
-        assertEquals("last corner", HistoryLabels.undoStepName(stepping))
+        assertEquals("last corner", HistoryLabels.undoStepName(corners))
+        val shapeLike = object : Tool(c) {
+            override val id = ToolId.MARQUEE
+            override val hasPendingWork: Boolean get() = true
+        }
+        assertNull("pending work without steps is discarded whole", HistoryLabels.undoStepName(shapeLike))
+        c.selectTool(ToolId.LASSO)
+        assertEquals("the real lasso without corners", null, HistoryLabels.undoStepName(c.currentTool))
         assertEquals("last point", HistoryLabels.stepName(ToolId.POLYLINE))
         assertEquals("last text step", HistoryLabels.stepName(ToolId.TEXT))
     }

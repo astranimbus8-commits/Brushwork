@@ -31,12 +31,19 @@ internal object HistoryLabels {
 
     /**
      * What undo takes back when [tool] steps back ONE part of its pending work (the last point
-     * of a curve, the last corner of a polygon...), or null when undo discards the work whole.
+     * of a curve, the last corner of a polygon), or null when undo discards the work whole.
+     *
+     * Known per tool, never found by reflection: release builds are minified (R8 renames
+     * [Tool.undoStep]), so a by-name lookup would label steps differently on the phone than in
+     * tests. The curve / polyline tools step back one point ([CurveTool.canUndoStep]); the lasso
+     * only has pending work while polygon corners are being tapped, and its undo takes back the
+     * last corner.
      */
     fun undoStepName(tool: Tool): String? {
-        val steps = when (tool) {
-            is CurveTool -> tool.canUndoStep
-            else -> overridesUndoStep(tool)
+        val steps = when {
+            tool is CurveTool -> tool.canUndoStep
+            tool.id == ToolId.LASSO -> tool.hasUserChanges
+            else -> false
         }
         return if (steps) stepName(tool.id) else null
     }
@@ -45,12 +52,5 @@ internal object HistoryLabels {
         ToolId.CURVE, ToolId.POLYLINE -> "last point"
         ToolId.LASSO -> "last corner"
         else -> "last ${id.label.lowercase()} step"
-    }
-
-    private val overrides = HashMap<Class<*>, Boolean>()
-
-    /** Whether the tool's class implements [Tool.undoStep] (the base class never steps). */
-    private fun overridesUndoStep(tool: Tool): Boolean = overrides.getOrPut(tool.javaClass) {
-        runCatching { tool.javaClass.getMethod("undoStep").declaringClass != Tool::class.java }.getOrDefault(false)
     }
 }
