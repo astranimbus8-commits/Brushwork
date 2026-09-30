@@ -1312,7 +1312,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)
         }
         controller.dropLastUndo()
-        // An empty step pushed and dropped again: counts as an edit, leaves no history.
+        // An empty step pushed and dropped again: counts as an edit, leaves no history. (The push
+        // also clears the redo stack, which is empty here anyway: the AddLayerAction was the
+        // newest step, see isFreshImportLayer, and pushing it cleared redo; the controller keeps
+        // redo waiting while a placement is pending.)
         controller.pushUndo(LambdaAction(label = "", onUndo = {}, onRedo = {}))
         controller.dropLastUndo()
     }
