@@ -175,6 +175,8 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
      */
     fun drag(name: String, from: Vec2, path: (Int) -> Vec2, frames: Int = 60, warmup: Int = 0): Stats {
         val s = Stats(name)
+        // Garbage left by earlier tests (documents, tiles) is collected now, not mid-measurement.
+        System.gc()
         send(MotionEvent.ACTION_DOWN, screenOf(from))
         idle(16); draw()
         var prev = from
