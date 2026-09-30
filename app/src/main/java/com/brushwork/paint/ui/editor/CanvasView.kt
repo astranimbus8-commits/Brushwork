@@ -401,8 +401,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 if (!startToolGesture(e)) restartTransform(e, -1)
             }
             Mode.TRANSFORM -> {
-                // A finger panning the view (stylus-only drawing) joined by a second one: the pair
-                // is offered to the tool too, but only the first time two fingers are down.
+                // A finger panning the view (stylus-only drawing, or one left after a pinch) joined
+                // by a second one: the pair is offered to the tool too, never after a third finger.
                 val offer = transformCount == 1 && classifier.maxPointers == 2
                 if (!(offer && startToolGesture(e))) restartTransform(e, -1)
             }
