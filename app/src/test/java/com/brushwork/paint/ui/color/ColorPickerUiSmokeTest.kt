@@ -2,6 +2,16 @@ package com.brushwork.paint.ui.color
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Surface
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
@@ -85,17 +95,46 @@ class ColorPickerUiSmokeTest {
         }
     }
 
+    /**
+     * The dialog's title-row actions and body composed straight into the activity. The real
+     * dialog is a bottom sheet, which only animates into view in the first test of a sandbox
+     * (see the class comment), so touch tests drive the same pieces without the sheet.
+     */
+    @Composable
+    private fun DialogWithoutSheet(initial: Int, showAlpha: Boolean, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+        val model = rememberColorDialogModel(initial, showAlpha)
+        Surface {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Row { ColorDialogActions(model, onPick, onDismiss) }
+                ColorDialogBody(model)
+            }
+        }
+    }
+
     @Test
     fun dialogComposesWithAlphaAndTabsRespondToTaps() {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         val store = PaletteStore.get(activity)
         store.setPickerMode(PickerMode.WHEEL)
-        activity.setContent { BrushworkTheme { ColorPickerDialog(0x8033AA55.toInt(), {}, {}, showAlpha = true) } }
+        var sheet by mutableStateOf(true)
+        activity.setContent {
+            BrushworkTheme {
+                if (sheet) ColorPickerDialog(0x8033AA55.toInt(), {}, {}, showAlpha = true)
+                else DialogWithoutSheet(0x8033AA55.toInt(), showAlpha = true, onPick = {}, onDismiss = {})
+            }
+        }
         settle()
         assertWindowsLaidOut()
+        for (m in PickerMode.entries) {
+            store.setPickerMode(m)
+            settle()
+            assertWindowsLaidOut()
+        }
+        store.setPickerMode(PickerMode.WHEEL)
+        sheet = false
+        settle()
         byText("RGB").tap()
         assertEquals(PickerMode.RGB.ordinal, store.data.pickerMode)
-        assertWindowsLaidOut()
     }
 
     @Test
@@ -107,7 +146,7 @@ class ColorPickerUiSmokeTest {
         var picked: Int? = null
         var dismissed = false
         activity.setContent {
-            BrushworkTheme { ColorPickerDialog(0xFF3366CC.toInt(), onPick = { picked = it }, onDismiss = { dismissed = true }) }
+            BrushworkTheme { DialogWithoutSheet(0xFF3366CC.toInt(), showAlpha = false, onPick = { picked = it }, onDismiss = { dismissed = true }) }
         }
         settle()
         val w = wheel(activity)
@@ -136,7 +175,7 @@ class ColorPickerUiSmokeTest {
         var picked: Int? = null
         var dismissed = false
         activity.setContent {
-            BrushworkTheme { ColorPickerDialog(0xFF3366CC.toInt(), onPick = { picked = it }, onDismiss = { dismissed = true }) }
+            BrushworkTheme { DialogWithoutSheet(0xFF3366CC.toInt(), showAlpha = false, onPick = { picked = it }, onDismiss = { dismissed = true }) }
         }
         settle()
         val w = wheel(activity)

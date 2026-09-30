@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,7 +14,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.Info
@@ -57,6 +60,24 @@ import kotlin.math.sin
 import kotlin.math.sign
 
 internal enum class NoticeKind { INFO, WARNING, ERROR }
+
+/**
+ * Layout of a canvas tab inside the half-height sheet: [body] scrolls in the height left under
+ * the tabs, [footer] (the tab's Apply button and why it is disabled) stays pinned below it, so
+ * the primary action is always reachable.
+ */
+@Composable
+internal fun ColumnScope.TabScaffold(footer: @Composable ColumnScope.() -> Unit = {}, body: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier
+            .weight(1f, fill = false)
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(top = 8.dp, bottom = 4.dp),
+        content = body,
+    )
+    Column(Modifier.fillMaxWidth(), content = footer)
+}
 
 /**
  * Runner for preset buttons that REPLACE field values (percent, dpi presets, crop shortcuts).

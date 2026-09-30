@@ -133,6 +133,11 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
         Text("Units", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
         UnitSelector(unit, { u -> update { it.copy(unit = u, nudgeStep = u.defaultStep.toFloat()) } })
     }
+    // Slider ranges: positions from one canvas size before it to two after, radii up to twice
+    // the longer side (the fields themselves accept any finite number).
+    val w = doc.width.toDouble()
+    val h = doc.height.toDouble()
+    val longSide = maxOf(w, h, 1.0)
     NumberField(
         label = "Nudge step",
         value = step,
@@ -141,15 +146,19 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
         decimals = exactDecimals(unit),
         suffix = unit.short,
         min = minStep(unit),
+        sliderMin = minStep(unit),
+        sliderMax = maxOf(unit.fromPx(longSide / 4.0, dpi), minStep(unit) * 10.0),
+        logSlider = true,
     )
-    ExactLengthField("Center X", ruler.centerX, { v -> update { it.copy(centerX = v) } }, unit, dpi, step = step)
-    ExactLengthField("Center Y", ruler.centerY, { v -> update { it.copy(centerY = v) } }, unit, dpi, step = step)
+    ExactLengthField("Center X", ruler.centerX, { v -> update { it.copy(centerX = v) } }, unit, dpi, step = step, sliderPx = -w..2.0 * w)
+    ExactLengthField("Center Y", ruler.centerY, { v -> update { it.copy(centerY = v) } }, unit, dpi, step = step, sliderPx = -h..2.0 * h)
+    val radii = RulerGeometry.MIN_RADIUS.toDouble()..maxOf(2.0 * longSide, RulerGeometry.MIN_RADIUS + 1.0)
     when (ruler.type) {
         RulerType.CIRCLE ->
-            ExactLengthField("Radius", ruler.radius, { v -> update { it.copy(radius = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
+            ExactLengthField("Radius", ruler.radius, { v -> update { it.copy(radius = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS, sliderPx = radii)
         RulerType.ELLIPSE -> {
-            ExactLengthField("Radius X", ruler.radiusX, { v -> update { it.copy(radiusX = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
-            ExactLengthField("Radius Y", ruler.radiusY, { v -> update { it.copy(radiusY = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS)
+            ExactLengthField("Radius X", ruler.radiusX, { v -> update { it.copy(radiusX = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS, sliderPx = radii)
+            ExactLengthField("Radius Y", ruler.radiusY, { v -> update { it.copy(radiusY = v) } }, unit, dpi, step = step, minPx = RulerGeometry.MIN_RADIUS, sliderPx = radii)
         }
         else -> {}
     }
@@ -162,6 +171,8 @@ private fun RulerControls(controller: EditorController, onEditOnCanvas: () -> Un
             decimals = 2,
             suffix = "°",
             step = 1.0,
+            sliderMin = -180.0,
+            sliderMax = 180.0,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             for (a in ANGLE_PRESETS) {
@@ -222,6 +233,8 @@ private fun safeDpi(dpi: Float): Double = if (dpi.isFinite() && dpi >= 1f) dpi.t
 /**
  * A length stored in document px (Float), edited in [unit] at [dpi] with [exactDecimals], so the
  * numbers match what is on the canvas. Non-finite input is ignored; values below [minPx] clamp.
+ * [sliderPx] (document px) adds a slider over that range (logarithmic when it is positive and
+ * wide); without it the field gets a scrub handle.
  */
 @Composable
 private fun ExactLengthField(
@@ -233,6 +246,7 @@ private fun ExactLengthField(
     modifier: Modifier = Modifier.fillMaxWidth(),
     step: Double? = unit.defaultStep,
     minPx: Float = Float.NEGATIVE_INFINITY,
+    sliderPx: ClosedFloatingPointRange<Double>? = null,
 ) {
     NumberField(
         label = label,
@@ -246,6 +260,10 @@ private fun ExactLengthField(
         suffix = unit.short,
         min = if (minPx.isFinite()) unit.fromPx(minPx.toDouble(), dpi) else Double.NEGATIVE_INFINITY,
         step = step,
+        sliderMin = sliderPx?.let { unit.fromPx(it.start, dpi) },
+        sliderMax = sliderPx?.let { unit.fromPx(it.endInclusive, dpi) },
+        // Scrubbing moves by the unit's usual step, not the (possibly tiny) nudge step.
+        dragStep = unit.defaultStep,
     )
 }
 
@@ -305,6 +323,7 @@ private val GRID_PRESETS = listOf(
 fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
     val grid = controller.grid
     val dpi = safeDpi(controller.doc.dpi)
+    val longSide = maxOf(controller.doc.width, controller.doc.height, 1).toDouble()
     var pickColor by rememberSaveable { mutableStateOf(false) }
     fun update(block: (GridSettings) -> GridSettings) = controller.updateGrid(block(controller.grid))
 
@@ -334,6 +353,7 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
                     dpi = dpi,
                     modifier = Modifier.weight(1f),
                     minPx = MIN_GRID_SPACING_PX,
+                    sliderPx = MIN_GRID_SPACING_PX.toDouble()..maxOf(longSide, MIN_GRID_SPACING_PX + 1.0),
                 )
                 UnitSelector(grid.unit, { u -> update { it.copy(unit = u) } })
             }
@@ -361,8 +381,10 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
             )
             Hint("0 or 1 draws every line the same.")
             SectionHeader("Offset")
-            ExactLengthField("Offset X", grid.offsetXPx, { v -> update { it.copy(offsetXPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi)
-            ExactLengthField("Offset Y", grid.offsetYPx, { v -> update { it.copy(offsetYPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi)
+            // One cell covers every distinct offset.
+            val offsets = 0.0..maxOf(grid.spacingPx.toDouble(), 1.0)
+            ExactLengthField("Offset X", grid.offsetXPx, { v -> update { it.copy(offsetXPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi, sliderPx = offsets)
+            ExactLengthField("Offset Y", grid.offsetYPx, { v -> update { it.copy(offsetYPx = v.coerceIn(-MAX_GRID_PX, MAX_GRID_PX)) } }, grid.unit, dpi, sliderPx = offsets)
         }
 
         SectionHeader("Appearance")

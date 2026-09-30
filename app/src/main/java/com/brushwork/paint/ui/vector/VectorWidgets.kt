@@ -106,6 +106,8 @@ internal fun LengthEditor(
             minPx = minPx.toDouble(),
             maxPx = maxPx.toDouble(),
             enabled = enabled,
+            // Its own log slider follows below: no second one in the field.
+            adjust = if (showSlider) com.brushwork.paint.ui.common.NumberAdjust.NONE else com.brushwork.paint.ui.common.NumberAdjust.AUTO,
         )
         if (showUnit) UnitSelector(unit, onUnit)
     }

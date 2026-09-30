@@ -89,6 +89,7 @@ import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.delay
 
@@ -211,10 +212,11 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
     val maxHeight = (LocalConfiguration.current.screenHeightDp * 0.45f).dp
     val busy = session.isApplying
     Surface(
-        color = BrushworkColors.Chrome,
+        // See-through like the editor's sheets: the live preview on the canvas shows behind it.
+        color = SheetBackground,
         contentColor = BrushworkColors.OnChrome,
         shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
-        shadowElevation = 8.dp,
+        // No elevation shadow: it would show through the translucent panel as a dark smear.
         // Edge-to-edge window: keep text parameters above the keyboard.
         modifier = modifier.fillMaxWidth().imePadding(),
     ) {

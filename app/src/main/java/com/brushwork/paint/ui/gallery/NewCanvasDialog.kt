@@ -301,17 +301,24 @@ private fun CustomSize(
     onDpi: (Double) -> Unit,
     onSwap: () -> Unit,
 ) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        LengthField("Width", widthPx, onWidth, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = 100_000.0)
-        IconButton(onClick = onSwap) { Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap width and height") }
-        LengthField("Height", heightPx, onHeight, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = 100_000.0)
+    // Logarithmic sliders up to the largest canvas; the swap button sits level with the fields.
+    val sliderMax = CanvasPresets.MAX_SIDE.toDouble()
+    Row(verticalAlignment = Alignment.Top) {
+        LengthField(
+            "Width", widthPx, onWidth, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = 100_000.0,
+            sliderMinPx = 1.0, sliderMaxPx = sliderMax,
+        )
+        IconButton(onClick = onSwap, modifier = Modifier.padding(top = 8.dp)) { Icon(Icons.Filled.SwapHoriz, contentDescription = "Swap width and height") }
+        LengthField(
+            "Height", heightPx, onHeight, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = 100_000.0,
+            sliderMinPx = 1.0, sliderMaxPx = sliderMax,
+        )
     }
-    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Text("Unit", style = MaterialTheme.typography.bodyMedium)
         UnitSelector(unit, onUnit)
-        Spacer(Modifier.width(8.dp))
-        NumberField("Resolution", dpi, onDpi, Modifier.weight(1f), decimals = 1, suffix = "dpi", min = CanvasPresets.MIN_DPI, max = CanvasPresets.MAX_DPI)
     }
+    NumberField("Resolution", dpi, onDpi, Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", min = CanvasPresets.MIN_DPI, max = CanvasPresets.MAX_DPI)
     Text(
         if (unit == LengthUnit.PX) "Resolution sets the physical print size and unit conversions."
         else "Sizes in ${unit.label.lowercase()} are converted to pixels at this resolution.",

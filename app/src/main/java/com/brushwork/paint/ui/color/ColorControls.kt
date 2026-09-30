@@ -65,6 +65,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.ui.common.NumberAdjust
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -294,6 +295,8 @@ fun ChannelRow(
             decimals = 0,
             min = 0.0,
             max = max.toDouble(),
+            // The gradient slider beside it is this channel's slider.
+            adjust = NumberAdjust.NONE,
             modifier = Modifier.width(84.dp),
         )
     }

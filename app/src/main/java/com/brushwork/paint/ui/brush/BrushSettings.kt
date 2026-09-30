@@ -1,8 +1,11 @@
 package com.brushwork.paint.ui.brush
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.brushwork.paint.brush.BrushLimits
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeKind
@@ -13,28 +16,10 @@ import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToggleRow
-import kotlin.math.exp
-import kotlin.math.ln
 import kotlin.math.roundToInt
 
 /** Applies a change to the current preset; `persist` = false while a slider is being dragged. */
 typealias PresetEdit = (persist: Boolean, transform: (BrushPreset) -> BrushPreset) -> Unit
-
-private val LOG_SIZE_RANGE = ln(BrushLimits.MAX_SIZE / BrushLimits.MIN_SIZE)
-
-/** Brush size (0.5..1000 px) -> slider position 0..1 (logarithmic). */
-fun sizeToSlider(size: Float): Float = (ln(size.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE) / BrushLimits.MIN_SIZE) / LOG_SIZE_RANGE).coerceIn(0f, 1f)
-
-/** Slider position 0..1 -> brush size, rounded to a sensible step for its magnitude. */
-fun sliderToSize(v: Float): Float {
-    val s = BrushLimits.MIN_SIZE * exp(v.coerceIn(0f, 1f) * LOG_SIZE_RANGE)
-    val r = when {
-        s < 10f -> (s * 10f).roundToInt() / 10f
-        s < 100f -> (s * 2f).roundToInt() / 2f
-        else -> s.roundToInt().toFloat()
-    }
-    return r.coerceIn(BrushLimits.MIN_SIZE, BrushLimits.MAX_SIZE)
-}
 
 /** "12.5 px" / "300 px". */
 fun formatSize(size: Float): String = Units.formatNumber(size.toDouble(), if (size < 10f) 1 else 0) + " px"
@@ -51,41 +36,28 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
 
     Column(modifier) {
         PanelCard {
-            LabeledSlider(
-                label = "Size",
-                value = sizeToSlider(preset.size),
-                onValueChange = { v -> onEdit(false) { it.copy(size = sliderToSize(v)) } },
-                valueRange = 0f..1f,
-                valueText = formatSize(preset.size),
-                onValueChangeFinished = done,
-            )
+            // Typed, dragged on the (logarithmic) slider or stepped; saved once a change is done.
             NumberField(
                 label = "Size",
                 value = preset.size.toDouble(),
-                onValueChange = { v -> onEdit(true) { it.copy(size = v.toFloat()) } },
+                onValueChange = { v -> onEdit(false) { it.copy(size = v.toFloat()) } },
+                modifier = Modifier.fillMaxWidth(),
                 decimals = 1,
                 suffix = "px",
                 min = BrushLimits.MIN_SIZE.toDouble(),
                 max = BrushLimits.MAX_SIZE.toDouble(),
                 step = if (preset.size < 10f) 0.5 else 1.0,
+                logSlider = true,
+                onValueChangeFinished = done,
             )
             if (smudgeOrBlur) {
-                LabeledSlider(
-                    label = "Strength",
-                    value = preset.mixing,
-                    onValueChange = { v -> onEdit(false) { it.copy(mixing = v) } },
-                    valueRange = 0f..1f,
-                    valueText = percent(preset.mixing),
-                    onValueChangeFinished = done,
-                )
+                PercentField("Strength", preset.mixing, { v -> onEdit(false) { it.copy(mixing = v) } }, done)
             } else {
-                LabeledSlider(
-                    label = if (kind == StrokeKind.WATERCOLOR) "Opacity" else "Opacity (stroke)",
-                    value = preset.opacity,
-                    onValueChange = { v -> onEdit(false) { it.copy(opacity = v) } },
-                    valueRange = 0f..1f,
-                    valueText = percent(preset.opacity),
-                    onValueChangeFinished = done,
+                PercentField(
+                    if (kind == StrokeKind.WATERCOLOR) "Opacity" else "Opacity (stroke)",
+                    preset.opacity,
+                    { v -> onEdit(false) { it.copy(opacity = v) } },
+                    done,
                 )
                 LabeledSlider(
                     label = "Flow (per dab)",
@@ -216,3 +188,19 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
 }
 
 private const val MAX_TAPER_UI = 600f
+
+/** A 0..1 setting shown and typed as a whole percentage, with a slider beside the number. */
+@Composable
+private fun PercentField(label: String, fraction: Float, onChange: (Float) -> Unit, onDone: () -> Unit) {
+    NumberField(
+        label = label,
+        value = (fraction * 100f).roundToInt().toDouble(),
+        onValueChange = { v -> onChange((v / 100.0).toFloat().coerceIn(0f, 1f)) },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        decimals = 0,
+        suffix = "%",
+        min = 0.0,
+        max = 100.0,
+        onValueChangeFinished = onDone,
+    )
+}

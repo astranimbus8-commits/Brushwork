@@ -5,6 +5,7 @@ import android.graphics.Rect
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -46,7 +47,6 @@ import com.brushwork.paint.engine.CanvasSnapshot
 import com.brushwork.paint.engine.ColorModeConverter
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.ui.common.ChoiceChips
-import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
@@ -76,7 +76,20 @@ private fun CardText(text: String) {
 
 /** Trim transparent edges, crop to the selection, or crop to a numeric rectangle. */
 @Composable
-internal fun TrimCropTab(
+internal fun ColumnScope.TrimCropTab(
+    c: EditorController,
+    unit: LengthUnit,
+    onUnitChange: (LengthUnit) -> Unit,
+    busy: Boolean,
+    thumbnail: CanvasThumbnail?,
+    onApplied: () -> Unit,
+) {
+    // Three independent actions, each with its own button: all of it scrolls.
+    TabScaffold { TrimCropBody(c, unit, onUnitChange, busy, thumbnail, onApplied) }
+}
+
+@Composable
+private fun TrimCropBody(
     c: EditorController,
     unit: LengthUnit,
     onUnitChange: (LengthUnit) -> Unit,
@@ -150,15 +163,28 @@ internal fun TrimCropTab(
             CardTitle("Crop to rectangle", Modifier.weight(1f))
             UnitSelector(unit, onUnitChange)
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LengthField("X", x, { x = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 0.0, maxPx = (curW - 1).toDouble())
+        // Linear sliders over the canvas: they move like the rectangle in the preview below.
+        Row(verticalAlignment = Alignment.Top) {
+            LengthField(
+                "X", x, { x = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 0.0, maxPx = (curW - 1).toDouble(),
+                sliderMinPx = 0.0, sliderMaxPx = (curW - 1).toDouble(), logSlider = false,
+            )
             Spacer(Modifier.width(8.dp))
-            LengthField("Y", y, { y = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 0.0, maxPx = (curH - 1).toDouble())
+            LengthField(
+                "Y", y, { y = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 0.0, maxPx = (curH - 1).toDouble(),
+                sliderMinPx = 0.0, sliderMaxPx = (curH - 1).toDouble(), logSlider = false,
+            )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            LengthField("Width", w, { w = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = curW.toDouble())
+        Row(verticalAlignment = Alignment.Top) {
+            LengthField(
+                "Width", w, { w = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = curW.toDouble(),
+                sliderMinPx = 1.0, sliderMaxPx = curW.toDouble(), logSlider = false,
+            )
             Spacer(Modifier.width(8.dp))
-            LengthField("Height", h, { h = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = curH.toDouble())
+            LengthField(
+                "Height", h, { h = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = curH.toDouble(),
+                sliderMinPx = 1.0, sliderMaxPx = curH.toDouble(), logSlider = false,
+            )
         }
         FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             TextButton(onClick = { afterCommit { setRect(Rect(0, 0, curW, curH)) } }) { Text("Whole canvas") }
@@ -196,7 +222,12 @@ private fun CropPreview(docW: Int, docH: Int, x: Int, y: Int, w: Int, h: Int, th
 
 /** One-tap rotations and mirrors of the whole canvas. The sheet stays open to combine them. */
 @Composable
-internal fun RotateFlipTab(c: EditorController, busy: Boolean) {
+internal fun ColumnScope.RotateFlipTab(c: EditorController, busy: Boolean) {
+    TabScaffold { RotateFlipBody(c, busy) }
+}
+
+@Composable
+private fun RotateFlipBody(c: EditorController, busy: Boolean) {
     val w = c.doc.width
     val h = c.doc.height
     CardText("Turns or mirrors the whole drawing: every layer and mask. Current size: $w × $h px.")
@@ -222,7 +253,7 @@ internal fun RotateFlipTab(c: EditorController, busy: Boolean) {
 
 /** Changes the dpi without resampling: the print size changes, the pixels don't. */
 @Composable
-internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> Unit) {
+internal fun ColumnScope.ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> Unit) {
     val doc = c.doc
     val w = doc.width.toDouble()
     val h = doc.height.toDouble()
@@ -232,34 +263,39 @@ internal fun ResolutionTab(c: EditorController, busy: Boolean, onApplied: () -> 
     val presets = listOf(72, 96, 150, 300, 350, 600)
     val afterCommit = rememberAfterFieldCommit()
 
-    PanelCard {
-        InfoRow("Pixels", "${doc.width} × ${doc.height} px")
-        InfoRow("Resolution", "${formatDpi(curDpi)} dpi")
+    TabScaffold(
+        footer = {
+            ApplyButton(
+                "Set ${formatDpi(dpi)} dpi",
+                enabled = !busy && !sameDpi(dpi, doc.dpi),
+                // The field clamps out-of-range text only when it commits on focus loss.
+                onClick = { afterCommit { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() } },
+            )
+        },
+    ) {
+        PanelCard {
+            InfoRow("Pixels", "${doc.width} × ${doc.height} px")
+            InfoRow("Resolution", "${formatDpi(curDpi)} dpi")
+        }
+        SectionHeader("New resolution")
+        NumberField(
+            "Resolution", dpi, { dpi = clampDpi(it) },
+            modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", step = 1.0,
+            min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
+        )
+        ChoiceChips(
+            presets.map { "$it dpi" },
+            presets.indexOfFirst { sameDpi(it.toDouble(), dpi.toFloat()) },
+            { i -> afterCommit { dpi = presets[i].toDouble() } },
+            modifier = Modifier.padding(top = 6.dp),
+        )
+        UnitHeader("Print size", printUnit, { printUnit = it }, units = listOf(LengthUnit.IN, LengthUnit.CM, LengthUnit.MM, LengthUnit.PT))
+        PanelCard {
+            InfoRow("Now", CanvasAdjustMath.formatSize(w, h, printUnit, curDpi))
+            InfoRow("After", CanvasAdjustMath.formatSize(w, h, printUnit, dpi), emphasize = true)
+        }
+        Notice("Pixels are not changed. The resolution sets the printed size and how physical units (cm, in, mm, pt) convert to pixels. To change the number of pixels, use Image size.")
     }
-    SectionHeader("New resolution")
-    NumberField(
-        "Resolution", dpi, { dpi = clampDpi(it) },
-        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi", step = 1.0,
-        min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
-    )
-    ChoiceChips(
-        presets.map { "$it dpi" },
-        presets.indexOfFirst { sameDpi(it.toDouble(), dpi.toFloat()) },
-        { i -> afterCommit { dpi = presets[i].toDouble() } },
-        modifier = Modifier.padding(top = 6.dp),
-    )
-    UnitHeader("Print size", printUnit, { printUnit = it }, units = listOf(LengthUnit.IN, LengthUnit.CM, LengthUnit.MM, LengthUnit.PT))
-    PanelCard {
-        InfoRow("Now", CanvasAdjustMath.formatSize(w, h, printUnit, curDpi))
-        InfoRow("After", CanvasAdjustMath.formatSize(w, h, printUnit, dpi), emphasize = true)
-    }
-    Notice("Pixels are not changed. The resolution sets the printed size and how physical units (cm, in, mm, pt) convert to pixels. To change the number of pixels, use Image size.")
-    ApplyButton(
-        "Set ${formatDpi(dpi)} dpi",
-        enabled = !busy && !sameDpi(dpi, doc.dpi),
-        // The field clamps out-of-range text only when it commits on focus loss.
-        onClick = { afterCommit { if (CanvasOps.applyDpi(c, dpi.toFloat())) onApplied() } },
-    )
 }
 
 // ------------------------------------------------------------------ color mode
@@ -272,7 +308,7 @@ private fun modeDescription(mode: ColorMode, current: ColorMode): String = when 
 
 /** RGB / grayscale / 1-bit monochrome conversion of every layer. */
 @Composable
-internal fun ColorModeTab(c: EditorController, busy: Boolean, thumbnail: CanvasThumbnail?, onApplied: () -> Unit) {
+internal fun ColumnScope.ColorModeTab(c: EditorController, busy: Boolean, thumbnail: CanvasThumbnail?, onApplied: () -> Unit) {
     val current = c.doc.colorMode
     var modeIdx by rememberSaveable { mutableIntStateOf(current.ordinal) }
     var threshold by rememberSaveable { mutableIntStateOf(128) }
@@ -280,20 +316,45 @@ internal fun ColorModeTab(c: EditorController, busy: Boolean, thumbnail: CanvasT
     val mode = ColorMode.entries[modeIdx]
     val convertsPixels = CanvasOps.convertsPixels(current, mode)
 
+    TabScaffold(
+        footer = {
+            ApplyButton(
+                text = if (mode == current) "Already ${current.label}" else "Convert to ${mode.label}",
+                enabled = !busy && mode != current,
+                onClick = { if (CanvasOps.applyColorMode(c, mode, threshold, dither)) onApplied() },
+            )
+        },
+    ) {
+        ColorModeBody(current, mode, { modeIdx = it }, threshold, { threshold = it }, dither, { dither = it }, convertsPixels, thumbnail)
+    }
+}
+
+@Composable
+private fun ColorModeBody(
+    current: ColorMode,
+    mode: ColorMode,
+    onMode: (Int) -> Unit,
+    threshold: Int,
+    onThreshold: (Int) -> Unit,
+    dither: Boolean,
+    onDither: (Boolean) -> Unit,
+    convertsPixels: Boolean,
+    thumbnail: CanvasThumbnail?,
+) {
     PanelCard { InfoRow("Current mode", current.label, emphasize = true) }
     SectionHeader("Convert to")
-    ChoiceChips(listOf("RGB", "Grayscale", "Monochrome"), modeIdx, { modeIdx = it })
+    ChoiceChips(listOf("RGB", "Grayscale", "Monochrome"), mode.ordinal, onMode)
     CardText(modeDescription(mode, current))
 
     if (mode == ColorMode.MONOCHROME && convertsPixels) {
-        LabeledSlider(
-            "Threshold", threshold.toFloat(), { threshold = it.roundToInt().coerceIn(1, 255) }, 1f..255f,
-            valueText = "$threshold",
-            modifier = Modifier.padding(top = 8.dp),
+        NumberField(
+            "Threshold", threshold.toDouble(), { onThreshold(it.roundToInt().coerceIn(1, 255)) },
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            decimals = 0, min = 1.0, max = 255.0, step = 1.0,
         )
         CardText("Pixels at least this bright become white; darker ones become black.")
         ToggleRow(
-            "Dithering (Floyd–Steinberg)", dither, { dither = it },
+            "Dithering (Floyd–Steinberg)", dither, onDither,
             description = "Simulates gray tones with patterns of black and white dots",
         )
     }
@@ -330,9 +391,4 @@ internal fun ColorModeTab(c: EditorController, busy: Boolean, thumbnail: CanvasT
     } else if (mode != current) {
         Notice("Only the mode changes; no pixels are modified.")
     }
-    ApplyButton(
-        text = if (mode == current) "Already ${current.label}" else "Convert to ${mode.label}",
-        enabled = !busy && mode != current,
-        onClick = { if (CanvasOps.applyColorMode(c, mode, threshold, dither)) onApplied() },
-    )
 }
