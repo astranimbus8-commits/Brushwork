@@ -176,9 +176,9 @@ class EditorSmokeTest {
         click("Eraser on: switch to")
         assertEquals(ToolId.BRUSH, c.activeToolId)
 
-        // ---- tool picker sheet: pick a tool from it
+        // ---- tool picker sheet: pick a tool from it (a panel in the editor's own window)
         click("Tools (current: Brush)")
-        assertWindowsLaidOut(2)
+        SmokeUi.assertPanelShown("Tools")
         assertTrue("tool grid shown", has("Frame divider"))
         click("Magic wand", exact = true)
         assertEquals(ToolId.MAGIC_WAND, c.activeToolId)
@@ -208,7 +208,7 @@ class EditorSmokeTest {
         for ((opener, expected) in panels) {
             click(opener)
             settle()
-            assertWindowsLaidOut(2)
+            SmokeUi.assertPanelShown()
             assertTrue("\"$opener\" shows \"$expected\"", has(expected))
             Smoke.assertQuiet(c, "panel $opener")
             SmokeUi.assertIdle("panel $opener")
@@ -219,7 +219,8 @@ class EditorSmokeTest {
             assertWindowsLaidOut(2)
             click(entry, exact = true)
             settle()
-            assertWindowsLaidOut(2)
+            // Grid and Stabilizer are panels; the settings are a dialog (its own window).
+            if (entry == "Settings") assertWindowsLaidOut(2) else SmokeUi.assertPanelShown(entry)
             Smoke.assertQuiet(c, "menu $entry")
             SmokeUi.assertIdle("panel $entry")
             closeSheets(activity) { screenKey++ }
@@ -248,18 +249,33 @@ class EditorSmokeTest {
         Smoke.assertQuiet(c, "end of editor screen")
     }
 
-    /** Closes every sheet/dialog on top of the activity (Close / Cancel buttons, else [reset]). */
+    /**
+     * Closes every menu: panels in the editor's window (minimized ones too) and sheets, dialogs
+     * or popups on top of the activity (Close / Cancel / Done buttons, else [reset]).
+     */
     private fun closeSheets(activity: ComponentActivity, reset: () -> Unit) {
         Smoke.step("close sheets")
-        repeat(4) {
-            if (SmokeUi.windows().size <= 1) return
+        repeat(6) {
+            if (!SmokeUi.menuOpen()) return
+            // A minimized panel is closed from its pill (or brought back to use its Cancel).
+            SmokeUi.pillTitles().firstOrNull()?.let { t ->
+                if (SmokeUi.has("Close $t", exact = true)) click("Close $t", exact = true) else click("Show $t")
+                return@repeat
+            }
             val closer = listOf("Close", "Cancel", "Done").firstOrNull { SmokeUi.find(it, exact = true) != null }
             if (closer == null) { reset(); settle(); return@repeat }
             click(closer, exact = true)
             settle()
         }
-        if (SmokeUi.windows().size > 1) { reset(); settle() }
+        if (SmokeUi.menuOpen()) { reset(); settle() }
         assertEquals("sheets closed", 1, SmokeUi.windows().size)
+        assertFalse("panels closed: ${SmokeUi.sheetTitles()} ${SmokeUi.pillTitles()}", SmokeUi.menuOpen())
+    }
+
+    /** A menu is shown: a panel in the editor's own window, or a popup / dialog window. */
+    private fun assertMenuShown() {
+        assertWindowsLaidOut(1)
+        assertTrue("a menu is shown; shown: ${SmokeUi.shown().take(60)}", SmokeUi.windows().size >= 2 || SmokeUi.sheetTitles().isNotEmpty())
     }
 
     private fun touchThroughWindow(activity: ComponentActivity, c: EditorController) {
@@ -299,12 +315,12 @@ class EditorSmokeTest {
         settle()
         val shape = c.tools.getValue(ToolId.SHAPE) as ShapeTool
         click("Settings", exact = true)
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         assertTrue(has("Stroke width"))
         closeSheets(activity, reset)
         click("Numbers", exact = true)
         assertTrue("Numbers creates a pending shape", shape.hasPendingWork)
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         assertTrue(has("Rotation"))
         closeSheets(activity, reset)
         for (type in com.brushwork.paint.tools.vector.ShapeType.entries) {
@@ -328,7 +344,7 @@ class EditorSmokeTest {
             settle()
             val curve = c.tools.getValue(id) as CurveTool
             click("Numbers", exact = true)
-            assertWindowsLaidOut(2)
+            assertMenuShown()
             click("Add point", exact = true)
             click("Add point", exact = true)
             closeSheets(activity, reset)
@@ -337,7 +353,7 @@ class EditorSmokeTest {
             settle()
             assertTrue(has("Delete point"))
             click("Settings", exact = true)
-            assertWindowsLaidOut(2)
+            assertMenuShown()
             closeSheets(activity, reset)
             click("Numbers", exact = true)
             assertTrue(has("Point 2 of"))
@@ -364,7 +380,7 @@ class EditorSmokeTest {
         click("Cancel", exact = true)
         assertFalse("cancelled new text removed", text.hasPendingWork)
         tapDoc(200f, 150f)
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         SmokeUi.field("Text").type("Smoke\ntest")
         settle()
         for (b in listOf("Bold", "Italic", "Vertical text", "Vertical text")) click(b, exact = true)
@@ -380,7 +396,7 @@ class EditorSmokeTest {
         click("Cancel", exact = true)
         assertEquals("Smoke\ntest", text.item!!.text)
         click("Numbers", exact = true)
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         assertTrue(text.numbersOpen)
         closeSheets(activity, reset)
         text.numbersOpen = false
@@ -402,11 +418,11 @@ class EditorSmokeTest {
         click("Rotate 90° clockwise")
         click("Smooth", exact = true)
         settle()
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         click("Nearest", exact = true)
         transform.numbersOpen = true
         settle()
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         transform.numbersOpen = false
         settle()
         val undoT = c.undoManager.undoCount
@@ -431,7 +447,7 @@ class EditorSmokeTest {
         assertTrue("polygon selection made", Smoke.pumpUntil { c.selection != null })
         settle()
         click("Selection menu")
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         closeSheets(activity, reset)
         c.deselect()
         lasso.setPolygonMode(false)
@@ -441,7 +457,7 @@ class EditorSmokeTest {
         c.selectTool(ToolId.MAGIC_WAND)
         settle()
         click("Tolerance")
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         closeSheets(activity, reset)
         c.selectTool(ToolId.FILL)
         settle()
@@ -459,12 +475,12 @@ class EditorSmokeTest {
         settle()
         val frame = c.tools.getValue(ToolId.FRAME_DIVIDER) as FrameDividerTool
         click("New frame layer")
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         assertTrue(frame.createFrameLayer())
         frame.settingsOpen = false
         settle()
         click("Rows × columns")
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         assertTrue(frame.applyGrid(2, 3))
         frame.gridOpen = false
         settle()
@@ -474,7 +490,7 @@ class EditorSmokeTest {
         c.selectTool(ToolId.SMUDGE)
         settle()
         click("Choose brush")
-        assertWindowsLaidOut(2)
+        assertMenuShown()
         closeSheets(activity, reset)
         c.selectTool(ToolId.RULER)
         settle()
@@ -746,7 +762,8 @@ class EditorSmokeTest {
         menu("Move layer up"); quiet("up")
         menu("Move layer down"); quiet("down")
         click("Merge down"); assertEquals(4, c.doc.layers.size); quiet("merge")
-        click("Delete layer"); SmokeUi.clickIn("Delete layer?", "Delete"); assertEquals(3, c.doc.layers.size); quiet("delete")
+        // Deleted at once, without a confirmation dialog (quiet() checks no window opened).
+        click("Delete layer"); assertEquals(3, c.doc.layers.size); assertEquals("Delete layer", c.undoManager.undoLabel); quiet("delete")
         click("Choose blend mode"); click("Multiply", exact = true)
         assertEquals(com.brushwork.paint.model.LayerBlendMode.MULTIPLY, c.activeLayer.blendMode); quiet("blend")
         for (t in listOf("Clipping", "α lock", "Lock")) { click(t, exact = true); click(t, exact = true); quiet("toggle $t") }

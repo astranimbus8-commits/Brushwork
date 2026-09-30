@@ -47,7 +47,8 @@ import org.robolectric.shadows.ShadowLog
 /**
  * The v1.1 editor chrome at runtime (Robolectric, real Skia, a 360 x 760 dp hdpi phone): the
  * brush slider bar above the hotbar and its typed values, the non-modal layers window in the
- * bottom-right corner (drawing around it keeps working), the selection bar's copy / cut / paste /
+ * bottom-right corner (drawing around it keeps working, a tap outside closes it), the selection
+ * bar's copy / cut / paste /
  * deselect flow into a placed "Pasted" layer, duplicating only the selection, step-wise undo of
  * a curve from the hotbar and the new settings.
  *
@@ -313,13 +314,27 @@ class ChromeSmokeTest {
         settle()
         assertEquals(layers0, c.doc.layers.size)
 
-        // A sheet hides the window; it comes back when the sheet closes.
+        // A panel (drawn in the editor's own window) hides the window; it comes back when the
+        // panel is closed.
         click("Open color picker")
-        assertEquals(2, SmokeUi.windows().size)
-        assertNull("hidden under a sheet", layersWindowBounds())
+        SmokeUi.assertPanelShown("Color")
+        assertNull("hidden under a panel", layersWindowBounds())
         click("Close", exact = true)
         settle()
-        assertNotNull("back after the sheet", layersWindowBounds())
+        assertNotNull("back after the panel", layersWindowBounds())
+
+        // A tap on the canvas beside the window closes it, and paints nothing.
+        val undoTap = c.undoManager.undoCount
+        val pixelsTap = IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+        val tapAt = screen(activity, c, docX, 60f)
+        touch.idle(300)
+        touch.tap(tapAt.first, tapAt.second)
+        settle()
+        assertNull("a tap outside closed the window", layersWindowBounds())
+        assertEquals("the tap drew nothing", undoTap, c.undoManager.undoCount)
+        assertTrue(pixelsTap.contentEquals(IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }))
+        click("Open layers")
+        assertNotNull(layersWindowBounds())
 
         // The Layers button toggles it; Back closes it too.
         click("Close layers (active layer")
@@ -507,7 +522,7 @@ class ChromeSmokeTest {
         c.selectAll()
         settle()
         click("Selection menu", exact = true)
-        assertWindowsLaidOut(2)
+        SmokeUi.assertPanelShown("Selection")
         assertTrue(has("Copy", exact = true) && has("Cut", exact = true) && has("Paste", exact = true) && has("Deselect", exact = true))
         click("Deselect", exact = true)
         assertNull(c.selection)
