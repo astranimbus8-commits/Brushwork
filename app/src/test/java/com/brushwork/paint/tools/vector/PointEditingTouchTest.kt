@@ -5,22 +5,15 @@ import android.graphics.Canvas
 import android.view.MotionEvent
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Column
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.Smoke.P
-import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
-import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.ui.editor.CanvasView
-import com.brushwork.paint.ui.editor.Hotbar
-import com.brushwork.paint.ui.theme.BrushworkTheme
-import com.brushwork.paint.ui.tools.ToolOptionsBar
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -39,8 +32,8 @@ import org.robolectric.shadows.ShadowLog
 /**
  * Point editing as the user does it on the phone (~392 dp wide): real MotionEvents through the
  * canvas view for tapping points / polygon corners, the two-finger tap (undo), the three-finger
- * tap (redo) and a pinch while a curve is being edited; the Redo button of the bottom bar and the
- * in-tool undo / redo buttons.
+ * tap (redo), dragging old points / corners, and a pinch while a curve is being edited. (No
+ * Compose here: like EditorRuntimeSmokeTest it only drives the canvas view.)
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi")
@@ -237,64 +230,5 @@ class PointEditingTouchTest {
         assertTrue(c.selection!!.mask.getPixel(200, 150) ushr 24 > 0)
         c.deselect()
         lasso.setPolygonMode(false)
-    }
-
-    // ------------------------------------------------------------------ buttons
-
-    @Test
-    fun bottomBarRedoAndInToolButtonsFollowThePointSteps() {
-        // Only the windows shown from here on are searched (the canvas activity has no Compose).
-        SmokeUi.markBaseline()
-        val ui = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
-        ui.setContent {
-            BrushworkTheme {
-                Column {
-                    ToolOptionsBar(c)
-                    Hotbar(c, onToolPicker = {}, onBrushPanel = {}, onColorPanel = {}, onLayersPanel = {})
-                }
-            }
-        }
-        SmokeUi.settle()
-        fun tap(x: Float, y: Float) { c.pointerDown(ToolPoint(x, y)); c.pointerUp(ToolPoint(x, y)) }
-
-        c.selectTool(ToolId.POLYLINE)
-        val tool = c.tools.getValue(ToolId.POLYLINE) as CurveTool
-        tool.update { it.copy(stroke = CurveStroke.PLAIN) }
-        tap(60f, 100f); tap(200f, 60f); tap(340f, 100f)
-        SmokeUi.settle()
-        assertFalse("nothing to redo yet", SmokeUi.isEnabled("Redo"))
-        SmokeUi.click("Undo", exact = true)
-        assertEquals("the bottom bar's undo takes back one point", 2, tool.anchors.size)
-        assertTrue("the bottom bar's redo brings a point back", SmokeUi.isEnabled("Redo"))
-        assertTrue(SmokeUi.isEnabled("Redo point"))
-        SmokeUi.click("Redo", exact = true)
-        assertEquals(3, tool.anchors.size)
-        assertFalse(SmokeUi.isEnabled("Redo"))
-        SmokeUi.click("Undo last point")
-        assertEquals(2, tool.anchors.size)
-        SmokeUi.click("Redo point")
-        assertEquals(3, tool.anchors.size)
-        tool.discard()
-        SmokeUi.settle()
-
-        c.selectTool(ToolId.LASSO)
-        val lasso = c.tools.getValue(ToolId.LASSO) as LassoTool
-        lasso.setPolygonMode(true)
-        tap(60f, 60f); tap(340f, 60f); tap(340f, 240f)
-        SmokeUi.settle()
-        assertTrue(SmokeUi.has("3 pt"))
-        SmokeUi.click("Undo last corner")
-        assertEquals(2, lasso.vertexCount)
-        assertTrue(SmokeUi.has("2 pt"))
-        assertTrue(SmokeUi.isEnabled("Redo"))
-        SmokeUi.click("Redo corner")
-        assertEquals(3, lasso.vertexCount)
-        SmokeUi.click("Undo", exact = true)
-        assertEquals(2, lasso.vertexCount)
-        SmokeUi.click("Redo", exact = true)
-        assertEquals(3, lasso.vertexCount)
-        lasso.discard()
-        lasso.setPolygonMode(false)
-        SmokeUi.settle()
     }
 }
