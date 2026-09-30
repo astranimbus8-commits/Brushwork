@@ -30,6 +30,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -50,8 +51,17 @@ object ContentAwareFillJob {
     private const val FIRST_SEED = 1
     private const val PROGRESS_MS = 80L
 
-    /** What Refill needs to know about the last selection fill. */
-    internal class LastFill(val action: UndoAction, val sourceLayer: Layer, val seed: Int, val editCount: Int, val undoCount: Int)
+    /**
+     * What Refill needs to know about the last selection fill. The step and the layer are held
+     * weakly: once they leave the history / document nothing here keeps their pixels alive.
+     */
+    internal class LastFill(action: UndoAction, sourceLayer: Layer, val seed: Int, val editCount: Int, val undoCount: Int) {
+        val label: String = action.label
+        private val actionRef = WeakReference(action)
+        private val layerRef = WeakReference(sourceLayer)
+        val action: UndoAction? get() = actionRef.get()
+        val sourceLayer: Layer? get() = layerRef.get()
+    }
 
     /** Per-editor state (options, last fill). */
     internal class State(settings: AppSettings) {
@@ -78,7 +88,7 @@ object ContentAwareFillJob {
     fun canRefill(controller: EditorController): Boolean {
         val last = state(controller).lastFill ?: return false
         val um = controller.undoManager
-        return controller.editCount == last.editCount && um.undoCount == last.undoCount && um.undoLabel == last.action.label
+        return controller.editCount == last.editCount && um.undoCount == last.undoCount && um.undoLabel == last.label && last.action != null
     }
 
     /**
@@ -102,7 +112,8 @@ object ContentAwareFillJob {
         var editsAfterUndo = -1
         if (refill && last != null) {
             seed = last.seed + 1
-            if (canRefill(controller) && !tool.hasPendingWork && isTopStep(controller, last.action)) {
+            val action = last.action
+            if (action != null && canRefill(controller) && !tool.hasPendingWork && isTopStep(controller, action)) {
                 controller.undo()
                 undone = last
                 editsAfterUndo = controller.editCount
@@ -110,17 +121,20 @@ object ContentAwareFillJob {
         }
         tool.onActivate()
         if (refill && last != null) {
-            if (controller.doc.indexOf(last.sourceLayer) >= 0 && controller.activeLayer !== last.sourceLayer) controller.selectLayer(last.sourceLayer)
+            val source = last.sourceLayer
+            if (source != null && controller.doc.indexOf(source) >= 0 && controller.activeLayer !== source) controller.selectLayer(source)
             st.lastFill = null
         }
-        /** Brings the fill Refill took back again (nothing else happened since); false if it can't. */
+        /** Brings back the fill Refill took back, if nothing else happened since. */
         fun restoreUndone() {
             val u = undone ?: return
             undone = null
             val um = controller.undoManager
-            if (controller.editCount != editsAfterUndo || !um.canRedo || um.redoLabel != u.action.label) return
+            if (controller.editCount != editsAfterUndo || !um.canRedo || um.redoLabel != u.label) return
             controller.redo()
-            st.lastFill = LastFill(u.action, u.sourceLayer, seed, controller.editCount, um.undoCount)
+            val action = u.action ?: return
+            val source = u.sourceLayer ?: return
+            st.lastFill = LastFill(action, source, seed, controller.editCount, um.undoCount)
         }
         val sel = controller.selection ?: run {
             restoreUndone(); controller.toast("Select the area to fill first"); return false
