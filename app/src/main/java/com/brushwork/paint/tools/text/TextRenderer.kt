@@ -220,9 +220,13 @@ object TextRenderer {
         }
     }
 
-    /** Lays out [text] with [spec] as straight (horizontal or vertical) text in its box. */
-    fun layout(text: String, spec: TextSpec): TextBlock =
-        if (spec.vertical) layoutVertical(text, spec) else layoutHorizontal(text, spec)
+    /**
+     * Lays out [text] with [spec] as straight (horizontal or vertical) text in its box.
+     * [measureInk] = false skips measuring how far an imported font's glyphs reach outside the
+     * text area (only the drawing margin depends on it: for fitting text, not for drawing).
+     */
+    fun layout(text: String, spec: TextSpec, measureInk: Boolean = true): TextBlock =
+        if (spec.vertical) layoutVertical(text, spec, measureInk) else layoutHorizontal(text, spec, measureInk)
 
     private fun inkPad(spec: TextSpec) = spec.strokeWidthPx + spec.sizePx * (if (spec.italic || spec.font == TextFont.CURSIVE) 0.5f else 0.3f) + 2f
 
@@ -237,7 +241,7 @@ object TextRenderer {
         return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, glyphs)
     }
 
-    private fun layoutHorizontal(text: String, spec: TextSpec): TextBlock {
+    private fun layoutHorizontal(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
         val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
         val fm = paint.fontMetrics
         val wrap = spec.box.width
@@ -250,7 +254,7 @@ object TextRenderer {
         val layout = staticLayout(text, spec, paint)
         val width = layout.width.toFloat()
         val height = max(max(1f, layout.height.toFloat()), minHeight)
-        val overflow = if (spec.fontId != null) horizontalOverflow(layout, text, paint, width, height) else 0f
+        val overflow = if (measureInk && spec.fontId != null) horizontalOverflow(layout, text, paint, width, height) else 0f
         return block(spec, width, height, layout.lineCount, paint, overflow) { c, _ -> layout.draw(c) }
     }
 
@@ -287,7 +291,7 @@ object TextRenderer {
         return max(0f, over)
     }
 
-    private fun layoutVertical(text: String, spec: TextSpec): TextBlock {
+    private fun layoutVertical(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
         val paint = newPaint(spec).apply { textAlign = Paint.Align.CENTER }
         val em = spec.sizePx
         val res = VerticalTextLayout.layout(
@@ -312,7 +316,7 @@ object TextRenderer {
         }
         val punct = VerticalTextLayout.PUNCTUATION_SHIFT * em
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
-        val overflow = if (spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
+        val overflow = if (measureInk && spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
         return block(spec, width, height, res.columns, paint, overflow) { c, p ->
             val s0 = c.save()
             if (shift != 0f) c.translate(shift, 0f)

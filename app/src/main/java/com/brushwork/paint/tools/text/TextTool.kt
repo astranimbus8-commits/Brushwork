@@ -478,7 +478,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val box = s.box
         // Off: the box fits the text again (its fixed other side goes too).
         if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f, minWidth = 0f) else box.copy(width = 0f, minHeight = 0f))
-        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)))
+        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)), measureInk = false)
         if (s.vertical) s.copy(box = box.copy(height = natural.contentHeight.coerceIn(s.sizePx, maxBoxPx)))
         else s.copy(box = box.copy(width = natural.contentWidth.coerceIn(s.sizePx, maxBoxPx)))
     }
@@ -498,7 +498,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     fun setFixedDepth(on: Boolean) = updateSpec { s ->
         if (s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
         val v = if (!on) 0f else {
-            val block = TextRenderer.layout(item?.text ?: "", s)
+            val block = TextRenderer.layout(item?.text ?: "", s, measureInk = false)
             (if (s.vertical) block.contentWidth else block.contentHeight).coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         }
         s.copy(box = if (s.vertical) s.box.copy(minWidth = v) else s.box.copy(minHeight = v))

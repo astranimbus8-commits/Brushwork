@@ -4,25 +4,14 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FontDownload
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import com.brushwork.paint.ui.theme.BrushworkTheme
+import androidx.compose.ui.graphics.toArgb
+import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.launch
 
 /**
@@ -65,7 +54,7 @@ object FontOpenIntent {
         if (uris.isEmpty()) return false
         val app = activity.applicationContext
         val store = FontStore.get(app)
-        (activity as? ComponentActivity)?.setContent { BrushworkTheme { ImportingScreen() } }
+        activity.setContentView(importingView(activity))
         // App-wide scope: the import finishes even while the activity goes away.
         FontStore.appScope.launch {
             val message = try {
@@ -84,19 +73,20 @@ object FontOpenIntent {
         return true
     }
 
-    /** What shows while the files are read (usually well under a second; nothing animates). */
-    @Composable
-    private fun ImportingScreen() {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Filled.FontDownload, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(48.dp))
-                Text(
-                    "Importing fonts…",
-                    color = MaterialTheme.colorScheme.onBackground,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(top = 16.dp),
-                )
-            }
+    /**
+     * What shows while the files are read (usually well under a second): a plain view, as this
+     * screen lives only for that moment (no Compose, nothing animating).
+     */
+    private fun importingView(activity: Activity): View {
+        val label = TextView(activity).apply {
+            text = "Importing fonts…"
+            textSize = 18f
+            setTextColor(BrushworkColors.OnChrome.toArgb())
+            gravity = Gravity.CENTER
+        }
+        return FrameLayout(activity).apply {
+            setBackgroundColor(BrushworkColors.Chrome.toArgb())
+            addView(label, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         }
     }
 }

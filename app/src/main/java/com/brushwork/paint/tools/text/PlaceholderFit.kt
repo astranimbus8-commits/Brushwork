@@ -18,7 +18,8 @@ object PlaceholderFit {
     /** Height (horizontal) or width (vertical) of [text] laid out in [spec]'s box, without its minimum size. */
     fun extent(text: String, spec: TextSpec): Float {
         val bare = spec.copy(box = spec.box.copy(minHeight = 0f, minWidth = 0f))
-        val block = TextRenderer.layout(text, bare)
+        // Only the text area counts (not the ink margin): skip measuring every glyph's ink.
+        val block = TextRenderer.layout(text, bare, measureInk = false)
         return if (spec.vertical) block.contentWidth else block.contentHeight
     }
 
@@ -123,7 +124,7 @@ object PlaceholderFit {
         var out = spec
         if (straight && amt != PlaceholderAmount.SHORT && spec.box.wrapFor(spec.vertical) <= 0f) {
             val wrap = paragraphWrap(spec, docW, docH, maxBox)
-            val natural = TextRenderer.layout(text, spec)
+            val natural = TextRenderer.layout(text, spec, measureInk = false)
             val along = if (spec.vertical) natural.contentHeight else natural.contentWidth
             if (along > wrap) out = spec.copy(box = if (spec.vertical) spec.box.copy(height = wrap) else spec.box.copy(width = wrap))
         }

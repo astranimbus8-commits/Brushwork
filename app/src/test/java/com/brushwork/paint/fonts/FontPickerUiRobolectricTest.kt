@@ -2,6 +2,9 @@ package com.brushwork.paint.fonts
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
@@ -122,5 +125,53 @@ class FontPickerUiRobolectricTest {
         SmokeUi.settle()
         Smoke.assertQuiet(c, "placeholder committed")
         SmokeUi.assertIdle("text tool")
+    }
+
+    /** On a narrow (360dp) phone the search field keeps room and every button stays on screen. */
+    @Test
+    @Config(qualifiers = "w360dp-h780dp-xxhdpi")
+    fun thePickerFitsANarrowPhone() {
+        SmokeUi.installTestRecomposer()
+        SmokeUi.markBaseline()
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        val c = Smoke.controller(activity, Smoke.document(600, 800, layers = 1))
+        c.selectTool(ToolId.TEXT)
+        val tool = c.tools.getValue(ToolId.TEXT) as TextTool
+        val bytes = TestFonts.real("ComingSoon.ttf")
+        val font = runBlocking { tool.fontStore.import(listOf(FontImporter.Source("ComingSoon.ttf") { bytes.inputStream() })) }.added.single()
+        activity.setContent { BrushworkTheme { TextToolOptions(tool) } }
+        tool.startTextAt(300f, 400f)
+        tool.setText("A fairly long caption to preview")
+        SmokeUi.settle()
+        SmokeUi.click("Choose font")
+        assertTrue(SmokeUi.has("Add Serif to favorites", exact = true))
+        val dp = activity.resources.displayMetrics.density
+        val screen = activity.resources.displayMetrics.widthPixels / dp
+        fun clickableBounds(label: String): android.graphics.Rect {
+            var n: SemanticsNode? = requireNotNull(SmokeUi.find(label, exact = true)) { label }.node
+            while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+            val b = requireNotNull(n) { "$label is not clickable" }.boundsInWindow
+            return android.graphics.Rect(b.left.toInt(), b.top.toInt(), b.right.toInt(), b.bottom.toInt())
+        }
+        val search = SmokeUi.field("Search fonts").bounds
+        assertTrue("search field ${search.width / dp} dp wide", search.width / dp >= 140f)
+        val import = clickableBounds("Import fonts")
+        assertTrue("import button inside the screen: ${import.right / dp} of $screen dp", import.right / dp <= screen - 12f)
+        fun assertTarget(label: String) {
+            val b = clickableBounds(label)
+            assertTrue("$label: ${b.width() / dp} x ${b.height() / dp} dp", b.width() / dp >= 40f && b.height() / dp >= 40f)
+            assertTrue("$label on screen", b.right / dp <= screen)
+        }
+        assertTarget("Add Serif to favorites")
+        // The imported font (found by searching): its star and delete buttons.
+        SmokeUi.field("Search fonts").type("coming")
+        SmokeUi.settle()
+        assertTrue(Smoke.pumpUntil { SmokeUi.has("Delete font ${font.name}", exact = true) })
+        assertTarget("Add ${font.name} to favorites")
+        assertTarget("Delete font ${font.name}")
+        assertTrue("with a query the field still has room", SmokeUi.field("Search fonts").bounds.width / dp >= 140f)
+        SmokeUi.click("Done", exact = true)
+        tool.discard()
+        SmokeUi.settle()
     }
 }
