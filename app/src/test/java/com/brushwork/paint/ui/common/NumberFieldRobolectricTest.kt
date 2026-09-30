@@ -133,6 +133,22 @@ class NumberFieldSliderSyncTest {
         settle(4, 50)
         assertEquals(1000.0, size, 0.0)
         assertEquals(1f, progress("Size"), 1e-6f)
+
+        // Done commits and finishes the edit once; the focus loss that follows doesn't finish
+        // the same edit a second time (one undo step / save per edit).
+        field("Size").focus()
+        settle(4, 50)
+        field("Size").type("40")
+        settle(4, 50)
+        val before = finished
+        requireNotNull(field("Size").node.config[SemanticsActions.OnImeAction].action).invoke()
+        settle(4, 50)
+        assertEquals(40.0, size, 0.0)
+        assertEquals("Done finishes the edit", before + 1, finished)
+        field("Size").window.clearFocus()
+        settle(4, 50)
+        assertEquals("the focus loss after Done doesn't finish it again", before + 1, finished)
+        assertEquals(40.0, size, 0.0)
     }
 }
 
@@ -258,6 +274,19 @@ class LabeledSliderTypingTest {
         settle(6, 50)
         assertEquals(0.4f, opacity, 1e-6f)
         assertEquals(3, finished)
+
+        // The value is a finger-sized target (the pill itself is ~26dp high): a tap near its
+        // lower edge, outside the pill, still opens the editor instead of moving the slider.
+        val density = activity.resources.displayMetrics.density
+        val target = elements().last { it.node.config.getOrNull(SemanticsActions.OnClick)?.label == "Type a value for Opacity" }
+        assertTrue("tap target is ${target.bounds.height / density}dp high", target.bounds.height >= 40f * density - 0.5f)
+        RobolectricUi.tap(target.window, target.bounds.center.x, target.bounds.bottom - 3f * density)
+        settle(6, 50)
+        assertEquals("a tap by the pill's edge opens the editor", 1, RobolectricUi.textFields().size)
+        assertEquals("and leaves the slider alone", 0.4f, opacity, 1e-6f)
+        requireNotNull(editor().node.config[SemanticsActions.OnImeAction].action).invoke()
+        settle(6, 50)
+        assertEquals(0.4f, opacity, 1e-6f)
     }
 }
 

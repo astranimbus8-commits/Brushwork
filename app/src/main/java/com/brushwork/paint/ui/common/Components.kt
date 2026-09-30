@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -311,7 +312,12 @@ fun LabeledSlider(
     val latestFinished by rememberUpdatedState(onValueChangeFinished)
     val focusManager = LocalFocusManager.current
     Column(modifier.fillMaxWidth()) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // A typeable value is a finger-sized target (a near miss would land on the slider below
+        // and move it), so its row is as tall as the target.
+        Row(
+            Modifier.heightIn(min = if (typing != null) MinTouchTarget else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             when {
                 typing != null && editing && enabled -> SliderValueEditor(
@@ -327,17 +333,25 @@ fun LabeledSlider(
                         }
                     },
                 )
-                typing != null && enabled -> Text(
-                    valueText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = BrushworkColors.OnChrome,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(BrushworkColors.ChromeHigh)
-                        .clickable(onClickLabel = "Type a value for $label") { editing = true }
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                )
+                typing != null && enabled -> Box(
+                    Modifier
+                        .heightIn(min = MinTouchTarget)
+                        .widthIn(min = 48.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClickLabel = "Type a value for $label", role = Role.Button) { editing = true },
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    Text(
+                        valueText,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = BrushworkColors.OnChrome,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BrushworkColors.ChromeHigh)
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
                 else -> Text(valueText, style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
             }
         }
@@ -384,7 +398,7 @@ private fun SliderValueEditor(label: String, initial: String, suffix: String, on
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = BrushworkColors.OnChrome, textAlign = TextAlign.End),
             cursorBrush = SolidColor(BrushworkColors.Accent),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { finish() }),
+            keyboardActions = KeyboardActions(onDone = { defaultKeyboardAction(ImeAction.Done); finish() }),
             modifier = Modifier
                 .width(64.dp)
                 .focusRequester(requester)
@@ -399,6 +413,9 @@ private fun SliderValueEditor(label: String, initial: String, suffix: String, on
     }
     LaunchedEffect(Unit) { runCatching { requester.requestFocus() } }
 }
+
+/** Smallest height of a tap target the app draws itself (Material components bring their own). */
+private val MinTouchTarget = 40.dp
 
 /** Width a numeric field takes when its parent doesn't limit it (e.g. a horizontally scrolling strip). */
 private val UnboundedFieldWidth = 240.dp
@@ -457,11 +474,15 @@ fun NumberField(
     val latestValue by rememberUpdatedState(value)
     val latestChange by rememberUpdatedState(onValueChange)
     val latestFinished by rememberUpdatedState(onValueChangeFinished)
+    // Text already committed (Done), so the focus loss that follows doesn't finish the same edit
+    // a second time (one undo step / save per edit). Cleared by any new change.
+    var committed by remember { mutableStateOf<String?>(null) }
     fun commit() {
         val v = parse(text)
         if (v != null) {
             latestChange(v.coerceIn(min, max))
-            latestFinished?.invoke()
+            if (committed != text) latestFinished?.invoke()
+            committed = text
         } else {
             text = format(latestValue)
         }
@@ -472,9 +493,13 @@ fun NumberField(
         if (!v.isFinite()) return
         val c = v.coerceIn(min, max)
         text = format(c)
+        committed = null
         latestChange(c)
     }
-    fun finish() { latestFinished?.invoke() }
+    fun finish() {
+        committed = text
+        latestFinished?.invoke()
+    }
 
     val scale = remember(adjust, min, max, sliderMin, sliderMax, logSlider) {
         NumberSliderMath.scaleFor(adjust, min, max, sliderMin, sliderMax, logSlider)
@@ -491,18 +516,22 @@ fun NumberField(
             OutlinedTextField(
                 value = text,
                 onValueChange = {
+                    if (it != text) committed = null
                     text = it
                     // Commit valid in-range values while typing, so buttons (Apply, presets) that
                     // don't take focus always see the number the user typed.
                     val v = parse(it)
                     if (v != null && v >= min && v <= max) latestChange(v)
                 },
-                label = { Text(label, maxLines = 1) },
+                // Beside a slider the box is narrow: a long label ends in "…" instead of being cut.
+                label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 suffix = if (suffix.isNotEmpty()) ({ Text(suffix) }) else null,
                 singleLine = true,
                 enabled = enabled,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { commit() }),
+                // Done commits and, like everywhere on Android, puts the keyboard away (a sheet
+                // sits on top of it, so it would otherwise keep covering the canvas).
+                keyboardActions = KeyboardActions(onDone = { commit(); defaultKeyboardAction(ImeAction.Done) }),
                 modifier = Modifier
                     .weight(1f)
                     .onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
