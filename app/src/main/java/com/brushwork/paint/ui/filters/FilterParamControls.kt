@@ -32,6 +32,7 @@ import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.RepeatIconButton
+import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
@@ -103,6 +104,8 @@ private fun SliderControl(session: FilterSession, p: FilterParam.Slider, enabled
             valueRange = p.min..p.max,
             valueText = SliderFormat.format(p, v),
             enabled = enabled,
+            // Tap the number to type it (snapped to the parameter's step like the slider).
+            typing = SliderTyping(decimals = SliderFormat.decimals(p), suffix = if (p.pixels) "px" else p.suffix),
             modifier = Modifier.weight(1f),
         )
         RepeatIconButton(Icons.Filled.Add, "Increase ${p.label}", enabled = enabled) {

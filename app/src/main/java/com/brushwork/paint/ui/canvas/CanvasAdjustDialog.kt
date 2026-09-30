@@ -4,8 +4,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -69,7 +67,8 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
     BwSheet(title = "Canvas", onDismiss = onDismiss, scrollable = false) {
         PrimaryScrollableTabRow(
             selectedTabIndex = tab,
-            containerColor = BrushworkColors.Chrome,
+            // The sheet's own see-through background shows through the tabs too.
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
             contentColor = BrushworkColors.OnChrome,
             edgePadding = 0.dp,
             divider = { HorizontalDivider(color = BrushworkColors.ChromeBorder) },
@@ -86,22 +85,17 @@ fun CanvasAdjustDialog(controller: EditorController, onDismiss: () -> Unit) {
         }
         // The rotate tab stays open while it works; show the editor's busy state here too.
         if (busy) BusyStrip(controller)
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(top = 8.dp),
-        ) {
-            // Fields restart from the document's new values after every change.
-            key(docVersion, layersVersion) {
-                when (CanvasTab.entries[tab]) {
-                    CanvasTab.IMAGE_SIZE -> ResizeImageTab(controller, unit, { unit = it }, busy, onApplied = onDismiss)
-                    CanvasTab.CANVAS_SIZE -> CanvasSizeTab(controller, unit, { unit = it }, busy, thumbnail, onApplied = onDismiss)
-                    CanvasTab.TRIM -> TrimCropTab(controller, unit, { unit = it }, busy, thumbnail, onApplied = onDismiss)
-                    CanvasTab.ROTATE -> RotateFlipTab(controller, busy)
-                    CanvasTab.RESOLUTION -> ResolutionTab(controller, busy, onApplied = onDismiss)
-                    CanvasTab.COLOR_MODE -> ColorModeTab(controller, busy, thumbnail, onApplied = onDismiss)
-                }
+        // Each tab scrolls its own body in the height left under the tabs and keeps its Apply
+        // button pinned below (TabScaffold). Fields restart from the document's new values
+        // after every change.
+        key(docVersion, layersVersion) {
+            when (CanvasTab.entries[tab]) {
+                CanvasTab.IMAGE_SIZE -> ResizeImageTab(controller, unit, { unit = it }, busy, onApplied = onDismiss)
+                CanvasTab.CANVAS_SIZE -> CanvasSizeTab(controller, unit, { unit = it }, busy, thumbnail, onApplied = onDismiss)
+                CanvasTab.TRIM -> TrimCropTab(controller, unit, { unit = it }, busy, thumbnail, onApplied = onDismiss)
+                CanvasTab.ROTATE -> RotateFlipTab(controller, busy)
+                CanvasTab.RESOLUTION -> ResolutionTab(controller, busy, onApplied = onDismiss)
+                CanvasTab.COLOR_MODE -> ColorModeTab(controller, busy, thumbnail, onApplied = onDismiss)
             }
         }
     }

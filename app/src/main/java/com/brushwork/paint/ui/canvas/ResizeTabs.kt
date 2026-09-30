@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.canvas
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -63,9 +64,13 @@ internal fun UnitHeader(title: String, unit: LengthUnit, onUnitChange: (LengthUn
     }
 }
 
+/** Slider range of the canvas size fields (document px, logarithmic); larger sizes can be typed. */
+private const val SLIDER_MIN_PX = 1.0
+private val SLIDER_MAX_PX = CanvasOps.MAX_SIDE.toDouble()
+
 /** Resize image: new pixel size (any unit), resolution, aspect lock, percent presets, resampling. */
 @Composable
-internal fun ResizeImageTab(
+internal fun ColumnScope.ResizeImageTab(
     c: EditorController,
     unit: LengthUnit,
     onUnitChange: (LengthUnit) -> Unit,
@@ -96,105 +101,110 @@ internal fun ResizeImageTab(
     val dpiChanged = dpi.toFloat() != doc.dpi
     val printUnit = printUnitFor(unit)
 
-    PanelCard {
-        InfoRow("Current", "$curW × $curH px")
-        InfoRow("Print size", "${CanvasAdjustMath.formatSize(curW.toDouble(), curH.toDouble(), printUnit, curDpi)} at ${formatDpi(curDpi)} dpi")
-    }
-
-    UnitHeader("New size", unit, onUnitChange)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        LengthField(
-            "Width", wPx,
-            onPxChange = { v -> wPx = v; if (keepAspect) hPx = v / aspect },
-            unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
-        )
-        Spacer(Modifier.width(8.dp))
-        LengthField(
-            "Height", hPx,
-            onPxChange = { v -> hPx = v; if (keepAspect) wPx = v * aspect },
-            unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
-        )
-    }
-    ToggleRow(
-        "Keep aspect ratio", keepAspect,
-        onCheckedChange = { on -> keepAspect = on; if (on) hPx = wPx / aspect },
-    )
-    NumberField(
-        "Resolution", dpi,
-        onValueChange = { typed ->
-            val v = clampDpi(typed)
-            wPx = CanvasAdjustMath.pxAfterDpiChange(wPx, dpi, v, unit)
-            hPx = CanvasAdjustMath.pxAfterDpiChange(hPx, dpi, v, unit)
-            dpi = v
+    TabScaffold(
+        footer = {
+            if (error != null) Notice(error, NoticeKind.ERROR)
+            ApplyButton(
+                text = if (!sizeChanged && dpiChanged) "Change resolution" else "Resize image",
+                enabled = !busy && error == null && (sizeChanged || dpiChanged),
+                onClick = {
+                    // The resolution field clamps out-of-range text only when it commits on focus loss.
+                    afterCommit {
+                        val w = CanvasAdjustMath.toPixels(wPx)
+                        val h = CanvasAdjustMath.toPixels(hPx)
+                        if (CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])) onApplied()
+                    }
+                },
+            )
         },
-        modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi",
-        min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
-    )
-    if (unit != LengthUnit.PX) {
-        Notice("A new resolution keeps the size in ${unit.label.lowercase()}, so the number of pixels changes with it.")
-    }
-
-    SectionHeader("Scale")
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (p in intArrayOf(25, 50, 100, 200, 400)) {
-            OutlinedButton(
-                onClick = { afterCommit { wPx = curW * p / 100.0; hPx = curH * p / 100.0 } },
-                modifier = Modifier.weight(1f).heightIn(min = 40.dp),
-                contentPadding = PaddingValues(horizontal = 2.dp),
-            ) { Text("$p%", maxLines = 1) }
+    ) {
+        PanelCard {
+            InfoRow("Current", "$curW × $curH px")
+            InfoRow("Print size", "${CanvasAdjustMath.formatSize(curW.toDouble(), curH.toDouble(), printUnit, curDpi)} at ${formatDpi(curDpi)} dpi")
         }
-    }
 
-    SectionHeader("Resampling")
-    ChoiceChips(Resample.entries.map { it.label }, resampleIdx, { resampleIdx = it })
-    Text(resample.description, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(top = 2.dp))
-
-    PanelCard(Modifier.padding(top = 8.dp)) {
-        InfoRow("Result", "$newW × $newH px", emphasize = true)
-        InfoRow("Scale", "${CanvasAdjustMath.percent(newW, curW)} × ${CanvasAdjustMath.percent(newH, curH)}")
-        InfoRow("Print size", "${CanvasAdjustMath.formatSize(newW.toDouble(), newH.toDouble(), printUnit, dpi)} at ${formatDpi(dpi)} dpi")
-        InfoRow("Memory", CanvasAdjustMath.memoryLine(newW, newH, bitmaps, budget))
-        Text(
-            "For ${CanvasAdjustMath.describeBitmaps(layerCount, maskCount)}",
-            style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim,
+        UnitHeader("New size", unit, onUnitChange)
+        Row(verticalAlignment = Alignment.Top) {
+            LengthField(
+                "Width", wPx,
+                onPxChange = { v -> wPx = v; if (keepAspect) hPx = v / aspect },
+                unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
+                sliderMinPx = SLIDER_MIN_PX, sliderMaxPx = SLIDER_MAX_PX,
+            )
+            Spacer(Modifier.width(8.dp))
+            LengthField(
+                "Height", hPx,
+                onPxChange = { v -> hPx = v; if (keepAspect) wPx = v * aspect },
+                unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
+                sliderMinPx = SLIDER_MIN_PX, sliderMaxPx = SLIDER_MAX_PX,
+            )
+        }
+        ToggleRow(
+            "Keep aspect ratio", keepAspect,
+            onCheckedChange = { on -> keepAspect = on; if (on) hPx = wPx / aspect },
         )
-    }
+        NumberField(
+            "Resolution", dpi,
+            onValueChange = { typed ->
+                val v = clampDpi(typed)
+                wPx = CanvasAdjustMath.pxAfterDpiChange(wPx, dpi, v, unit)
+                hPx = CanvasAdjustMath.pxAfterDpiChange(hPx, dpi, v, unit)
+                dpi = v
+            },
+            modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "dpi",
+            min = CanvasOps.MIN_DPI.toDouble(), max = CanvasOps.MAX_DPI.toDouble(),
+        )
+        if (unit != LengthUnit.PX) {
+            Notice("A new resolution keeps the size in ${unit.label.lowercase()}, so the number of pixels changes with it.")
+        }
 
-    if (error != null) {
-        Notice(error, NoticeKind.ERROR)
-    } else {
-        if (!keepAspect && CanvasAdjustMath.aspectChanged(curW, curH, newW, newH)) {
-            Notice("The aspect ratio changes, so the picture will be stretched.", NoticeKind.WARNING)
-        }
-        if ((newW > curW * 2 || newH > curH * 2) && resample != Resample.NEAREST) {
-            Notice("Enlarging more than 200% makes edges soft. Choose Nearest for pixel art.", NoticeKind.WARNING)
-        }
-        if (CanvasOps.estimateBytes(bitmaps, newW, newH) > budget * 0.6) {
-            Notice("This is a very large canvas: fewer new layers will fit and painting may be slower.", NoticeKind.WARNING)
-        }
-        if (!sizeChanged && dpiChanged) {
-            Notice("Only the resolution changes; the pixels stay as they are.")
-        }
-        if (sizeChanged) Notice("All layers and masks are resampled. Undo restores the original pixels.")
-    }
-
-    ApplyButton(
-        text = if (!sizeChanged && dpiChanged) "Change resolution" else "Resize image",
-        enabled = !busy && error == null && (sizeChanged || dpiChanged),
-        onClick = {
-            // The resolution field clamps out-of-range text only when it commits on focus loss.
-            afterCommit {
-                val w = CanvasAdjustMath.toPixels(wPx)
-                val h = CanvasAdjustMath.toPixels(hPx)
-                if (CanvasOps.applyResizeImage(c, w, h, dpi.toFloat(), Resample.entries[resampleIdx])) onApplied()
+        SectionHeader("Scale")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (p in intArrayOf(25, 50, 100, 200, 400)) {
+                OutlinedButton(
+                    onClick = { afterCommit { wPx = curW * p / 100.0; hPx = curH * p / 100.0 } },
+                    modifier = Modifier.weight(1f).heightIn(min = 40.dp),
+                    contentPadding = PaddingValues(horizontal = 2.dp),
+                ) { Text("$p%", maxLines = 1) }
             }
-        },
-    )
+        }
+
+        SectionHeader("Resampling")
+        ChoiceChips(Resample.entries.map { it.label }, resampleIdx, { resampleIdx = it })
+        Text(resample.description, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(top = 2.dp))
+
+        PanelCard(Modifier.padding(top = 8.dp)) {
+            InfoRow("Result", "$newW × $newH px", emphasize = true)
+            InfoRow("Scale", "${CanvasAdjustMath.percent(newW, curW)} × ${CanvasAdjustMath.percent(newH, curH)}")
+            InfoRow("Print size", "${CanvasAdjustMath.formatSize(newW.toDouble(), newH.toDouble(), printUnit, dpi)} at ${formatDpi(dpi)} dpi")
+            InfoRow("Memory", CanvasAdjustMath.memoryLine(newW, newH, bitmaps, budget))
+            Text(
+                "For ${CanvasAdjustMath.describeBitmaps(layerCount, maskCount)}",
+                style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim,
+            )
+        }
+
+        if (error == null) {
+            if (!keepAspect && CanvasAdjustMath.aspectChanged(curW, curH, newW, newH)) {
+                Notice("The aspect ratio changes, so the picture will be stretched.", NoticeKind.WARNING)
+            }
+            if ((newW > curW * 2 || newH > curH * 2) && resample != Resample.NEAREST) {
+                Notice("Enlarging more than 200% makes edges soft. Choose Nearest for pixel art.", NoticeKind.WARNING)
+            }
+            if (CanvasOps.estimateBytes(bitmaps, newW, newH) > budget * 0.6) {
+                Notice("This is a very large canvas: fewer new layers will fit and painting may be slower.", NoticeKind.WARNING)
+            }
+            if (!sizeChanged && dpiChanged) {
+                Notice("Only the resolution changes; the pixels stay as they are.")
+            }
+            if (sizeChanged) Notice("All layers and masks are resampled. Undo restores the original pixels.")
+        }
+    }
 }
 
 /** Canvas size: new width/height, 3x3 anchor, optional fill of the added area. */
 @Composable
-internal fun CanvasSizeTab(
+internal fun ColumnScope.CanvasSizeTab(
     c: EditorController,
     unit: LengthUnit,
     onUnitChange: (LengthUnit) -> Unit,
@@ -225,66 +235,75 @@ internal fun CanvasSizeTab(
     val error = CanvasOps.validateSize(newW, newH, bitmaps, budget)
     val shownFill = ColorModeOps.displayColor(fillColor, doc.colorMode)
 
-    PanelCard {
-        InfoRow("Current", "$curW × $curH px")
-        InfoRow("Print size", CanvasAdjustMath.formatSize(curW.toDouble(), curH.toDouble(), printUnitFor(unit), dpi))
-    }
-
-    UnitHeader("New canvas", unit, onUnitChange)
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        LengthField("Width", wPx, { wPx = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX)
-        Spacer(Modifier.width(8.dp))
-        LengthField("Height", hPx, { hPx = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX)
-    }
-
-    SectionHeader("Anchor")
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        AnchorPicker(anchor, { anchor = it }, shrinkX = newW < curW, shrinkY = newH < curH)
-        Spacer(Modifier.width(12.dp))
-        CanvasLayoutPreview(
-            curW, curH, newW, newH, ox, oy, thumbnail?.image,
-            modifier = Modifier.weight(1f).height(120.dp),
-            fill = if (fillEnabled && grows) Color(shownFill) else null,
-        )
-    }
-    Text(
-        CanvasAdjustMath.formatEdges(edges),
-        style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim,
-        modifier = Modifier.padding(top = 6.dp),
-    )
-
-    Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        ColorSwatch(shownFill, size = 40.dp, onClick = { picking = true })
-        Spacer(Modifier.width(12.dp))
-        ToggleRow(
-            "Fill the new area of the bottom layer", fillEnabled, { fillEnabled = it },
-            modifier = Modifier.weight(1f),
-            description = if (fillEnabled) "Tap the swatch to change the color" else "Otherwise the new area is transparent",
-        )
-    }
-
-    PanelCard(Modifier.padding(top = 8.dp)) {
-        InfoRow("Result", "$newW × $newH px", emphasize = true)
-        InfoRow("Memory", CanvasAdjustMath.memoryLine(newW, newH, bitmaps, budget))
-    }
-    if (error != null) {
-        Notice(error, NoticeKind.ERROR)
-    } else {
-        if (shrinks) Notice("Pixels outside the new canvas are cut from every layer (undo brings them back).", NoticeKind.WARNING)
-        if (fillEnabled && !grows) Notice("The canvas doesn't grow, so there is no new area to fill.")
-    }
-
-    ApplyButton(
-        text = "Change canvas size",
-        enabled = !busy && error == null && (newW != curW || newH != curH),
-        onClick = {
-            // Read the state now (not the values of the last composition).
-            val w = CanvasAdjustMath.toPixels(wPx)
-            val h = CanvasAdjustMath.toPixels(hPx)
-            val fill = if (fillEnabled && (w > curW || h > curH)) fillColor else null
-            if (CanvasOps.applyResizeCanvas(c, w, h, anchor % 3, anchor / 3, fill)) onApplied()
+    TabScaffold(
+        footer = {
+            if (error != null) Notice(error, NoticeKind.ERROR)
+            ApplyButton(
+                text = "Change canvas size",
+                enabled = !busy && error == null && (newW != curW || newH != curH),
+                onClick = {
+                    // Read the state now (not the values of the last composition).
+                    val w = CanvasAdjustMath.toPixels(wPx)
+                    val h = CanvasAdjustMath.toPixels(hPx)
+                    val fill = if (fillEnabled && (w > curW || h > curH)) fillColor else null
+                    if (CanvasOps.applyResizeCanvas(c, w, h, anchor % 3, anchor / 3, fill)) onApplied()
+                },
+            )
         },
-    )
+    ) {
+        PanelCard {
+            InfoRow("Current", "$curW × $curH px")
+            InfoRow("Print size", CanvasAdjustMath.formatSize(curW.toDouble(), curH.toDouble(), printUnitFor(unit), dpi))
+        }
+
+        UnitHeader("New canvas", unit, onUnitChange)
+        Row(verticalAlignment = Alignment.Top) {
+            LengthField(
+                "Width", wPx, { wPx = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
+                sliderMinPx = SLIDER_MIN_PX, sliderMaxPx = SLIDER_MAX_PX,
+            )
+            Spacer(Modifier.width(8.dp))
+            LengthField(
+                "Height", hPx, { hPx = it }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0, maxPx = FIELD_MAX_PX,
+                sliderMinPx = SLIDER_MIN_PX, sliderMaxPx = SLIDER_MAX_PX,
+            )
+        }
+
+        SectionHeader("Anchor")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            AnchorPicker(anchor, { anchor = it }, shrinkX = newW < curW, shrinkY = newH < curH)
+            Spacer(Modifier.width(12.dp))
+            CanvasLayoutPreview(
+                curW, curH, newW, newH, ox, oy, thumbnail?.image,
+                modifier = Modifier.weight(1f).height(120.dp),
+                fill = if (fillEnabled && grows) Color(shownFill) else null,
+            )
+        }
+        Text(
+            CanvasAdjustMath.formatEdges(edges),
+            style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+
+        Row(Modifier.padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            ColorSwatch(shownFill, size = 40.dp, onClick = { picking = true })
+            Spacer(Modifier.width(12.dp))
+            ToggleRow(
+                "Fill the new area of the bottom layer", fillEnabled, { fillEnabled = it },
+                modifier = Modifier.weight(1f),
+                description = if (fillEnabled) "Tap the swatch to change the color" else "Otherwise the new area is transparent",
+            )
+        }
+
+        PanelCard(Modifier.padding(top = 8.dp)) {
+            InfoRow("Result", "$newW × $newH px", emphasize = true)
+            InfoRow("Memory", CanvasAdjustMath.memoryLine(newW, newH, bitmaps, budget))
+        }
+        if (error == null) {
+            if (shrinks) Notice("Pixels outside the new canvas are cut from every layer (undo brings them back).", NoticeKind.WARNING)
+            if (fillEnabled && !grows) Notice("The canvas doesn't grow, so there is no new area to fill.")
+        }
+    }
 
     if (picking) {
         ColorPickerDialog(

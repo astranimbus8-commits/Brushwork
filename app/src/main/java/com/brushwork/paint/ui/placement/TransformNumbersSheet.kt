@@ -35,6 +35,11 @@ fun TransformNumbersSheet(tool: TransformTool) {
     val dpi = doc.dpi.toDouble()
     val unit = tool.unit
     val bounds = st.bounds()
+    // Slider ranges (document px): positions from one canvas size before the canvas to two
+    // after it, sizes up to twice its longer side. Any finite number can still be typed.
+    val w = doc.width.toDouble()
+    val h = doc.height.toDouble()
+    val maxSize = 2.0 * maxOf(w, h, 1.0)
     BwSheet(
         title = "Numbers",
         onDismiss = { tool.numbersOpen = false },
@@ -42,14 +47,26 @@ fun TransformNumbersSheet(tool: TransformTool) {
     ) {
         SectionHeader("Position (top-left)")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LengthField("X", bounds.left.toDouble(), { tool.setPosition(left = it) }, unit, dpi, Modifier.weight(1f), step = null)
-            LengthField("Y", bounds.top.toDouble(), { tool.setPosition(top = it) }, unit, dpi, Modifier.weight(1f), step = null)
+            LengthField(
+                "X", bounds.left.toDouble(), { tool.setPosition(left = it) }, unit, dpi, Modifier.weight(1f), step = null,
+                sliderMinPx = -w, sliderMaxPx = 2.0 * w,
+            )
+            LengthField(
+                "Y", bounds.top.toDouble(), { tool.setPosition(top = it) }, unit, dpi, Modifier.weight(1f), step = null,
+                sliderMinPx = -h, sliderMaxPx = 2.0 * h,
+            )
         }
 
         SectionHeader("Size")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LengthField("Width", st.width.toDouble(), { tool.setSize(width = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0)
-            LengthField("Height", st.height.toDouble(), { tool.setSize(height = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0)
+            LengthField(
+                "Width", st.width.toDouble(), { tool.setSize(width = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0,
+                sliderMinPx = 1.0, sliderMaxPx = maxSize,
+            )
+            LengthField(
+                "Height", st.height.toDouble(), { tool.setSize(height = it) }, unit, dpi, Modifier.weight(1f), step = null, minPx = 1.0,
+                sliderMinPx = 1.0, sliderMaxPx = maxSize,
+            )
         }
         ToggleRow("Keep aspect ratio", tool.keepAspect, { tool.keepAspect = it })
         Text(
@@ -68,6 +85,8 @@ fun TransformNumbersSheet(tool: TransformTool) {
             min = -360.0,
             max = 360.0,
             step = 1.0,
+            sliderMin = -180.0,
+            sliderMax = 180.0,
         )
         NumberField(
             label = "Scale",
@@ -78,6 +97,10 @@ fun TransformNumbersSheet(tool: TransformTool) {
             min = 0.1,
             max = 10000.0,
             step = 1.0,
+            // 1 % .. 10000 % on a logarithmic slider: 100 % sits in the middle.
+            sliderMin = 1.0,
+            sliderMax = 10000.0,
+            logSlider = true,
             modifier = Modifier.padding(top = 4.dp),
         )
 

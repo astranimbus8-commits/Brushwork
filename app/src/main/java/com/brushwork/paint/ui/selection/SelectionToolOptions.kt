@@ -287,6 +287,7 @@ internal fun SliderChip(label: String, value: Int, range: IntRange, suffix: Stri
                     min = range.first.toDouble(),
                     max = range.last.toDouble(),
                     step = 1.0,
+                    adjust = com.brushwork.paint.ui.common.NumberAdjust.NONE, // the slider is right above
                 )
             }
         }

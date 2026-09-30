@@ -27,8 +27,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
@@ -117,11 +119,23 @@ fun ColorPickerPanel(controller: EditorController, onDismiss: () -> Unit) {
             HexField(state, withAlpha = false, modifier = Modifier.width(132.dp))
         }
         Spacer(Modifier.height(8.dp))
-        PickerBody(state, mode, wheelMaxSize = 290.dp)
+        PickerBody(state, mode, wheelMaxSize = wheelSizeForSheet(controlsAbove = 128.dp))
         if (colorMode != ColorMode.RGB) ColorModeHint(colorMode)
         PaletteSection(store, current = current, onUse = use, display = display)
         RecentColorsSection(store, onUse = use, display = display)
     }
+}
+
+/**
+ * Largest wheel that fits, whole, in a half-height sheet under [controlsAbove] of other controls
+ * (the sheet's handle, title row and padding are accounted for here), between 150dp and 290dp.
+ * On a 360 x 760dp phone that is about 170dp; the palettes follow below it (scroll to see them).
+ */
+@Composable
+internal fun wheelSizeForSheet(controlsAbove: Dp): Dp {
+    val screen = LocalConfiguration.current.screenHeightDp.dp
+    val sheetChrome = 16.dp + 48.dp + 16.dp // drag handle, title row, bottom padding
+    return (screen * 0.5f - sheetChrome - controlsAbove).coerceIn(150.dp, 290.dp)
 }
 
 /** Primary swatch over the secondary one (tap to swap). */
