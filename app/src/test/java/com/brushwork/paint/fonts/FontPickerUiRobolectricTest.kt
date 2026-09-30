@@ -58,6 +58,10 @@ class FontPickerUiRobolectricTest {
         SmokeUi.click("Serif", exact = true)
         assertEquals(TextFont.SERIF, tool.item!!.spec.font)
         assertTrue(SmokeUi.has("Font: Serif", exact = true))
+        // Remembered as recent, but the open list doesn't change under the finger.
+        assertTrue(Smoke.pumpUntil { store.recent.firstOrNull() == FontIds.keyOf(TextFont.SERIF) })
+        SmokeUi.settle()
+        assertFalse(SmokeUi.has("RECENT", exact = true))
 
         // Star a font: it is listed under Favorites (and saved).
         SmokeUi.field("Search fonts").type("casual")
@@ -88,6 +92,11 @@ class FontPickerUiRobolectricTest {
         SmokeUi.settle()
         assertTrue(SmokeUi.has("isn't on this device"))
         assertTrue(tool.fontMissing)
+        SmokeUi.click("Done", exact = true)
+        assertFalse(SmokeUi.has("Search fonts"))
+        // Next time the picker opens, the fonts used are listed under Recent.
+        SmokeUi.click("Choose font")
+        assertTrue(SmokeUi.has("RECENT", exact = true))
         SmokeUi.click("Done", exact = true)
         assertFalse(SmokeUi.has("Search fonts"))
         Smoke.assertQuiet(c, "fonts picked")

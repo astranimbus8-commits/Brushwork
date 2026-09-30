@@ -16,7 +16,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.brushwork.paint.tools.text.TextFont
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -60,6 +63,10 @@ class FontStore internal constructor(
     var loaded: Boolean by mutableStateOf(false)
         private set
 
+    /** True while an import runs (a reopened font picker still shows it). */
+    var importing: Boolean by mutableStateOf(false)
+        private set
+
     private var index = FontIndexData()
     private val mutex = Mutex()
     private val typefaces = ConcurrentHashMap<String, Typeface>()
@@ -89,7 +96,13 @@ class FontStore internal constructor(
         typefaces[id]?.let { return it }
         val file = fileOf(id) ?: return null
         val tf = loadTypeface(file) ?: return null
-        return typefaces.putIfAbsent(id, tf) ?: tf
+        val cached = typefaces.putIfAbsent(id, tf) ?: tf
+        // Deleted while it was loading (a picker row loads on a background thread): not cached.
+        if (!file.exists()) {
+            typefaces.remove(id, cached)
+            return null
+        }
+        return cached
     }
 
     /** Whether imported font [id] can be drawn on this device. */
@@ -136,22 +149,33 @@ class FontStore internal constructor(
 
     // ------------------------------------------------------------------ changes
 
-    /** Imports fonts and zips of fonts (see [FontImporter]); returns what happened. */
+    /**
+     * Imports fonts and zips of fonts (see [FontImporter]); returns what happened. Once started
+     * it always finishes and updates the lists (fonts copied to disk are never left out of the
+     * index), even when the caller is cancelled meanwhile (e.g. the font picker was closed).
+     */
     suspend fun import(sources: List<FontImporter.Source>): FontImportReport = mutex.withLock {
         ensureLoaded()
-        val existing = index.fonts
-        val (report, next) = withContext(io) {
-            val importer = FontImporter(dir, limits, validator = ::validate)
-            val r = importer.import(sources, existing)
-            val n = index.copy(fonts = index.fonts + r.added).sanitized()
-            if (r.added.isNotEmpty()) writeIndex(n)
-            r to n
+        withContext(NonCancellable) {
+            importing = true
+            try {
+                val existing = index.fonts
+                val (report, next) = withContext(io) {
+                    val importer = FontImporter(dir, limits, validator = ::validate)
+                    val r = importer.import(sources, existing)
+                    val n = index.copy(fonts = index.fonts + r.added).sanitized()
+                    if (r.added.isNotEmpty()) writeIndex(n)
+                    r to n
+                }
+                if (report.added.isNotEmpty()) {
+                    publish(next)
+                    bumpGeneration()
+                }
+                report
+            } finally {
+                importing = false
+            }
         }
-        if (report.added.isNotEmpty()) {
-            publish(next)
-            bumpGeneration()
-        }
-        report
     }
 
     /** Imports the documents [uris] (Storage Access Framework / "Open with" intents). */
@@ -175,13 +199,16 @@ class FontStore internal constructor(
         ensureLoaded()
         if (index.fonts.none { it.id == id }) return@withLock false
         val next = index.without(id)
-        withContext(io) {
-            fileOf(id)?.delete()
-            writeIndex(next)
+        // File, index and lists always change together (see import).
+        withContext(NonCancellable) {
+            withContext(io) {
+                fileOf(id)?.delete()
+                writeIndex(next)
+            }
+            typefaces.remove(id)
+            publish(next)
+            bumpGeneration()
         }
-        typefaces.remove(id)
-        publish(next)
-        bumpGeneration()
         true
     }
 
@@ -196,9 +223,10 @@ class FontStore internal constructor(
         ensureLoaded()
         val next = transform(index).sanitized()
         if (next == index) return@withLock
-        // Shown at once, then written (off the main thread).
+        // Shown at once, then written (off the main thread), also when the caller goes away
+        // meanwhile (a star tapped just before closing the picker is still saved).
         publish(next)
-        withContext(io) { writeIndex(next) }
+        withContext(NonCancellable + io) { writeIndex(next) }
     }
 
     private fun publish(data: FontIndexData) {
@@ -241,6 +269,12 @@ class FontStore internal constructor(
             private set
 
         @Volatile private var instance: FontStore? = null
+
+        /**
+         * App-wide scope (main thread) for imports that must outlive the screen that started them:
+         * "Open with Brushwork", or an import whose font picker is closed before it finishes.
+         */
+        val appScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
 
         private fun bumpGeneration() { generation++ }
 

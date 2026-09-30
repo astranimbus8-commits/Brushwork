@@ -291,9 +291,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
         return decoded to prep
     }
 
-    /** Reopens the editor for the current text. */
+    /**
+     * Reopens the editor for the current text. Already open (its sheet minimized, and "Edit text"
+     * tapped): nothing changes, so Cancel still takes back everything since it opened and still
+     * removes a new text.
+     */
     fun openEditor() {
         val cur = item ?: return
+        if (editorOpen) return
         editorBackup = cur
         editingNew = false
         editorOpen = true
@@ -305,12 +310,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
      */
     fun confirmEditor() {
         val cur = item
-        editorOpen = false
-        editorBackup = null
         if (cur != null && cur.text.isBlank() && editingLayer != null) {
-            deleteEmptiedLayer()
+            // Refused (the layer was locked or hidden meanwhile; a message says so): the editor
+            // stays open, so the text can be typed again or the edit cancelled.
+            if (deleteEmptiedLayer()) {
+                editorOpen = false
+                editorBackup = null
+            }
             return
         }
+        editorOpen = false
+        editorBackup = null
         if (cur == null || cur.text.isBlank()) item = null else nextSpec = styleToRemember(cur.spec)
         controller.invalidateOverlay()
     }

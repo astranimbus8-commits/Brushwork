@@ -71,6 +71,10 @@ class TextEditorOpenGesturesRobolectricTest {
         c.twoFingerEnd(false)
         assertEquals(60f, tool.item!!.spec.sizePx, 0.01f)
 
+        // "Edit text" tapped while the editor is already open (its sheet minimized): nothing
+        // changes, so Cancel still takes back everything done since it opened.
+        tool.openEditor()
+        assertTrue(tool.editorOpen)
         // Cancel: back to how the text was when the editor opened.
         tool.cancelEditor()
         assertEquals(150f, tool.item!!.cx, 0.01f)
@@ -83,7 +87,10 @@ class TextEditorOpenGesturesRobolectricTest {
         c.pointerMove(ToolPoint(130f, 100f))
         c.pointerUp(ToolPoint(130f, 100f))
         assertEquals(130f, tool.item!!.cx, 0.01f)
+        tool.openEditor()
+        assertTrue("still the new text", tool.editingNew)
         tool.cancelEditor()
         assertNull(tool.item)
+        assertEquals(1, c.doc.layers.size)
     }
 }

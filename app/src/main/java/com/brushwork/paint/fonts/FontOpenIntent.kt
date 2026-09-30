@@ -5,9 +5,24 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FontDownload
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.brushwork.paint.ui.theme.BrushworkTheme
 import kotlinx.coroutines.launch
 
 /**
@@ -40,20 +55,19 @@ object FontOpenIntent {
         (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
         else intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)).orEmpty().filterNotNull()
 
-    /** App-wide scope: the import finishes even while the activity goes away. */
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-
     /**
-     * If [intent] opens font files: imports them, shows the result in a toast and finishes
-     * [activity] afterwards (the read permission of the documents lasts as long as the activity).
-     * Returns true when it took the intent (the caller then shows no UI).
+     * If [intent] opens font files: shows "Importing fonts…", imports them, shows the result in a
+     * toast and finishes [activity] afterwards (the read permission of the documents lasts as
+     * long as the activity). Returns true when it took the intent (the caller shows nothing else).
      */
     fun handle(activity: Activity, intent: Intent?): Boolean {
         val uris = uris(intent)
         if (uris.isEmpty()) return false
         val app = activity.applicationContext
         val store = FontStore.get(app)
-        scope.launch {
+        (activity as? ComponentActivity)?.setContent { BrushworkTheme { ImportingScreen() } }
+        // App-wide scope: the import finishes even while the activity goes away.
+        FontStore.appScope.launch {
             val message = try {
                 val report = store.importUris(app, uris)
                 if (report.added.isNotEmpty()) "${report.message}. Pick it in the Text tool's font list." else report.message
@@ -61,8 +75,28 @@ object FontOpenIntent {
                 "Couldn't import the font: ${e.message ?: e.javaClass.simpleName}"
             }
             Toast.makeText(app, message, Toast.LENGTH_LONG).show()
-            if (!activity.isFinishing) activity.finish()
+            if (!activity.isFinishing) {
+                // Opened in a task of its own: remove that (else empty) task from Recents too.
+                // Never when it sits on top of the app's own task (the editor lives below).
+                if (activity.isTaskRoot) activity.finishAndRemoveTask() else activity.finish()
+            }
         }
         return true
+    }
+
+    /** What shows while the files are read (usually well under a second; nothing animates). */
+    @Composable
+    private fun ImportingScreen() {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(Icons.Filled.FontDownload, contentDescription = null, tint = MaterialTheme.colorScheme.onBackground, modifier = Modifier.size(48.dp))
+                Text(
+                    "Importing fonts…",
+                    color = MaterialTheme.colorScheme.onBackground,
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
+            }
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.fonts
 
 import android.graphics.Typeface
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -9,6 +10,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -38,12 +41,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -67,6 +72,7 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Document types the "Import fonts" picker offers: fonts, and zips (how dafont.com serves them).
@@ -85,11 +91,28 @@ private sealed class FontRow(val key: String, val name: String) {
     class Imported(val font: ImportedFont) : FontRow(FontIds.keyOf(font.id), font.name)
 }
 
+/** One item of the picker's list: a section header, an empty-section note or a font row. */
+private sealed class PickerEntry(val key: String) {
+    class Header(val title: String) : PickerEntry("header:$title")
+    class Note(section: String, val text: String) : PickerEntry("empty:$section")
+    class Font(section: String, val row: FontRow) : PickerEntry(rowKey(section, row.key))
+
+    companion object {
+        fun rowKey(section: String, fontKey: String) = "$section:$fontKey"
+    }
+}
+
+private const val IMPORTED = "Imported"
+
 /**
  * The text tool's font picker: search, "Import fonts" (fonts or dafont zips through the system
  * file picker), then Favorites, Recent, Built-in and Imported fonts, every row written in its own
  * font with [sample]. Rows have a star (favorite) and, for imported fonts, a delete button.
- * Picking a font applies it at once (the sheet stays open to compare fonts).
+ * Picking a font applies it at once (the sheet stays open to compare fonts; the Recent section
+ * keeps the order it had when the sheet opened, so rows never jump under the finger).
+ *
+ * An import runs on in the app's scope when the sheet is closed meanwhile (its result is then
+ * shown in a toast).
  */
 @Composable
 fun FontPickerSheet(
@@ -105,30 +128,49 @@ fun FontPickerSheet(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var query by remember { mutableStateOf("") }
-    var importing by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<ImportedFont?>(null) }
-    LaunchedEffect(store) { store.load() }
+    /** Recent fonts as they were when the sheet opened (null until the index is read). */
+    var recentShown by remember { mutableStateOf<List<String>?>(null) }
+    /** Key of a list item to scroll to (the fonts just imported). */
+    var scrollTo by remember { mutableStateOf<String?>(null) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(store) {
+        store.load()
+        if (recentShown == null) recentShown = store.recent
+    }
+    // Whether this sheet is still on screen when an import finishes.
+    val showing = remember { AtomicBoolean(true) }
+    DisposableEffect(Unit) { onDispose { showing.set(false) } }
+    val pickImported by rememberUpdatedState(onPickImported)
+    val fontsChanged by rememberUpdatedState(onFontsChanged)
 
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isEmpty()) return@rememberLauncherForActivityResult
-        importing = true
         status = null
-        scope.launch {
+        val app = context.applicationContext
+        FontStore.appScope.launch {
             val report = try {
-                store.importUris(context, uris)
+                store.importUris(app, uris)
             } catch (e: Exception) {
                 null
             }
-            importing = false
-            status = report?.message ?: "Couldn't import these files"
-            if (report != null && report.added.isNotEmpty()) {
-                onFontsChanged()
-                // A single new font is most likely the one wanted: use it.
-                report.added.singleOrNull()?.let { f ->
-                    onPickImported(f)
-                    store.markUsed(FontIds.keyOf(f.id))
-                }
+            val message = report?.message ?: "Couldn't import these files"
+            if (report != null && report.added.isNotEmpty()) fontsChanged()
+            if (!showing.get()) {
+                Toast.makeText(app, message, Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            status = message
+            if (report == null || report.added.isEmpty()) return@launch
+            query = ""
+            // Show the new fonts (the Imported section is below the built-in ones).
+            val first = report.added.minWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
+            scrollTo = PickerEntry.rowKey(IMPORTED, FontIds.keyOf(first.id))
+            // A single new font is most likely the one wanted: use it.
+            report.added.singleOrNull()?.let { f ->
+                pickImported(f)
+                store.markUsed(FontIds.keyOf(f.id))
             }
         }
     }
@@ -145,6 +187,29 @@ fun FontPickerSheet(
     val builtIns = remember { TextFont.entries.map { FontRow.BuiltIn(it) } }
     val imported = store.fonts.map { FontRow.Imported(it) }
     val all: Map<String, FontRow> = (builtIns + imported).associateBy { it.key }
+    val q = query.trim()
+    val entries: List<PickerEntry> = buildList {
+        fun section(title: String, rows: List<FontRow>, emptyNote: String? = null) {
+            if (rows.isEmpty() && emptyNote == null) return
+            add(PickerEntry.Header(title))
+            if (rows.isEmpty() && emptyNote != null) add(PickerEntry.Note(title, emptyNote))
+            rows.forEach { add(PickerEntry.Font(title, it)) }
+        }
+        if (q.isNotEmpty()) {
+            section("Results", (builtIns + imported).filter { it.name.contains(q, ignoreCase = true) }, "No font matches \"$q\"")
+        } else {
+            section("Favorites", store.favorites.mapNotNull { all[it] })
+            section("Recent", recentShown.orEmpty().filter { it !in store.favorites }.mapNotNull { all[it] })
+            section("Built-in", builtIns)
+            section(IMPORTED, imported, if (store.loaded) "No imported fonts yet: tap Import fonts to add .ttf, .otf or .zip files." else null)
+        }
+    }
+    LaunchedEffect(scrollTo) {
+        val key = scrollTo ?: return@LaunchedEffect
+        val i = entries.indexOfFirst { it.key == key }
+        if (i >= 0) listState.animateScrollToItem(i)
+        scrollTo = null
+    }
 
     BwSheet(
         title = "Fonts",
@@ -159,7 +224,7 @@ fun FontPickerSheet(
                 value = query,
                 onValueChange = { query = it },
                 singleLine = true,
-                label = { Text("Search fonts") },
+                label = { Text("Search fonts", maxLines = 1) },
                 leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
                 trailingIcon = if (query.isEmpty()) null else ({
                     IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Clear, contentDescription = "Clear search") }
@@ -167,14 +232,21 @@ fun FontPickerSheet(
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(8.dp))
-            FilledTonalButton(onClick = { launcher.launch(FONT_IMPORT_MIME_TYPES) }, enabled = !importing, modifier = Modifier.heightIn(min = 48.dp)) {
-                if (importing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            FilledTonalButton(
+                onClick = { launcher.launch(FONT_IMPORT_MIME_TYPES) },
+                enabled = !store.importing,
+                // Narrower than the default padding: the search field keeps room on a 360dp phone.
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
+                if (store.importing) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                 else Icon(Icons.Filled.FileOpen, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Import fonts")
+                Text("Import fonts", maxLines = 1)
             }
         }
-        status?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChrome, modifier = Modifier.padding(top = 4.dp)) }
+        val statusText = if (store.importing) "Importing fonts…" else status
+        statusText?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChrome, modifier = Modifier.padding(top = 4.dp)) }
         Text(
             "Download fonts from dafont.com (the .zip is fine), then import them here. Check each font's license on dafont before commercial use.",
             style = MaterialTheme.typography.bodySmall,
@@ -182,40 +254,29 @@ fun FontPickerSheet(
             modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
         )
 
-        val q = query.trim()
-        val sections: List<Pair<String, List<FontRow>>> = if (q.isNotEmpty()) {
-            val found = (builtIns + imported).filter { it.name.contains(q, ignoreCase = true) }
-            listOf("Results" to found)
-        } else {
-            val favorites = store.favorites.mapNotNull { all[it] }
-            val recent = store.recent.filter { it !in store.favorites }.mapNotNull { all[it] }
-            listOf("Favorites" to favorites, "Recent" to recent, "Built-in" to builtIns, "Imported" to imported)
-        }
-        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
-            for ((title, rows) in sections) {
-                if (rows.isEmpty() && title != "Imported" && title != "Results") continue
-                item(key = "header:$title") { SectionHeader(title) }
-                if (rows.isEmpty()) {
-                    item(key = "empty:$title") {
-                        Text(
-                            if (title == "Results") "No font matches \"$q\"" else "No imported fonts yet: tap Import fonts to add .ttf, .otf or .zip files.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = BrushworkColors.OnChromeDim,
-                            modifier = Modifier.padding(vertical = 8.dp),
+        LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false), state = listState) {
+            items(entries, key = { it.key }, contentType = { it.javaClass.simpleName }) { e ->
+                when (e) {
+                    is PickerEntry.Header -> SectionHeader(e.title)
+                    is PickerEntry.Note -> Text(
+                        e.text,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BrushworkColors.OnChromeDim,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                    is PickerEntry.Font -> {
+                        val row = e.row
+                        FontPickerRow(
+                            row = row,
+                            store = store,
+                            sample = sample,
+                            selected = row.key == selectedKey,
+                            favorite = store.isFavorite(row.key),
+                            onPick = { pick(row) },
+                            onToggleFavorite = { scope.launch { store.toggleFavorite(row.key) } },
+                            onDelete = (row as? FontRow.Imported)?.let { r -> { confirmDelete = r.font } },
                         )
                     }
-                }
-                items(rows, key = { "$title:${it.key}" }) { row ->
-                    FontPickerRow(
-                        row = row,
-                        store = store,
-                        sample = sample,
-                        selected = row.key == selectedKey,
-                        favorite = store.isFavorite(row.key),
-                        onPick = { pick(row) },
-                        onToggleFavorite = { scope.launch { store.toggleFavorite(row.key) } },
-                        onDelete = (row as? FontRow.Imported)?.let { r -> { confirmDelete = r.font } },
-                    )
                 }
             }
         }
@@ -243,6 +304,13 @@ fun FontPickerSheet(
     }
 }
 
+/** A picker row's typeface: still loading, ready, or missing (file gone or damaged). */
+private sealed interface RowFace {
+    data object Loading : RowFace
+    class Ready(val typeface: Typeface) : RowFace
+    data object Missing : RowFace
+}
+
 @Composable
 private fun FontPickerRow(
     row: FontRow,
@@ -254,16 +322,20 @@ private fun FontPickerRow(
     onToggleFavorite: () -> Unit,
     onDelete: (() -> Unit)?,
 ) {
-    val typeface: Typeface? = when (row) {
-        is FontRow.BuiltIn -> remember(row.font) { FontStore.builtIn(row.font) }
+    val face: RowFace = when (row) {
+        is FontRow.BuiltIn -> remember(row.font) { RowFace.Ready(FontStore.builtIn(row.font)) }
         is FontRow.Imported -> {
             // Loading a font file takes a moment: off the main thread, once (the store keeps it).
-            val loaded by produceState<Typeface?>(null, row.font.id) { value = withContext(Dispatchers.IO) { store.typeface(row.font.id) } }
+            val loaded by produceState<RowFace>(RowFace.Loading, row.font.id) {
+                value = withContext(Dispatchers.IO) { store.typeface(row.font.id)?.let { RowFace.Ready(it) } ?: RowFace.Missing }
+            }
             loaded
         }
     }
+    val typeface: Typeface? = (face as? RowFace.Ready)?.typeface
     val family = remember(typeface) { typeface?.let { FontFamily(it) } }
-    val unusable = row is FontRow.Imported && typeface == null && store.loaded && store.fileOf(row.font.id) == null
+    // Its file is gone or can't be loaded any more: shown in the default font, with a warning.
+    val unusable = face == RowFace.Missing
     Row(
         Modifier
             .fillMaxWidth()

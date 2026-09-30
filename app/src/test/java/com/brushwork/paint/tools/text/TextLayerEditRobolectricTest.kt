@@ -400,6 +400,38 @@ class TextLayerEditRobolectricTest {
         assertNull(c.renderOverride)
     }
 
+    @Test
+    fun anEmptiedTextWhoseLayerGotLockedKeepsTheEditorOpen() {
+        val (c, tool) = newController()
+        val layer = addText(c, tool, "Locked", 150f, 100f)
+        val before = pixels(layer.bitmap)
+        assertTrue(tool.editLayer(layer, openEditor = true))
+        tool.setText("")
+        // Locked from the layers window while the editor was open.
+        layer.locked = true
+        c.message = null
+        tool.confirmEditor()
+        assertEquals("nothing deleted", 2, c.doc.layers.size)
+        assertTrue(c.message!!.contains("locked"))
+        assertTrue("the editor stays open to fix or cancel it", tool.editorOpen)
+        assertEquals("", tool.item!!.text)
+        // Cancel: the old text is back, the layer untouched.
+        tool.cancelEditor()
+        assertEquals("Locked", tool.item!!.text)
+        assertFalse(tool.editorOpen)
+        tool.discard()
+        assertNull(c.renderOverride)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        assertEquals("Locked", TextCodec.decode(layer.textData)!!.text)
+        // Unlocked again: emptying it now deletes it.
+        layer.locked = false
+        assertTrue(tool.editLayer(layer, openEditor = true))
+        tool.setText(" ")
+        tool.confirmEditor()
+        assertFalse(tool.editorOpen)
+        assertEquals(1, c.doc.layers.size)
+    }
+
     // ------------------------------------------------------------------ hit testing
 
     @Test

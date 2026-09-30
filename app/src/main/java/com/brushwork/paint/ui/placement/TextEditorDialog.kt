@@ -405,7 +405,14 @@ private fun PlaceholderSection(tool: TextTool, onPath: Boolean) {
     val dpi = tool.controller.doc.dpi.toDouble()
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf<String?>(null) }
+    // A message about the last Insert, shown while the text and its look stay as they were then
+    // (a "no room" note goes away once the box or the text changes).
+    var note by remember { mutableStateOf<Pair<Pair<String, TextSpec>, String>?>(null) }
+    fun noteHere(message: String?) {
+        val now = tool.item
+        note = if (message == null || now == null) null else (now.text to now.spec) to message
+    }
+    val shownNote = note?.takeIf { it.first.first == item.text && it.first.second == spec }?.second
     val canFill = !onPath && spec.box.wrapFor(spec.vertical) > 0f
     val amounts = PlaceholderAmount.entries.filter { canFill || it != PlaceholderAmount.FILL }
     val amount = tool.placeholderAmount.takeIf { it in amounts } ?: PlaceholderAmount.PARAGRAPH
@@ -426,17 +433,20 @@ private fun PlaceholderSection(tool: TextTool, onPath: Boolean) {
                     val result = withContext(Dispatchers.Default) { runCatching { req.edit() } }
                     busy = false
                     val edit = result.getOrNull()
-                    note = when {
-                        result.isFailure -> "Couldn't make the placeholder text"
-                        edit == null -> "No room in this box: make the box bigger or the text smaller"
-                        else -> { tool.applyPlaceholder(req.item, edit); null }
-                    }
+                    noteHere(
+                        when {
+                            result.isFailure -> "Couldn't make the placeholder text"
+                            edit == null -> "No room in this box: make the box bigger or the text smaller"
+                            tool.applyPlaceholder(req.item, edit) -> null
+                            else -> "The text changed meanwhile: tap Insert again"
+                        }
+                    )
                 }
             },
         ) { Text(if (busy) "Filling…" else "Insert") }
     }
     Note(
-        note ?: if (canFill) {
+        shownNote ?: if (canFill) {
             val depth = PlaceholderFit.depthFor(spec)
             val wrap = spec.box.wrapFor(spec.vertical)
             val w = if (spec.vertical) depth else wrap

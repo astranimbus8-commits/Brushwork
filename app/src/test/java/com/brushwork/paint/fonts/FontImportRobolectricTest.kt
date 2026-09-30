@@ -10,6 +10,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.MainActivity
 import com.brushwork.paint.fonts.TestFonts.write
 import com.brushwork.paint.tools.text.TextFont
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -198,6 +201,44 @@ class FontImportRobolectricTest {
     }
 
     @Test
+    fun anImportOrStarWhoseCallerIsCancelledStillLandsInTheListAndTheIndex() = runBlocking<Unit> {
+        val s = store()
+        // The font picker is closed while its import runs: the coroutine that started it is
+        // cancelled while the font is being read.
+        lateinit var job: Job
+        job = launch {
+            s.import(listOf(FontImporter.Source("Arvo-Regular.ttf") { job.cancel(); ByteArrayInputStream(arvo) }))
+        }
+        job.join()
+        assertTrue(job.isCancelled)
+        assertFalse(s.importing)
+        assertEquals("the list shows the font copied to disk", 1, s.fonts.size)
+        assertTrue(File(s.dir, s.fonts[0].file).isFile)
+        // The next import keeps it in the index (not written from a stale list).
+        s.import(listOf(src("ComingSoon.ttf", coming)))
+        assertEquals(2, s.fonts.size)
+        val reread = FontStore(s.dir).also { it.load() }
+        assertEquals(s.fonts, reread.fonts)
+
+        // A star tapped just before the picker closes is still saved.
+        val key = FontIds.keyOf(s.fonts[0].id)
+        val star = launch(start = CoroutineStart.UNDISPATCHED) { s.toggleFavorite(key) }
+        star.cancel()
+        star.join()
+        assertEquals(listOf(key), s.favorites)
+        assertEquals(listOf(key), FontStore(s.dir).also { it.load() }.favorites)
+
+        // Deleting, cancelled the same way: file, list and index change together.
+        val gone = s.fonts[1]
+        val del = launch(start = CoroutineStart.UNDISPATCHED) { s.delete(gone.id) }
+        del.cancel()
+        del.join()
+        assertTrue(s.fonts.none { it.id == gone.id })
+        assertNull(s.fileOf(gone.id))
+        assertTrue(FontStore(s.dir).also { it.load() }.fonts.none { it.id == gone.id })
+    }
+
+    @Test
     fun loadingRepairsALostOrStaleIndex() = runBlocking<Unit> {
         val s = store()
         s.import(listOf(src("a.ttf", arvo), src("c.ttf", coming)))
@@ -245,13 +286,18 @@ class FontImportRobolectricTest {
         File(context.filesDir, FontStore.DIR_NAME).deleteRecursively()
         val f = File(context.cacheDir, "Download/ComingSoon.ttf").write(coming)
         val intent = Intent(Intent.ACTION_VIEW, Uri.fromFile(f)).setClass(context, MainActivity::class.java)
-        val activity = Robolectric.buildActivity(MainActivity::class.java, intent).setup().get()
+        val launched = Robolectric.buildActivity(MainActivity::class.java, intent).setup()
+        val activity = launched.get()
+        // It says what it is doing while the font is read (no blank window).
+        assertTrue(activity.window.decorView.findViewById<android.view.ViewGroup>(android.R.id.content).childCount > 0)
         val end = System.currentTimeMillis() + 20_000
         while (!activity.isFinishing && System.currentTimeMillis() < end) {
-            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20))
+            shadowOf(Looper.getMainLooper()).idle()
             Thread.sleep(5)
         }
         assertTrue("closes after importing", activity.isFinishing)
+        // The system then destroys it (and its "Importing fonts…" screen with its spinner).
+        launched.pause().stop().destroy()
         val toast = ShadowToast.getTextOfLatestToast()
         assertTrue(toast, toast.startsWith("Added the font Coming Soon"))
         assertEquals(1, FontStore.get(context).fonts.size)
