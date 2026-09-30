@@ -7,6 +7,7 @@ import com.brushwork.paint.tools.text.VerticalGlyphKind.SMALL_KANA
 import com.brushwork.paint.tools.text.VerticalGlyphKind.TATE_CHU_YOKO
 import com.brushwork.paint.tools.text.VerticalGlyphKind.UPRIGHT
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VerticalTextLayoutTest {
@@ -91,6 +92,76 @@ class VerticalTextLayoutTest {
         val r = VerticalTextLayout.layout("12月", 10f, 0f, 1f, TextAlign.START, latin)
         assertEquals(2, r.glyphs.size)
         assertEquals(20f, r.height, 1e-4f) // tate-chu-yoko takes one em
+    }
+
+    // ------------------------------------------------------------------ upright letters
+
+    @Test
+    fun uprightStyleStacksEveryCharacterUprightInOneColumn() {
+        val r = VerticalTextLayout.layout("Hi, 42!?", 10f, 0f, 1.2f, TextAlign.START, latin, style = VerticalStyle.UPRIGHT)
+        assertEquals(1, r.columns)
+        // No tate-chu-yoko, nothing turned: one upright cell per character, one em each.
+        assertEquals(listOf("H", "i", ",", " ", "4", "2", "!", "?"), r.glyphs.map { it.text })
+        assertEquals(List(8) { UPRIGHT }, r.glyphs.map { it.kind })
+        assertEquals(80f, r.height, 1e-4f)
+        assertEquals(10f, r.width, 1e-4f)
+        // Same x (centered in the column), strictly increasing y.
+        assertEquals(1, r.glyphs.map { it.cx }.distinct().size)
+        assertEquals(5f, r.glyphs[0].cx, 1e-4f)
+        assertTrue(r.glyphs.zipWithNext().all { (a, b) -> b.cy > a.cy })
+        assertEquals(5f, r.glyphs[0].cy, 1e-4f)
+        assertEquals(75f, r.glyphs[7].cy, 1e-4f)
+    }
+
+    @Test
+    fun uprightStyleOrientation() {
+        for (s in listOf("A", "g", "7", "(", "-", ".", "–", "é")) assertEquals(s, UPRIGHT, VerticalTextLayout.kindOf(s, VerticalStyle.UPRIGHT))
+        // Japanese vertical forms keep their vertical shape in both styles.
+        assertEquals(ROTATED, VerticalTextLayout.kindOf("ー", VerticalStyle.UPRIGHT))
+        assertEquals(ROTATED, VerticalTextLayout.kindOf("「", VerticalStyle.UPRIGHT))
+        assertEquals(PUNCTUATION, VerticalTextLayout.kindOf("。", VerticalStyle.UPRIGHT))
+        assertEquals(SMALL_KANA, VerticalTextLayout.kindOf("ょ", VerticalStyle.UPRIGHT))
+        assertEquals(UPRIGHT, VerticalTextLayout.kindOf("漢", VerticalStyle.UPRIGHT))
+        // Mixed (manga) style is unchanged.
+        assertEquals(ROTATED, VerticalTextLayout.kindOf("A", VerticalStyle.MIXED))
+        assertEquals(ROTATED, VerticalTextLayout.kindOf("–", VerticalStyle.MIXED))
+    }
+
+    @Test
+    fun letterSpacingIsTheGapAndLineSpacingThePitch() {
+        val r = VerticalTextLayout.layout("AB\nC", 10f, 0.5f, 2f, TextAlign.START, latin, style = VerticalStyle.UPRIGHT)
+        assertEquals(2, r.columns)
+        assertEquals(30f, r.width, 1e-4f)       // em + 1 pitch of 2 em
+        assertEquals(25f, r.height, 1e-4f)      // 10 + 5 gap + 10
+        assertEquals(20f, r.glyphs[1].cy, 1e-4f)
+        assertEquals(25f, r.glyphs[0].cx, 1e-4f) // first column on the right
+        assertEquals(5f, r.glyphs[2].cx, 1e-4f)
+        val ltr = VerticalTextLayout.layout("AB\nC", 10f, 0.5f, 2f, TextAlign.START, latin, style = VerticalStyle.UPRIGHT, leftToRight = true)
+        assertEquals(5f, ltr.glyphs[0].cx, 1e-4f) // first column on the left
+        assertEquals(25f, ltr.glyphs[2].cx, 1e-4f)
+    }
+
+    @Test
+    fun columnsWrapAtTheBoxHeightByWord() {
+        // 40 px = 4 cells per column.
+        val r = VerticalTextLayout.layout("AB CDE FGHIJK", 10f, 0f, 1.5f, TextAlign.START, latin, style = VerticalStyle.UPRIGHT, wrapLength = 40f)
+        val cols = r.glyphs.groupBy { it.column }.values.map { g -> g.joinToString("") { it.text } }
+        assertEquals(listOf("AB", "CDE", "FGHI", "JK"), cols)
+        assertEquals(4, r.columns)
+        assertEquals(40f, r.height, 1e-4f)
+        assertTrue(r.glyphs.all { it.cy - it.advance / 2f >= -1e-4f && it.cy + it.advance / 2f <= 40f + 1e-4f })
+        // Alignment inside the fixed height.
+        val end = VerticalTextLayout.layout("AB", 10f, 0f, 1f, TextAlign.END, latin, style = VerticalStyle.UPRIGHT, wrapLength = 40f)
+        assertEquals(25f, end.glyphs[0].cy, 1e-4f)
+        assertEquals(35f, end.glyphs[1].cy, 1e-4f)
+        val center = VerticalTextLayout.layout("AB", 10f, 0f, 1f, TextAlign.CENTER, latin, style = VerticalStyle.UPRIGHT, wrapLength = 40f)
+        assertEquals(15f, center.glyphs[0].cy, 1e-4f)
+        // CJK without spaces wraps between any two characters; a cell taller than the box still fits alone.
+        val cjk = VerticalTextLayout.layout("漢字漢字漢", 10f, 0f, 1f, TextAlign.START, latin, wrapLength = 20f)
+        assertEquals(3, cjk.columns)
+        val tiny = VerticalTextLayout.layout("AB", 10f, 0f, 1f, TextAlign.START, latin, style = VerticalStyle.UPRIGHT, wrapLength = 4f)
+        assertEquals(2, tiny.columns)
+        assertEquals(10f, tiny.height, 1e-4f)
     }
 
     @Test

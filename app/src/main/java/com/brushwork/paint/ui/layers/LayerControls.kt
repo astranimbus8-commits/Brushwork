@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.Merge
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.DropdownMenu
@@ -377,6 +378,10 @@ private fun OverflowMenuButton(
         BarIcon(Icons.Filled.MoreVert, "More layer actions", enabled = true) { maskPage = false; open = true }
         DropdownMenu(expanded = open, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
             if (!maskPage) {
+                if (row.isText) {
+                    MenuItem("Edit text", Icons.Filled.TextFields) { act { LayerOps.editText(controller, layer) } }
+                    HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                }
                 MenuItem("Import picture", Icons.Filled.AddPhotoAlternate, enabled = canAddLayer) { close(); onImportPicture() }
                 MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); onRename() }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)
