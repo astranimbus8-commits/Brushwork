@@ -122,5 +122,10 @@ class MaskOpsTest {
         assertEquals(MaskOps.contentHash(a), MaskOps.contentHash(a.copy()))
         assertNotEquals(MaskOps.contentHash(a), MaskOps.contentHash(b))
         assertNotEquals(MaskOps.contentHash(PixelBuffer(10, 20)), MaskOps.contentHash(PixelBuffer(20, 10)))
+        // Segmentation treats transparency as white paper: same pixels to it, same key.
+        val clear = a.copy().also { it[3, 3] = 0x00000000; it[4, 4] = 0x80FF0000.toInt() }
+        val white = a.copy().also { it[3, 3] = -1; it[4, 4] = MaskOps.flattenOverWhite(0x80FF0000.toInt()) }
+        assertEquals(MaskOps.contentHash(white), MaskOps.contentHash(clear))
+        assertNotEquals(MaskOps.contentHash(a), MaskOps.contentHash(clear))
     }
 }

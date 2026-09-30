@@ -278,6 +278,28 @@ class InteractiveSegmenterTest {
     }
 
     @Test
+    fun objectSelectionOnTinyAndDegenerateImages() {
+        val images = listOf(
+            PixelBuffer.filled(1, 1, SegTestImages.RED),
+            PixelBuffer.filled(3, 2, 0x00000000),
+            PixelBuffer.filled(4000, 2, SegTestImages.RED),
+            PixelBuffer.filled(2, 1500, SegTestImages.GRAY_BG),
+        )
+        for (model in listOf(FloodModel(), null)) for (img in images) for (refine in listOf(true, false)) {
+            val pipeline = SegmentationPipeline(null, null, model)
+            val tap = ObjectPrompt.tap(img.width / 2f, img.height / 2f)
+            val r = pipeline.selectObject(img, tap, refine)
+            assertEquals("${img.width}x${img.height}", img.size, r.mask.size)
+            assertTrue(r.mask.all { it in 0f..1f })
+            // A tiny uniform picture: the tapped "object" is all of it.
+            if (img.size <= 6) assertTrue("${img.width}x${img.height} model=${model != null}", r.mask.all { it > 0.5f })
+            // A scribble across the whole picture is fine too.
+            val scribble = ObjectPrompt(floatArrayOf(0f, 0f, img.width - 0.5f, img.height - 0.5f))
+            assertEquals(img.size, pipeline.selectObject(img, scribble, refine).mask.size)
+        }
+    }
+
+    @Test
     fun subjectWithoutMlKitTapsTheMostSalientObject() {
         val w = 800; val h = 600
         val img = SegTestImages.disc(w, h, SegTestImages.GRAY_BG, SegTestImages.RED, 0.2f)

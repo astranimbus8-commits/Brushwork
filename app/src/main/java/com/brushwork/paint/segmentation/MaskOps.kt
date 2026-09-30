@@ -301,12 +301,19 @@ object MaskOps {
         return t * t * (3f - 2f * t)
     }
 
-    /** 64-bit content hash of an image (dimensions + every pixel), used as a cache key. */
+    /**
+     * 64-bit content hash of an image (dimensions + every pixel as segmentation sees it, i.e.
+     * flattened over white), used as a cache key. A canvas flattened over transparency (object
+     * select) and the same canvas flattened over white (smart select) share one analysis.
+     */
     fun contentHash(image: PixelBuffer): Long {
         var hash = -0x340d631b7bdddcdbL // FNV-1a offset basis
         hash = (hash xor image.width.toLong()) * 0x100000001b3L
         hash = (hash xor image.height.toLong()) * 0x100000001b3L
-        for (c in image.pixels) hash = (hash xor (c.toLong() and 0xFFFFFFFFL)) * 0x100000001b3L
+        for (c in image.pixels) {
+            val f = if (c ushr 24 == 255) c else flattenOverWhite(c)
+            hash = (hash xor (f.toLong() and 0xFFFFFFFFL)) * 0x100000001b3L
+        }
         return hash
     }
 }
