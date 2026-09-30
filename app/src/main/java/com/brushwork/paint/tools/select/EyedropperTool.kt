@@ -1,22 +1,31 @@
 package com.brushwork.paint.tools.select
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import kotlin.math.floor
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Eyedropper: touch or drag to sample a color (from the canvas composite or the active layer,
- * 1x1 / 3x3 / 5x5 average ignoring transparent pixels). A loupe ring shows the new color (top)
- * against the current one (bottom); releasing sets the drawing color and, optionally, returns
- * to the last painting tool.
+ * 1x1 / 3x3 / 5x5 average ignoring transparent pixels). A preview square above the finger shows
+ * the new color (top) against the current one (bottom) and a small ring marks the sampled pixel;
+ * releasing sets the drawing color and, optionally, returns to the last painting tool.
+ *
+ * It also serves the long-press color pick of the painting tools (controller.holdPicking): then
+ * releasing only sets the color, the tool stays, and a transparent spot keeps the color quietly.
  */
 class EyedropperTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.EYEDROPPER
@@ -24,21 +33,29 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
     var settings: EyedropperSettings by PersistedOption(controller.settings, "select.eyedropper", EyedropperSettings.serializer(), EyedropperSettings())
 
     private var active = false
+    /** This gesture is another tool's long-press pick (see class docs). */
+    private var holding = false
     private var sampled: Int? = null
     private var previous = 0
     private var posX = 0f
     private var posY = 0f
 
-    private val probe: Bitmap = Bitmap.createBitmap(MAX_SAMPLE, MAX_SAMPLE, Bitmap.Config.ARGB_8888)
-    private val probeCanvas = Canvas(probe)
     private val pixels = IntArray(MAX_SAMPLE * MAX_SAMPLE)
-    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val oval = RectF()
+
+    // Canvas sampling reads a flattened patch of the document around the finger, rendered once
+    // and reused while the finger stays inside it (a drag re-renders only every so often).
+    private val patch: Bitmap = Bitmap.createBitmap(PATCH_SIZE, PATCH_SIZE, Bitmap.Config.ARGB_8888)
+    private val patchCanvas = Canvas(patch)
+    private val patchRect = Rect()
+    private var patchValid = false
 
     override fun onDown(p: ToolPoint) {
         active = true
+        holding = controller.holdPicking
         previous = controller.color
         sampled = null
+        // The document may have changed since the last pick.
+        patchValid = false
         sampleAt(p)
     }
 
@@ -50,25 +67,34 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         if (!active) return
         sampleAt(p)
         active = false
+        val hold = holding || controller.holdPicking
+        holding = false
+        patchValid = false
         controller.invalidateOverlay()
         val c = sampled
         if (c == null) {
-            val where = if (settings.source == SampleSource.LAYER) "on this layer" else "on the canvas"
-            controller.toast("Nothing to pick here: the area is transparent $where")
+            // A held brush that rests on an empty spot just keeps its color (the preview showed it).
+            if (!hold) {
+                val where = if (settings.source == SampleSource.LAYER) "on this layer" else "on the canvas"
+                controller.toast("Nothing to pick here: the area is transparent $where")
+            }
             return
         }
         controller.color = c or 0xFF000000.toInt()
-        if (settings.returnToBrush) controller.selectTool(controller.lastPaintTool)
+        if (!hold && settings.returnToBrush) controller.selectTool(controller.lastPaintTool)
     }
 
     override fun onCancel() {
         active = false
+        holding = false
         sampled = null
+        patchValid = false
         controller.invalidateOverlay()
     }
 
     private fun sampleAt(p: ToolPoint) {
         posX = p.x; posY = p.y
+        // Transparent spots keep the last color found in this gesture (what releasing picks).
         sample(p.x, p.y)?.let { sampled = it }
         controller.invalidateOverlay()
     }
@@ -79,6 +105,7 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
      */
     fun sample(x: Float, y: Float): Int? {
         val doc = controller.doc
+        if (!x.isFinite() || !y.isFinite()) return null
         val ix = floor(x).toInt(); val iy = floor(y).toInt()
         if (ix !in 0 until doc.width || iy !in 0 until doc.height) return null
         val half = (settings.sampleSize.coerceIn(1, MAX_SAMPLE) - 1) / 2
@@ -88,45 +115,145 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         if (settings.source == SampleSource.LAYER) {
             controller.activeLayer.bitmap.getPixels(pixels, 0, w, r.left, r.top, w, h)
         } else {
-            probe.eraseColor(0)
-            probeCanvas.save()
-            probeCanvas.clipRect(0, 0, w, h)
-            probeCanvas.translate(-r.left.toFloat(), -r.top.toFloat())
-            controller.compositor.drawDocument(probeCanvas, r, useOverrides = false)
-            probeCanvas.restore()
-            probe.getPixels(pixels, 0, w, 0, 0, w, h)
+            // Outside a gesture nothing guarantees the cached patch is current.
+            if (!active) patchValid = false
+            if (!patchValid || !patchRect.contains(r)) renderPatch(ix, iy)
+            if (!patchRect.contains(r)) return null
+            patch.getPixels(pixels, 0, w, r.left - patchRect.left, r.top - patchRect.top, w, h)
         }
         return averageOpaque(pixels, w * h)
     }
 
+    /** Flattens the document area around ([cx], [cy]) into [patch] (no tool previews). */
+    private fun renderPatch(cx: Int, cy: Int) {
+        val doc = controller.doc
+        val left = (cx - PATCH_SIZE / 2).coerceIn(0, max(0, doc.width - PATCH_SIZE))
+        val top = (cy - PATCH_SIZE / 2).coerceIn(0, max(0, doc.height - PATCH_SIZE))
+        patchRect.set(left, top, min(doc.width, left + PATCH_SIZE), min(doc.height, top + PATCH_SIZE))
+        patch.eraseColor(0)
+        patchCanvas.save()
+        patchCanvas.clipRect(0, 0, patchRect.width(), patchRect.height())
+        patchCanvas.translate(-left.toFloat(), -top.toFloat())
+        controller.compositor.drawDocument(patchCanvas, patchRect, useOverrides = false)
+        patchCanvas.restore()
+        patchValid = true
+    }
+
+    // ------------------------------------------------------------------ overlay
+
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val box = RectF()
+    private val half = RectF()
+    private val topPath = Path()
+    private val radii = FloatArray(8)
+    private var checkerPaint: Paint? = null
+    private var checkerCell = 0f
+
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         if (!active) return
-        val c = t.docToScreen(posX, posY)
-        val radius = t.dp(46f)
-        val thick = t.dp(14f)
-        oval.set(c.x - radius, c.y - radius, c.x + radius, c.y + radius)
-        ring.strokeWidth = thick
-        ring.color = (sampled ?: previous) or 0xFF000000.toInt()
-        canvas.drawArc(oval, 180f, 180f, false, ring)
-        ring.color = previous or 0xFF000000.toInt()
-        canvas.drawArc(oval, 0f, 180f, false, ring)
-        // Thin light/dark rims keep the ring visible on any background.
-        ring.strokeWidth = t.dp(1.5f)
-        ring.color = 0xFFFFFFFF.toInt()
-        canvas.drawCircle(c.x, c.y, radius + thick / 2, ring)
-        canvas.drawCircle(c.x, c.y, radius - thick / 2, ring)
-        ring.color = 0x99000000.toInt()
-        canvas.drawCircle(c.x, c.y, radius + thick / 2 + t.dp(1.5f), ring)
-        canvas.drawCircle(c.x, c.y, radius - thick / 2 - t.dp(1.5f), ring)
-        // Crosshair marking the sampled pixel.
-        val arm = t.dp(6f)
-        ring.color = 0xFFFFFFFF.toInt()
-        canvas.drawLine(c.x - arm, c.y, c.x + arm, c.y, ring)
-        canvas.drawLine(c.x, c.y - arm, c.x, c.y + arm, ring)
+        val at = t.docToScreen(posX, posY)
+        val fx = at.x
+        val fy = at.y
+        if (!fx.isFinite() || !fy.isFinite()) return
+        placePreview(fx, fy, canvas.width.toFloat(), canvas.height.toFloat(), t.density, box)
+        drawPreview(canvas, t)
+        drawMarker(canvas, t, fx, fy)
+    }
+
+    /**
+     * The preview square (new color on top, current color below) with a two-tone border so it
+     * reads on any background. A checkerboard stands for "nothing picked yet" (transparent).
+     */
+    private fun drawPreview(canvas: Canvas, t: ViewTransform) {
+        val corner = t.dp(PREVIEW_CORNER_DP)
+        // Soft dark rim first (visible on light canvases).
+        stroke.color = 0x80000000.toInt()
+        stroke.strokeWidth = t.dp(4f)
+        canvas.drawRoundRect(box, corner, corner, stroke)
+
+        // Current color: the whole square, then the new color over its top half.
+        fill.color = previous or 0xFF000000.toInt()
+        canvas.drawRoundRect(box, corner, corner, fill)
+        half.set(box.left, box.top, box.right, box.centerY())
+        radii.fill(0f)
+        for (i in 0..3) radii[i] = corner // top-left and top-right corners (x, y each)
+        topPath.rewind()
+        topPath.addRoundRect(half, radii, Path.Direction.CW)
+        val c = sampled
+        if (c != null) {
+            fill.color = c or 0xFF000000.toInt()
+            canvas.drawPath(topPath, fill)
+        } else {
+            canvas.drawPath(topPath, checker(t.dp(6f)))
+        }
+
+        // Light inner rim and a hairline between the two halves.
+        stroke.color = 0xFFFFFFFF.toInt()
+        stroke.strokeWidth = t.dp(2f)
+        canvas.drawRoundRect(box, corner, corner, stroke)
+        stroke.strokeWidth = t.dp(1f)
+        canvas.drawLine(box.left, box.centerY(), box.right, box.centerY(), stroke)
+    }
+
+    /** Ring with a center dot on the exact sampled pixel. */
+    private fun drawMarker(canvas: Canvas, t: ViewTransform, x: Float, y: Float) {
+        val r = t.dp(MARKER_RADIUS_DP)
+        stroke.color = 0x99000000.toInt()
+        stroke.strokeWidth = t.dp(3.5f)
+        canvas.drawCircle(x, y, r, stroke)
+        stroke.color = 0xFFFFFFFF.toInt()
+        stroke.strokeWidth = t.dp(1.5f)
+        canvas.drawCircle(x, y, r, stroke)
+        fill.color = 0x99000000.toInt()
+        canvas.drawCircle(x, y, t.dp(2.25f), fill)
+        fill.color = 0xFFFFFFFF.toInt()
+        canvas.drawCircle(x, y, t.dp(1.25f), fill)
+    }
+
+    private fun checker(cell: Float): Paint {
+        checkerPaint?.let { if (checkerCell == cell) return it }
+        val bmp = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        bmp.setPixel(0, 0, 0xFFFFFFFF.toInt()); bmp.setPixel(1, 1, 0xFFFFFFFF.toInt())
+        bmp.setPixel(1, 0, 0xFFBDBDBD.toInt()); bmp.setPixel(0, 1, 0xFFBDBDBD.toInt())
+        val shader = BitmapShader(bmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        shader.setLocalMatrix(Matrix().apply { setScale(cell, cell) })
+        return Paint().apply { this.shader = shader }.also { checkerPaint = it; checkerCell = cell }
     }
 
     companion object {
         const val MAX_SAMPLE = 5
+
+        /** Side of the cached composite patch (document px). */
+        private const val PATCH_SIZE = 128
+        const val PREVIEW_SIZE_DP = 64f
+        /** Distance from the finger to the preview's center (screen dp). */
+        const val PREVIEW_OFFSET_DP = 80f
+        private const val PREVIEW_CORNER_DP = 12f
+        private const val PREVIEW_MARGIN_DP = 8f
+        private const val MARKER_RADIUS_DP = 9f
+
+        /**
+         * Where the preview square goes for a finger at ([fx], [fy]) in a [viewW] x [viewH]
+         * view (screen px; [density] px per dp): centered [PREVIEW_OFFSET_DP] above the finger so
+         * the finger doesn't hide it; beside it (on the roomier side) when there is no room above,
+         * never below (the hand is there). Always kept inside the view. Written into [out].
+         */
+        fun placePreview(fx: Float, fy: Float, viewW: Float, viewH: Float, density: Float, out: RectF) {
+            val size = PREVIEW_SIZE_DP * density
+            val halfSize = size / 2f
+            val offset = PREVIEW_OFFSET_DP * density
+            val margin = PREVIEW_MARGIN_DP * density
+            var cx = fx
+            var cy = fy - offset
+            if (cy - halfSize < margin) {
+                cy = fy
+                cx = if (viewW <= 0f || fx < viewW / 2f) fx + offset else fx - offset
+            }
+            if (viewW > 0f) cx = cx.coerceIn(margin + halfSize, max(margin + halfSize, viewW - margin - halfSize))
+            if (viewH > 0f) cy = cy.coerceIn(margin + halfSize, max(margin + halfSize, viewH - margin - halfSize))
+            out.set(cx - halfSize, cy - halfSize, cx + halfSize, cy + halfSize)
+        }
 
         /**
          * Alpha-weighted average of the first [count] NON-premultiplied pixels, ignoring fully

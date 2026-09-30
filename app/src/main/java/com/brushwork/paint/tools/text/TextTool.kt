@@ -14,11 +14,12 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.transform.TransformHandles
 import kotlin.math.max
 
 /**
  * Text tool: tap the canvas to place a text object, type in the editor dialog, then move it
- * (drag), rotate it (top handle) or resize it (corner handle) before committing it with ✓ into a
+ * (drag), rotate it (top handle) or resize it (corner handle, or pinch it with two fingers) before committing it with ✓ into a
  * new layer. Supports horizontal and vertical (manga) text, outline, spacing and alignment.
  *
  * The editor dialog and the "Numbers" sheet are hosted by `TextToolOptions` and driven by the
@@ -166,6 +167,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         editorBackup = null
         mode = Mode.NONE
         gestureStart = null
+        pinchStart = null
         controller.invalidateOverlay()
     }
 
@@ -300,6 +302,46 @@ class TextTool(controller: EditorController) : Tool(controller) {
         if (mode == Mode.MOVE || mode == Mode.ROTATE || mode == Mode.SCALE) gestureStart?.let { item = it }
         mode = Mode.NONE
         gestureStart = null
+        controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ two-finger pinch
+
+    /** The text when a two-finger pinch on it started (null = no pinch). */
+    private var pinchStart: TextItem? = null
+    private var pinchFocus = Vec2.ZERO
+
+    /**
+     * Two fingers on the pending text (the midpoint or either finger inside its box): pinching
+     * scales the font size, turning rotates it and moving drags it. Elsewhere the view zooms.
+     */
+    override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        pinchStart = null
+        val cur = item ?: return false
+        if (editorOpen) return false
+        val t = controller.viewTransform
+        val block = blockFor(cur)
+        if (listOf(focus, a, b).none { isInside(cur, block, it, t) }) return false
+        mode = Mode.NONE
+        gestureStart = null
+        pinchStart = cur
+        pinchFocus = focus
+        return true
+    }
+
+    override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        val start = pinchStart ?: return
+        // Placed or removed meanwhile (a chrome button): nothing to pinch any more.
+        if (item == null || editorOpen) { pinchStart = null; return }
+        val delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg)
+        item = start.pinched(pinchFocus, translation, scale, delta, maxSizePx)
+        controller.invalidateOverlay()
+    }
+
+    override fun onTwoFingerEnd(cancelled: Boolean) {
+        val start = pinchStart ?: return
+        pinchStart = null
+        if (cancelled && item != null && !editorOpen) item = start
         controller.invalidateOverlay()
     }
 
