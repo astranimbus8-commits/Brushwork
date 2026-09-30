@@ -236,7 +236,10 @@ internal class BrushStrokePreview(
     private var shownToast: String? = null
     private var lastRunAt = Long.MIN_VALUE / 2
     private var lastCostMs = 0L
-    /** Uptime at which the finger last stopped dragging the path (see [interacting]). */
+    /**
+     * Uptime of the last change of the stroke ([request]) or of the end of a drag ([interacting]):
+     * a draft is refined once the path has rested [REFINE_DELAY_MS] since then.
+     */
     private var restingSince = Long.MIN_VALUE / 2
     /** Time the last replay from scratch took (ms). */
     private var fullReplayMs = 0L
@@ -309,12 +312,17 @@ internal class BrushStrokePreview(
         val cur = live
         val tool = paintTool()
         val req = Request(geometry, points)
+        val shown = cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)
+        // The stroke changes (also without a finger on the canvas: nudge arrows held down, numeric
+        // fields scrubbed, sliders): a draft is only refined once the changes stop for a moment,
+        // instead of refining parts that the next change throws away again.
+        if (!shown) restingSince = SystemClock.uptimeMillis()
         if (deferred && interacting) {
             // Held back until the drag ends: only the latest geometry is kept.
             pending = req
             return
         }
-        if (cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)) {
+        if (shown) {
             // Already shown (e.g. a tap that only selected a point, or a cancelled touch)...
             pending = null
             unschedule()

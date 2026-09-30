@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushTool
+import com.brushwork.paint.brush.StrokeResources
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.tools.ToolId
@@ -26,7 +27,9 @@ import org.robolectric.shadows.ShadowLog
  * layers) through the real canvas view: 60 frames of a finger dragging an anchor / tangent
  * handle / shape handle with the default brush ("Current brush") or a plain line.
  *
- * The budgets are generous (a busy build machine must pass): v1.2 took 30 to 80 ms per frame
+ * The time budgets are generous (a busy build machine must pass; if a merged full-suite run
+ * flakes, these wall-clock limits are the first suspects, the dab / tile / allocation counts are
+ * machine-independent): v1.2 took 30 to 80 ms per frame
  * (worst frames 55 to 165 ms, 4400 to 7500 dabs and 1 to 1.8 MB of allocations per frame) for
  * the brush drags on the machine these numbers were measured on, and re-rendered 6 to 9 display
  * tiles per frame for the plain ones.
@@ -76,16 +79,26 @@ class VectorPerfBenchmarkTest {
 
     private fun moving(from: Vec2, dx: Float, dy: Float): (Int) -> Vec2 = { f -> Vec2(from.x + dx * (f + 1), from.y + dy * (f + 1)) }
 
-    /** A drag with the live brush stroke: one bounded replay per frame, exact again after the drag. */
-    private fun VectorPerfHarness.Stats.withinBrushBudget(): VectorPerfHarness.Stats {
-        assertTrue("$name: ${"%.2f".format(avgFrameMs)} ms per frame", avgFrameMs < 25.0)
-        assertTrue("$name: 90th percentile frame ${"%.2f".format(p90FrameMs)} ms", p90FrameMs < 40.0)
+    /**
+     * The frames of a drag with the live brush stroke do bounded work. The dab / allocation
+     * counts are machine-independent; the wall-clock limits leave a lot of room (several Gradle
+     * builds may share this machine) and still fail v1.2 (30 to 80 ms per frame).
+     */
+    private fun VectorPerfHarness.Stats.framesWithinBrushBudget(): VectorPerfHarness.Stats {
+        assertTrue("$name: ${"%.2f".format(avgFrameMs)} ms per frame", avgFrameMs < 30.0)
+        assertTrue("$name: 90th percentile frame ${"%.2f".format(p90FrameMs)} ms", p90FrameMs < 50.0)
         assertTrue("$name: ${"%.0f".format(stampsPerFrame)} dabs per frame", stampsPerFrame < 3500.0)
         assertTrue("$name: $maxFrameStamps dabs in the worst frame", maxFrameStamps < 4000)
         assertTrue("$name: ${"%.0f".format(allocKbPerFrame)} KB allocated per frame", allocKbPerFrame < 250.0)
+        return this
+    }
+
+    /** A drag with the live brush stroke: one bounded replay per frame, exact again after the drag. */
+    private fun VectorPerfHarness.Stats.withinBrushBudget(): VectorPerfHarness.Stats {
+        framesWithinBrushBudget()
         // After the drag the stroke becomes exact over several frames, not in one long stall.
         assertTrue("$name: $releaseMaxFrameStamps dabs in one frame after the drag", releaseMaxFrameStamps < 2000)
-        assertTrue("$name: 90th percentile frame after the drag ${"%.2f".format(releaseP90FrameMs)} ms", releaseP90FrameMs < 40.0)
+        assertTrue("$name: 90th percentile frame after the drag ${"%.2f".format(releaseP90FrameMs)} ms", releaseP90FrameMs < 50.0)
         val brush = c.tools.getValue(ToolId.BRUSH) as BrushTool
         assertTrue("$name: the live stroke is still shown", brush.isStroking)
         assertFalse("$name: the stroke is exact again after the drag", brush.isDraft)
@@ -140,6 +153,44 @@ class VectorPerfBenchmarkTest {
     fun curveBrushFillDragMiddleAnchor() {
         curve(false) { it.copy(stroke = CurveStroke.BRUSH, fill = true, closed = true, taper = false) }
         h.drag("curve brush+fill: middle anchor", anchors[2], moving(anchors[2], 6f, 3f), warmup = 10).withinBrushBudget()
+    }
+
+    @Test
+    fun curveBrushCommitRightAfterADrag() {
+        // ✓ tapped before the draft on screen was refined: the commit redraws it exactly in one
+        // go (the committed pixels must be exact), a one-time pause worth knowing about.
+        val tool = curve(false) { it.copy(stroke = CurveStroke.BRUSH, fill = false, taper = false) }
+        h.drag("curve brush: middle anchor, then ✓", anchors[2], moving(anchors[2], 6f, 3f), warmup = 10, release = false)
+            .framesWithinBrushBudget()
+        val brush = c.tools.getValue(ToolId.BRUSH) as BrushTool
+        assertTrue("still a draft when ✓ is tapped", brush.isDraft)
+        val stamper = StrokeResources.of(c).stamper
+        val s0 = stamper.stampCount
+        val t0 = System.nanoTime()
+        tool.commit()
+        val ms = (System.nanoTime() - t0) / 1e6
+        val dabs = stamper.stampCount - s0
+        println(String.format(java.util.Locale.ROOT, "[perf] %-34s commit=%.2fms dabs=%d", "curve brush: ✓ right after a drag", ms, dabs))
+        assertFalse(brush.isStroking)
+        assertEquals(1, c.undoManager.undoCount)
+        assertTrue("the draft part is redrawn exactly ($dabs dabs)", dabs > 1000)
+        assertTrue("commit took ${"%.1f".format(ms)} ms", ms < 1500.0)
+    }
+
+    @Test
+    fun curveBrushPinchAfterACancelledDrag() {
+        // A second finger lands while an anchor is dragged: the drag is taken back and the fingers
+        // zoom the view. The stroke goes back (as a draft, refined after a moment) with the same
+        // bounded work per frame as a drag.
+        val tool = curve(false) { it.copy(stroke = CurveStroke.BRUSH, fill = false, taper = false) }
+        val z0 = c.viewTransform.zoom
+        h.pinchAfterDrag("curve brush: pinch after a drag", anchors[2], moving(anchors[2], 6f, 3f)).framesWithinBrushBudget()
+        assertTrue("the view zoomed", c.viewTransform.zoom > z0 * 1.2f)
+        assertTrue("the drag was taken back", tool.anchors[2].pos.distanceTo(anchors[2]) < 1f)
+        h.settle(2000)
+        val brush = c.tools.getValue(ToolId.BRUSH) as BrushTool
+        assertTrue(brush.isStroking)
+        assertFalse("exact again once the path rests", brush.isDraft)
     }
 
     @Test

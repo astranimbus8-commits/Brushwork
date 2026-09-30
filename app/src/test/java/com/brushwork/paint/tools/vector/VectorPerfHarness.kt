@@ -129,6 +129,16 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         e.recycle()
     }
 
+    /** Two fingers (pointer ids 0 and 1) at screen points [a] and [b]; [index] for POINTER_DOWN / UP. */
+    private fun send2(action: Int, a: Vec2, b: Vec2, index: Int = 0) {
+        val props = Array(2) { i -> MotionEvent.PointerProperties().apply { id = i; toolType = MotionEvent.TOOL_TYPE_FINGER } }
+        val coords = arrayOf(a, b).map { p -> MotionEvent.PointerCoords().apply { x = p.x; y = p.y; pressure = 0.6f; size = 0.1f } }.toTypedArray()
+        val masked = action or (index shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        val e = MotionEvent.obtain(down, SystemClock.uptimeMillis(), masked, 2, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        view.dispatchTouchEvent(e)
+        e.recycle()
+    }
+
     /** One frame: the input, the looper for 16 ms, then the draw. */
     @Suppress("DEPRECATION")
     private fun frame(s: Stats?, input: () -> Unit) {
@@ -171,9 +181,10 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
     /**
      * A finger lands on document point [from] and moves along [path] (document points, two touch
      * samples per frame: 120 Hz input on a 60 Hz display), then lifts. The first [warmup] frames
-     * are not measured.
+     * are not measured. Without [release] the finger lifts and nothing else happens (no frame
+     * runs after it): the caller measures what follows.
      */
-    fun drag(name: String, from: Vec2, path: (Int) -> Vec2, frames: Int = 60, warmup: Int = 0): Stats {
+    fun drag(name: String, from: Vec2, path: (Int) -> Vec2, frames: Int = 60, warmup: Int = 0, release: Boolean = true): Stats {
         val s = Stats(name)
         // Garbage left by earlier tests (documents, tiles) is collected now, not mid-measurement.
         System.gc()
@@ -185,6 +196,11 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
             val mid = prev.lerp(next, 0.5f)
             frame(if (f >= warmup) s else null) { send(MotionEvent.ACTION_MOVE, screenOf(mid), screenOf(next)) }
             prev = next
+        }
+        if (!release) {
+            send(MotionEvent.ACTION_UP, screenOf(prev))
+            println(s)
+            return s
         }
         val st0 = stamper.stampCount
         // The finger lifts; the exact redraw after the drag (if any) happens within the next
@@ -207,6 +223,42 @@ internal class VectorPerfHarness(private val c: EditorController, private val vi
         s.releaseNs = total
         s.releaseMaxFrameNs = worst
         s.releaseStamps = stamper.stampCount - st0
+        println(s)
+        return s
+    }
+
+    /**
+     * A finger drags from document point [from] along [path] for [dragFrames] frames (not
+     * measured), then a second finger lands next to it (the one-finger edit is cancelled) and the
+     * two fingers spread apart, zooming the view, for [frames] measured frames; then both lift.
+     */
+    fun pinchAfterDrag(name: String, from: Vec2, path: (Int) -> Vec2, dragFrames: Int = 30, frames: Int = 40): Stats {
+        val s = Stats(name)
+        System.gc()
+        send(MotionEvent.ACTION_DOWN, screenOf(from))
+        idle(16); draw()
+        var prev = from
+        for (f in 0 until dragFrames) {
+            val next = path(f)
+            val mid = prev.lerp(next, 0.5f)
+            frame(null) { send(MotionEvent.ACTION_MOVE, screenOf(mid), screenOf(next)) }
+            prev = next
+        }
+        // Screen positions from here on (the view zooms under the fingers).
+        val a0 = screenOf(prev)
+        val b0 = Vec2(a0.x + 240f, a0.y + 80f)
+        send2(MotionEvent.ACTION_POINTER_DOWN, a0, b0, index = 1)
+        var a = a0
+        var b = b0
+        for (f in 0 until frames) {
+            val k = (f + 1) * 5f
+            a = Vec2(a0.x - k, a0.y - k / 3f)
+            b = Vec2(b0.x + k, b0.y + k / 3f)
+            frame(s) { send2(MotionEvent.ACTION_MOVE, a, b) }
+        }
+        send2(MotionEvent.ACTION_POINTER_UP, a, b, index = 1)
+        send(MotionEvent.ACTION_UP, a)
+        idle(16); draw()
         println(s)
         return s
     }

@@ -11,6 +11,7 @@ import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushTool
 import com.brushwork.paint.brush.PathStrokeInput
+import com.brushwork.paint.brush.StrokeResources
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -408,6 +409,33 @@ class VectorFastPathTest {
         assertTrue(preview.commit(last.ops) { brushStrokeInput(last, out = it) })
         assertFalse(preview.isLive)
         assertEquals(1, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun draftIsRefinedOnlyOnceTheChangesStop() {
+        // Changes without a finger on the canvas (a nudge arrow held down, a numeric field
+        // scrubbed): each one moves the whole long stroke, drawn as a draft. Refining it between
+        // two changes would be thrown away by the next one, so it waits until they stop.
+        val c = controller(1600, 700, deterministicBrush)
+        c.selectTool(ToolId.CURVE)
+        val preview = BrushStrokePreview(c) { ToolId.BRUSH }
+        val stamper = StrokeResources.of(c).stamper
+        fun path(dy: Float) = VectorPath.polyline(listOf(Vec2(20f, 100f + dy), Vec2(1580f, 140f + dy), Vec2(20f, 600f + dy)))
+        for (k in 0 until 6) {
+            val p = path(k * 3f)
+            preview.request(p.ops) { brushStrokeInput(p, out = it) }
+            idle(16)
+            assertTrue("change $k: a draft", preview.isDraft)
+            val s = stamper.stampCount
+            idle(64)
+            assertEquals("change $k: not refined while the changes go on", s, stamper.stampCount)
+        }
+        // They stopped: refined part by part after a moment.
+        idle(3000)
+        assertFalse("refined once the path rests", preview.isDraft)
+        assertTrue(preview.isLive)
+        preview.end()
+        assertNull(c.renderOverride)
     }
 
     // ------------------------------------------------------------------ replay budget

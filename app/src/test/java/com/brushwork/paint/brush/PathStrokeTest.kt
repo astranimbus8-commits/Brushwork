@@ -188,6 +188,9 @@ class PathStrokeTest {
             ToolId.BRUSH to BrushLibrary.defaultBrush,
             ToolId.BRUSH to BrushLibrary.all.first { it.id == "pencil" },
             ToolId.BRUSH to BrushLibrary.all.first { it.id == "chalk" },
+            // 6 tip variants (nextInt(6) may draw several values per dab) and scatter: the random
+            // sequence must be rewound exactly when parts are redrawn.
+            ToolId.BRUSH to BrushLibrary.all.first { it.id == "spray" }.copy(size = 24f),
             ToolId.BRUSH to BrushLibrary.defaultBrush.copy(size = 5.5f),
             ToolId.ERASER to BrushLibrary.defaultEraser.copy(size = 9f),
         )
