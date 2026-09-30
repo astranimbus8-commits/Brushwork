@@ -4,8 +4,27 @@ Autoseg-EdgeTPU-S (fused argmax) semantic segmentation model, ADE20K 32-class va
 from the TensorFlow Model Garden (https://github.com/tensorflow/models).
 Source: https://storage.googleapis.com/tf_model_garden/models/edgetpu/checkpoint_and_tflite/vision/segmentation-edgetpu/tflite/fused_argmax/autoseg_edgetpu_s.tflite
 SHA-256: 7A1F16F5DCCC387192649D9E8F36BD4A2E107BEEAB546D6AE446D05C72DD2B88
+The file is shipped unmodified. At run time Brushwork loads a copy whose graph output is
+rewired (in memory) to the per-class logits tensor that feeds the model's own argmax.
 
 Copyright The TensorFlow Authors.
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software distributed under the
+License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
+
+
+magic_touch.tflite
+------------------
+MediaPipe MagicTouch v1 interactive segmentation model (float32), from MediaPipe
+(https://github.com/google-ai-edge/mediapipe), model card "Model Card MagicTouch".
+Source: https://storage.googleapis.com/mediapipe-models/interactive_segmenter/magic_touch/float32/1/magic_touch.tflite
+MD5: 3B1295F91561C13956CB422F714E2D07
+SHA-256: E24338A717C1B7AD8D159666677EF400BABB7F33B8AD60C4D96DB4ECF694CD25
+The file is shipped unmodified.
+
+Copyright Google LLC.
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0

@@ -2,7 +2,6 @@ package com.brushwork.paint.segmentation
 
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.core.PixelBuffer
-import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -97,7 +96,7 @@ object MaskOps {
     }
 
     /**
-     * Mean over the (2r+1)² window around each pixel, normalized by the number of pixels that are
+     * Mean over the (2r+1)Â² window around each pixel, normalized by the number of pixels that are
      * inside the image (no edge replication). O(n) regardless of [r]; double accumulators.
      * [dst] may be the same array as [src]; [tmp] must be distinct from both.
      */
@@ -185,148 +184,101 @@ object MaskOps {
     }
 
     /**
-     * Fast guided filter output at full resolution: bilinearly upsamples the coefficient planes
-     * [meanA]/[meanB] (computed at [w]x[h], see [GuidedFilter.coefficients]) to the size of
-     * [image] and evaluates `q = a·I + b` with the full-resolution luma of [image] as guide.
-     * Only the returned array is allocated at full size. Values are clamped to 0..1.
+     * Like [resample] (area average, alpha flattened over white) when shrinking, but bilinear
+     * when enlarging, so an enlarged model input has no nearest-neighbour blocks.
      */
-    fun guidedUpsample(image: PixelBuffer, meanA: FloatArray, meanB: FloatArray, w: Int, h: Int): FloatArray {
-        require(meanA.size == w * h && meanB.size == w * h)
-        val fw = image.width; val fh = image.height
-        val px = image.pixels
-        val out = FloatArray(fw * fh)
-        if (fw == w && fh == h) {
-            Parallel.forRange(out.size, 4096) { s, e ->
-                for (i in s until e) out[i] = clamp01(meanA[i] * luma01(px[i]) + meanB[i])
-            }
-            return out
-        }
-        val xi = IntArray(fw); val xt = FloatArray(fw)
-        axisTable(w, fw, xi, xt)
-        Parallel.forRows(fh) { y0, y1 ->
+    fun resampleSmooth(src: PixelBuffer, dw: Int, dh: Int): PixelBuffer {
+        require(dw > 0 && dh > 0)
+        val sw = src.width; val sh = src.height
+        if (dw <= sw && dh <= sh) return resample(src, dw, dh)
+        // Shrink the axis that shrinks first (area), then enlarge bilinearly.
+        val mid = if (dw < sw || dh < sh) resample(src, min(sw, dw), min(sh, dh)) else resample(src, sw, sh)
+        val mw = mid.width; val mh = mid.height
+        val mp = mid.pixels
+        val out = PixelBuffer(dw, dh)
+        val xi = IntArray(dw); val xt = FloatArray(dw)
+        axisTable(mw, dw, xi, xt)
+        Parallel.forRows(dh) { y0, y1 ->
             for (y in y0 until y1) {
-                val fy = ((y + 0.5f) * h / fh - 0.5f).coerceIn(0f, (h - 1).toFloat())
-                val sy0 = min(fy.toInt(), h - 1)
-                val sy1 = min(sy0 + 1, h - 1)
-                val ty = fy - sy0
-                val r0 = sy0 * w; val r1 = sy1 * w
-                val row = y * fw
-                for (x in 0 until fw) {
-                    val sx0 = xi[x]; val sx1 = min(sx0 + 1, w - 1); val tx = xt[x]
-                    val aTop = meanA[r0 + sx0] + (meanA[r0 + sx1] - meanA[r0 + sx0]) * tx
-                    val aBot = meanA[r1 + sx0] + (meanA[r1 + sx1] - meanA[r1 + sx0]) * tx
-                    val bTop = meanB[r0 + sx0] + (meanB[r0 + sx1] - meanB[r0 + sx0]) * tx
-                    val bBot = meanB[r1 + sx0] + (meanB[r1 + sx1] - meanB[r1 + sx0]) * tx
-                    val a = aTop + (aBot - aTop) * ty
-                    val b = bTop + (bBot - bTop) * ty
-                    out[row + x] = clamp01(a * luma01(px[row + x]) + b)
+                val fy = ((y + 0.5f) * mh / dh - 0.5f).coerceIn(0f, (mh - 1).toFloat())
+                val r0 = min(fy.toInt(), mh - 1)
+                val r1 = min(r0 + 1, mh - 1)
+                val ty = fy - r0
+                for (x in 0 until dw) {
+                    val x0 = xi[x]; val x1 = min(x0 + 1, mw - 1); val tx = xt[x]
+                    out.pixels[y * dw + x] = lerpColor(mp[r0 * mw + x0], mp[r0 * mw + x1], mp[r1 * mw + x0], mp[r1 * mw + x1], tx, ty)
                 }
             }
         }
+        return out
+    }
+
+    private fun lerpColor(c00: Int, c10: Int, c01: Int, c11: Int, tx: Float, ty: Float): Int {
+        fun ch(shift: Int): Int {
+            val a = (c00 shr shift) and 0xFF; val b = (c10 shr shift) and 0xFF
+            val c = (c01 shr shift) and 0xFF; val d = (c11 shr shift) and 0xFF
+            val top = a + (b - a) * tx; val bot = c + (d - c) * tx
+            return (top + (bot - top) * ty + 0.5f).toInt().coerceIn(0, 255)
+        }
+        return (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+    }
+
+    /**
+     * The [x0, x1) x [y0, y1) part of [src] (which may extend past the image: outside pixels
+     * repeat the nearest edge pixel), flattened over white.
+     */
+    fun crop(src: PixelBuffer, x0: Int, y0: Int, x1: Int, y1: Int): PixelBuffer {
+        require(x1 > x0 && y1 > y0)
+        val w = x1 - x0; val h = y1 - y0
+        val out = PixelBuffer(w, h)
+        val sp = src.pixels
+        Parallel.forRows(h) { ya, yb ->
+            for (y in ya until yb) {
+                val sy = (y0 + y).coerceIn(0, src.height - 1) * src.width
+                for (x in 0 until w) out.pixels[y * w + x] = flattenOverWhite(sp[sy + (x0 + x).coerceIn(0, src.width - 1)])
+            }
+        }
+        return out
+    }
+
+    /** The [x0, x1) x [y0, y1) window of a [w]-wide plane (the window must lie inside it). */
+    fun cropPlane(src: FloatArray, w: Int, x0: Int, y0: Int, x1: Int, y1: Int): FloatArray {
+        val cw = x1 - x0
+        val out = FloatArray(cw * (y1 - y0))
+        for (y in y0 until y1) System.arraycopy(src, y * w + x0, out, (y - y0) * cw, cw)
         return out
     }
 
     /**
-     * Refines a coarse (upsampled) mask [m] of [img] inside a band of about [radius] px around its
-     * boundary. Each band pixel is classified by its color distance to the LOCAL mean color of the
-     * confidently-inside and confidently-outside pixels nearby (within 2·radius), which recovers
-     * detail the coarse mask cannot represent (sky between branches, shorelines). [extra] is an
-     * optional independent 0..1 estimate that can only ADD confidence inside the band (heuristic
-     * fusion). Pixels outside the band keep [m]. Returns a new array.
+     * Area-average downscale (or bilinear enlargement) of a float plane; center-aligned, like
+     * [resizeBilinear] when enlarging.
      */
-    fun refineBand(img: PixelBuffer, m: FloatArray, radius: Int, extra: FloatArray? = null): FloatArray {
-        val w = img.width; val h = img.height; val n = w * h
-        require(m.size == n && (extra == null || extra.size == n))
-        val out = m.copyOf()
-        if (radius <= 0) return out
-        val tmp = FloatArray(n)
-        val mb = boxMean(m, w, h, radius, FloatArray(n), tmp)
-        // 1 = confidently inside, 2 = confidently outside (no opposite pixel within radius), 0 = band.
-        val state = ByteArray(n)
-        var nb = 0
-        for (i in 0 until n) {
-            val v = mb[i]
-            when {
-                v >= BAND_HI -> state[i] = 1
-                v <= BAND_LO -> state[i] = 2
-                else -> nb++
-            }
+    fun resizeArea(src: FloatArray, sw: Int, sh: Int, dw: Int, dh: Int): FloatArray {
+        require(src.size == sw * sh)
+        if (dw > sw || dh > sh) return resizeBilinear(src, sw, sh, dw, dh)
+        if (dw == sw && dh == sh) return src.copyOf()
+        val out = FloatArray(dw * dh)
+        val x0 = IntArray(dw); val x1 = IntArray(dw)
+        for (x in 0 until dw) {
+            x0[x] = min((x.toLong() * sw / dw).toInt(), sw - 1)
+            x1[x] = min(sw, max(x0[x] + 1, ((x + 1).toLong() * sw / dw).toInt()))
         }
-        if (nb == 0) return out
-        val bandIdx = IntArray(nb)
-        val bandBeta = FloatArray(nb)
-        run {
-            var k = 0
-            for (i in 0 until n) {
-                if (state[i].toInt() == 0) { bandIdx[k] = i; bandBeta[k] = 1f - abs(2f * mb[i] - 1f); k++ }
-            }
-        }
-        val px = img.pixels
-        val r2 = radius * 2
-        // Local mean colors of confident-inside (pass 0) and confident-outside (pass 1) pixels.
-        val means = Array(2) { FloatArray(nb * 4) } // weight, r, g, b per band pixel
-        val wPlane = mb // reused: the band information has been extracted
-        val rPlane = FloatArray(n); val gPlane = FloatArray(n); val bPlane = FloatArray(n)
-        for (pass in 0..1) {
-            val want: Byte = if (pass == 0) 1 else 2
-            for (i in 0 until n) {
-                if (state[i] == want) {
-                    val c = px[i]
-                    wPlane[i] = 1f
-                    rPlane[i] = ((c shr 16) and 0xFF) / 255f
-                    gPlane[i] = ((c shr 8) and 0xFF) / 255f
-                    bPlane[i] = (c and 0xFF) / 255f
-                } else {
-                    wPlane[i] = 0f; rPlane[i] = 0f; gPlane[i] = 0f; bPlane[i] = 0f
+        Parallel.forRows(dh) { ya, yb ->
+            for (y in ya until yb) {
+                val sy0 = min((y.toLong() * sh / dh).toInt(), sh - 1)
+                val sy1 = min(sh, max(sy0 + 1, ((y + 1).toLong() * sh / dh).toInt()))
+                for (x in 0 until dw) {
+                    var s = 0f; var n = 0
+                    for (sy in sy0 until sy1) {
+                        val row = sy * sw
+                        for (sx in x0[x] until x1[x]) { s += src[row + sx]; n++ }
+                    }
+                    out[y * dw + x] = s / n
                 }
             }
-            boxMean(wPlane, w, h, r2, wPlane, tmp)
-            boxMean(rPlane, w, h, r2, rPlane, tmp)
-            boxMean(gPlane, w, h, r2, gPlane, tmp)
-            boxMean(bPlane, w, h, r2, bPlane, tmp)
-            val dstMeans = means[pass]
-            for (k in 0 until nb) {
-                val i = bandIdx[k]
-                val wt = wPlane[i]
-                dstMeans[k * 4] = wt
-                if (wt > 1e-6f) {
-                    dstMeans[k * 4 + 1] = rPlane[i] / wt
-                    dstMeans[k * 4 + 2] = gPlane[i] / wt
-                    dstMeans[k * 4 + 3] = bPlane[i] / wt
-                }
-            }
-        }
-        val ins = means[0]; val outs = means[1]
-        for (k in 0 until nb) {
-            val i = bandIdx[k]
-            var a = m[i]
-            // Trust the color decision by position in the band (the coarse boundary is most likely
-            // wrong at its center) and by how clearly the color matches one side.
-            var weight = bandBeta[k]
-            if (ins[k * 4] > 1e-4f && outs[k * 4] > 1e-4f) {
-                val c = px[i]
-                val r = ((c shr 16) and 0xFF) / 255f; val g = ((c shr 8) and 0xFF) / 255f; val b = (c and 0xFF) / 255f
-                val di = sq(r - ins[k * 4 + 1]) + sq(g - ins[k * 4 + 2]) + sq(b - ins[k * 4 + 3])
-                val dout = sq(r - outs[k * 4 + 1]) + sq(g - outs[k * 4 + 2]) + sq(b - outs[k * 4 + 3])
-                val ratio = dout / (di + dout + 1e-6f)
-                // Only distinct local colors are informative: when both sides look alike the
-                // ratio is noise and the coarse mask is kept.
-                val contrast = smoothstep(0.004f, 0.03f, sq(ins[k * 4 + 1] - outs[k * 4 + 1]) +
-                    sq(ins[k * 4 + 2] - outs[k * 4 + 2]) + sq(ins[k * 4 + 3] - outs[k * 4 + 3]))
-                a = m[i] + (smoothstep(0.2f, 0.8f, ratio) - m[i]) * contrast
-                weight = max(weight, abs(2f * ratio - 1f) * contrast)
-            }
-            if (extra != null && extra[i] > a) {
-                weight = max(weight, extra[i])
-                a = extra[i]
-            }
-            out[i] = clamp01((1f - weight) * m[i] + weight * a)
         }
         return out
     }
-
-    private const val BAND_LO = 0.02f
-    private const val BAND_HI = 0.98f
 
     /** Pointwise maximum of two planes (new array). */
     fun pointwiseMax(a: FloatArray, b: FloatArray): FloatArray {
@@ -348,8 +300,6 @@ object MaskOps {
         val t = clamp01((x - e0) / (e1 - e0))
         return t * t * (3f - 2f * t)
     }
-
-    private fun sq(v: Float) = v * v
 
     /** 64-bit content hash of an image (dimensions + every pixel), used as a cache key. */
     fun contentHash(image: PixelBuffer): Long {

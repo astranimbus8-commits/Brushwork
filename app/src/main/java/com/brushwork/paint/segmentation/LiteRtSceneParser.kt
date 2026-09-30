@@ -12,48 +12,62 @@ import java.nio.channels.FileChannel
 import kotlin.math.roundToInt
 
 /**
- * Scene parser backed by the bundled Autoseg-EdgeTPU-S model (ADE20K-32, fused argmax) on the
- * LiteRT CPU runtime (4 threads, XNNPACK; no NNAPI). One process-wide interpreter, created lazily
- * and guarded by a lock so one inference runs at a time. Tensor shapes and types are verified at
- * load time; any load failure (missing native library, incompatible model) disables the parser
- * for the process and callers fall back to heuristics.
+ * Scene parser backed by the bundled Autoseg-EdgeTPU-S model (ADE20K-32) on the LiteRT CPU
+ * runtime (XNNPACK; no NNAPI). One process-wide interpreter, created lazily and guarded by a
+ * lock so one inference runs at a time.
+ *
+ * The bundled file is the "fused argmax" export (class ids only). At load time a copy is
+ * rewired in memory to output the per-class LOGITS instead ([TfliteLogitsPatch]: graph output =
+ * the [1, 64, 64, 32] tensor before the finalizer, finalizer operators dropped), checked with a
+ * self-test inference, and used for soft probabilities. Any failure falls back, in order, to the
+ * rewired model without dropping operators, then to the original argmax model (class ids,
+ * turned into soft block fractions by the pipeline), then to the heuristics.
  */
 internal class LiteRtSceneParser private constructor(private val appContext: Context) : SceneParser {
+    private enum class Variant { LOGITS_TRUNCATED, LOGITS, ARGMAX }
+
     private val lock = Any()
     private var interpreter: Interpreter? = null
+    private var variant: Variant? = null
+
+    /** The patched model bytes: must stay reachable while the interpreter uses them. */
+    private var modelBuffer: ByteBuffer? = null
     private var unavailable = false
+    private val broken = HashSet<Variant>()
     private var inputBuffer: ByteBuffer? = null
     private var outputBuffer: ByteBuffer? = null
     private var inputBytes: ByteArray? = null
-    private var outputIsFloat = true
     private var lut = ByteArray(256)
+    private var outType = DataType.FLOAT32
+    private var outScale = 1f
+    private var outZero = 0
+    private var gridW = 0
+    private var gridH = 0
 
-    override fun parse(content: PixelBuffer, letterbox: Letterbox): ByteArray? {
-        if (letterbox.size != SIZE) return null
+    override fun run(input: PixelBuffer): SceneScores? {
+        if (input.width != SIZE || input.height != SIZE) return null
         synchronized(lock) {
-            val interp = obtainLocked() ?: return null
-            val input = inputBuffer ?: return null
-            val output = outputBuffer ?: return null
-            val bytes = inputBytes ?: ByteArray(SIZE * SIZE * 3).also { inputBytes = it }
-            return try {
-                letterbox.fillInput(content, lut, bytes)
-                input.clear()
-                input.put(bytes)
-                input.rewind()
-                output.clear()
-                interp.run(input, output)
-                output.rewind()
-                readClassIds(output)
-            } catch (e: OutOfMemoryError) {
-                Log.w(TAG, "scene inference out of memory", e)
-                null
-            } catch (e: Exception) {
-                // Interpreter errors are deterministic for a given model: stop retrying.
-                Log.e(TAG, "scene inference failed; using heuristics from now on", e)
-                releaseLocked()
-                unavailable = true
-                null
+            repeat(3) {
+                val interp = obtainLocked() ?: return null
+                val v = variant ?: return null
+                try {
+                    return infer(interp, v, input)
+                } catch (e: OutOfMemoryError) {
+                    Log.w(TAG, "scene inference out of memory", e)
+                    return null
+                } catch (e: Exception) {
+                    // Interpreter errors are deterministic for a given model: drop this variant.
+                    releaseLocked()
+                    broken += v
+                    if (v == Variant.ARGMAX) {
+                        Log.e(TAG, "scene inference failed; using heuristics from now on", e)
+                        unavailable = true
+                        return null
+                    }
+                    Log.w(TAG, "scene inference failed with the $v model; trying the next one", e)
+                }
             }
+            return null
         }
     }
 
@@ -62,16 +76,47 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
         synchronized(lock) { obtainLocked() }
     }
 
-    /** Frees the interpreter and its buffers; the next [parse] recreates them. */
+    /** Frees the interpreter and its buffers; the next [run] recreates them. */
     fun release() {
         synchronized(lock) { releaseLocked() }
+    }
+
+    private fun infer(interp: Interpreter, v: Variant, img: PixelBuffer): SceneScores {
+        val input = inputBuffer!!
+        val output = outputBuffer!!
+        val bytes = inputBytes ?: ByteArray(SIZE * SIZE * 3).also { inputBytes = it }
+        val px = img.pixels
+        for (i in 0 until SIZE * SIZE) {
+            val c = MaskOps.flattenOverWhite(px[i])
+            bytes[i * 3] = lut[(c shr 16) and 0xFF]
+            bytes[i * 3 + 1] = lut[(c shr 8) and 0xFF]
+            bytes[i * 3 + 2] = lut[c and 0xFF]
+        }
+        input.clear()
+        input.put(bytes)
+        input.rewind()
+        output.clear()
+        interp.run(input, output)
+        output.rewind()
+        return if (v == Variant.ARGMAX) SceneScores.Labels(SIZE, readClassIds(output)) else SceneScores.Logits(gridW, gridH, readLogits(output))
+    }
+
+    private fun readLogits(output: ByteBuffer): FloatArray {
+        val n = gridW * gridH * SceneClasses.COUNT
+        val out = FloatArray(n)
+        when (outType) {
+            DataType.FLOAT32 -> output.asFloatBuffer().get(out)
+            DataType.INT8 -> for (i in 0 until n) out[i] = (output.get(i) - outZero) * outScale
+            else -> for (i in 0 until n) out[i] = ((output.get(i).toInt() and 0xFF) - outZero) * outScale
+        }
+        return out
     }
 
     private fun readClassIds(output: ByteBuffer): ByteArray {
         val n = SIZE * SIZE
         val ids = ByteArray(n)
         val max = SceneClasses.COUNT - 1
-        if (outputIsFloat) {
+        if (outType == DataType.FLOAT32) {
             val fb = output.asFloatBuffer()
             for (i in 0 until n) {
                 val v = fb.get(i)
@@ -87,36 +132,64 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
     private fun obtainLocked(): Interpreter? {
         interpreter?.let { return it }
         if (unavailable) return null
-        var created: Interpreter? = null
-        try {
-            created = Interpreter(mapModel(), Interpreter.Options().setNumThreads(NUM_THREADS))
-            if (!configure(created)) {
-                created.close()
-                unavailable = true
-                return null
-            }
-            interpreter = created
-            return created
-        } catch (e: OutOfMemoryError) {
-            Log.w(TAG, "not enough memory for the scene model", e)
-            created?.close()
-            return null
-        } catch (t: Throwable) {
-            // UnsatisfiedLinkError (no native runtime), IOException (asset), IllegalArgumentException (bad model)...
-            Log.e(TAG, "scene model unavailable; using heuristics", t)
+        for (v in Variant.entries) {
+            if (v in broken) continue
+            var created: Interpreter? = null
             try {
-                created?.close()
-            } catch (_: Throwable) {
+                created = create(v)
+                if (!configure(created, v) || !selfTest(created, v)) {
+                    created.close()
+                    releaseLocked()
+                    broken += v
+                    if (v == Variant.ARGMAX) break
+                    continue
+                }
+                interpreter = created
+                variant = v
+                Log.i(TAG, "scene model ready ($v)")
+                return created
+            } catch (e: OutOfMemoryError) {
+                Log.w(TAG, "not enough memory for the scene model", e)
+                closeQuietly(created)
+                releaseLocked()
+                return null
+            } catch (t: Throwable) {
+                // UnsatisfiedLinkError (no native runtime), IOException (asset), IllegalArgumentException (bad model)...
+                closeQuietly(created)
+                releaseLocked()
+                broken += v
+                if (v == Variant.ARGMAX) {
+                    Log.e(TAG, "scene model unavailable; using heuristics", t)
+                    break
+                }
+                Log.w(TAG, "scene model variant $v unavailable", t)
             }
-            unavailable = true
-            return null
+        }
+        unavailable = true
+        return null
+    }
+
+    private fun closeQuietly(i: Interpreter?) {
+        try {
+            i?.close()
+        } catch (_: Throwable) {
         }
     }
 
+    private fun create(v: Variant): Interpreter {
+        val options = Interpreter.Options().setNumThreads(NUM_THREADS)
+        if (v == Variant.ARGMAX) return Interpreter(mapModel(), options)
+        val buf = readModel()
+        TfliteLogitsPatch.patchInPlace(buf, SceneClasses.COUNT, truncate = v == Variant.LOGITS_TRUNCATED)
+            ?: throw IllegalArgumentException("the scene model does not have the expected logits tensor")
+        modelBuffer = buf
+        return Interpreter(buf, options)
+    }
+
     /** Verifies the tensor signature and prepares buffers + the input quantization table. */
-    private fun configure(interp: Interpreter): Boolean {
+    private fun configure(interp: Interpreter, v: Variant): Boolean {
         if (interp.inputTensorCount != 1 || interp.outputTensorCount < 1) {
-            Log.e(TAG, "unexpected tensor counts ${interp.inputTensorCount}/${interp.outputTensorCount}")
+            Log.w(TAG, "unexpected tensor counts ${interp.inputTensorCount}/${interp.outputTensorCount} ($v)")
             return false
         }
         val inT = interp.getInputTensor(0)
@@ -124,21 +197,78 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
         val inShape = inT.shape()
         val outShape = outT.shape()
         val inType = inT.dataType()
-        val outType = outT.dataType()
+        val oType = outT.dataType()
         val inOk = inShape.contentEquals(intArrayOf(1, SIZE, SIZE, 3)) && (inType == DataType.INT8 || inType == DataType.UINT8)
-        val outOk = (outShape.contentEquals(intArrayOf(1, SIZE, SIZE)) || outShape.contentEquals(intArrayOf(1, SIZE, SIZE, 1))) &&
-            (outType == DataType.FLOAT32 || outType == DataType.INT32)
+        val outOk = if (v == Variant.ARGMAX) {
+            (outShape.contentEquals(intArrayOf(1, SIZE, SIZE)) || outShape.contentEquals(intArrayOf(1, SIZE, SIZE, 1))) &&
+                (oType == DataType.FLOAT32 || oType == DataType.INT32)
+        } else {
+            outShape.size == 4 && outShape[0] == 1 && outShape[1] == outShape[2] && outShape[1] in 16..256 &&
+                outShape[3] == SceneClasses.COUNT && (oType == DataType.INT8 || oType == DataType.UINT8 || oType == DataType.FLOAT32)
+        }
         if (!inOk || !outOk) {
-            Log.e(TAG, "unexpected model signature: in ${inShape.contentToString()} $inType, out ${outShape.contentToString()} $outType")
+            Log.w(TAG, "unexpected model signature ($v): in ${inShape.contentToString()} $inType, out ${outShape.contentToString()} $oType")
             return false
         }
         val q = inT.quantizationParams()
         lut = Letterbox.quantLut(q.scale, q.zeroPoint, signed = inType == DataType.INT8)
-        outputIsFloat = outType == DataType.FLOAT32
+        outType = oType
+        val oq = outT.quantizationParams()
+        outScale = oq.scale
+        outZero = oq.zeroPoint
+        if (v != Variant.ARGMAX && oType != DataType.FLOAT32 && !(outScale > 0f && outScale.isFinite())) {
+            Log.w(TAG, "logits tensor has no usable quantization ($outScale, $outZero)")
+            return false
+        }
+        gridH = if (v == Variant.ARGMAX) SIZE else outShape[1]
+        gridW = if (v == Variant.ARGMAX) SIZE else outShape[2]
         inputBuffer = ByteBuffer.allocateDirect(SIZE * SIZE * 3).order(ByteOrder.nativeOrder())
-        outputBuffer = ByteBuffer.allocateDirect(SIZE * SIZE * 4).order(ByteOrder.nativeOrder())
+        outputBuffer = ByteBuffer.allocateDirect(outT.numBytes()).order(ByteOrder.nativeOrder())
         return true
     }
+
+    /**
+     * One inference on a synthetic scene (sky gradient over textured green ground) whose output
+     * must be finite, spread (logit range > 1) and not the same class everywhere. Catches a
+     * rewired graph that runs but yields garbage.
+     */
+    private fun selfTest(interp: Interpreter, v: Variant): Boolean {
+        if (v == Variant.ARGMAX) return true
+        val img = PixelBuffer(SIZE, SIZE)
+        for (y in 0 until SIZE) for (x in 0 until SIZE) {
+            img[x, y] = if (y < SIZE / 2) {
+                val t = y.toFloat() / (SIZE / 2)
+                rgb((70 + 80 * t).toInt(), (130 + 60 * t).toInt(), (220 + 25 * t).toInt())
+            } else {
+                val n = ((x * 7919 + y * 104729) % 41) - 20
+                rgb(60 + n, 120 + n, 45 + n / 2)
+            }
+        }
+        val scores = infer(interp, v, img) as SceneScores.Logits
+        var lo = Float.POSITIVE_INFINITY; var hi = Float.NEGATIVE_INFINITY
+        for (x in scores.values) {
+            if (!x.isFinite()) { Log.w(TAG, "self-test: non-finite logits ($v)"); return false }
+            if (x < lo) lo = x
+            if (x > hi) hi = x
+        }
+        // The argmax of the logits is the argmax of the probabilities. The sky half and the
+        // ground half must be told apart: a misrouted or constant tensor cannot do that.
+        val arg = SceneTargets.argmax(scores.values, gridW * gridH)
+        fun dominant(y0: Int, y1: Int): Int {
+            val counts = IntArray(SceneClasses.COUNT)
+            for (y in y0 until y1) for (x in 0 until gridW) counts[arg[y * gridW + x]]++
+            return counts.indices.maxByOrNull { counts[it] } ?: 0
+        }
+        val top = dominant(gridH / 8, gridH * 3 / 8)
+        val bottom = dominant(gridH * 5 / 8, gridH * 7 / 8)
+        val ok = hi - lo > 1f && top != bottom
+        if (!ok) Log.w(TAG, "self-test failed ($v): logit range ${hi - lo}, classes ${SceneClasses.LABELS[top]} / ${SceneClasses.LABELS[bottom]}")
+        else Log.i(TAG, "self-test ($v): ${SceneClasses.LABELS[top]} over ${SceneClasses.LABELS[bottom]}")
+        return ok
+    }
+
+    private fun rgb(r: Int, g: Int, b: Int): Int =
+        (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
 
     private fun releaseLocked() {
         try {
@@ -147,6 +277,8 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
             Log.w(TAG, "closing interpreter", t)
         }
         interpreter = null
+        variant = null
+        modelBuffer = null
         inputBuffer = null
         outputBuffer = null
         inputBytes = null
@@ -160,11 +292,22 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
             }
         }
 
+    /** A writable native-order copy of the asset (the logits patch edits it in place). */
+    private fun readModel(): ByteBuffer {
+        val bytes = appContext.assets.open(MODEL_ASSET).use { it.readBytes() }
+        require(bytes.size in 8..MAX_MODEL_BYTES) { "unexpected model size ${bytes.size}" }
+        val buf = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+        buf.put(bytes)
+        buf.rewind()
+        return buf
+    }
+
     companion object {
         private const val TAG = "Segmentation"
         const val MODEL_ASSET = "models/autoseg_edgetpu_s.tflite"
         private const val SIZE = Letterbox.MODEL_SIZE
         private const val NUM_THREADS = 4
+        private const val MAX_MODEL_BYTES = 64 shl 20
 
         @Volatile private var instance: LiteRtSceneParser? = null
 

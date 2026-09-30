@@ -29,11 +29,14 @@ enum class SmartTarget(val label: String) {
  *
  * - SUBJECT uses ML Kit Subject Segmentation (Play services module: scheduled for a background
  *   download by [get], installed immediately on the first SUBJECT request if still missing);
- *   BACKGROUND is its complement. Without ML Kit: scene-model people ∪ a saliency heuristic.
+ *   BACKGROUND is its complement. Without ML Kit: scene-model people âˆª a saliency heuristic.
  * - SKY / NATURE / BUILDINGS / PEOPLE / WATER use the bundled Autoseg-EdgeTPU scene parser
  *   (LiteRT). Without it: color/texture heuristics ([SceneHeuristics]).
- * - Masks are computed at <= 1280 px and brought to full size with a fast guided filter that
- *   uses the full-resolution image as guide ([SegmentationPipeline]).
+ * - Scene targets fuse several model passes (letterbox, overlapping crops, mirrored) into soft
+ *   class probabilities; edges are refined by band matting and a color guided filter whose
+ *   coefficients are evaluated with the full-resolution image ([SegmentationPipeline]).
+ * - [selectObject] (the object select tool) uses the bundled MagicTouch model (LiteRT), or color
+ *   region growing where it cannot run.
  *
  * Safe to call repeatedly and concurrently from background threads; results for several
  * targets on the same image share one analysis. Interrupting the calling thread (e.g. with
@@ -43,8 +46,10 @@ class SegmentationService(private val context: Context) {
     private val appContext: Context = context.applicationContext ?: context
     private val sceneParser = LiteRtSceneParser.get(appContext)
     private val subjectBackend = MlKitSubjectBackend.get(appContext)
-    private val pipeline = SegmentationPipeline(sceneParser, subjectBackend, log = { msg, t -> Log.w(TAG, msg, t) })
+    private val objectModel = LiteRtMagicTouch.get(appContext)
+    private val pipeline = SegmentationPipeline(sceneParser, subjectBackend, objectModel, log = { msg, t -> Log.w(TAG, msg, t) })
     private val prepared = AtomicBoolean(false)
+    private val objectPrepared = AtomicBoolean(false)
     private val releasing = AtomicBoolean(false)
 
     /**
@@ -75,6 +80,48 @@ class SegmentationService(private val context: Context) {
         }
     }
 
+    /**
+     * Selects the object under [prompt] (a tap or scribble in [image] coordinates): the bundled
+     * MagicTouch model with a zoomed second pass and edge refinement, or color region growing
+     * when the model cannot run here ([ObjectSelection.usedModel] = false). BLOCKING; returns
+     * null when cancelled ([cancelled] turned true, or the thread was interrupted) or on failure.
+     */
+    fun selectObject(image: PixelBuffer, prompt: ObjectPrompt, refineEdges: Boolean = true, cancelled: () -> Boolean = { false }): ObjectSelection? {
+        if (Looper.getMainLooper().isCurrentThread) Log.w(TAG, "selectObject called on the main thread")
+        val start = SystemClock.elapsedRealtime()
+        return try {
+            val r = pipeline.selectObject(image, prompt, refineEdges, cancelled)
+            Log.d(TAG, "object ${image.width}x${image.height} (model: ${r.usedModel}) in ${SystemClock.elapsedRealtime() - start} ms")
+            ObjectSelection(r.mask, r.usedModel)
+        } catch (e: CancellationException) {
+            if (!cancelled()) Thread.currentThread().interrupt()
+            Log.d(TAG, "selectObject cancelled")
+            null
+        } catch (e: OutOfMemoryError) {
+            pipeline.clearCache()
+            Log.w(TAG, "selectObject ran out of memory on ${image.width}x${image.height}", e)
+            null
+        } catch (e: Exception) {
+            Log.w(TAG, "selectObject failed", e)
+            null
+        }
+    }
+
+    /** Result of [selectObject]: selection strength 0..1 per pixel. */
+    class ObjectSelection(val mask: FloatArray, val usedModel: Boolean)
+
+    /** Non-blocking: loads the object model in the background (the object select tool was picked). */
+    fun prepareObjectSelect() {
+        if (!objectPrepared.compareAndSet(false, true)) return
+        thread(name = "bw-seg-object", isDaemon = true, priority = Thread.MIN_PRIORITY) {
+            try {
+                objectModel.warmUp()
+            } catch (t: Throwable) {
+                Log.w(TAG, "object model warm-up failed", t)
+            }
+        }
+    }
+
     /** Adapter used by filters such as Background Removal. */
     fun asFilterServices(): FilterServices = object : FilterServices {
         override fun subjectMask(image: PixelBuffer): FloatArray? = segment(image, SmartTarget.SUBJECT)
@@ -101,6 +148,8 @@ class SegmentationService(private val context: Context) {
     fun releaseMemory() {
         pipeline.clearCache()
         sceneParser.release()
+        objectModel.release()
+        objectPrepared.set(false)
     }
 
     /**

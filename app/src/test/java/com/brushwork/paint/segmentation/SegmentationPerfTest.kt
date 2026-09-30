@@ -10,17 +10,16 @@ import java.util.concurrent.TimeUnit
 
 class SegmentationPerfTest {
 
-    /** Fake scene model: bright blue content is sky, everything else is tree. */
-    private val parser = SceneParser { content, lb ->
-        val s = lb.size
-        ByteArray(s * s) { i ->
-            val x = i % s - lb.offsetX; val y = i / s - lb.offsetY
+    /** Fake scene model: bright blue is sky, the letterbox padding "other", everything else tree. */
+    private val parser = SceneParser { input ->
+        SceneScores.Labels(input.width, ByteArray(input.size) { i ->
+            val c = input.pixels[i]
             when {
-                x < 0 || y < 0 || x >= lb.contentWidth || y >= lb.contentHeight -> 0
-                (content[x, y] and 0xFF) > 150 -> SceneClasses.SKY.toByte()
+                c == ScenePasses.PAD -> 0
+                (c and 0xFF) > 150 -> SceneClasses.SKY.toByte()
                 else -> SceneClasses.TREE.toByte()
             }
-        }
+        })
     }
 
     @Test
