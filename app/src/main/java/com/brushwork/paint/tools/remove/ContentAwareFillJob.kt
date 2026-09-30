@@ -303,7 +303,9 @@ object ContentAwareFillJob {
                 }
                 applied = apply(controller, req, result, version, source)
             } catch (e: InpaintException) {
-                controller.toast(e.message ?: "${req.label} failed")
+                // "Too large" under a region cap lowered for lack of free memory: say so.
+                val lowMemory = e.message == ContentAwareFill.TOO_LARGE && req.params.maxRoiPixels < InpaintParams().maxRoiPixels
+                controller.toast(if (lowMemory) "Not enough free memory to fill an area this large. Select a smaller area." else e.message ?: "${req.label} failed")
             } finally {
                 st.running = false
                 onFinished(applied)
