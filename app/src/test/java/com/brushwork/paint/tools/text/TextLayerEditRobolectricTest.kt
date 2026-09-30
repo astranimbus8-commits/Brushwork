@@ -348,37 +348,88 @@ class TextLayerEditRobolectricTest {
     }
 
     @Test
-    fun emptiedTextAsksBeforeDeletingTheLayer() {
+    fun emptiedTextDeletesTheLayerWithoutAskingAndUndoRestoresIt() {
         val (c, tool) = newController()
         val layer = addText(c, tool, "Gone?", 150f, 100f)
+        val before = pixels(layer.bitmap)
+        val undoBefore = c.undoManager.undoCount
         assertTrue(tool.editLayer(layer, openEditor = true))
         tool.setText("  ")
+        c.message = null
         tool.confirmEditor()
-        assertTrue("asks instead of deleting", tool.emptyTextPrompt)
-        assertEquals(2, c.doc.layers.size)
-        tool.keepOldText()
-        assertFalse(tool.emptyTextPrompt)
-        assertEquals("Gone?", tool.item!!.text)
-
-        tool.openEditor()
-        tool.setText("")
-        tool.confirmEditor()
-        assertTrue(tool.emptyTextPrompt)
-        tool.deleteEditedLayer()
+        // Deleted at once, no question.
         assertEquals(1, c.doc.layers.size)
+        assertTrue(c.doc.layers.none { it === layer })
+        assertEquals("Text layer deleted — undo to restore", c.message)
         assertNull(tool.item)
+        assertNull(tool.editingLayer)
+        assertFalse(tool.editorOpen)
+        assertNull(c.renderOverride)
+        assertEquals("one undo step", undoBefore + 1, c.undoManager.undoCount)
+        // Undo brings the layer back with its pixels and editable text.
+        c.undo()
+        assertEquals(2, c.doc.layers.size)
+        assertSame(layer, c.doc.layers[1])
+        assertSame(layer, c.activeLayer)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        assertEquals("Gone?", TextCodec.decode(layer.textData)!!.text)
+        c.redo()
+        assertEquals(1, c.doc.layers.size)
+        c.undo()
+
+        // Applying an emptied text any other way (switching tools) deletes it the same way.
+        assertTrue(tool.editLayer(layer))
+        tool.setText("")
+        c.selectTool(ToolId.BRUSH)
+        assertEquals(1, c.doc.layers.size)
         assertNull(c.renderOverride)
         c.undo()
         assertEquals(2, c.doc.layers.size)
         assertTrue(layer.isTextLayer)
 
-        // Switching tools with an emptied text never deletes: the old text stays.
-        assertTrue(tool.editLayer(layer))
+        // The only layer of a drawing can't go: it keeps its old text.
+        c.selectTool(ToolId.TEXT)
+        c.deleteLayer(c.doc.layers[0])
+        assertEquals(listOf(layer), c.doc.layers.toList())
+        assertTrue(tool.editLayer(layer, openEditor = true))
         tool.setText("")
-        c.selectTool(ToolId.BRUSH)
-        assertEquals(2, c.doc.layers.size)
+        tool.confirmEditor()
+        assertEquals(1, c.doc.layers.size)
         assertEquals("Gone?", TextCodec.decode(layer.textData)!!.text)
+        assertNull(tool.item)
         assertNull(c.renderOverride)
+    }
+
+    @Test
+    fun anEmptiedTextWhoseLayerGotLockedKeepsTheEditorOpen() {
+        val (c, tool) = newController()
+        val layer = addText(c, tool, "Locked", 150f, 100f)
+        val before = pixels(layer.bitmap)
+        assertTrue(tool.editLayer(layer, openEditor = true))
+        tool.setText("")
+        // Locked from the layers window while the editor was open.
+        layer.locked = true
+        c.message = null
+        tool.confirmEditor()
+        assertEquals("nothing deleted", 2, c.doc.layers.size)
+        assertTrue(c.message!!.contains("locked"))
+        assertTrue("the editor stays open to fix or cancel it", tool.editorOpen)
+        assertEquals("", tool.item!!.text)
+        // Cancel: the old text is back, the layer untouched.
+        tool.cancelEditor()
+        assertEquals("Locked", tool.item!!.text)
+        assertFalse(tool.editorOpen)
+        tool.discard()
+        assertNull(c.renderOverride)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        assertEquals("Locked", TextCodec.decode(layer.textData)!!.text)
+        // Unlocked again: emptying it now deletes it.
+        layer.locked = false
+        assertTrue(tool.editLayer(layer, openEditor = true))
+        tool.setText(" ")
+        tool.confirmEditor()
+        assertFalse(tool.editorOpen)
+        assertEquals(1, c.doc.layers.size)
     }
 
     // ------------------------------------------------------------------ hit testing

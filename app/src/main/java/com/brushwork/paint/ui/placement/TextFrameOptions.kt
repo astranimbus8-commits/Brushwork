@@ -31,13 +31,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
-import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
- * Options strip of the text tool; also hosts the text editor dialog, the "Numbers" sheet and the
- * question asked when an edited text layer's text was emptied.
+ * Options strip of the text tool; also hosts the text editor dialog and the "Numbers" sheet.
+ * (An edited text layer whose text is emptied is deleted without a question; undo restores it.)
  */
 @Composable
 fun TextToolOptions(tool: TextTool) {
@@ -70,6 +69,8 @@ fun TextToolOptions(tool: TextTool) {
         Hint(
             when {
                 onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
+                item != null && item.spec.box.wrapFor(item.spec.vertical) > 0f ->
+                    if (item.spec.vertical) "Bottom / side handles: box size" else "Side / bottom handles: box size"
                 item != null -> if (item.spec.vertical) "Bottom handle: box height" else "Side handle: box width"
                 activeText != null -> "or tap a text to edit it, empty canvas to add"
                 else -> "Tap the canvas to add text, or a text to edit it"
@@ -78,22 +79,6 @@ fun TextToolOptions(tool: TextTool) {
     }
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)
-    if (tool.emptyTextPrompt && item != null) EmptyTextDialog(tool)
-}
-
-/** The edited text layer's text was emptied: delete the layer, or keep its old text. */
-@Composable
-private fun EmptyTextDialog(tool: TextTool) {
-    val name = tool.editingLayer?.name ?: "this text layer"
-    BwDialog(
-        title = "Delete the text layer?",
-        onDismiss = { tool.keepOldText() },
-        confirmText = "Delete layer",
-        onConfirm = { tool.deleteEditedLayer() },
-        dismissText = "Keep old text",
-    ) {
-        Text("The text is empty. Delete \"$name\" (you can undo this), or keep its old text?")
-    }
 }
 
 /** Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog. */

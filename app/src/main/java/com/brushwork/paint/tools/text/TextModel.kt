@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.text
 
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.fonts.FontIds
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.cos
@@ -67,6 +68,14 @@ data class TextBoxSpec(
     val borderColor: Int = 0xFF000000.toInt(),
     /** 0 = square corners .. 1 = fully rounded ends (a pill; a circle-ish bubble for short text). */
     val roundness: Float = 0f,
+    /**
+     * Horizontal text with a fixed [width]: the text area is at least this tall, so the box is a
+     * real area of [width] x [minHeight] (what "Fill the box" fills); it still grows when the text
+     * is taller. 0 = the box fits the text. Ignored without a fixed width and for vertical text.
+     */
+    val minHeight: Float = 0f,
+    /** Vertical text with a fixed [height]: the text area is at least this wide (see [minHeight]). */
+    val minWidth: Float = 0f,
 ) {
     /** True when something of the box itself is drawn. */
     val hasFrame: Boolean get() = fill || borderWidth > 0f
@@ -75,7 +84,16 @@ data class TextBoxSpec(
     val inset: Float get() = max(0f, padding) + max(0f, borderWidth)
 
     /** Every length multiplied by [k] (resizing the text object). */
-    fun scaled(k: Float): TextBoxSpec = copy(width = width * k, height = height * k, padding = padding * k, borderWidth = borderWidth * k)
+    fun scaled(k: Float): TextBoxSpec = copy(
+        width = width * k, height = height * k, padding = padding * k, borderWidth = borderWidth * k,
+        minHeight = minHeight * k, minWidth = minWidth * k,
+    )
+
+    /** Wrap length of [vertical] or horizontal text (0 = the box fits the text). */
+    fun wrapFor(vertical: Boolean): Float = if (vertical) height else width
+
+    /** The box's other side (across the lines / columns), 0 = fits the text; only used with a wrap. */
+    fun depthFor(vertical: Boolean): Float = if (vertical) minWidth else minHeight
 
     companion object {
         const val MIN_ROUNDNESS = 0f
@@ -123,6 +141,7 @@ enum class TextBoxPreset(val label: String) {
  */
 @Serializable
 data class TextSpec(
+    /** Built-in family; with [fontId] set it is the fallback drawn while that font is missing. */
     val font: TextFont = TextFont.SANS,
     val bold: Boolean = false,
     val italic: Boolean = false,
@@ -143,7 +162,21 @@ data class TextSpec(
     val columnsLeftToRight: Boolean = false,
     /** Box (wrap width, padding, background, border, rounding). */
     val box: TextBoxSpec = TextBoxSpec(),
+    /**
+     * Imported font file (see `com.brushwork.paint.fonts.FontStore`): its content hash, or null
+     * for the built-in [font]. When the file is missing (deleted, or a project from another
+     * device) the text is drawn with [font] and the editor warns.
+     */
+    val fontId: String? = null,
+    /** Display name of [fontId], kept so a missing font can still be named. */
+    val fontName: String? = null,
 ) {
+    /** True when the text uses an imported font (which may be missing). */
+    val usesImportedFont: Boolean get() = fontId != null
+
+    /** The name of the font the text asks for. */
+    val fontLabel: String get() = if (fontId != null) fontName ?: "Imported font" else font.label
+
     /**
      * The whole look resized by [k]: font size, outline and box (used by the resize handle and
      * the pinch). The caller clamps the size.
@@ -159,6 +192,8 @@ data class TextSpec(
         fun f(v: Float, default: Float) = if (v.isFinite()) v else default
         fun len(v: Float) = f(v, 0f).coerceIn(0f, MAX_LENGTH_PX)
         val b = box
+        // The id names a file: anything but a plain hash (damaged or crafted data) is dropped.
+        val id = fontId?.takeIf { FontIds.isValid(it) }
         return copy(
             sizePx = f(sizePx, 48f).coerceIn(MIN_SIZE_PX, MAX_SIZE_PX),
             letterSpacing = f(letterSpacing, 0f).coerceIn(MIN_LETTER_SPACING, MAX_LETTER_SPACING),
@@ -170,7 +205,11 @@ data class TextSpec(
                 padding = len(b.padding),
                 borderWidth = len(b.borderWidth),
                 roundness = f(b.roundness, 0f).coerceIn(TextBoxSpec.MIN_ROUNDNESS, TextBoxSpec.MAX_ROUNDNESS),
+                minHeight = len(b.minHeight),
+                minWidth = len(b.minWidth),
             ),
+            fontId = id,
+            fontName = if (id == null) null else fontName?.let { FontIds.cleanName(it) },
         )
     }
 

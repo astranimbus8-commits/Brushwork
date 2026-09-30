@@ -28,6 +28,44 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <!-- "Open with Brushwork" for fonts (.ttf / .otf / .ttc, dafont .zip): imported by
+                 fonts/FontOpenIntent, then the activity closes again. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:scheme="file" />
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/sfnt" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-otf" />
+                <data android:mimeType="application/x-font-truetype" />
+                <data android:mimeType="application/x-font-opentype" />
+                <data android:mimeType="application/vnd.ms-opentype" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="font/ttf" />
+                <data android:mimeType="font/otf" />
+                <data android:mimeType="font/sfnt" />
+                <data android:mimeType="font/collection" />
+                <data android:mimeType="application/x-font-ttf" />
+                <data android:mimeType="application/x-font-otf" />
+                <data android:mimeType="application/x-font-truetype" />
+                <data android:mimeType="application/x-font-opentype" />
+                <data android:mimeType="application/vnd.ms-opentype" />
+                <data android:mimeType="application/font-sfnt" />
+                <data android:mimeType="application/zip" />
+                <data android:mimeType="application/x-zip-compressed" />
+            </intent-filter>
         </activity>
 
         <provider

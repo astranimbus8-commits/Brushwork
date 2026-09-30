@@ -14,6 +14,8 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.fonts.FontStore
+import com.brushwork.paint.fonts.ImportedFont
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -35,13 +37,23 @@ import kotlin.math.max
  * strip) loads it as pending work, hides the layer's old pixels while editing, and ✓ re-renders
  * that same layer as one undo step ([EditorController.updateTextLayer]); ✕ leaves it untouched.
  * A re-edited text ignores the selection (it is re-rendered whole, so a leftover selection can
- * never cut away part of the old text); new text is clipped to the selection.
+ * never cut away part of the old text); new text is clipped to the selection. A re-edited text
+ * that is emptied deletes its layer (one undo step, no question asked).
  *
- * The editor dialog, the "Numbers" sheet and the empty-text question are hosted by
- * `TextToolOptions` and driven by the Compose state here.
+ * Fonts: the built-in families or fonts the user imported ([FontStore], e.g. from dafont),
+ * referenced by their content hash; a missing imported font falls back to the built-in family.
+ * Placeholder text (Lorem ipsum, English, Japanese dummy text) can be inserted, or fill a fixed
+ * text box exactly ([PlaceholderFit]).
+ *
+ * The editor dialog and the "Numbers" sheet are hosted by `TextToolOptions` and driven by the
+ * Compose state here. While the editor is open the text can still be dragged, resized and
+ * pinched on the canvas (taps don't apply or reopen it).
  */
 class TextTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TEXT
+
+    /** The app's imported fonts (also makes text rendering resolve them). */
+    val fontStore: FontStore = FontStore.get(controller.appContext)
 
     private var itemState by mutableStateOf<TextItem?>(null)
 
@@ -79,9 +91,11 @@ class TextTool(controller: EditorController) : Tool(controller) {
     var editingLayer by mutableStateOf<Layer?>(null)
         private set
 
-    /** Asks whether to delete the edited text layer because its text was emptied. */
-    var emptyTextPrompt by mutableStateOf(false)
-        private set
+    /** Placeholder text options of the editor (kept while the editor is closed and reopened). */
+    var placeholderKind by mutableStateOf(PlaceholderKind.LOREM)
+    var placeholderAmount by mutableStateOf(PlaceholderAmount.PARAGRAPH)
+    /** Replace the text (true) or add to it. */
+    var placeholderReplace by mutableStateOf(true)
 
     override val hasPendingWork: Boolean get() = item != null
 
@@ -119,9 +133,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     /**
      * The look of a placed or edited text, kept for the next new text: everything but the fixed
-     * box width / height, which belonged to that text's words (a new text starts fitting its own).
+     * box size, which belonged to that text's words (a new text starts fitting its own).
      */
-    private fun styleToRemember(spec: TextSpec): TextSpec = spec.copy(box = spec.box.copy(width = 0f, height = 0f))
+    private fun styleToRemember(spec: TextSpec): TextSpec =
+        spec.copy(box = spec.box.copy(width = 0f, height = 0f, minHeight = 0f, minWidth = 0f))
 
     // ------------------------------------------------------------------ layout cache
 
@@ -180,11 +195,13 @@ class TextTool(controller: EditorController) : Tool(controller) {
         loadedInk = inkOf(layer, loaded)
         editingNew = false
         editorBackup = null
-        emptyTextPrompt = false
         // The old pixels are hidden and the pending text is drawn in their place (see LayerPreview).
         layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
         loadedInk?.let { controller.tiles.invalidate(it) }
         item = loaded
+        if (TextRenderer.isFontMissing(loaded.spec)) {
+            controller.toast("The font \"${loaded.spec.fontLabel}\" isn't on this device: the text shows in ${loaded.spec.font.label} until it is imported again")
+        }
         if (openEditor) openEditor()
         controller.invalidateOverlay()
         return true
@@ -240,7 +257,6 @@ class TextTool(controller: EditorController) : Tool(controller) {
         loadedInk = null
         loadedItem = null
         editingLayer = null
-        emptyTextPrompt = false
         controller.invalidateOverlay()
     }
 
@@ -267,7 +283,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     private fun layerText(layer: Layer): Pair<TextItem, PreparedText>? {
         val data = layer.textData ?: return null
-        layerTexts[layer.id]?.let { (d, it, p) -> if (d == data) return it to p }
+        layerTexts[layer.id]?.let { (d, it, p) -> if (d == data && p.fontsCurrent) return it to p }
         val decoded = TextCodec.decode(data) ?: return null
         val prep = TextRenderer.prepare(decoded)
         if (layerTexts.size >= LAYER_CACHE_SIZE) layerTexts.clear()
@@ -275,9 +291,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
         return decoded to prep
     }
 
-    /** Reopens the editor for the current text. */
+    /**
+     * Reopens the editor for the current text. Already open (its sheet minimized, and "Edit text"
+     * tapped): nothing changes, so Cancel still takes back everything since it opened and still
+     * removes a new text.
+     */
     fun openEditor() {
         val cur = item ?: return
+        if (editorOpen) return
         editorBackup = cur
         editingNew = false
         editorOpen = true
@@ -285,14 +306,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     /**
      * Closes the editor keeping the changes; an empty new text is removed. An edited text layer
-     * whose text was emptied is never deleted silently: [emptyTextPrompt] asks first.
+     * whose text was emptied is deleted right away as one undo step (see [deleteEmptiedLayer]).
      */
     fun confirmEditor() {
         val cur = item
         if (cur != null && cur.text.isBlank() && editingLayer != null) {
-            editorOpen = false
-            editorBackup = null
-            emptyTextPrompt = true
+            // Refused (the layer was locked or hidden meanwhile; a message says so): the editor
+            // stays open, so the text can be typed again or the edit cancelled.
+            if (deleteEmptiedLayer()) {
+                editorOpen = false
+                editorBackup = null
+            }
             return
         }
         editorOpen = false
@@ -309,24 +333,93 @@ class TextTool(controller: EditorController) : Tool(controller) {
         controller.invalidateOverlay()
     }
 
-    /** Answer to [emptyTextPrompt]: keep the layer, with its old text back (other changes stay). */
-    fun keepOldText() {
-        emptyTextPrompt = false
-        val old = loadedItem?.text ?: return
-        update { it.copy(text = old) }
-    }
-
-    /** Answer to [emptyTextPrompt]: delete the edited text layer (undoable). */
-    fun deleteEditedLayer() {
-        emptyTextPrompt = false
-        val layer = editingLayer ?: return
+    /**
+     * The text of the edited text layer was emptied: the layer is deleted without asking, as one
+     * undo step ("undo to restore" brings it back with its text). The only layer of a drawing
+     * can't be deleted: its old text is kept then. Returns false (keep editing) when the layer
+     * got locked or hidden meanwhile.
+     */
+    private fun deleteEmptiedLayer(): Boolean {
+        val layer = editingLayer ?: return true
+        if (doc.indexOf(layer) < 0) { discard(); return true }
+        if (doc.layers.size <= 1) {
+            discard()
+            controller.toast("The text is empty, but a drawing needs at least one layer: the old text was kept")
+            return true
+        }
+        if (!controller.checkEditable(layer)) return false
         discard()
         controller.deleteLayer(layer)
+        controller.toast("Text layer deleted — undo to restore")
+        return true
     }
 
     fun setText(text: String) = update { it.copy(text = text) }
 
     fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
+
+    // ------------------------------------------------------------------ fonts
+
+    /** Uses the built-in family [font]. */
+    fun setBuiltInFont(font: TextFont) = updateSpec { it.copy(font = font, fontId = null, fontName = null) }
+
+    /**
+     * Uses the imported font [font]; the built-in family stays as its fallback (drawn when the
+     * font file is missing, e.g. in a project opened on another device).
+     */
+    fun setImportedFont(font: ImportedFont) = updateSpec { it.copy(fontId = font.id, fontName = font.name) }
+
+    /** True when the current text asks for an imported font that isn't available. */
+    val fontMissing: Boolean get() = item?.spec?.let { TextRenderer.isFontMissing(it) } ?: false
+
+    /**
+     * An imported font was deleted or imported: the current text is laid out again (with its
+     * fallback font or the font that is back).
+     */
+    fun onFontsChanged() {
+        val cur = item ?: return
+        if (cur.spec.fontId == null) return
+        prepared = null
+        if (layerPreview != null) refreshLayerPreview()
+        controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ placeholder text
+
+    /**
+     * Inserts placeholder text into the current text (see [PlaceholderFit.edit]): replacing or
+     * after the text, a short line, one or three paragraphs, or exactly as much as fills the
+     * text box. Returns false (with a message) when nothing could be inserted.
+     */
+    fun insertPlaceholder(
+        kind: PlaceholderKind = placeholderKind,
+        amount: PlaceholderAmount = placeholderAmount,
+        replace: Boolean = placeholderReplace,
+    ): Boolean {
+        val cur = item ?: return false
+        return applyPlaceholder(cur, PlaceholderFit.edit(cur, kind, amount, replace, doc.width, doc.height, maxBoxPx))
+    }
+
+    /** Inputs of [PlaceholderFit.edit] for the current text (to compute it off the main thread). */
+    fun placeholderRequest(): PlaceholderFit.Request? {
+        val cur = item ?: return null
+        return PlaceholderFit.Request(cur, placeholderKind, placeholderAmount, placeholderReplace, doc.width, doc.height, maxBoxPx)
+    }
+
+    /**
+     * Applies a placeholder [edit] computed for [basedOn]; ignored (false) when the text or its
+     * look changed meanwhile. A null edit means the box has no room: a message says so.
+     */
+    fun applyPlaceholder(basedOn: TextItem, edit: PlaceholderFit.Edit?): Boolean {
+        val cur = item ?: return false
+        if (cur.text != basedOn.text || cur.spec != basedOn.spec) return false
+        if (edit == null) {
+            controller.toast("No room for placeholder text in this box: make the box bigger or the text smaller")
+            return false
+        }
+        update { it.copy(text = edit.text, spec = edit.spec) }
+        return true
+    }
 
     /**
      * Where the text object is on the canvas (document px): the center of straight text, or the
@@ -383,8 +476,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
      */
     fun setFixedBox(on: Boolean) = updateSpec { s ->
         val box = s.box
-        if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f) else box.copy(width = 0f))
-        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)))
+        // Off: the box fits the text again (its fixed other side goes too).
+        if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f, minWidth = 0f) else box.copy(width = 0f, minHeight = 0f))
+        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)), measureInk = false)
         if (s.vertical) s.copy(box = box.copy(height = natural.contentHeight.coerceIn(s.sizePx, maxBoxPx)))
         else s.copy(box = box.copy(width = natural.contentWidth.coerceIn(s.sizePx, maxBoxPx)))
     }
@@ -394,6 +488,27 @@ class TextTool(controller: EditorController) : Tool(controller) {
         if (!px.isFinite()) return@updateSpec s
         val v = px.coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         if (s.vertical) s.copy(box = s.box.copy(height = v)) else s.copy(box = s.box.copy(width = v))
+    }
+
+    /**
+     * With a fixed box: gives it a fixed other side too (height of horizontal text, width of
+     * vertical text), starting at the current size, so the box is an area to fill; off = the box
+     * fits the text again.
+     */
+    fun setFixedDepth(on: Boolean) = updateSpec { s ->
+        if (s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
+        val v = if (!on) 0f else {
+            val block = TextRenderer.layout(item?.text ?: "", s, measureInk = false)
+            (if (s.vertical) block.contentWidth else block.contentHeight).coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
+        }
+        s.copy(box = if (s.vertical) s.box.copy(minWidth = v) else s.box.copy(minHeight = v))
+    }
+
+    /** Sets the fixed other side of the box (see [setFixedDepth]) in px. */
+    fun setBoxDepth(px: Float) = updateSpec { s ->
+        if (!px.isFinite() || s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
+        val v = px.coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
+        s.copy(box = if (s.vertical) s.box.copy(minWidth = v) else s.box.copy(minHeight = v))
     }
 
     fun updateBox(transform: (TextBoxSpec) -> TextBoxSpec) = updateSpec { it.copy(box = transform(it.box)) }
@@ -548,8 +663,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
     /** Re-renders the edited text layer [layer] with [cur] (see [commitItem]). */
     private fun commitLayerEdit(layer: Layer, cur: TextItem): Boolean {
         val loaded = loadedItem
-        // An emptied text never deletes the layer silently (the editor asks); keep the old text.
-        if (cur.text.isBlank() || cur == loaded) { discard(); return true }
+        // An emptied text deletes its layer (undoable, see deleteEmptiedLayer).
+        if (cur.text.isBlank()) return deleteEmptiedLayer()
+        if (cur == loaded) { discard(); return true }
         val prep = preparedFor(cur)
         val newRect = Rect()
         prep.docBounds(cur).roundOut(newRect)
@@ -593,7 +709,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ gestures
 
-    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, PATH_HANDLE }
+    /** [DEPTH]: the box's other side (height of horizontal text, width of vertical text). */
+    private enum class Mode { NONE, CREATE, MOVE, ROTATE, SCALE, BOX, DEPTH, PATH_HANDLE }
 
     private var mode = Mode.NONE
     private var downDoc = Vec2.ZERO
@@ -612,11 +729,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
         downDoc = Vec2(p.x, p.y)
         moved = false
         val cur = item
-        if (cur == null || emptyTextPrompt) {
-            mode = if (cur == null) Mode.CREATE else Mode.NONE
+        if (cur == null) {
+            mode = Mode.CREATE
             gestureStart = null
             return
         }
+        // Also while the editor is open (its sheet may be minimized): drags move and resize the text.
         gestureStart = cur
         val prep = preparedFor(cur)
         gesturePrepared = prep
@@ -649,15 +767,22 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val toRotate = s.distanceTo(h.rotate)
         val toScale = s.distanceTo(h.scale)
         val toBox = s.distanceTo(h.box)
+        val toDepth = h.depth?.let { s.distanceTo(it) } ?: Float.MAX_VALUE
         mode = when {
             toRotate <= hit && toRotate < toCenter && toRotate <= toScale && toRotate <= toBox -> Mode.ROTATE
             toScale <= hit && toScale < toCenter && toScale <= toBox -> Mode.SCALE
-            toBox <= hit && toBox < toCenter -> Mode.BOX
+            toBox <= hit && toBox < toCenter && toBox <= toDepth -> Mode.BOX
+            toDepth <= hit && toDepth < toCenter -> Mode.DEPTH
             else -> Mode.MOVE
         }
-        if (mode == Mode.BOX) {
-            val l = cur.docToLocal(downDoc, block.width, block.height)
-            boxGrab = if (cur.spec.vertical) l.y - block.height else l.x - block.width
+        val l = cur.docToLocal(downDoc, block.width, block.height)
+        if (mode == Mode.BOX) boxGrab = if (cur.spec.vertical) l.y - block.height else l.x - block.width
+        if (mode == Mode.DEPTH) {
+            boxGrab = when {
+                !cur.spec.vertical -> l.y - block.height
+                cur.spec.columnsLeftToRight -> l.x - block.width
+                else -> l.x
+            }
         }
     }
 
@@ -690,6 +815,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
                 item = start.copy(spec = start.spec.scaled(k).copy(sizePx = size))
             }
             Mode.BOX -> item = boxResized(start, q)
+            Mode.DEPTH -> item = depthResized(start, q)
             Mode.PATH_HANDLE -> item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, q + handleGrab))
             Mode.NONE, Mode.CREATE -> return
         }
@@ -711,11 +837,38 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val outer = if (vertical) l.y - boxGrab else l.x - boxGrab
         val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
         val ns = if (vertical) spec.copy(box = spec.box.copy(height = content)) else spec.copy(box = spec.box.copy(width = content))
-        val moved = start.copy(spec = ns)
+        return anchored(start, b0, start.copy(spec = ns))
+    }
+
+    /**
+     * [start] with the box's other side dragged to [q] (the bottom edge of horizontal text, the
+     * left edge of right-to-left columns, else the right edge): a fixed-size area to fill, at
+     * least one em; the opposite edge stays in place.
+     */
+    private fun depthResized(start: TextItem, q: Vec2): TextItem {
+        val b0 = gesturePrepared?.block ?: return start
+        val spec = start.spec
+        val l = start.docToLocal(q, b0.width, b0.height)
+        val inset = spec.box.inset
+        val min = spec.sizePx.coerceAtMost(maxBoxPx)
+        val outer = when {
+            !spec.vertical -> l.y - boxGrab
+            spec.columnsLeftToRight -> l.x - boxGrab
+            else -> b0.width - (l.x - boxGrab)
+        }
+        val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
+        val ns = if (spec.vertical) spec.copy(box = spec.box.copy(minWidth = content)) else spec.copy(box = spec.box.copy(minHeight = content))
+        return anchored(start, b0, start.copy(spec = ns))
+    }
+
+    /**
+     * [moved] (a resized [start] whose block was [b0]) placed so the box keeps its top-left
+     * corner (horizontal text, or columns left to right), else its top-right corner.
+     */
+    private fun anchored(start: TextItem, b0: TextBlock, moved: TextItem): TextItem {
         val nb = preparedFor(moved).block ?: return moved
         val rot = Math.toRadians(start.rotationDeg.toDouble()).toFloat()
-        // Anchor: top-left (horizontal, or columns left to right), else top-right.
-        val anchorRight = vertical && !spec.columnsLeftToRight
+        val anchorRight = start.spec.vertical && !start.spec.columnsLeftToRight
         val anchor = start.localToDoc(if (anchorRight) b0.width else 0f, 0f, b0.width, b0.height)
         val half = Vec2(if (anchorRight) -nb.width / 2f else nb.width / 2f, nb.height / 2f).rotated(rot)
         return moved.copy(cx = anchor.x + half.x, cy = anchor.y + half.y)
@@ -732,6 +885,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
             // be dragged and pinched, but a tap neither places it nor restarts the editor.
             editorOpen -> {}
             m == Mode.CREATE -> tapAt(p.x, p.y)
+            // While the editor is open a tap neither applies the text nor reopens the editor.
+            editorOpen -> {}
             m == Mode.MOVE && downInside -> openEditor()
             // Tap away from the text: place it, then edit the text tapped or start a new one there.
             m == Mode.MOVE -> if (commitItem()) tapAt(p.x, p.y)
@@ -752,7 +907,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      */
     override fun onLongPress(p: ToolPoint): Boolean {
         if (item == null || gestureStart == null) return false
-        return mode == Mode.ROTATE || mode == Mode.SCALE || mode == Mode.BOX || mode == Mode.PATH_HANDLE ||
+        return mode == Mode.ROTATE || mode == Mode.SCALE || mode == Mode.BOX || mode == Mode.DEPTH || mode == Mode.PATH_HANDLE ||
             (mode == Mode.MOVE && downInside)
     }
 
@@ -778,7 +933,6 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         pinchStart = null
         val cur = item ?: return false
-        if (emptyTextPrompt) return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
         val tol = t.screenToDocLength(t.dp(BOX_PAD_DP + 8f))
@@ -816,7 +970,11 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ overlay
 
-    private class Handles(val corners: List<Vec2>, val rotateBase: Vec2, val rotate: Vec2, val scale: Vec2, val box: Vec2, val boxDir: Vec2)
+    private class Handles(
+        val corners: List<Vec2>, val rotateBase: Vec2, val rotate: Vec2, val scale: Vec2, val box: Vec2, val boxDir: Vec2,
+        /** Handle of the box's other side (null without a fixed box). */
+        val depth: Vec2?, val depthDir: Vec2,
+    )
 
     private fun handles(t0: TextItem, block: TextBlock, t: ViewTransform): Handles {
         val pad = t.screenToDocLength(t.dp(BOX_PAD_DP))
@@ -826,10 +984,20 @@ class TextTool(controller: EditorController) : Tool(controller) {
         var dir = (topMid - center).normalized()
         if (dir.lengthSq < 0.5f) dir = Vec2(0f, -1f)
         // Box handle: middle of the right edge (horizontal text) or of the bottom edge (vertical).
-        val box = if (t0.spec.vertical) (sc[2] + sc[3]) / 2f else (sc[1] + sc[2]) / 2f
+        val vertical = t0.spec.vertical
+        val box = if (vertical) (sc[2] + sc[3]) / 2f else (sc[1] + sc[2]) / 2f
         var boxDir = (box - center).normalized()
         if (boxDir.lengthSq < 0.5f) boxDir = Vec2(1f, 0f)
-        return Handles(sc, topMid, topMid + dir * t.dp(ROTATE_STEM_DP), sc[2], box, boxDir)
+        // A fixed box also has a handle for its other side (the area "Fill the box" fills): the
+        // bottom edge of horizontal text, the left (right-to-left columns) or right edge of vertical.
+        val depth = if (t0.spec.box.wrapFor(vertical) <= 0f) null else when {
+            !vertical -> (sc[2] + sc[3]) / 2f
+            t0.spec.columnsLeftToRight -> (sc[1] + sc[2]) / 2f
+            else -> (sc[0] + sc[3]) / 2f
+        }
+        var depthDir = depth?.let { (it - center).normalized() } ?: Vec2(0f, 1f)
+        if (depthDir.lengthSq < 0.5f) depthDir = Vec2(0f, 1f)
+        return Handles(sc, topMid, topMid + dir * t.dp(ROTATE_STEM_DP), sc[2], box, boxDir, depth, depthDir)
     }
 
     private val haloPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x99000000.toInt() }
@@ -874,6 +1042,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         canvas.drawLine(h.rotateBase.x, h.rotateBase.y, h.rotate.x, h.rotate.y, haloPaint)
         canvas.drawLine(h.rotateBase.x, h.rotateBase.y, h.rotate.x, h.rotate.y, linePaint)
         drawBoxHandle(canvas, t, h.box, h.boxDir, fixed = if (cur.spec.vertical) cur.spec.box.height > 0f else cur.spec.box.width > 0f)
+        h.depth?.let { drawBoxHandle(canvas, t, it, h.depthDir, fixed = cur.spec.box.depthFor(cur.spec.vertical) > 0f) }
         drawHandle(canvas, t, h.rotate, filled = false)
         drawHandle(canvas, t, h.scale, filled = true)
     }
