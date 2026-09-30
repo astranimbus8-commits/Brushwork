@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
@@ -26,22 +27,30 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.ui.common.SheetBackground
+import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
  * Floating actions for the current selection (whatever made it: marquee, lasso, magic wand,
- * smart select...): copy, cut, paste, deselect, delete the selected pixels, invert and the full
- * selection menu ([onMore]). With no selection but something copied, it offers Paste only, and
+ * smart select...): copy, cut, paste, deselect, delete the selected pixels, content-aware fill
+ * (opens its options), invert and the full selection menu ([onMore]). With no selection but
+ * something copied, it offers Paste only, and
  * [onHide] (non-null then) hides it until something new is copied.
  */
 @Composable
@@ -53,6 +62,9 @@ internal fun SelectionActionBar(
 ) {
     val hasSelection = controller.selection != null
     val canPaste = controller.clipboard != null
+    // Content-aware fill options; Fill closes them (the busy overlay shows the progress).
+    var fillOptionsOpen by remember { mutableStateOf(false) }
+    if (fillOptionsOpen) ContentAwareFillSheet(controller, onDismiss = { fillOptionsOpen = false })
     Surface(
         color = SheetBackground,
         contentColor = BrushworkColors.OnChrome,
@@ -81,6 +93,9 @@ internal fun SelectionActionBar(
                 BarItem(Icons.Outlined.DeleteSweep, "Delete", "Delete the selected pixels") {
                     controller.endCanvasGesture(); controller.clearLayer()
                 }
+                BarItem(Icons.Outlined.AutoFixHigh, "Content-aware", ContentAwareFillJob.FILL_LABEL, width = 80.dp) {
+                    controller.endCanvasGesture(); fillOptionsOpen = true
+                }
                 BarItem(Icons.Outlined.InvertColors, "Invert", "Invert the selection") { controller.endCanvasGesture(); controller.invertSelection() }
             }
             BarItem(Icons.Outlined.MoreHoriz, "More", "Selection menu", onClick = onMore)
@@ -91,11 +106,11 @@ internal fun SelectionActionBar(
 
 /** Icon over a short label; [clickLabel] tells a screen reader what it does. */
 @Composable
-private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, width: Dp = 46.dp, onClick: () -> Unit) {
     val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.45f)
     Column(
         Modifier
-            .width(46.dp)
+            .width(width)
             .height(46.dp)
             .clip(RoundedCornerShape(10.dp))
             .clickable(enabled = enabled, onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
