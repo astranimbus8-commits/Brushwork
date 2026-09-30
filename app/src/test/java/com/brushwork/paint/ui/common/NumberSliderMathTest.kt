@@ -194,6 +194,22 @@ class NumberSliderMathTest {
     }
 
     @Test
+    fun typedSliderValuesParseWithScaleAndSuffix() {
+        assertEquals(0.57f, NumberSliderMath.parseTyped("57", 100f, 0f, 1f)!!, 1e-6f)
+        assertEquals(0.57f, NumberSliderMath.parseTyped(" 57 % ", 100f, 0f, 1f)!!, 1e-6f)
+        assertEquals(12.5f, NumberSliderMath.parseTyped("12,5 px", 1f, 0f, 600f)!!, 1e-6f)
+        assertEquals(-30f, NumberSliderMath.parseTyped("-30°", 1f, -180f, 180f)!!, 0f)
+        // Clamped to the slider's range.
+        assertEquals(1f, NumberSliderMath.parseTyped("250", 100f, 0f, 1f)!!, 0f)
+        assertEquals(0.01f, NumberSliderMath.parseTyped("0", 100f, 0.01f, 1f)!!, 0f)
+        // Garbage and nonsense scales give nothing.
+        assertNull(NumberSliderMath.parseTyped("abc", 1f, 0f, 1f))
+        assertNull(NumberSliderMath.parseTyped("", 1f, 0f, 1f))
+        assertNull(NumberSliderMath.parseTyped("--5", 1f, 0f, 10f))
+        assertNull(NumberSliderMath.parseTyped("5", 0f, 0f, 10f))
+    }
+
+    @Test
     fun defaultDragStepFollowsShownDecimals() {
         assertEquals(1.0, NumberSliderMath.defaultDragStep(0), 0.0)
         assertEquals(1.0, NumberSliderMath.defaultDragStep(1), 0.0)

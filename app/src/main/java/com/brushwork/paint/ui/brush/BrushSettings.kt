@@ -15,6 +15,7 @@ import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import kotlin.math.roundToInt
 
@@ -87,6 +88,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(flow = v) } },
                 valueRange = 0.01f..1f,
                 valueText = percent(preset.flow),
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = done,
             )
             if (kind == StrokeKind.WATERCOLOR) {
@@ -96,6 +98,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                     onValueChange = { v -> onEdit(false) { it.copy(mixing = v) } },
                     valueRange = 0f..1f,
                     valueText = percent(preset.mixing),
+                    typing = SliderTyping.Percent,
                     onValueChangeFinished = done,
                 )
             }
@@ -109,6 +112,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(hardness = v) } },
                 valueRange = 0f..1f,
                 valueText = percent(preset.hardness),
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = done,
             )
             LabeledSlider(
@@ -117,6 +121,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(spacing = (v * 100f).roundToInt() / 100f) } },
                 valueRange = BrushLimits.MIN_SPACING..1.5f,
                 valueText = percent(preset.spacing),
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = done,
             )
             // Tips are symmetric, so 0..180 degrees covers every orientation.
@@ -127,6 +132,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(angle = v.roundToInt().toFloat()) } },
                 valueRange = 0f..180f,
                 valueText = "${angle.roundToInt()}°",
+                typing = SliderTyping(suffix = "°"),
                 onValueChangeFinished = done,
             )
             LabeledSlider(
@@ -135,6 +141,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(roundness = v) } },
                 valueRange = BrushLimits.MIN_ROUNDNESS..1f,
                 valueText = percent(preset.roundness),
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = done,
             )
             if (!smudgeOrBlur) {
@@ -144,6 +151,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                     onValueChange = { v -> onEdit(false) { it.copy(scatter = v) } },
                     valueRange = 0f..2f,
                     valueText = percent(preset.scatter),
+                    typing = SliderTyping.Percent,
                     onValueChangeFinished = done,
                 )
             }
@@ -154,6 +162,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                     onValueChange = { v -> onEdit(false) { it.copy(grain = v) } },
                     valueRange = 0f..1f,
                     valueText = percent(preset.grain),
+                    typing = SliderTyping.Percent,
                     onValueChangeFinished = done,
                 )
                 ToggleRow(
@@ -178,6 +187,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                 onValueChange = { v -> onEdit(false) { it.copy(minSizeRatio = v) } },
                 valueRange = 0f..1f,
                 valueText = percent(preset.minSizeRatio),
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = done,
                 enabled = preset.pressureSize,
             )
@@ -193,6 +203,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                     onValueChange = { v -> onEdit(false) { it.copy(taperStart = v.roundToInt().toFloat()) } },
                     valueRange = 0f..MAX_TAPER_UI,
                     valueText = if (preset.taperStart <= 0f) "Off" else formatSize(preset.taperStart),
+                    typing = SliderTyping(suffix = "px"),
                     onValueChangeFinished = done,
                 )
                 LabeledSlider(
@@ -201,6 +212,7 @@ fun BrushSettings(toolId: ToolId, preset: BrushPreset, onEdit: PresetEdit, modif
                     onValueChange = { v -> onEdit(false) { it.copy(taperEnd = v.roundToInt().toFloat()) } },
                     valueRange = 0f..MAX_TAPER_UI,
                     valueText = if (preset.taperEnd <= 0f) "Off" else formatSize(preset.taperEnd),
+                    typing = SliderTyping(suffix = "px"),
                     onValueChangeFinished = done,
                 )
             }

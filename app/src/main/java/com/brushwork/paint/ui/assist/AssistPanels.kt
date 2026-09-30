@@ -60,6 +60,7 @@ import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
@@ -398,6 +399,7 @@ fun GridPanel(controller: EditorController, onDismiss: () -> Unit) {
             onValueChange = { v -> update { it.copy(opacity = v) } },
             valueRange = 0.05f..1f,
             valueText = "${(grid.opacity * 100).roundToInt()}%",
+            typing = SliderTyping.Percent,
         )
         ToggleRow(
             label = "Snap to grid",
@@ -454,6 +456,7 @@ fun StabilizerPanel(controller: EditorController, onDismiss: () -> Unit) {
                 onValueChange = { v -> draft = draft.copy(strength = v) },
                 valueRange = 0f..1f,
                 valueText = "${(draft.strength * 100).roundToInt()}%",
+                typing = SliderTyping.Percent,
                 onValueChangeFinished = { controller.updateStabilizer(draft) },
             )
             StabilizerMode.ROPE -> LabeledSlider(
@@ -462,6 +465,7 @@ fun StabilizerPanel(controller: EditorController, onDismiss: () -> Unit) {
                 onValueChange = { v -> draft = draft.copy(ropeLengthDp = v) },
                 valueRange = MIN_ROPE_DP..MAX_ROPE_DP,
                 valueText = "${draft.ropeLengthDp.roundToInt()} dp",
+                typing = SliderTyping(suffix = "dp"),
                 onValueChangeFinished = { controller.updateStabilizer(draft) },
             )
             StabilizerMode.OFF -> {}

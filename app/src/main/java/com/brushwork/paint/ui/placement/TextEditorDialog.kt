@@ -47,6 +47,7 @@ import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
@@ -145,6 +146,7 @@ fun TextEditorDialog(tool: TextTool) {
             onValueChange = { v -> style { it.copy(letterSpacing = v) } },
             valueRange = TextSpec.MIN_LETTER_SPACING..TextSpec.MAX_LETTER_SPACING,
             valueText = Units.formatNumber(spec.letterSpacing.toDouble(), 2) + " em",
+            typing = SliderTyping(decimals = 2, suffix = "em"),
         )
         LabeledSlider(
             label = if (spec.vertical) "Column spacing" else "Line spacing",
@@ -152,6 +154,7 @@ fun TextEditorDialog(tool: TextTool) {
             onValueChange = { v -> style { it.copy(lineSpacing = v) } },
             valueRange = TextSpec.MIN_LINE_SPACING..TextSpec.MAX_LINE_SPACING,
             valueText = "× " + Units.formatNumber(spec.lineSpacing.toDouble(), 2),
+            typing = SliderTyping(decimals = 2, suffix = "×"),
         )
 
         SectionHeader("Outline")
@@ -162,6 +165,7 @@ fun TextEditorDialog(tool: TextTool) {
             onValueChange = { v -> style { it.copy(strokeWidthPx = v) } },
             valueRange = 0f..maxOutline,
             valueText = if (spec.strokeWidthPx <= 0f) "None" else Units.format(spec.strokeWidthPx.toDouble(), LengthUnit.PX, dpi),
+            typing = SliderTyping(decimals = 1, suffix = "px"),
         )
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
             ColorSwatch(spec.strokeColor, size = 36.dp, onClick = { colorTarget = ColorTarget.OUTLINE })

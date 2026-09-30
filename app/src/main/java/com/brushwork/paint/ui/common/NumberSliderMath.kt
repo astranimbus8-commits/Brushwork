@@ -164,6 +164,18 @@ object NumberSliderMath {
         return rounded.coerceIn(min, max)
     }
 
+    /**
+     * A number typed for a slider shown as value × [scale] ("57", "57%", "12,5 px", "-30°"),
+     * back in slider units and clamped to [min]..[max]; null for text without a finite number.
+     */
+    fun parseTyped(text: String, scale: Float, min: Float, max: Float): Float? {
+        val number = text.trim().filter { it.isDigit() || it == '.' || it == ',' || it == '-' || it == '+' }
+        val v = number.replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+        if (scale == 0f || !scale.isFinite()) return null
+        val out = (v / scale).toFloat()
+        return if (out.isFinite()) out.coerceIn(min, max) else null
+    }
+
     /** Step of a scrub handle when the field has no -/+ step: 1 for whole or 1-decimal numbers, else one digit coarser than shown. */
     fun defaultDragStep(decimals: Int): Double = if (decimals <= 1) 1.0 else 10.0.pow(-(decimals.coerceAtMost(9) - 1))
 

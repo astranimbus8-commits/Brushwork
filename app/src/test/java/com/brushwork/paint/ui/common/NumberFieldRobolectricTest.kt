@@ -192,6 +192,76 @@ class NumberFieldScrubTest {
 }
 
 @RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.common.slidertypingsandbox"])
+class LabeledSliderTypingTest {
+
+    private fun clickLabeled(label: String) {
+        val e = elements().last { it.node.config.getOrNull(SemanticsActions.OnClick)?.label == label }
+        requireNotNull(e.node.config[SemanticsActions.OnClick].action).invoke()
+        settle(6, 50)
+    }
+
+    private fun editor() = RobolectricUi.textFields().single()
+
+    private fun typeAndDone(text: String) {
+        editor().type(text)
+        settle(4, 50)
+        requireNotNull(editor().node.config[SemanticsActions.OnImeAction].action).invoke()
+        settle(6, 50)
+    }
+
+    @Test
+    fun tappingTheValueLetsItBeTyped() {
+        val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
+        var opacity by androidx.compose.runtime.mutableFloatStateOf(0.5f)
+        var finished by mutableIntStateOf(0)
+        activity.setContent {
+            BrushworkTheme {
+                Surface {
+                    Column(Modifier.padding(16.dp)) {
+                        LabeledSlider(
+                            "Opacity", opacity, { opacity = it }, 0f..1f,
+                            valueText = "${(opacity * 100).toInt()}%",
+                            onValueChangeFinished = { finished++ },
+                            typing = SliderTyping.Percent,
+                        )
+                    }
+                }
+            }
+        }
+        settle(10, 50)
+        assertTrue("no text field until the value is tapped", RobolectricUi.textFields().isEmpty())
+
+        clickLabeled("Type a value for Opacity")
+        assertTrue("the editor takes focus to take the typing", editor().focused)
+        assertEquals("50", editor().text)
+        typeAndDone("25")
+        assertEquals(0.25f, opacity, 1e-6f)
+        assertEquals(1, finished)
+        assertTrue("the editor closes", RobolectricUi.textFields().isEmpty())
+        assertTrue(RobolectricUi.hasText("25%"))
+
+        // Out of range is clamped; garbage changes nothing.
+        clickLabeled("Type a value for Opacity")
+        typeAndDone("250 %")
+        assertEquals(1f, opacity, 0f)
+        clickLabeled("Type a value for Opacity")
+        typeAndDone("abc")
+        assertEquals(1f, opacity, 0f)
+        assertEquals(2, finished)
+
+        // Leaving the editor (focus moves away) commits too.
+        clickLabeled("Type a value for Opacity")
+        editor().type("40")
+        settle(4, 50)
+        editor().window.clearFocus()
+        settle(6, 50)
+        assertEquals(0.4f, opacity, 1e-6f)
+        assertEquals(3, finished)
+    }
+}
+
+@RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.common.numberfieldlayoutsandbox"])
 class NumberFieldLayoutTest {
 

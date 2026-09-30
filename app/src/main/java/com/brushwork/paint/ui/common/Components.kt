@@ -4,8 +4,10 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
@@ -67,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -80,10 +83,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusManager
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
@@ -99,9 +105,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -266,7 +275,24 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** Slider with a label and value text. [onValueChangeFinished] fires on release (use for undo). */
+/**
+ * Makes the value of a [LabeledSlider] typeable: tap the number, type, Done. The value is shown
+ * for typing as value × [scale] with [decimals] decimals (a 0..1 slider shown as a percentage:
+ * [Percent]); [suffix] is only a hint next to the number.
+ */
+@Immutable
+class SliderTyping(val scale: Float = 1f, val decimals: Int = 0, val suffix: String = "") {
+    companion object {
+        /** A 0..1 value shown and typed as a whole percentage. */
+        val Percent = SliderTyping(100f, 0, "%")
+    }
+}
+
+/**
+ * Slider with a label and value text. [onValueChangeFinished] fires on release (use for undo).
+ * With [typing] the value text is a button: tapping it lets the number be typed in (committed on
+ * Done or when the field loses focus, then [onValueChangeFinished] fires).
+ */
 @Composable
 fun LabeledSlider(
     label: String,
@@ -278,11 +304,42 @@ fun LabeledSlider(
     valueText: String = Units.formatNumber(value.toDouble(), if (valueRange.endInclusive - valueRange.start > 20f) 0 else 2),
     onValueChangeFinished: (() -> Unit)? = null,
     enabled: Boolean = true,
+    typing: SliderTyping? = null,
 ) {
+    var editing by remember { mutableStateOf(false) }
+    val latestChange by rememberUpdatedState(onValueChange)
+    val latestFinished by rememberUpdatedState(onValueChangeFinished)
+    val focusManager = LocalFocusManager.current
     Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-            Text(valueText, style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
+            when {
+                typing != null && editing && enabled -> SliderValueEditor(
+                    label = label,
+                    initial = Units.formatNumber((value * typing.scale).toDouble(), typing.decimals),
+                    suffix = typing.suffix,
+                    onDone = { text ->
+                        editing = false
+                        val v = NumberSliderMath.parseTyped(text, typing.scale, valueRange.start, valueRange.endInclusive)
+                        if (v != null) {
+                            latestChange(v)
+                            latestFinished?.invoke()
+                        }
+                    },
+                )
+                typing != null && enabled -> Text(
+                    valueText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BrushworkColors.OnChrome,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(BrushworkColors.ChromeHigh)
+                        .clickable(onClickLabel = "Type a value for $label") { editing = true }
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
+                )
+                else -> Text(valueText, style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
+            }
         }
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
@@ -292,8 +349,55 @@ fun LabeledSlider(
             enabled = enabled,
             onValueChangeFinished = onValueChangeFinished,
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+            // A number being typed is committed before the slider moves (not over it later).
+            modifier = if (typing != null) Modifier.clearFocusOnTouch(focusManager) else Modifier,
         )
     }
+}
+
+/**
+ * Small in-place number editor of a [LabeledSlider]: focused and fully selected when it appears,
+ * so typing replaces the number. [onDone] runs once, on Done or when focus leaves.
+ */
+@Composable
+private fun SliderValueEditor(label: String, initial: String, suffix: String, onDone: (String) -> Unit) {
+    var field by remember { mutableStateOf(TextFieldValue(initial, selection = TextRange(0, initial.length))) }
+    val requester = remember { FocusRequester() }
+    var wasFocused by remember { mutableStateOf(false) }
+    var finished by remember { mutableStateOf(false) }
+    val done by rememberUpdatedState(onDone)
+    fun finish() {
+        if (finished) return
+        finished = true
+        done(field.text)
+    }
+    Row(
+        Modifier
+            .border(1.dp, BrushworkColors.Accent, RoundedCornerShape(6.dp))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        BasicTextField(
+            value = field,
+            onValueChange = { field = it },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = BrushworkColors.OnChrome, textAlign = TextAlign.End),
+            cursorBrush = SolidColor(BrushworkColors.Accent),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { finish() }),
+            modifier = Modifier
+                .width(64.dp)
+                .focusRequester(requester)
+                .semantics { contentDescription = label }
+                .onFocusChanged { f ->
+                    if (f.isFocused) wasFocused = true else if (wasFocused) finish()
+                },
+        )
+        if (suffix.isNotEmpty()) {
+            Text(suffix, style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(start = 2.dp))
+        }
+    }
+    LaunchedEffect(Unit) { runCatching { requester.requestFocus() } }
 }
 
 /** Width a numeric field takes when its parent doesn't limit it (e.g. a horizontally scrolling strip). */
