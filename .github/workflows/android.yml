@@ -51,6 +51,7 @@ jobs:
           BW_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           BW_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           BW_VERSION_CODE: ${{ github.run_number }}
+          BW_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: ./gradlew --no-daemon assembleRelease
 
       - name: Rename APK

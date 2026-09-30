@@ -17,6 +17,7 @@ import com.brushwork.paint.assist.RulerRenderer
 import com.brushwork.paint.assist.StrokeAssist
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
@@ -217,6 +218,8 @@ class EditorController(
         if (session != null) { session.cancel(); return }
         val tool = currentTool
         if (tool.hasPendingWork) {
+            // Tools with steps (points of a curve/polygon) take back only the last one.
+            if (tool.hasUserChanges && tool.undoStep()) { invalidateOverlay(); return }
             // The user's pending work is what undo takes back; an untouched automatic lift
             // (transform tool) is just dropped and the last step is undone as usual.
             val userWork = tool.hasUserChanges
@@ -231,6 +234,7 @@ class EditorController(
         if (filterSession != null) return
         val tool = currentTool
         if (tool.hasPendingWork) {
+            if (tool.redoStep()) { invalidateOverlay(); return }
             if (tool.hasUserChanges) return
             tool.discard()
             invalidateOverlay()
@@ -364,6 +368,7 @@ class EditorController(
         } else {
             tool.onUp(p)
         }
+        endHoldPicking()
     }
 
     fun pointerCancel() {
@@ -372,12 +377,72 @@ class EditorController(
         gestureTool = null
         if (gestureAssisted) strokeAssist.cancel()
         tool.onCancel()
+        endHoldPicking()
         invalidateOverlay()
     }
 
+    /**
+     * The finger stayed still ~450 ms. The tool gets it first (e.g. the curve tool's point menu);
+     * otherwise, for tools that paint with the drawing color, the gesture turns into a temporary
+     * eyedropper: the stroke so far is cancelled and the eyedropper follows the finger (showing
+     * a preview square) until it lifts, then the picked color becomes the drawing color and the
+     * tool stays the same.
+     */
     fun pointerLongPress(p: ToolPoint): Boolean {
         if (gestureToFilter) return false
-        return gestureTool?.onLongPress(p) ?: false
+        val tool = gestureTool ?: return false
+        if (tool.onLongPress(p)) return true
+        if (holdPicking || !settings.longPressEyedropper || activeToolId !in HOLD_PICK_TOOLS) return false
+        val picker = tools[ToolId.EYEDROPPER] ?: return false
+        if (gestureAssisted) strokeAssist.cancel()
+        tool.onCancel()
+        gestureAssisted = false
+        holdPicking = true
+        gestureTool = picker
+        picker.onDown(p)
+        invalidateOverlay()
+        return true
+    }
+
+    /**
+     * True while a long-press eyedropper gesture runs (see [pointerLongPress]); the eyedropper
+     * must then not switch tools when it finishes, and draws its preview square.
+     */
+    var holdPicking by mutableStateOf(false)
+        private set
+
+    /** Ends hold-picking after the gesture (called from pointerUp/pointerCancel). */
+    private fun endHoldPicking() {
+        if (holdPicking) { holdPicking = false; invalidateOverlay() }
+    }
+
+    // ------------------------------------------------------------------ two-finger gestures
+
+    private var twoFingerTool: Tool? = null
+
+    /**
+     * The canvas view offers every two-finger gesture to the current tool first (after any
+     * one-finger gesture was cancelled). Returns true if the tool takes it; the view then feeds
+     * [twoFingerGesture] and [twoFingerEnd] instead of moving the view.
+     */
+    fun twoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        twoFingerTool = null
+        if (filterSession != null || busyMessage != null) return false
+        val tool = currentTool
+        if (!tool.onTwoFingerStart(focus, a, b)) return false
+        twoFingerTool = tool
+        return true
+    }
+
+    fun twoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        twoFingerTool?.onTwoFingerGesture(translation, scale, rotationDeg)
+    }
+
+    fun twoFingerEnd(cancelled: Boolean) {
+        val t = twoFingerTool ?: return
+        twoFingerTool = null
+        t.onTwoFingerEnd(cancelled)
+        invalidateOverlay()
     }
 
     /** Draws grid, ruler, marching ants and tool overlays in screen space. */
@@ -387,6 +452,7 @@ class EditorController(
         if (ruler.enabled || activeToolId == ToolId.RULER) RulerRenderer.draw(canvas, t, doc, ruler, activeToolId == ToolId.RULER)
         if (!hideSelectionOutline) selection?.let { SelectionOutline.draw(canvas, t, it, antsPhase) }
         currentTool.drawOverlay(canvas, t)
+        if (holdPicking) tools[ToolId.EYEDROPPER]?.drawOverlay(canvas, t)
         if (gestureAssisted && gestureTool != null) strokeAssist.drawOverlay(canvas, t)
         filterSession?.drawOverlay(canvas, t)
     }
@@ -542,12 +608,19 @@ class EditorController(
         pushUndo(RemoveLayerAction(layer, idx))
     }
 
+    /**
+     * Duplicates [layer] above itself. With an active selection only the selected pixels are
+     * copied (like "copy selection to new layer"); the layer mask, if any, is copied whole.
+     */
     fun duplicateLayer(layer: Layer = activeLayer): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         return withToolPaused {
             // Copy after committing pending work so the duplicate includes it.
+            val sel = selection
             val copy = try {
-                Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), BitmapUtils.copy(layer.bitmap)).also {
+                val pixels = BitmapUtils.copy(layer.bitmap)
+                if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
+                Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
                     it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
                 }
             } catch (e: OutOfMemoryError) {
@@ -560,9 +633,79 @@ class EditorController(
                 doc.layers.add(at, copy)
                 doc.activeLayerIndex = at
             }
-            pushUndo(AddLayerAction(copy, at, "Duplicate layer"))
+            pushUndo(AddLayerAction(copy, at, if (sel != null) "Duplicate selection" else "Duplicate layer"))
             copy
         }
+    }
+
+    // ------------------------------------------------------------------ clipboard
+
+    /** Pixels copied with [copySelection]; [left]/[top] = where they came from (document px). */
+    class ClipboardImage(val bitmap: Bitmap, val left: Int, val top: Int)
+
+    /** This editor's internal clipboard (null = empty). */
+    var clipboard by mutableStateOf<ClipboardImage?>(null)
+        private set
+
+    /**
+     * Copies the selected pixels of the active layer (without a selection: the layer's painted
+     * area). Returns false (with a message) if there is nothing to copy.
+     */
+    fun copySelection(): Boolean {
+        val layer = activeLayer
+        val sel = selection
+        val rect = if (sel != null) Rect(sel.bounds) else contentBounds(layer.bitmap)
+        if (rect == null || rect.isEmpty || !rect.intersect(0, 0, doc.width, doc.height)) {
+            toast("Nothing to copy on \"${layer.name}\""); return false
+        }
+        val out = try {
+            BitmapUtils.createLayerBitmap(rect.width(), rect.height()).also { b ->
+                val c = Canvas(b)
+                c.drawBitmap(layer.bitmap, -rect.left.toFloat(), -rect.top.toFloat(), null)
+                if (sel != null) BitmapUtils.maskWith(c, sel.mask, -rect.left.toFloat(), -rect.top.toFloat())
+            }
+        } catch (e: OutOfMemoryError) {
+            toast("Not enough memory to copy this"); return false
+        }
+        clipboard = ClipboardImage(out, rect.left, rect.top)
+        toast(if (sel != null) "Selection copied" else "Layer copied")
+        return true
+    }
+
+    /** Copies (see [copySelection]) and then clears the copied area, as one "Cut" undo step. */
+    fun cutSelection(): Boolean {
+        if (!checkEditable()) return false
+        if (!copySelection()) return false
+        clearLayer(activeLayer, label = "Cut")
+        toast(if (selection != null) "Selection cut" else "Layer cut")
+        return true
+    }
+
+    /**
+     * Pastes the clipboard into a new layer above the active one, at the place it was copied
+     * from, and starts the transform tool on it so it can be moved/scaled before confirming.
+     */
+    fun paste(): Layer? {
+        val clip = clipboard ?: run { toast("Nothing to paste yet"); return null }
+        val image = try { BitmapUtils.copy(clip.bitmap) } catch (e: OutOfMemoryError) { toast("Not enough memory to paste"); return null }
+        val layer = addLayer(uniqueLayerName("Pasted"), label = PASTE_LABEL) ?: return null
+        selectTool(ToolId.TRANSFORM)
+        (tools[ToolId.TRANSFORM] as? TransformTool)?.startPlacement(layer, image, clip.left.toFloat(), clip.top.toFloat(), PASTE_LABEL)
+        return layer
+    }
+
+    /** Tight bounds of the non-transparent pixels of [bmp], or null if it is empty. */
+    private fun contentBounds(bmp: Bitmap): Rect? {
+        val w = bmp.width; val h = bmp.height
+        val row = IntArray(w)
+        var minX = w; var minY = h; var maxX = -1; var maxY = -1
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            var any = false
+            for (x in 0 until w) if (row[x] ushr 24 != 0) { any = true; if (x < minX) minX = x; if (x > maxX) maxX = x }
+            if (any) { if (y < minY) minY = y; maxY = y }
+        }
+        return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
     }
 
     /** Moves [layer] to [toIndex] (0 = bottom). */
@@ -675,7 +818,7 @@ class EditorController(
      * Clears the layer (or only the selected area). Follows the edit target: when the layer's mask
      * is being edited, the mask is cleared to black (hidden). Refused on alpha-locked content.
      */
-    fun clearLayer(layer: Layer = activeLayer) {
+    fun clearLayer(layer: Layer = activeLayer, label: String = "Clear") {
         if (!checkEditable(layer)) return
         withToolPaused {
             val target = editTargetOf(layer)
@@ -694,7 +837,7 @@ class EditorController(
                 if (sel == null) bmp.eraseColor(0)
                 else c.drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
             }
-            commitEdit(rec, "Clear")
+            commitEdit(rec, label)
         }
     }
 
@@ -872,5 +1015,10 @@ class EditorController(
 
     companion object {
         val PAINT_TOOLS = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR)
+
+        const val PASTE_LABEL = "Paste"
+
+        /** Tools that use the drawing color: a long press there picks a color (see pointerLongPress). */
+        val HOLD_PICK_TOOLS = setOf(ToolId.BRUSH, ToolId.FILL, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.TEXT)
     }
 }

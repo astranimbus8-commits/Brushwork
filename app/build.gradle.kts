@@ -24,7 +24,9 @@ android {
             version = release(37)
         }
         versionCode = System.getenv("BW_VERSION_CODE")?.toIntOrNull() ?: 1
-        versionName = "1.0." + (System.getenv("BW_VERSION_CODE") ?: "0")
+        // Release builds from a tag (v1.2.3) are named after it; other CI builds get 1.x.<run>.
+        versionName = System.getenv("BW_VERSION_NAME")?.removePrefix("v")?.takeIf { it.isNotBlank() }
+            ?: ("1.1." + (System.getenv("BW_VERSION_CODE") ?: "0"))
     }
 
     signingConfigs {

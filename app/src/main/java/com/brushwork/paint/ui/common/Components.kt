@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -90,24 +91,34 @@ import kotlinx.coroutines.launch
  * Shared UI building blocks. Every panel in the app should use these so the UI is consistent.
  */
 
-/** Standard bottom sheet used for all editor panels. Content scrolls vertically. */
+/** Background of editor sheets: see-through so the artwork stays visible behind menus. */
+val SheetBackground = BrushworkColors.Chrome.copy(alpha = 0.88f)
+
+/**
+ * Standard bottom sheet used for all editor panels. It takes at most [maxHeightFraction] of the
+ * screen (half by default), has a translucent background and no dimming scrim, so the canvas
+ * stays visible above and behind it. Content scrolls vertically inside the sheet (with
+ * [scrollable] = false the content must bring its own scrolling, e.g. a LazyColumn).
+ */
 @Composable
 fun BwSheet(
     title: String,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     scrollable: Boolean = true,
+    maxHeightFraction: Float = 0.5f,
     actions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val maxHeight = (androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp * maxHeightFraction.coerceIn(0.2f, 1f)).dp
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
-        containerColor = BrushworkColors.Chrome,
+        containerColor = SheetBackground,
         contentColor = BrushworkColors.OnChrome,
-        scrimColor = Color.Black.copy(alpha = 0.25f),
-        modifier = modifier,
+        scrimColor = Color.Transparent,
+        modifier = modifier.heightIn(max = maxHeight),
     ) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
             Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -116,7 +127,8 @@ fun BwSheet(
                 IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close") }
             }
             val inner = if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier
-            Column(inner.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 16.dp), content = content)
+            // weight(fill = false): the body takes the height left under the header and scrolls.
+            Column(Modifier.weight(1f, fill = false).then(inner).fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 16.dp), content = content)
         }
     }
 }

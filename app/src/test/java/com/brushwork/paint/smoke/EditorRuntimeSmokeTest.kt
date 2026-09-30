@@ -251,15 +251,20 @@ class EditorRuntimeSmokeTest {
 
     @Test
     fun longPressSelectsACurvePointAndIsHarmlessForTheBrush() {
-        // Brush: holding still paints one dot and nothing else happens.
+        // Brush: holding still turns the gesture into the eyedropper: the dot is taken back, no
+        // undo step is recorded and the brush stays the current tool.
         val (bx, by) = screen(60f, 60f)
+        val undoBefore = c.undoManager.undoCount
         touch.idle(200)
         touch.send(MotionEvent.ACTION_DOWN, P(0, bx, by))
         touch.idle(700)
+        assertTrue("long press started color picking", c.holdPicking)
         touch.send(MotionEvent.ACTION_UP, P(0, bx, by))
         touch.idle(50)
-        assertEquals(1, c.undoManager.undoCount)
-        assertEquals(255, alpha(c.activeLayer, 60, 60))
+        assertFalse(c.holdPicking)
+        assertEquals(undoBefore, c.undoManager.undoCount)
+        assertEquals(0, alpha(c.activeLayer, 60, 60))
+        assertEquals(ToolId.BRUSH, c.activeToolId)
 
         // Curve: long-pressing an anchor selects it (and the finger then does nothing else).
         c.selectTool(ToolId.CURVE)

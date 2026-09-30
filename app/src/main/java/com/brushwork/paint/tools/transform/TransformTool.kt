@@ -150,6 +150,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         maskBackground: Int,
         val initial: TransformState,
         val placement: Boolean,
+        /** Undo label of a placement ("Import picture", "Paste"...). */
+        val placementLabel: String = IMPORT_LABEL,
     ) {
         /** Floating bitmap pixels -> document. */
         val matrix = Matrix()
@@ -287,7 +289,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
      * ARGB_8888 [image] is used directly until the placement ends, so the caller must not
      * recycle it before that.
      */
-    fun startPlacement(layer: Layer, image: Bitmap) {
+    fun startPlacement(layer: Layer, image: Bitmap) = startPlacement(layer, image, null, null, IMPORT_LABEL)
+
+    /**
+     * Like [startPlacement] but at an exact position: the image's top-left corner at ([left],
+     * [top]) in document pixels, unscaled (null = centered and shrunk to fit). [label] names the
+     * undo step and must equal the label of the AddLayerAction that created [layer] (so a
+     * discarded placement can remove its layer without leaving history behind).
+     */
+    fun startPlacement(layer: Layer, image: Bitmap, left: Float?, top: Float?, label: String) {
         if (controller.activeToolId != ToolId.TRANSFORM) controller.selectTool(ToolId.TRANSFORM)
         cancelJobs()
         if (session != null) commit()
@@ -302,13 +312,17 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (floating == null) {
             controller.toast(if (usable) "Not enough memory to place the picture" else "The picture could not be placed")
             // Don't leave the empty layer behind when it is clearly the one just added for this.
-            if (isFreshImportLayer(layer)) controller.undo()
+            if (isFreshImportLayer(layer, label)) controller.undo()
             return
         }
         val doc = controller.doc
-        val initial = TransformState.placement(floating.width, floating.height, doc.width, doc.height)
+        val initial = if (left != null && top != null) {
+            TransformState(floating.width, floating.height, left + floating.width / 2f, top + floating.height / 2f).snappedToPixels()
+        } else {
+            TransformState.placement(floating.width, floating.height, doc.width, doc.height)
+        }
         startSession(
-            Session(layer, EditTarget.CONTENT, layer.bitmap, floating, floating !== image, null, null, 0, initial, placement = true),
+            Session(layer, EditTarget.CONTENT, layer.bitmap, floating, floating !== image, null, null, 0, initial, placement = true, placementLabel = label),
             initial,
         )
     }
@@ -538,7 +552,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         // Unchanged: nothing to record.
         if (!s.placement && st.sameGeometry(s.initial)) return endSession(s)
-        val label = if (s.placement) IMPORT_LABEL else TRANSFORM_LABEL
+        val label = if (s.placement) s.placementLabel else TRANSFORM_LABEL
         val bmp = s.targetBitmap
         val rec = controller.beginEdit(s.layer, s.target)
         try {
@@ -566,7 +580,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         endSession(s)
         // Deferred: discard() is also called from inside controller.deleteLayer(), which removes
         // a layer by a precomputed index right after — changing the list now would break it.
-        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer) }
+        if (s.placement) controller.scope.launch(Dispatchers.Main) { removePlacementLayer(s.layer, s.placementLabel) }
     }
 
     /** Clears the session (no pixel changes) and redraws what the preview covered. */
@@ -591,13 +605,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Removes the (still empty) layer of a discarded placement. */
-    private fun removePlacementLayer(layer: Layer) {
+    private fun removePlacementLayer(layer: Layer, label: String) {
         // A transform started meanwhile: undo()/deleteLayer() would discard it, so leave the layer.
         if (controller.doc.indexOf(layer) < 0 || session != null) return
         // Nothing was recorded since the layer was added: undo its AddLayerAction so no
         // history entry remains (Redo can still bring the empty layer back: the controller has
         // no way to drop a redo entry). Otherwise delete it as a regular step.
-        if (isFreshImportLayer(layer)) controller.undo()
+        if (isFreshImportLayer(layer, label)) controller.undo()
         else if (controller.doc.layers.size > 1) controller.deleteLayer(layer)
         // else: it is the only layer left (the others were deleted meanwhile); a drawing needs one.
     }
@@ -607,9 +621,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
      * of [layer]: startPlacement() gets the empty layer importImageAsLayer() just added, and a
      * layer that was painted since (fill from a menu, a committed placement) no longer counts.
      */
-    private fun isFreshImportLayer(layer: Layer): Boolean =
+    private fun isFreshImportLayer(layer: Layer, label: String = IMPORT_LABEL): Boolean =
         controller.doc.indexOf(layer) >= 0 && layer.contentVersion == 0L &&
-            controller.undoManager.undoLabel == IMPORT_LABEL
+            controller.undoManager.undoLabel == label
 
     /** The session's layer and bitmaps are still the ones it was started on. */
     private fun isValid(s: Session): Boolean {

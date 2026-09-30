@@ -43,6 +43,11 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("stylusOnly", false)
         set(v) = prefs.edit { putBoolean("stylusOnly", v) }
 
+    /** Holding a finger still on the canvas with a color tool picks the color under it. */
+    var longPressEyedropper: Boolean
+        get() = prefs.getBoolean("longPressEyedropper", true)
+        set(v) = prefs.edit { putBoolean("longPressEyedropper", v) }
+
     /** Put the side sliders on the right (left-handed layout). */
     var leftHanded: Boolean
         get() = prefs.getBoolean("leftHanded", false)

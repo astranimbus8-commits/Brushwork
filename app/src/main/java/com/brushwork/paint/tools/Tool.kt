@@ -2,6 +2,7 @@ package com.brushwork.paint.tools
 
 import android.graphics.Canvas
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 
 enum class ToolId(val label: String) {
@@ -104,6 +105,39 @@ abstract class Tool(val controller: EditorController) {
      * and redo drop it and act on the history right away, so they never seem to do nothing.
      */
     open val hasUserChanges: Boolean get() = hasPendingWork
+
+    /**
+     * Undo ONE step of the pending work (e.g. remove the last placed point) instead of discarding
+     * all of it. Return true if a step was undone; false lets the controller discard the pending
+     * work as a whole. Called by controller.undo() (undo button / two-finger tap).
+     */
+    open fun undoStep(): Boolean = false
+
+    /** Redo one step previously taken back by [undoStep]. Return true if something was redone. */
+    open fun redoStep(): Boolean = false
+
+    /** True when [redoStep] would do something (Compose state; enables the Redo button). */
+    open val canRedoStep: Boolean get() = false
+
+    // ------------------------------------------------------------------ two-finger gestures
+
+    /**
+     * A two-finger gesture begins while this tool is current ([focus] = midpoint of the fingers,
+     * [a]/[b] = the two finger positions, all DOCUMENT coordinates). Return true to handle it
+     * (e.g. pinch-scale the transformed image when the fingers are on it); false lets the canvas
+     * pan/zoom/rotate the view. Any one-finger gesture was already cancelled via [onCancel].
+     */
+    open fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean = false
+
+    /**
+     * Cumulative change since [onTwoFingerStart]: [translation] of the focus point (document
+     * px), [scale] factor of the finger distance and [rotationDeg] of the finger angle, around
+     * the START focus point. Called for every move.
+     */
+    open fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {}
+
+    /** The gesture ended ([cancelled] = e.g. a third finger landed; revert to the start state). */
+    open fun onTwoFingerEnd(cancelled: Boolean) {}
 
     /** Bake pending work into the layer (with undo). */
     open fun commit() {}

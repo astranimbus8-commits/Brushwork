@@ -151,9 +151,12 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         canUndoStep = true
     }
 
-    /** Steps back one anchor edit (add, move, delete, corner change). */
-    fun undoStep() {
-        val prev = history.removeLastOrNull() ?: return
+    /**
+     * Steps back one anchor edit (add, move, delete, corner change). Also used by the app's undo
+     * (button / two-finger tap) so it takes back the last point instead of the whole curve.
+     */
+    override fun undoStep(): Boolean {
+        val prev = history.removeLastOrNull() ?: return false
         historyKey = null
         anchors = prev
         if (selected !in prev.indices) selected = -1
@@ -161,6 +164,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         if (prev.isEmpty()) targetLayer = null
         else if (targetLayer == null) targetLayer = controller.doc.activeLayer
         changed()
+        return true
     }
 
     /**
