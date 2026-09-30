@@ -612,7 +612,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         downDoc = Vec2(p.x, p.y)
         moved = false
         val cur = item
-        if (cur == null || editorOpen || emptyTextPrompt) {
+        if (cur == null || emptyTextPrompt) {
             mode = if (cur == null) Mode.CREATE else Mode.NONE
             gestureStart = null
             return
@@ -728,6 +728,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
         gesturePrepared = null
         when {
             moved -> {}
+            // The editor is open (minimized to its pill while the canvas is used): the text can
+            // be dragged and pinched, but a tap neither places it nor restarts the editor.
+            editorOpen -> {}
             m == Mode.CREATE -> tapAt(p.x, p.y)
             m == Mode.MOVE && downInside -> openEditor()
             // Tap away from the text: place it, then edit the text tapped or start a new one there.
@@ -748,7 +751,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * still happens away from the text).
      */
     override fun onLongPress(p: ToolPoint): Boolean {
-        if (item == null || editorOpen || gestureStart == null) return false
+        if (item == null || gestureStart == null) return false
         return mode == Mode.ROTATE || mode == Mode.SCALE || mode == Mode.BOX || mode == Mode.PATH_HANDLE ||
             (mode == Mode.MOVE && downInside)
     }
@@ -775,7 +778,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         pinchStart = null
         val cur = item ?: return false
-        if (editorOpen || emptyTextPrompt) return false
+        if (emptyTextPrompt) return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
         val tol = t.screenToDocLength(t.dp(BOX_PAD_DP + 8f))
@@ -790,7 +793,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
         val start = pinchStart ?: return
         // Placed or removed meanwhile (a chrome button): nothing to pinch any more.
-        if (item == null || editorOpen) { pinchStart = null; return }
+        if (item == null) { pinchStart = null; return }
         val delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg).takeIf { it.isFinite() } ?: 0f
         val next = start.pinched(pinchFocus, translation, scale, delta, maxSizePx)
         item = if (start.path.isActive) {
@@ -807,7 +810,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val start = pinchStart ?: return
         pinchStart = null
-        if (cancelled && item != null && !editorOpen) item = start
+        if (cancelled && item != null) item = start
         controller.invalidateOverlay()
     }
 
