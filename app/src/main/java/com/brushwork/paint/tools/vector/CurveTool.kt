@@ -344,7 +344,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         anchors = list
         selected = -1
         drag = Drag.NEW_ANCHOR
-        changed()
+        // The first finger of a two-finger tap (undo) or pinch (zoom) lands here too, and the
+        // point goes away again when the second finger cancels this touch: the brush stroke waits
+        // a moment so it doesn't flash to that point (and cost a replay) every time.
+        changed(brushDelayMs = NEW_POINT_BRUSH_DELAY_MS)
     }
 
     override fun onMove(p: ToolPoint) {
@@ -383,7 +386,11 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                 moved -> onMove(p)
                 !longPressed -> select(if (selected == dragIndex) -1 else dragIndex)
             }
-            Drag.NEW_ANCHOR -> onMove(p)
+            Drag.NEW_ANCHOR -> {
+                onMove(p)
+                // A tap: the point stays, so its brush stroke can show right away.
+                if (!moved) changed()
+            }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> if (moved) onMove(p)
             Drag.NONE, Drag.IGNORE -> {}
         }
@@ -460,7 +467,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
      * compositor; with "Current brush" the painting tool's own unfinished stroke is the preview
      * (replayed, coalesced) and the fill is drawn in the overlay.
      */
-    private fun changed() {
+    private fun changed(brushDelayMs: Long = 0L) {
         if (anchors.isNotEmpty()) ensureObserving()
         val path = if (anchors.size >= 2) path() else null
         if (path != null) path.toAndroidPath(docPath) else docPath.rewind()
@@ -471,7 +478,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             overlaySpecs = specs
             if (specs.isNotEmpty()) specOverlay.setBand(docPath, controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
             val g = brushGeometry(path, settings)
-            brushPreview.request(g) { brushPoints(path, g) }
+            brushPreview.request(g, brushDelayMs) { brushPoints(path, g) }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
@@ -616,5 +623,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         private const val TOUCH_SLOP_DP = 6f
         /** Grab radius of anchors and tangent handles (screen dp): generous for fingers. */
         private const val HANDLE_TOUCH_DP = 24f
+        /** How long the brush stroke waits for a point just placed under a finger (see onDown). */
+        internal const val NEW_POINT_BRUSH_DELAY_MS = 150L
     }
 }

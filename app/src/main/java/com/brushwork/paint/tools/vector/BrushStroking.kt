@@ -95,6 +95,8 @@ internal class BrushStrokePreview(
     private val handler = Handler(Looper.getMainLooper())
     private val runnable = Runnable { scheduled = false; flush() }
     private var scheduled = false
+    /** Uptime at which the scheduled replay runs. */
+    private var scheduledFor = 0L
     private var pending: Request? = null
     private var live: Live? = null
     /** Key of the last replay the painting tool refused (locked layer...): not retried until something changes. */
@@ -127,25 +129,32 @@ internal class BrushStrokePreview(
     /**
      * Shows the stroke for [geometry] (compared with equals: pass immutable data such as the
      * path's ops). [points] must compute the input from captured, immutable values; it runs when
-     * the coalesced replay happens.
+     * the coalesced replay happens, not before [minDelayMs] from now (a point added under a
+     * finger that may still turn into a two-finger tap or pinch waits for that to be ruled out).
      */
-    fun request(geometry: Any, points: () -> List<ToolPoint>) {
+    fun request(geometry: Any, minDelayMs: Long = 0L, points: () -> List<ToolPoint>) {
         val cur = live
         val tool = paintTool()
         if (cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)) {
-            // Already shown (e.g. a tap that only selected a point).
+            // Already shown (e.g. a tap that only selected a point, or a cancelled touch).
             pending = null
             unschedule()
             return
         }
         pending = Request(geometry, points)
-        if (scheduled) return
-        scheduled = true
         val now = SystemClock.uptimeMillis()
         // The replay's own time, plus about as much again for redrawing the tiles it touched,
         // must leave the main thread free most of the time.
         val interval = (lastCostMs * 3).coerceIn(MIN_INTERVAL_MS, MAX_INTERVAL_MS)
-        handler.postDelayed(runnable, (lastRunAt + interval - now).coerceIn(0L, interval))
+        val delay = maxOf((lastRunAt + interval - now).coerceIn(0L, interval), minDelayMs)
+        if (scheduled) {
+            // Keeps the scheduled time unless this request may run sooner.
+            if (now + delay >= scheduledFor) return
+            handler.removeCallbacks(runnable)
+        }
+        scheduled = true
+        scheduledFor = now + delay
+        handler.postDelayed(runnable, delay)
     }
 
     /** Runs a waiting replay now (tests; the looper does it otherwise). */
