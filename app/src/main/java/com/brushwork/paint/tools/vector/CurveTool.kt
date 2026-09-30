@@ -64,9 +64,11 @@ data class CurveSettings(
 
 /**
  * Bezier curve tool, or polyline tool when [polyline] (all corners sharp). Tap to add anchors
- * (tapping near the path inserts one), drag anchors or tangent handles to edit, tap / long-press
- * an anchor to select it for sharp / smooth / delete / numeric editing. ✓ strokes the path with
- * the current brush or a plain line and optionally fills it.
+ * (tapping near the path inserts one), drag any anchor or tangent handle to edit it, tap /
+ * long-press an anchor to select it for sharp / smooth / delete / numeric editing. Undo (the
+ * app's undo button and two-finger tap included) takes back one anchor edit at a time, redo
+ * brings it back. With "Current brush" the painting tool's real stroke is shown live while the
+ * path is edited; ✓ paints it (plus the optional fill) as one undo step.
  */
 class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(controller) {
     override val id = if (polyline) ToolId.POLYLINE else ToolId.CURVE
@@ -84,12 +86,20 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         private set
 
     /** True when [undoStep] can go back. */
-    var canUndoStep by mutableStateOf(false)
+    override var canUndoStep by mutableStateOf(false)
+        private set
+
+    /** Number of edits [redoStep] can bring back (Compose state; the in-tool redo button). */
+    var redoCount by mutableIntStateOf(0)
         private set
 
     override val hasPendingWork: Boolean get() = anchors.isNotEmpty()
 
+    // The app's redo only reaches the tool while a path is pending (see EditorController.redo).
+    override val canRedoStep: Boolean get() = redoCount > 0 && anchors.isNotEmpty()
+
     private val history = ArrayDeque<List<CurveAnchor>>()
+    private val redo = ArrayDeque<List<CurveAnchor>>()
     private var historyKey: Any? = null
     private var historyKeyTime = 0L
     private data class NumericKey(val kind: String, val index: Int)
@@ -98,6 +108,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     internal var clock: () -> Long = { SystemClock.uptimeMillis() }
     private var targetLayer: Layer? = null
     private val preview = PreviewHost(controller)
+    private val brushPreview = BrushStrokePreview(controller)
+    private val specOverlay = SpecOverlay()
+    /** Plain items drawn in the overlay while the brush preview owns the render override (the fill). */
+    private var overlaySpecs: List<VectorPaintSpec> = emptyList()
     private var observeJob: Job? = null
 
     private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, IGNORE }
@@ -106,9 +120,12 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private var dragIndex = -1
     private var downPoint = Vec2.ZERO
     private var moved = false
+    /** The current touch long-pressed an anchor and selected it (lifting keeps it selected). */
+    private var longPressed = false
     private var gestureStart: List<CurveAnchor> = emptyList()
     private var gestureSelected = -1
     private var gestureHistorySize = 0
+    private var gestureRedo: List<List<CurveAnchor>> = emptyList()
 
     private val painter = OverlayPainter()
     private val docPath = Path()
@@ -137,18 +154,26 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     // ------------------------------------------------------------------ editing actions
 
     /**
-     * Saves the anchors for [undoStep]. Consecutive edits with the same non-null [key] that follow
-     * each other quickly (typing a coordinate, holding a nudge arrow) share one step.
+     * Saves the anchors for [undoStep] (and drops the redo steps: this is a new edit).
+     * Consecutive edits with the same non-null [key] that follow each other quickly (typing a
+     * coordinate, holding a nudge arrow) share one step.
      */
     private fun pushHistory(key: Any? = null) {
         val now = if (key != null) clock() else 0L
         val coalesce = key != null && key == historyKey && history.isNotEmpty() && now - historyKeyTime <= COALESCE_MS
         historyKey = key
         historyKeyTime = now
+        clearRedo()
         if (coalesce) return
         history.addLast(anchors)
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
+    }
+
+    private fun clearRedo() {
+        if (redo.isEmpty()) return
+        redo.clear()
+        redoCount = 0
     }
 
     /**
@@ -157,14 +182,32 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
      */
     override fun undoStep(): Boolean {
         val prev = history.removeLastOrNull() ?: return false
+        redo.addLast(anchors)
+        redoCount = redo.size
         historyKey = null
-        anchors = prev
-        if (selected !in prev.indices) selected = -1
+        restore(prev)
         canUndoStep = history.isNotEmpty()
-        if (prev.isEmpty()) targetLayer = null
+        return true
+    }
+
+    /** Brings back the edit last taken back by [undoStep] (the app's redo, or the in-tool button). */
+    override fun redoStep(): Boolean {
+        val next = redo.removeLastOrNull() ?: return false
+        redoCount = redo.size
+        history.addLast(anchors)
+        while (history.size > MAX_HISTORY) history.removeFirst()
+        canUndoStep = true
+        historyKey = null
+        restore(next)
+        return true
+    }
+
+    private fun restore(list: List<CurveAnchor>) {
+        anchors = list
+        if (selected !in list.indices) selected = -1
+        if (list.isEmpty()) targetLayer = null
         else if (targetLayer == null) targetLayer = controller.doc.activeLayer
         changed()
-        return true
     }
 
     /**
@@ -257,9 +300,11 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val pt = Vec2(p.x, p.y)
         downPoint = pt
         moved = false
+        longPressed = false
         gestureStart = anchors
         gestureSelected = selected
         gestureHistorySize = history.size
+        gestureRedo = redo.toList()
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
         val tol = controller.docLength(HANDLE_TOUCH_DP)
         val sel = selected
@@ -268,7 +313,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             val a = anchors[sel].pos
             val dOut = if (hOut.length > 1e-3f) pt.distanceTo(a + hOut) else Float.MAX_VALUE
             val dIn = if (hIn.length > 1e-3f) pt.distanceTo(a + hIn) else Float.MAX_VALUE
-            if (minOf(dOut, dIn) <= tol) {
+            // The anchor itself wins when the finger is closer to it than to its handles.
+            if (minOf(dOut, dIn) <= tol && minOf(dOut, dIn) < pt.distanceTo(a)) {
                 drag = if (dOut <= dIn) Drag.HANDLE_OUT else Drag.HANDLE_IN
                 dragIndex = sel
                 return
@@ -276,6 +322,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         }
         val idx = nearestAnchor(pt, tol)
         if (idx >= 0) {
+            // Every existing point can be grabbed and moved at any time.
             drag = Drag.ANCHOR
             dragIndex = idx
             return
@@ -297,7 +344,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         anchors = list
         selected = -1
         drag = Drag.NEW_ANCHOR
-        changed()
+        // The first finger of a two-finger tap (undo) or pinch (zoom) lands here too, and the
+        // point goes away again when the second finger cancels this touch: the brush stroke waits
+        // a moment so it doesn't flash to that point (and cost a replay) every time.
+        changed(brushDelayMs = NEW_POINT_BRUSH_DELAY_MS)
     }
 
     override fun onMove(p: ToolPoint) {
@@ -313,7 +363,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> {
                 val a = anchors.getOrNull(dragIndex) ?: return
-                if (!moved) { pushHistory(); moved = true }
+                if (!moved) {
+                    if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
+                    pushHistory(); moved = true
+                }
                 val (hIn, hOut) = handlesOf(dragIndex)
                 val v = pt - a.pos
                 if (v.length < 1e-3f) return
@@ -329,8 +382,16 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     override fun onUp(p: ToolPoint) {
         when (drag) {
-            Drag.ANCHOR -> if (moved) onMove(p) else select(if (selected == dragIndex) -1 else dragIndex)
-            Drag.NEW_ANCHOR, Drag.HANDLE_IN, Drag.HANDLE_OUT -> onMove(p)
+            Drag.ANCHOR -> when {
+                moved -> onMove(p)
+                !longPressed -> select(if (selected == dragIndex) -1 else dragIndex)
+            }
+            Drag.NEW_ANCHOR -> {
+                onMove(p)
+                // A tap: the point stays, so its brush stroke can show right away.
+                if (!moved) changed()
+            }
+            Drag.HANDLE_IN, Drag.HANDLE_OUT -> if (moved) onMove(p)
             Drag.NONE, Drag.IGNORE -> {}
         }
         drag = Drag.NONE
@@ -342,6 +403,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             anchors = gestureStart
             selected = gestureSelected
             while (history.size > gestureHistorySize) history.removeLast()
+            redo.clear(); redo.addAll(gestureRedo)
+            redoCount = redo.size
             historyKey = null
             canUndoStep = history.isNotEmpty()
             if (anchors.isEmpty()) targetLayer = null
@@ -350,13 +413,21 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         changed()
     }
 
-    override fun onLongPress(p: ToolPoint): Boolean {
-        if (drag == Drag.ANCHOR && !moved) {
-            select(dragIndex)
-            drag = Drag.IGNORE // the rest of this gesture does nothing
-            return true
+    /**
+     * A long press on an anchor selects it (its sharp / smooth / delete actions appear) and the
+     * finger can still drag it; on a tangent handle it keeps the drag going. Elsewhere it is left
+     * to the controller (color picking).
+     */
+    override fun onLongPress(p: ToolPoint): Boolean = when (drag) {
+        Drag.ANCHOR -> {
+            if (!moved) {
+                select(dragIndex)
+                longPressed = true
+            }
+            true
         }
-        return false
+        Drag.HANDLE_IN, Drag.HANDLE_OUT -> true
+        else -> false
     }
 
     private fun nearestAnchor(p: Vec2, tol: Float): Int {
@@ -372,10 +443,10 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
 
     // ------------------------------------------------------------------ preview
 
-    private fun buildSpecs(): List<VectorPaintSpec> {
+    /** Plain items of the path: the fill (when on) and the plain line (when that is the stroke). */
+    private fun buildSpecs(path: VectorPath): List<VectorPaintSpec> {
         if (anchors.size < 2) return emptyList()
         val s = settings
-        val path = path()
         val fill = if (s.fill && anchors.size >= 3) path else null
         val stroke = if (s.stroke == CurveStroke.PLAIN) path else null
         return listOfNotNull(
@@ -383,15 +454,41 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         )
     }
 
-    /** Rebuilds the guide path and the compositor preview (plain line / fill), then redraws. */
-    private fun changed() {
+    /** The brush stroke of [path] with the current taper settings. */
+    private data class BrushGeometry(val ops: List<PathOp>, val taperFraction: Float)
+
+    private fun brushGeometry(path: VectorPath, s: CurveSettings) =
+        BrushGeometry(path.ops, if (s.taper) s.taperPercent / 100f else 0f)
+
+    private fun brushPoints(path: VectorPath, g: BrushGeometry): List<ToolPoint> = brushStrokePoints(path, g.taperFraction)
+
+    /**
+     * Rebuilds the guide path and the preview, then redraws. A plain line / fill goes through the
+     * compositor; with "Current brush" the painting tool's own unfinished stroke is the preview
+     * (replayed, coalesced) and the fill is drawn in the overlay.
+     */
+    private fun changed(brushDelayMs: Long = 0L) {
         if (anchors.isNotEmpty()) ensureObserving()
-        if (anchors.size >= 2) path().toAndroidPath(docPath) else docPath.rewind()
-        preview.show(targetLayer ?: controller.doc.activeLayer, buildSpecs())
+        val path = if (anchors.size >= 2) path() else null
+        if (path != null) path.toAndroidPath(docPath) else docPath.rewind()
+        val layer = targetLayer ?: controller.doc.activeLayer
+        val specs = if (path != null) buildSpecs(path) else emptyList()
+        if (path != null && settings.stroke == CurveStroke.BRUSH && layer === controller.doc.activeLayer) {
+            preview.release()
+            overlaySpecs = specs
+            if (specs.isNotEmpty()) specOverlay.setBand(docPath, controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
+            val g = brushGeometry(path, settings)
+            brushPreview.request(g, brushDelayMs) { brushPoints(path, g) }
+        } else {
+            brushPreview.cancel()
+            overlaySpecs = emptyList()
+            preview.show(layer, specs)
+        }
         controller.invalidateOverlay()
     }
 
-    private fun releasePreview() = preview.release()
+    /** Runs a waiting live-brush replay now (the main looper does it otherwise). */
+    internal fun flushPreview() = brushPreview.flush()
 
     // ------------------------------------------------------------------ commit / discard
 
@@ -402,17 +499,28 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         if (!controller.checkEditable(layer)) return
         val s = settings
         val path = path()
-        val specs = buildSpecs()
-        clear()
-        if (specs.isNotEmpty()) {
-            val label = when {
-                s.stroke != CurveStroke.PLAIN -> "Fill path"
-                polyline -> "Polyline"
-                else -> "Curve"
+        val specs = buildSpecs(path)
+        val brush = s.stroke == CurveStroke.BRUSH && layer === controller.doc.activeLayer
+        val g = brushGeometry(path, s)
+        resetPath()
+        // Fill and brush stroke are ONE undo step, named after the tool (a plain line / fill
+        // alone keeps its own name).
+        val step: (String, () -> Unit) -> Unit = if (brush) controller::undoStepNamed else controller::groupUndo
+        step(if (polyline) "Polyline" else "Curve") {
+            if (specs.isNotEmpty()) {
+                // The fill goes under the stroke, so the stroke is painted after it (smudge /
+                // blur previews edit the pixels: they are restored first).
+                brushPreview.cancel()
+                val label = when {
+                    s.stroke != CurveStroke.PLAIN -> "Fill path"
+                    polyline -> "Polyline"
+                    else -> "Curve"
+                }
+                VectorCommit.commit(controller, layer, specs, label)
             }
-            VectorCommit.commit(controller, layer, specs, label)
+            if (brush) brushPreview.commit(g) { brushPoints(path, g) }
         }
-        if (s.stroke == CurveStroke.BRUSH && layer === controller.doc.activeLayer) strokeWithBrush(path, s)
+        brushPreview.end()
         controller.invalidateOverlay()
     }
 
@@ -421,52 +529,40 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         controller.invalidateOverlay()
     }
 
-    private fun clear() {
+    /** Forgets the path and its in-tool history (the brush preview is left to the caller). */
+    private fun resetPath() {
         anchors = emptyList()
         selected = -1
         history.clear()
+        redo.clear()
+        redoCount = 0
         historyKey = null
         canUndoStep = false
         drag = Drag.NONE
         targetLayer = null
         docPath.rewind()
-        releasePreview()
+        overlaySpecs = emptyList()
+        preview.release()
     }
 
-    /**
-     * Paints the path with the last painting tool through the generic Tool API: even samples,
-     * stylus points so the given pressure (1, or the taper ramp) is honored.
-     */
-    private fun strokeWithBrush(path: VectorPath, s: CurveSettings) {
-        val samples = CurveGeometry.sample(path, BRUSH_SAMPLE_SPACING)
-        if (samples.size < 2) return
-        val tool = controller.tools[controller.lastPaintTool] ?: return
-        if (tool === this) return
-        val total = VectorPath.length(samples)
-        val taperLen = if (s.taper) total * s.taperPercent / 100f else 0f
-        val t0 = SystemClock.uptimeMillis()
-        var dist = 0f
-        fun point(i: Int): ToolPoint {
-            if (i > 0) dist += samples[i].distanceTo(samples[i - 1])
-            val pressure = if (s.taper) CurveGeometry.taperPressure(dist, total, taperLen) else 1f
-            return ToolPoint(samples[i].x, samples[i].y, pressure, t0 + i, isStylus = true)
-        }
-        tool.onDown(point(0))
-        for (i in 1 until samples.lastIndex) tool.onMove(point(i))
-        tool.onUp(point(samples.lastIndex))
+    private fun clear() {
+        resetPath()
+        brushPreview.end()
     }
 
     override fun onActivate() = ensureObserving()
 
     /**
-     * The preview depends on the main color, selection and layer props. Started on activation
-     * and again whenever anchors exist, because some controller operations call onDeactivate
-     * without a following onActivate.
+     * The preview depends on the main color, selection, layer props and the painting tool's
+     * preset (the size / opacity sliders). Started on activation and again whenever anchors
+     * exist, because some controller operations call onDeactivate without a following onActivate.
      */
     private fun ensureObserving() {
         if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
-            snapshotFlow { Triple(controller.color, controller.selection, controller.layersVersion) }
+            snapshotFlow {
+                listOf(controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool))
+            }
                 .drop(1)
                 .collect { if (anchors.size >= 2) changed() }
         }
@@ -486,6 +582,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         clear()
     }
 
+    override fun onDispose() = brushPreview.end()
+
     // ------------------------------------------------------------------ overlay
 
     private fun map(t: ViewTransform, p: Vec2): FloatArray {
@@ -497,6 +595,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val list = anchors
         if (list.isEmpty()) return
+        if (overlaySpecs.isNotEmpty()) {
+            specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
+        }
         if (list.size >= 2) painter.path(canvas, t, docPath)
         val sel = selected
         if (!polyline && sel in list.indices && !list[sel].sharp) {
@@ -520,7 +621,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         /** Keyed numeric edits closer together than this share one in-tool undo step. */
         private const val COALESCE_MS = 1500L
         private const val TOUCH_SLOP_DP = 6f
-        private const val HANDLE_TOUCH_DP = 22f
-        private const val BRUSH_SAMPLE_SPACING = 0.75f
+        /** Grab radius of anchors and tangent handles (screen dp): generous for fingers. */
+        private const val HANDLE_TOUCH_DP = 24f
+        /** How long the brush stroke waits for a point just placed under a finger (see onDown). */
+        internal const val NEW_POINT_BRUSH_DELAY_MS = 150L
     }
 }

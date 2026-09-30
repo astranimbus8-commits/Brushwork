@@ -23,12 +23,26 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
+/** How a shape's outline is painted. */
+@Serializable
+enum class ShapeStroke(val label: String) {
+    /** A plain anti-aliased line (caps, joins and corner styles exactly as set). */
+    PLAIN("Plain line"),
+    /** The last painting tool (brush / smudge / blur) is driven along the outline. */
+    BRUSH("Current brush"),
+}
+
 /** Persisted options of the shape tool. Lengths are document pixels. */
 @Serializable
 data class ShapeSettings(
     val type: ShapeType = ShapeType.RECTANGLE,
     val style: ShapeStyle = ShapeStyle.STROKE,
+    /** Stroke width used when [useBrushSize] is off. */
     val strokeWidth: Float = 8f,
+    /** The stroke width follows the size of the current brush (the size slider). */
+    val useBrushSize: Boolean = true,
+    /** Plain line or painted with the current brush. */
+    val strokeWith: ShapeStroke = ShapeStroke.PLAIN,
     /** Fill color, or null to follow the main drawing color. */
     val fillColor: Int? = null,
     val lineCap: LineCapStyle = LineCapStyle.ROUND,
@@ -52,6 +66,9 @@ data class ShapeSettings(
 ) {
     val outlineParams: OutlineParams get() = OutlineParams(sides, starPoints, innerRatio, corner, cornerRadius)
 
+    /** The shape has an outline (lines and arrows always do). */
+    val strokes: Boolean get() = type.isLineLike || style.stroke
+
     /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
     fun sanitized(fallback: ShapeSettings = DEFAULT) = copy(
         strokeWidth = strokeWidth.finiteOr(fallback.strokeWidth).coerceIn(MIN_STROKE, MAX_STROKE),
@@ -73,8 +90,9 @@ data class ShapeSettings(
 
 /**
  * Lines, rectangles, ellipses, polygons, stars and arrows. Drag to create; the shape then stays
- * editable (move, 8 resize handles, rotation handle, numeric entry) until committed with ✓,
- * by tapping outside it, or by switching tools. The preview goes through the compositor.
+ * editable (move, 8 resize handles, rotation handle, two-finger pinch inside it, numeric entry)
+ * until committed with ✓, by tapping outside it, or by switching tools. A plain outline previews
+ * through the compositor; with "Current brush" the painting tool's own stroke is shown live.
  */
 class ShapeTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.SHAPE
@@ -92,6 +110,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private var targetLayer: Layer? = null
     private var creatingBox: ShapeBox? = null
     private val preview = PreviewHost(controller)
+    private val brushPreview = BrushStrokePreview(controller)
+    private val specOverlay = SpecOverlay()
+    /** Plain items drawn in the overlay while the brush preview owns the render override. */
+    private var overlaySpecs: List<VectorPaintSpec> = emptyList()
     private var observeJob: Job? = null
 
     private enum class Mode { NONE, CREATE, MOVE, RESIZE, ROTATE, LINE_START, LINE_END }
@@ -104,8 +126,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** The current gesture moved past the touch slop. */
     private var started = false
 
+    /** The shape when a two-finger pinch on it began (null when not pinching). */
+    private var pinchStart: ShapeBox? = null
+    private var pinchFocus = Vec2.ZERO
+
     private val painter = OverlayPainter()
     private val boxPath = Path()
+    private val bandPath = Path()
     private val pts = FloatArray(2)
 
     // ------------------------------------------------------------------ settings
@@ -124,6 +151,32 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     private fun loadSettings(): ShapeSettings =
         runCatching { controller.settings.getObject(PREFS_KEY, ShapeSettings.serializer()) }.getOrNull()?.sanitized() ?: ShapeSettings()
+
+    /** Size of the current painting tool's brush (what "Use brush size" follows), or null. */
+    val brushSize: Float?
+        get() = controller.presetFor(controller.lastPaintTool)?.size?.takeIf { it.isFinite() && it > 0f }
+            ?.coerceIn(ShapeSettings.MIN_STROKE, ShapeSettings.MAX_STROKE)
+
+    /** The stroke width in use: the brush size when "Use brush size" is on (Compose state). */
+    val strokeWidth: Float
+        get() = settings.let { s -> if (s.useBrushSize) brushSize ?: s.strokeWidth else s.strokeWidth }
+
+    /**
+     * Sets the stroke width. With "Use brush size" the width IS the brush size, so the brush
+     * (and the size slider) change with it.
+     */
+    fun setStrokeWidth(w: Float) {
+        if (!w.isFinite()) return
+        val v = w.coerceIn(ShapeSettings.MIN_STROKE, ShapeSettings.MAX_STROKE)
+        val paintTool = controller.lastPaintTool
+        val preset = controller.presetFor(paintTool)
+        if (settings.useBrushSize && preset != null) {
+            if (preset.size != v) controller.updatePreset(paintTool, preset.copy(size = v))
+            refreshPreview()
+        } else {
+            update { it.copy(strokeWidth = v) }
+        }
+    }
 
     /** Line <-> box conversion when the type changes while a shape is pending. */
     private fun convert(b: ShapeBox, type: ShapeType): ShapeBox = if (type.isLineLike) {
@@ -164,15 +217,18 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     fun place(b: ShapeBox) {
         if (box == null) return
         if (!(b.cx.isFinite() && b.cy.isFinite() && b.w.isFinite() && b.h.isFinite() && b.rotationDeg.isFinite())) return
+        box = clean(b)
+        refreshPreview()
+    }
+
+    private fun clean(b: ShapeBox): ShapeBox {
         val lim = ShapeSettings.MAX_LENGTH
-        val clean = ShapeBox(
+        return ShapeBox(
             b.cx.coerceIn(-lim, lim), b.cy.coerceIn(-lim, lim),
             if (settings.type.isLineLike) b.w.coerceIn(0f, lim) else b.w.coerceIn(1f, lim),
             if (settings.type.isLineLike) 0f else b.h.coerceIn(1f, lim),
             ShapeGeometry.normalizeDegrees(b.rotationDeg),
         )
-        box = clean
-        refreshPreview()
     }
 
     /** Moves the pending shape by the nudge step in direction ([dx], [dy]). */
@@ -290,6 +346,65 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         refreshPreview()
     }
 
+    /**
+     * Holding a finger still on the pending shape (a handle, or the shape to move it) keeps that
+     * edit going instead of turning into color picking; elsewhere the controller decides.
+     */
+    override fun onLongPress(p: ToolPoint): Boolean = mode != Mode.NONE && mode != Mode.CREATE
+
+    // ------------------------------------------------------------------ two-finger pinch
+
+    /** Two fingers on (or around) the pending shape scale, rotate and move it. */
+    override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        val bx = box ?: return false
+        if (!isOnShape(bx, focus)) return false
+        creatingBox = null
+        mode = Mode.NONE
+        pinchStart = bx
+        pinchFocus = focus
+        return true
+    }
+
+    override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        val start = pinchStart ?: return
+        if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || scale <= 0f || !rotationDeg.isFinite()) return
+        box = pinched(start, pinchFocus, translation, scale, rotationDeg, settings.snapAngle)
+        refreshPreview()
+    }
+
+    override fun onTwoFingerEnd(cancelled: Boolean) {
+        val start = pinchStart ?: return
+        pinchStart = null
+        if (cancelled) {
+            box = start
+            refreshPreview()
+        }
+    }
+
+    /**
+     * [start] scaled by [scale] and rotated by [rotationDeg] around the pinch [focus], then moved
+     * by [translation] (rotation snapped to 15° steps with [snap]).
+     */
+    private fun pinched(start: ShapeBox, focus: Vec2, translation: Vec2, scale: Float, rotationDeg: Float, snap: Boolean): ShapeBox {
+        val target = start.rotationDeg + rotationDeg
+        val deg = if (snap) ShapeGeometry.snapDegrees(target) else ShapeGeometry.normalizeDegrees(target)
+        val delta = ShapeGeometry.normalizeDegrees(deg - start.rotationDeg) * Geometry.DEG
+        val c = focus + (start.center - focus).rotated(delta) * scale + translation
+        return clean(ShapeBox(c.x, c.y, start.w * scale, start.h * scale, deg))
+    }
+
+    /** True when [p] is on the pending shape (its box with a finger's margin, or near a line). */
+    private fun isOnShape(b: ShapeBox, p: Vec2): Boolean {
+        val tol = controller.docLength(HANDLE_TOUCH_DP)
+        if (settings.type.isLineLike) {
+            return Geometry.distanceToSegment(p, b.start, b.end) <= tol * 1.5f + strokeWidth / 2f
+        }
+        val local = b.toLocal(p)
+        return abs(local.x) <= b.w / 2f + tol && abs(local.y) <= b.h / 2f + tol
+    }
+
+    // ------------------------------------------------------------------ geometry helpers
+
     private fun creationBox(pt: Vec2): ShapeBox {
         val s = settings
         var cur = controller.snapToGrid(pt)
@@ -312,10 +427,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     private fun hitTest(b: ShapeBox, p: Vec2): Mode? {
         val tol = controller.docLength(HANDLE_TOUCH_DP)
+        val width = strokeWidth
         if (settings.type.isLineLike) {
             val ds = p.distanceTo(b.start); val de = p.distanceTo(b.end)
             if (min(ds, de) <= tol) return if (de <= ds) Mode.LINE_END else Mode.LINE_START
-            val reach = max(tol * 0.75f, settings.strokeWidth / 2f)
+            val reach = max(tol * 0.75f, width / 2f)
             return if (Geometry.distanceToSegment(p, b.start, b.end) <= reach) Mode.MOVE else null
         }
         if (p.distanceTo(rotationHandle(b)) <= tol) return Mode.ROTATE
@@ -331,43 +447,77 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             handle = best
             return Mode.RESIZE
         }
-        val pad = max(tol * 0.5f, settings.strokeWidth / 2f)
+        val pad = max(tol * 0.5f, width / 2f)
         return if (abs(local.x) <= b.w / 2f + pad && abs(local.y) <= b.h / 2f + pad) Mode.MOVE else null
     }
 
     // ------------------------------------------------------------------ preview
 
-    private fun buildSpec(b: ShapeBox): VectorPaintSpec? {
+    /** True when the outline is painted with the painting tool (on the active layer). */
+    private fun paintsWithBrush(layer: Layer): Boolean {
+        val s = settings
+        return s.strokeWith == ShapeStroke.BRUSH && s.strokes && layer === controller.doc.activeLayer
+    }
+
+    /**
+     * The plain items of shape [b]: everything when [brush] is false; with the brush only what
+     * stays plain (the fill, filled arrowheads), since the brush paints the outline.
+     */
+    private fun buildSpec(b: ShapeBox, brush: Boolean): VectorPaintSpec? {
         val s = settings
         val color = controller.color
+        val w = strokeWidth
         return when (s.type) {
-            ShapeType.LINE -> VectorPaintSpec.build(
-                null, 0, VectorPath.polyline(listOf(b.start, b.end)), color, s.strokeWidth, s.lineCap, JoinStyle.ROUND,
+            ShapeType.LINE -> if (brush) null else VectorPaintSpec.build(
+                null, 0, VectorPath.polyline(listOf(b.start, b.end)), color, w, s.lineCap, JoinStyle.ROUND,
             )
             ShapeType.ARROW -> {
-                val g = ShapeGeometry.arrow(b.start, b.end, s.strokeWidth, s.arrowHeads, s.arrowHeadStyle, s.arrowHeadScale)
-                VectorPaintSpec.build(null, 0, g.stroke, color, s.strokeWidth, s.lineCap, JoinStyle.ROUND, g.fill)
+                val g = ShapeGeometry.arrow(b.start, b.end, w, s.arrowHeads, s.arrowHeadStyle, s.arrowHeadScale)
+                VectorPaintSpec.build(null, 0, if (brush) null else g.stroke, color, w, s.lineCap, JoinStyle.ROUND, g.fill)
             }
             else -> {
                 val outline = ShapeGeometry.outline(s.type, b, s.outlineParams)
                 val join = if (s.type == ShapeType.ELLIPSE) JoinStyle.ROUND else ShapeGeometry.joinFor(s.corner)
                 VectorPaintSpec.build(
                     if (s.style.fill) outline else null, s.fillColor ?: color,
-                    if (s.style.stroke) outline else null, color, s.strokeWidth, LineCapStyle.ROUND, join,
+                    if (s.style.stroke && !brush) outline else null, color, w, LineCapStyle.ROUND, join,
                 )
             }
         }
     }
 
-    /** Rebuilds the compositor preview of the pending / in-creation shapes and redraws. */
+    /** The outline the painting tool follows for shape [b] (one continuous path). */
+    private fun brushOutline(b: ShapeBox): VectorPath {
+        val s = settings
+        return ShapeGeometry.brushOutline(s.type, b, s.outlineParams, strokeWidth, s.arrowHeads, s.arrowHeadStyle, s.arrowHeadScale)
+    }
+
+    /** Rebuilds the preview of the pending / in-creation shapes and redraws. */
     fun refreshPreview() {
-        val specs = listOfNotNull(box?.let { buildSpec(it) }, creatingBox?.let { buildSpec(it) })
-        if (specs.isNotEmpty()) ensureObserving()
-        preview.show(targetLayer ?: controller.doc.activeLayer, specs)
+        val layer = targetLayer ?: controller.doc.activeLayer
+        val brushBox = if (paintsWithBrush(layer)) creatingBox ?: box else null
+        if (brushBox != null) {
+            ensureObserving()
+            preview.release()
+            // Only one shape can be the live brush stroke: while a new one is dragged out, the
+            // pending one is shown as a plain outline until it is committed.
+            val older = box?.takeIf { it !== brushBox }
+            overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushBox, brush = true))
+            val path = brushOutline(brushBox)
+            if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), controller.presetFor(controller.lastPaintTool)?.size ?: 0f)
+            brushPreview.request(path.ops) { brushStrokePoints(path) }
+        } else {
+            brushPreview.cancel()
+            overlaySpecs = emptyList()
+            val specs = listOfNotNull(box?.let { buildSpec(it, brush = false) }, creatingBox?.let { buildSpec(it, brush = false) })
+            if (specs.isNotEmpty()) ensureObserving()
+            preview.show(layer, specs)
+        }
         controller.invalidateOverlay()
     }
 
-    private fun releasePreview() = preview.release()
+    /** Runs a waiting live-brush replay now (the main looper does it otherwise). */
+    internal fun flushPreview() = brushPreview.flush()
 
     // ------------------------------------------------------------------ commit / discard
 
@@ -376,12 +526,25 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val layer = targetLayer ?: controller.doc.activeLayer
         if (controller.doc.indexOf(layer) < 0) { discard(); return }
         if (!controller.checkEditable(layer)) return
-        val spec = buildSpec(b)
+        val brush = paintsWithBrush(layer)
+        val spec = buildSpec(b, brush)
+        val path = if (brush) brushOutline(b) else null
         box = null
         creatingBox = null
         targetLayer = null
-        releasePreview()
-        if (spec != null) VectorCommit.commit(controller, layer, listOf(spec), "Shape")
+        pinchStart = null
+        overlaySpecs = emptyList()
+        preview.release()
+        // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
+        controller.undoStepNamed("Shape") {
+            if (spec != null) {
+                // The fill goes under the brush stroke: a live stroke is restarted after it.
+                brushPreview.cancel()
+                VectorCommit.commit(controller, layer, listOf(spec), "Shape")
+            }
+            if (path != null) brushPreview.commit(path.ops) { brushStrokePoints(path) }
+        }
+        brushPreview.end()
         controller.invalidateOverlay()
     }
 
@@ -391,21 +554,26 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         targetLayer = null
         mode = Mode.NONE
         startBox = null
-        releasePreview()
+        pinchStart = null
+        overlaySpecs = emptyList()
+        preview.release()
+        brushPreview.end()
         controller.invalidateOverlay()
     }
 
     override fun onActivate() = ensureObserving()
 
     /**
-     * The preview depends on state the tool doesn't own (main color, selection, layer props).
-     * Started on activation and again whenever a shape appears, because some controller
-     * operations call onDeactivate without a following onActivate.
+     * The preview depends on state the tool doesn't own (main color, selection, layer props, the
+     * painting tool's preset: size slider). Started on activation and again whenever a shape
+     * appears, because some controller operations call onDeactivate without a following onActivate.
      */
     private fun ensureObserving() {
         if (observeJob?.isActive == true) return
         observeJob = controller.scope.launch {
-            snapshotFlow { Triple(controller.color, controller.selection, controller.layersVersion) }
+            snapshotFlow {
+                listOf(controller.color, controller.selection, controller.layersVersion, controller.lastPaintTool, controller.presetFor(controller.lastPaintTool))
+            }
                 .drop(1)
                 .collect { if (box != null) refreshPreview() }
         }
@@ -420,10 +588,15 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         observeJob = null
         if (mode == Mode.CREATE) creatingBox = null
         mode = Mode.NONE
+        pinchStart = null
         if (hasPendingWork) commit()
         if (hasPendingWork) discard()
-        releasePreview()
+        overlaySpecs = emptyList()
+        preview.release()
+        brushPreview.end()
     }
+
+    override fun onDispose() = brushPreview.end()
 
     // ------------------------------------------------------------------ overlay
 
@@ -436,6 +609,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         val creating = creatingBox
         val b = creating ?: box ?: return
+        if (overlaySpecs.isNotEmpty()) {
+            specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive)
+        }
         if (settings.type.isLineLike) {
             if (creating != null) return
             map(t, b.start).let { painter.handle(canvas, t, it[0], it[1]) }

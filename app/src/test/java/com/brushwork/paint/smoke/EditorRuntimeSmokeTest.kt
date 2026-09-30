@@ -266,7 +266,7 @@ class EditorRuntimeSmokeTest {
         assertEquals(0, alpha(c.activeLayer, 60, 60))
         assertEquals(ToolId.BRUSH, c.activeToolId)
 
-        // Curve: long-pressing an anchor selects it (and the finger then does nothing else).
+        // Curve: long-pressing an anchor selects it (no color picking); the finger can then drag it.
         c.selectTool(ToolId.CURVE)
         val curve = c.tools.getValue(ToolId.CURVE) as CurveTool
         for (p in listOf(Vec2(100f, 200f), Vec2(200f, 120f), Vec2(300f, 200f))) curve.addAnchor(p)
@@ -281,7 +281,10 @@ class EditorRuntimeSmokeTest {
         touch.idle(20)
         touch.send(MotionEvent.ACTION_UP, P(0, ax + 40f, ay + 40f))
         touch.idle(50)
-        assertEquals("the rest of the gesture did not drag the point", Vec2(200f, 120f), curve.anchors[1].pos)
+        assertFalse("no color picking over a point", c.holdPicking)
+        assertEquals("the rest of the gesture dragged the point", 1, curve.selected)
+        assertNotEquals(Vec2(200f, 120f), curve.anchors[1].pos)
+        assertEquals(3, curve.anchors.size)
         curve.discard()
     }
 

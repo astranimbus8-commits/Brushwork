@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
@@ -80,7 +82,10 @@ fun MagicWandOptions(tool: MagicWandTool) {
     }
 }
 
-/** Lasso: freehand / polygon, mode, anti-alias, ✓ / ✕ for an unfinished polygon. */
+/**
+ * Lasso: freehand / polygon, mode, anti-alias; for the polygon: undo / redo of the last corner,
+ * ✓ / ✕ for an unfinished polygon.
+ */
 @Composable
 fun LassoOptions(tool: LassoTool) {
     val s = tool.settings
@@ -88,6 +93,10 @@ fun LassoOptions(tool: LassoTool) {
         ToolIconButton(Icons.Filled.Gesture, "Freehand lasso", onClick = { tool.setPolygonMode(false) }, selected = !s.polygon, size = 40.dp)
         ToolIconButton(Icons.Outlined.Polyline, "Polygon lasso", onClick = { tool.setPolygonMode(true) }, selected = s.polygon, size = 40.dp)
         StripDivider()
+        if (s.polygon) {
+            ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last corner", onClick = { tool.undoLastCorner() }, enabled = tool.canUndoStep, size = 40.dp)
+            ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo corner", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 40.dp)
+        }
         if (tool.hasPendingWork) {
             Text("${tool.vertexCount} pt", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
             ToolIconButton(Icons.Filled.Close, "Discard polygon", onClick = { tool.discard() }, size = 40.dp)

@@ -40,12 +40,9 @@ internal object HistoryLabels {
      * last corner.
      */
     fun undoStepName(tool: Tool): String? {
-        val steps = when {
-            tool is CurveTool -> tool.canUndoStep
-            tool.id == ToolId.LASSO -> tool.hasUserChanges
-            else -> false
-        }
-        return if (steps) stepName(tool.id) else null
+        // Tool.canUndoStep is a plain property (safe under R8), overridden by the curve,
+        // polyline and lasso tools.
+        return if (tool.canUndoStep) stepName(tool.id) else null
     }
 
     fun stepName(id: ToolId): String = when (id) {

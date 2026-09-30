@@ -19,7 +19,9 @@ import kotlin.math.min
 
 /**
  * Lasso selection. Freehand: drag around the area. Polygon: tap the corners; tapping near the
- * first corner (or ✓) closes the shape, ✕ discards it. A plain tap in "New" mode deselects.
+ * first corner (or ✓) closes the shape, ✕ discards it. While the polygon is open every corner
+ * can be dragged to a new place, and undo / redo (the app's buttons and two-finger tap too)
+ * take back / bring back one corner edit at a time. A plain tap in "New" mode deselects.
  */
 class LassoTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.LASSO
@@ -31,18 +33,36 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     var vertexCount by mutableIntStateOf(0)
         private set
 
+    /** Corner edits [redoStep] can bring back (Compose state; the in-tool redo button). */
+    var redoCount by mutableIntStateOf(0)
+        private set
+
     /** True while the selection is being rasterized. */
     var busy by mutableStateOf(false)
         private set
 
     override val hasPendingWork: Boolean get() = settings.polygon && vertexCount > 0
 
+    // The app's redo only reaches the tool while the polygon is pending (see EditorController.redo).
+    override val canRedoStep: Boolean get() = redoCount > 0 && hasPendingWork
+
     private val stroke = PointList()
     private val vertices = PointList()
+    /** Corner lists before each edit (for [undoStep]) and after each undone one (for [redoStep]). */
+    private val history = ArrayDeque<FloatArray>()
+    private val redo = ArrayDeque<FloatArray>()
     private var dragging = false
     private var cursorX = 0f
     private var cursorY = 0f
     private var cursorDown = false
+    /** Corner being dragged by the current touch (-1: the touch places a new corner). */
+    private var grabbed = -1
+    private var grabMoved = false
+    private var downX = 0f
+    private var downY = 0f
+    private var grabStartX = 0f
+    private var grabStartY = 0f
+    private var gestureRedo: List<FloatArray> = emptyList()
     /** Shape shown until its selection has been applied (avoids a blank frame). */
     private var committing: Path? = null
     private val screenPath = Path()
@@ -61,6 +81,11 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         if (busy) return
         if (settings.polygon) {
             cursorX = p.x; cursorY = p.y; cursorDown = true
+            downX = p.x; downY = p.y
+            grabMoved = false
+            gestureRedo = redo.toList()
+            grabbed = nearestVertex(p.x, p.y, docLength(GRAB_DP))
+            if (grabbed >= 0) { grabStartX = vertices.x(grabbed); grabStartY = vertices.y(grabbed) }
         } else {
             stroke.clear()
             stroke.add(p.x, p.y)
@@ -73,9 +98,18 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         if (settings.polygon) {
             if (!cursorDown) return
             cursorX = p.x; cursorY = p.y
+            if (grabbed >= 0) {
+                // A touch that starts on a corner and moves drags that corner.
+                if (!grabMoved) {
+                    if (hypot(p.x - downX, p.y - downY) < docLength(SLOP_DP)) return
+                    pushHistory()
+                    grabMoved = true
+                }
+                vertices.set(grabbed, p.x, p.y)
+            }
         } else {
             if (!dragging) return
-            val minStep = controller.viewTransform.screenToDocLength(controller.viewTransform.dp(1.5f))
+            val minStep = docLength(1.5f)
             if (hypot(p.x - stroke.lastX, p.y - stroke.lastY) < minStep) return
             stroke.add(p.x, p.y)
         }
@@ -83,14 +117,20 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onUp(p: ToolPoint) {
-        val t = controller.viewTransform
         if (settings.polygon) {
             if (!cursorDown) return
             cursorDown = false
-            val closeDist = t.screenToDocLength(t.dp(22f))
+            val grab = grabbed
+            grabbed = -1
+            if (grab >= 0 && grabMoved) {
+                vertices.set(grab, p.x, p.y)
+                controller.invalidateOverlay()
+                return
+            }
             when {
-                vertices.size >= 3 && hypot(p.x - vertices.x(0), p.y - vertices.y(0)) <= closeDist -> commit()
-                vertices.size == 0 || hypot(p.x - vertices.lastX, p.y - vertices.lastY) > t.screenToDocLength(t.dp(3f)) -> {
+                vertices.size >= 3 && hypot(p.x - vertices.x(0), p.y - vertices.y(0)) <= docLength(CLOSE_DP) -> commit()
+                vertices.size == 0 || hypot(p.x - vertices.lastX, p.y - vertices.lastY) > docLength(3f) -> {
+                    pushHistory()
                     vertices.add(p.x, p.y)
                     vertexCount = vertices.size
                 }
@@ -99,7 +139,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             if (!dragging) return
             dragging = false
             stroke.add(p.x, p.y)
-            val tap = stroke.extent() < t.screenToDocLength(t.dp(8f))
+            val tap = stroke.extent() < docLength(8f)
             if (tap || stroke.size < 3) {
                 stroke.clear()
                 if (tap && mode == SelectionMode.REPLACE && controller.selection != null) controller.deselect()
@@ -113,11 +153,86 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onCancel() {
-        // Only the current gesture is dropped; committed polygon corners stay.
+        // Only the current gesture is dropped; committed polygon corners stay (a dragged corner
+        // goes back to where it was).
+        if (cursorDown && grabbed >= 0 && grabMoved && grabbed < vertices.size) {
+            vertices.set(grabbed, grabStartX, grabStartY)
+            history.removeLastOrNull()
+            redo.clear(); redo.addAll(gestureRedo)
+            redoCount = redo.size
+        }
+        grabbed = -1
+        grabMoved = false
         dragging = false
         cursorDown = false
         stroke.clear()
         controller.invalidateOverlay()
+    }
+
+    private fun docLength(dp: Float): Float {
+        val t = controller.viewTransform
+        return t.screenToDocLength(t.dp(dp))
+    }
+
+    private fun nearestVertex(x: Float, y: Float, tol: Float): Int {
+        var best = -1
+        var bestD = tol
+        // Later corners win ties (the newest one is grabbed when corners overlap).
+        for (i in vertices.size - 1 downTo 0) {
+            val d = hypot(vertices.x(i) - x, vertices.y(i) - y)
+            if (d < bestD) { best = i; bestD = d }
+        }
+        return best
+    }
+
+    // ------------------------------------------------------------------ corner history
+
+    /** Saves the corners before an edit (and drops the redo steps: this is a new edit). */
+    private fun pushHistory() {
+        history.addLast(vertices.toArray())
+        while (history.size > MAX_HISTORY) history.removeFirst()
+        if (redo.isNotEmpty()) { redo.clear(); redoCount = 0 }
+    }
+
+    /** Takes back the last corner edit (placing or moving a corner). */
+    override fun undoStep(): Boolean {
+        val prev = history.removeLastOrNull() ?: return false
+        redo.addLast(vertices.toArray())
+        redoCount = redo.size
+        setVertices(prev)
+        return true
+    }
+
+    /** Brings back the corner edit last taken back by [undoStep]. */
+    override fun redoStep(): Boolean {
+        val next = redo.removeLastOrNull() ?: return false
+        redoCount = redo.size
+        history.addLast(vertices.toArray())
+        setVertices(next)
+        return true
+    }
+
+    /** Position of polygon corner [i] (document px). */
+    fun corner(i: Int): Pair<Float, Float> = vertices.x(i) to vertices.y(i)
+
+    /** True when there is a corner to take back (Compose state through [vertexCount]). */
+    override val canUndoStep: Boolean get() = vertexCount > 0
+
+    /** The in-tool undo button: the last corner edit, or the whole polygon if its history ran out. */
+    fun undoLastCorner() {
+        if (!undoStep()) discard()
+    }
+
+    private fun setVertices(xy: FloatArray) {
+        vertices.setAll(xy)
+        vertexCount = vertices.size
+        controller.invalidateOverlay()
+    }
+
+    private fun clearHistory() {
+        history.clear()
+        redo.clear()
+        redoCount = 0
     }
 
     // ------------------------------------------------------------------ pending polygon
@@ -127,6 +242,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             val path = vertices.toPath()
             vertices.clear()
             vertexCount = 0
+            clearHistory()
             apply(path)
         } else {
             discard()
@@ -137,7 +253,9 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     override fun discard() {
         vertices.clear()
         vertexCount = 0
+        clearHistory()
         cursorDown = false
+        grabbed = -1
         controller.invalidateOverlay()
     }
 
@@ -166,14 +284,16 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         }
         if (settings.polygon && (vertices.size > 0 || cursorDown)) {
             vertices.toScreenPath(t, screenPath, close = false)
-            if (cursorDown) {
+            // Rubber band to the finger while it is placing a new corner.
+            if (cursorDown && !(grabbed >= 0 && grabMoved)) {
                 map(t, cursorX, cursorY)
                 if (vertices.size == 0) screenPath.moveTo(mapped[0], mapped[1]) else screenPath.lineTo(mapped[0], mapped[1])
             }
             SelectionOverlay.drawScreenPath(canvas, t, screenPath)
+            val dragged = if (cursorDown && grabMoved) grabbed else -1
             for (i in 0 until vertices.size) {
                 map(t, vertices.x(i), vertices.y(i))
-                SelectionOverlay.drawVertex(canvas, t, mapped[0], mapped[1], highlighted = i == 0 && vertices.size >= 3)
+                SelectionOverlay.drawVertex(canvas, t, mapped[0], mapped[1], highlighted = i == dragged || (i == 0 && vertices.size >= 3))
             }
         }
     }
@@ -184,6 +304,14 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     }
 
     companion object {
+        /** Grab radius of polygon corners (screen dp): generous for fingers. */
+        private const val GRAB_DP = 24f
+        /** A corner touch must move this far (dp) before it drags the corner. */
+        private const val SLOP_DP = 6f
+        /** Tapping this close (dp) to the first corner closes the polygon. */
+        private const val CLOSE_DP = 22f
+        private const val MAX_HISTORY = 200
+
         /** Rasterizes a closed lasso path into a document-sized selection (blocking; any thread). */
         internal fun rasterize(path: Path, docW: Int, docH: Int, antiAlias: Boolean): Selection =
             Selection.fromPath(path, docW, docH, antiAlias)
@@ -209,6 +337,22 @@ internal class PointList {
         data[2 * size] = x
         data[2 * size + 1] = y
         size++
+    }
+
+    /** Moves point [i]. */
+    fun set(i: Int, x: Float, y: Float) {
+        data[2 * i] = x
+        data[2 * i + 1] = y
+    }
+
+    /** The points as x0, y0, x1, y1, ... (a copy). */
+    fun toArray(): FloatArray = data.copyOf(2 * size)
+
+    /** Replaces all points with [xy] (x0, y0, x1, y1, ...). */
+    fun setAll(xy: FloatArray) {
+        if (xy.size > data.size) data = xy.copyOf(max(256, xy.size))
+        else xy.copyInto(data)
+        size = xy.size / 2
     }
 
     fun clear() { size = 0 }
