@@ -22,6 +22,7 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.engine.SelectionAction
@@ -422,7 +423,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (floating == null) {
             controller.toast(if (usable) "Not enough memory to place the picture" else "The picture could not be placed")
             // Don't leave the empty layer behind when it is clearly the one just added for this.
-            if (isFreshImportLayer(layer, label)) controller.undo()
+            if (isFreshImportLayer(layer, label)) dropFreshLayer(layer)
             return
         }
         val doc = controller.doc
@@ -604,12 +605,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /**
      * A corner / edge drag of an axis-aligned box: the dragged side snaps to the closest guide
      * within reach (both sides for corners; with keep-aspect only the closer one, the other side
-     * follows the ratio). The fixed side / center stays where it is.
+     * follows the ratio). The fixed side / center stays where it is. Rotated boxes: see
+     * [snapResizeOneFactor].
      */
     private fun snapResize(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
-        if (snap == null || !raw.isAxisAligned || !g.start.isAxisAligned) return raw
+        if (snap == null) return raw
         val kind = g.hit.kind
         val fixed = TransformHandles.fixedPoint(g.start, kind, g.hit.index, scaleFromCenter)
+        if (!raw.isAxisAligned || !g.start.isAxisAligned) return snapResizeOneFactor(g, raw, snap, fixed)
         val h = TransformHandles.handlePoint(raw, kind, g.hit.index)
         val movesX = abs(h.x - fixed.x) > 1e-3f
         val movesY = abs(h.y - fixed.y) > 1e-3f
@@ -637,6 +640,63 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val hs = TransformHandles.handlePoint(snapped, kind, g.hit.index)
         val xEdges = if (movesX) listOf(if (hs.x < fixed.x) SnapEdge.START else SnapEdge.END) else emptyList()
         val yEdges = if (movesY) listOf(if (hs.y < fixed.y) SnapEdge.START else SnapEdge.END) else emptyList()
+        guides = SnapGuides.guidesFor(snapped.bounds(), snap.targets, GUIDE_EPS, xEdges, yEdges)
+        return snapped
+    }
+
+    /**
+     * Resizing a rotated (or perspective) box where ONE factor drives the change around the fixed
+     * point: a corner handle keeping the aspect ratio (both axes) or a side handle (one axis).
+     * Each line of its bounds then moves piecewise linearly with that factor, so the closest
+     * moving line within reach of a guide is solved for (on the line through the current state
+     * and a slightly larger one, plus one secant step when another corner takes over that side)
+     * and kept only when it really lands on the guide. Corner handles without the aspect lock
+     * move two factors at once and stay free.
+     */
+    private fun snapResizeOneFactor(g: Gesture, raw: TransformState, snap: SnapContext, fixed: Vec2): TransformState {
+        val kind = g.hit.kind
+        if (kind == HandleKind.CORNER && !keepAspect) return raw
+        if (kind != HandleKind.CORNER && kind != HandleKind.EDGE) return raw
+        fun scaled(k: Float): TransformState = when {
+            kind == HandleKind.CORNER -> raw.clampUniform(k).let { raw.scaledAbout(fixed, it, it) }
+            g.hit.index % 2 == 0 -> raw.scaledAbout(fixed, 1f, raw.clampY(k))
+            else -> raw.scaledAbout(fixed, raw.clampX(k), 1f)
+        }
+        val b0 = raw.bounds()
+        val b1 = scaled(1f + PROBE_FACTOR).bounds()
+        val xEdges = ArrayList<SnapEdge>(3)
+        val yEdges = ArrayList<SnapEdge>(3)
+        var best: TransformState? = null
+        var bestD = Float.POSITIVE_INFINITY
+        for (axis in SnapAxis.entries) {
+            for (e in SnapEdge.entries) {
+                val v0 = SnapGuides.feature(b0, axis, e)
+                val slope = (SnapGuides.feature(b1, axis, e) - v0) / PROBE_FACTOR
+                // Lines through the fixed point stay put: they are not what the finger drags.
+                if (!(abs(slope) >= MIN_LINE_SLOPE)) continue
+                if (axis == SnapAxis.X) xEdges += e else yEdges += e
+                val hit = SnapGuides.snapValue(v0, axis, snap.targets, snap.threshold) ?: continue
+                if (hit.distance >= bestD) continue
+                var k = 1f + (hit.pos - v0) / slope
+                if (!k.isFinite() || k <= 0f) continue
+                var cand = scaled(k)
+                var v = SnapGuides.feature(cand.bounds(), axis, e)
+                if (abs(v - hit.pos) > GUIDE_EPS && abs(k - 1f) > 1e-6f) {
+                    val s2 = (v - v0) / (k - 1f)
+                    if (!(abs(s2) >= MIN_LINE_SLOPE)) continue
+                    k = 1f + (hit.pos - v0) / s2
+                    if (!k.isFinite() || k <= 0f) continue
+                    cand = scaled(k)
+                    v = SnapGuides.feature(cand.bounds(), axis, e)
+                }
+                if (abs(v - hit.pos) > GUIDE_EPS) continue
+                if (cand.width < TransformState.MIN_SIZE || cand.height < TransformState.MIN_SIZE) continue
+                best = cand
+                bestD = hit.distance
+            }
+        }
+        val snapped = best ?: return raw
+        g.snapped = true
         guides = SnapGuides.guidesFor(snapped.bounds(), snap.targets, GUIDE_EPS, xEdges, yEdges)
         return snapped
     }
@@ -1226,14 +1286,35 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /** Removes the (still empty) layer of a discarded placement. */
     private fun removePlacementLayer(layer: Layer, label: String) {
-        // A transform started meanwhile: undo()/deleteLayer() would discard it, so leave the layer.
-        if (controller.doc.indexOf(layer) < 0 || session != null) return
-        // Nothing was recorded since the layer was added: undo its AddLayerAction so no
-        // history entry remains (Redo can still bring the empty layer back: the controller has
-        // no way to drop a redo entry). Otherwise delete it as a regular step.
-        if (isFreshImportLayer(layer, label)) controller.undo()
-        else if (controller.doc.layers.size > 1) controller.deleteLayer(layer)
-        // else: it is the only layer left (the others were deleted meanwhile); a drawing needs one.
+        val doc = controller.doc
+        // A transform started meanwhile: deleteLayer() would discard it, so leave the layer.
+        if (doc.indexOf(layer) < 0 || session != null) return
+        // It is the only layer left (the others were deleted meanwhile): a drawing needs one.
+        if (doc.layers.size <= 1) return
+        // Nothing was recorded since the layer was added: it goes without a trace. Otherwise it
+        // is deleted as a regular step.
+        if (isFreshImportLayer(layer, label)) dropFreshLayer(layer)
+        else controller.deleteLayer(layer)
+    }
+
+    /**
+     * Takes away [layer], added for a placement with nothing recorded since (see
+     * [isFreshImportLayer]), together with its AddLayerAction: no history entry is left and Redo
+     * can't bring the empty layer back. The layer that was active before it (right below it)
+     * is active again, and the change counts as an edit (autosave must not keep the layer).
+     */
+    private fun dropFreshLayer(layer: Layer) {
+        val doc = controller.doc
+        val idx = doc.indexOf(layer)
+        if (idx < 0 || doc.layers.size <= 1) return
+        controller.structural {
+            doc.layers.removeAt(idx)
+            doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)
+        }
+        controller.dropLastUndo()
+        // An empty step pushed and dropped again: counts as an edit, leaves no history.
+        controller.pushUndo(LambdaAction(label = "", onUndo = {}, onRedo = {}))
+        controller.dropLastUndo()
     }
 
     /**
@@ -1523,6 +1604,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         const val SNAP_SLOP_DP = 6f
         /** A settled box within this many document px of a guide still shows it (half-pixel centers). */
         private const val GUIDE_EPS = 0.51f
+        /** Relative factor change used to see how fast each line of a rotated box's bounds moves. */
+        private const val PROBE_FACTOR = 0.01f
+        /** Bounds lines moving less than this (document px per 100 % of scale) count as fixed. */
+        private const val MIN_LINE_SLOPE = 0.5f
         /** How long a nudge shows the guides it lined up with. */
         private const val NUDGE_GUIDES_MS = 1200L
 

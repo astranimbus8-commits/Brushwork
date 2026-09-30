@@ -209,6 +209,51 @@ class TransformSnapDeleteRobolectricTest {
         assertEquals(RED, c.activeLayer.bitmap.getPixel(15, 15))
     }
 
+    @Test
+    fun deletingAPictureMovedOffTheCanvasLeavesNoHistory() {
+        val c = setup(100, 100)
+        val base = c.activeLayer
+        c.importImageAsLayer(Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) })
+        idle()
+        val t = tool(c)
+        t.moveBy(500f, 0f) // nothing of it is on the canvas any more
+        val edits = c.editCount
+        assertTrue(t.deleteContent())
+        idle()
+        assertFalse(t.hasPendingWork)
+        assertEquals(listOf(base), c.doc.layers.toList())
+        assertSame(base, c.activeLayer)
+        assertFalse(c.canUndo)
+        assertFalse("redo can't bring an empty layer back", c.canRedo)
+        assertTrue("counts as an edit (autosave)", c.editCount > edits)
+    }
+
+    @Test
+    fun aDiscardedPlacementLeavesNoRedoAndReactivatesTheLayerBelow() {
+        val c = setup(100, 100, layers = 3)
+        val before = c.doc.layers.toList()
+        c.selectLayer(before[0])
+        val img = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888).apply { eraseColor(BLUE) }
+        for (how in listOf("discard", "undo")) {
+            c.importImageAsLayer(img)
+            idle()
+            val t = tool(c)
+            assertTrue(t.isPlacement)
+            assertEquals(4, c.doc.layers.size)
+            val edits = c.editCount
+            if (how == "discard") t.discard() else c.undo() // ✕, or a two-finger tap
+            idle()
+            assertFalse(how, t.hasPendingWork)
+            assertEquals(how, before, c.doc.layers.toList())
+            assertSame("$how: the layer that was active before the import", before[0], c.activeLayer)
+            assertFalse(how, c.canUndo)
+            assertFalse("$how: redo can't bring an empty layer back", c.canRedo)
+            assertTrue("$how: counts as an edit (autosave)", c.editCount > edits)
+            c.redo()
+            assertEquals(how, before, c.doc.layers.toList())
+        }
+    }
+
     // ================================================================== smart guides
 
     /**
@@ -433,6 +478,90 @@ class TransformSnapDeleteRobolectricTest {
         assertEquals(20f, b.top, 1e-3f)
         assertTrue(t.activeGuides.any { it.axis == SnapAxis.X && it.label == "Layer 1 center" })
         c.pointerUp(ToolPoint(348f, 184f))
+    }
+
+    /**
+     * 500 x 500 canvas (small enough for the other layer's bounds to be known at once); "Layer 1"
+     * has content at (350, 400)-(450, 480); the active layer's block [block] is turned 30°
+     * around its center.
+     */
+    private fun rotatedBox(block: Rect): Pair<EditorController, TransformTool> {
+        val c = setup(500, 500, layers = 2)
+        fill(c.doc.layers[0].bitmap, Rect(350, 400, 450, 480), BLUE)
+        c.doc.layers[0].markChanged()
+        fill(c.doc.layers[1].bitmap, block, RED)
+        c.doc.layers[1].markChanged()
+        val t = activate(c)
+        t.setRotation(30.0)
+        t.endNumericEdit()
+        return c to t
+    }
+
+    @Test
+    fun aRotatedBoxResizedFromACornerSnapsItsBounds() {
+        val (c, t) = rotatedBox(Rect(80, 80, 120, 100))
+        val st = t.transformState!!
+        assertFalse(st.isAxisAligned)
+        val tl = st.corner(0)
+        val br = st.corner(2)
+        // Along the diagonal (keep-aspect scales by the projection on it) to where the bounds'
+        // right side is at 347: 3 px short of the other layer's left edge.
+        val k = (347f - tl.x) / (st.bounds().right - tl.x)
+        val to = br + (br - tl) * (k - 1f)
+        c.pointerDown(ToolPoint(br.x, br.y))
+        c.pointerMove(ToolPoint((br.x + to.x) / 2f, (br.y + to.y) / 2f))
+        c.pointerMove(ToolPoint(to.x, to.y))
+        val snapped = t.transformState!!
+        assertEquals(350f, snapped.bounds().right, 0.02f)
+        assertEquals(30f, snapped.rotationDeg, 1e-3f)
+        assertEquals("aspect ratio kept", snapped.sx, snapped.sy, 1e-4f)
+        assertEquals("the opposite corner stays", tl.x, snapped.corner(0).x, 0.02f)
+        assertEquals("the opposite corner stays", tl.y, snapped.corner(0).y, 0.02f)
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.any { it.axis == SnapAxis.X && it.pos == 350f && it.label == "Layer 1 left" })
+        c.pointerUp(ToolPoint(to.x, to.y))
+        assertEquals("release keeps it", 350f, t.transformState!!.bounds().right, 0.02f)
+        assertTrue(t.activeGuides.isEmpty())
+
+        // Without the aspect lock a corner moves two factors at once: no snapping.
+        t.reset()
+        t.setRotation(30.0)
+        t.endNumericEdit()
+        t.keepAspect = false
+        val s2 = t.transformState!!
+        c.pointerDown(ToolPoint(br.x, br.y))
+        c.pointerMove(ToolPoint((br.x + to.x) / 2f, (br.y + to.y) / 2f))
+        c.pointerMove(ToolPoint(to.x, to.y))
+        val free = TransformHandles.corner(s2, 2, br, to, keepAspect = false)
+        assertTrue(t.transformState!!.sameGeometry(free))
+        c.pointerUp(ToolPoint(to.x, to.y))
+    }
+
+    @Test
+    fun aRotatedBoxResizedFromASideSnapsItsBounds() {
+        val (c, t) = rotatedBox(Rect(60, 40, 160, 100))
+        val st = t.transformState!!
+        val q = TransformHandles.handlePoint(st, HandleKind.EDGE, 1) // the right side's handle
+        val u = st.fromLocalAxes(Vec2(1f, 0f))                         // the box's own x axis
+        // Along its own x axis the bounds' right side moves by u.x per px: to 347.
+        val d = (347f - st.bounds().right) / u.x
+        val to = q + u * d
+        c.pointerDown(ToolPoint(q.x, q.y))
+        c.pointerMove(ToolPoint((q.x + to.x) / 2f, (q.y + to.y) / 2f))
+        c.pointerMove(ToolPoint(to.x, to.y))
+        val snapped = t.transformState!!
+        assertEquals(350f, snapped.bounds().right, 0.02f)
+        assertEquals("only its width changed", st.height, snapped.height, 1e-3f)
+        assertEquals("the left side stays", st.bounds().left, snapped.bounds().left, 0.02f)
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.any { it.axis == SnapAxis.X && it.pos == 350f })
+        c.pointerUp(ToolPoint(to.x, to.y))
+        assertEquals(350f, t.transformState!!.bounds().right, 0.02f)
+        // 20 px back along its own axis, farther than the snap distance: free again (its right
+        // side moves by u.x per px).
+        c.pointerDown(ToolPoint(to.x, to.y))
+        c.pointerMove(ToolPoint(to.x - 20f * u.x, to.y - 20f * u.y))
+        assertEquals(350f - 20f * u.x, t.transformState!!.bounds().right, 0.05f)
+        assertTrue(t.activeGuides.isEmpty())
+        c.pointerUp(ToolPoint(to.x - 20f * u.x, to.y - 20f * u.y))
     }
 
     private fun assertBox(expected: DocBox, actual: DocBox, tol: Float = 1e-3f) {
