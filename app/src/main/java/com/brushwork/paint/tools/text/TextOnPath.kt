@@ -43,30 +43,31 @@ object TextOnPath {
      * a curve and the stem of a rectangle's rotation handle.
      */
     fun guide(spec: TextPathSpec): Path {
+        val s = TextPathGeometry.sanitized(spec)
         val p = Path()
-        when (spec.type) {
+        when (s.type) {
             TextPathType.NONE -> {}
             TextPathType.LINE -> {
-                p.moveTo(spec.x1, spec.y1)
-                p.lineTo(spec.x2, spec.y2)
+                p.moveTo(s.x1, s.y1)
+                p.lineTo(s.x2, s.y2)
             }
-            TextPathType.CIRCLE -> p.addCircle(spec.cx, spec.cy, max(spec.radius, TextPathGeometry.MIN_EXTENT), Path.Direction.CW)
+            TextPathType.CIRCLE -> p.addCircle(s.cx, s.cy, max(s.radius, TextPathGeometry.MIN_EXTENT), Path.Direction.CW)
             TextPathType.RECT -> {
-                val hw = max(spec.width, TextPathGeometry.MIN_EXTENT) / 2f
-                val hh = max(spec.height, TextPathGeometry.MIN_EXTENT) / 2f
-                val r = spec.cornerRadius.coerceIn(0f, minOf(hw, hh))
+                val hw = max(s.width, TextPathGeometry.MIN_EXTENT) / 2f
+                val hh = max(s.height, TextPathGeometry.MIN_EXTENT) / 2f
+                val r = s.cornerRadius.coerceIn(0f, minOf(hw, hh))
                 p.addRoundRect(RectF(-hw, -hh, hw, hh), r, r, Path.Direction.CW)
                 p.moveTo(hw, 0f)
-                p.lineTo(hw + TextPathGeometry.rotationStem(spec), 0f)
-                p.transform(Matrix().apply { setRotate(spec.rotationDeg); postTranslate(spec.cx, spec.cy) })
+                p.lineTo(hw + TextPathGeometry.rotationStem(s), 0f)
+                p.transform(Matrix().apply { setRotate(s.rotationDeg); postTranslate(s.cx, s.cy) })
             }
             TextPathType.CURVE -> {
-                p.moveTo(spec.x1, spec.y1)
-                p.cubicTo(spec.cx1, spec.cy1, spec.cx2, spec.cy2, spec.x2, spec.y2)
-                p.moveTo(spec.x1, spec.y1)
-                p.lineTo(spec.cx1, spec.cy1)
-                p.moveTo(spec.x2, spec.y2)
-                p.lineTo(spec.cx2, spec.cy2)
+                p.moveTo(s.x1, s.y1)
+                p.cubicTo(s.cx1, s.cy1, s.cx2, s.cy2, s.x2, s.y2)
+                p.moveTo(s.x1, s.y1)
+                p.lineTo(s.cx1, s.cy1)
+                p.moveTo(s.x2, s.y2)
+                p.lineTo(s.cx2, s.cy2)
             }
         }
         return p

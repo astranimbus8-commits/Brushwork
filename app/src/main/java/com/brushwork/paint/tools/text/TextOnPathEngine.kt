@@ -208,8 +208,10 @@ internal object TextOnPathEngine {
     }
     /** Layout and placement of [text] along [spec] (cached for the last two inputs); null when nothing is drawn. */
     @Synchronized
-    fun result(text: String, paint: Paint, spec: TextPathSpec): Pair<PathTextLayout, PathTextResult>? {
-        if (!spec.isActive) return null
+    fun result(text: String, paint: Paint, requested: TextPathSpec): Pair<PathTextLayout, PathTextResult>? {
+        if (!requested.isActive) return null
+        // Numbers out of any sensible range (a corrupt file, a runaway pinch) are fixed first.
+        val spec = TextPathGeometry.sanitized(requested)
         val layout = layout(text, paint) ?: return null
         val key = ResultKey(layout, spec)
         results[key]?.let { return layout to it }

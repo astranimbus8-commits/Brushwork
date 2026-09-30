@@ -69,7 +69,7 @@ object TextPathWarp {
 
         /** Emits the edge (sa, ha) -> (sb, hb), without its start point (already emitted). */
         fun edge(sa: Double, ha: Double, sb: Double, hb: Double) {
-            if (sa == sb) {
+            if (sa == sb || !sa.isFinite() || !sb.isFinite()) {
                 // Perpendicular to the path: its image is a straight segment along the normal.
                 emit(sb, hb)
                 return
@@ -81,7 +81,9 @@ object TextPathWarp {
             var guard = 0
             while (true) {
                 val nx = guide.nextVertex(cur, forward)
-                val end = if (forward) minOf(nx, sb) else maxOf(nx, sb)
+                var end = if (forward) minOf(nx, sb) else maxOf(nx, sb)
+                // No vertex to stop at that moves on (arc lengths too large to tell apart): finish.
+                if (!(if (forward) end > cur else end < cur)) end = sb
                 val he = if (end == sb) hb else ha + (hb - ha) * ((end - sa) / span)
                 val turn = guide.turnBetween(cur, end)
                 var pieces = 1

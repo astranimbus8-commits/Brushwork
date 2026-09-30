@@ -3,6 +3,7 @@ package com.brushwork.paint.tools.text
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.getValue
@@ -11,6 +12,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.AndroidUiDispatcher
+import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.ui.placement.TextPathControls
@@ -116,7 +118,7 @@ class TextOnPathControlsRobolectricTest {
             }
         }
         settle()
-        assertTrue("straight text explains the shapes", SmokeUi.has("drag the handles on the canvas"))
+        assertTrue("straight text offers the shapes", SmokeUi.has("Curve", exact = true))
         assertFalse(SmokeUi.has("Bend letters"))
 
         click("Circle")
@@ -141,6 +143,8 @@ class TextOnPathControlsRobolectricTest {
         assertEquals(250f, spec.radius, 0.01f)
         type("Text position", "-45")
         assertEquals(-45f, spec.startAngleDeg, 0.01f)
+        type("Offset", "1e39")
+        assertEquals("a huge number is limited (not infinity)", TextPathGeometry.MAX_COORD, spec.offset, 0f)
         type("Offset", "12")
         assertEquals(12f, spec.offset, 0.01f)
         type("Baseline shift", "-8")
@@ -203,6 +207,48 @@ class TextOnPathControlsRobolectricTest {
             assertEquals(spec.cx1.toDouble(), SmokeUi.field("Control 1 X").text!!.toDouble(), 0.05)
         }
         SmokeUi.assertIdle("after handle drags")
+    }
+
+    /**
+     * On a narrow phone (360 dp, the sheet's 16 dp margins) every choice and every number of
+     * every shape is fully on screen: nothing hides behind a sideways scroll or the edge.
+     */
+    @Test
+    @Config(qualifiers = "w360dp-h740dp-xxhdpi")
+    fun everyChoiceAndFieldIsOnScreenOnANarrowPhone() {
+        val activity = newActivity()
+        var spec by mutableStateOf(TextPathSpec())
+        activity.setContent {
+            BrushworkTheme {
+                Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+                    TextPathControls(spec, 300f) { spec = it }
+                }
+            }
+        }
+        settle()
+        val density = activity.resources.displayMetrics.density
+        val right = activity.window.decorView.width - 16f * density + 0.5f
+        val left = 16f * density - 0.5f
+        // Unclipped horizontal extent (rows below the fold are clipped by the vertical scroll,
+        // which doesn't matter here; a chip scrolled off sideways or pushed past the edge does).
+        fun assertOnScreen(label: String, e: com.brushwork.paint.ui.color.RobolectricUi.Element) {
+            val x0 = e.node.positionInWindow.x
+            val x1 = x0 + e.node.size.width
+            assertTrue("$label spans $x0..$x1, inside $left..$right", x0 >= left && x1 <= right)
+        }
+        val choices = TextPathType.entries.map { it.label }
+        for (l in choices) assertOnScreen(l, requireNotNull(SmokeUi.find(l, exact = true)) { "$l shown" })
+        for (type in listOf(TextPathType.LINE, TextPathType.CIRCLE, TextPathType.RECT, TextPathType.CURVE)) {
+            spec = TextOnPath.defaultFor(type, Vec2(300f, 300f), 300f, 40f, TextPathSpec(type = type))
+            settle()
+            val labels = choices + TextPathMode.entries.map { it.label } + TextPathAlign.entries.map { it.label } +
+                if (type.isClosed) TextPathSide.entries.map { it.label } + listOf("Clockwise", "Counter-clockwise") else emptyList()
+            for (l in labels) assertOnScreen("$type: $l", requireNotNull(SmokeUi.find(l, exact = true)) { "$type: $l shown" })
+            val fields = com.brushwork.paint.ui.color.RobolectricUi.textFields()
+            assertTrue("$type has number fields", fields.size >= 3)
+            for (f in fields) assertOnScreen("$type field ${f.text}", f)
+        }
+        SmokeUi.assertIdle("narrow text path controls")
     }
 
     private companion object {

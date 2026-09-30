@@ -209,10 +209,14 @@ class TextPathGuide internal constructor(
 
     /**
      * The arc length of the next vertex strictly beyond [s] in the direction [forward] (closed
-     * paths: on the unwrapped line, lap after lap); ±infinity past the ends of an open path.
+     * paths: on the unwrapped line, lap after lap); ±infinity past the ends of an open path, and
+     * where [s] is so far along a closed path (or not a number) that no vertex beyond it can be
+     * told apart from it.
      */
     fun nextVertex(s: Double, forward: Boolean): Double {
         val n = px.size
+        val none = if (forward) Double.POSITIVE_INFINITY else Double.NEGATIVE_INFINITY
+        if (s.isNaN()) return none
         if (!closed) {
             return if (forward) {
                 if (s >= length) Double.POSITIVE_INFINITY else dist[firstAbove(s)]
@@ -224,10 +228,14 @@ class TextPathGuide internal constructor(
         var u = s - lap * length
         if (u >= length) { lap += 1.0; u -= length }
         if (u < 0.0) u = 0.0
+        // One lap and a bit always finds the next vertex, unless adding a lap to [s] no longer
+        // changes it (arc lengths beyond ~2^53 px): then there is none worth stopping at.
+        var guard = 0
         if (forward) {
             var i = firstAbove(u)
             var r = lap * length + dist[i]
             while (r <= s) {
+                if (++guard > n + 2) return none
                 i++
                 if (i >= n) { i = 1; lap += 1.0 }
                 r = lap * length + dist[i]
@@ -242,6 +250,7 @@ class TextPathGuide internal constructor(
             }
             var r = lap * length + dist[i]
             while (r >= s) {
+                if (++guard > n + 2) return none
                 i--
                 if (i < 0) { i = n - 2; lap -= 1.0 }
                 r = lap * length + dist[i]
@@ -371,13 +380,59 @@ object TextPathGeometry {
     /** Largest angle between two guide vertices. */
     private const val MAX_STEP_RAD = 3.0 * PI / 180.0
 
+    /**
+     * Largest coordinate, size, offset or shift (px, either sign) a path takes: far beyond any
+     * canvas, yet small enough that arc lengths stay exact to a small fraction of a pixel.
+     */
+    const val MAX_COORD = 1e6f
+
+    private val DEFAULTS = TextPathSpec()
+
+    /**
+     * [spec] with every number usable (a file, a pinch or a typed value may bring anything): a
+     * non-finite number falls back to its default, coordinates, sizes, the offset and the shift
+     * are kept within ±[MAX_COORD] and angles beyond a turn are brought back to (-180, 180].
+     * The same instance when nothing needed fixing. Every function here takes specs through it.
+     */
+    fun sanitized(spec: TextPathSpec): TextPathSpec {
+        if (isClean(spec)) return spec
+        val d = DEFAULTS
+        return spec.copy(
+            x1 = coord(spec.x1, d.x1), y1 = coord(spec.y1, d.y1), x2 = coord(spec.x2, d.x2), y2 = coord(spec.y2, d.y2),
+            cx1 = coord(spec.cx1, d.cx1), cy1 = coord(spec.cy1, d.cy1), cx2 = coord(spec.cx2, d.cx2), cy2 = coord(spec.cy2, d.cy2),
+            cx = coord(spec.cx, d.cx), cy = coord(spec.cy, d.cy),
+            radius = coord(spec.radius, d.radius),
+            width = coord(spec.width, d.width), height = coord(spec.height, d.height),
+            cornerRadius = coord(spec.cornerRadius, d.cornerRadius),
+            startAngleDeg = angle(spec.startAngleDeg, d.startAngleDeg),
+            rotationDeg = angle(spec.rotationDeg, d.rotationDeg),
+            offset = coord(spec.offset, d.offset),
+            baselineShift = coord(spec.baselineShift, d.baselineShift),
+        )
+    }
+
+    private fun coordOk(v: Float) = v >= -MAX_COORD && v <= MAX_COORD
+    private fun angleOk(v: Float) = v >= -360f && v <= 360f
+    private fun coord(v: Float, default: Float) = if (v.isFinite()) v.coerceIn(-MAX_COORD, MAX_COORD) else default
+    private fun angle(v: Float, default: Float) = if (!v.isFinite()) default else if (angleOk(v)) v else normalizeDegrees(v)
+
+    private fun isClean(s: TextPathSpec): Boolean =
+        coordOk(s.x1) && coordOk(s.y1) && coordOk(s.x2) && coordOk(s.y2) &&
+            coordOk(s.cx1) && coordOk(s.cy1) && coordOk(s.cx2) && coordOk(s.cy2) &&
+            coordOk(s.cx) && coordOk(s.cy) && coordOk(s.radius) && coordOk(s.width) && coordOk(s.height) &&
+            coordOk(s.cornerRadius) && coordOk(s.offset) && coordOk(s.baselineShift) &&
+            angleOk(s.startAngleDeg) && angleOk(s.rotationDeg)
+
     /** The guide of [spec], or null for straight text ([TextPathType.NONE]). */
-    fun guide(spec: TextPathSpec): TextPathGuide? = when (spec.type) {
-        TextPathType.NONE -> null
-        TextPathType.LINE -> lineGuide(spec)
-        TextPathType.CIRCLE -> circleGuide(spec)
-        TextPathType.RECT -> rectGuide(spec)
-        TextPathType.CURVE -> curveGuide(spec)
+    fun guide(spec: TextPathSpec): TextPathGuide? {
+        val s = sanitized(spec)
+        return when (s.type) {
+            TextPathType.NONE -> null
+            TextPathType.LINE -> lineGuide(s)
+            TextPathType.CIRCLE -> circleGuide(s)
+            TextPathType.RECT -> rectGuide(s)
+            TextPathType.CURVE -> curveGuide(s)
+        }
     }
 
     /**
@@ -547,15 +602,22 @@ object TextPathGeometry {
      * whose capitals are [capHeight] px tall: the baseline shift for standing letters; for hanging
      * ones the cap line sits on the path and the shift pushes them further to their body's side.
      */
-    fun heightOffset(spec: TextPathSpec, capHeight: Float): Double =
-        if (isStanding(spec)) spec.baselineShift.toDouble() else -capHeight.toDouble() - spec.baselineShift
+    fun heightOffset(spec: TextPathSpec, capHeight: Float): Double {
+        val shift = sanitized(spec).baselineShift.toDouble()
+        val cap = if (capHeight.isFinite()) capHeight.toDouble() else 0.0
+        return if (isStanding(spec)) shift else -cap - shift
+    }
 
     /**
      * Arc length at which a text [textWidth] px wide starts on [guide]: open paths align it to
-     * the start, middle or end of the path; closed ones to the anchor. Plus [TextPathSpec.offset].
+     * the start, middle or end of the path; closed ones to the anchor. Plus [TextPathSpec.offset]
+     * — on a closed path only what is left of it after whole laps, which lands the text in the
+     * same place while keeping the arc lengths small (and exact).
      */
     fun startDistance(spec: TextPathSpec, guide: TextPathGuide, textWidth: Float): Double {
-        val w = textWidth.toDouble()
+        val w = if (textWidth.isFinite()) textWidth.toDouble() else 0.0
+        val offset = sanitized(spec).offset.toDouble()
+        val shift = if (guide.closed && guide.length > 0.0) Math.IEEEremainder(offset, guide.length) else offset
         val base = if (guide.closed) {
             guide.anchor - when (spec.align) {
                 TextPathAlign.START -> 0.0
@@ -569,7 +631,7 @@ object TextPathGeometry {
                 TextPathAlign.END -> guide.length - w
             }
         }
-        return base + spec.offset
+        return base + shift
     }
 
     /**
@@ -598,7 +660,9 @@ object TextPathGeometry {
      *   curve (moves it).
      * NONE has none.
      */
-    fun handles(spec: TextPathSpec): List<Vec2> = when (spec.type) {
+    fun handles(spec: TextPathSpec): List<Vec2> = handlesOf(sanitized(spec))
+
+    private fun handlesOf(spec: TextPathSpec): List<Vec2> = when (spec.type) {
         TextPathType.NONE -> emptyList()
         TextPathType.LINE -> listOf(
             Vec2(spec.x1, spec.y1),
@@ -671,7 +735,12 @@ object TextPathGeometry {
 
     /** [spec] with handle [index] (see [handles]) dragged to [pos]; unknown indices change nothing. */
     fun moveHandle(spec: TextPathSpec, index: Int, pos: Vec2): TextPathSpec {
-        if (!pos.x.isFinite() || !pos.y.isFinite()) return spec
+        val clean = sanitized(spec)
+        if (!pos.x.isFinite() || !pos.y.isFinite()) return clean
+        return sanitized(moved(clean, index, pos))
+    }
+
+    private fun moved(spec: TextPathSpec, index: Int, pos: Vec2): TextPathSpec {
         return when (spec.type) {
             TextPathType.NONE -> spec
             TextPathType.LINE -> when (index) {
@@ -740,28 +809,36 @@ object TextPathGeometry {
      * which is relative to the rectangle and turns with its rotation.
      */
     fun transformed(spec: TextPathSpec, translation: Vec2, scale: Float, rotationDeg: Float, pivot: Vec2): TextPathSpec {
-        val k = if (scale.isFinite() && scale > 0f) scale else 1f
-        val deg = if (rotationDeg.isFinite()) rotationDeg else 0f
-        val t = Vec2(if (translation.x.isFinite()) translation.x else 0f, if (translation.y.isFinite()) translation.y else 0f)
-        val rad = Math.toRadians(deg.toDouble()).toFloat()
-        fun map(x: Float, y: Float): Vec2 = pivot + (Vec2(x, y) - pivot).rotated(rad) * k + t
-        val p1 = map(spec.x1, spec.y1)
-        val p2 = map(spec.x2, spec.y2)
-        val c1 = map(spec.cx1, spec.cy1)
-        val c2 = map(spec.cx2, spec.cy2)
-        val c = map(spec.cx, spec.cy)
-        return spec.copy(
-            x1 = p1.x, y1 = p1.y, x2 = p2.x, y2 = p2.y,
-            cx1 = c1.x, cy1 = c1.y, cx2 = c2.x, cy2 = c2.y,
-            cx = c.x, cy = c.y,
-            radius = spec.radius * k,
-            width = spec.width * k,
-            height = spec.height * k,
-            cornerRadius = spec.cornerRadius * k,
-            rotationDeg = normalizeDegrees(spec.rotationDeg + deg),
-            startAngleDeg = if (spec.type == TextPathType.RECT) spec.startAngleDeg else normalizeDegrees(spec.startAngleDeg + deg),
-            offset = spec.offset * k,
-            baselineShift = spec.baselineShift * k,
+        val s = sanitized(spec)
+        val pivotOk = pivot.x.isFinite() && pivot.y.isFinite()
+        // Without a pivot, turning and scaling have no center: only the move applies.
+        val k = if (pivotOk && scale.isFinite() && scale > 0f) scale.toDouble() else 1.0
+        val deg = if (pivotOk && rotationDeg.isFinite()) rotationDeg else 0f
+        val tx = if (translation.x.isFinite()) translation.x.toDouble() else 0.0
+        val ty = if (translation.y.isFinite()) translation.y.toDouble() else 0.0
+        val px = if (pivotOk) pivot.x.toDouble() else 0.0
+        val py = if (pivotOk) pivot.y.toDouble() else 0.0
+        val rad = Math.toRadians(deg.toDouble())
+        val cos = cos(rad)
+        val sin = sin(rad)
+        // In doubles, and kept within range, so a huge scale can't overflow to infinity.
+        fun lim(v: Double): Float = v.coerceIn(-MAX_COORD.toDouble(), MAX_COORD.toDouble()).toFloat()
+        fun mapX(x: Float, y: Float): Float = lim(px + ((x - px) * cos - (y - py) * sin) * k + tx)
+        fun mapY(x: Float, y: Float): Float = lim(py + ((x - px) * sin + (y - py) * cos) * k + ty)
+        return sanitized(
+            s.copy(
+                x1 = mapX(s.x1, s.y1), y1 = mapY(s.x1, s.y1), x2 = mapX(s.x2, s.y2), y2 = mapY(s.x2, s.y2),
+                cx1 = mapX(s.cx1, s.cy1), cy1 = mapY(s.cx1, s.cy1), cx2 = mapX(s.cx2, s.cy2), cy2 = mapY(s.cx2, s.cy2),
+                cx = mapX(s.cx, s.cy), cy = mapY(s.cx, s.cy),
+                radius = lim(s.radius * k),
+                width = lim(s.width * k),
+                height = lim(s.height * k),
+                cornerRadius = lim(s.cornerRadius * k),
+                rotationDeg = normalizeDegrees(s.rotationDeg + deg),
+                startAngleDeg = if (s.type == TextPathType.RECT) s.startAngleDeg else normalizeDegrees(s.startAngleDeg + deg),
+                offset = lim(s.offset * k),
+                baselineShift = lim(s.baselineShift * k),
+            )
         )
     }
 
@@ -772,9 +849,13 @@ object TextPathGeometry {
      * or at the bottom (counter-clockwise). Fields of other shapes, the mode, side, direction,
      * alignment and shifts are kept from [current].
      */
-    fun defaultFor(type: TextPathType, center: Vec2, textWidth: Float, fontSize: Float, current: TextPathSpec): TextPathSpec {
-        val fs = if (fontSize.isFinite() && fontSize > 0f) fontSize else 48f
-        val w = if (textWidth.isFinite() && textWidth > 0f) textWidth else fs
+    fun defaultFor(type: TextPathType, center: Vec2, textWidth: Float, fontSize: Float, current: TextPathSpec): TextPathSpec =
+        sanitized(fitted(type, center, textWidth, fontSize, sanitized(current)))
+
+    private fun fitted(type: TextPathType, at: Vec2, textWidth: Float, fontSize: Float, current: TextPathSpec): TextPathSpec {
+        val center = Vec2(if (at.x.isFinite()) at.x else 0f, if (at.y.isFinite()) at.y else 0f)
+        val fs = if (fontSize.isFinite() && fontSize > 0f) fontSize.coerceAtMost(MAX_COORD / 8f) else 48f
+        val w = if (textWidth.isFinite() && textWidth > 0f) textWidth.coerceAtMost(MAX_COORD) else fs
         // Straight text centered on `center`: its baseline sits about 0.35 em below the center and
         // its capitals reach about 0.7 em above the baseline.
         val baseY = center.y + 0.35f * fs

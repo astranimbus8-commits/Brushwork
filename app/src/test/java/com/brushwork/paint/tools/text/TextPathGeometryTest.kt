@@ -552,6 +552,116 @@ class TextPathGeometryTest {
         assertEquals(TextPathType.NONE, TextPathGeometry.defaultFor(TextPathType.NONE, center, 1f, 1f, s).type)
     }
 
+    // ------------------------------------------------------------------ nonsense input
+
+    private fun finite(v: Vec2) = v.x.isFinite() && v.y.isFinite()
+
+    /** Every shape with one number of it set to [bad]. */
+    private fun spoiled(bad: Float): List<TextPathSpec> {
+        val out = ArrayList<TextPathSpec>()
+        for (base in samples + listOf(circle.copy(clockwise = false))) {
+            out += base.copy(x1 = bad)
+            out += base.copy(cy2 = bad)
+            out += base.copy(cx = bad)
+            out += base.copy(radius = bad)
+            out += base.copy(width = bad)
+            out += base.copy(height = bad)
+            out += base.copy(cornerRadius = bad)
+            out += base.copy(rotationDeg = bad)
+            out += base.copy(startAngleDeg = bad)
+            out += base.copy(offset = bad)
+            out += base.copy(baselineShift = bad)
+        }
+        return out
+    }
+
+    @Test(timeout = 20_000)
+    fun nonFiniteOrHugeNumbersNeitherCrashNorHang() {
+        for (bad in listOf(Float.NaN, Float.POSITIVE_INFINITY, Float.NEGATIVE_INFINITY, 1e30f, -1e30f, 3e38f)) {
+            for (s in spoiled(bad)) {
+                val g = TextPathGeometry.guide(s)!!
+                assertTrue("$bad in $s: length ${g.length}", g.length.isFinite())
+                if (s.type.isClosed) assertTrue("$bad: a closed path has a length", g.length > 0.0)
+                val start = TextPathGeometry.startDistance(s, g, 300f)
+                val shift = TextPathGeometry.heightOffset(s, 50f)
+                assertTrue("$bad: start $start, shift $shift", start.isFinite() && shift.isFinite())
+                assertTrue("$bad: placed", finite(TextPathGeometry.placePoint(g, start, shift, 10f, -20f)))
+                val out = TextPathWarp.warp(listOf(bar(0f, 300f, 50f)), g, start, shift, 0.25).single()
+                assertTrue("$bad: bent outline (${out.size / 2} points)", out.size in 8..2_000_000)
+                assertTrue("$bad: bent points are numbers", out.all { it.isFinite() })
+                for (h in TextPathGeometry.handles(s)) assertTrue("$bad: handle $h of $s", finite(h))
+                for (i in TextPathGeometry.handles(s).indices) TextPathGeometry.moveHandle(s, i, Vec2(10f, 20f))
+                assertTrue(TextPathGeometry.pathLength(s).isFinite())
+            }
+        }
+    }
+
+    @Test(timeout = 20_000)
+    fun aHugeOffsetOnAClosedPathIsTheSameAsItsRemainder() {
+        val g = guide(circle)
+        val len = g.length
+        for (laps in listOf(3.0, 1000.0, 1e7, 1e30)) {
+            val off = (laps * len + 25.0).toFloat()
+            val start = TextPathGeometry.startDistance(circle.copy(offset = off), g, 100f)
+            if (off < TextPathGeometry.MAX_COORD) {
+                val plain = TextPathGeometry.startDistance(circle.copy(offset = Math.IEEEremainder(off.toDouble(), len).toFloat()), g, 100f)
+                assertEquals("$laps laps", plain, start, 1e-3)
+                assertEquals("$laps laps: 25 px on", -25.0, start, 0.05 * laps)
+            }
+            assertTrue("kept within about a lap of the anchor ($start)", abs(start) <= len)
+            // Bending at such an offset returns (and lands on the circle).
+            val out = TextPathWarp.warp(listOf(bar(0f, 100f, 20f)), g, start, 0.0, 0.25).single()
+            for (i in 0 until out.size / 2) {
+                val d = Vec2(out[2 * i], out[2 * i + 1]).distanceTo(Vec2(500f, 400f))
+                assertTrue("$laps laps: point at $d", d > 99.8f && d < 120.2f)
+            }
+        }
+        // Far along an open path the text simply runs off along the end.
+        val lg = guide(line)
+        val far = TextPathGeometry.startDistance(line.copy(offset = 1e30f), lg, 100f)
+        assertTrue(far.isFinite())
+        assertTrue(TextPathWarp.warp(listOf(bar(0f, 100f, 20f)), lg, far, 0.0, 0.25).single().isNotEmpty())
+    }
+
+    @Test(timeout = 20_000)
+    fun bendingNeverStallsFarAlongAClosedPath() {
+        // Arc lengths so large that a lap no longer changes them: the outline still comes back.
+        for (r in listOf(100f, 1f)) {
+            val g = guide(circle.copy(radius = r))
+            for (start in listOf(1e17, -1e17, 1e25)) {
+                val out = TextPathWarp.warp(listOf(bar(0f, 100f, 20f)), g, start, 0.0, 0.25).single()
+                assertTrue("r $r, $start: ${out.size / 2} points", out.size in 8..2_000_000)
+            }
+        }
+    }
+
+    @Test
+    fun cleanSpecsAreLeftAloneAndBrokenOnesFixed() {
+        for (s in samples + TextPathSpec()) assertTrue("${s.type} is the same instance", TextPathGeometry.sanitized(s) === s)
+        val fixed = TextPathGeometry.sanitized(circle.copy(radius = Float.NaN, offset = Float.POSITIVE_INFINITY, cx = 1e30f, cy = -1e30f, rotationDeg = 725f))
+        assertEquals("NaN falls back to the default", TextPathSpec().radius, fixed.radius, 0f)
+        assertEquals(0f, fixed.offset, 0f)
+        assertEquals(TextPathGeometry.MAX_COORD, fixed.cx, 0f)
+        assertEquals(-TextPathGeometry.MAX_COORD, fixed.cy, 0f)
+        assertEquals("angles beyond a turn come back", 5f, fixed.rotationDeg, 1e-3f)
+        assertEquals("the rest is kept", circle.startAngleDeg, fixed.startAngleDeg, 0f)
+    }
+
+    @Test
+    fun nonFinitePivotCenterOrSizeAreIgnored() {
+        val t = TextPathGeometry.transformed(circle, Vec2(5f, 6f), 2f, 30f, Vec2(Float.NaN, 0f))
+        assertEquals("translated only", 505f, t.cx, 1e-3f)
+        assertEquals(406f, t.cy, 1e-3f)
+        assertEquals(circle.radius, t.radius, 0f)
+        val huge = TextPathGeometry.transformed(circle, Vec2(0f, 0f), 1e38f, 0f, Vec2(0f, 0f))
+        assertTrue("clamped: ${huge.radius}, ${huge.cx}", huge.radius.isFinite() && huge.cx.isFinite() && huge.offset.isFinite())
+        for (type in listOf(TextPathType.LINE, TextPathType.CIRCLE, TextPathType.RECT, TextPathType.CURVE)) {
+            val d = TextPathGeometry.defaultFor(type, Vec2(Float.NaN, Float.POSITIVE_INFINITY), 300f, 40f, TextPathSpec())
+            for (h in TextPathGeometry.handles(d)) assertTrue("$type default handle $h", finite(h))
+            assertTrue(TextPathGeometry.guide(d)!!.length > 0.0)
+        }
+    }
+
     @Test
     fun circleGuideUsesTheExactArcLength() {
         for (r in listOf(1f, 3f, 40f, 1000f, 20000f)) {

@@ -1,6 +1,8 @@
 package com.brushwork.paint.ui.placement
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,6 +11,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SwapHoriz
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -21,6 +25,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.tools.text.TextPathAlign
@@ -30,7 +35,6 @@ import com.brushwork.paint.tools.text.TextPathSide
 import com.brushwork.paint.tools.text.TextPathSpec
 import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.isClosed
-import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
@@ -41,6 +45,9 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 
+/** Largest number (px, either sign) a field takes: what the text path engine works with. */
+private val LIMIT = TextPathGeometry.MAX_COORD.toDouble()
+
 /** Labels of the direction chips (clockwise first). */
 private val DIRECTIONS = listOf("Clockwise", "Counter-clockwise")
 
@@ -49,11 +56,14 @@ private val DIRECTIONS = listOf("Clockwise", "Counter-clockwise")
  * rotate letters, side, direction, alignment, offset, and exact numbers (with sliders) for the
  * path's shape. [dpi] is for unit display; [onChange] gets every edit live.
  *
- * Meant for the body of a sheet that already scrolls vertically (it has no scrolling of its own).
+ * Meant for the body of a sheet that already scrolls vertically (it has no scrolling of its own);
+ * the choices wrap onto more lines on a narrow phone. For straight text only the shapes are shown
+ * (the caller introduces the feature).
  *
  * Caller contract:
- * - picking a shape sends `spec.copy(type = newType)` with every other field untouched; the caller
- *   knows the text's center, width and size and should fit the new shape to the text with
+ * - picking a shape sends `spec.copy(type = newType)` with every other field untouched (numbers
+ *   out of range, e.g. from a damaged file, are repaired as with every edit); the caller knows the
+ *   text's center, width and size and should fit the new shape to the text with
  *   `TextOnPath.defaultFor` whenever the type changes;
  * - switching the direction of a circle or rectangle also turns the text position by 180°, so the
  *   text stays upright: clockwise text reads upright at the top, counter-clockwise at the bottom.
@@ -65,25 +75,24 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
     // Callbacks of fields and sliders may run between recompositions: they edit the newest spec.
     val current by rememberUpdatedState(spec)
     val send by rememberUpdatedState(onChange)
+    // Every edit leaves usable numbers (a typed 1e39 would otherwise become infinity).
     fun edit(transform: (TextPathSpec) -> TextPathSpec) {
-        val next = transform(current)
+        val next = TextPathGeometry.sanitized(transform(current))
         if (next != current) send(next)
     }
 
     Column(Modifier.fillMaxWidth()) {
-        ChoiceChips(TextPathType.entries.map { it.label }, spec.type.ordinal, { i -> edit { it.copy(type = TextPathType.entries[i]) } })
-        if (!spec.isActive) {
-            PathHint("Make the text follow a line, a circle, a square or a curve, then drag the handles on the canvas to shape it.")
-            return@Column
-        }
+        WrapChips(TextPathType.entries.map { it.label }, spec.type.ordinal, { i -> edit { it.copy(type = TextPathType.entries[i]) } })
+        // Straight text: only the shapes (the text editor explains them right above).
+        if (!spec.isActive) return@Column
         PathLabel("Letters")
-        ChoiceChips(TextPathMode.entries.map { it.label }, spec.mode.ordinal, { i -> edit { it.copy(mode = TextPathMode.entries[i]) } })
+        WrapChips(TextPathMode.entries.map { it.label }, spec.mode.ordinal, { i -> edit { it.copy(mode = TextPathMode.entries[i]) } })
 
         if (spec.type.isClosed) {
             PathLabel("Side of the shape")
-            ChoiceChips(TextPathSide.entries.map { it.label }, spec.side.ordinal, { i -> edit { it.copy(side = TextPathSide.entries[i]) } })
+            WrapChips(TextPathSide.entries.map { it.label }, spec.side.ordinal, { i -> edit { it.copy(side = TextPathSide.entries[i]) } })
             PathLabel("Direction")
-            ChoiceChips(DIRECTIONS, if (spec.clockwise) 0 else 1, { i ->
+            WrapChips(DIRECTIONS, if (spec.clockwise) 0 else 1, { i ->
                 edit {
                     val cw = i == 0
                     if (cw == it.clockwise) it
@@ -94,7 +103,7 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
         }
 
         PathLabel(if (spec.type.isClosed) "Align to the text position" else "Align on the path")
-        ChoiceChips(TextPathAlign.entries.map { it.label }, spec.align.ordinal, { i -> edit { it.copy(align = TextPathAlign.entries[i]) } })
+        WrapChips(TextPathAlign.entries.map { it.label }, spec.align.ordinal, { i -> edit { it.copy(align = TextPathAlign.entries[i]) } })
 
         val length = remember(spec) { TextPathGeometry.pathLength(spec).toDouble() }
         val offsetRange = max(1.0, if (spec.type.isClosed) length / 2.0 else length)
@@ -106,6 +115,8 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
             dpi = dpiD,
             modifier = Modifier.padding(top = 8.dp),
             step = null,
+            minPx = -LIMIT,
+            maxPx = LIMIT,
             sliderMinPx = -offsetRange,
             sliderMaxPx = offsetRange,
         )
@@ -118,6 +129,8 @@ fun TextPathControls(spec: TextPathSpec, dpi: Float, onChange: (TextPathSpec) ->
             dpi = dpiD,
             modifier = Modifier.padding(top = 8.dp),
             step = null,
+            minPx = -LIMIT,
+            maxPx = LIMIT,
             sliderMinPx = -shiftRange,
             sliderMaxPx = shiftRange,
         )
@@ -223,6 +236,7 @@ private class ShapeFields(val type: TextPathType, val unit: LengthUnit, val dpi:
             LengthField(
                 label = "$label X", px = x.toDouble(), onPxChange = { onChange(it.toFloat(), latestY) },
                 unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null,
+                minPx = -LIMIT, maxPx = LIMIT,
                 sliderMinPx = wx.first, sliderMaxPx = wx.second,
             )
             Spacer(Modifier.width(8.dp))
@@ -230,6 +244,7 @@ private class ShapeFields(val type: TextPathType, val unit: LengthUnit, val dpi:
             LengthField(
                 label = "$label Y", px = y.toDouble(), onPxChange = { onChange(latestX, it.toFloat()) },
                 unit = unit, dpi = dpi, modifier = Modifier.weight(1f), step = null,
+                minPx = -LIMIT, maxPx = LIMIT,
                 sliderMinPx = wy.first, sliderMaxPx = wy.second,
             )
         }
@@ -244,6 +259,7 @@ private class ShapeFields(val type: TextPathType, val unit: LengthUnit, val dpi:
             modifier = if (step) modifier else modifier.padding(top = 8.dp),
             step = if (step) unit.defaultStep else null,
             minPx = TextPathGeometry.MIN_EXTENT.toDouble(),
+            maxPx = LIMIT,
             sliderMinPx = TextPathGeometry.MIN_EXTENT.toDouble(), sliderMaxPx = top,
         )
     }
@@ -281,6 +297,24 @@ private fun AngleField(label: String, deg: Float, onChange: (Float) -> Unit) {
         max = 180.0,
         step = 1.0,
     )
+}
+
+/**
+ * One-of-several chips that wrap onto more lines instead of scrolling sideways: on a narrow phone
+ * every choice stays in view (a sideways-scrolling row would hide "Curve" off the edge).
+ */
+@Composable
+private fun WrapChips(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEachIndexed { i, label ->
+            FilterChip(
+                selected = i == selected,
+                onClick = { onSelect(i) },
+                label = { Text(label) },
+                colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White),
+            )
+        }
+    }
 }
 
 @Composable

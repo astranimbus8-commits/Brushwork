@@ -285,6 +285,36 @@ class TextOnPathRobolectricTest {
     }
 
     @Test
+    fun brokenOrHugeNumbersDrawSafely() {
+        // A corrupt file, a runaway pinch or a typed 1e20: nothing throws, hangs or draws garbage.
+        val broken = listOf(
+            circle.copy(radius = Float.NaN),
+            circle.copy(offset = 1e20f),
+            circle.copy(radius = 1f, offset = 3e38f),
+            circle.copy(cx = Float.POSITIVE_INFINITY),
+            circle.copy(startAngleDeg = Float.NaN, baselineShift = Float.NEGATIVE_INFINITY),
+            TextPathSpec(type = TextPathType.RECT, cx = 300f, cy = 300f, width = Float.NaN, height = 1e30f, cornerRadius = Float.NaN),
+            TextPathSpec(type = TextPathType.CURVE, x1 = Float.NaN, y1 = 300f, cx1 = 1e38f, cy1 = 0f, cx2 = 400f, cy2 = 0f, x2 = 500f, y2 = 300f),
+            TextPathSpec(type = TextPathType.LINE, x1 = 50f, y1 = 300f, x2 = 550f, y2 = 300f, offset = Float.NaN),
+        )
+        for (base in broken) for (mode in TextPathMode.entries) {
+            val spec = base.copy(mode = mode)
+            var drawn = RectF()
+            render { drawn = TextOnPath.draw(it, "HELLO", fill(40f), stroke(40f, 4f), spec) }
+            assertTrue("$spec: bounds $drawn", drawn.isEmpty || floatArrayOf(drawn.left, drawn.top, drawn.right, drawn.bottom).all { it.isFinite() })
+            assertEquals(drawn, TextOnPath.bounds("HELLO", fill(40f), stroke(40f, 4f), spec))
+            for (h in TextOnPath.handles(spec)) assertTrue("$spec: handle $h", h.x.isFinite() && h.y.isFinite())
+            val g = RectF()
+            TextOnPath.guide(spec).computeBounds(g, true)
+            assertTrue("$spec: guide $g", floatArrayOf(g.left, g.top, g.right, g.bottom).all { it.isFinite() })
+        }
+        // A huge offset on a circle still puts the text on the circle.
+        val ink = render { TextOnPath.draw(it, "HELLO", fill(40f), null, circle.copy(offset = 1e20f)) }
+        assertTrue(ink.points.size > 300)
+        for ((x, y) in ink.points) assertTrue("ink at ($x, $y)", hypot(x - 300.0, y - 300.0) in 140.0..200.0)
+    }
+
+    @Test
     fun bendingThirtyLettersIsFastEnoughToDragAHandle() {
         val f = fill(150f)
         val text = "Thirty characters on a circle"
