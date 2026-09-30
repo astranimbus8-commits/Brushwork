@@ -75,6 +75,13 @@ class TouchGestureClassifier(
     fun tapStillPossible(nowMs: Long): Boolean =
         !cancelled && maxPointers in 2..3 && maxMove < tapSlopPx && nowMs - startTime <= tapTimeoutMs
 
+    /**
+     * True while the current (or just ended) gesture has had exactly one pointer that never
+     * moved [tapSlopPx] or more: with a short enough duration, a one-finger tap. (Kept apart from
+     * [up], whose taps are the multi-finger undo/redo ones.)
+     */
+    fun isSinglePointerStill(): Boolean = !cancelled && maxPointers == 1 && maxMove < tapSlopPx
+
     /** The gesture can no longer be a tap or long press (system cancel, stylus involved...). */
     fun invalidate() { cancelled = true }
 

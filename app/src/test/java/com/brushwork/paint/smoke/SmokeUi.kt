@@ -11,6 +11,8 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.BwSheetPillKey
+import com.brushwork.paint.ui.common.BwSheetTitleKey
 import org.junit.Assert.assertTrue
 
 /** Semantics lookups on top of [RobolectricUi] (click labels, texts, windows). */
@@ -59,7 +61,14 @@ internal object SmokeUi {
 
     private fun matches(n: SemanticsNode, label: String, exact: Boolean) = n.labels().any { if (exact) it == label else it.contains(label) }
 
-    private fun elements() = RobolectricUi.elements().filter { e -> RobolectricUi.windowRoots().indexOf(e.window) >= baseline }
+    /**
+     * Elements of the current screen's windows that are on screen. Nodes that are composed but
+     * not placed (a minimized or covered menu panel keeps its content that way) are not shown to
+     * anyone, so they are left out, like accessibility services leave them out.
+     */
+    private fun elements() = RobolectricUi.elements().filter { e ->
+        RobolectricUi.windowRoots().indexOf(e.window) >= baseline && e.node.layoutInfo.isPlaced
+    }
 
     fun find(label: String, exact: Boolean = false): RobolectricUi.Element? = elements().lastOrNull { matches(it.node, label, exact) }
 
@@ -190,5 +199,32 @@ internal object SmokeUi {
         val roots = windows()
         assertTrue("expected at least $min windows, got ${roots.size}", roots.size >= min)
         assertTrue("a window has no size: ${roots.map { "${it.width}x${it.height}" }}", roots.all { it.width > 0 && it.height > 0 })
+    }
+
+    // ------------------------------------------------------------------ hosted (non-modal) sheets
+
+    /** Titles of the sheet panels the editor's sheet host shows (expanded), oldest first. */
+    fun sheetTitles(): List<String> = elements().mapNotNull { it.node.config.getOrNull(BwSheetTitleKey) }
+
+    /** Titles in the pills of minimized sheets. */
+    fun pillTitles(): List<String> = elements().mapNotNull { it.node.config.getOrNull(BwSheetPillKey) }
+
+    /** The shown hosted panel (the node carrying its title), or null. */
+    fun sheetPanel(): RobolectricUi.Element? = elements().lastOrNull { it.node.config.getOrNull(BwSheetTitleKey) != null }
+
+    /** A menu is up: a modal sheet or dialog window, a hosted panel, or a minimized one's pill. */
+    fun menuOpen(): Boolean = windows().size > 1 || sheetTitles().isNotEmpty() || pillTitles().isNotEmpty()
+
+    /**
+     * A panel (titled [title], if given) is shown by the editor's host: in the editor's own window
+     * (no extra window), laid out with a size.
+     */
+    fun assertPanelShown(title: String? = null) {
+        assertWindowsLaidOut(1)
+        assertTrue("a hosted panel adds no window: ${windows().size}", windows().size == 1)
+        val panel = sheetPanel() ?: throw AssertionError("no panel shown; shown: ${shown().take(80)}")
+        val t = panel.node.config[BwSheetTitleKey]
+        if (title != null) assertTrue("panel \"$t\" shown instead of \"$title\"", t == title)
+        assertTrue("panel \"$t\" has no size: ${panel.bounds}", panel.bounds.width > 0f && panel.bounds.height > 0f)
     }
 }

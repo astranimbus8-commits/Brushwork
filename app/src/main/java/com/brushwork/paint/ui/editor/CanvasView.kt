@@ -26,6 +26,7 @@ import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.ui.theme.BrushworkColors
 import java.util.WeakHashMap
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.pow
 
 /** Zoom/rotation readout while the user pinches (for the on-screen chip). */
@@ -52,6 +53,21 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     /** Receives zoom/rotation while pinching, then null when the gesture ends. */
     var onViewGesture: ((ViewGestureInfo?) -> Unit)? = null
+
+    /**
+     * Called when a touch gesture starts on the canvas (the first finger or pen goes down),
+     * before the tool sees it: e.g. the editor minimizes an open menu so the canvas is in view.
+     */
+    var onTouchDown: (() -> Unit)? = null
+
+    /**
+     * While set, the canvas is "outside" a floating window (the layers window): a quick tap with
+     * one finger or the pen only calls this (e.g. to close the window) and never reaches the
+     * tool, so it paints no dot and starts no text. Everything else still works: a stroke is
+     * given to the tool from its first point once it moves, a finger held still picks a color,
+     * and two fingers zoom the view or pinch the tool's object.
+     */
+    var onOutsideTap: (() -> Unit)? = null
 
     private val viewport = ViewportStore.of(controller)
     // The activity handles density changes itself (manifest configChanges): see onConfigurationChanged.
@@ -147,6 +163,12 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * another finger): drop the stroke instead of letting it jump across the canvas.
      */
     private fun interruptStroke() {
+        if (mode == Mode.PENDING_TAP) {
+            // The tool never saw the held touch: just forget it.
+            dropPendingTap()
+            mode = Mode.IGNORE
+            return
+        }
         if (mode == Mode.TOOL || mode == Mode.TOOL_REST) {
             // Same for two fingers driving the tool: keep what they did, ignore the rest.
             endToolGesture(cancelled = false)
@@ -227,6 +249,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     override fun onDetachedFromWindow() {
         removeCallbacks(antsTick)
         removeCallbacks(longPressRunnable)
+        dropPendingTap()
         if (mode == Mode.DRAW) controller.pointerCancel()
         if (mode == Mode.TRANSFORM) endTransform()
         endToolGesture(cancelled = true)
@@ -289,9 +312,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * fingers drive the current tool (controller.twoFingerStart accepted them, e.g. pinching the
      * picture being placed). TOOL_REST: one finger of such a gesture lifted and the other is still
      * down; the tool gesture may still be open, waiting to see whether it was a two-finger tap.
+     * PENDING_TAP: one pointer is down while [onOutsideTap] is set; it is held back from the tool
+     * until it turns out to be more than a tap (see [startPendingTap]).
      * IGNORE: the rest of the gesture does nothing.
      */
-    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, IGNORE }
+    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE }
 
     private var mode = Mode.NONE
     private var drawPointerId = -1
@@ -311,6 +336,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private val gy = FloatArray(MAX_GESTURE_POINTERS)
 
     private var lastPoint: ToolPoint? = null
+
+    // The touch held back in Mode.PENDING_TAP: a copy of its down event and of the moves since.
+    private var pendingDown: MotionEvent? = null
+    private val pendingMoves = ArrayList<MotionEvent>()
 
     // Two-finger gesture handed to the tool (Mode.TOOL / TOOL_REST).
     private val toolIds = IntArray(2)
@@ -351,6 +380,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         // A missed UP/CANCEL (should not happen): close the previous gesture cleanly.
         if (mode == Mode.DRAW) controller.pointerCancel()
         if (mode == Mode.TRANSFORM) endTransform()
+        dropPendingTap()
         endToolGesture(cancelled = true)
         cancelPendingLongPress()
         ignoredMask = 0L
@@ -369,12 +399,31 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         val mousePan = type == MotionEvent.TOOL_TYPE_MOUSE &&
             (e.buttonState and (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_TERTIARY)) != 0
         val fingerPans = type == MotionEvent.TOOL_TYPE_FINGER && controller.settings.stylusOnlyDrawing
-        if (mousePan || fingerPans) restartTransform(e, -1) else startDraw(e, 0)
+        onTouchDown?.invoke()
+        when {
+            mousePan || fingerPans -> restartTransform(e, -1)
+            onOutsideTap != null -> startPendingTap(e)
+            else -> startDraw(e, 0)
+        }
     }
 
     private fun onPointerDown(e: MotionEvent, idx: Int) {
         val id = e.getPointerId(idx)
         val stylus = isStylusType(e.getToolType(idx))
+        if (mode == Mode.PENDING_TAP) {
+            // A held pen keeps the gesture: another contact is a resting palm or a second pen.
+            if (drawIsStylus) { ignore(id); return }
+            // Not a tap: the held finger never reached the tool, so there is nothing to cancel.
+            dropPendingTap()
+            mode = Mode.NONE
+            if (!stylus) {
+                // Two fingers: they drive the tool if it wants them, else the view.
+                classifier.down(id, e.getX(idx), e.getY(idx), e.eventTime)
+                if (!startToolGesture(e)) restartTransform(e, -1)
+                return
+            }
+            // The pen takes over below, the finger becoming a palm.
+        }
         if (!stylus && ((mode == Mode.DRAW && drawIsStylus) || mode == Mode.IGNORE)) {
             // Palm (or a leftover finger) while the pen is in use: never draws, pans or taps.
             ignore(id)
@@ -458,6 +507,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             Mode.TOOL -> feedToolGesture(e)
             // The remaining finger moved or waited too long: that was no tap, the pinch stands.
             Mode.TOOL_REST -> if (toolGestureOpen && !classifier.tapStillPossible(e.eventTime)) endToolGesture(cancelled = false)
+            Mode.PENDING_TAP -> holdPendingMove(e)
             else -> {}
         }
     }
@@ -484,6 +534,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
                 finishToolGesture(tap)
                 mode = Mode.IGNORE
             }
+            // The held pen lifted quickly while a palm stays down: a tap.
+            Mode.PENDING_TAP -> if (id == drawPointerId) {
+                finishPendingTap()
+                mode = Mode.IGNORE
+            }
             else -> {}
         }
     }
@@ -499,13 +554,97 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             }
             Mode.TRANSFORM -> {
                 endTransform()
-                if (enteredTransform && !gestureHadStylus) handleTap(tap)
+                val outside = onOutsideTap
+                if (outside != null && isQuickSingleTap(e)) {
+                    // A finger that pans the view (stylus-only drawing) tapped: same as a tap
+                    // anywhere else outside the floating window. Take back the few pixels it panned.
+                    revertView()
+                    outside()
+                } else if (enteredTransform && !gestureHadStylus) {
+                    handleTap(tap)
+                }
             }
             Mode.TOOL, Mode.TOOL_REST -> finishToolGesture(tap)
+            Mode.PENDING_TAP -> if (id == drawPointerId) finishPendingTap() else dropPendingTap()
             else -> {}
         }
         mode = Mode.NONE
         ignoredMask = 0L
+    }
+
+    /** The gesture that just ended was one pointer, lifted quickly without moving. */
+    private fun isQuickSingleTap(e: MotionEvent): Boolean =
+        classifier.isSinglePointerStill() && e.eventTime - e.downTime <= TouchGestureClassifier.LONG_PRESS_TIMEOUT_MS
+
+    // ------------------------------------------------------------------ held taps (outside a window)
+
+    /**
+     * Holds the first pointer back from the tool while [onOutsideTap] is set: lifted quickly
+     * without moving it is a tap ([finishPendingTap]); moving past the tap slop, staying down
+     * for the long-press time or a second finger make it an ordinary gesture
+     * ([releasePendingTap] replays it to the tool from its first point, or see onPointerDown).
+     */
+    private fun startPendingTap(e: MotionEvent) {
+        mode = Mode.PENDING_TAP
+        drawPointerId = e.getPointerId(0)
+        drawIsStylus = isStylusType(e.getToolType(0))
+        // On the live event: the stream is drawn with, should it become a stroke.
+        requestUnbufferedDispatch(e)
+        pendingDown = MotionEvent.obtain(e)
+        removeCallbacks(pendingTapTimeout)
+        postDelayed(pendingTapTimeout, TouchGestureClassifier.LONG_PRESS_TIMEOUT_MS)
+    }
+
+    private val pendingTapTimeout = Runnable {
+        if (mode == Mode.PENDING_TAP && controller.busyMessage == null) releasePendingTap()
+    }
+
+    /** A move of the held pointer: kept for the replay; far enough from the start, it is no tap. */
+    private fun holdPendingMove(e: MotionEvent) {
+        val down = pendingDown ?: return
+        val idx = e.findPointerIndex(drawPointerId)
+        if (idx < 0) return
+        pendingMoves += MotionEvent.obtain(e)
+        val far = hypot(e.getX(idx) - down.getX(0), e.getY(idx) - down.getY(0)) >= TouchGestureClassifier.TAP_SLOP_DP * density
+        if (far || pendingMoves.size >= MAX_PENDING_MOVES) releasePendingTap()
+    }
+
+    /** The held touch is not a tap: the tool gets it now, from its first point on. */
+    private fun releasePendingTap() {
+        val down = pendingDown ?: return
+        removeCallbacks(pendingTapTimeout)
+        pendingDown = null
+        mode = Mode.DRAW
+        controller.pointerDown(toolPoint(down, 0, -1))
+        for (m in pendingMoves) {
+            val idx = m.findPointerIndex(drawPointerId)
+            if (idx >= 0) {
+                for (h in 0 until m.historySize) controller.pointerMove(toolPoint(m, idx, h))
+                controller.pointerMove(toolPoint(m, idx, -1))
+            }
+            m.recycle()
+        }
+        pendingMoves.clear()
+        // The hold-still color pick keeps counting from the real start of the touch.
+        val held = SystemClock.uptimeMillis() - down.eventTime
+        down.recycle()
+        cancelPendingLongPress()
+        postDelayed(longPressRunnable, (TouchGestureClassifier.LONG_PRESS_TIMEOUT_MS - held).coerceAtLeast(0L))
+    }
+
+    /** The held pointer lifted quickly: a tap outside the window. The tool never sees it. */
+    private fun finishPendingTap() {
+        dropPendingTap()
+        onOutsideTap?.invoke()
+    }
+
+    /** Forgets the held touch (the tool never saw it). */
+    private fun dropPendingTap() {
+        removeCallbacks(pendingTapTimeout)
+        pendingDown?.recycle()
+        pendingDown = null
+        for (m in pendingMoves) m.recycle()
+        pendingMoves.clear()
     }
 
     private fun startDraw(e: MotionEvent, idx: Int) {
@@ -616,6 +755,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             Mode.DRAW -> controller.pointerCancel()
             Mode.TRANSFORM -> endTransform()
             Mode.TOOL, Mode.TOOL_REST -> endToolGesture(cancelled = true)
+            Mode.PENDING_TAP -> dropPendingTap()
             else -> {}
         }
         classifier.cancel()
@@ -626,14 +766,13 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         when (tap) {
             TouchGestureClassifier.Tap.TWO_FINGER -> if (settings.twoFingerUndo) {
                 revertView()
-                val label = HistoryLabels.undo(controller)
-                controller.undo()
+                // (Undone first: a null listener must not skip the undo.)
+                val label = HistoryLabels.performUndo(controller)
                 onTapAction?.invoke(label)
             }
             TouchGestureClassifier.Tap.THREE_FINGER -> if (settings.threeFingerRedo) {
                 revertView()
-                val label = HistoryLabels.redo(controller)
-                controller.redo()
+                val label = HistoryLabels.performRedo(controller)
                 onTapAction?.invoke(label)
             }
             TouchGestureClassifier.Tap.NONE -> {}
@@ -727,6 +866,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private companion object {
         const val MAX_GESTURE_POINTERS = 10
+        /** Moves kept while a touch is held back (PENDING_TAP); more means it is no tap anyway. */
+        const val MAX_PENDING_MOVES = 64
         const val ANTS_FRAME_MS = 66L
         /** Above this zoom the tiles are drawn with nearest-neighbor sampling (crisp pixels). */
         const val SMOOTH_ZOOM_LIMIT = 2.5f

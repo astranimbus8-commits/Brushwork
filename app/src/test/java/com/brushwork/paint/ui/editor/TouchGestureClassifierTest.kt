@@ -171,4 +171,30 @@ class TouchGestureClassifierTest {
         c.down(0, 100f, 100f, 1000)
         assertTrue(c.longPressDue(1450))
     }
+
+    @Test
+    fun singlePointerStillIsOneFingerThatDidNotMove() {
+        val c = classifier()
+        c.down(0, 100f, 100f, 0)
+        c.move(0, 110f, 105f)
+        assertTrue(c.isSinglePointerStill())
+        // Still known after the finger lifted (one-finger taps are not reported by up()).
+        assertEquals(Tap.NONE, c.up(0, 80))
+        assertTrue(c.isSinglePointerStill())
+        // Moving the tap slop: no longer still.
+        c.down(0, 100f, 100f, 1000)
+        c.move(0, 124f, 100f)
+        assertFalse(c.isSinglePointerStill())
+        c.up(0, 1080)
+        // Two fingers never count, even without moving.
+        c.down(0, 100f, 100f, 2000)
+        c.down(1, 200f, 100f, 2010)
+        c.up(1, 2050)
+        assertFalse(c.isSinglePointerStill())
+        c.up(0, 2060)
+        // A cancelled gesture neither.
+        c.down(0, 100f, 100f, 3000)
+        c.cancel()
+        assertFalse(c.isSinglePointerStill())
+    }
 }

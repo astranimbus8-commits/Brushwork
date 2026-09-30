@@ -79,9 +79,18 @@ import kotlin.math.roundToInt
  * as a layer; the window calls [onDismiss] right before it, so the placement is visible once the
  * picture arrives. [modifier] positions the window; its size comes from the screen size
  * ([LayerListMath.windowSize]), shrunk to the space the host gives it.
+ *
+ * Delete removes the active layer at once, without asking (undo brings it back);
+ * [onLayerDeleted] then gets the removed layer, e.g. to offer Undo in a snackbar.
  */
 @Composable
-fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPicture: () -> Unit, modifier: Modifier = Modifier) {
+fun LayersPanel(
+    controller: EditorController,
+    onDismiss: () -> Unit,
+    onImportPicture: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLayerDeleted: (Layer) -> Unit = {},
+) {
     val doc = controller.doc
     // Layer objects are not observable: these counters change on every layer edit, undo or redo.
     val layersVersion = controller.layersVersion
@@ -107,7 +116,6 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
     val canAddLayer = controller.canAddLayer
     val maxLayers = controller.maxLayers
 
-    var deleteId by rememberSaveable { mutableStateOf<Long?>(null) }
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
     var opacityId by rememberSaveable { mutableStateOf<Long?>(null) }
 
@@ -161,7 +169,12 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
                     layerCount = layerCount,
                     canAddLayer = canAddLayer,
                     hasSelection = hasSelection,
-                    onDelete = { deleteId = active.id },
+                    // No confirmation: undo (or the snackbar's Undo) brings the layer back.
+                    onDelete = {
+                        val count = controller.doc.layers.size
+                        controller.deleteLayer(active)
+                        if (controller.doc.layers.size < count) onLayerDeleted(active)
+                    },
                     onRename = { renameId = active.id },
                     // Close first so the transform placement of the imported picture is visible.
                     onImportPicture = { onDismiss(); onImportPicture() },
@@ -190,20 +203,8 @@ fun LayersPanel(controller: EditorController, onDismiss: () -> Unit, onImportPic
 
     // Forget dialogs whose layer disappeared (e.g. undo of its creation behind the dialog).
     LaunchedEffect(layersVersion, editCount) {
-        deleteId?.let { if (doc.layerById(it) == null) deleteId = null }
         renameId?.let { if (doc.layerById(it) == null) renameId = null }
         opacityId?.let { if (doc.layerById(it) == null) opacityId = null }
-    }
-
-    deleteId?.let(doc::layerById)?.let { layer ->
-        BwDialog(
-            title = "Delete layer?",
-            onDismiss = { deleteId = null },
-            confirmText = "Delete",
-            onConfirm = { deleteId = null; controller.fromPanel { controller.deleteLayer(layer) } },
-        ) {
-            Text("\"${layer.name}\" will be deleted. You can undo this.")
-        }
     }
 
     renameId?.let(doc::layerById)?.let { layer ->

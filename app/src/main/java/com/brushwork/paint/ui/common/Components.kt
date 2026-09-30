@@ -100,6 +100,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -146,9 +147,13 @@ private val MinSheetBody = 120.dp
  *
  * [footer] stays pinned under the scrolling body (primary actions such as Apply). With the
  * keyboard up the sheet sits on top of it and keeps its body height, so the field being typed
- * into stays visible. [dismissible] = false keeps the sheet open on outside taps and swipes (the
- * back button still calls [onDismiss]); [showClose] = false hides the ✕ (when [actions] already
- * offer Cancel / OK).
+ * into stays visible. [showClose] = false hides the ✕ (when [actions] already offer Cancel / OK).
+ *
+ * Inside the editor ([LocalSheetHost] provided) the sheet is a NON-MODAL panel drawn by the
+ * editor's [SheetHost]: touches outside it minimize it to a pill and reach the canvas; only ✕,
+ * Back or the caller dropping this call close it (see SheetHost.kt). Elsewhere it is a modal
+ * bottom sheet, where [dismissible] = false keeps it open on outside taps and swipes (the back
+ * button still calls [onDismiss]).
  */
 @Composable
 fun BwSheet(
@@ -161,6 +166,29 @@ fun BwSheet(
     showClose: Boolean = true,
     actions: @Composable RowScope.() -> Unit = {},
     footer: (@Composable ColumnScope.() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val host = LocalSheetHost.current
+    // A sheet asked for from another window (a popup or dialog) stays modal: the host draws in
+    // the editor's own window only.
+    if (host != null && host.view === LocalView.current) {
+        HostedBwSheet(host, title, onDismiss, modifier, scrollable, maxHeightFraction, showClose, actions, footer, content)
+    } else {
+        ModalBwSheet(title, onDismiss, modifier, scrollable, maxHeightFraction, dismissible, showClose, actions, footer, content)
+    }
+}
+
+@Composable
+private fun ModalBwSheet(
+    title: String,
+    onDismiss: () -> Unit,
+    modifier: Modifier,
+    scrollable: Boolean,
+    maxHeightFraction: Float,
+    dismissible: Boolean,
+    showClose: Boolean,
+    actions: @Composable RowScope.() -> Unit,
+    footer: (@Composable ColumnScope.() -> Unit)?,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -235,7 +263,7 @@ private fun sheetBodyMaxHeight(screenHeight: Dp, fraction: Float): Dp {
 }
 
 @Composable
-private fun SheetHandle() {
+internal fun SheetHandle() {
     Box(
         Modifier
             .padding(top = 8.dp, bottom = 4.dp)
