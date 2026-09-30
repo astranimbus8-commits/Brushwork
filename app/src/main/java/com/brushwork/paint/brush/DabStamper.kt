@@ -46,6 +46,13 @@ class DabStamper(private val tips: TipCache) {
     var stampCount = 0L
         private set
 
+    /**
+     * Approximate work of the dabs drawn by [stamp] so far, in [BrushTool.pathDabCost] units:
+     * dividing the time some drawing took by the work it did measures this device's speed.
+     */
+    var work = 0.0
+        private set
+
     private fun tipFor(preset: BrushPreset, diameter: Float, variant: Int): Tip {
         val t = lastTip
         if (t != null && preset === lastPreset && diameter == lastDiameter && variant == lastVariant && !t.bitmap.isRecycled) return t
@@ -92,7 +99,9 @@ class DabStamper(private val tips: TipCache) {
         if (alpha <= 0) return
         stampCount++
         val a = alpha.coerceAtMost(255)
-        if (draft && preset.antiAlias) {
+        val draftDab = draft && preset.antiAlias
+        work += (if (draftDab) BrushTool.DRAFT_DAB_OVERHEAD else BrushTool.DAB_OVERHEAD) + dab.diameter * dab.diameter
+        if (draftDab) {
             if (a != draftAlpha) {
                 draftPaint.alpha = a
                 draftAlpha = a

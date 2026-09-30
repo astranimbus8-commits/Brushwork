@@ -58,6 +58,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      */
     val isDraft: Boolean get() = (stroke as? BufferStroke)?.isDraft == true
 
+    /**
+     * Approximate work of every dab drawn so far by the painting tools of this editor
+     * ([pathDabCost] units, growing): the time a path update took divided by the work it did
+     * tells how fast this device draws dabs, which sets the draft budgets of live previews.
+     */
+    val dabWork: Double get() = res.stamper.work
+
     override fun onDown(p: ToolPoint) {
         val s = start(p, System.nanoTime() xor (++strokeCounter * -0x61c8864680b583ebL)) ?: return
         s.begin(p)
@@ -95,7 +102,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      * [updatePath] changes the path later and [onUp] finishes the stroke (one undo step) or
      * [onCancel] drops it without a trace.
      *
-     * With a [draftBudget] (> 0, in [dabCost] units) a long path is drawn with fewer dabs
+     * With a [draftBudget] (> 0, in [pathDabCost] units) a long path is drawn with fewer dabs
      * while a finger drags it (see [updatePath]). Returns false when nothing was started
      * (fewer than two points, or the layer refused with a message).
      */
@@ -121,7 +128,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      *
      * With [draftBudget] > 0 (a finger is dragging) the re-rendered part is a draft whose dabs
      * are spaced further apart (at most half the brush width; the flow compensates)
-     * when drawing it exactly would cost more than [draftBudget] ([dabCost] units per dab); an
+     * when drawing it exactly would cost more than [draftBudget] ([pathDabCost] units per dab); an
      * update with no budget, or [onUp], redraws the draft parts exactly.
      *
      * Returns false when the stroke can't be updated (no path stroke in progress, or a
@@ -210,8 +217,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         protected var lastY = first.y
         val sampler = StrokeSampler(
             spacingAt = { pr, d -> dynamics.spacing(pr, d) * spacingScale * draftScale },
-            onSample = { x, y, pr, d -> onDab(dynamics.newDab(x, y, pr, d)) },
+            onSample = { x, y, pr, d -> onDab(dynamics.newDab(x, y, pr, d, recycledDab())) },
         )
+
+        /** A dab object no longer used by this stroke, to be reused for the next dab (or null). */
+        protected open fun recycledDab(): Dab? = null
 
         /** Pixel operations allowed per input event before dab spacing is stretched. */
         abstract val budget: Float
@@ -351,6 +361,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         /** The input points fed so far, exactly as given. */
         private var input = PathStrokeInput(0)
+        /** Reused copy of [input] (an exact update of the whole path takes a separate input). */
+        private val scratch = PathStrokeInput(0)
+
+        private fun inputCopy(): PathStrokeInput = scratch.also { it.set(input) }
         private val checkpoints = ArrayList<Checkpoint>()
         /**
          * First input point rendered as a draft (Int.MAX_VALUE: everything is exact). Drafts
@@ -361,6 +375,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         /** New dabs are drafts (while [feedPlanned] feeds a draft). */
         private var drafting = false
         val isDraft: Boolean get() = draftFrom != Int.MAX_VALUE
+        /**
+         * Dabs removed by a rewind, reused for the next dabs: a finger dragging a long path
+         * re-renders thousands of dabs per frame without allocating them again.
+         */
+        private val pool = ArrayList<Dab>()
+
+        override fun recycledDab(): Dab? = if (pool.isEmpty()) null else pool.removeAt(pool.lastIndex)
+
         /** Cells cleared by a rewind. */
         private var cleared: CellGrid? = null
         /** Cells to redraw on screen after an update. */
@@ -507,7 +529,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                     }
                 }
             }
-            dabs.subList(from, until).clear()
+            val removed = dabs.subList(from, until)
+            pool.addAll(removed)
+            removed.clear()
         }
 
         /**
@@ -541,7 +565,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             if (end < 0 || checkpoints[end].input >= n - 1) {
                 // The last part: an exact update from the start of the draft.
-                updatePath(PathStrokeInput(n).also { it.set(input) }, 0f)
+                updatePath(inputCopy(), 0f)
                 return false
             }
             val cpEnd = checkpoints[end]
@@ -551,7 +575,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val cpStart = checkpoints[startIdx]
             if (cpStart.input != e - 1) {
                 // (Never expected: the exact state at the start of the draft is always kept.)
-                updatePath(PathStrokeInput(n).also { it.set(input) }, 0f)
+                updatePath(inputCopy(), 0f)
                 return false
             }
             val dStart = draftDabFrom
@@ -610,7 +634,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         /** Ends a path stroke: a draft is redrawn exactly first. */
         override fun finish(p: ToolPoint?) {
-            if (isPath && isDraft) updatePath(PathStrokeInput(input.size).also { it.set(input) }, 0f)
+            if (isPath && isDraft) updatePath(inputCopy(), 0f)
             super.finish(p)
         }
 
@@ -871,7 +895,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         const val DAB_OVERHEAD = 5000f
 
         /** The same for a draft dab (no anti-aliased box edge: several times cheaper). */
-        private const val DRAFT_DAB_OVERHEAD = 1000f
+        internal const val DRAFT_DAB_OVERHEAD = 1000f
 
         /** Approximate cost of one dab of [diameter] px (the unit of draft budgets). */
         fun pathDabCost(diameter: Float): Float = DAB_OVERHEAD + diameter * diameter

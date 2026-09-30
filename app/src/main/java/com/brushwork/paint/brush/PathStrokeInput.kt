@@ -35,8 +35,14 @@ class PathStrokeInput(capacity: Int = 256) {
 
     /** Copies [other] into this input. */
     fun set(other: PathStrokeInput) {
-        clear()
-        for (i in 0 until other.size) add(other.x[i], other.y[i], other.pressure[i])
+        val n = other.size
+        if (x.size < n) {
+            x = FloatArray(n); y = FloatArray(n); pressure = FloatArray(n)
+        }
+        other.x.copyInto(x, 0, 0, n)
+        other.y.copyInto(y, 0, 0, n)
+        other.pressure.copyInto(pressure, 0, 0, n)
+        size = n
     }
 }
 

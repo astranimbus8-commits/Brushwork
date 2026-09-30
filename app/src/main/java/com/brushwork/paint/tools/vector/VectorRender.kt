@@ -15,8 +15,10 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -349,16 +351,53 @@ class VectorPreview(private val controller: EditorController, override val layer
 /**
  * Keeps one tool's [VectorPreview] installed as the controller's render override and redraws
  * only the regions that the old and the new items cover (not their whole bounding boxes).
+ *
+ * While a finger drags the items ([interacting]) they are drawn straight into the screen
+ * overlay instead ([drawOverlay]) whenever that looks exactly the same (see [drawsInOverlay]):
+ * the canvas tiles then stay as they are during the whole drag instead of being recomposited
+ * and re-uploaded on every frame. When the finger lifts, the items go back into the layer.
  */
 internal class PreviewHost(private val controller: EditorController) {
     private var preview: VectorPreview? = null
     private var shown: List<Rect> = emptyList()
 
+    /** Items drawn in the overlay while dragging (empty: none), on [overlayLayer]. */
+    private var overlaySpecs: List<VectorPaintSpec> = emptyList()
+    private var overlayLayer: Layer? = null
+    private val overlay = SpecOverlay()
+
+    /** True while the overlay shows the items (tests). */
+    val isInOverlay: Boolean get() = overlaySpecs.isNotEmpty()
+
+    /**
+     * True while a finger drags the items: they are then shown in the overlay when possible.
+     * Setting it back to false puts them back into the layer.
+     */
+    var interacting = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) {
+                val layer = overlayLayer
+                val specs = overlaySpecs
+                if (layer != null && specs.isNotEmpty()) show(layer, specs)
+            }
+        }
+
     /** Previews [specs] on [layer]; an empty list removes the preview. */
     fun show(layer: Layer, specs: List<VectorPaintSpec>) {
         if (specs.isEmpty()) { release(); return }
+        if (interacting && drawsInOverlay(layer)) {
+            // Out of the layer (its tiles redraw once without the items) and into the overlay.
+            removeOverride()
+            overlayLayer = layer
+            overlaySpecs = specs
+            controller.invalidateOverlay()
+            return
+        }
+        clearOverlay()
         val p = preview?.takeIf { it.layer === layer } ?: run {
-            release()
+            removeOverride()
             VectorPreview(controller, layer).also { preview = it }
         }
         p.specs = specs
@@ -372,6 +411,53 @@ internal class PreviewHost(private val controller: EditorController) {
 
     /** Removes the preview (if it is still installed) and redraws what it covered. */
     fun release() {
+        clearOverlay()
+        removeOverride()
+    }
+
+    /** Draws the items shown in the overlay (call first in the tool's drawOverlay). */
+    fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        val layer = overlayLayer ?: return
+        val specs = overlaySpecs
+        if (specs.isEmpty()) return
+        overlay.draw(canvas, t, controller, layer, specs)
+        // The layers changed under the drag (props, order): back into the layer from the next
+        // frame on.
+        if (!drawsInOverlay(layer)) {
+            clearOverlay()
+            show(layer, specs)
+        }
+    }
+
+    /**
+     * True when drawing items over the finished composite looks exactly like drawing them into
+     * [layer]: a normal, fully opaque, unmasked, unclipped layer that paints its content (not its
+     * mask), without alpha lock, with no visible layer above it, in a color document (1-bit art
+     * is thresholded at document resolution).
+     */
+    private fun drawsInOverlay(layer: Layer): Boolean {
+        val doc = controller.doc
+        val index = doc.indexOf(layer)
+        if (index < 0 || !layer.visible || layer.opacity < 1f) return false
+        if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping || layer.alphaLocked) return false
+        if (layer.mask != null && layer.maskEnabled) return false
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT || doc.colorMode == ColorMode.MONOCHROME) return false
+        val layers = doc.layers
+        for (i in index + 1 until layers.size) {
+            val above = layers[i]
+            if (above.visible && above.opacity > 0f) return false
+        }
+        return true
+    }
+
+    private fun clearOverlay() {
+        if (overlaySpecs.isEmpty() && overlayLayer == null) return
+        overlaySpecs = emptyList()
+        overlayLayer = null
+        controller.invalidateOverlay()
+    }
+
+    private fun removeOverride() {
         val p = preview
         if (p != null && controller.renderOverride === p) controller.renderOverride = null
         preview = null

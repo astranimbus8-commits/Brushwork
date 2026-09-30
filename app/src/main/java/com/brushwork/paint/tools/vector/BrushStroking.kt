@@ -66,16 +66,6 @@ internal fun brushStrokeInput(path: VectorPath, taperFraction: Float = 0f, out: 
 }
 
 /**
- * The points of [brushStrokeInput] as tool input: stylus points (so the pressure is honored)
- * with increasing time stamps starting at [t0].
- */
-internal fun brushStrokePoints(path: VectorPath, taperFraction: Float = 0f, t0: Long = SystemClock.uptimeMillis()): List<ToolPoint> =
-    brushStrokeInput(path, taperFraction).toToolPoints(t0)
-
-internal fun PathStrokeInput.toToolPoints(t0: Long): List<ToolPoint> =
-    List(size) { i -> ToolPoint(x[i], y[i], pressure[i], t0 + i, isStylus = true) }
-
-/**
  * Array versions of `VectorPath.flatten` (first sub-path) and `VectorPath.resample`, with the
  * same arithmetic so the samples are bit-identical. Main thread only (shared scratch arrays).
  */
@@ -187,11 +177,13 @@ private object FlatScratch {
  * frame, further apart when a replay is expensive) and skipped when nothing that affects the
  * stroke changed. With the brush / eraser a replay only re-renders the stroke from the first
  * point that changed ([BrushTool.updatePath]), and while a finger drags the path
- * ([interacting]) a long re-render is a lighter draft that is redrawn exactly once the finger
- * lifts and rests. Other painting tools (smudge / blur / watercolor, or any [Tool]) are replayed
- * from scratch: the previous preview is cancelled (`onCancel` leaves no trace), then the new
- * points are fed through onDown + onMove. [commit] finishes the stroke (onUp) as a real edit,
- * always exact; [cancel] / [end] drop it.
+ * ([interacting]) a long re-render is a lighter draft that is redrawn exactly, part by part,
+ * once the finger lifts and the path rests. The work of one replay is capped by a budget
+ * measured on this device ([budget]), so dragging stays smooth on a slow phone too. Other
+ * painting tools (smudge / blur / watercolor, or any [Tool]) are replayed from scratch: the
+ * previous preview is cancelled (`onCancel` leaves no trace), then the new points are fed
+ * through onDown + onMove. [commit] finishes the stroke (onUp) as a real edit, always exact;
+ * [cancel] / [end] drop it.
  *
  * Main thread only.
  */
@@ -241,6 +233,8 @@ internal class BrushStrokePreview(
     private var shownToast: String? = null
     private var lastRunAt = Long.MIN_VALUE / 2
     private var lastCostMs = 0L
+    /** Uptime at which the finger last stopped dragging the path (see [interacting]). */
+    private var restingSince = Long.MIN_VALUE / 2
     /** Random values of the brush for this editing session: a replay never changes its texture. */
     private var seed = newSeed()
     private val input = PathStrokeInput(1024)
@@ -257,21 +251,22 @@ internal class BrushStrokePreview(
     /**
      * True while a finger drags the path: the stroke then follows it as a draft (see
      * [BrushTool.updatePath]) and is not refined. Set back to false when the finger lifts: a
-     * draft on screen is refined once the path has rested for a moment.
+     * draft on screen is refined once the path has rested for [REFINE_DELAY_MS].
      */
     var interacting = false
         set(value) {
             if (field == value) return
             field = value
-            if (!value) {
-                val cur = live
-                val req = pending ?: cur?.request?.takeUnless { cur.exact }
-                if (req != null && cur != null && !cur.exact) {
-                    unschedule()
-                    schedule(req, REFINE_DELAY_MS)
-                }
-            }
+            if (value) return
+            restingSince = SystemClock.uptimeMillis()
+            val cur = live
+            // A waiting replay (the last position of the drag) runs as scheduled; a draft
+            // already on screen is refined once the path rests.
+            if (pending == null && cur != null && !cur.exact) schedule(cur.request, REFINE_DELAY_MS)
         }
+
+    /** How long a refinement still waits for the path to rest (ms). */
+    private fun refineDelay(): Long = (restingSince + REFINE_DELAY_MS - SystemClock.uptimeMillis()).coerceAtLeast(0L)
 
     private fun paintTool(): Pair<ToolId, Tool>? {
         val id = paintToolId()
@@ -300,13 +295,10 @@ internal class BrushStrokePreview(
         val req = Request(geometry, points)
         if (cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)) {
             // Already shown (e.g. a tap that only selected a point, or a cancelled touch)...
-            if (cur.exact || interacting) {
-                pending = null
-                unschedule()
-                return
-            }
-            // ...as a draft: its refinement goes on.
-            schedule(req, 0L)
+            pending = null
+            unschedule()
+            // ...as a draft: its refinement goes on once the path rests.
+            if (!cur.exact && !interacting) schedule(req, refineDelay())
             return
         }
         schedule(req, minDelayMs)
@@ -330,9 +322,28 @@ internal class BrushStrokePreview(
     }
 
     /**
-     * Runs a waiting replay now (tests; the looper does it otherwise). A replay never does more
-     * than about [DRAFT_BUDGET] of dab work: a longer re-render is a draft, and a draft on
-     * screen is refined part by part on the following frames once no finger drags the path.
+     * Work allowed for one replay ([BrushTool.pathDabCost] units): what this device draws in
+     * about [TARGET_REPLAY_NS] (see [measure]), within [MIN_BUDGET]..[MAX_BUDGET]. Beyond it a
+     * re-render is a draft, and a draft is refined by parts of this size.
+     */
+    private fun budget(): Float = (TARGET_REPLAY_NS / nsPerUnit).toFloat().coerceIn(MIN_BUDGET, MAX_BUDGET)
+
+    /**
+     * Learns this device's speed from a replay of [tool] that took [ns] and started when the
+     * tool's [BrushTool.dabWork] was [work0]. Replays that did little are not a fair sample
+     * (their fixed costs dominate).
+     */
+    private fun measure(tool: BrushTool, work0: Double, ns: Long) {
+        val work = tool.dabWork - work0
+        if (work < MIN_SAMPLE_WORK || ns <= 0L) return
+        val sample = (ns / work).coerceIn(MIN_NS_PER_UNIT, MAX_NS_PER_UNIT)
+        nsPerUnit += (sample - nsPerUnit) * SPEED_SMOOTHING
+    }
+
+    /**
+     * Runs a waiting replay now (tests; the looper does it otherwise). A replay never does much
+     * more than [budget] of dab work: a longer re-render is a draft, and a draft on screen is
+     * refined part by part on the following frames once no finger drags the path.
      */
     fun flush() {
         unschedule()
@@ -346,7 +357,10 @@ internal class BrushStrokePreview(
             if (tool is BrushTool && cur.tool === tool && tool.isStroking) {
                 // This very path as a draft: the next part of it becomes exact.
                 val t0 = SystemClock.uptimeMillis()
-                val more = tool.refinePath(DRAFT_BUDGET)
+                val n0 = System.nanoTime()
+                val w0 = tool.dabWork
+                val more = tool.refinePath(budget())
+                measure(tool, w0, System.nanoTime() - n0)
                 live = Live(tool, key, req, exact = !tool.isDraft, last = cur.last)
                 ran(t0)
                 if (more) schedule(req, 0L)
@@ -363,17 +377,21 @@ internal class BrushStrokePreview(
         req.points(input)
         if (input.size < 2) { cancelLive(); return }
         val t0 = SystemClock.uptimeMillis()
+        val n0 = System.nanoTime()
+        val w0 = (tool as? BrushTool)?.dabWork ?: 0.0
+        val budget = budget()
         val updated = cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking &&
-            cur.key.sameStroke(key) && tool.updatePath(input, DRAFT_BUDGET)
+            cur.key.sameStroke(key) && tool.updatePath(input, budget)
         if (!updated) {
             cancelLive()
-            if (!start(tool, key, DRAFT_BUDGET)) return
+            if (!start(tool, key, budget)) return
         }
+        if (tool is BrushTool) measure(tool, w0, System.nanoTime() - n0)
         val exact = !(tool is BrushTool && tool.isDraft)
         live = Live(tool, key, req, exact = exact, last = lastPoint(t0))
         ran(t0)
-        // Refined from the next frame on (after the drag, once the path has rested).
-        if (!exact && !interacting) schedule(req, 0L)
+        // Refined part by part once the path rests (not while a finger drags it).
+        if (!exact && !interacting) schedule(req, refineDelay())
     }
 
     private fun ran(t0: Long) {
@@ -479,23 +497,48 @@ internal class BrushStrokePreview(
         scheduled = false
     }
 
-    private companion object {
+    internal companion object {
         /** Minimum time between two replays (one frame); 1.5 times the last replay's cost if larger. */
-        const val MIN_INTERVAL_MS = 16L
-        const val MAX_INTERVAL_MS = 250L
+        private const val MIN_INTERVAL_MS = 16L
+        private const val MAX_INTERVAL_MS = 250L
 
         /** How long a draft waits after a drag before it is refined (ms): the finger may grab again. */
         const val REFINE_DELAY_MS = 200L
 
         /**
-         * Work allowed for one replay while dragging ([BrushTool.pathDabCost] units: about 500
-         * dabs of a small brush), beyond which the re-rendered part is a draft.
+         * Time one replay may take (ns): about a third of a 60 Hz frame, leaving the rest for the
+         * touch input and for redrawing the tiles the replay changed.
          */
-        const val DRAFT_BUDGET = 2_500_000f
+        private const val TARGET_REPLAY_NS = 6_000_000.0
+
+        /**
+         * Largest work of one replay ([BrushTool.pathDabCost] units: about 500 dabs of a small
+         * brush, or 2 to 3 ms on a desktop computer), also on devices faster than that.
+         */
+        const val MAX_BUDGET = 2_500_000f
+
+        /** Smallest work of one replay, however slow the device seems (drafts can't go sparser). */
+        const val MIN_BUDGET = 250_000f
+
+        /** Replays that did less work than this are not used to measure the speed. */
+        private const val MIN_SAMPLE_WORK = 150_000.0
+        private const val MIN_NS_PER_UNIT = 0.05
+        private const val MAX_NS_PER_UNIT = 50.0
+
+        /** Weight of a new speed sample (the rest is the running average). */
+        private const val SPEED_SMOOTHING = 0.3
+
+        /**
+         * Measured nanoseconds per unit of dab work on this device, shared by every preview (the
+         * device doesn't change from one tool to the next). Starts at a desktop computer's speed:
+         * a slow phone lowers it within a few replays.
+         */
+        @Volatile
+        var nsPerUnit = 1.0
 
         private var seeds = 0L
 
-        fun newSeed(): Long = System.nanoTime() xor (++seeds * -0x61c8864680b583ebL)
+        private fun newSeed(): Long = System.nanoTime() xor (++seeds * -0x61c8864680b583ebL)
     }
 }
 

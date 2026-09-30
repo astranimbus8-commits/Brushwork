@@ -10,27 +10,47 @@ import kotlin.random.Random
 
 /**
  * One brush dab. The input part (path position, pressure, distance and the random values drawn
- * for it) is fixed when the dab is created; [StrokeDynamics.resolve] computes the rendered
- * center, diameter and alpha, which can change once the stroke length is known (end taper).
+ * for it) is fixed when the dab is created (a path stroke reuses the dabs it removed: see
+ * [StrokeDynamics.newDab]); [StrokeDynamics.resolve] computes the rendered center, diameter and
+ * alpha, which can change once the stroke length is known (end taper).
  */
 class Dab(
-    /** Position on the smoothed path (document px). */
-    val x: Float,
-    val y: Float,
-    /** Effective pressure 0..1 (stylus pressure, or 1 for fingers). */
-    val pressure: Float,
-    /** Distance along the path from the stroke start. */
-    val distance: Float,
-    /** Random offset inside the unit disk, scaled by scatter * diameter. */
-    val scatterX: Float,
-    val scatterY: Float,
-    /** Tip rotation in degrees. */
-    val rotation: Float,
-    /** Texture variant of the tip. */
-    val variant: Int,
-    /** Uniform random 0..1 used for the grain opacity jitter. */
-    val jitter: Float,
+    x: Float,
+    y: Float,
+    pressure: Float,
+    distance: Float,
+    scatterX: Float,
+    scatterY: Float,
+    rotation: Float,
+    variant: Int,
+    jitter: Float,
 ) {
+    /** Position on the smoothed path (document px). */
+    var x = x
+        private set
+    var y = y
+        private set
+    /** Effective pressure 0..1 (stylus pressure, or 1 for fingers). */
+    var pressure = pressure
+        private set
+    /** Distance along the path from the stroke start. */
+    var distance = distance
+        private set
+    /** Random offset inside the unit disk, scaled by scatter * diameter. */
+    var scatterX = scatterX
+        private set
+    var scatterY = scatterY
+        private set
+    /** Tip rotation in degrees. */
+    var rotation = rotation
+        private set
+    /** Texture variant of the tip. */
+    var variant = variant
+        private set
+    /** Uniform random 0..1 used for the grain opacity jitter. */
+    var jitter = jitter
+        private set
+
     /** Rendered center. */
     var cx = x
     var cy = y
@@ -46,6 +66,17 @@ class Dab(
     var bottom = 0
 
     val hasBounds: Boolean get() = right > left && bottom > top
+
+    /** Makes this dab (no longer used anywhere) a new one, as if just constructed. */
+    internal fun reuse(x: Float, y: Float, pressure: Float, distance: Float, scatterX: Float, scatterY: Float, rotation: Float, variant: Int, jitter: Float): Dab {
+        this.x = x; this.y = y; this.pressure = pressure; this.distance = distance
+        this.scatterX = scatterX; this.scatterY = scatterY; this.rotation = rotation
+        this.variant = variant; this.jitter = jitter
+        cx = x; cy = y
+        diameter = 0f; alpha = 0f
+        left = 0; top = 0; right = 0; bottom = 0
+        return this
+    }
 }
 
 /**
@@ -118,8 +149,11 @@ class StrokeDynamics(
     fun spacing(pressure: Float, distance: Float): Float =
         max(MIN_SPACING_PX, preset.spacing * max(1f, liveDiameter(pressure, distance)))
 
-    /** Creates the dab for a path sample, drawing its random values. */
-    fun newDab(x: Float, y: Float, pressure: Float, distance: Float): Dab {
+    /**
+     * Creates the dab for a path sample, drawing its random values; with [recycled] (a dab no
+     * longer used anywhere) that object is reused instead of allocating one.
+     */
+    fun newDab(x: Float, y: Float, pressure: Float, distance: Float, recycled: Dab? = null): Dab {
         var sx = 0f
         var sy = 0f
         if (preset.scatter > 0f) {
@@ -130,7 +164,9 @@ class StrokeDynamics(
         val rotation = if (randomRotation) preset.angle + rng.nextFloat() * 360f else preset.angle
         val variant = if (variants > 1) rng.nextInt(variants) else 0
         val jitter = rng.nextFloat()
-        return Dab(x, y, pressure.coerceIn(0f, 1f), distance, sx, sy, rotation, variant, jitter)
+        val p = pressure.coerceIn(0f, 1f)
+        return recycled?.reuse(x, y, p, distance, sx, sy, rotation, variant, jitter)
+            ?: Dab(x, y, p, distance, sx, sy, rotation, variant, jitter)
     }
 
     /**
