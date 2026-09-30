@@ -312,6 +312,32 @@ class TransformSnapDeleteRobolectricTest {
     }
 
     @Test
+    fun anOtherLayersMaskTrimsWhatItSnapsTo() {
+        val (c, _) = twoObjects()
+        val below = c.doc.layers[0] // content (300, 100)-(400, 160)
+        // Its mask hides everything right of x = 350: what is seen of it is (300, 100)-(350, 160).
+        below.mask = BitmapUtils.createMaskBitmap(500, 400).also { fill(it, Rect(350, 0, 500, 400), BLACK) }
+        below.markChanged()
+        val t = activate(c)
+        // Raw box (312, 20)-(352, 40): its right edge 2 px from the visible right side.
+        c.pointerDown(ToolPoint(40f, 30f))
+        c.pointerMove(ToolPoint(332f, 30f))
+        assertEquals(350f, bounds(t).right, 0f)
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.any { it.axis == SnapAxis.X && it.label == "Layer 1 right" })
+        c.pointerUp(ToolPoint(332f, 30f))
+
+        // Mask turned off: the whole content counts again (350 is now its center line).
+        below.maskEnabled = false
+        c.pointerDown(ToolPoint(330f, 30f))
+        c.pointerMove(ToolPoint(300f, 30f))
+        c.pointerMove(ToolPoint(332f, 30f))
+        assertEquals(350f, bounds(t).right, 0f)
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.any { it.axis == SnapAxis.X && it.label == "Layer 1 center" })
+        assertFalse(t.activeGuides.any { it.label == "Layer 1 right" })
+        c.pointerUp(ToolPoint(332f, 30f))
+    }
+
+    @Test
     fun draggingSnapsToTheCanvasCenter() {
         val (c, _) = twoObjects()
         val t = activate(c)
