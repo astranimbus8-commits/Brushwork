@@ -239,8 +239,9 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
      * what the UNTOUCHED fused-argmax model answers for the same input
      * ([SceneSelfTest.argmaxAgreement] >= [SceneSelfTest.MIN_AGREEMENT]): that proves the right
      * tensor, dequantization and channel order, whatever classes the scene happens to get. If
-     * the reference cannot run, the sky half and the ground half must at least get different
-     * classes. Catches a rewired graph that runs but yields garbage.
+     * the reference cannot run (or its answer is too mottled to judge), the sky half and the
+     * ground half must at least get different classes. Catches a rewired graph that runs but
+     * yields garbage.
      */
     private fun selfTest(interp: Interpreter, v: Variant): Boolean {
         if (v == Variant.ARGMAX) return true
@@ -256,9 +257,8 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
             Log.w(TAG, "self-test failed ($v): logit range ${hi - lo}")
             return false
         }
-        val reference = referenceLabels(img)
-        if (reference != null) {
-            val agreement = SceneSelfTest.argmaxAgreement(scores, reference, SIZE)
+        val agreement = referenceLabels(img)?.let { SceneSelfTest.argmaxAgreement(scores, it, SIZE) }
+        if (agreement != null) {
             val ok = agreement >= SceneSelfTest.MIN_AGREEMENT
             if (ok) Log.i(TAG, "self-test ($v): logits argmax agrees with the argmax model on ${(agreement * 100).roundToInt()} % of cells")
             else Log.w(TAG, "self-test failed ($v): logits argmax agrees with the argmax model on only ${(agreement * 100).roundToInt()} % of cells")

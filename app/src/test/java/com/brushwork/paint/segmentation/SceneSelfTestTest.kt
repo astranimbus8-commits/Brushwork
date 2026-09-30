@@ -2,6 +2,7 @@ package com.brushwork.paint.segmentation
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,29 +29,51 @@ class SceneSelfTestTest {
 
     private val skyOverTrees = logits { _, cy -> if (cy < g / 2) SceneClasses.SKY else SceneClasses.TREE }
 
+    private fun agreement(l: SceneScores.Logits, ref: ByteArray): Float =
+        SceneSelfTest.argmaxAgreement(l, ref, size) ?: throw AssertionError("no verdict")
+
     @Test
     fun aCorrectlyRewiredModelAgreesEvenWhenTheFinalizerShiftsTheBoundary() {
-        assertEquals(1f, SceneSelfTest.argmaxAgreement(skyOverTrees, labels(256), size), 0f)
+        assertEquals(1f, agreement(skyOverTrees, labels(256)), 0f)
         // The finalizer's resize may move a boundary by up to a cell (8 input px) either way.
         for (b in listOf(248, 252, 260, 264)) {
-            assertTrue("boundary $b", SceneSelfTest.argmaxAgreement(skyOverTrees, labels(b), size) >= 0.98f)
+            assertTrue("boundary $b", agreement(skyOverTrees, labels(b)) >= 0.98f)
         }
+    }
+
+    @Test
+    fun mottledReferenceCellsAreNotHeldAgainstTheModel() {
+        // Near-tied ground classes: the logits alternate tree / grass per cell, and the resize in
+        // the finalizer blurs that into a reference that alternates every 4 px (every cell is
+        // mixed at its quarter points). Those cells prove nothing and must not count.
+        val mottled = logits { cx, cy -> if (cy < g / 2) SceneClasses.SKY else if (cx % 2 == 0) SceneClasses.TREE else SceneClasses.GRASS }
+        val ref = ByteArray(size * size) { i ->
+            val x = i % size; val y = i / size
+            (if (y < 256) SceneClasses.SKY else if ((x / 4) % 2 == 0) SceneClasses.GRASS else SceneClasses.TREE).toByte()
+        }
+        assertEquals(1f, agreement(mottled, ref), 0f)
+        // The same reference still exposes a wrong channel order on the uniform (sky) cells.
+        val shifted = logits { cx, cy -> (if (cy < g / 2) SceneClasses.SKY else if (cx % 2 == 0) SceneClasses.TREE else SceneClasses.GRASS) + 1 }
+        assertEquals(0f, agreement(shifted, ref), 0f)
+        // A reference mottled almost everywhere gives no verdict (the caller falls back).
+        val speckled = ByteArray(size * size) { i -> (if ((i % size / 4 + i / size / 4) % 2 == 0) SceneClasses.TREE else SceneClasses.GRASS).toByte() }
+        assertNull(SceneSelfTest.argmaxAgreement(mottled, speckled, size))
     }
 
     @Test
     fun misroutedOrPermutedOutputsFail() {
         // Channels shifted by one (wrong channel order): no cell agrees.
         val shifted = logits { _, cy -> (if (cy < g / 2) SceneClasses.SKY else SceneClasses.TREE) + 1 }
-        assertEquals(0f, SceneSelfTest.argmaxAgreement(shifted, labels(256), size), 0f)
+        assertEquals(0f, agreement(shifted, labels(256)), 0f)
         // Rows flipped (e.g. a transposed or reversed tensor): only a sliver agrees.
         val flipped = logits { _, cy -> if (cy >= g / 2) SceneClasses.SKY else SceneClasses.TREE }
-        assertTrue(SceneSelfTest.argmaxAgreement(flipped, labels(256), size) < SceneSelfTest.MIN_AGREEMENT)
+        assertTrue(agreement(flipped, labels(256)) < SceneSelfTest.MIN_AGREEMENT)
         // A constant answer only matches the half it happens to name.
         val constant = logits { _, _ -> SceneClasses.SKY }
-        assertEquals(0.5f, SceneSelfTest.argmaxAgreement(constant, labels(256), size), 0.01f)
+        assertEquals(0.5f, agreement(constant, labels(256)), 0.01f)
         // Malformed inputs never pass.
-        assertEquals(0f, SceneSelfTest.argmaxAgreement(SceneScores.Logits(g, g, FloatArray(10)), labels(256), size), 0f)
-        assertEquals(0f, SceneSelfTest.argmaxAgreement(skyOverTrees, ByteArray(7), size), 0f)
+        assertEquals(0f, agreement(SceneScores.Logits(g, g, FloatArray(10)), labels(256)), 0f)
+        assertEquals(0f, agreement(skyOverTrees, ByteArray(7)), 0f)
     }
 
     @Test

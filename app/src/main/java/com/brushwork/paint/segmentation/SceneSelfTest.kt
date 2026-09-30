@@ -30,31 +30,43 @@ internal object SceneSelfTest {
         return img
     }
 
+    /** Below this share of uniform reference cells, [argmaxAgreement] has no verdict. */
+    const val MIN_UNIFORM_CELLS = 0.25f
+
     /**
-     * Fraction (0..1) of the cells of [logits] whose most likely class also appears in the
-     * reference [labels] ([size]² class ids for the same input) at one of the cell's four inner
-     * quarter points. The fused-argmax finalizer resizes these same logits before its argmax, so
-     * a correctly rewired output agrees everywhere except on some class-boundary cells (the
-     * resize may shift a boundary by up to a cell); a misrouted tensor, a wrong channel order or
-     * a wrong dequantization does not.
+     * Fraction (0..1) of the grid cells of [logits] whose most likely class is the class the
+     * reference [labels] ([size]² class ids for the same input) give the whole cell. Only cells
+     * whose reference label is the same at all four inner quarter points count: the fused-argmax
+     * finalizer resizes these same logits bilinearly before its argmax, so where neighbouring
+     * cells are near-ties (mottled grass / tree / plant) or on a class boundary its label may
+     * come from a neighbour, and such cells prove nothing. On the rest a correctly rewired
+     * output agrees (a boundary shifted by the resize costs at most one row of cells); a
+     * misrouted tensor, a wrong channel order or a wrong dequantization does not.
+     *
+     * 0 for malformed input; null when fewer than [MIN_UNIFORM_CELLS] of the cells are uniform
+     * (no verdict: use [halvesDiffer]).
      */
-    fun argmaxAgreement(logits: SceneScores.Logits, labels: ByteArray, size: Int): Float {
+    fun argmaxAgreement(logits: SceneScores.Logits, labels: ByteArray, size: Int): Float? {
         val gw = logits.gridWidth; val gh = logits.gridHeight
         if (gw <= 0 || gh <= 0 || logits.values.size != gw * gh * C || labels.size != size * size) return 0f
         val arg = SceneTargets.argmax(logits.values, gw * gh)
         val sx = size.toFloat() / gw; val sy = size.toFloat() / gh
-        var agree = 0
+        var uniform = 0; var agree = 0
         for (cy in 0 until gh) for (cx in 0 until gw) {
-            val k = arg[cy * gw + cx]
-            var hit = false
+            var ref = -1
+            var mixed = false
             for (qy in 0..1) for (qx in 0..1) {
                 val x = min(size - 1, ((cx + 0.25f + 0.5f * qx) * sx).toInt())
                 val y = min(size - 1, ((cy + 0.25f + 0.5f * qy) * sy).toInt())
-                if ((labels[y * size + x].toInt() and 0xFF) == k) hit = true
+                val l = labels[y * size + x].toInt() and 0xFF
+                if (ref < 0) ref = l else if (l != ref) mixed = true
             }
-            if (hit) agree++
+            if (mixed) continue
+            uniform++
+            if (arg[cy * gw + cx] == ref) agree++
         }
-        return agree.toFloat() / (gw * gh)
+        if (uniform < MIN_UNIFORM_CELLS * gw * gh) return null
+        return agree.toFloat() / uniform
     }
 
     /**
