@@ -295,13 +295,14 @@ class VectorFastPathTest {
 
     @Test
     fun plainPreviewStaysInTheLayerWhereTheOverlayWouldLookDifferent() {
-        // Under a visible layer, at half opacity, with a blend mode or alpha lock: the compositor
-        // keeps drawing the dragged shape.
+        // Under a visible layer, at half opacity, with a blend mode or alpha lock, or zoomed in so
+        // far that the canvas shows crisp pixels: the compositor keeps drawing the dragged shape.
         val cases: List<(EditorController) -> Unit> = listOf(
             { c -> c.doc.activeLayerIndex = 0 },
             { c -> c.doc.activeLayer.opacity = 0.5f },
             { c -> c.doc.activeLayer.blendMode = com.brushwork.paint.model.LayerBlendMode.MULTIPLY },
             { c -> c.doc.activeLayer.alphaLocked = true },
+            { c -> c.viewTransform.set(android.graphics.Matrix().apply { setScale(4f, 4f) }) },
         )
         for ((k, setUp) in cases.withIndex()) {
             val c = controller(200, 200, layers = 2)

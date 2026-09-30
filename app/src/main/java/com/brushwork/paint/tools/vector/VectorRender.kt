@@ -430,9 +430,12 @@ internal class PreviewHost(private val controller: EditorController) {
      * True when drawing items over the finished composite looks exactly like drawing them into
      * [layer]: a normal, fully opaque, unmasked, unclipped layer that paints its content (not its
      * mask), without alpha lock, with no visible layer above it, in a color document (1-bit art
-     * is thresholded at document resolution).
+     * is thresholded at document resolution), at a zoom where the canvas pixels are drawn
+     * smoothed (zoomed further in, they are drawn as crisp squares, and the items drawn as
+     * smooth vectors would visibly change when the finger lifts).
      */
     private fun drawsInOverlay(layer: Layer): Boolean {
+        if (controller.viewTransform.zoom >= PIXELATED_ZOOM) return false
         val doc = controller.doc
         val index = doc.indexOf(layer)
         if (index < 0 || !layer.visible || layer.opacity < 1f) return false
@@ -467,5 +470,13 @@ internal class PreviewHost(private val controller: EditorController) {
         val tiles = controller.tiles
         for (r in rects) tiles.invalidate(r)
         controller.invalidateOverlay()
+    }
+
+    private companion object {
+        /**
+         * Zoom (screen px per document px) from which the canvas view draws the document's
+         * pixels as crisp squares (CanvasView.SMOOTH_ZOOM_LIMIT).
+         */
+        const val PIXELATED_ZOOM = 2.5f
     }
 }
