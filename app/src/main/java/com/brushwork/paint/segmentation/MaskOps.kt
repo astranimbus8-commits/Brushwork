@@ -96,7 +96,7 @@ object MaskOps {
     }
 
     /**
-     * Mean over the (2r+1)Â² window around each pixel, normalized by the number of pixels that are
+     * Mean over the (2r+1)² window around each pixel, normalized by the number of pixels that are
      * inside the image (no edge replication). O(n) regardless of [r]; double accumulators.
      * [dst] may be the same array as [src]; [tmp] must be distinct from both.
      */

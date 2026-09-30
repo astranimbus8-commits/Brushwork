@@ -19,7 +19,8 @@ import kotlin.math.roundToInt
  * The bundled file is the "fused argmax" export (class ids only). At load time a copy is
  * rewired in memory to output the per-class LOGITS instead ([TfliteLogitsPatch]: graph output =
  * the [1, 64, 64, 32] tensor before the finalizer, finalizer operators dropped), checked with a
- * self-test inference, and used for soft probabilities. Any failure falls back, in order, to the
+ * self-test inference against the untouched model ([selfTest]), and used for soft
+ * probabilities. The asset itself is never modified. Any failure falls back, in order, to the
  * rewired model without dropping operators, then to the original argmax model (class ids,
  * turned into soft block fractions by the pipeline), then to the heuristics.
  */
@@ -85,6 +86,18 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
         val input = inputBuffer!!
         val output = outputBuffer!!
         val bytes = inputBytes ?: ByteArray(SIZE * SIZE * 3).also { inputBytes = it }
+        encode(img, lut, bytes)
+        input.clear()
+        input.put(bytes)
+        input.rewind()
+        output.clear()
+        interp.run(input, output)
+        output.rewind()
+        return if (v == Variant.ARGMAX) SceneScores.Labels(SIZE, readClassIds(output, outType)) else SceneScores.Logits(gridW, gridH, readLogits(output))
+    }
+
+    /** The NHWC model input of [img] (SIZE², flattened over white), quantized through [lut]. */
+    private fun encode(img: PixelBuffer, lut: ByteArray, bytes: ByteArray) {
         val px = img.pixels
         for (i in 0 until SIZE * SIZE) {
             val c = MaskOps.flattenOverWhite(px[i])
@@ -92,13 +105,6 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
             bytes[i * 3 + 1] = lut[(c shr 8) and 0xFF]
             bytes[i * 3 + 2] = lut[c and 0xFF]
         }
-        input.clear()
-        input.put(bytes)
-        input.rewind()
-        output.clear()
-        interp.run(input, output)
-        output.rewind()
-        return if (v == Variant.ARGMAX) SceneScores.Labels(SIZE, readClassIds(output)) else SceneScores.Logits(gridW, gridH, readLogits(output))
     }
 
     private fun readLogits(output: ByteBuffer): FloatArray {
@@ -112,11 +118,11 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
         return out
     }
 
-    private fun readClassIds(output: ByteBuffer): ByteArray {
+    private fun readClassIds(output: ByteBuffer, type: DataType): ByteArray {
         val n = SIZE * SIZE
         val ids = ByteArray(n)
         val max = SceneClasses.COUNT - 1
-        if (outType == DataType.FLOAT32) {
+        if (type == DataType.FLOAT32) {
             val fb = output.asFloatBuffer()
             for (i in 0 until n) {
                 val v = fb.get(i)
@@ -228,22 +234,17 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
     }
 
     /**
-     * One inference on a synthetic scene (sky gradient over textured green ground) whose output
-     * must be finite, spread (logit range > 1) and not the same class everywhere. Catches a
-     * rewired graph that runs but yields garbage.
+     * One inference of the rewired model on a synthetic scene ([SceneSelfTest.image]). Its
+     * logits must be finite and spread (range > 1), and their per-cell argmax must agree with
+     * what the UNTOUCHED fused-argmax model answers for the same input
+     * ([SceneSelfTest.argmaxAgreement] >= [SceneSelfTest.MIN_AGREEMENT]): that proves the right
+     * tensor, dequantization and channel order, whatever classes the scene happens to get. If
+     * the reference cannot run, the sky half and the ground half must at least get different
+     * classes. Catches a rewired graph that runs but yields garbage.
      */
     private fun selfTest(interp: Interpreter, v: Variant): Boolean {
         if (v == Variant.ARGMAX) return true
-        val img = PixelBuffer(SIZE, SIZE)
-        for (y in 0 until SIZE) for (x in 0 until SIZE) {
-            img[x, y] = if (y < SIZE / 2) {
-                val t = y.toFloat() / (SIZE / 2)
-                rgb((70 + 80 * t).toInt(), (130 + 60 * t).toInt(), (220 + 25 * t).toInt())
-            } else {
-                val n = ((x * 7919 + y * 104729) % 41) - 20
-                rgb(60 + n, 120 + n, 45 + n / 2)
-            }
-        }
+        val img = SceneSelfTest.image(SIZE)
         val scores = infer(interp, v, img) as SceneScores.Logits
         var lo = Float.POSITIVE_INFINITY; var hi = Float.NEGATIVE_INFINITY
         for (x in scores.values) {
@@ -251,24 +252,58 @@ internal class LiteRtSceneParser private constructor(private val appContext: Con
             if (x < lo) lo = x
             if (x > hi) hi = x
         }
-        // The argmax of the logits is the argmax of the probabilities. The sky half and the
-        // ground half must be told apart: a misrouted or constant tensor cannot do that.
-        val arg = SceneTargets.argmax(scores.values, gridW * gridH)
-        fun dominant(y0: Int, y1: Int): Int {
-            val counts = IntArray(SceneClasses.COUNT)
-            for (y in y0 until y1) for (x in 0 until gridW) counts[arg[y * gridW + x]]++
-            return counts.indices.maxByOrNull { counts[it] } ?: 0
+        if (hi - lo <= 1f) {
+            Log.w(TAG, "self-test failed ($v): logit range ${hi - lo}")
+            return false
         }
-        val top = dominant(gridH / 8, gridH * 3 / 8)
-        val bottom = dominant(gridH * 5 / 8, gridH * 7 / 8)
-        val ok = hi - lo > 1f && top != bottom
-        if (!ok) Log.w(TAG, "self-test failed ($v): logit range ${hi - lo}, classes ${SceneClasses.LABELS[top]} / ${SceneClasses.LABELS[bottom]}")
-        else Log.i(TAG, "self-test ($v): ${SceneClasses.LABELS[top]} over ${SceneClasses.LABELS[bottom]}")
+        val reference = referenceLabels(img)
+        if (reference != null) {
+            val agreement = SceneSelfTest.argmaxAgreement(scores, reference, SIZE)
+            val ok = agreement >= SceneSelfTest.MIN_AGREEMENT
+            if (ok) Log.i(TAG, "self-test ($v): logits argmax agrees with the argmax model on ${(agreement * 100).roundToInt()} % of cells")
+            else Log.w(TAG, "self-test failed ($v): logits argmax agrees with the argmax model on only ${(agreement * 100).roundToInt()} % of cells")
+            return ok
+        }
+        val ok = SceneSelfTest.halvesDiffer(scores)
+        if (!ok) Log.w(TAG, "self-test failed ($v): the sky and ground halves got the same class")
         return ok
     }
 
-    private fun rgb(r: Int, g: Int, b: Int): Int =
-        (0xFF shl 24) or (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+    /** Class ids of the untouched fused-argmax model for [img] (the self-test reference), or null. */
+    private fun referenceLabels(img: PixelBuffer): ByteArray? {
+        var ref: Interpreter? = null
+        return try {
+            ref = Interpreter(mapModel(), Interpreter.Options().setNumThreads(NUM_THREADS))
+            if (ref.inputTensorCount != 1 || ref.outputTensorCount < 1) return null
+            val inT = ref.getInputTensor(0)
+            val outT = ref.getOutputTensor(0)
+            val inType = inT.dataType()
+            val oType = outT.dataType()
+            val outShape = outT.shape()
+            val inOk = inT.shape().contentEquals(intArrayOf(1, SIZE, SIZE, 3)) && (inType == DataType.INT8 || inType == DataType.UINT8)
+            val outOk = (outShape.contentEquals(intArrayOf(1, SIZE, SIZE)) || outShape.contentEquals(intArrayOf(1, SIZE, SIZE, 1))) &&
+                (oType == DataType.FLOAT32 || oType == DataType.INT32)
+            if (!inOk || !outOk) return null
+            val q = inT.quantizationParams()
+            val bytes = ByteArray(SIZE * SIZE * 3)
+            encode(img, Letterbox.quantLut(q.scale, q.zeroPoint, signed = inType == DataType.INT8), bytes)
+            val input = ByteBuffer.allocateDirect(bytes.size).order(ByteOrder.nativeOrder())
+            input.put(bytes)
+            input.rewind()
+            val output = ByteBuffer.allocateDirect(outT.numBytes()).order(ByteOrder.nativeOrder())
+            ref.run(input, output)
+            output.rewind()
+            readClassIds(output, oType)
+        } catch (e: OutOfMemoryError) {
+            Log.w(TAG, "not enough memory for the self-test reference", e)
+            null
+        } catch (t: Exception) {
+            Log.w(TAG, "self-test reference failed", t)
+            null
+        } finally {
+            closeQuietly(ref)
+        }
+    }
 
     private fun releaseLocked() {
         try {

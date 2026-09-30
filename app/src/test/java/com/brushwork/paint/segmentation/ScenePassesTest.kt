@@ -136,6 +136,23 @@ class ScenePassesTest {
     }
 
     @Test
+    fun passPlanNeverRefinesOnlyPartOfThePicture() {
+        val crops = ScenePasses.crops(1280, 720)
+        assertEquals(2, crops.size)
+        val flip = ScenePasses.global(1280, 720, flip = true)
+        assertEquals(listOf(flip) + crops, ScenePasses.plan(crops, flip, 3))
+        assertEquals(listOf(flip) + crops, ScenePasses.plan(crops, flip, 10))
+        assertEquals(crops, ScenePasses.plan(crops, flip, 2))
+        // One more pass fits: the mirrored picture, not a lone left crop.
+        assertEquals(listOf(flip), ScenePasses.plan(crops, flip, 1))
+        assertTrue(ScenePasses.plan(crops, flip, 0).isEmpty())
+        assertTrue(ScenePasses.plan(crops, flip, -3).isEmpty())
+        // Square pictures have no crops: the mirrored pass whenever one fits.
+        assertEquals(listOf(flip), ScenePasses.plan(emptyList(), flip, 1))
+        assertTrue(ScenePasses.plan(emptyList(), flip, 0).isEmpty())
+    }
+
+    @Test
     fun renderedInputsPutPixelsWhereTheGeometrySays() {
         val w = 640; val h = 360
         val work = PixelBuffer(w, h)

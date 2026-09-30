@@ -29,31 +29,34 @@ import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
- * Object select: selection mode, what to analyse (canvas / layer), edge refinement, and while it
- * works a spinner with a cancel button; otherwise a short hint. Ends with deselect and the
- * selection menu, like the other selection tools.
+ * Object select: selection mode, what to analyse (canvas / layer), edge refinement, then
+ * deselect and the selection menu, like the other selection tools. While a selection is being
+ * computed the strip STARTS with a spinner and a cancel button, so they are visible on a narrow
+ * phone without scrolling the strip; otherwise it ends with a short hint.
  */
 @Composable
 fun ObjectSelectOptions(tool: ObjectSelectTool) {
     val s = tool.settings
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (tool.busy) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = BrushworkColors.Accent)
+            Text("Selecting…", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChrome)
+            ToolIconButton(Icons.Filled.Close, "Cancel object select", onClick = { tool.cancel() }, size = 40.dp)
+            Divider()
+        }
         SelectionModeButtons(tool.mode) { tool.mode = it }
         Divider()
         ChoiceChip("Refer", SampleSource.entries, s.source, { it.label }) { tool.settings = tool.settings.copy(source = it) }
         ToggleChip("Refine edges", s.refineEdges) { tool.settings = tool.settings.copy(refineEdges = it) }
         Divider()
-        if (tool.busy) {
-            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = BrushworkColors.Accent)
-            Text("Selecting…", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChrome)
-            ToolIconButton(Icons.Filled.Close, "Cancel object select", onClick = { tool.cancel() }, size = 40.dp)
-        } else {
-            Text("Tap or scribble on an object", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
-        }
-        Divider()
         var menu by remember { mutableStateOf(false) }
         ToolIconButton(Icons.Outlined.Deselect, "Deselect", onClick = { tool.controller.deselect() }, enabled = tool.controller.selection != null, size = 40.dp)
         ToolIconButton(Icons.Outlined.HighlightAlt, "Selection menu", onClick = { menu = true }, size = 40.dp)
         if (menu) SelectionPanel(tool.controller) { menu = false }
+        if (!tool.busy) {
+            Divider()
+            Text("Tap or scribble on an object", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
+        }
     }
 }
 

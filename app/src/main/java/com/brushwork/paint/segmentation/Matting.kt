@@ -65,6 +65,7 @@ internal object Matting {
         val conf = FloatArray(n)
         localColorModels(img, tri, params.band, ratio, conf)
         Parallel.forRange(n, 4096) { s, e ->
+            val cmp = FloatArray(2)
             for (i in s until e) {
                 when (tri[i]) {
                     FOREGROUND -> alpha[i] = 1f
@@ -72,8 +73,9 @@ internal object Matting {
                     else -> {
                         var r = ratio[i]; var c = conf[i]
                         if (global != null && params.globalColorModel) {
-                            val gr = global.ratio(img, i)
-                            val gc = 0.7f * global.confidence(img, i)
+                            global.compare(img, i, cmp)
+                            val gr = cmp[0]
+                            val gc = 0.7f * cmp[1]
                             if (r < 0f) { r = gr; c = gc } else {
                                 val sum = c + gc
                                 if (sum > 1e-6f) r = (c * r + gc * gr) / sum
@@ -130,7 +132,7 @@ internal object Matting {
         return out
     }
 
-    /** Local color standard deviation (RGB, 0..~0.9) in a (2r+1)Ã‚Â² window. */
+    /** Local color standard deviation (RGB, 0..~0.9) in a (2r+1)² window. */
     fun colorTexture(img: ColorPlanes, r: Int): FloatArray {
         val w = img.w; val h = img.h; val n = w * h
         val tmp = FloatArray(n)
@@ -196,20 +198,23 @@ internal object Matting {
 
     /** Image-wide color models of the confident foreground (p > 0.9) and background (p < 0.1). */
     class GlobalModel private constructor(private val fg: ColorModel, private val bg: ColorModel) {
-        private val tmp = ThreadLocal.withInitial { FloatArray(2) }
-
-        /** 0..1, 1 = the color of pixel [i] is a foreground color. */
-        fun ratio(img: ColorPlanes, i: Int): Float {
-            val out = tmp.get()
-            ColorModel.compare(fg, bg, img.r[i], img.g[i], img.b[i], out)
-            return out[0]
+        private val tmp = object : ThreadLocal<FloatArray>() {
+            override fun initialValue(): FloatArray = FloatArray(2)
         }
 
-        /** 0..1, how decisive [ratio] is. */
-        fun confidence(img: ColorPlanes, i: Int): Float {
-            val out = tmp.get()
+        /**
+         * Writes into [out] how much the color of pixel [i] is a foreground color (0..1, 1 =
+         * foreground) and how decisive that is (0..1).
+         */
+        fun compare(img: ColorPlanes, i: Int, out: FloatArray) {
             ColorModel.compare(fg, bg, img.r[i], img.g[i], img.b[i], out)
-            return out[1]
+        }
+
+        /** 0..1, 1 = the color of pixel [i] is a foreground color (thread-safe). */
+        fun ratio(img: ColorPlanes, i: Int): Float {
+            val out = tmp.get()!!
+            compare(img, i, out)
+            return out[0]
         }
 
         companion object {

@@ -29,7 +29,8 @@ enum class SmartTarget(val label: String) {
  *
  * - SUBJECT uses ML Kit Subject Segmentation (Play services module: scheduled for a background
  *   download by [get], installed immediately on the first SUBJECT request if still missing);
- *   BACKGROUND is its complement. Without ML Kit: scene-model people âˆª a saliency heuristic.
+ *   BACKGROUND is its complement. Without ML Kit: scene-model people ∪ the object model tapped
+ *   on the most salient object (or a saliency heuristic).
  * - SKY / NATURE / BUILDINGS / PEOPLE / WATER use the bundled Autoseg-EdgeTPU scene parser
  *   (LiteRT). Without it: color/texture heuristics ([SceneHeuristics]).
  * - Scene targets fuse several model passes (letterbox, overlapping crops, mirrored) into soft

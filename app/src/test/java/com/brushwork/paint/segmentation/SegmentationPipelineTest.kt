@@ -175,6 +175,37 @@ class SegmentationPipelineTest {
     }
 
     @Test
+    fun slowModelsRunFewerButBalancedPasses() {
+        // Each pass takes ~300 ms. With room for ONE more pass after the letterbox, a 16:9
+        // picture must get the mirrored letterbox (padding rows, mirrored content), not the
+        // left of its two crops; with room for two, both crops.
+        val w = 1280; val h = 720
+        val img = SegTestImages.skyOverFoliage(w, h)
+        val inputs = mutableListOf<PixelBuffer>()
+        val slow = SceneParser { input ->
+            inputs += input.copy()
+            Thread.sleep(300)
+            SceneScores.Labels(input.width, ByteArray(input.size) { i ->
+                val c = input.pixels[i]
+                (if (c == ScenePasses.PAD) SceneClasses.OTHER else if ((c and 0xFF) > 150) SceneClasses.SKY else SceneClasses.TREE).toByte()
+            })
+        }
+        val sky = SegmentationPipeline(slow, null, passBudgetMs = 750).segment(img, SmartTarget.SKY)!!
+        assertEquals(2, inputs.size)
+        val second = inputs[1]
+        assertEquals(ScenePasses.PAD, second[256, 10]) // letterbox padding above the picture
+        assertEquals(ScenePasses.PAD, second[256, 501])
+        assertTrue(mean(sky, w, 0, 0, w, h / 2 - 10) > 0.97f)
+        assertTrue(mean(sky, w, 0, h / 2 + 10, w, h) < 0.03f)
+
+        inputs.clear()
+        SegmentationPipeline(slow, null, passBudgetMs = 1050).segment(img, SmartTarget.SKY)
+        assertEquals(3, inputs.size)
+        // Crops fill the whole input: no padding anywhere.
+        for (k in 1..2) assertTrue(inputs[k].pixels.none { it == ScenePasses.PAD })
+    }
+
+    @Test
     fun buildingsIncludeFacadeWindows() {
         val w = 512; val h = 384
         val img = SegTestImages.facade(w, h)

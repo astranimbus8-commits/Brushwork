@@ -115,6 +115,19 @@ internal object ScenePasses {
         }
     }
 
+    /**
+     * The passes to run after the global one when [affordable] more fit in the time budget:
+     * the mirrored pass and every crop; or only the crops (every part of the picture refined
+     * alike); or only the mirrored pass. Never a subset of the crops, which would sharpen one
+     * side of the picture and not the other. The mirrored pass comes first.
+     */
+    fun plan(crops: List<PassGeometry>, flip: PassGeometry, affordable: Int): List<PassGeometry> = when {
+        affordable >= crops.size + 1 -> listOf(flip) + crops
+        crops.isNotEmpty() && affordable >= crops.size -> crops
+        affordable >= 1 -> listOf(flip)
+        else -> emptyList()
+    }
+
     /** Mid gray: the Autoseg input value 0 (the padding the model was exported with). */
     const val PAD = 0xFF808080.toInt()
 

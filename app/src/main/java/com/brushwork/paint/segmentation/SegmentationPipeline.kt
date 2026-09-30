@@ -256,23 +256,23 @@ class SegmentationPipeline(
             var strideWork = first.stride / global.sx
             var passes = 1
             val perPass = max(1L, (System.nanoTime() - t0) / 1_000_000)
-            var budget = passBudgetMs - perPass
-            val crops = ScenePasses.crops(w, h)
+            // The pass set is chosen up front from the measured cost of the first pass, so it
+            // is always balanced (never one lone crop that sharpens half of the picture).
+            val affordable = ((passBudgetMs - perPass) / perPass).toInt()
+            val extra = ScenePasses.plan(ScenePasses.crops(w, h), ScenePasses.global(w, h, flip = true), affordable)
             var filled: PixelBuffer? = null
-            val extra = crops + ScenePasses.global(w, h, flip = true)
             for (geo in extra) {
-                if (budget < perPass) break
+                // Safety net for passes that turn out much slower than the first (thermal throttling).
+                val spent = (System.nanoTime() - t0) / 1_000_000
+                if (spent + perPass > passBudgetMs + passBudgetMs / 4) break
                 check()
-                val t = System.nanoTime()
                 val input = if (geo.kind == PassGeometry.Kind.CROP) {
                     val f = filled ?: ScenePasses.fillSize(w, h).let { s -> MaskOps.resampleSmooth(work, s[0], s[1]) }.also { filled = it }
                     ScenePasses.renderCrop(f, geo)
                 } else {
                     ScenePasses.renderGlobal(work, geo)
                 }
-                val grid = runPass(parser, input, geo)
-                budget -= max(1L, (System.nanoTime() - t) / 1_000_000)
-                if (grid == null) continue
+                val grid = runPass(parser, input, geo) ?: continue
                 fusion.add(grid, geo)
                 strideWork = min(strideWork, grid.stride / geo.sx)
                 passes++
