@@ -323,6 +323,11 @@ class SheetHostEditorRobolectricTest {
         SmokeUi.field("Text").type("Hello")
         settle()
         assertEquals("Hello", text.item?.text)
+        // The hotbar stays usable, but its Undo can't throw the typed text away.
+        click("Undo", exact = true)
+        assertTrue(text.editorOpen)
+        assertEquals("Hello", text.item?.text)
+        assertTrue("it says why", has(HistoryLabels.UNDO_BLOCKED_BY_TEXT, exact = true))
         // Zooming the canvas minimizes the editor; the text and the editor stay.
         val z0 = s.c.viewTransform.zoom
         s.pinchAt(s.freeCanvasSpot(SmokeUi.sheetPanel()!!.bounds.top))
@@ -355,6 +360,14 @@ class SheetHostEditorRobolectricTest {
         assertEquals("the tap changed nothing", t1, text.item)
         assertEquals("nothing placed", layers0, s.c.doc.layers.size)
         assertEquals(undo0, s.c.undoManager.undoCount)
+        // ...nor does a two-finger tap (undo) throw it away...
+        s.touch.idle(300)
+        s.touch.twoFingerTap(here.first - 30f * s.density to here.second + 100f * s.density, here.first + 30f * s.density to here.second + 100f * s.density)
+        settle()
+        assertTrue("still editing after a two-finger tap", text.editorOpen)
+        assertEquals(t1, text.item)
+        assertEquals(undo0, s.c.undoManager.undoCount)
+        assertEquals("the view is where it was", z1, s.c.viewTransform.zoom, 0.01f)
         // ...and two fingers on it scale it (the view stays).
         val size0 = t1.spec.sizePx
         val d = s.density

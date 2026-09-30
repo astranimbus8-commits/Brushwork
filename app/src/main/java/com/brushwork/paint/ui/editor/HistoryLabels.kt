@@ -3,6 +3,7 @@ package com.brushwork.paint.ui.editor
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.CurveTool
 
 /**
@@ -11,6 +12,30 @@ import com.brushwork.paint.tools.vector.CurveTool
  * pending tool work).
  */
 internal object HistoryLabels {
+    /**
+     * Why undo must wait right now, or null. While the text editor is open (shown, or minimized
+     * to its pill while the canvas is used: the hotbar and the canvas stay usable) the text being
+     * typed is not history yet; undo would throw the whole text away, so the editor's OK / Cancel
+     * finish it first. (Redo already does nothing while there is pending text.)
+     */
+    fun undoBlocked(c: EditorController): String? {
+        val text = c.currentTool as? TextTool ?: return null
+        return if (text.editorOpen && c.filterSession == null) UNDO_BLOCKED_BY_TEXT else null
+    }
+
+    const val UNDO_BLOCKED_BY_TEXT = "Finish the text first: OK or Cancel"
+
+    /**
+     * Undoes (see [EditorController.undo]) unless [undoBlocked]; returns the feedback text either
+     * way. Used by the hotbar's Undo and the canvas' two-finger tap.
+     */
+    fun performUndo(c: EditorController): String {
+        undoBlocked(c)?.let { return it }
+        val label = undo(c)
+        c.undo()
+        return label
+    }
+
     fun undo(c: EditorController): String {
         if (c.filterSession != null) return "Filter cancelled"
         val tool = c.currentTool

@@ -766,8 +766,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         when (tap) {
             TouchGestureClassifier.Tap.TWO_FINGER -> if (settings.twoFingerUndo) {
                 revertView()
-                val label = HistoryLabels.undo(controller)
-                controller.undo()
+                // (Undone first: a null listener must not skip the undo.)
+                val label = HistoryLabels.performUndo(controller)
                 onTapAction?.invoke(label)
             }
             TouchGestureClassifier.Tap.THREE_FINGER -> if (settings.threeFingerRedo) {

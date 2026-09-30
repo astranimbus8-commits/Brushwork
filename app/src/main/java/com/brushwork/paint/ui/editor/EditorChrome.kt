@@ -243,9 +243,7 @@ fun Hotbar(
                 Icons.AutoMirrored.Filled.Undo, "Undo",
                 {
                     controller.endCanvasGesture()
-                    val label = HistoryLabels.undo(controller)
-                    controller.undo()
-                    onHistory(label)
+                    onHistory(HistoryLabels.performUndo(controller))
                 },
                 enabled = undoEnabled,
             )

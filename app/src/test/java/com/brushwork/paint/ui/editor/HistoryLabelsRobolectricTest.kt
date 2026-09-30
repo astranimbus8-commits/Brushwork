@@ -10,6 +10,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
 import kotlinx.coroutines.CoroutineScope
@@ -93,6 +94,37 @@ class HistoryLabelsRobolectricTest {
             assertFalse(canRedoNow(c))
             c.filterSession?.cancel()
         }
+    }
+
+    /**
+     * The text editor is not modal any more (the hotbar and the canvas' two-finger tap stay
+     * usable while it is shown or minimized): undo then must not throw the typed text away.
+     */
+    @Test
+    fun anOpenTextEditorKeepsItsTextFromUndo() {
+        val c = controller()
+        c.pushUndo(LambdaAction("Brush", onUndo = {}, onRedo = {}))
+        c.selectTool(ToolId.TEXT)
+        val text = c.tools.getValue(ToolId.TEXT) as TextTool
+        text.startTextAt(30f, 20f)
+        text.setText("Typed")
+        assertTrue(text.editorOpen)
+        assertEquals(HistoryLabels.UNDO_BLOCKED_BY_TEXT, HistoryLabels.undoBlocked(c))
+        assertEquals(HistoryLabels.UNDO_BLOCKED_BY_TEXT, HistoryLabels.performUndo(c))
+        assertEquals("the typed text stays", "Typed", text.item?.text)
+        assertTrue("the editor stays open", text.editorOpen)
+        assertEquals("history untouched", 1, c.undoManager.undoCount)
+        // Once the editor is closed (OK), undo takes the pending text back as before.
+        text.confirmEditor()
+        assertNull(HistoryLabels.undoBlocked(c))
+        assertEquals("Undo: Text (discarded)", HistoryLabels.performUndo(c))
+        assertFalse(text.hasPendingWork)
+        assertEquals(1, c.undoManager.undoCount)
+        // Other tools are never blocked.
+        c.selectTool(ToolId.BRUSH)
+        assertNull(HistoryLabels.undoBlocked(c))
+        assertEquals("Undo: Brush", HistoryLabels.performUndo(c))
+        assertEquals(0, c.undoManager.undoCount)
     }
 
     /**
