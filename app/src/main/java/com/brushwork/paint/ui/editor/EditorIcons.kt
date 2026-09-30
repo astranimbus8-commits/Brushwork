@@ -2,6 +2,8 @@ package com.brushwork.paint.ui.editor
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.AutoFixNormal
+import androidx.compose.material.icons.filled.CenterFocusWeak
 import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
@@ -73,5 +75,7 @@ object EditorIcons {
         ToolId.POLYLINE -> Icons.Filled.Polyline
         ToolId.FRAME_DIVIDER -> Icons.AutoMirrored.Filled.ViewQuilt
         ToolId.RULER -> Icons.Filled.Straighten
+        ToolId.OBJECT_SELECT -> Icons.Filled.CenterFocusWeak
+        ToolId.REMOVE -> Icons.Filled.AutoFixNormal
     }
 }

@@ -24,6 +24,10 @@ android {
             version = release(37)
         }
         versionCode = System.getenv("BW_VERSION_CODE")?.toIntOrNull() ?: 1
+        // Phones are ARM: skip the x86 builds of the native (LiteRT) libraries to keep the APK small.
+        ndk {
+            abiFilters += setOf("arm64-v8a", "armeabi-v7a")
+        }
         // Release builds from a tag (v1.2.3) are named after it; other CI builds get 1.x.<run>.
         versionName = System.getenv("BW_VERSION_NAME")?.removePrefix("v")?.takeIf { it.isNotBlank() }
             ?: ("1.1." + (System.getenv("BW_VERSION_CODE") ?: "0"))

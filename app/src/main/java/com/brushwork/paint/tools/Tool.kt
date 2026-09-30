@@ -22,6 +22,10 @@ enum class ToolId(val label: String) {
     POLYLINE("Polyline"),
     FRAME_DIVIDER("Frame divider"),
     RULER("Ruler"),
+    /** Tap an object to select it (on-device AI, like Photoshop's Object Selection). */
+    OBJECT_SELECT("Object select"),
+    /** Brush over something to remove it (content-aware fill of the painted area). */
+    REMOVE("Remove"),
 }
 
 /**

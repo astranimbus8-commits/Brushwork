@@ -62,6 +62,8 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
             is CurveTool -> CurveToolOptions(tool)
             is FrameDividerTool -> FrameDividerOptions(tool)
             is RulerTool -> RulerToolOptions(tool)
+            is com.brushwork.paint.tools.select.ObjectSelectTool -> com.brushwork.paint.ui.selection.ObjectSelectOptions(tool)
+            is com.brushwork.paint.tools.remove.RemoveTool -> com.brushwork.paint.ui.remove.RemoveToolOptions(tool)
         }
     }
 }

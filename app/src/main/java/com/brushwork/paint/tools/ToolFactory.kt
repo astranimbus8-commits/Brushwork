@@ -30,6 +30,8 @@ object ToolFactory {
             ToolId.POLYLINE -> CurveTool(c, polyline = true)
             ToolId.FRAME_DIVIDER -> FrameDividerTool(c)
             ToolId.RULER -> RulerTool(c)
+            ToolId.OBJECT_SELECT -> com.brushwork.paint.tools.select.ObjectSelectTool(c)
+            ToolId.REMOVE -> com.brushwork.paint.tools.remove.RemoveTool(c)
         }
     }
 }
