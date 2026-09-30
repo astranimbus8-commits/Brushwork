@@ -25,6 +25,33 @@ class ShapeGeometryTest {
     }
 
     @Test
+    fun brushOutlinesAreOneContinuousPath() {
+        val a = Vec2(0f, 0f); val b = Vec2(100f, 0f)
+        for (heads in ArrowHeads.entries) for (style in ArrowHeadStyle.entries) {
+            val path = ShapeGeometry.arrowBrushOutline(a, b, 4f, heads, style, 4f)
+            val polys = path.flatten()
+            assertEquals("$heads/$style: one sub-path", 1, polys.size)
+            val pts = polys[0].points
+            // Covers the whole arrow: both tips and the head corners (16 px long, 8 or 9.6 px wide).
+            val halfW = if (style == ArrowHeadStyle.FILLED) 8f else 9.6f
+            assertTrue(pts.any { it == a } && pts.any { it == b })
+            if (heads.end) {
+                assertTrue(pts.any { abs(it.x - 84f) < 1e-3f && abs(abs(it.y) - halfW) < 1e-3f && it.y > 0f })
+                assertTrue(pts.any { abs(it.x - 84f) < 1e-3f && abs(abs(it.y) - halfW) < 1e-3f && it.y < 0f })
+            }
+            if (heads.start) assertTrue(pts.any { abs(it.x - 16f) < 1e-3f && abs(abs(it.y) - halfW) < 1e-3f })
+            // Consecutive points never jump across the arrow (no hidden pen-up).
+            pts.zipWithNext().forEach { (p, q) -> assertTrue(p.distanceTo(q) <= 100f + 1e-3f) }
+        }
+        val box = ShapeBox(50f, 50f, 60f, 40f, 0f)
+        for (type in ShapeType.entries) {
+            val outline = ShapeGeometry.brushOutline(type, box, OutlineParams(corner = CornerStyle.ROUND, cornerRadius = 8f), 4f, ArrowHeads.BOTH, ArrowHeadStyle.OPEN, 3f)
+            assertEquals("$type", 1, outline.flatten().size)
+        }
+        assertTrue(ShapeGeometry.arrowBrushOutline(a, a, 4f, ArrowHeads.END, ArrowHeadStyle.FILLED, 4f).isEmpty)
+    }
+
+    @Test
     fun polygonVertices() {
         for (n in listOf(3, 5, 6, 64)) {
             val v = ShapeGeometry.unitPolygon(n)

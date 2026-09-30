@@ -298,9 +298,7 @@ object ShapeGeometry {
         if (len < 1e-3f) return ArrowGeometry(VectorPath.EMPTY, VectorPath.EMPTY)
         val u = (b - a) / len
         val perp = u.perpendicular()
-        val count = (if (heads.start) 1 else 0) + (if (heads.end) 1 else 0)
-        val headLen = min(max(strokeWidth * headScale, 4f), len * (if (count == 2) 0.45f else 0.9f))
-        val halfW = headLen * (if (style == ArrowHeadStyle.FILLED) 0.5f else 0.6f)
+        val (headLen, halfW) = arrowHeadSize(len, strokeWidth, heads, style, headScale)
         var s = a
         var e = b
         val strokeOps = ArrayList<PathOp>()
@@ -324,6 +322,59 @@ object ShapeGeometry {
         shaft += PathOp.MoveTo(s); shaft += PathOp.LineTo(e)
         shaft += strokeOps
         return ArrowGeometry(VectorPath(shaft), VectorPath(fillOps))
+    }
+
+    /** Arrowhead length and half width for an arrow of length [len] (see [arrow]). */
+    private fun arrowHeadSize(len: Float, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): Pair<Float, Float> {
+        val count = (if (heads.start) 1 else 0) + (if (heads.end) 1 else 0)
+        val headLen = min(max(strokeWidth * headScale, 4f), len * (if (count == 2) 0.45f else 0.9f))
+        val halfW = headLen * (if (style == ArrowHeadStyle.FILLED) 0.5f else 0.6f)
+        return headLen to halfW
+    }
+
+    /**
+     * An arrow's outline as ONE continuous open path, to paint it with a brush in a single
+     * stroke: through each open head's chevron (retracing one arm) or around each filled head's
+     * triangle, joined by the shaft. Heads match [arrow] (filled heads are also filled there).
+     */
+    fun arrowBrushOutline(a: Vec2, b: Vec2, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): VectorPath {
+        val len = a.distanceTo(b)
+        if (len < 1e-3f) return VectorPath.EMPTY
+        val u = (b - a) / len
+        val perp = u.perpendicular()
+        val (headLen, halfW) = arrowHeadSize(len, strokeWidth, heads, style, headScale)
+        val pts = ArrayList<Vec2>(12)
+        // One head at [tip] pointing along [dir]; [first] = the head is drawn before the shaft.
+        fun head(tip: Vec2, dir: Vec2, first: Boolean) {
+            val base = tip - dir * headLen
+            val l = base + perp * halfW
+            val r = base - perp * halfW
+            val part = if (style == ArrowHeadStyle.FILLED) listOf(base, l, tip, r, base) else listOf(tip, l, tip, r)
+            // The shaft joins the head at its base (filled) or tip (open).
+            pts += if (first) part.asReversed() else part
+        }
+        if (heads.start) head(a, -u, first = true) else pts += a
+        if (heads.end) head(b, u, first = false) else pts += b
+        return VectorPath.polyline(pts)
+    }
+
+    /**
+     * The outline a brush paints for a shape: one continuous sub-path (a brush tool can only have
+     * one stroke in progress). Box shapes use their [outline] (corner styles included), lines a
+     * straight path, arrows [arrowBrushOutline].
+     */
+    fun brushOutline(
+        type: ShapeType,
+        box: ShapeBox,
+        params: OutlineParams,
+        strokeWidth: Float,
+        heads: ArrowHeads,
+        headStyle: ArrowHeadStyle,
+        headScale: Float,
+    ): VectorPath = when (type) {
+        ShapeType.LINE -> VectorPath.polyline(listOf(box.start, box.end))
+        ShapeType.ARROW -> arrowBrushOutline(box.start, box.end, strokeWidth, heads, headStyle, headScale)
+        else -> outline(type, box, params)
     }
 
     // ------------------------------------------------------------------ interaction math

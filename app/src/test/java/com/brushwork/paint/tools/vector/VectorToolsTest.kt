@@ -316,22 +316,30 @@ class VectorToolsTest {
         c.tap(onPath.x, onPath.y)
         assertEquals(4, tool.anchors.size)
         assertEquals(onPath.x, tool.anchors[1].x, 1e-3f)
-        // Long-press selects an anchor; the rest of the gesture is ignored.
+        // Long-press selects an anchor (not the eyedropper); the finger can still drag it.
         c.pointerDown(ToolPoint(100f, 30f))
         assertTrue(c.pointerLongPress(ToolPoint(100f, 30f)))
+        assertFalse(c.holdPicking)
         c.pointerMove(ToolPoint(140f, 60f))
         c.pointerUp(ToolPoint(140f, 60f))
         assertEquals(2, tool.selected)
-        assertEquals(Vec2(100f, 30f), tool.anchors[2].pos)
+        assertEquals(Vec2(140f, 60f), tool.anchors[2].pos)
+        // A long press that does not move keeps the point selected when the finger lifts.
+        c.pointerDown(ToolPoint(140f, 60f))
+        assertTrue(c.pointerLongPress(ToolPoint(140f, 60f)))
+        c.pointerUp(ToolPoint(140f, 60f))
+        assertEquals(2, tool.selected)
         tool.setSharp(2, true)
         assertTrue(tool.anchors[2].sharp)
         tool.deleteAnchor(0)
         assertEquals(3, tool.anchors.size)
-        // In-tool undo walks back delete, sharp and insert.
+        // In-tool undo walks back delete, sharp, move and insert.
         tool.undoStep()
         assertEquals(4, tool.anchors.size)
         tool.undoStep()
         assertFalse(tool.anchors[2].sharp)
+        tool.undoStep()
+        assertEquals(Vec2(100f, 30f), tool.anchors[2].pos)
         tool.undoStep()
         assertEquals(3, tool.anchors.size)
         // Dragging an anchor moves it.
@@ -479,10 +487,11 @@ class VectorToolsTest {
     /** Stands in for the brush module: records what the curve tool feeds the painting tool. */
     private class RecordingTool(c: EditorController) : Tool(c) {
         override val id = ToolId.BRUSH
-        val events = ArrayList<Pair<Char, ToolPoint>>()
+        val events = ArrayList<Pair<Char, ToolPoint?>>()
         override fun onDown(p: ToolPoint) { events += 'd' to p }
         override fun onMove(p: ToolPoint) { events += 'm' to p }
         override fun onUp(p: ToolPoint) { events += 'u' to p }
+        override fun onCancel() { events += 'c' to null }
     }
 
     @Test
@@ -493,18 +502,33 @@ class VectorToolsTest {
         (c.tools as MutableMap<ToolId, Tool>)[ToolId.BRUSH] = brush
         val tool = curveTool(c, polyline = true)
         tool.update { it.copy(stroke = CurveStroke.BRUSH, taper = true, taperPercent = 25f, fill = false) }
-        c.tap(20f, 100f); c.tap(180f, 100f)
+        c.tap(20f, 100f); c.tap(90f, 100f)
+        tool.flushPreview()
+        // The live preview is an unfinished stroke: down + moves, no up.
+        assertEquals('d', brush.events.first().first)
+        assertTrue(brush.events.drop(1).all { it.first == 'm' })
+        // Editing the path cancels it and replays the new path.
+        c.drag(90f to 100f, 180f to 100f)
+        tool.flushPreview()
+        val cancel = brush.events.indexOfFirst { it.first == 'c' }
+        assertTrue(cancel > 0)
+        assertEquals('d', brush.events[cancel + 1].first)
         tool.commit()
-        val ev = brush.events
+        // The final stroke is the preview on screen (no second pass), finished with an up at
+        // the path's end.
+        assertEquals(1, brush.events.count { it.first == 'c' })
+        assertEquals(2, brush.events.count { it.first == 'd' })
+        val ev = brush.events.subList(brush.events.indexOfLast { it.first == 'd' }, brush.events.size)
         assertEquals('d', ev.first().first)
         assertEquals('u', ev.last().first)
         assertTrue(ev.drop(1).dropLast(1).all { it.first == 'm' })
-        val pts = ev.map { it.second }
+        val pts = ev.map { it.second!! }
         assertEquals(20f, pts.first().x, 1e-3f)
         assertEquals(180f, pts.last().x, 1e-3f)
         assertTrue(pts.all { it.isStylus && it.y == 100f })
-        // Even spacing (the last gap may be shorter) and increasing time stamps.
-        pts.zipWithNext().dropLast(1).forEach { (a, b) -> assertEquals(0.75f, b.x - a.x, 1e-3f) }
+        // Even spacing (the last gap may be shorter; the up repeats the last point) and
+        // increasing time stamps.
+        pts.zipWithNext().dropLast(2).forEach { (a, b) -> assertEquals(0.75f, b.x - a.x, 1e-3f) }
         assertTrue(pts.zipWithNext().all { (a, b) -> b.time > a.time })
         // Tapered: thin at both ends, full pressure in the middle.
         assertTrue(pts.first().pressure < 0.2f && pts.last().pressure < 0.2f)

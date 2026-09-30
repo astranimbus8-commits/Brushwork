@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Deselect
@@ -56,6 +58,7 @@ import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.tools.vector.ShapeBox
 import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
+import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
@@ -124,8 +127,20 @@ fun ShapeToolOptions(tool: ShapeTool) {
             contentDescription = "Shape style",
         )
     }
-    if (s.type.isLineLike || s.style.stroke) {
-        ActionChip(Units.format(s.strokeWidth.toDouble(), s.unit, dpi.toDouble()), Icons.Filled.LineWeight) { showSettings = true }
+    if (s.strokes) {
+        DropdownChip(
+            label = s.strokeWith.label,
+            options = ShapeStroke.entries,
+            selected = s.strokeWith,
+            optionLabel = { it.label },
+            onSelect = { m -> set { it.copy(strokeWith = m) } },
+            leading = { Icon(if (s.strokeWith == ShapeStroke.BRUSH) Icons.Filled.Brush else Icons.Filled.LineWeight, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            contentDescription = "Stroke with",
+        )
+        if (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW) {
+            // The width (the brush size when "Use brush size" is on).
+            ActionChip(Units.format(tool.strokeWidth.toDouble(), s.unit, dpi.toDouble()), if (s.useBrushSize) Icons.Filled.Brush else Icons.Filled.LineWeight) { showSettings = true }
+        }
     }
     OptionChip("Center", s.fromCenter, { set { it.copy(fromCenter = !it.fromCenter) } }, icon = Icons.Filled.CenterFocusStrong)
     if (!s.type.isLineLike) {
@@ -165,15 +180,21 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             ChoiceChips(ShapeStyle.entries.map { it.label }, s.style.ordinal, { i -> set { it.copy(style = ShapeStyle.entries[i]) } })
         }
 
-        if (s.type.isLineLike || s.style.stroke) {
+        if (s.strokes) {
             SectionHeader("Stroke")
             MainColorNote(controller.color)
-            LengthEditor(
-                label = "Stroke width", px = s.strokeWidth, onPx = { w -> set { it.copy(strokeWidth = w) } },
-                unit = s.unit, onUnit = onUnit, dpi = dpi,
-                minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
-            )
-            if (s.type.isLineLike) {
+            ChoiceChips(ShapeStroke.entries.map { it.label }, s.strokeWith.ordinal, { i -> set { it.copy(strokeWith = ShapeStroke.entries[i]) } })
+            if (s.strokeWith == ShapeStroke.BRUSH) {
+                val paintTool = controller.lastPaintTool
+                val preset = controller.presetFor(paintTool)
+                Hint(
+                    (if (preset != null) "Painted with the ${paintTool.label.lowercase()} \"${preset.name}\"" else "Painted with the ${paintTool.label.lowercase()}") +
+                        " at full pressure, with its own size, opacity and texture",
+                    Modifier.padding(top = 4.dp),
+                )
+            }
+            StrokeWidthControls(tool, unit = s.unit, onUnit = onUnit, dpi = dpi, showSlider = true, showUnit = true)
+            if (s.type.isLineLike && s.strokeWith == ShapeStroke.PLAIN) {
                 Hint("Line ends")
                 ChoiceChips(LineCapStyle.entries.map { it.label }, s.lineCap.ordinal, { i -> set { it.copy(lineCap = LineCapStyle.entries[i]) } })
             }
@@ -218,6 +239,42 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
     }
 }
 
+/**
+ * "Use brush size" and the stroke width (the brush size while that is on: editing it resizes the
+ * brush too). When the brush paints the outline only arrows use the width (for their heads).
+ */
+@Composable
+private fun StrokeWidthControls(tool: ShapeTool, unit: LengthUnit, onUnit: (LengthUnit) -> Unit, dpi: Float, showSlider: Boolean, showUnit: Boolean) {
+    val s = tool.settings
+    val brush = s.strokeWith == ShapeStroke.BRUSH
+    if (brush && s.type != ShapeType.ARROW) return
+    ToggleRow(
+        "Use brush size", s.useBrushSize, { v -> tool.update { it.copy(useBrushSize = v) } },
+        description = if (s.useBrushSize) "The width follows the brush size slider" else "The width set here is used",
+    )
+    LengthEditor(
+        label = if (brush) "Stroke width (arrowheads)" else "Stroke width",
+        px = tool.strokeWidth, onPx = { tool.setStrokeWidth(it) },
+        unit = unit, onUnit = onUnit, dpi = dpi,
+        minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
+        showSlider = showSlider, showUnit = showUnit,
+    )
+    if (s.useBrushSize) Hint("Same as the brush size: changing it here resizes the brush too")
+}
+
+/** Integer field with -/+ buttons, under a slider for quick changes. */
+@Composable
+private fun IntSliderField(label: String, value: Int, onChange: (Int) -> Unit, range: IntRange) {
+    LabeledSlider(
+        label = label,
+        value = value.toFloat(),
+        onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
+        valueRange = range.first.toFloat()..range.last.toFloat(),
+        valueText = value.toString(),
+    )
+    IntStepper(label, value, onChange, range)
+}
+
 /** Sides / points / inner radius / corners of the current shape type (shared by both sheets). */
 @Composable
 private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
@@ -228,24 +285,23 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
     when (s.type) {
         ShapeType.POLYGON -> {
             SectionHeader("Polygon")
-            IntStepper("Number of sides", s.sides, { n -> set { it.copy(sides = n) } }, range)
+            IntSliderField("Number of sides", s.sides, { n -> set { it.copy(sides = n) } }, range)
         }
         ShapeType.STAR -> {
             SectionHeader("Star")
-            IntStepper("Number of points", s.starPoints, { n -> set { it.copy(starPoints = n) } }, range)
+            IntSliderField("Number of points", s.starPoints, { n -> set { it.copy(starPoints = n) } }, range)
+            LabeledSlider(
+                label = "Inner radius",
+                value = s.innerRatio * 100f,
+                onValueChange = { v -> set { it.copy(innerRatio = v / 100f) } },
+                valueRange = 5f..95f,
+                valueText = "${(s.innerRatio * 100f).roundToInt()} %",
+            )
             if (compact) {
                 NumberField(
                     label = "Inner radius", value = (s.innerRatio * 100f).toDouble(),
                     onValueChange = { v -> set { it.copy(innerRatio = v.toFloat() / 100f) } },
                     modifier = Modifier.fillMaxWidth(), decimals = 0, suffix = "%", min = 5.0, max = 95.0, step = 1.0,
-                )
-            } else {
-                LabeledSlider(
-                    label = "Inner radius",
-                    value = s.innerRatio * 100f,
-                    onValueChange = { v -> set { it.copy(innerRatio = v / 100f) } },
-                    valueRange = 5f..95f,
-                    valueText = "${(s.innerRatio * 100f).roundToInt()} %",
                 )
             }
         }
@@ -260,7 +316,7 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
             px = s.cornerRadius, onPx = { r -> set { it.copy(cornerRadius = r) } },
             unit = s.unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi,
             minPx = 0f, maxPx = ShapeSettings.MAX_LENGTH, sliderMin = 1f, sliderMax = 1000f,
-            showSlider = !compact, showUnit = !compact, enabled = s.corner != CornerStyle.SHARP,
+            showSlider = true, showUnit = !compact, enabled = s.corner != CornerStyle.SHARP,
         )
         if (s.corner != CornerStyle.SHARP) Hint("Limited to half of the shorter edge at each corner")
     }
@@ -310,6 +366,7 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 onValueChange = { deg -> tool.place(ShapeBox.line(st, st + direction(deg.toFloat()) * b.w)) },
                 modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "°", min = -360.0, max = 360.0, step = 1.0,
             )
+            AngleSlider("Angle", b.rotationDeg, s.snapAngle) { deg -> tool.place(ShapeBox.line(st, st + direction(deg) * b.w)) }
             Hint("The start point stays put when the length or angle changes")
         } else {
             SectionHeader("Position")
@@ -340,17 +397,14 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 onValueChange = { deg -> tool.place(b.copy(rotationDeg = deg.toFloat())) },
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp), decimals = 1, suffix = "°", min = -360.0, max = 360.0, step = 1.0,
             )
+            AngleSlider("Rotation", b.rotationDeg, s.snapAngle) { deg -> tool.place(b.copy(rotationDeg = deg)) }
         }
 
         ShapeParamFields(tool, compact = true)
 
-        if (s.type.isLineLike || s.style.stroke) {
+        if (s.strokes && (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW)) {
             SectionHeader("Stroke")
-            LengthEditor(
-                label = "Stroke width", px = s.strokeWidth, onPx = { w -> set { it.copy(strokeWidth = w) } },
-                unit = unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi.toFloat(),
-                minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE, showSlider = false, showUnit = false,
-            )
+            StrokeWidthControls(tool, unit = unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi.toFloat(), showSlider = true, showUnit = false)
         }
 
         SectionHeader("Nudge")
@@ -362,6 +416,18 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             onNudge = { dx, dy -> tool.nudge(dx, dy) },
         )
     }
+}
+
+/** Slider for an angle in -180..180° (15° steps with [snap]). */
+@Composable
+private fun AngleSlider(label: String, deg: Float, snap: Boolean, onChange: (Float) -> Unit) {
+    LabeledSlider(
+        label = label,
+        value = deg,
+        onValueChange = { v -> onChange(if (snap) ShapeGeometry.snapDegrees(v) else v.roundToInt().toFloat()) },
+        valueRange = -180f..180f,
+        valueText = "${Units.formatNumber(deg.toDouble(), 1)}°",
+    )
 }
 
 private fun direction(deg: Float): Vec2 {
@@ -390,7 +456,9 @@ fun CurveToolOptions(tool: CurveTool) {
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
 
+    // The same steps as the app's undo / redo (which take back one point edit at a time too).
     ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
+    ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
     val a = selInfo
     if (a != null) {
         val sel = a.index
@@ -437,7 +505,10 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             CurveStroke.BRUSH -> {
                 val paintTool = controller.lastPaintTool
                 val preset = controller.presetFor(paintTool)
-                Hint(if (preset != null) "Painted with ${paintTool.label.lowercase()} \"${preset.name}\" at full pressure" else "Painted with the ${paintTool.label.lowercase()}")
+                Hint(
+                    (if (preset != null) "Painted with ${paintTool.label.lowercase()} \"${preset.name}\" at full pressure" else "Painted with the ${paintTool.label.lowercase()}") +
+                        ". The stroke shows while you edit the points.",
+                )
                 ToggleRow("Taper ends", s.taper, { v -> set { it.copy(taper = v) } }, description = "Pressure fades in and out along the path")
                 if (s.taper) {
                     LabeledSlider(
@@ -480,8 +551,9 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             Hint("0 % is a smooth curve through every point, 100 % straight lines")
         }
         Hint(
-            if (tool.polyline) "Tap to add points, drag a point to move it, long-press a point to select it."
-            else "Tap to add points (on the path to insert one), drag a point to move it, long-press a point for corner / smooth / delete. A selected smooth point shows tangent handles you can drag.",
+            (if (tool.polyline) "Tap to add points, drag any point to move it, long-press a point to select it."
+            else "Tap to add points (on the path to insert one), drag any point to move it, long-press a point for corner / smooth / delete. A selected smooth point shows tangent handles you can drag.") +
+                " Undo takes back the last point edit.",
             Modifier.padding(top = 8.dp),
         )
     }
