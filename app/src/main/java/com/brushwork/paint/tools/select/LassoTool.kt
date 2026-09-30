@@ -13,21 +13,44 @@ import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import kotlinx.serialization.builtins.serializer
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+
+/** How the lasso outline is drawn. */
+enum class LassoKind(val label: String) {
+    FREEHAND("Freehand"),
+    POLYGON("Polygon"),
+    CURVE("Curve"),
+}
 
 /**
  * Lasso selection. Freehand: drag around the area. Polygon: tap the corners; tapping near the
  * first corner (or ✓) closes the shape, ✕ discards it. While the polygon is open every corner
  * can be dragged to a new place, and undo / redo (the app's buttons and two-finger tap too)
- * take back / bring back one corner edit at a time. A plain tap in "New" mode deselects.
+ * take back / bring back one corner edit at a time. Curve: tap points and the outline runs
+ * smoothly through them ([LassoCurve]). A plain tap in "New" mode deselects (freehand).
  */
 class LassoTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.LASSO
 
     var settings: LassoSettings by PersistedOption(controller.settings, "select.lasso", LassoSettings.serializer(), LassoSettings())
     var mode by mutableStateOf(SelectionMode.REPLACE)
+
+    /** Curve mode is on (persisted on its own; it wins over [LassoSettings.polygon]). */
+    private var curveMode: Boolean by PersistedOption(controller.settings, "select.lasso.curve", Boolean.serializer(), false)
+
+    /** Freehand, polygon or curve (Compose state). */
+    val kind: LassoKind
+        get() = when {
+            curveMode -> LassoKind.CURVE
+            settings.polygon -> LassoKind.POLYGON
+            else -> LassoKind.FREEHAND
+        }
+
+    /** The points of the curve mode (Compose state; the options strip edits them). */
+    val curve = LassoCurve(controller) { commit() }
 
     /** Committed polygon corners (Compose state so ✓/✕ appear). */
     var vertexCount by mutableIntStateOf(0)
@@ -41,10 +64,12 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     var busy by mutableStateOf(false)
         private set
 
-    override val hasPendingWork: Boolean get() = settings.polygon && vertexCount > 0
+    override val hasPendingWork: Boolean
+        get() = if (kind == LassoKind.CURVE) curve.count > 0 else settings.polygon && vertexCount > 0
 
-    // The app's redo only reaches the tool while the polygon is pending (see EditorController.redo).
-    override val canRedoStep: Boolean get() = redoCount > 0 && hasPendingWork
+    // The app's redo only reaches the tool while the polygon / curve is pending (see EditorController.redo).
+    override val canRedoStep: Boolean
+        get() = (if (kind == LassoKind.CURVE) curve.redoCount else redoCount) > 0 && hasPendingWork
 
     private val stroke = PointList()
     private val vertices = PointList()
@@ -68,17 +93,22 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     private val screenPath = Path()
     private val mapped = FloatArray(2)
 
-    /** Switches between freehand and polygon mode (drops an unfinished polygon). */
-    fun setPolygonMode(polygon: Boolean) {
-        if (polygon == settings.polygon) return
+    /** Switches between freehand and polygon mode (drops an unfinished polygon or curve). */
+    fun setPolygonMode(polygon: Boolean) = setKind(if (polygon) LassoKind.POLYGON else LassoKind.FREEHAND)
+
+    /** Switches to freehand, polygon or curve mode (drops an unfinished polygon or curve). */
+    fun setKind(kind: LassoKind) {
+        if (kind == this.kind) return
         discard()
-        settings = settings.copy(polygon = polygon)
+        curveMode = kind == LassoKind.CURVE
+        settings = settings.copy(polygon = kind == LassoKind.POLYGON)
     }
 
     // ------------------------------------------------------------------ input
 
     override fun onDown(p: ToolPoint) {
         if (busy) return
+        if (kind == LassoKind.CURVE) { curve.onDown(p); return }
         if (settings.polygon) {
             cursorX = p.x; cursorY = p.y; cursorDown = true
             downX = p.x; downY = p.y
@@ -95,6 +125,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onMove(p: ToolPoint) {
+        if (kind == LassoKind.CURVE) { curve.onMove(p); return }
         if (settings.polygon) {
             if (!cursorDown) return
             cursorX = p.x; cursorY = p.y
@@ -117,6 +148,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onUp(p: ToolPoint) {
+        if (kind == LassoKind.CURVE) { curve.onUp(p); return }
         if (settings.polygon) {
             if (!cursorDown) return
             cursorDown = false
@@ -166,8 +198,12 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         dragging = false
         cursorDown = false
         stroke.clear()
+        curve.onCancel()
         controller.invalidateOverlay()
     }
+
+    /** Curve mode: a long press on a point selects it (its sharp / smooth / delete actions). */
+    override fun onLongPress(p: ToolPoint): Boolean = kind == LassoKind.CURVE && curve.onLongPress(p)
 
     private fun docLength(dp: Float): Float {
         val t = controller.viewTransform
@@ -194,8 +230,9 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         if (redo.isNotEmpty()) { redo.clear(); redoCount = 0 }
     }
 
-    /** Takes back the last corner edit (placing or moving a corner). */
+    /** Takes back the last corner / point edit (placing or moving a corner). */
     override fun undoStep(): Boolean {
+        if (kind == LassoKind.CURVE) return curve.undoStep()
         val prev = history.removeLastOrNull() ?: return false
         redo.addLast(vertices.toArray())
         redoCount = redo.size
@@ -203,8 +240,9 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         return true
     }
 
-    /** Brings back the corner edit last taken back by [undoStep]. */
+    /** Brings back the corner / point edit last taken back by [undoStep]. */
     override fun redoStep(): Boolean {
+        if (kind == LassoKind.CURVE) return curve.redoStep()
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size
         history.addLast(vertices.toArray())
@@ -215,10 +253,13 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     /** Position of polygon corner [i] (document px). */
     fun corner(i: Int): Pair<Float, Float> = vertices.x(i) to vertices.y(i)
 
-    /** True when there is a corner to take back (Compose state through [vertexCount]). */
-    override val canUndoStep: Boolean get() = vertexCount > 0
+    /** True when there is a corner / point to take back (Compose state through [vertexCount] / the curve points). */
+    override val canUndoStep: Boolean get() = if (kind == LassoKind.CURVE) curve.count > 0 else vertexCount > 0
 
-    /** The in-tool undo button: the last corner edit, or the whole polygon if its history ran out. */
+    /**
+     * The in-tool undo button: the last corner / point edit, or the whole polygon / curve if its
+     * history ran out.
+     */
     fun undoLastCorner() {
         if (!undoStep()) discard()
     }
@@ -238,6 +279,14 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     // ------------------------------------------------------------------ pending polygon
 
     override fun commit() {
+        if (kind == LassoKind.CURVE) {
+            val path = curve.closedPath()
+            if (path == null) { discard(); return }
+            curve.clear()
+            apply(path)
+            controller.invalidateOverlay()
+            return
+        }
         if (vertices.size >= 3) {
             val path = vertices.toPath()
             vertices.clear()
@@ -256,8 +305,16 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         clearHistory()
         cursorDown = false
         grabbed = -1
+        curve.clear()
         controller.invalidateOverlay()
     }
+
+    override fun onDeactivate() {
+        curve.onDeactivate()
+        super.onDeactivate()
+    }
+
+    override fun onDispose() = curve.onDeactivate()
 
     private fun apply(path: Path) {
         val docW = controller.doc.width; val docH = controller.doc.height
@@ -296,6 +353,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
                 SelectionOverlay.drawVertex(canvas, t, mapped[0], mapped[1], highlighted = i == dragged || (i == 0 && vertices.size >= 3))
             }
         }
+        if (kind == LassoKind.CURVE) curve.drawOverlay(canvas, t)
     }
 
     private fun map(t: ViewTransform, x: Float, y: Float) {
