@@ -5,13 +5,12 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Selection
 import kotlin.math.ceil
@@ -19,14 +18,20 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * Laid-out text in block-local coordinates: the box spans (0, 0) - ([width], [height]); ink may
- * reach [inkPad] beyond it (outline, italic overhang, accents). Not thread-safe: draw on the
+ * Laid-out straight text in block-local coordinates: the box spans (0, 0) - ([width], [height])
+ * (text area + padding + border); the text area starts at ([inset], [inset]). Ink may reach
+ * [inkPad] beyond the box (outline, italic overhang, accents). Not thread-safe: draw on the
  * thread that created it.
  */
 class TextBlock internal constructor(
     val width: Float,
     val height: Float,
+    /** Size of the text area (the box without padding and border). */
+    val contentWidth: Float,
+    val contentHeight: Float,
     val inkPad: Float,
+    /** Lines of horizontal text, columns of vertical text (0 when empty). */
+    val lineCount: Int,
     private val spec: TextSpec,
     private val paint: TextPaint,
     private val drawGlyphs: ((Canvas, TextPaint) -> Unit)?,
@@ -34,9 +39,17 @@ class TextBlock internal constructor(
     /** True when there is nothing to draw (empty text); the box still has a placeholder size. */
     val isEmpty: Boolean get() = drawGlyphs == null
 
-    /** Draws the outline (if any) and then the fill at block-local coordinates. */
+    /** Distance from the box edge to the text area. */
+    val inset: Float get() = spec.box.inset
+
+    private val boxPaint by lazy { Paint().apply { isAntiAlias = spec.antiAlias } }
+
+    /** Draws the box (background, border), then the outline (if any) and the fill. */
     fun draw(canvas: Canvas) {
         val glyphs = drawGlyphs ?: return
+        drawBox(canvas)
+        val s = canvas.save()
+        canvas.translate(inset, inset)
         if (spec.strokeWidthPx > 0f) {
             paint.style = Paint.Style.STROKE
             paint.strokeWidth = spec.strokeWidthPx * 2f // centered on the glyph edge; the fill covers the inner half
@@ -46,6 +59,80 @@ class TextBlock internal constructor(
             paint.color = spec.color
         }
         glyphs(canvas, paint)
+        canvas.restoreToCount(s)
+    }
+
+    private fun drawBox(canvas: Canvas) {
+        val box = spec.box
+        if (!box.hasFrame) return
+        val r = box.roundness.coerceIn(0f, 1f) * min(width, height) / 2f
+        if (box.fill) {
+            boxPaint.style = Paint.Style.FILL
+            boxPaint.color = box.fillColor
+            canvas.drawRoundRect(0f, 0f, width, height, r, r, boxPaint)
+        }
+        val b = box.borderWidth
+        if (b > 0f) {
+            // Inside the box edge, so the box keeps its size.
+            val h = min(b, min(width, height)) / 2f
+            val ri = max(0f, r - h)
+            boxPaint.style = Paint.Style.STROKE
+            boxPaint.strokeWidth = h * 2f
+            boxPaint.strokeJoin = Paint.Join.MITER
+            boxPaint.color = box.borderColor
+            canvas.drawRoundRect(h, h, width - h, height - h, ri, ri, boxPaint)
+        }
+    }
+}
+
+/** Fill and (optional) outline paints for text on a path; see [TextOnPath.draw]. */
+class PathPaints internal constructor(val fill: TextPaint, val stroke: TextPaint?)
+
+/**
+ * A text object ready to draw: the straight layout ([block]) or, for text on a path, its paints
+ * and document bounds. Build with [TextRenderer.prepare], passing the previous one to reuse what
+ * did not change (moving text never re-lays it out).
+ */
+class PreparedText internal constructor(
+    val text: String,
+    val spec: TextSpec,
+    val path: TextPathSpec,
+    /** Straight text layout; null when the text follows a path. */
+    val block: TextBlock?,
+    internal val paints: PathPaints?,
+    private val pathBounds: RectF?,
+) {
+    val onPath: Boolean get() = block == null
+
+    /** True when nothing would be drawn. */
+    val isEmpty: Boolean get() = block?.isEmpty ?: (text.isEmpty() || pathBounds == null || pathBounds.isEmpty)
+
+    /** Whether this can draw [item] (position and rotation of straight text don't matter). */
+    fun matches(item: TextItem): Boolean {
+        if (item.text != text || item.spec != spec) return false
+        return if (block != null) !item.path.isActive else item.path == path
+    }
+
+    /** Document bounds of everything [item] paints (copy). */
+    fun docBounds(item: TextItem): RectF = if (block != null) TextRenderer.docBounds(item, block) else RectF(pathBounds ?: RectF())
+
+    /** This text on a path moved by ([dx], [dy]) to [item] (bounds offset, nothing re-measured). */
+    internal fun translatedTo(item: TextItem, dx: Float, dy: Float): PreparedText {
+        if (block != null) return this
+        val b = RectF(pathBounds ?: RectF()).apply { if (!isEmpty) offset(dx, dy) }
+        return PreparedText(item.text, item.spec, item.path, null, paints, b)
+    }
+
+    /** Whether the document point [p] is on [item] (its box, or its path bounds), with [tolerance] px. */
+    fun contains(item: TextItem, p: Vec2, tolerance: Float): Boolean {
+        val b = block
+        if (b == null) {
+            val r = pathBounds ?: return false
+            if (r.isEmpty) return false
+            return p.x >= r.left - tolerance && p.x <= r.right + tolerance && p.y >= r.top - tolerance && p.y <= r.bottom + tolerance
+        }
+        val l = item.docToLocal(p, b.width, b.height)
+        return l.x >= -tolerance && l.y >= -tolerance && l.x <= b.width + tolerance && l.y <= b.height + tolerance
     }
 }
 
@@ -72,19 +159,65 @@ object TextRenderer {
         strokeCap = Paint.Cap.ROUND
     }
 
-    /** Lays out [text] with [spec]. */
+    /** Paints for [TextOnPath]: typeface, size, letter spacing and colors of [spec]. */
+    fun pathPaints(spec: TextSpec): PathPaints {
+        val fill = newPaint(spec).apply {
+            letterSpacing = spec.letterSpacing
+            style = Paint.Style.FILL
+        }
+        val stroke = if (spec.strokeWidthPx > 0f) {
+            newPaint(spec).apply {
+                letterSpacing = spec.letterSpacing
+                style = Paint.Style.STROKE
+                strokeWidth = spec.strokeWidthPx * 2f // like straight text: the fill covers the inner half
+                color = spec.strokeColor
+            }
+        } else null
+        return PathPaints(fill, stroke)
+    }
+
+    /** Width of [text] on one line (newlines as spaces) with [spec]'s font, size and letter spacing. */
+    fun lineWidth(text: String, spec: TextSpec): Float {
+        val p = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
+        return p.measureText(text.replace('\n', ' '))
+    }
+
+    /**
+     * Prepares [item] for drawing, reusing [reuse] (or its layout / paints) when the text and
+     * look didn't change. Text on a path is measured by [TextOnPath.bounds].
+     */
+    fun prepare(item: TextItem, reuse: PreparedText? = null): PreparedText {
+        if (reuse != null && reuse.matches(item)) return reuse
+        return if (item.path.isActive) {
+            val paints = reuse?.paints?.takeIf { reuse.spec == item.spec } ?: pathPaints(item.spec)
+            val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
+            PreparedText(item.text, item.spec, item.path, null, paints, b)
+        } else {
+            val block = reuse?.block?.takeIf { reuse.text == item.text && reuse.spec == item.spec } ?: layout(item.text, item.spec)
+            PreparedText(item.text, item.spec, item.path, block, null, null)
+        }
+    }
+
+    /** Lays out [text] with [spec] as straight (horizontal or vertical) text in its box. */
     fun layout(text: String, spec: TextSpec): TextBlock =
         if (spec.vertical) layoutVertical(text, spec) else layoutHorizontal(text, spec)
 
     private fun inkPad(spec: TextSpec) = spec.strokeWidthPx + spec.sizePx * (if (spec.italic || spec.font == TextFont.CURSIVE) 0.5f else 0.3f) + 2f
 
+    private fun block(spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, glyphs: ((Canvas, TextPaint) -> Unit)?): TextBlock {
+        val inset = spec.box.inset
+        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, inkPad(spec), lines, spec, paint, glyphs)
+    }
+
     private fun layoutHorizontal(text: String, spec: TextSpec): TextBlock {
         val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
         val fm = paint.fontMetrics
+        val wrap = spec.box.width
         if (text.isEmpty()) {
-            return TextBlock(spec.sizePx * 0.6f, (fm.descent - fm.ascent) * max(1f, spec.lineSpacing), inkPad(spec), spec, paint, null)
+            val w = if (wrap > 0f) wrap else spec.sizePx * 0.6f
+            return block(spec, w, (fm.descent - fm.ascent) * max(1f, spec.lineSpacing), 0, paint, null)
         }
-        val width = ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1
+        val width = if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1
         val align = when (spec.align) {
             TextAlign.START -> Layout.Alignment.ALIGN_NORMAL
             TextAlign.CENTER -> Layout.Alignment.ALIGN_CENTER
@@ -96,15 +229,21 @@ object TextRenderer {
             .setIncludePad(false)
             .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
             .build()
-        return TextBlock(width.toFloat(), max(1f, layout.height.toFloat()), inkPad(spec), spec, paint) { c, _ -> layout.draw(c) }
+        return block(spec, width.coerceAtLeast(1).toFloat(), max(1f, layout.height.toFloat()), layout.lineCount, paint) { c, _ -> layout.draw(c) }
     }
 
     private fun layoutVertical(text: String, spec: TextSpec): TextBlock {
         val paint = newPaint(spec).apply { textAlign = Paint.Align.CENTER }
         val em = spec.sizePx
-        val res = VerticalTextLayout.layout(text, em, spec.letterSpacing, spec.lineSpacing, spec.align) { paint.measureText(it) }
+        val res = VerticalTextLayout.layout(
+            text, em, spec.letterSpacing, spec.lineSpacing, spec.align,
+            rotatedAdvance = { paint.measureText(it) },
+            style = spec.verticalStyle,
+            wrapLength = spec.box.height,
+            leftToRight = spec.columnsLeftToRight,
+        )
         val height = if (res.height > 0f) res.height else em
-        if (res.glyphs.isEmpty()) return TextBlock(res.width, height, inkPad(spec), spec, paint, null)
+        if (res.glyphs.isEmpty()) return block(spec, res.width, height, 0, paint, null)
         val fm = paint.fontMetrics
         val baseline = -(fm.ascent + fm.descent) / 2f
         val glyphs = res.glyphs
@@ -115,7 +254,7 @@ object TextRenderer {
         }
         val punct = VerticalTextLayout.PUNCTUATION_SHIFT * em
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
-        return TextBlock(res.width, height, inkPad(spec), spec, paint) { c, p ->
+        return block(spec, res.width, height, res.columns, paint) { c, p ->
             for (i in glyphs.indices) {
                 val g = glyphs[i]
                 when (g.kind) {
@@ -148,29 +287,38 @@ object TextRenderer {
         postTranslate(item.cx, item.cy)
     }
 
-    /** Document-space bounds of everything the item may paint. */
+    /** Document-space bounds of everything the (straight) item may paint. */
     fun docBounds(item: TextItem, block: TextBlock): RectF {
         val r = RectF(-block.inkPad, -block.inkPad, block.width + block.inkPad, block.height + block.inkPad)
         matrix(item, block).mapRect(r)
         return r
     }
 
-    private val dstIn = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    /** Straight-text convenience for [drawItem]. */
+    fun drawItem(canvas: Canvas, item: TextItem, block: TextBlock, selection: Selection?, previewMode: ColorMode = ColorMode.RGB) =
+        drawItem(canvas, item, PreparedText(item.text, item.spec, item.path, block, null, null), selection, previewMode)
 
     /**
-     * Draws [item] into a canvas in DOCUMENT coordinates, clipped to [selection] (soft mask) when
-     * given. [previewMode] adds a color filter approximating the document color mode (previews
-     * only; committed pixels are constrained exactly by ColorModeOps).
+     * Draws [item] (prepared as [prepared]) into a canvas in DOCUMENT coordinates, clipped to
+     * [selection] (soft mask) when given. [previewMode] adds a color filter approximating the
+     * document color mode (previews only; committed pixels are constrained exactly by ColorModeOps).
      */
-    fun drawItem(canvas: Canvas, item: TextItem, block: TextBlock, selection: Selection?, previewMode: ColorMode = ColorMode.RGB) {
-        if (block.isEmpty) return
+    fun drawItem(canvas: Canvas, item: TextItem, prepared: PreparedText, selection: Selection?, previewMode: ColorMode = ColorMode.RGB) {
+        if (prepared.isEmpty) return
+        val bounds = prepared.docBounds(item)
+        if (bounds.isEmpty) return
         val filter = colorModePaint(previewMode)
-        val bounds = docBounds(item, block)
         val save = if (selection != null || filter != null) canvas.saveLayer(bounds, filter) else canvas.save()
-        canvas.save()
-        canvas.concat(matrix(item, block))
-        block.draw(canvas)
-        canvas.restore()
+        val block = prepared.block
+        if (block != null) {
+            canvas.save()
+            canvas.concat(matrix(item, block))
+            block.draw(canvas)
+            canvas.restore()
+        } else {
+            val paints = prepared.paints
+            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path)
+        }
         if (selection != null) {
             canvas.clipRect(bounds)
             com.brushwork.paint.engine.BitmapUtils.maskWith(canvas, selection.mask)

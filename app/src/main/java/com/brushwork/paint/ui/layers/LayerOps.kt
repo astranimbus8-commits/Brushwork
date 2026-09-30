@@ -15,6 +15,8 @@ import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextTool
 
 /**
  * Layer operations as offered by the layers panel. Wraps the controller with the guards it leaves
@@ -247,6 +249,22 @@ object LayerOps {
     fun setMaskEnabled(c: EditorController, layer: Layer, enabled: Boolean) {
         if (layer.mask == null) return
         c.setMaskEnabled(layer, enabled)
+    }
+
+    /**
+     * Edits the text of the text layer [layer] again: switches to the text tool, loads the text
+     * (the layer becomes active) and opens the text editor. False (with a message) when the layer
+     * isn't an editable text layer or can't be changed (locked / hidden).
+     */
+    fun editText(c: EditorController, layer: Layer): Boolean {
+        if (!layer.isTextLayer) {
+            c.toast("\"${layer.name}\" is not a text layer")
+            return false
+        }
+        if (!c.checkEditable(layer)) return false
+        c.selectTool(ToolId.TEXT)
+        val tool = c.tools[ToolId.TEXT] as? TextTool ?: return false
+        return tool.editLayer(layer, openEditor = true)
     }
 
     /** Makes [layer] active and chooses whether painting edits its mask or its pixels. */

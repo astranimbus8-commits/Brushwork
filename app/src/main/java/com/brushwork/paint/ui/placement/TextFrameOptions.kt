@@ -31,32 +31,69 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 
-/** Options strip of the text tool; also hosts the text editor dialog and the "Numbers" sheet. */
+/**
+ * Options strip of the text tool; also hosts the text editor dialog, the "Numbers" sheet and the
+ * question asked when an edited text layer's text was emptied.
+ */
 @Composable
 fun TextToolOptions(tool: TextTool) {
     val item = tool.item
+    val c = tool.controller
+    // The active layer isn't Compose state: follow the counters that change with it.
+    val activeText = remember(c.layersVersion, c.editCount) { c.activeLayer.takeIf { it.isTextLayer } }
+    val onPath = item?.path?.isActive == true
+    // Buttons first, hints last: on a narrow phone the strip scrolls, and only a hint may be cut.
     Row(verticalAlignment = Alignment.CenterVertically) {
-        if (item == null) {
-            Icon(Icons.Filled.TextFields, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Hint("Tap the canvas to add text")
-        } else {
-            StripButton(Icons.Filled.Edit, "Edit text") { tool.openEditor() }
-            StripButton(Icons.Filled.Tune, "Numbers") { tool.numbersOpen = true }
+        when {
+            item == null && activeText != null -> StripButton(Icons.Filled.Edit, "Edit text") { tool.editLayer(activeText, openEditor = true) }
+            item == null -> {
+                Icon(Icons.Filled.TextFields, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(4.dp))
+            }
+            else -> {
+                StripButton(Icons.Filled.Edit, "Edit text") { tool.openEditor() }
+                StripButton(Icons.Filled.Tune, "Numbers") { tool.numbersOpen = true }
+            }
         }
-        Spacer(Modifier.width(4.dp))
         ToolIconButton(
             icon = if (tool.isVertical) Icons.Filled.TextRotateVertical else Icons.Filled.TextRotationNone,
             contentDescription = if (tool.isVertical) "Vertical text (tap for horizontal)" else "Horizontal text (tap for vertical)",
             onClick = { tool.toggleVertical() },
-            selected = tool.isVertical,
+            selected = tool.isVertical && !onPath,
+            enabled = !onPath,
+        )
+        Spacer(Modifier.width(4.dp))
+        Hint(
+            when {
+                onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
+                item != null -> if (item.spec.vertical) "Bottom handle: box height" else "Side handle: box width"
+                activeText != null -> "or tap a text to edit it, empty canvas to add"
+                else -> "Tap the canvas to add text, or a text to edit it"
+            }
         )
     }
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)
+    if (tool.emptyTextPrompt && item != null) EmptyTextDialog(tool)
+}
+
+/** The edited text layer's text was emptied: delete the layer, or keep its old text. */
+@Composable
+private fun EmptyTextDialog(tool: TextTool) {
+    val name = tool.editingLayer?.name ?: "this text layer"
+    BwDialog(
+        title = "Delete the text layer?",
+        onDismiss = { tool.keepOldText() },
+        confirmText = "Delete layer",
+        onConfirm = { tool.deleteEditedLayer() },
+        dismissText = "Keep old text",
+    ) {
+        Text("The text is empty. Delete \"$name\" (you can undo this), or keep its old text?")
+    }
 }
 
 /** Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog. */
