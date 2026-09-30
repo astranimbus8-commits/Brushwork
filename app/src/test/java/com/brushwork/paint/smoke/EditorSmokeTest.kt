@@ -186,11 +186,20 @@ class EditorSmokeTest {
         c.selectTool(ToolId.BRUSH)
         settle()
 
+        // ---- the layers window: not a sheet (no extra window), closed with its ✕
+        click("Open layers")
+        assertWindowsLaidOut()
+        assertEquals("the layers window is part of the editor window", 1, SmokeUi.windows().size)
+        assertTrue("layers window shows the stack", has("Layer 2") && has("Close layers", exact = true))
+        Smoke.assertQuiet(c, "layers window")
+        SmokeUi.assertIdle("layers window")
+        click("Close layers", exact = true)
+        assertFalse("layers window closed", has("Add layer"))
+
         // ---- every panel through the chrome
         val panels = listOf(
             "Open brush settings" to "PRESETS",
             "Open color picker" to "Previous",
-            "Open layers" to "Layer 2",
             "Filters" to "Filters",
             "Selection" to "Select all",
             "Canvas" to "Canvas",
@@ -488,21 +497,21 @@ class EditorSmokeTest {
         val root = activity.window.decorView
         val touch = Smoke.Touch(root)
 
-        // Side slider: a real vertical drag shows the size preview and changes the size.
-        Smoke.step("side slider drag")
+        // Slider bar above the hotbar: a real rightward drag shows the size preview and grows the size.
+        Smoke.step("slider bar drag")
         val slider = com.brushwork.paint.ui.color.RobolectricUi.elements().last { e ->
             e.node.config.contains(androidx.compose.ui.semantics.SemanticsActions.SetProgress) &&
                 e.node.config.getOrElseNullable(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription) { null }?.contains("Brush size") == true
         }
         val sb = slider.bounds
         touch.send(MotionEvent.ACTION_DOWN, P(0, sb.center.x, sb.center.y))
-        for (s in 1..8) { touch.idle(16); touch.send(MotionEvent.ACTION_MOVE, P(0, sb.center.x, sb.center.y - s * 12f)) }
+        for (s in 1..8) { touch.idle(16); touch.send(MotionEvent.ACTION_MOVE, P(0, sb.center.x + s * 12f, sb.center.y)) }
         settle(2)
         assertWindowsLaidOut()
-        touch.send(MotionEvent.ACTION_UP, P(0, sb.center.x, sb.center.y - 96f))
+        touch.send(MotionEvent.ACTION_UP, P(0, sb.center.x + 96f, sb.center.y))
         settle()
-        assertTrue("dragging up grew the brush: ${c.brush.size}", c.brush.size > 20f)
-        Smoke.assertQuiet(c, "side slider")
+        assertTrue("dragging right grew the brush: ${c.brush.size}", c.brush.size > 20f)
+        Smoke.assertQuiet(c, "slider bar")
 
         // Busy overlay with a Stop button; the canvas ignores touches meanwhile.
         Smoke.step("busy overlay")
@@ -534,6 +543,7 @@ class EditorSmokeTest {
         assertNotNull(c.filterSession)
         assertFalse("tool options hidden during a filter", has("Choose brush"))
         assertFalse("hotbar hidden during a filter", has("Open color picker"))
+        assertFalse("slider bar hidden during a filter", has("Type brush size"))
         assertWindowsLaidOut()
         assertTrue("filter preview finished", Smoke.pumpUntil { settle(1); c.filterSession?.let { !it.isRendering } ?: true })
         c.filterSession?.cancel()
@@ -723,34 +733,46 @@ class EditorSmokeTest {
         var open by mutableStateOf(true)
         activity.setContent { BrushworkTheme { if (open) LayersPanel(c, { open = false }, onImportPicture = {}) } }
         settle()
-        assertWindowsLaidOut(2)
-        fun quiet(where: String) { settle(4); Smoke.assertQuiet(c, where); assertWindowsLaidOut(2) }
+        // The layers window is not a sheet: it is drawn in the host's own window.
+        assertWindowsLaidOut(1)
+        assertEquals(1, SmokeUi.windows().size)
+        fun quiet(where: String) { settle(4); Smoke.assertQuiet(c, where); assertWindowsLaidOut(1); assertEquals("$where: no window left open", 1, SmokeUi.windows().size) }
+        fun menu(item: String, exact: Boolean = true) { click("More layer actions"); click(item, exact) }
+        fun maskMenu(item: String) { click("More layer actions"); click("Layer mask"); click(item, exact = true) }
 
         click("Layer 2", exact = true); assertEquals(1, c.doc.activeLayerIndex); quiet("select row")
         click("Add layer"); assertEquals(4, c.doc.layers.size); quiet("add")
         click("Duplicate layer"); assertEquals(5, c.doc.layers.size); quiet("duplicate")
-        click("Move layer up"); quiet("up")
-        click("Move layer down"); quiet("down")
+        menu("Move layer up"); quiet("up")
+        menu("Move layer down"); quiet("down")
         click("Merge down"); assertEquals(4, c.doc.layers.size); quiet("merge")
         click("Delete layer"); SmokeUi.clickIn("Delete layer?", "Delete"); assertEquals(3, c.doc.layers.size); quiet("delete")
         click("Choose blend mode"); click("Multiply", exact = true)
         assertEquals(com.brushwork.paint.model.LayerBlendMode.MULTIPLY, c.activeLayer.blendMode); quiet("blend")
         for (t in listOf("Clipping", "α lock", "Lock")) { click(t, exact = true); click(t, exact = true); quiet("toggle $t") }
         click("Hide layer"); click("Show layer"); quiet("visibility")
-        click("Layer mask"); click("Add mask", exact = true); assertNotNull(c.activeLayer.mask); quiet("add mask")
+        maskMenu("Add mask"); assertNotNull(c.activeLayer.mask); quiet("add mask")
         for (item in listOf("Invert mask", "Disable mask", "Enable mask", "Edit layer content", "Edit mask", "Apply mask")) {
-            click("Layer mask"); click(item, exact = true); quiet(item)
+            maskMenu(item); quiet(item)
         }
         assertEquals(null, c.activeLayer.mask)
-        click("Layer mask"); click("Add mask", exact = true); click("Layer mask"); click("Delete mask", exact = true); quiet("delete mask")
+        maskMenu("Add mask"); maskMenu("Delete mask"); quiet("delete mask")
+        // The typed opacity: tap the value, type, Done = one undo step.
+        click("Type layer opacity")
+        SmokeUi.typeAndDone("Layer opacity", "35")
+        assertEquals(0.35f, c.activeLayer.opacity, 1e-4f)
+        assertEquals("Opacity", c.undoManager.undoLabel)
+        quiet("typed opacity")
         click("More layer actions"); click("Rename…", exact = true)
         SmokeUi.typeAndDone("Name", "Renamed")
         assertEquals("Renamed", c.activeLayer.name); quiet("rename")
-        for (item in listOf("Flip horizontal", "Flip vertical")) { click("More layer actions"); click(item, exact = true); quiet(item) }
-        click("More layer actions"); click("Fill", exact = false); quiet("fill")
-        click("More layer actions"); click("Clear", exact = false); quiet("clear")
+        for (item in listOf("Flip horizontal", "Flip vertical")) { menu(item); quiet(item) }
+        menu("Fill", exact = false); quiet("fill")
+        menu("Clear", exact = false); quiet("clear")
 
         // Opacity: a real drag on the slider = live preview, ONE undo step on release.
+        c.setLayerProps(c.activeLayer, c.activeLayer.props().copy(opacity = 1f))
+        quiet("opacity reset")
         val slider = RobolectricUiElements.slider()
         val undo0 = c.undoManager.undoCount
         val b = slider.bounds
@@ -986,10 +1008,12 @@ class EditorSmokeTest {
             settle()
         }
         click("Open layers")
-        assertWindowsLaidOut(2)
+        assertWindowsLaidOut(1)
         assertTrue(has("Add layer"))
+        assertTrue("landscape layers window has room for its rows", has("Layer 1", exact = true))
         SmokeUi.assertIdle("layers panel in landscape")
-        closeSheets(act) {}
+        click("Close layers", exact = true)
+        assertFalse(has("Add layer"))
         org.robolectric.RuntimeEnvironment.setQualifiers("w360dp-h760dp-port-hdpi")
         ctl.configurationChange()
         settle()
@@ -1108,10 +1132,13 @@ class EditorSmokeTest {
             }
         }
         settle()
+        // Everything opens its own window except the layers window (drawn in the host's window).
+        fun windowsFor(i: Int) = if (i == 3) 1 else 2
         for ((i, name) in names.withIndex()) {
             which = i
             settle()
-            assertWindowsLaidOut(2)
+            assertWindowsLaidOut(windowsFor(i))
+            if (i == 3) assertTrue("layers window shown", has("Close layers", exact = true))
             Smoke.assertQuiet(c, name)
             SmokeUi.assertIdle(name)
             which = -1
@@ -1126,7 +1153,7 @@ class EditorSmokeTest {
         for (i in listOf(1, 3, 4, 8)) {
             which = i
             settle()
-            assertWindowsLaidOut(2)
+            assertWindowsLaidOut(windowsFor(i))
             which = -1
             settle()
         }

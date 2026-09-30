@@ -2,10 +2,14 @@ package com.brushwork.paint.ui.layers
 
 import android.os.SystemClock
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -14,6 +18,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -32,6 +38,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Merge
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Opacity
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -42,6 +49,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,14 +67,18 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.ui.common.ColorSwatch
-import com.brushwork.paint.ui.common.LabeledSlider
+import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -73,36 +86,48 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
-/** Properties of the active layer: blend mode, clipping / alpha lock / lock, opacity. */
+/**
+ * Runs a layers-window action. The window is not modal, so a finger may still be drawing on the
+ * canvas: that stroke ends first (a layer switch or edit must never land mid-gesture).
+ */
+internal inline fun EditorController.fromPanel(block: () -> Unit) {
+    endCanvasGesture()
+    block()
+}
+
+/**
+ * Properties of the active layer, compact: blend mode + clipping / alpha lock / lock toggles on
+ * one row, the opacity slider (live preview, one undo step) with its typed value on the next.
+ */
 @Composable
-internal fun LayerProperties(controller: EditorController, row: LayerRowModel, isBottom: Boolean) {
+internal fun LayerProperties(controller: EditorController, row: LayerRowModel, isBottom: Boolean, onTypeOpacity: () -> Unit) {
     val layer = row.layer
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
         BlendModeButton(
             mode = row.blendMode,
-            onSelect = { controller.setBlendMode(layer, it) },
+            onSelect = { m -> controller.fromPanel { controller.setBlendMode(layer, m) } },
             modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.width(4.dp))
+        Spacer(Modifier.width(2.dp))
         PropToggle(
             label = "Clipping",
             checked = row.clipping,
             // A clipping flag on the bottom layer has no effect; only allow turning it off there.
             enabled = !isBottom || row.clipping,
-            onToggle = { controller.toggleClipping(layer) },
-        ) { tint -> Icon(Icons.Filled.SubdirectoryArrowRight, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) }
+            onToggle = { controller.fromPanel { controller.toggleClipping(layer) } },
+        ) { tint -> Icon(Icons.Filled.SubdirectoryArrowRight, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp)) }
         PropToggle(
             label = "α lock",
             checked = row.alphaLocked,
-            onToggle = { controller.toggleAlphaLock(layer) },
+            onToggle = { controller.fromPanel { controller.toggleAlphaLock(layer) } },
         ) { tint -> AlphaLockBadge(tint) }
         PropToggle(
             label = "Lock",
             checked = row.locked,
-            onToggle = { controller.toggleLock(layer) },
-        ) { tint -> Icon(if (row.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) }
+            onToggle = { controller.fromPanel { controller.toggleLock(layer) } },
+        ) { tint -> Icon(if (row.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp)) }
     }
-    OpacitySlider(controller, layer, row.opacity)
+    OpacitySlider(controller, layer, row.opacity, onTypeOpacity)
 }
 
 /** Drop-down listing every [LayerBlendMode]. */
@@ -114,12 +139,12 @@ private fun BlendModeButton(mode: LayerBlendMode, onSelect: (LayerBlendMode) -> 
             onClick = { open = true },
             shape = RoundedCornerShape(8.dp),
             color = BrushworkColors.ChromeHigh,
-            modifier = Modifier.fillMaxWidth().height(48.dp),
+            modifier = Modifier.fillMaxWidth().height(40.dp),
         ) {
-            Row(Modifier.padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.padding(start = 8.dp, end = 2.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Blend mode", style = MaterialTheme.typography.labelSmall, color = BrushworkColors.OnChromeDim, maxLines = 1)
-                    Text(mode.label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("Blend", style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, lineHeight = 10.sp, color = BrushworkColors.OnChromeDim, maxLines = 1)
+                    Text(mode.label, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose blend mode")
             }
@@ -139,7 +164,7 @@ private fun BlendModeButton(mode: LayerBlendMode, onSelect: (LayerBlendMode) -> 
     }
 }
 
-/** Compact icon-over-label toggle (>= 48dp touch target). */
+/** Compact icon-over-label toggle (48 x 40 dp touch target). */
 @Composable
 private fun PropToggle(
     label: String,
@@ -155,45 +180,66 @@ private fun PropToggle(
     }
     Column(
         Modifier
-            .size(width = 56.dp, height = 48.dp)
+            .size(width = 48.dp, height = 40.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (checked) BrushworkColors.AccentDim else Color.Transparent)
             .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() }),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+        verticalArrangement = Arrangement.Center,
     ) {
-        Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) { glyph(tint) }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = tint, maxLines = 1)
+        Box(Modifier.height(18.dp), contentAlignment = Alignment.Center) { glyph(tint) }
+        Text(label, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, lineHeight = 11.sp, color = tint, maxLines = 1)
     }
 }
 
 /**
  * Opacity 0-100 %. Dragging previews live through [EditorController.previewLayerProps] at most
- * ~30 times a second (each preview recomposites the whole canvas); releasing records ONE undo step.
+ * ~30 times a second (each preview recomposites the whole canvas); releasing records ONE undo
+ * step. Tapping the value ([onType]) lets the user type it.
  */
 @Composable
-private fun OpacitySlider(controller: EditorController, layer: Layer, opacity: Float) {
+private fun OpacitySlider(controller: EditorController, layer: Layer, opacity: Float, onType: () -> Unit) {
     val scope = rememberCoroutineScope()
     val preview = remember(layer) { OpacityPreview(controller, layer, scope) }
     var dragValue by remember(layer) { mutableStateOf<Float?>(null) }
-    // Leaving composition mid-drag (sheet dismissed) must still record the change.
+    // Leaving composition mid-drag (window closed) must still record the change.
     DisposableEffect(preview) { onDispose { preview.finish() } }
     val shown = dragValue ?: opacity
-    LabeledSlider(
-        label = "Opacity",
-        value = shown * 100f,
-        onValueChange = { v ->
-            val o = (v / 100f).coerceIn(0f, 1f)
-            dragValue = o
-            preview.update(o)
-        },
-        valueRange = 0f..100f,
-        valueText = "${(shown * 100f).roundToInt()}%",
-        onValueChangeFinished = {
-            preview.finish()
-            dragValue = null
-        },
-    )
+    Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        Icon(Icons.Filled.Opacity, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.padding(start = 4.dp, end = 2.dp).size(16.dp))
+        Slider(
+            value = (shown * 100f).coerceIn(0f, 100f),
+            onValueChange = { v ->
+                if (dragValue == null) controller.endCanvasGesture()
+                val o = (v / 100f).coerceIn(0f, 1f)
+                dragValue = o
+                preview.update(o)
+            },
+            valueRange = 0f..100f,
+            onValueChangeFinished = {
+                preview.finish()
+                dragValue = null
+            },
+            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+            modifier = Modifier.weight(1f).semantics { contentDescription = "Layer opacity" },
+        )
+        Box(
+            Modifier
+                .width(52.dp)
+                .fillMaxHeight()
+                .clip(RoundedCornerShape(8.dp))
+                .clickable(onClickLabel = "Type layer opacity", role = Role.Button, onClick = onType),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "${(shown * 100f).roundToInt()}%",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(BrushworkColors.ChromeHigh).padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+        }
+    }
 }
 
 /** Throttled live preview of one layer's opacity with a single undo step per gesture. */
@@ -248,7 +294,10 @@ private class OpacityPreview(
     }
 }
 
-/** Icon toolbar + mask menu + overflow menu for the active layer. */
+/**
+ * The window's action row: add, duplicate (only the selected pixels while there is a selection),
+ * delete, merge down, and the overflow menu with everything else.
+ */
 @Composable
 internal fun LayerToolbar(
     controller: EditorController,
@@ -262,24 +311,23 @@ internal fun LayerToolbar(
     onImportPicture: () -> Unit,
 ) {
     val layer = row.layer
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        BarButton(Icons.Filled.Add, "Add layer", enabled = canAddLayer) { LayerOps.addLayer(controller) }
-        BarButton(Icons.Filled.ContentCopy, "Duplicate layer", enabled = canAddLayer) { LayerOps.duplicate(controller, layer) }
-        BarButton(Icons.Filled.Delete, "Delete layer", enabled = layerCount > 1, onClick = onDelete)
-        BarButton(Icons.Filled.Merge, "Merge down", enabled = docIndex > 0, rotation = 180f) { LayerOps.mergeDown(controller, layer) }
-        BarButton(Icons.Filled.ArrowUpward, "Move layer up", enabled = docIndex < layerCount - 1) { controller.moveLayerUp(layer) }
-        BarButton(Icons.Filled.ArrowDownward, "Move layer down", enabled = docIndex > 0) { controller.moveLayerDown(layer) }
+    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+        BarButton(Icons.Filled.Add, "Add layer", enabled = canAddLayer) { controller.fromPanel { LayerOps.addLayer(controller) } }
+        BarButton(
+            Icons.Filled.ContentCopy,
+            if (hasSelection) "Duplicate layer (selected pixels only)" else "Duplicate layer",
+            enabled = canAddLayer,
+        ) { controller.fromPanel { LayerOps.duplicate(controller, layer) } }
+        BarButton(Icons.Filled.Delete, "Delete layer", enabled = layerCount > 1) { controller.fromPanel(onDelete) }
+        BarButton(Icons.Filled.Merge, "Merge down", enabled = docIndex > 0, rotation = 180f) { controller.fromPanel { LayerOps.mergeDown(controller, layer) } }
         Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            MaskMenuButton(controller, row, hasSelection)
-        }
-        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
-            OverflowMenuButton(controller, row, canAddLayer, onRename, onImportPicture)
+            OverflowMenuButton(controller, row, docIndex, layerCount, canAddLayer, hasSelection, onRename, onImportPicture)
         }
     }
 }
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.BarButton(
+private fun RowScope.BarButton(
     icon: ImageVector,
     description: String,
     enabled: Boolean = true,
@@ -304,62 +352,77 @@ private fun BarIcon(icon: ImageVector, description: String, enabled: Boolean, ro
     ) { Icon(icon, contentDescription = description, modifier = Modifier.rotate(rotation)) }
 }
 
-@Composable
-private fun MaskMenuButton(controller: EditorController, row: LayerRowModel, hasSelection: Boolean) {
-    val layer = row.layer
-    var open by remember { mutableStateOf(false) }
-    Box {
-        BarIcon(Icons.Filled.Contrast, "Layer mask", enabled = true) { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BrushworkColors.ChromeHigh) {
-            if (!row.hasMask) {
-                if (hasSelection) {
-                    MenuItem("Add mask from selection", Icons.Filled.Add) { open = false; LayerOps.addMask(controller, layer, fromSelection = true) }
-                }
-                MenuItem(if (hasSelection) "Add mask (reveal all)" else "Add mask", Icons.Filled.Add) {
-                    open = false; LayerOps.addMask(controller, layer, fromSelection = false)
-                }
-            } else {
-                val editing = row.editingMask
-                MenuItem(if (editing) "Edit layer content" else "Edit mask", Icons.Filled.Edit) {
-                    open = false; LayerOps.editTarget(controller, layer, mask = !editing)
-                }
-                val enabled = row.maskEnabled
-                MenuItem(if (enabled) "Disable mask" else "Enable mask", if (enabled) Icons.Filled.VisibilityOff else Icons.Filled.Visibility) {
-                    open = false; LayerOps.setMaskEnabled(controller, layer, !enabled)
-                }
-                MenuItem("Invert mask", Icons.Filled.InvertColors) { open = false; LayerOps.invertMask(controller, layer) }
-                MenuItem("Apply mask", Icons.Filled.Check) { open = false; LayerOps.applyMask(controller, layer) }
-                MenuItem("Delete mask", Icons.Filled.Delete) { open = false; LayerOps.deleteMask(controller, layer) }
-            }
-        }
-    }
-}
-
+/**
+ * Everything that doesn't fit the action row: import, rename, move up/down, the mask actions (a
+ * sub-page of the same menu), flips, clear and fill.
+ */
 @Composable
 private fun OverflowMenuButton(
     controller: EditorController,
     row: LayerRowModel,
+    docIndex: Int,
+    layerCount: Int,
     canAddLayer: Boolean,
+    hasSelection: Boolean,
     onRename: () -> Unit,
     onImportPicture: () -> Unit,
 ) {
     val layer = row.layer
     var open by remember { mutableStateOf(false) }
+    var maskPage by remember { mutableStateOf(false) }
+    val close = { open = false; maskPage = false }
+    /** Closes the menu, then runs [block] as a panel action. */
+    val act = { block: () -> Unit -> close(); controller.fromPanel(block) }
     Box {
-        BarIcon(Icons.Filled.MoreVert, "More layer actions", enabled = true) { open = true }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BrushworkColors.ChromeHigh) {
-            MenuItem("Import picture", Icons.Filled.AddPhotoAlternate, enabled = canAddLayer) { open = false; onImportPicture() }
-            MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { open = false; onRename() }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            MenuItem("Flip horizontal", Icons.Filled.Flip) { open = false; LayerOps.flip(controller, layer, horizontal = true) }
-            MenuItem("Flip vertical", Icons.Filled.Flip, iconRotation = 90f) { open = false; LayerOps.flip(controller, layer, horizontal = false) }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            MenuItem(LayerOps.clearLabel(controller, layer), Icons.Filled.LayersClear) { open = false; LayerOps.clear(controller, layer) }
-            DropdownMenuItem(
-                text = { Text(LayerOps.fillLabel(controller, layer)) },
-                onClick = { open = false; LayerOps.fill(controller, layer) },
-                leadingIcon = { ColorSwatch(controller.color, size = 22.dp) },
-            )
+        BarIcon(Icons.Filled.MoreVert, "More layer actions", enabled = true) { maskPage = false; open = true }
+        DropdownMenu(expanded = open, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+            if (!maskPage) {
+                MenuItem("Import picture", Icons.Filled.AddPhotoAlternate, enabled = canAddLayer) { close(); onImportPicture() }
+                MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); onRename() }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem("Move layer up", Icons.Filled.ArrowUpward, enabled = docIndex < layerCount - 1) { act { controller.moveLayerUp(layer) } }
+                MenuItem("Move layer down", Icons.Filled.ArrowDownward, enabled = docIndex > 0) { act { controller.moveLayerDown(layer) } }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                DropdownMenuItem(
+                    text = { Text(if (row.hasMask) "Layer mask" else "Layer mask (none)") },
+                    onClick = { maskPage = true },
+                    leadingIcon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
+                    trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Open mask actions") },
+                )
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem("Flip horizontal", Icons.Filled.Flip) { act { LayerOps.flip(controller, layer, horizontal = true) } }
+                MenuItem("Flip vertical", Icons.Filled.Flip, iconRotation = 90f) { act { LayerOps.flip(controller, layer, horizontal = false) } }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem(LayerOps.clearLabel(controller, layer), Icons.Filled.LayersClear) { act { LayerOps.clear(controller, layer) } }
+                DropdownMenuItem(
+                    text = { Text(LayerOps.fillLabel(controller, layer)) },
+                    onClick = { act { LayerOps.fill(controller, layer) } },
+                    leadingIcon = { ColorSwatch(controller.color, size = 22.dp) },
+                )
+            } else {
+                MenuItem("Back", Icons.AutoMirrored.Filled.ArrowBack) { maskPage = false }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                if (!row.hasMask) {
+                    if (hasSelection) {
+                        MenuItem("Add mask from selection", Icons.Filled.Add) { act { LayerOps.addMask(controller, layer, fromSelection = true) } }
+                    }
+                    MenuItem(if (hasSelection) "Add mask (reveal all)" else "Add mask", Icons.Filled.Add) {
+                        act { LayerOps.addMask(controller, layer, fromSelection = false) }
+                    }
+                } else {
+                    val editing = row.editingMask
+                    MenuItem(if (editing) "Edit layer content" else "Edit mask", Icons.Filled.Edit) {
+                        act { LayerOps.editTarget(controller, layer, mask = !editing) }
+                    }
+                    val enabled = row.maskEnabled
+                    MenuItem(if (enabled) "Disable mask" else "Enable mask", if (enabled) Icons.Filled.VisibilityOff else Icons.Filled.Visibility) {
+                        act { LayerOps.setMaskEnabled(controller, layer, !enabled) }
+                    }
+                    MenuItem("Invert mask", Icons.Filled.InvertColors) { act { LayerOps.invertMask(controller, layer) } }
+                    MenuItem("Apply mask", Icons.Filled.Check) { act { LayerOps.applyMask(controller, layer) } }
+                    MenuItem("Delete mask", Icons.Filled.Delete) { act { LayerOps.deleteMask(controller, layer) } }
+                }
+            }
         }
     }
 }

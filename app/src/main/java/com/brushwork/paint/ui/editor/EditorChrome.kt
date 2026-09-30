@@ -45,6 +45,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -158,8 +159,26 @@ private fun OverflowMenu(first: List<MenuEntry>, rest: List<MenuEntry>) {
 }
 
 /**
+ * Keeps touches on a chrome container (including the gaps between its controls) from falling
+ * through to the full-screen canvas behind it, like a Material Surface does.
+ */
+internal fun Modifier.blockCanvasTouches(): Modifier = pointerInput(Unit) {}
+
+/** Whether the Redo button does something right now (see [EditorController.redo]). */
+internal fun canRedoNow(controller: EditorController): Boolean {
+    if (controller.filterSession != null) return false
+    val tool = controller.currentTool
+    // A tool that took back a step of its pending work (a curve point) redoes that first; an
+    // untouched automatic lift (transform tool) doesn't block redo (see Tool.hasUserChanges).
+    if (tool.hasPendingWork && tool.canRedoStep) return true
+    return controller.canRedo && !tool.hasUserChanges
+}
+
+/**
  * Bottom tool bar (ibisPaint-like): tool picker, brush/eraser toggle, brush size, color,
- * layers, undo, redo. Seven 44dp targets fit a 360dp-wide phone.
+ * layers, undo, redo. Seven 44dp targets fit a 360dp-wide phone. [onHistory] receives the
+ * feedback text of an undo/redo pressed here (see [HistoryLabels]); [layersOpen] highlights the
+ * Layers button while the layers window is shown.
  */
 @Composable
 fun Hotbar(
@@ -169,6 +188,8 @@ fun Hotbar(
     onColorPanel: () -> Unit,
     onLayersPanel: () -> Unit,
     modifier: Modifier = Modifier,
+    layersOpen: Boolean = false,
+    onHistory: (String) -> Unit = {},
 ) {
     val active = controller.activeToolId
     val paintTool = controller.lastPaintTool
@@ -176,15 +197,19 @@ fun Hotbar(
     val preset = controller.presetFor(controller.sliderToolId)
     controller.layersVersion // observe layer changes for the active layer number
     val layerNumber = controller.doc.activeLayerIndex.coerceIn(0, (controller.doc.layers.size - 1).coerceAtLeast(0)) + 1
-    val tool = controller.currentTool
-    val pending = tool.hasPendingWork
-    // An untouched automatic lift (transform tool) doesn't block redo (see Tool.hasUserChanges).
-    val userWork = tool.hasUserChanges
-    val session = controller.filterSession
+    // Derived: the tool state behind these changes on every move of a transform / curve / shape
+    // drag, which must not recompose the bar each time. Undo acts when there is history, the
+    // user's own tool work to take back, or a filter preview to cancel (an untouched automatic
+    // lift alone has nothing to undo).
+    val undoEnabled by remember(controller) {
+        derivedStateOf { controller.canUndo || controller.currentTool.hasUserChanges || controller.filterSession != null }
+    }
+    val redoEnabled by remember(controller) { derivedStateOf { canRedoNow(controller) } }
     Box(
         modifier
             .fillMaxWidth()
             .background(BrushworkColors.Chrome)
+            .blockCanvasTouches()
             .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
         contentAlignment = Alignment.Center,
     ) {
@@ -213,16 +238,26 @@ fun Hotbar(
                     .clickable(onClickLabel = "Open color picker", role = Role.Button, onClick = onColorPanel),
                 contentAlignment = Alignment.Center,
             ) { ColorSwatch(controller.color, size = 30.dp) }
-            LayersButton(layerNumber, onLayersPanel)
+            LayersButton(layerNumber, layersOpen, onLayersPanel)
             ToolIconButton(
                 Icons.AutoMirrored.Filled.Undo, "Undo",
-                { controller.endCanvasGesture(); controller.undo() },
-                enabled = controller.canUndo || pending || session != null,
+                {
+                    controller.endCanvasGesture()
+                    val label = HistoryLabels.undo(controller)
+                    controller.undo()
+                    onHistory(label)
+                },
+                enabled = undoEnabled,
             )
             ToolIconButton(
                 Icons.AutoMirrored.Filled.Redo, "Redo",
-                { controller.endCanvasGesture(); controller.redo() },
-                enabled = controller.canRedo && !userWork && session == null,
+                {
+                    controller.endCanvasGesture()
+                    val label = HistoryLabels.redo(controller)
+                    controller.redo()
+                    onHistory(label)
+                },
+                enabled = redoEnabled,
             )
         }
     }
@@ -248,15 +283,20 @@ private fun BrushSizeButton(size: Float, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LayersButton(number: Int, onClick: () -> Unit) {
+private fun LayersButton(number: Int, open: Boolean, onClick: () -> Unit) {
     Box(
         Modifier
             .size(44.dp)
             .clip(RoundedCornerShape(10.dp))
-            .clickable(onClickLabel = "Open layers (active layer $number)", role = Role.Button, onClick = onClick),
+            .background(if (open) BrushworkColors.AccentDim else Color.Transparent)
+            .clickable(
+                onClickLabel = if (open) "Close layers (active layer $number)" else "Open layers (active layer $number)",
+                role = Role.Button,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(Icons.Filled.Layers, contentDescription = null, tint = BrushworkColors.OnChrome)
+        Icon(Icons.Filled.Layers, contentDescription = null, tint = if (open) Color.White else BrushworkColors.OnChrome)
         Text(
             number.toString(),
             fontSize = 10.sp,
@@ -317,19 +357,26 @@ private fun ToolTile(id: ToolId, selected: Boolean, modifier: Modifier, onClick:
     }
 }
 
-/** Floating apply / discard buttons for a tool with uncommitted editable work. */
+/**
+ * Floating apply / discard buttons for a tool with uncommitted editable work; [vertical] stacks
+ * them (apply on top), for the narrow strip beside the layers window.
+ */
 @Composable
-fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier = Modifier) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-        Surface(
-            onClick = { controller.endCanvasGesture(); tool.discard(); controller.invalidateOverlay() },
-            shape = CircleShape,
-            color = BrushworkColors.ChromeHigh,
-            shadowElevation = 4.dp,
-            modifier = Modifier.size(52.dp),
-        ) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Close, contentDescription = "Discard ${tool.id.label.lowercase()} edit", tint = BrushworkColors.Danger) }
+fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier = Modifier, vertical: Boolean = false) {
+    if (vertical) {
+        Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            PendingButtons(controller, tool, applyFirst = true)
         }
+    } else {
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+            PendingButtons(controller, tool, applyFirst = false)
+        }
+    }
+}
+
+@Composable
+private fun PendingButtons(controller: EditorController, tool: Tool, applyFirst: Boolean) {
+    val apply: @Composable () -> Unit = {
         Surface(
             onClick = { controller.endCanvasGesture(); tool.commit(); controller.invalidateOverlay() },
             shape = CircleShape,
@@ -340,6 +387,17 @@ fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier 
             Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Check, contentDescription = "Apply ${tool.id.label.lowercase()} edit", tint = Color(0xFF002B55)) }
         }
     }
+    if (applyFirst) apply()
+    Surface(
+        onClick = { controller.endCanvasGesture(); tool.discard(); controller.invalidateOverlay() },
+        shape = CircleShape,
+        color = BrushworkColors.ChromeHigh,
+        shadowElevation = 4.dp,
+        modifier = Modifier.size(52.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Close, contentDescription = "Discard ${tool.id.label.lowercase()} edit", tint = BrushworkColors.Danger) }
+    }
+    if (!applyFirst) apply()
 }
 
 /**

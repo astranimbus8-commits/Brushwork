@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.CloseFullscreen
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Deselect
 import androidx.compose.material.icons.outlined.InvertColors
 import androidx.compose.material.icons.outlined.Layers
@@ -63,8 +64,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
 /**
- * The selection menu: select all / deselect / invert, grow / shrink / feather, select from layer
- * opacity, smart select (subject, sky, ...) and edits of the selected pixels.
+ * The selection menu: copy / cut / paste / deselect, select all / invert, grow / shrink /
+ * feather, select from layer opacity, smart select (subject, sky, ...) and edits of the selected
+ * pixels.
  *
  * Operations that run in the background or may report a problem close the sheet first, so the
  * editor's busy overlay (with its Stop button) and messages are visible.
@@ -91,9 +93,17 @@ fun SelectionPanel(controller: EditorController, onDismiss: () -> Unit) {
             color = BrushworkColors.OnChromeDim,
         )
         Spacer(Modifier.height(8.dp))
+        // Clipboard first: copy / cut the selected pixels of the active layer (the whole layer's
+        // painting without a selection) and paste them back as a new layer, in place.
+        TileRow {
+            ActionTile(Icons.Outlined.ContentCopy, if (hasSelection) "Copy" else "Copy layer") { closeThen { controller.copySelection() } }
+            ActionTile(Icons.Outlined.ContentCut, if (hasSelection) "Cut" else "Cut layer") { closeThen { controller.cutSelection() } }
+            ActionTile(Icons.Outlined.ContentPaste, "Paste", enabled = controller.clipboard != null) { closeThen { controller.paste() } }
+            ActionTile(Icons.Outlined.Deselect, "Deselect", enabled = hasSelection) { controller.deselect() }
+        }
+        Spacer(Modifier.height(6.dp))
         TileRow {
             ActionTile(Icons.Outlined.SelectAll, "Select all") { controller.selectAll() }
-            ActionTile(Icons.Outlined.Deselect, "Deselect", enabled = hasSelection) { controller.deselect() }
             ActionTile(Icons.Outlined.InvertColors, "Invert") { controller.invertSelection() }
         }
 

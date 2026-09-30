@@ -1,5 +1,7 @@
 package com.brushwork.paint.ui.layers
 
+import kotlin.math.roundToInt
+
 /**
  * Pure index/structure helpers for the layers panel (no Android dependencies, JVM-tested).
  *
@@ -54,6 +56,36 @@ object LayerListMath {
         clipStructure(clippingDocOrder).asReversed()
 
     /**
+     * Size in dp (width, height) of the floating layers window on a [screenW] x [screenH] dp
+     * screen, before the editor fits it between its top and bottom chrome.
+     *
+     * Portrait (and tall landscape tablets): about 78 % of the width, at most 300 dp (360 dp on
+     * tablets), and half the height. Short screens (a phone in landscape): a wider window for a
+     * side-by-side layout that takes all the height the chrome leaves.
+     */
+    fun windowSize(screenW: Int, screenH: Int): WindowDp {
+        val w = screenW.coerceAtLeast(1)
+        val h = screenH.coerceAtLeast(1)
+        if (isShortScreen(h)) {
+            return WindowDp(minOf(SHORT_MAX_WIDTH, (w * 0.65f).roundToInt()).coerceAtLeast(minOf(w, SHORT_MIN_WIDTH)), h)
+        }
+        val maxW = if (w >= TABLET_WIDTH) TABLET_MAX_WIDTH else PHONE_MAX_WIDTH
+        val width = minOf(maxW, (w * 0.78f).roundToInt())
+        val height = maxOf(MIN_HEIGHT, (h * 0.5f).roundToInt())
+        return WindowDp(width, height)
+    }
+
+    /** Screens this short (dp) get the side-by-side layers window. */
+    fun isShortScreen(screenH: Int): Boolean = screenH < 480
+
+    private const val PHONE_MAX_WIDTH = 300
+    private const val TABLET_MAX_WIDTH = 360
+    private const val TABLET_WIDTH = 600
+    private const val SHORT_MAX_WIDTH = 520
+    private const val SHORT_MIN_WIDTH = 380
+    private const val MIN_HEIGHT = 240
+
+    /**
      * Top of a dragged row of height [size] whose finger-following top is [top], kept inside the
      * viewport [viewportStart]..[viewportEnd] (unchanged when the row is taller than the viewport).
      */
@@ -87,6 +119,9 @@ object LayerListMath {
         return if (travel > 0f) speed else -speed
     }
 }
+
+/** A width x height in dp. */
+data class WindowDp(val width: Int, val height: Int)
 
 /**
  * How one row participates in a clipping group.
