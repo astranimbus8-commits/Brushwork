@@ -1,6 +1,5 @@
 package com.brushwork.paint.segmentation
 
-import com.brushwork.paint.core.PixelBuffer
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -36,41 +35,6 @@ class Letterbox(val srcWidth: Int, val srcHeight: Int, val size: Int = MODEL_SIZ
     /** True if the model pixel (mx, my) lies in the content (not the padding). */
     fun isContent(mx: Int, my: Int): Boolean =
         mx >= offsetX && my >= offsetY && mx < offsetX + contentWidth && my < offsetY + contentHeight
-
-    /**
-     * Writes the NHWC model input for [content] (already resampled to contentWidth x contentHeight)
-     * into [out] (size*size*3 bytes). Each channel value v is written as [lut][v]; padding gets
-     * lut[128] (mid gray), which is 0 for the Autoseg int8 input (v - 128).
-     */
-    fun fillInput(content: PixelBuffer, lut: ByteArray, out: ByteArray) {
-        require(content.width == contentWidth && content.height == contentHeight) {
-            "content ${content.width}x${content.height} != ${contentWidth}x$contentHeight"
-        }
-        require(lut.size == 256 && out.size == size * size * 3)
-        out.fill(lut[128])
-        val px = content.pixels
-        for (y in 0 until contentHeight) {
-            var o = ((offsetY + y) * size + offsetX) * 3
-            val row = y * contentWidth
-            for (x in 0 until contentWidth) {
-                val c = MaskOps.flattenOverWhite(px[row + x])
-                out[o] = lut[(c shr 16) and 0xFF]
-                out[o + 1] = lut[(c shr 8) and 0xFF]
-                out[o + 2] = lut[c and 0xFF]
-                o += 3
-            }
-        }
-    }
-
-    /** The content part of a size*size per-pixel model output (e.g. class ids), row-major. */
-    fun crop(modelOutput: ByteArray): ByteArray {
-        require(modelOutput.size == size * size)
-        val out = ByteArray(contentWidth * contentHeight)
-        for (y in 0 until contentHeight) {
-            System.arraycopy(modelOutput, (offsetY + y) * size + offsetX, out, y * contentWidth, contentWidth)
-        }
-        return out
-    }
 
     override fun toString(): String =
         "Letterbox(${srcWidth}x$srcHeight -> ${contentWidth}x$contentHeight @($offsetX,$offsetY) in $size)"

@@ -404,6 +404,21 @@ class SegmentationPipeline(
          * point farthest from its outline). Null if there is no model or the answer is implausible.
          */
         fun interactiveSubject(image: PixelBuffer, check: () -> Unit): FloatArray? {
+            synchronized(tapLock) {
+                if (!tapDone) {
+                    // A cancellation throws before anything is cached.
+                    tapResult = computeInteractiveSubject(image, check)
+                    tapDone = true
+                }
+                return tapResult
+            }
+        }
+
+        private val tapLock = Any()
+        private var tapDone = false
+        private var tapResult: FloatArray? = null
+
+        private fun computeInteractiveSubject(image: PixelBuffer, check: () -> Unit): FloatArray? {
             val model = interactiveModel ?: return null
             val sal = MaskOps.resizeBilinear(saliencyContent, letterbox.contentWidth, letterbox.contentHeight, w, h)
             val lab = Regions.label(BooleanArray(w * h) { sal[it] >= 0.5f }, w, h)
