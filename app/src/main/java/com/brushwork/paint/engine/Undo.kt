@@ -99,6 +99,11 @@ private fun Layer.bitmapFor(target: EditTarget): Bitmap? = if (target == EditTar
  * turns the saved tiles into an undo action; [abort] restores them (cancelled stroke).
  */
 class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val tileSize: Int = 256) {
+    /**
+     * Set by the text tool when it re-renders a text layer: the layer stays an editable text
+     * layer. Any other edit of a text layer turns it into a raster layer (see commitEdit).
+     */
+    var preserveText: Boolean = false
     private val bitmap: Bitmap = requireNotNull(layer.bitmapFor(target)) { "Layer has no ${target.name.lowercase()} bitmap" }
     private val cols = (bitmap.width + tileSize - 1) / tileSize
     private val rows = (bitmap.height + tileSize - 1) / tileSize
@@ -266,7 +271,10 @@ class DocumentBitmapsAction(
     private val modeBefore: ColorMode,
     private val modeAfter: ColorMode,
 ) : UndoAction {
-    class Entry(val layer: Layer, val bitmapBefore: Bitmap, val maskBefore: Bitmap?, val bitmapAfter: Bitmap, val maskAfter: Bitmap?)
+    class Entry(val layer: Layer, val bitmapBefore: Bitmap, val maskBefore: Bitmap?, val bitmapAfter: Bitmap, val maskAfter: Bitmap?) {
+        /** Editable text of a text layer: new pixels make it a raster layer, undo restores it. */
+        val textBefore: String? = layer.textData
+    }
 
     override val byteSize: Long
         get() = entries.sumOf { it.bitmapBefore.byteCount.toLong() + (it.maskBefore?.byteCount ?: 0) }
@@ -279,6 +287,7 @@ class DocumentBitmapsAction(
         for (e in entries) {
             e.layer.bitmap = if (before) e.bitmapBefore else e.bitmapAfter
             e.layer.mask = if (before) e.maskBefore else e.maskAfter
+            if (e.bitmapBefore !== e.bitmapAfter) e.layer.textData = if (before) e.textBefore else null
             e.layer.markChanged()
         }
         c.onDocumentGeometryChanged()

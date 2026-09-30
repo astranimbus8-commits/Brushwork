@@ -56,6 +56,16 @@ class Layer(
     /** Prevents all edits. */
     var locked: Boolean = false
 
+    /**
+     * Non-null for an EDITABLE TEXT LAYER: the text tool's serialized text object (content, style,
+     * box, path...) that [bitmap] was rendered from. The text tool can load it to edit the text
+     * again. Any other pixel edit turns the layer into a normal raster layer (the controller
+     * clears this, undoably). Opaque to everything except the text tool and storage.
+     */
+    var textData: String? = null
+
+    val isTextLayer: Boolean get() = textData != null
+
     /** Incremented on every pixel change (content or mask). Used for thumbnails and dirty saving. */
     var contentVersion: Long = 0
         private set

@@ -489,6 +489,18 @@ class EditorController(
         PixelEditRecorder(layer, target)
 
     /**
+     * If [layer] is an editable text layer and [keep] is false: clears its text data now and
+     * returns the undo action that restores it (null otherwise).
+     */
+    private fun rasterizeTextAction(layer: Layer, keep: Boolean): UndoAction? {
+        val text = layer.textData ?: return null
+        if (keep) return null
+        layer.textData = null
+        toast("\"${layer.name}\" is now a regular layer (its text can no longer be edited; undo to get it back)")
+        return LambdaAction("Rasterize text", onUndo = { c -> layer.textData = text; c.notifyLayersChanged() }, onRedo = { c -> layer.textData = null; c.notifyLayersChanged() })
+    }
+
+    /**
      * Finishes a pixel edit: applies color-mode constraints to the touched area, pushes the undo
      * action, marks the layer changed and redraws. Returns false if nothing was touched.
      */
@@ -500,8 +512,11 @@ class EditorController(
             for (tile in recorder.touchedTileRects()) ColorModeOps.constrain(recorder.layer.bitmap, tile, doc.colorMode)
         }
         val action = recorder.finish(label) ?: return false
+        // Painting on an editable text layer turns it into a normal layer (undo restores the text).
+        val rasterize = rasterizeTextAction(recorder.layer, recorder.preserveText || recorder.target == EditTarget.MASK)
+        val all = listOf(action) + extraActions + listOfNotNull(rasterize)
         // Extra actions (e.g. a SelectionAction applied with recordUndo = false) join the same step.
-        pushUndo(if (extraActions.isEmpty()) action else CompositeAction(label, listOf(action) + extraActions))
+        pushUndo(if (all.size == 1) action else CompositeAction(label, all))
         recorder.layer.markChanged()
         layersVersion++
         invalidateDoc(rect)
@@ -582,7 +597,7 @@ class EditorController(
     }
 
     /** Adds a new layer above the active one and lets [draw] paint into it (document coordinates). */
-    fun addLayerWithContent(name: String, label: String, draw: (Canvas) -> Unit): Layer? {
+    fun addLayerWithContent(name: String, label: String, textData: String? = null, draw: (Canvas) -> Unit): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         val bmp = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height).also { b ->
@@ -593,7 +608,7 @@ class EditorController(
             toast("Not enough memory for another layer"); return null
         }
         return withToolPaused {
-            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp)
+            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData }
             val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
             structural {
                 doc.layers.add(at, layer)
@@ -602,6 +617,42 @@ class EditorController(
             pushUndo(AddLayerAction(layer, at, label))
             layer
         }
+    }
+
+    /**
+     * Re-renders the editable text layer [layer] with new text: clears [dirty] (document px; it
+     * must cover the old AND the new text, null = the whole layer), lets [draw] paint the new text
+     * and stores [textData] — one undo step named [label] that restores both pixels and text.
+     * Returns false if the layer is gone or can't be edited.
+     */
+    fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, draw: (Canvas) -> Unit): Boolean {
+        if (doc.indexOf(layer) < 0 || !checkEditable(layer)) return false
+        val before = layer.textData
+        val area = Rect(dirty ?: doc.bounds)
+        if (!area.intersect(0, 0, doc.width, doc.height)) area.set(0, 0, 0, 0)
+        val rec = beginEdit(layer, EditTarget.CONTENT).also { it.preserveText = true }
+        try {
+            if (!area.isEmpty) rec.touch(area)
+            val c = Canvas(layer.bitmap)
+            // Only the snapshotted area may change, or undo couldn't restore it.
+            c.save()
+            c.clipRect(area)
+            c.drawColor(0, PorterDuff.Mode.CLEAR)
+            draw(c)
+            c.restore()
+        } catch (e: OutOfMemoryError) {
+            rec.abort()
+            toast("Not enough memory to update the text")
+            return false
+        }
+        layer.textData = textData
+        val textAction = LambdaAction("Edit text", onUndo = { ctl -> layer.textData = before; ctl.notifyLayersChanged() }, onRedo = { ctl -> layer.textData = textData; ctl.notifyLayersChanged() })
+        if (!commitEdit(rec, label, listOf(textAction))) {
+            // Nothing was touched (empty area): still record the text change.
+            if (before != textData) pushUndo(textAction)
+            notifyLayersChanged()
+        }
+        return true
     }
 
     fun deleteLayer(layer: Layer = activeLayer) {
@@ -630,6 +681,8 @@ class EditorController(
                 if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
                 Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
                     it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
+                    // A partial copy is no longer the text object: only whole copies stay editable.
+                    if (sel == null) it.textData = layer.textData
                 }
             } catch (e: OutOfMemoryError) {
                 toast("Not enough memory to duplicate this layer"); return@withToolPaused null
@@ -762,11 +815,11 @@ class EditorController(
         tmpDoc.layers += lowerView
         tmpDoc.layers += upperView
         val merged = Compositor(tmpDoc) { null }.renderFlattened()
-        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props()
+        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props(); val beforeText = lower.textData
         val afterProps = beforeProps.copy(opacity = 1f, maskEnabled = true)
         val replace = LambdaAction("Merge down", byteSize = beforeBmp.byteCount.toLong() + (beforeMask?.byteCount ?: 0),
-            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.copyPropsFrom(beforeProps); lower.markChanged() } },
-            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
+            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.textData = beforeText; lower.copyPropsFrom(beforeProps); lower.markChanged() } },
+            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.textData = null; lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
         )
         val remove = RemoveLayerAction(layer, idx, "Merge down")
         replace.redo(this)
@@ -791,7 +844,10 @@ class EditorController(
             }
         }
         flip(this)
-        pushUndo(LambdaAction(if (horizontal) "Flip layer horizontally" else "Flip layer vertically", onUndo = flip, onRedo = flip))
+        val label = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+        val flipAction = LambdaAction(label, onUndo = flip, onRedo = flip)
+        val rasterize = rasterizeTextAction(layer, keep = false)
+        pushUndo(if (rasterize == null) flipAction else CompositeAction(label, listOf(flipAction, rasterize)))
     }
 
     /** Applies property changes with undo. Use [previewLayerProps] for live slider dragging. */

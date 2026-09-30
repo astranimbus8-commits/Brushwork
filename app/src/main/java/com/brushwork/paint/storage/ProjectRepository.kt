@@ -262,6 +262,7 @@ class ProjectRepository(private val context: Context) {
                 readPixels(dir, entry.contentFileName, bitmap, scratch, "Layer \"${entry.props.name}\"")
                 val layer = Layer(entry.id, entry.props.name, bitmap)
                 layer.copyPropsFrom(sanitized(entry.props))
+                layer.textData = entry.textData
                 if (entry.hasMask) {
                     val mask = BitmapUtils.createLayerBitmap(w, h).also { allocated += it }
                     readPixels(dir, entry.maskFileName, mask, scratch, "The mask of layer \"${entry.props.name}\"")
@@ -344,7 +345,7 @@ class ProjectRepository(private val context: Context) {
                     prev.contentFileName in existing &&
                     (mask == null || prev.maskFileName in existing)
                 ) {
-                    entries += LayerEntryDto(layer.id, props.name, props, mask != null, prev.contentFileName, if (mask != null) prev.maskFileName else null)
+                    entries += LayerEntryDto(layer.id, props.name, props, mask != null, prev.contentFileName, if (mask != null) prev.maskFileName else null, layer.textData)
                     continue
                 }
                 // The document may have been resized while we were writing: the next save retries.
@@ -361,7 +362,7 @@ class ProjectRepository(private val context: Context) {
                     LayerCodec.copyPixels(mask, buffer)
                     withContext(Dispatchers.IO) { LayerCodec.write(File(dir, maskName), w, h, buffer, length) }
                 }
-                entries += LayerEntryDto(layer.id, props.name, props, mask != null, contentName, maskName)
+                entries += LayerEntryDto(layer.id, props.name, props, mask != null, contentName, maskName, layer.textData)
                 savedVersions += layer to version
             }
             @Suppress("UNUSED_VALUE")
