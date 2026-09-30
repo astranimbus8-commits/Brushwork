@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.fonts
 
+import android.content.ActivityNotFoundException
 import android.graphics.Typeface
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -233,7 +234,14 @@ fun FontPickerSheet(
             )
             Spacer(Modifier.width(8.dp))
             FilledTonalButton(
-                onClick = { launcher.launch(FONT_IMPORT_MIME_TYPES) },
+                onClick = {
+                    try {
+                        launcher.launch(FONT_IMPORT_MIME_TYPES)
+                    } catch (e: ActivityNotFoundException) {
+                        // No system file picker (disabled on some devices).
+                        status = "No file picker is available on this device"
+                    }
+                },
                 enabled = !store.importing,
                 // Narrower than the default padding: the search field keeps room on a 360dp phone.
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
