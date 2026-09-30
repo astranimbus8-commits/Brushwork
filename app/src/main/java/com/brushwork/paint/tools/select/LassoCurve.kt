@@ -143,9 +143,14 @@ class LassoCurve internal constructor(
         changed()
     }
 
-    /** Removes point [index]. One undo step. */
+    /**
+     * Removes point [index]. One undo step, except for the only point left: that throws the curve
+     * away like ✕ (with no points there is nothing pending, so the app's undo would otherwise skip
+     * the kept steps and act on the document history).
+     */
     fun deleteAnchor(index: Int) {
         if (index !in anchors.indices) return
+        if (anchors.size == 1) { clear(); return }
         pushHistory()
         anchors = anchors.toMutableList().also { it.removeAt(index) }
         selected = -1

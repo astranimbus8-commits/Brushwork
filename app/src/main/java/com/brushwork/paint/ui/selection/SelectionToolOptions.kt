@@ -105,7 +105,13 @@ fun LassoOptions(tool: LassoTool) {
     OptionsRow {
         // While an outline is being placed the picker shrinks to icons, so the point actions and
         // ✓ fit on the phone's first screen of the strip.
-        LassoKindPicker(kind, compact = pending) { tool.setKind(it) }
+        LassoKindPicker(kind, compact = pending) { k ->
+            if (k != tool.kind) {
+                tool.setKind(k)
+                // The strip's own hint sits past the labelled chips, off a phone's first screen.
+                lassoKindHint(k)?.let { tool.controller.toast(it) }
+            }
+        }
         StripDivider()
         when (kind) {
             LassoKind.POLYGON -> {
@@ -157,6 +163,13 @@ private fun lassoKindIcon(kind: LassoKind): ImageVector = when (kind) {
     LassoKind.FREEHAND -> Icons.Filled.Gesture
     LassoKind.POLYGON -> Icons.Outlined.Polyline
     LassoKind.CURVE -> CurveLassoIcon
+}
+
+/** How to use a lasso mode, shown as a message whenever the strip switches to it (none for freehand). */
+internal fun lassoKindHint(kind: LassoKind): String? = when (kind) {
+    LassoKind.FREEHAND -> null
+    LassoKind.POLYGON -> "Tap the corners, then tap the first one to close"
+    LassoKind.CURVE -> "Tap to place points, then tap the first one to close. Long-press a point to make it sharp or delete it"
 }
 
 /** The long-pressed curve point, as far as the strip shows it. */

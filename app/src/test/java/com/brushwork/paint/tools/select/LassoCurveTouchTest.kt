@@ -141,4 +141,26 @@ class LassoCurveTouchTest {
         assertEquals(0, sel.alphaAt(200, 10))
         c.deselect()
     }
+
+    @Test
+    fun pinchingTheViewWhilePlacingPointsLeavesNoPointBehind() {
+        for ((x, y) in listOf(80f to 50f, 320f to 50f, 320f to 190f)) tapDoc(x, y)
+        assertEquals(3, lasso.curve.count)
+        val undoBefore = lasso.curve.undoCount
+        val zoomBefore = c.viewTransform.zoom
+        // The first finger lands on empty canvas (a new point would follow it), the second one
+        // turns the touch into a pinch: the view zooms and no point is added.
+        touch.idle(200)
+        touch.pinch(screen(150f, 150f), screen(250f, 150f), screen(120f, 150f), screen(280f, 150f))
+        assertTrue("the view zoomed", c.viewTransform.zoom > zoomBefore * 1.2f)
+        assertEquals(3, lasso.curve.count)
+        assertEquals(undoBefore, lasso.curve.undoCount)
+        // The points are still where they were in the document, and still editable.
+        assertNear(Vec2(320f, 190f), lasso.curve.anchors[2].pos)
+        tapDoc(120f, 190f)
+        assertEquals(4, lasso.curve.count)
+        assertNear(Vec2(120f, 190f), lasso.curve.anchors[3].pos)
+        lasso.discard()
+        assertFalse(lasso.hasPendingWork)
+    }
 }

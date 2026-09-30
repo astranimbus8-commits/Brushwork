@@ -11,6 +11,7 @@ import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.selection.lassoKindHint
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.tools.ToolOptionsBar
 import org.junit.Assert.assertEquals
@@ -60,6 +61,9 @@ class LassoCurveStripTest {
         click("Curve", exact = true)
         assertEquals(LassoKind.CURVE, tool.kind)
         assertTrue(has("Tap points"))
+        // The hint above lies past the chips (off the first screen): switching says it too.
+        assertEquals(lassoKindHint(LassoKind.CURVE), c.message)
+        c.message = null
 
         fun tap(x: Float, y: Float) { c.pointerDown(ToolPoint(x, y)); c.pointerUp(ToolPoint(x, y)) }
         tap(80f, 50f); tap(320f, 50f); tap(320f, 190f)
@@ -110,6 +114,7 @@ class LassoCurveStripTest {
         click("Polygon", exact = true)
         assertEquals(LassoKind.POLYGON, tool.kind)
         assertTrue(has("Tap corners"))
+        assertEquals(lassoKindHint(LassoKind.POLYGON), c.message)
         click("Freehand", exact = true)
         assertEquals(LassoKind.FREEHAND, tool.kind)
         c.deselect()

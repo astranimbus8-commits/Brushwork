@@ -263,6 +263,35 @@ class LassoCurveTest {
     }
 
     @Test
+    fun deletingTheLastPointThrowsTheCurveAway() {
+        val c = controller()
+        val tool = lasso(c)
+        c.selectAll()
+        c.tap(50f, 50f); c.tap(150f, 50f)
+        c.tap(50f, 50f) // selects the first point (two points don't close)
+        assertEquals(0, tool.curve.selected)
+        tool.curve.deleteAnchor(0)
+        assertEquals(1, tool.curve.count)
+        // Deleting down to one point is still one undo step.
+        c.undo()
+        assertEquals(2, tool.curve.count)
+        tool.curve.deleteAnchor(1)
+        tool.curve.deleteAnchor(0)
+        // No point left: nothing pending and no in-tool steps kept, so the next undo is the
+        // document's (the select all) instead of silently skipping stranded point edits.
+        assertFalse(tool.hasPendingWork)
+        assertEquals(0, tool.curve.undoCount)
+        assertEquals(0, tool.curve.redoCount)
+        assertNotNull(c.selection)
+        c.undo()
+        assertNull(c.selection)
+        // A new curve starts clean.
+        c.tap(60f, 60f)
+        assertEquals(1, tool.curve.count)
+        assertEquals(1, tool.curve.undoCount)
+    }
+
+    @Test
     fun aCancelledTouchLeavesNoTrace() {
         val c = controller()
         val tool = lasso(c)
