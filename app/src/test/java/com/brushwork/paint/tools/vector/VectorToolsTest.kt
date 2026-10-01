@@ -56,9 +56,10 @@ class VectorToolsTest {
         return out
     }
 
+    /** The shape tool drawing into the active layer (v1.3 behaviour; editable shapes: ShapeLayerEditTest). */
     private fun shapeTool(c: EditorController): ShapeTool {
         c.selectTool(ToolId.SHAPE)
-        return c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        return (c.tools.getValue(ToolId.SHAPE) as ShapeTool).also { it.update { s -> s.copy(editable = false) } }
     }
 
     // ------------------------------------------------------------------ shapes

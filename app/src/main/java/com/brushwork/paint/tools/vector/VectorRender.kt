@@ -310,11 +310,17 @@ class VectorPreview(private val controller: EditorController, override val layer
     /** Items to preview (replaced by the tool whenever geometry or style changes). */
     var specs: List<VectorPaintSpec> = emptyList()
 
+    /**
+     * The items will go into a NEW layer added above [layer] (an editable shape): they are drawn
+     * over its content without its alpha lock and never into its mask.
+     */
+    var asNewLayer = false
+
     private val renderer = VectorRenderer()
     private val clip = Rect()
     private val clipF = RectF()
 
-    private val maskMode: Boolean get() = controller.editTargetOf(layer) == EditTarget.MASK
+    private val maskMode: Boolean get() = !asNewLayer && controller.editTargetOf(layer) == EditTarget.MASK
 
     override fun drawContent(canvas: Canvas): Boolean {
         if (maskMode) return false
@@ -322,7 +328,8 @@ class VectorPreview(private val controller: EditorController, override val layer
         if (specs.isEmpty()) return true
         canvas.getClipBounds(clip)
         val sel = controller.selection
-        for (s in specs) renderer.drawClipped(canvas, s, sel, layer.alphaLocked, clip, false, controller.doc.colorMode)
+        val locked = layer.alphaLocked && !asNewLayer
+        for (s in specs) renderer.drawClipped(canvas, s, sel, locked, clip, false, controller.doc.colorMode)
         return true
     }
 
@@ -364,6 +371,7 @@ internal class PreviewHost(private val controller: EditorController) {
     /** Items drawn in the overlay while dragging (empty: none), on [overlayLayer]. */
     private var overlaySpecs: List<VectorPaintSpec> = emptyList()
     private var overlayLayer: Layer? = null
+    private var overlayAsNewLayer = false
     private val overlay = SpecOverlay()
 
     /**
@@ -377,18 +385,22 @@ internal class PreviewHost(private val controller: EditorController) {
             if (!value) {
                 val layer = overlayLayer
                 val specs = overlaySpecs
-                if (layer != null && specs.isNotEmpty()) show(layer, specs)
+                if (layer != null && specs.isNotEmpty()) show(layer, specs, overlayAsNewLayer)
             }
         }
 
-    /** Previews [specs] on [layer]; an empty list removes the preview. */
-    fun show(layer: Layer, specs: List<VectorPaintSpec>) {
+    /**
+     * Previews [specs] on [layer] ([asNewLayer]: as the content of a new layer that will be
+     * added above it, see [VectorPreview.asNewLayer]); an empty list removes the preview.
+     */
+    fun show(layer: Layer, specs: List<VectorPaintSpec>, asNewLayer: Boolean = false) {
         if (specs.isEmpty()) { release(); return }
-        if (interacting && drawsInOverlay(layer)) {
+        if (interacting && drawsInOverlay(layer, asNewLayer)) {
             // Out of the layer (its tiles redraw once without the items) and into the overlay.
             removeOverride()
             overlayLayer = layer
             overlaySpecs = specs
+            overlayAsNewLayer = asNewLayer
             controller.invalidateOverlay()
             return
         }
@@ -397,6 +409,7 @@ internal class PreviewHost(private val controller: EditorController) {
             removeOverride()
             VectorPreview(controller, layer).also { preview = it }
         }
+        p.asNewLayer = asNewLayer
         p.specs = specs
         if (controller.renderOverride !== p) controller.renderOverride = p
         val regions = ArrayList<Rect>()
@@ -417,12 +430,13 @@ internal class PreviewHost(private val controller: EditorController) {
         val layer = overlayLayer ?: return
         val specs = overlaySpecs
         if (specs.isEmpty()) return
-        overlay.draw(canvas, t, controller, layer, specs)
+        val asNew = overlayAsNewLayer
+        overlay.draw(canvas, t, controller, layer, specs, asNewLayer = asNew)
         // The layers changed under the drag (props, order): back into the layer from the next
         // frame on.
-        if (!drawsInOverlay(layer)) {
+        if (!drawsInOverlay(layer, asNew)) {
             clearOverlay()
-            show(layer, specs)
+            show(layer, specs, asNew)
         }
     }
 
@@ -434,14 +448,14 @@ internal class PreviewHost(private val controller: EditorController) {
      * smoothed (zoomed further in, they are drawn as crisp squares, and the items drawn as
      * smooth vectors would visibly change when the finger lifts).
      */
-    private fun drawsInOverlay(layer: Layer): Boolean {
+    private fun drawsInOverlay(layer: Layer, asNewLayer: Boolean = false): Boolean {
         if (controller.viewTransform.zoom >= PIXELATED_ZOOM) return false
         val doc = controller.doc
         val index = doc.indexOf(layer)
         if (index < 0 || !layer.visible || layer.opacity < 1f) return false
-        if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping || layer.alphaLocked) return false
+        if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping || (layer.alphaLocked && !asNewLayer)) return false
         if (layer.mask != null && layer.maskEnabled) return false
-        if (controller.editTargetOf(layer) != EditTarget.CONTENT || doc.colorMode == ColorMode.MONOCHROME) return false
+        if ((!asNewLayer && controller.editTargetOf(layer) != EditTarget.CONTENT) || doc.colorMode == ColorMode.MONOCHROME) return false
         val layers = doc.layers
         for (i in index + 1 until layers.size) {
             val above = layers[i]
@@ -454,6 +468,7 @@ internal class PreviewHost(private val controller: EditorController) {
         if (overlaySpecs.isEmpty() && overlayLayer == null) return
         overlaySpecs = emptyList()
         overlayLayer = null
+        overlayAsNewLayer = false
         controller.invalidateOverlay()
     }
 
