@@ -5,6 +5,7 @@ import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -37,12 +38,38 @@ class TextBlock internal constructor(
     private val spec: TextSpec,
     private val paint: TextPaint,
     private val drawGlyphs: ((Canvas, TextPaint) -> Unit)?,
+    /** Unwrapped horizontal text: its layout (for [TextExport]). */
+    internal val staticLayout: StaticLayout? = null,
+    /** Text wrapped around a picture: its lines, in text area coordinates. */
+    internal val wrapLines: List<WrapLine>? = null,
+    /** Adds the glyph outlines (text area coordinates) to a path, as [drawGlyphs] draws them. */
+    private val outlineGlyphs: ((Path, TextPaint) -> Unit)? = null,
 ) {
     /** True when there is nothing to draw (empty text); the box still has a placeholder size. */
     val isEmpty: Boolean get() = drawGlyphs == null
 
+    /** True for text laid out around a picture ([wrapLines]). */
+    val isWrapped: Boolean get() = wrapLines != null
+
     /** Distance from the box edge to the text area. */
     val inset: Float get() = spec.box.inset
+
+    /** The paint the glyphs are drawn with (fill color, font, size, letter spacing); do not change it. */
+    internal val textPaint: TextPaint get() = paint
+
+    /**
+     * The glyph outlines in block coordinates (the box's top-left corner at 0, 0), or null when
+     * they are not available (empty text).
+     */
+    internal fun glyphOutline(): Path? {
+        val add = outlineGlyphs ?: return null
+        if (drawGlyphs == null) return null
+        val p = Path()
+        add(p, paint)
+        val i = inset
+        if (i != 0f) p.offset(i, i)
+        return p
+    }
 
     private val boxPaint by lazy { Paint().apply { isAntiAlias = spec.antiAlias } }
 
@@ -64,10 +91,13 @@ class TextBlock internal constructor(
         canvas.restoreToCount(s)
     }
 
+    /** Corner radius of the box (block coordinates). */
+    internal val boxRadius: Float get() = spec.box.roundness.coerceIn(0f, 1f) * min(width, height) / 2f
+
     private fun drawBox(canvas: Canvas) {
         val box = spec.box
         if (!box.hasFrame) return
-        val r = box.roundness.coerceIn(0f, 1f) * min(width, height) / 2f
+        val r = boxRadius
         if (box.fill) {
             boxPaint.style = Paint.Style.FILL
             boxPaint.color = box.fillColor
@@ -105,6 +135,10 @@ class PreparedText internal constructor(
     private val pathBounds: RectF?,
     /** [FontStore.generation] when this was laid out (imported fonts may come and go). */
     internal val fontGeneration: Int = FontStore.generation,
+    /** Text wrapped around a picture: the placement and wrap it was laid out for (else null). */
+    internal val wrapKey: WrapKey? = null,
+    /** Text wrapped around a picture: its measured characters (reused while only the placement changes). */
+    internal val wrapText: WrapText? = null,
 ) {
     val onPath: Boolean get() = block == null
 
@@ -114,10 +148,15 @@ class PreparedText internal constructor(
     /** False when this uses an imported font and fonts were imported or deleted since. */
     internal val fontsCurrent: Boolean get() = spec.fontId == null || fontGeneration == FontStore.generation
 
-    /** Whether this can draw [item] (position and rotation of straight text don't matter). */
+    /**
+     * Whether this can draw [item]: position and rotation of straight text don't matter, unless
+     * the text wraps around a picture (then its lines depend on where the picture is).
+     */
     fun matches(item: TextItem): Boolean {
         if (item.text != text || item.spec != spec || !fontsCurrent) return false
-        return if (block != null) !item.path.isActive else item.path == path
+        if (block == null) return item.path == path
+        if (item.path.isActive) return false
+        return if (item.wrapActive) wrapKey == WrapKey.of(item) else wrapKey == null
     }
 
     /** Document bounds of everything [item] paints (copy). */
@@ -140,6 +179,13 @@ class PreparedText internal constructor(
         }
         val l = item.docToLocal(p, b.width, b.height)
         return l.x >= -tolerance && l.y >= -tolerance && l.x <= b.width + tolerance && l.y <= b.height + tolerance
+    }
+}
+
+/** What the lines of a wrapped text depend on besides its words and look: where it is and its picture. */
+internal data class WrapKey(val cx: Float, val cy: Float, val rotationDeg: Float, val wrap: TextWrapSpec) {
+    companion object {
+        fun of(item: TextItem) = WrapKey(item.cx, item.cy, item.rotationDeg, item.wrap)
     }
 }
 
@@ -210,13 +256,23 @@ object TextRenderer {
     fun prepare(item: TextItem, reuse: PreparedText? = null): PreparedText {
         if (reuse != null && reuse.matches(item)) return reuse
         val sameLook = reuse != null && reuse.spec == item.spec && reuse.fontsCurrent
-        return if (item.path.isActive) {
-            val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
-            val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
-            PreparedText(item.text, item.spec, item.path, null, paints, b)
-        } else {
-            val block = reuse?.block?.takeIf { sameLook && reuse.text == item.text } ?: layout(item.text, item.spec)
-            PreparedText(item.text, item.spec, item.path, block, null, null)
+        return when {
+            item.path.isActive -> {
+                val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
+                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
+                PreparedText(item.text, item.spec, item.path, null, paints, b)
+            }
+            item.wrapActive -> {
+                // Same words and look (the text or its picture moved): measured characters and the
+                // last height are reused, so a drag re-breaks lines without measuring again.
+                val same = reuse?.takeIf { sameLook && it.text == item.text && it.wrapText != null }
+                val (block, measured) = layoutWrapped(item, same?.block?.height, same?.wrapText)
+                PreparedText(item.text, item.spec, item.path, block, null, null, wrapKey = WrapKey.of(item), wrapText = measured)
+            }
+            else -> {
+                val block = reuse?.block?.takeIf { sameLook && reuse.text == item.text && reuse.wrapKey == null } ?: layout(item.text, item.spec)
+                PreparedText(item.text, item.spec, item.path, block, null, null)
+            }
         }
     }
 
@@ -235,10 +291,14 @@ object TextRenderer {
      * and display fonts from dafont often have swashes far beyond their letter cells, which the
      * fixed allowance of the built-in fonts would cut off when the text is committed).
      */
-    private fun block(spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, overflow: Float = 0f, glyphs: ((Canvas, TextPaint) -> Unit)?): TextBlock {
+    private fun block(
+        spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, overflow: Float = 0f,
+        staticLayout: StaticLayout? = null, wrapLines: List<WrapLine>? = null, outline: ((Path, TextPaint) -> Unit)? = null,
+        glyphs: ((Canvas, TextPaint) -> Unit)?,
+    ): TextBlock {
         val inset = spec.box.inset
         val pad = max(inkPad(spec), spec.strokeWidthPx + overflow + 2f)
-        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, glyphs)
+        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, glyphs, staticLayout, wrapLines, outline)
     }
 
     private fun layoutHorizontal(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
@@ -255,8 +315,140 @@ object TextRenderer {
         val width = layout.width.toFloat()
         val height = max(max(1f, layout.height.toFloat()), minHeight)
         val overflow = if (measureInk && spec.fontId != null) horizontalOverflow(layout, text, paint, width, height) else 0f
-        return block(spec, width, height, layout.lineCount, paint, overflow) { c, _ -> layout.draw(c) }
+        val outline: (Path, TextPaint) -> Unit = { out, p ->
+            val tmp = Path()
+            for (i in 0 until layout.lineCount) {
+                val s = layout.getLineStart(i)
+                val e = layout.getLineVisibleEnd(i)
+                if (e <= s) continue
+                tmp.rewind()
+                p.getTextPath(text, s, e, staticLineX(layout, i), layout.getLineBaseline(i).toFloat(), tmp)
+                out.addPath(tmp)
+            }
+        }
+        return block(spec, width, height, layout.lineCount, paint, overflow, staticLayout = layout, outline = outline) { c, _ -> layout.draw(c) }
     }
+
+    /**
+     * Where [layout] starts drawing line [i] (the left end of its text): the integer positions
+     * `Layout.drawText` uses for left-to-right lines, `getLineLeft` for right-to-left ones.
+     */
+    internal fun staticLineX(layout: StaticLayout, i: Int): Float {
+        if (layout.getParagraphDirection(i) != Layout.DIR_LEFT_TO_RIGHT) return layout.getLineLeft(i)
+        val right = layout.width
+        val max = layout.getLineMax(i).toInt()
+        return when (layout.getParagraphAlignment(i)) {
+            Layout.Alignment.ALIGN_OPPOSITE -> (right - max).toFloat()
+            Layout.Alignment.ALIGN_CENTER -> ((right - (max and 1.inv())) shr 1).toFloat()
+            else -> 0f
+        }
+    }
+
+    // ------------------------------------------------------------------ text wrapped around a picture
+
+    /**
+     * Lays out [item] flowing around its picture ([TextItem.wrap], horizontal straight text):
+     * [WrapLayout] lines with StaticLayout's metrics, the picture seen through [WrapObstacle].
+     * The block is centered on the item's position, so where the picture falls on the lines
+     * depends on the block's height: up to 3 passes find a height that agrees with its lines
+     * (starting from [heightHint], e.g. the last layout while the text is dragged); if they don't
+     * agree, the tallest height seen is laid out and kept (the box gets a little room below).
+     * [measured] is reused when the text and look are unchanged.
+     */
+    internal fun layoutWrapped(item: TextItem, heightHint: Float? = null, measured: WrapText? = null, measureInk: Boolean = true): Pair<TextBlock, WrapText?> {
+        val spec = item.spec
+        val text = item.text
+        if (text.isEmpty()) return layoutHorizontal(text, spec, measureInk) to null
+        val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
+        val fmi = paint.fontMetricsInt
+        val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
+        val wrap = spec.box.width
+        // StaticLayout's width (whole pixels); without a fixed box, the text's own width.
+        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
+        val wt = measured?.takeIf { it.text == text } ?: WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
+        val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
+        val inset = spec.box.inset
+        val blockW = width + 2f * inset
+        val gap = item.wrap.gapPx
+        val minRun = item.wrap.minRunEm * spec.sizePx
+        fun blockHeight(contentH: Float) = max(max(1f, contentH), minHeight) + 2f * inset
+        fun run(blockH: Float): WrapResult {
+            val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - blockW / 2f, inset - blockH / 2f, gap)
+            return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, minRun)
+        }
+        var bh = heightHint?.takeIf { it.isFinite() && it > 0f } ?: blockHeight(WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, item.wrap.sides, spec.align, minRun).height)
+        var res = run(bh)
+        var next = blockHeight(res.height)
+        var tallest = max(bh, next)
+        var passes = 1
+        while (next != bh && passes < WRAP_PASSES) {
+            bh = next
+            res = run(bh)
+            next = blockHeight(res.height)
+            tallest = max(tallest, next)
+            passes++
+        }
+        if (next != bh) {
+            bh = tallest
+            res = run(bh)
+            next = blockHeight(res.height)
+        }
+        val finalH = max(next, bh)
+        val contentH = finalH - 2f * inset
+        val lines = res.lines
+        val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, width, contentH) else 0f
+        val outline: (Path, TextPaint) -> Unit = { out, p ->
+            val tmp = Path()
+            for (l in lines) {
+                if (l.end <= l.start) continue
+                tmp.rewind()
+                p.getTextPath(text, l.start, l.end, l.x, l.baseline, tmp)
+                out.addPath(tmp)
+            }
+        }
+        val block = block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p ->
+            for (l in lines) if (l.end > l.start) c.drawText(text, l.start, l.end, l.x, l.baseline, p)
+        }
+        return block to wt
+    }
+
+    /**
+     * Height of the text area [text] needs in [item]'s wrapped layout when the block is
+     * [blockHeight] tall (no fixed-point search: for fitting text into a box of that height).
+     */
+    internal fun wrappedTextHeight(item: TextItem, text: String, blockHeight: Float): Float {
+        val spec = item.spec
+        if (text.isEmpty()) return 0f
+        val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
+        val fmi = paint.fontMetricsInt
+        val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
+        val wrap = spec.box.width
+        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val wt = WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
+        val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
+        val inset = spec.box.inset
+        val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - blockHeight / 2f, item.wrap.gapPx)
+        return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx).height
+    }
+
+    /** Like [horizontalOverflow] for wrapped [lines]. */
+    private fun wrappedOverflow(lines: List<WrapLine>, text: String, paint: TextPaint, w: Float, h: Float): Float {
+        val r = Rect()
+        var over = 0f
+        for (l in lines) {
+            if (l.end <= l.start) continue
+            paint.getTextBounds(text, l.start, l.end, r)
+            if (r.isEmpty) continue
+            over = max(over, max(max(-(l.x + r.left), l.x + r.right - w), max(-(l.baseline + r.top), l.baseline + r.bottom - h)))
+        }
+        return max(0f, over)
+    }
+
+    private val NOTHING_BLOCKED: (Float, Float) -> List<ClosedFloatingPointRange<Float>> = { _, _ -> emptyList() }
+
+    /** Layout passes looking for a block height that agrees with its wrapped lines. */
+    private const val WRAP_PASSES = 3
 
     private fun staticLayout(text: String, spec: TextSpec, paint: TextPaint): StaticLayout {
         val wrap = spec.box.width
@@ -317,7 +509,34 @@ object TextRenderer {
         val punct = VerticalTextLayout.PUNCTUATION_SHIFT * em
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
         val overflow = if (measureInk && spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
-        return block(spec, width, height, res.columns, paint, overflow) { c, p ->
+        // The same placement as the drawing below, as outlines (for export).
+        val outline: (Path, TextPaint) -> Unit = { out, p ->
+            val tmp = Path()
+            val m = Matrix()
+            for (i in glyphs.indices) {
+                val g = glyphs[i]
+                tmp.rewind()
+                when (g.kind) {
+                    VerticalGlyphKind.UPRIGHT -> p.getTextPath(g.text, 0, g.text.length, g.cx + shift, g.cy + baseline, tmp)
+                    VerticalGlyphKind.PUNCTUATION -> p.getTextPath(g.text, 0, g.text.length, g.cx + punct + shift, g.cy + baseline - punct, tmp)
+                    VerticalGlyphKind.SMALL_KANA -> p.getTextPath(g.text, 0, g.text.length, g.cx + small + shift, g.cy + baseline - small, tmp)
+                    VerticalGlyphKind.ROTATED -> {
+                        p.getTextPath(g.text, 0, g.text.length, 0f, baseline, tmp)
+                        m.setRotate(90f)
+                        m.postTranslate(g.cx + shift, g.cy)
+                        tmp.transform(m)
+                    }
+                    VerticalGlyphKind.TATE_CHU_YOKO -> {
+                        p.getTextPath(g.text, 0, g.text.length, 0f, 0f, tmp)
+                        m.setScale(tcyScale[i], 1f)
+                        m.postTranslate(g.cx + shift, g.cy + baseline)
+                        tmp.transform(m)
+                    }
+                }
+                out.addPath(tmp)
+            }
+        }
+        return block(spec, width, height, res.columns, paint, overflow, outline = outline) { c, p ->
             val s0 = c.save()
             if (shift != 0f) c.translate(shift, 0f)
             for (i in glyphs.indices) {

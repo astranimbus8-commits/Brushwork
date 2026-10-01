@@ -373,6 +373,39 @@ internal object TextOnPathEngine {
         canvas.restoreToCount(save)
     }
 
+    /**
+     * What [draw] paints, as outlines in document coordinates: the letters (first) and, with a
+     * [stroke], the area the outline stroke covers (second; null without one). Color emoji have
+     * no outline. Null when nothing is drawn.
+     */
+    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): Pair<Path, Path?>? {
+        val (layout, res) = result(text, fill, spec) ?: return null
+        val glyphs = Path()
+        val outlined = Path()
+        val tmp = Path()
+        val m = Matrix()
+        val p = Paint(fill).apply { textAlign = Paint.Align.LEFT; style = Paint.Style.FILL }
+        val bend = spec.mode == TextPathMode.BEND
+        res.path?.let { if (bend) { glyphs.addPath(it); outlined.addPath(it) } }
+        for (pl in res.placements) {
+            val c = pl.cluster
+            tmp.rewind()
+            p.getTextPath(layout.line, c.start, c.end, -c.advance / 2f, 0f, tmp)
+            if (tmp.isEmpty) continue
+            m.setRotate(pl.angleDeg)
+            m.postTranslate(pl.x, pl.y)
+            tmp.transform(m)
+            glyphs.addPath(tmp)
+            // Bent text strokes only its bent outline; rotated letters are each stroked.
+            if (!bend && !c.rigid) outlined.addPath(tmp)
+        }
+        if (glyphs.isEmpty) return null
+        val strokeArea = if (stroke != null && !outlined.isEmpty) {
+            Path().also { out -> Paint(stroke).apply { style = Paint.Style.STROKE }.getFillPath(outlined, out) }
+        } else null
+        return glyphs to strokeArea
+    }
+
     /** Bounds of what [draw] paints. */
     fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): RectF {
         val (_, res) = result(text, fill, spec) ?: return RectF()

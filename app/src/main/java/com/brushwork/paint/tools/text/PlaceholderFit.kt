@@ -23,15 +23,24 @@ object PlaceholderFit {
         return if (spec.vertical) block.contentWidth else block.contentHeight
     }
 
-    /** Whether [text] fits a box of [spec]'s wrap length and [depth] across. */
-    fun fits(text: String, spec: TextSpec, depth: Float): Boolean = extent(text, spec) <= depth + EPS
+    /**
+     * Whether [text] fits a box of [spec]'s wrap length and [depth] across. [wrapped]: the text
+     * flows around a picture (v1.5), measured with its wrapped layout in a box [depth] tall.
+     */
+    fun fits(text: String, spec: TextSpec, depth: Float, wrapped: TextItem? = null): Boolean {
+        if (wrapped != null && wrapped.wrapActive && !spec.vertical) {
+            return TextRenderer.wrappedTextHeight(wrapped.copy(spec = spec), text, depth + 2f * spec.box.inset) <= depth + EPS
+        }
+        return extent(text, spec) <= depth + EPS
+    }
 
     /**
      * [prefix] followed by as many placeholder units of [kind] as fit [spec]'s box (fixed width
      * for horizontal text, fixed height for vertical text) when it is [depth] tall (horizontal)
-     * or wide (vertical). Null when not even one unit fits (or [spec] has no fixed box).
+     * or wide (vertical). Null when not even one unit fits (or [spec] has no fixed box). [wrapped]:
+     * the text flows around a picture (see [fits]).
      */
-    fun fill(prefix: String, kind: PlaceholderKind, spec: TextSpec, depth: Float): String? {
+    fun fill(prefix: String, kind: PlaceholderKind, spec: TextSpec, depth: Float, wrapped: TextItem? = null): String? {
         if (spec.box.wrapFor(spec.vertical) <= 0f || !(depth > 0f)) return null
         val tokens = PlaceholderText.tokens(kind, max(0, MAX_CHARS - prefix.length))
         if (tokens.isEmpty()) return null
@@ -45,7 +54,7 @@ object PlaceholderFit {
         val all = full.toString()
         fun textOf(n: Int) = all.substring(0, ends[n - 1])
         val memo = HashMap<Int, Boolean>()
-        fun ok(n: Int): Boolean = memo.getOrPut(n) { fits(textOf(n), spec, depth) }
+        fun ok(n: Int): Boolean = memo.getOrPut(n) { fits(textOf(n), spec, depth, wrapped) }
         if (!ok(1)) return null
         val n = tokens.size
         // Grow until it overflows, then bisect: about 2 x log2(words) layouts.
@@ -116,7 +125,7 @@ object PlaceholderFit {
         if (amount == PlaceholderAmount.FILL && straight && spec.box.wrapFor(spec.vertical) > 0f) {
             val depth = depthFor(spec)
             val boxed = spec.copy(box = if (spec.vertical) spec.box.copy(minWidth = depth) else spec.box.copy(minHeight = depth))
-            val text = fill(base + PlaceholderText.separator(base, kind, amount), kind, boxed, depth) ?: return null
+            val text = fill(base + PlaceholderText.separator(base, kind, amount), kind, boxed, depth, item.takeIf { it.wrapActive }) ?: return null
             return Edit(text, boxed)
         }
         val amt = if (amount == PlaceholderAmount.FILL) PlaceholderAmount.PARAGRAPH else amount
