@@ -10,13 +10,17 @@ import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
+import android.graphics.RectF
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.vector.LayerDataTransforms
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.geom.ObjectIndex
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
@@ -53,7 +57,12 @@ class CanvasSnapshot(
         val visible: Boolean,
         /** [Layer.contentVersion] when the snapshot was taken (detects pixel edits in between). */
         val contentVersion: Long = layer.contentVersion,
-    )
+        /** The layer's editable data when the snapshot was taken (immutable: vector content, specs). */
+        val data: LayerData = layer.dataSnapshot(),
+    ) {
+        /** The vector content (v1.5): scaling operations re-render it instead of resampling the cache. */
+        val vector: VectorContent? get() = data.vector
+    }
 
     /** Number of full-size bitmaps (layers + masks). */
     val bitmapCount: Int get() = layers.size + layers.count { it.mask != null }
@@ -93,7 +102,11 @@ class CanvasResult(
     val layers: List<LayerResult>,
     val geometry: CanvasGeometry,
 ) {
-    class LayerResult(val layer: Layer, val bitmap: Bitmap, val mask: Bitmap?)
+    /**
+     * One layer's new [bitmap] and [mask]; [data]: its editable data mapped along (computed in
+     * the background with the pixels; null = map it at commit with `LayerDataTransforms`).
+     */
+    class LayerResult(val layer: Layer, val bitmap: Bitmap, val mask: Bitmap?, val data: LayerData? = null)
 
     /** Frees the bitmaps this result created (never the snapshot's own bitmaps). */
     fun recycle(snapshot: CanvasSnapshot) = recycleCreated(layers, snapshot)
@@ -187,7 +200,13 @@ object CanvasOps {
         checkSize(snap, newWidth, newHeight)
         // Grayscale stays gray (equal channels are filtered identically); 1-bit needs a threshold.
         val constrain = snap.colorMode == ColorMode.MONOCHROME && resample != Resample.NEAREST
-        val layers = mapLayers(snap, progress) { src, isMask, sub ->
+        val geometry = CanvasGeometry.scale(newWidth.toDouble() / snap.width, newHeight.toDouble() / snap.height)
+        // Vector layers are re-rendered from their (scaled) objects: crisp at any size (v1.5).
+        val layers = mapLayers(
+            snap, progress,
+            data = { l -> mappedData(l, geometry, newWidth, newHeight) },
+            content = { _, d, sub -> d?.vector?.let { v -> renderVector(v, newWidth, newHeight, snap.colorMode, sub) } },
+        ) { src, isMask, sub ->
             if (constrain && !isMask) {
                 val out = resampleBitmap(src, newWidth, newHeight, resample) { f -> sub(f * 0.8f) }
                 try {
@@ -198,7 +217,6 @@ object CanvasOps {
                 resampleBitmap(src, newWidth, newHeight, resample, sub)
             }
         }
-        val geometry = CanvasGeometry.scale(newWidth.toDouble() / snap.width, newHeight.toDouble() / snap.height)
         return CanvasResult(newWidth, newHeight, dpi, snap.colorMode, layers, geometry)
     }
 
@@ -219,7 +237,24 @@ object CanvasOps {
         checkSize(snap, newWidth, newHeight)
         val fill = fillBottom?.let { ColorModeOps.displayColor(it, snap.colorMode) }
         val bottomBitmap = snap.layers.first().bitmap
-        val layers = mapLayers(snap, progress) { src, isMask, _ ->
+        val geometry = CanvasGeometry.translate(offsetX.toDouble(), offsetY.toDouble())
+        val layers = mapLayers(
+            snap, progress,
+            data = { l ->
+                val d = mappedData(l, geometry, newWidth, newHeight)
+                // A filled bottom layer gets pixels its objects don't make: it becomes a raster layer.
+                if (fill != null && l.bitmap === bottomBitmap && d.vector != null) d.copy(vector = null) else d
+            },
+            content = { l, d, sub ->
+                // Objects reaching past the old edges into the new canvas are drawn again there;
+                // otherwise the cache moves exactly.
+                val v = d?.vector
+                val old = l.vector
+                if (v != null && old != null && exposesObjects(old, snap.width, snap.height, newWidth, newHeight, offsetX, offsetY)) {
+                    renderVector(v, newWidth, newHeight, snap.colorMode, sub)
+                } else null
+            },
+        ) { src, isMask, _ ->
             val background = when {
                 isMask -> MASK_WHITE
                 fill != null && src === bottomBitmap -> fill
@@ -227,7 +262,7 @@ object CanvasOps {
             }
             shifted(src, newWidth, newHeight, offsetX, offsetY, background)
         }
-        return CanvasResult(newWidth, newHeight, snap.dpi, snap.colorMode, layers, CanvasGeometry.translate(offsetX.toDouble(), offsetY.toDouble()))
+        return CanvasResult(newWidth, newHeight, snap.dpi, snap.colorMode, layers, geometry)
     }
 
     /** Crops every layer to [rect] (clamped to the document). */
@@ -265,7 +300,8 @@ object CanvasOps {
         val w = if (swap) snap.height else snap.width
         val h = if (swap) snap.width else snap.height
         val geometry = CanvasGeometry.rotate(rotation, snap.width, snap.height)
-        val layers = mapLayers(snap, progress) { src, _, _ -> transformed(src, w, h, geometry) }
+        // Pixels are remapped exactly; vector objects and mask specs turn with them.
+        val layers = mapLayers(snap, progress, data = { l -> mappedData(l, geometry, w, h) }) { src, _, _ -> transformed(src, w, h, geometry) }
         return CanvasResult(w, h, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -273,7 +309,7 @@ object CanvasOps {
     fun flip(snap: CanvasSnapshot, horizontal: Boolean, progress: (Float) -> Unit = {}): CanvasResult {
         if (snap.layers.isEmpty()) throw CanvasOpException("The drawing has no layers.")
         val geometry = CanvasGeometry.flip(horizontal, snap.width, snap.height)
-        val layers = mapLayers(snap, progress) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
+        val layers = mapLayers(snap, progress, data = { l -> mappedData(l, geometry, snap.width, snap.height) }) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
         return CanvasResult(snap.width, snap.height, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -323,25 +359,19 @@ object CanvasOps {
             var bytesBefore = 0L
             var bytesAfter = 0L
             // The layers' editable data follows the artwork (v1.5): vector content and mask specs
-            // are mapped by the same affine; data the pixels no longer match is cleared.
-            val geometry = result.geometry
-            val matrix = Matrix().apply {
-                setValues(floatArrayOf(
-                    geometry.a.toFloat(), geometry.b.toFloat(), geometry.tx.toFloat(),
-                    geometry.c.toFloat(), geometry.d.toFloat(), geometry.ty.toFloat(),
-                    0f, 0f, 1f,
-                ))
-            }
+            // are mapped by the same affine (in the background with the pixels when the
+            // operation did so); data the pixels no longer match is cleared.
+            val matrix = matrixOf(result.geometry)
             val entries = result.layers.mapIndexed { i, r ->
                 val s = snap.layers[i]
                 require(s.layer === r.layer)
                 if (s.bitmap !== r.bitmap) { bytesBefore += s.bitmap.byteCount; bytesAfter += r.bitmap.byteCount }
                 if (s.mask !== r.mask) { bytesBefore += s.mask?.byteCount ?: 0; bytesAfter += r.mask?.byteCount ?: 0 }
                 val dataBefore = r.layer.dataSnapshot()
-                val dataAfter = if (s.bitmap !== r.bitmap || s.mask !== r.mask) {
-                    LayerDataTransforms.transformed(dataBefore, matrix, result.width, result.height)
-                } else {
-                    dataBefore
+                val dataAfter = when {
+                    r.data != null && dataBefore == s.data -> r.data
+                    s.bitmap !== r.bitmap || s.mask !== r.mask -> LayerDataTransforms.transformed(dataBefore, matrix, result.width, result.height)
+                    else -> dataBefore
                 }
                 DocumentBitmapsAction.Entry(r.layer, s.bitmap, s.mask, r.bitmap, r.mask, dataBefore, dataAfter)
             }
@@ -369,6 +399,8 @@ object CanvasOps {
         if (c.busyMessage != null) return false
         c.filterSession?.cancel()
         c.currentTool.onDeactivate()
+        // A vector edit still rendering lands first (the snapshot must hold its result).
+        c.vectors.flushPending()
         val snap = CanvasSnapshot.of(c.doc)
         val stop = AtomicBoolean(false)
         c.runBusy(label, onCancel = { stop.set(true) }) {
@@ -419,6 +451,7 @@ object CanvasOps {
     /** Applies a metadata-only change (no new bitmaps) immediately on the main thread. */
     private fun applyNow(c: EditorController, label: String, compute: (CanvasSnapshot) -> CanvasResult): Boolean {
         if (c.busyMessage != null) return false
+        c.vectors.flushPending()
         val snap = CanvasSnapshot.of(c.doc)
         return try {
             commit(c, label, snap, compute(snap))
@@ -503,11 +536,16 @@ object CanvasOps {
     /**
      * Builds new bitmaps for every layer (and its mask when [transformMasks]) with
      * `op(source, isMask, subProgress)`; on failure frees what was already created and rethrows.
+     * [data] maps a layer's editable data along (v1.5; null = at commit); [content] may draw a
+     * layer's new pixels itself (a vector layer re-rendered from its mapped objects, given the
+     * mapped data) instead of `op` (null = use `op`).
      */
     private fun mapLayers(
         snap: CanvasSnapshot,
         progress: (Float) -> Unit,
         transformMasks: Boolean = true,
+        data: ((CanvasSnapshot.LayerSnapshot) -> LayerData)? = null,
+        content: ((CanvasSnapshot.LayerSnapshot, LayerData?, (Float) -> Unit) -> Bitmap?)? = null,
         op: (Bitmap, Boolean, (Float) -> Unit) -> Bitmap,
     ): List<CanvasResult.LayerResult> {
         val out = ArrayList<CanvasResult.LayerResult>(snap.layers.size)
@@ -521,7 +559,9 @@ object CanvasOps {
         try {
             progress(0f)
             for (l in snap.layers) {
-                val bmp = op(l.bitmap, false, subProgress())
+                val d = data?.invoke(l)
+                val sub = subProgress()
+                val bmp = content?.invoke(l, d, sub) ?: op(l.bitmap, false, sub)
                 pendingBitmap = bmp
                 progress(++done / total)
                 val mask = if (transformMasks && l.mask != null) {
@@ -529,7 +569,7 @@ object CanvasOps {
                 } else {
                     l.mask
                 }
-                out += CanvasResult.LayerResult(l.layer, bmp, mask)
+                out += CanvasResult.LayerResult(l.layer, bmp, mask, d)
                 pendingBitmap = null
             }
         } catch (t: Throwable) {
@@ -542,6 +582,45 @@ object CanvasOps {
 
     private fun newBitmap(w: Int, h: Int, fill: Int): Bitmap =
         BitmapUtils.createLayerBitmap(w, h).also { if (fill != 0) it.eraseColor(fill) }
+
+    // ------------------------------------------------------------------ editable data (v1.5)
+
+    /** [g] as an android Matrix (old -> new document px). */
+    internal fun matrixOf(g: CanvasGeometry): Matrix = Matrix().apply {
+        setValues(floatArrayOf(g.a.toFloat(), g.b.toFloat(), g.tx.toFloat(), g.c.toFloat(), g.d.toFloat(), g.ty.toFloat(), 0f, 0f, 1f))
+    }
+
+    /** [l]'s editable data after the geometry change [g] (see LayerDataTransforms). */
+    private fun mappedData(l: CanvasSnapshot.LayerSnapshot, g: CanvasGeometry, newW: Int, newH: Int): LayerData =
+        if (l.data.isEmpty) l.data else LayerDataTransforms.transformed(l.data, matrixOf(g), newW, newH)
+
+    /**
+     * A vector layer's new pixels: its (already mapped) objects rendered at the new size, held to
+     * the document's color mode. [sub] reports progress (and may throw to stop).
+     */
+    private fun renderVector(content: VectorContent, w: Int, h: Int, mode: ColorMode, sub: (Float) -> Unit): Bitmap? {
+        val b = LayerDataTransforms.renderScaled(content, w, h, { false }, sub) ?: return null
+        if (mode != ColorMode.RGB) {
+            try {
+                ColorModeOps.constrain(b, Rect(0, 0, w, h), mode)
+            } catch (t: Throwable) { b.recycle(); throw t }
+        }
+        return b
+    }
+
+    /**
+     * True when objects of [content] (old document px) reach past the old canvas edges into the
+     * part of the new canvas ([newW] x [newH], the old one placed at [ox], [oy]) that was not
+     * on the old canvas: the cache never held those pixels.
+     */
+    internal fun exposesObjects(content: VectorContent, oldW: Int, oldH: Int, newW: Int, newH: Int, ox: Int, oy: Int): Boolean {
+        val u = ObjectIndex.of(content).unionBounds()
+        if (u.isEmpty) return false
+        u.offset(ox.toFloat(), oy.toFloat())
+        if (!u.intersect(0f, 0f, newW.toFloat(), newH.toFloat())) return false
+        val old = RectF(ox.toFloat(), oy.toFloat(), (ox + oldW).toFloat(), (oy + oldH).toFloat())
+        return !old.contains(u)
+    }
 
     private fun copyPaint() = Paint().apply {
         isFilterBitmap = false

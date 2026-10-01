@@ -28,6 +28,9 @@ import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
+import com.brushwork.paint.vector.geom.ObjectIndex
+import com.brushwork.paint.vector.geom.ObjectMapping
+import com.brushwork.paint.vector.geom.StrokeHits
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -39,12 +42,18 @@ import kotlin.math.sqrt
 
 /**
  * Geometry of vector objects (v1.5 §5.4; API frozen, owned by A1). A2, A3, A4 and A8 depend on
- * these bodies; A1 makes them precise and fast.
+ * these bodies.
  *
- * F2 reference: bounds are conservative (a stroke's largest dab everywhere), hit tests use the
- * flattened outline (strokes: their input polyline with the largest dab radius), [touching]
- * rasterizes each candidate's footprint against the selection, and [transformed] maps geometry
- * exactly for affine maps (homographies: anchors and handle points are mapped, see A1).
+ * - [bounds] are conservative (a stroke's largest dab everywhere: what it can paint).
+ * - [hit] is exact for strokes: the replayed dabs ([StrokeHits]: same sampler, pressure, tapers
+ *   and scatter as the pixels) as a chain of capsules, so a tap beside a tapered tip misses and
+ *   one on a pressure swell hits; paths and shapes use their flattened outline and fill.
+ * - [touching] prefilters by the content's spatial index ([ObjectIndex]) and rasterizes each
+ *   candidate's footprint (strokes: their dab chain) against the selection.
+ * - [transformed] is exact for affine maps (gradients included); a homography first splits every
+ *   curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles.
+ *   A shape stays a shape under similarities, and under reflections when it is symmetric (or has
+ *   custom points, which are mirrored); otherwise it becomes a path.
  */
 object VectorOps {
     /** Flattening tolerance of hit tests and footprints (document px). */
@@ -73,8 +82,9 @@ object VectorOps {
     }
 
     /**
-     * Ids of the objects of [content] that [sel] touches: the object's footprint (what it paints,
-     * a stroke at its largest width) has a pixel where the selection is not empty.
+     * Ids of the objects of [content] that [sel] touches: the object's footprint (what it paints;
+     * a stroke: its replayed dab chain) has a pixel where the selection is not empty. Only the
+     * objects the spatial index finds near the selection are tested.
      *
      * The footprint is rasterized against the selection in [TOUCH_TILE] squares of one reused
      * buffer (memory stays bounded however large the objects), stopping at the first touched
@@ -84,9 +94,12 @@ object VectorOps {
         if (sel.isEmpty || content.objects.isEmpty()) return emptySet()
         val out = LinkedHashSet<Long>()
         var probe: FootprintProbe? = null
+        val index = ObjectIndex.of(content)
+        val sb = sel.bounds
         try {
-            for (o in content.objects) {
-                val b = bounds(o)
+            for (i in index.query(sb.left - 1f, sb.top - 1f, sb.right + 1f, sb.bottom + 1f)) {
+                val o = content.objects[i]
+                val b = index.bounds(i)
                 if (b.isEmpty) continue
                 val r = Rect(floor(b.left).toInt() - 1, floor(b.top).toInt() - 1, ceil(b.right).toInt() + 1, ceil(b.bottom).toInt() + 1)
                 if (!r.intersect(sel.bounds)) continue
@@ -157,22 +170,25 @@ object VectorOps {
 
     /**
      * [o] mapped by [m] (3x3 row-major; may be a homography). Strokes map their points and scale
-     * `sizeScale` by sqrt|det|; a VShape becomes a VPath unless [m] is a similarity.
-     *
-     * F2 reference: exact for affine maps (gradients included); a homography maps the points,
-     * anchors and handle points (A1 subdivides first). A reflection is not a similarity here: a
-     * mirrored shape becomes a path.
+     * `sizeScale` by sqrt|det| (at the bounds centre); a VShape stays a VShape under similarities
+     * (and under reflections when it mirrors into itself, see [ObjectMapping.mirroredShape]),
+     * otherwise it becomes a VPath. Exact for affine maps (gradients included); a homography
+     * first splits every curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps
+     * anchors and handles. A non-finite matrix returns [o].
      */
     fun transformed(o: VObject, m: FloatArray): VObject {
         if (m.size < 9 || m.any { !it.isFinite() }) return o
+        val projective = m[6] != 0f || m[7] != 0f
         return when (o) {
             is VStroke -> {
+                // Projective maps keep straight lines straight: mapping the points is exact.
                 val b = o.points.bounds()
                 val s = scaleAt(m, b.centerX(), b.centerY())
                 o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s)
             }
-            is VPath -> mapPath(o, m)
-            is VShape -> similarityShape(o, m) ?: mapPath(toPaths(o).let { mergePaths(o, it) }, m)
+            is VPath -> mapPath(if (projective) ObjectMapping.subdivided(o) else o, m)
+            is VShape -> similarityShape(o, m) ?: ObjectMapping.mirroredShape(o, m)
+                ?: mergePaths(o, toPaths(o)).let { p -> mapPath(if (projective) ObjectMapping.subdivided(p) else p, m) }
         }
     }
 
@@ -366,16 +382,10 @@ object VectorOps {
         return d / 2f + o.preset.scatter.coerceAtLeast(0f) * d
     }
 
+    /** Exact: within [tol] of the replayed dab chain (see [StrokeHits]). */
     private fun strokeHit(o: VStroke, p: Vec2, tol: Float): Boolean {
-        val pts = o.points
-        val n = pts.size
-        if (n == 0) return false
-        val lim = strokeRadius(o) + tol
-        if (n == 1) return p.distanceTo(Vec2(pts.x[0], pts.y[0])) <= lim
-        for (i in 1 until n) {
-            if (Geometry.distanceToSegment(p, Vec2(pts.x[i - 1], pts.y[i - 1]), Vec2(pts.x[i], pts.y[i])) <= lim) return true
-        }
-        return false
+        if (o.points.size == 0) return false
+        return StrokeHits.hits(o, p.x, p.y, tol)
     }
 
     private fun pathHit(o: VPath, p: Vec2, tol: Float): Boolean {
@@ -434,20 +444,22 @@ object VectorOps {
      */
     private fun footprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
         is VStroke -> {
-            val pts = o.points
-            val r = strokeRadius(o)
-            if (pts.size == 1) {
-                val x = pts.x[0]
-                val y = pts.y[0]
-                val dot: (Canvas, Paint) -> Unit = { c, paint -> paint.style = Paint.Style.FILL; c.drawCircle(x, y, r, paint) }
-                dot
-            } else {
-                val path = Path()
-                path.moveTo(pts.x[0], pts.y[0])
-                for (i in 1 until pts.size) path.lineTo(pts.x[i], pts.y[i])
-                val line: (Canvas, Paint) -> Unit = { c, paint -> strokePaint(paint, 2f * r, Paint.Cap.ROUND, Paint.Join.ROUND); c.drawPath(path, paint) }
-                line
+            // The replayed dabs as a chain of capsules (thin tapered ends, wide pressure swells).
+            val d = StrokeHits.dabs(o)
+            val n = d.size / 3
+            val chain: (Canvas, Paint) -> Unit = { c, paint ->
+                paint.style = Paint.Style.FILL
+                for (i in 0 until n) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
+                if (n > 1) {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeCap = Paint.Cap.ROUND
+                    for (i in 1 until n) {
+                        paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
+                        c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+                    }
+                }
             }
+            chain
         }
         is VPath -> {
             val path = toVectorPath(o).toAndroidPath()

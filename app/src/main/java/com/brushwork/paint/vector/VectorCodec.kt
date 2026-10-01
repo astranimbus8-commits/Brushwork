@@ -12,15 +12,22 @@ class CorruptVectorException(message: String, cause: Throwable? = null) : IOExce
 
 /**
  * The `.vec` file of a vector layer: Deflate (zlib, level 5) of the JSON of its [VectorContent]
- * (v1.5; owned by A1 after F1, which must keep reading version 1). Stroke points are stored as
- * base64 little-endian float32 (see PackedPoints), so a reloaded stroke replays identically.
- * Pure Kotlin; thread-safe.
+ * (v1.5; owned by A1, which keeps reading version 1). Stroke points are stored as base64
+ * little-endian float32 (see PackedPoints), so a reloaded stroke replays identically. Pure
+ * Kotlin; thread-safe.
+ *
+ * Hardened against damaged files: [decode] throws [CorruptVectorException] for anything it can't
+ * read — truncated or garbage bytes, a zip bomb (inflated JSON beyond [MAX_JSON_BYTES]), malformed
+ * or mistyped JSON, unknown object kinds, point data whose size doesn't match, sizes that would
+ * exhaust memory, nesting that would exhaust the stack — never another exception or a crash. A
+ * readable file is sanitized: objects with duplicate ids get new ones and `nextId` is moved past
+ * every id, so later edits can't confuse two objects.
  */
 object VectorCodec {
     const val VERSION = 1
 
-    /** Largest inflated JSON accepted (a damaged file must not exhaust memory). */
-    private const val MAX_JSON_BYTES = 256L shl 20
+    /** Largest inflated JSON accepted (2000 long strokes are about 10 MB). */
+    private const val MAX_JSON_BYTES = 128L shl 20
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -50,27 +57,63 @@ object VectorCodec {
 
     /** The content stored in [b]; throws [CorruptVectorException] when it can't be read. */
     fun decode(b: ByteArray): VectorContent {
+        val text = inflate(b)
+        val content = try {
+            json.decodeFromString(VectorContent.serializer(), String(text, Charsets.UTF_8))
+        } catch (e: OutOfMemoryError) {
+            throw CorruptVectorException("The vector data is too large to read", e)
+        } catch (e: StackOverflowError) {
+            throw CorruptVectorException("The vector data is nested too deeply", e)
+        } catch (e: Exception) {
+            throw CorruptVectorException("The vector data can't be read (${e.message?.take(200) ?: e.javaClass.simpleName})", e)
+        }
+        return sanitized(content)
+    }
+
+    private fun inflate(b: ByteArray): ByteArray {
+        if (b.isEmpty()) throw CorruptVectorException("The vector data is empty")
         val inflater = Inflater()
-        val text = try {
+        try {
             inflater.setInput(b)
-            val out = ByteArrayOutputStream(maxOf(64, b.size * 3))
+            val out = ByteArrayOutputStream(minOf(MAX_JSON_BYTES, maxOf(64L, b.size * 3L)).toInt())
             val buf = ByteArray(64 * 1024)
             while (!inflater.finished()) {
                 val n = inflater.inflate(buf)
-                if (n == 0 && !inflater.finished()) throw CorruptVectorException("The vector data is truncated")
+                if (n == 0 && !inflater.finished()) {
+                    if (inflater.needsDictionary()) throw CorruptVectorException("The vector data is damaged (needs a dictionary)")
+                    throw CorruptVectorException("The vector data is truncated")
+                }
                 out.write(buf, 0, n)
                 if (out.size() > MAX_JSON_BYTES) throw CorruptVectorException("The vector data is too large")
             }
-            out.toByteArray()
+            return out.toByteArray()
         } catch (e: DataFormatException) {
             throw CorruptVectorException("The vector data is damaged", e)
+        } catch (e: OutOfMemoryError) {
+            throw CorruptVectorException("The vector data is too large to read", e)
         } finally {
             inflater.end()
         }
-        return try {
-            json.decodeFromString(VectorContent.serializer(), String(text, Charsets.UTF_8))
-        } catch (e: Exception) {
-            throw CorruptVectorException("The vector data can't be read (${e.message ?: e.javaClass.simpleName})", e)
+    }
+
+    /**
+     * [c] with unique ids (a later duplicate gets a new id) and a `nextId` beyond every id; the
+     * same instance when it already is.
+     */
+    internal fun sanitized(c: VectorContent): VectorContent {
+        val seen = HashSet<Long>(c.objects.size * 2)
+        var maxId = 0L
+        var dup = false
+        for (o in c.objects) {
+            if (!seen.add(o.id)) dup = true
+            if (o.id > maxId) maxId = o.id
         }
+        val next0 = maxOf(c.nextId, maxId + 1, 1L)
+        if (!dup && next0 == c.nextId) return c
+        if (!dup) return c.copy(nextId = next0)
+        var next = next0
+        val ids = HashSet<Long>(c.objects.size * 2)
+        val objects = c.objects.map { o -> if (ids.add(o.id)) o else o.withId(next++).also { ids += it.id } }
+        return c.copy(objects = objects, nextId = next)
     }
 }

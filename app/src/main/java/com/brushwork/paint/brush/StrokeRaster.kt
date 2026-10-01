@@ -83,7 +83,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         if (!RectF.intersects(reach, RectF(clip))) return Rect()
 
         val dynamics = StrokeDynamics(p, stylus, seed)
-        sample(dynamics, p, stylus, points)
+        lastLength = collectDabs(dynamics, p, stylus, points, dabs)
 
         // The dabs as the live stroke leaves them. Those reaching the clip are stamped whole but
         // for [cut] (the buffer covers [area], their parts within it, past the clip if need be): a
@@ -176,30 +176,6 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     /** Length of the last sampled stroke. */
     private var lastLength = 0f
 
-    /** Feeds [points] to a sampler exactly as BrushTool's stroke does, collecting the dabs. */
-    private fun sample(dynamics: StrokeDynamics, preset: BrushPreset, stylus: Boolean, points: PackedPoints) {
-        dabs.clear()
-        val xs = points.x; val ys = points.y; val ps = points.p
-        var spacingScale = 1f
-        val sampler = StrokeSampler(
-            spacingAt = { pr, d -> dynamics.spacing(pr, d) * spacingScale },
-            onSample = { x, y, pr, d -> dabs += dynamics.newDab(x, y, pr, d) },
-        )
-        var lastX = xs[0]
-        var lastY = ys[0]
-        sampler.begin(xs[0], ys[0], pressureOf(stylus, ps[0]))
-        for (i in 1 until points.size) {
-            val x = xs[i]; val y = ys[i]
-            // Stroke.limitCost: large brushes on long segments space their dabs further apart.
-            val len = hypot(x - lastX, y - lastY)
-            lastX = x; lastY = y
-            spacingScale = StrokeCost.spacingScale(len, dynamics.size, preset.spacing, { d -> d * d }, StrokeCost.BUFFER_BUDGET)
-            sampler.add(x, y, pressureOf(stylus, ps[i]))
-        }
-        sampler.end()
-        lastLength = sampler.length
-    }
-
     private fun coverage(w: Int, h: Int): Bitmap {
         val b = buffer
         if (b != null && !b.isRecycled && b.width >= w && b.height >= h) return b
@@ -241,6 +217,66 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
 
         /** The live stroke's `pressureOf`: stylus pressure clamped, 1 for fingers (and NaN). */
         fun pressureOf(stylus: Boolean, raw: Float): Float = if (stylus && !raw.isNaN()) raw.coerceIn(0f, 1f) else 1f
+
+        /**
+         * Feeds [points] to a sampler exactly as BrushTool's stroke does (the first point begins
+         * the stroke; every later one first sets the cost-limited spacing for the distance from
+         * the previous point), collecting the dabs into [out] (cleared first). Returns the length
+         * of the sampled path (the dabs are not resolved yet).
+         */
+        internal fun collectDabs(dynamics: StrokeDynamics, preset: BrushPreset, stylus: Boolean, points: PackedPoints, out: MutableList<Dab>): Float {
+            out.clear()
+            if (points.size == 0) return 0f
+            val xs = points.x; val ys = points.y; val ps = points.p
+            var spacingScale = 1f
+            val sampler = StrokeSampler(
+                spacingAt = { pr, d -> dynamics.spacing(pr, d) * spacingScale },
+                onSample = { x, y, pr, d -> out += dynamics.newDab(x, y, pr, d) },
+            )
+            var lastX = xs[0]
+            var lastY = ys[0]
+            sampler.begin(xs[0], ys[0], pressureOf(stylus, ps[0]))
+            for (i in 1 until points.size) {
+                val x = xs[i]; val y = ys[i]
+                // Stroke.limitCost: large brushes on long segments space their dabs further apart.
+                val len = hypot(x - lastX, y - lastY)
+                lastX = x; lastY = y
+                spacingScale = StrokeCost.spacingScale(len, dynamics.size, preset.spacing, { d -> d * d }, StrokeCost.BUFFER_BUDGET)
+                sampler.add(x, y, pressureOf(stylus, ps[i]))
+            }
+            sampler.end()
+            return sampler.length
+        }
+
+        /**
+         * The dabs a replay of the stroke stamps, as (centre x, centre y, radius) triples in
+         * stamping order: exactly the replay's dabs ([render]: same sampler, dynamics, spacing
+         * and final-length tapers), the radius half the dab's diameter (its tip's visible disc).
+         * For precise hit tests and erasers (a tapered end is thin, a pressure swell wide).
+         */
+        fun dabCircles(
+            preset: BrushPreset,
+            sizeScale: Float,
+            stylus: Boolean,
+            seed: Long,
+            points: PackedPoints,
+            taperIn: Boolean = true,
+            taperOut: Boolean = true,
+        ): FloatArray {
+            if (points.size == 0) return FloatArray(0)
+            val p = replayPreset(preset, sizeScale, taperIn, taperOut)
+            val dynamics = StrokeDynamics(p, stylus, seed)
+            val dabs = ArrayList<Dab>()
+            val total = collectDabs(dynamics, p, stylus, points, dabs)
+            val out = FloatArray(dabs.size * 3)
+            for ((i, dab) in dabs.withIndex()) {
+                dynamics.resolve(dab, total)
+                out[3 * i] = dab.cx
+                out[3 * i + 1] = dab.cy
+                out[3 * i + 2] = dab.diameter / 2f
+            }
+            return out
+        }
 
         /**
          * The brush a replay paints with: [preset] sanitized (as at stroke start); [sizeScale]

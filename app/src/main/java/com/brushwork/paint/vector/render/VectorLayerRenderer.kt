@@ -38,26 +38,28 @@ import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.geom.ObjectIndex
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.max
 
 /**
  * Draws vector content (v1.5 §5.4; API frozen, owned by A1): objects in z-order, clipped to the
- * region. Thread-safe when every thread passes its own [TipCache].
+ * region. Thread-safe when every thread passes its own [TipCache] (and [RenderCache]).
  *
- * F2 reference (minimal, every object kind):
- * - [VStroke]: [StrokeRaster] replay (per-object opacity folded into the stroke opacity);
+ * - [VStroke]: [StrokeRaster] replay (per-object opacity folded into the stroke opacity).
  * - [VPath]: fill with its paint (solid / linear / radial), then the outline: a plain line of
  *   constant width as a stroked path, varying anchor widths as a [VariableWidthOutline] fill, a
  *   brush outline as a [StrokeRaster] replay along `brushStrokeSamples` (each sub-path, seed + its
- *   index, sized up to the thickest anchor with the widths as pressure, §4.5);
- * - [VShape]: `ShapeOutlines.paintSpec` like the Shape tool, then its brush outline;
+ *   index, sized up to the thickest anchor with the widths as pressure, §4.5).
+ * - [VShape]: `ShapeOutlines.paintSpec` like the Shape tool, then its brush outline.
  * - opacity < 1 (paths, shapes): `saveLayerAlpha`, one [TILE] square at a time.
- * Paths and shapes are rasterized per [TILE] grid square (see there: the same pixels whatever the
- * region, and bounded offscreen layers). No spatial grid (every object's bounds are tested) and no
- * color-mode constraint (the editor's commit constrains the touched tiles). Brush outlines are
- * drawn as paint whatever their tool.
+ *
+ * Objects are found through the content's spatial index ([ObjectIndex], 128 px cells). Paths and
+ * shapes are rasterized per [TILE] grid square (see there: the same pixels whatever the region,
+ * and bounded offscreen layers). A [RenderCache] keeps each object's prepared paths, paints and
+ * brush samples between renders. No color-mode constraint is applied (the editor's commit
+ * constrains the touched tiles). Brush outlines are drawn as paint whatever their tool.
  */
 object VectorLayerRenderer {
     /** Flattening tolerance of varying-width outlines (document px). */
@@ -80,6 +82,12 @@ object VectorLayerRenderer {
      */
     const val TILE = 256
 
+    /** Cost units ([BrushTool.pathDabCost]) of filling one pixel of a path or shape. */
+    private const val PIXEL_UNITS = 0.35
+
+    /** Cost units of one dab that is sampled but lands outside the region. */
+    private const val SAMPLE_UNITS = 150.0
+
     /**
      * Draws [content] (document px) clipped to [region], leaving out the objects [exclude].
      *
@@ -90,17 +98,39 @@ object VectorLayerRenderer {
      * at a few pixels.
      */
     fun render(canvas: Canvas, content: VectorContent, region: Rect, exclude: Set<Long> = emptySet(), tips: TipCache, document: Rect? = null) {
-        if (region.isEmpty || content.objects.isEmpty()) return
-        val ctx = Context(StrokeRaster(tips), document ?: Rect(region))
-        val regionF = RectF(region)
+        renderWith(canvas, content, region, exclude, tips, document, null, null)
+    }
+
+    /**
+     * [render] with the caller thread's [cache] of prepared objects (null = none) and a
+     * [progress] callback after each drawn object (objects done, objects to draw; false stops the
+     * render). Returns false when stopped.
+     */
+    internal fun renderWith(
+        canvas: Canvas,
+        content: VectorContent,
+        region: Rect,
+        exclude: Set<Long>,
+        tips: TipCache,
+        document: Rect?,
+        cache: RenderCache?,
+        progress: ((done: Int, total: Int) -> Boolean)?,
+    ): Boolean {
+        if (region.isEmpty || content.objects.isEmpty()) return true
+        val index = ObjectIndex.of(content)
+        val found = index.query(region.left.toFloat(), region.top.toFloat(), region.right.toFloat(), region.bottom.toFloat())
+        if (found.isEmpty()) return true
+        val ctx = Context(StrokeRaster(tips), document ?: Rect(region), cache)
         val save = canvas.save()
         try {
             canvas.clipRect(region)
-            for (o in content.objects) {
+            var done = 0
+            for (i in found) {
+                val o = content.objects[i]
                 if (o.id in exclude) continue
-                val b = VectorOps.bounds(o)
-                if (b.isEmpty || !RectF.intersects(b, regionF)) continue
-                draw(canvas, o, region, b, ctx)
+                draw(canvas, o, region, index.bounds(i), ctx)
+                done++
+                if (progress != null && !progress(done, found.size)) return false
             }
         } finally {
             canvas.restoreToCount(save)
@@ -108,57 +138,129 @@ object VectorLayerRenderer {
             // (the tips stay in the caller's cache).
             ctx.raster.releaseCoverage()
         }
+        return true
     }
 
     /**
-     * Estimated cost of rendering [region] ([com.brushwork.paint.brush.BrushTool.pathDabCost]
-     * units): the dabs of the strokes and brush outlines that reach it, plus the pixels of the
-     * paths and shapes there.
+     * Estimated cost of rendering [region] ([BrushTool.pathDabCost] units, about a nanosecond of
+     * pixel work each on a desktop): for the strokes and brush outlines that reach it, the share
+     * of their dabs landing there (plus sampling the rest); for paths and shapes, the pixels of
+     * their bounds there.
      */
     fun estimateUnits(content: VectorContent, region: Rect): Double {
-        if (region.isEmpty) return 0.0
-        val regionF = RectF(region)
+        if (region.isEmpty || content.objects.isEmpty()) return 0.0
+        val index = ObjectIndex.of(content)
         var units = 0.0
-        for (o in content.objects) {
-            val b = VectorOps.bounds(o)
-            if (b.isEmpty || !RectF.intersects(b, regionF)) continue
-            val clipped = RectF(b).apply { intersect(regionF) }
-            units += clipped.width().toDouble() * clipped.height()
-            when (o) {
-                is VStroke -> units += dabUnits(o.preset.size * o.sizeScale, o.preset.spacing, polylineLength(o.points))
-                is VPath -> {
-                    val st = o.stroke
-                    if (st != null && st.kind == VStrokeKind.BRUSH) {
-                        val brush = VectorOps.brushOf(st, max(VectorOps.maxWidth(o), 1e-3f))
-                        val len = VectorOps.toVectorPath(o).flatten(1f).sumOf { VectorPath.length(it.points).toDouble() }
-                        units += dabUnits(brush.size, brush.spacing, len.toFloat())
-                    }
-                }
-                is VShape -> if (o.shape.paintsWithBrush) {
-                    val brush = VectorOps.brushPresetOf(o.shape)
-                    val len = ShapeOutlines.brushOutline(o.shape).flatten(1f).sumOf { VectorPath.length(it.points).toDouble() }
-                    units += dabUnits(brush.size, brush.spacing, len.toFloat())
-                }
-            }
+        for (i in index.query(region.left.toFloat(), region.top.toFloat(), region.right.toFloat(), region.bottom.toFloat())) {
+            units += objectUnits(content.objects[i], index.bounds(i), region)
         }
         return units
     }
 
-    private fun dabUnits(size: Float, spacing: Float, length: Float): Double {
-        val d = max(1f, size)
-        val step = max(StrokeDynamics.MIN_SPACING_PX, spacing * d)
-        return (length / step + 1f).toDouble() * BrushTool.pathDabCost(d)
+    /** [estimateUnits] of several disjoint regions (a tile set). */
+    internal fun estimateUnits(content: VectorContent, regions: List<Rect>): Double = regions.sumOf { estimateUnits(content, it) }
+
+    private fun objectUnits(o: VObject, b: RectF, region: Rect): Double {
+        if (b.isEmpty) return 0.0
+        val clipped = RectF(b)
+        if (!clipped.intersect(region.left.toFloat(), region.top.toFloat(), region.right.toFloat(), region.bottom.toFloat())) return 0.0
+        val area = b.width().toDouble() * b.height()
+        val share = if (area > 0.0) (clipped.width().toDouble() * clipped.height() / area).coerceIn(0.0, 1.0) else 1.0
+        val stats = ObjectCost.of(o)
+        return stats.dabUnits * share + stats.dabs * SAMPLE_UNITS + if (stats.fills) clipped.width().toDouble() * clipped.height() * PIXEL_UNITS else 0.0
     }
 
-    private fun polylineLength(p: PackedPoints): Float {
-        var s = 0f
-        for (i in 1 until p.size) s += hypot(p.x[i] - p.x[i - 1], p.y[i] - p.y[i - 1])
-        return s
+    /** Per-object cost figures (kept by identity: objects are immutable). */
+    internal class ObjectCost(val dabUnits: Double, val dabs: Double, val fills: Boolean) {
+        companion object {
+            private class Key(val o: VObject) {
+                override fun hashCode(): Int = System.identityHashCode(o)
+                override fun equals(other: Any?): Boolean = other is Key && other.o === o
+            }
+
+            private val cache = object : LinkedHashMap<Key, ObjectCost>(256, 0.75f, true) {
+                override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, ObjectCost>?): Boolean = size > 4096
+            }
+
+            fun of(o: VObject): ObjectCost {
+                val k = Key(o)
+                synchronized(cache) { cache[k]?.let { return it } }
+                val c = measure(o)
+                synchronized(cache) { cache[k] = c }
+                return c
+            }
+
+            private fun measure(o: VObject): ObjectCost = when (o) {
+                is VStroke -> {
+                    val (u, n) = dabUnits(o.preset.size * o.sizeScale, o.preset.spacing, polylineLength(o.points))
+                    ObjectCost(u, n, fills = false)
+                }
+                is VPath -> {
+                    val st = o.stroke
+                    var u = 0.0
+                    var n = 0.0
+                    if (st != null && st.kind == VStrokeKind.BRUSH) {
+                        val brush = VectorOps.brushOf(st, max(VectorOps.maxWidth(o), 1e-3f))
+                        val len = VectorOps.toVectorPath(o).flatten(1f).sumOf { VectorPath.length(it.points).toDouble() }
+                        val d = dabUnits(brush.size, brush.spacing, len.toFloat())
+                        u = d.first; n = d.second
+                    }
+                    ObjectCost(u, n, fills = o.fill != null || (st != null && st.kind == VStrokeKind.PLAIN))
+                }
+                is VShape -> {
+                    var u = 0.0
+                    var n = 0.0
+                    if (o.shape.paintsWithBrush) {
+                        val brush = VectorOps.brushPresetOf(o.shape)
+                        val len = ShapeOutlines.brushOutline(o.shape).flatten(1f).sumOf { VectorPath.length(it.points).toDouble() }
+                        val d = dabUnits(brush.size, brush.spacing, len.toFloat())
+                        u = d.first; n = d.second
+                    }
+                    ObjectCost(u, n, fills = true)
+                }
+            }
+
+            /** (units, dab count) of a stroke of [length] with dabs of [size]. */
+            private fun dabUnits(size: Float, spacing: Float, length: Float): Pair<Double, Double> {
+                val d = max(1f, if (size.isFinite()) size else 1f)
+                val step = max(StrokeDynamics.MIN_SPACING_PX, (if (spacing.isFinite()) spacing else 0.1f) * d)
+                val count = ((if (length.isFinite()) length else 0f) / step + 1f).toDouble()
+                return count * BrushTool.pathDabCost(d) to count
+            }
+
+            private fun polylineLength(p: PackedPoints): Float {
+                var s = 0f
+                for (i in 1 until p.size) {
+                    val l = hypot(p.x[i] - p.x[i - 1], p.y[i] - p.y[i - 1])
+                    if (l.isFinite()) s += l
+                }
+                return s
+            }
+        }
     }
 
     /** One render call's (thread-confined) helpers; [cut]: where brush dabs are cut (see [render]). */
-    private class Context(val raster: StrokeRaster, val cut: Rect) {
+    private class Context(val raster: StrokeRaster, val cut: Rect, val cache: RenderCache?) {
         val input = PathStrokeInput(512)
+    }
+
+    /** [o]'s prepared parts, from the cache when there is one. */
+    private fun prepared(o: VObject, ctx: Context): RenderCache.Prepared {
+        val c = ctx.cache ?: return prepare(o, ctx)
+        return c.get(o) { prepare(o, ctx) }
+    }
+
+    private fun prepare(o: VObject, ctx: Context): RenderCache.Prepared = when (o) {
+        is VStroke -> RenderCache.Prepared(null, emptyList())
+        is VPath -> RenderCache.Prepared(pathParts(o), o.stroke?.takeIf { it.kind == VStrokeKind.BRUSH }?.let { brushReplays(o, it, ctx) } ?: emptyList())
+        is VShape -> RenderCache.Prepared(
+            ShapeOutlines.paintSpec(o.shape, o.shape.paintsWithBrush)?.let { spec ->
+                val renderer = VectorRenderer()
+                val draw: (Canvas) -> Unit = { c -> renderer.draw(c, spec, false, ColorMode.RGB) }
+                draw
+            },
+            if (o.shape.paintsWithBrush) shapeBrushReplays(o, ctx) else emptyList(),
+        )
     }
 
     /**
@@ -175,8 +277,9 @@ object VectorLayerRenderer {
             ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut, cut = ctx.cut)
             return
         }
+        val parts = prepared(o, ctx)
         val faded = opacity < 1f
-        val plain = plainParts(o)
+        val plain = parts.plain
         if (plain != null || faded) {
             val area = Rect()
             RectF(bounds).roundOut(area)
@@ -193,7 +296,7 @@ object VectorLayerRenderer {
                         canvas.clipRect(tile)
                         if (faded) canvas.saveLayerAlpha(RectF(tile), alpha)
                         plain?.invoke(canvas)
-                        if (faded) drawBrush(canvas, o, tile, ctx)
+                        if (faded) drawBrushes(canvas, parts, tile, ctx)
                         canvas.restoreToCount(save)
                     }
                     left += TILE
@@ -201,35 +304,20 @@ object VectorLayerRenderer {
                 top += TILE
             }
         }
-        if (!faded) drawBrush(canvas, o, region, ctx)
+        if (!faded) drawBrushes(canvas, parts, region, ctx)
     }
 
-    /** The brush outline of [o] (if it has one) within [region]. */
-    private fun drawBrush(canvas: Canvas, o: VObject, region: Rect, ctx: Context) {
-        when (o) {
-            is VPath -> o.stroke?.takeIf { it.kind == VStrokeKind.BRUSH }?.let { drawBrushOutline(canvas, o, it, region, ctx) }
-            is VShape -> if (o.shape.paintsWithBrush) drawShapeBrush(canvas, o, region, ctx)
-            is VStroke -> {}
-        }
+    /** The brush replays of an object within [region]. */
+    private fun drawBrushes(canvas: Canvas, parts: RenderCache.Prepared, region: Rect, ctx: Context) {
+        for (b in parts.brushes) ctx.raster.render(canvas, region, b.preset, b.color, b.seed, true, b.points, cut = ctx.cut)
     }
 
     // ------------------------------------------------------------------ paths
 
     /**
-     * What [o] draws besides a brush outline (built once, drawn into each tile): a path's fill
-     * and plain outline, a shape's `ShapeOutlines.paintSpec` like the Shape tool; null when
-     * there is nothing of the kind.
+     * What [p] draws besides a brush outline (built once, drawn into each tile): its fill and
+     * plain outline; null when there is nothing of the kind.
      */
-    private fun plainParts(o: VObject): ((Canvas) -> Unit)? = when (o) {
-        is VPath -> pathParts(o)
-        is VShape -> ShapeOutlines.paintSpec(o.shape, o.shape.paintsWithBrush)?.let { spec ->
-            val renderer = VectorRenderer()
-            val draw: (Canvas) -> Unit = { c -> renderer.draw(c, spec, false, ColorMode.RGB) }
-            draw
-        }
-        is VStroke -> null
-    }
-
     private fun pathParts(p: VPath): ((Canvas) -> Unit)? {
         val geometry = VectorOps.toVectorPath(p)
         if (geometry.ops.isEmpty()) return null
@@ -325,8 +413,9 @@ object VectorLayerRenderer {
      * are fed as a [WidthProfile] (pressure × w / wMax) to the brush sized up to the thickest
      * sample, with size following pressure and opacity not.
      */
-    private fun drawBrushOutline(canvas: Canvas, p: VPath, st: VStrokeStyle, region: Rect, ctx: Context) {
-        if (!(VectorOps.maxWidth(p) > 0f)) return
+    private fun brushReplays(p: VPath, st: VStrokeStyle, ctx: Context): List<RenderCache.BrushReplay> {
+        if (!(VectorOps.maxWidth(p) > 0f)) return emptyList()
+        val out = ArrayList<RenderCache.BrushReplay>(p.subpaths.size)
         val uniform = p.subpaths.all { s -> s.anchors.all { it.width == 1f } }
         val base = VectorOps.brushOf(st)
         val taper = (st.taperPercent / 100f).let { if (it.isFinite()) it.coerceIn(0f, 0.5f) else 0f }
@@ -346,19 +435,24 @@ object VectorLayerRenderer {
                 input = brushStrokeSamples(path, taper, WidthProfile(widths), ctx.input)
                 brush = base.copy(size = base.size * wMax, pressureSize = true, minSizeRatio = 0f, pressureOpacity = false)
             }
-            // The live path stroke ends with its last point once more (onUp).
-            val n = input.size
-            val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
-            input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
-            xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
-            ctx.raster.render(canvas, region, brush, st.color, st.seed + index, true, PackedPoints(xs, ys, ps), cut = ctx.cut)
+            out += RenderCache.BrushReplay(brush, st.color, st.seed + index, withLastPointAgain(input))
         }
+        return out
+    }
+
+    /** The samples as a replay input that ends with its last point once more (the live stroke's onUp). */
+    private fun withLastPointAgain(input: PathStrokeInput): PackedPoints {
+        val n = input.size
+        val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
+        input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
+        xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
+        return PackedPoints(xs, ys, ps)
     }
 
     /**
      * The thickness factor at every sample of [input] (one per sample, for a [WidthProfile]):
      * the factor at the nearest point of the flattened sub-path, whose factors blend with
-     * smoothstep along arc length between anchors (§4.5). A reference; A4 owns the real profile.
+     * smoothstep along arc length between anchors (§4.5).
      */
     private fun widthsAtSamples(input: PathStrokeInput, s: VSubpath, tension: Float, polyline: Boolean): FloatArray {
         val out = FloatArray(input.size) { 1f }
@@ -384,15 +478,11 @@ object VectorLayerRenderer {
     // ------------------------------------------------------------------ shapes
 
     /** A brush-stroked shape's outline, replayed along `brushStrokeSamples(brushOutline)` with the shape's seed. */
-    private fun drawShapeBrush(canvas: Canvas, s: VShape, region: Rect, ctx: Context) {
+    private fun shapeBrushReplays(s: VShape, ctx: Context): List<RenderCache.BrushReplay> {
         val o = s.shape
         val input = brushStrokeSamples(ShapeOutlines.brushOutline(o), 0f, null, ctx.input)
-        if (input.size < 2) return
-        val n = input.size
-        val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
-        input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
-        xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
-        ctx.raster.render(canvas, region, VectorOps.brushPresetOf(o), o.strokeColor, s.seed, true, PackedPoints(xs, ys, ps), cut = ctx.cut)
+        if (input.size < 2) return emptyList()
+        return listOf(RenderCache.BrushReplay(VectorOps.brushPresetOf(o), o.strokeColor, s.seed, withLastPointAgain(input)))
     }
 
     // ------------------------------------------------------------------ paints
