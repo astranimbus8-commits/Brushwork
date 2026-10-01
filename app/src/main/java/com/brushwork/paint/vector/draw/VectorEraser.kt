@@ -72,25 +72,40 @@ internal class VectorEraserRecorder(
 
     override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
         if (ended) return false
+        if (layer.vector == null || c.doc.indexOf(layer) < 0) { end(); return false }
+        // No more points. The dimmed preview stays until the new content is on the layer: the
+        // update of an earlier gesture may still be on its way, and this one may render in the
+        // background.
+        ended = true
+        state.serial(layer) { finish -> apply(finish) }
+        return true
+    }
+
+    /**
+     * Removes what the gesture erased from what the layer holds NOW (ONE undo step "Erase");
+     * [finish] is called once it was applied (or nothing was to be done).
+     */
+    private fun apply(finish: () -> Unit) {
         val current = layer.vector
-        if (current == null || c.doc.indexOf(layer) < 0) { end(); return false }
-        // The layer changed during the gesture (a background update landed): the same eraser
-        // path is applied to what the layer holds now.
+        if (current == null || c.doc.indexOf(layer) < 0) { removePreview(); finish(); return }
+        // The layer changed since the gesture began (an update landed meanwhile): the same
+        // eraser path is applied to what the layer holds now.
         val final = if (current === session.content) session else EraseSession(current, mode, state.targets).also { s ->
             var k = 0
             while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
         }
         val after = final.result()
-        if (after == null) { end(); return false }
+        if (after == null) { removePreview(); finish(); return }
         if (final.removedWholeInPartial && !state.partialWholeHintShown) {
             state.partialWholeHintShown = true
             c.toast("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)")
         }
-        // No more points; the dimmed preview stays until the new content is on the layer (the
-        // update may render in the background).
-        ended = true
-        c.vectors.update(layer, after, ERASE_LABEL) { removePreview() }
-        return true
+        try {
+            state.update(layer, after, ERASE_LABEL) { removePreview(); finish() }
+        } catch (e: Throwable) {
+            removePreview()
+            throw e
+        }
     }
 
     override fun cancel() {
@@ -104,9 +119,13 @@ internal class VectorEraserRecorder(
     }
 
     private fun removePreview() {
+        preview.alive = false
         if (installed) {
             installed = false
-            if (c.renderOverride === preview) c.renderOverride = previous
+            // What was installed before this gesture comes back, unless it is the preview of an
+            // earlier gesture whose update landed meanwhile (with background updates a second
+            // gesture can start before the first one's preview goes): that one must not return.
+            if (c.renderOverride === preview) c.renderOverride = previous?.takeIf { it !is DoomPreview || it.alive }
             previous = null
             val r = preview.bounds()
             if (!r.isEmpty) c.invalidateDoc(r)
@@ -124,8 +143,11 @@ internal class VectorEraserRecorder(
  * objects along their centerlines and fills, cut parts along their part of the centerline.
  * Drawn inside the compositor's layer (any xfermode is safe there).
  */
-private class DoomPreview(override val layer: Layer, private val session: EraseSession) : LayerRenderOverride {
+internal class DoomPreview(override val layer: Layer, private val session: EraseSession) : LayerRenderOverride {
     private class Item(val path: Path, val width: Float, val fill: Boolean, val butt: Boolean, val bounds: RectF)
+
+    /** False once its gesture ended (cancelled, or its update applied): it must never be installed again. */
+    var alive = true
 
     private val items = HashMap<Int, List<Item>>()
     private val union = RectF()

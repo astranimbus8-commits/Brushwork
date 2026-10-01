@@ -69,6 +69,12 @@ internal class Intervals {
         return false
     }
 
+    /** True when some interval reaches strictly into [a, b] (touching an end only does not count). */
+    fun reachesInto(a: Float, b: Float): Boolean {
+        for (k in 0 until size) if (lo[k] < b && hi[k] > a) return true
+        return false
+    }
+
     /** The parts of [from, to] that are NOT covered (the kept pieces), in order. */
     fun complement(from: Float, to: Float): List<FloatArray> {
         val out = ArrayList<FloatArray>()
@@ -386,9 +392,10 @@ internal object EraseMath {
     /**
      * The parts of the open [line] that the "to intersection" eraser removes: [line] is cut at
      * the [crossings] (sorted parameters) into pieces; a piece goes when [touched] reaches into it
-     * deeper than [spill] (arc length) from each of its ends, so an eraser that only spills over
-     * a crossing from the neighbouring piece leaves this piece alone. A piece shorter than four
-     * spills uses a quarter of its length instead.
+     * deeper than [spill] (arc length, plus [SPILL_MARGIN]) from each of its ends, so an eraser
+     * that only spills over a crossing from the neighbouring piece (or sits right on the
+     * crossing) leaves this piece alone. A piece shorter than four spills uses a quarter of its
+     * length instead.
      */
     fun piecesToIntersection(line: FlatLine, crossings: List<Float>, touched: Intervals, spill: Float, out: Intervals) {
         if (touched.isEmpty || line.n < 2) return
@@ -401,12 +408,18 @@ internal object EraseMath {
             val a = cuts[k]; val b = cuts[k + 1]
             if (b <= a) continue
             val sa = line.arcAt(a, cum); val sb = line.arcAt(b, cum)
-            val m = min(max(0f, spill), (sb - sa) / 4f)
+            val m = min(max(0f, spill) + SPILL_MARGIN, (sb - sa) / 4f)
             val ia = line.uAtArc(sa + m, cum)
             val ib = line.uAtArc(sb - m, cum)
-            if (touched.overlaps(min(ia, ib), max(ia, ib))) out.add(a, b)
+            if (touched.reachesInto(min(ia, ib), max(ia, ib))) out.add(a, b)
         }
     }
+
+    /**
+     * How much deeper than the spill (document px) the "to intersection" eraser must reach into
+     * a piece: an eraser centered on a crossing reaches exactly its spill into both neighbours.
+     */
+    const val SPILL_MARGIN = 0.5f
 
     /** Subdivision count of a cubic for [tolerance] (as VectorPath.flattenCubic). */
     fun cubicSteps(

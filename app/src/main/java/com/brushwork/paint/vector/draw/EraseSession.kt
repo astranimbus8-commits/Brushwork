@@ -1,6 +1,9 @@
 package com.brushwork.paint.vector.draw
 
 import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import java.util.IdentityHashMap
 import kotlin.math.max
@@ -131,14 +134,17 @@ internal class EraseSession(
                         continue
                     }
                     val line = tg.lines[0]
+                    // Touched where the eraser meets the line's paint (as the other modes), not
+                    // only its centerline; the spill over a crossing is measured the same way.
+                    val reach = r + tg.cutReach
                     val set = touched[i] ?: Intervals().also { touched[i] = it }
                     val sum0 = total(set)
                     val size0 = set.size
-                    EraseMath.capsuleIntervals(line, cx, cy, dx, dy, r, set)
+                    EraseMath.capsuleIntervals(line, cx, cy, dx, dy, reach, set)
                     if (set.isEmpty || (set.size == size0 && total(set) == sum0)) continue
                     val cr = crossings[i] ?: crossingsOf(i).also { crossings[i] = it }
                     val out = Intervals()
-                    EraseMath.piecesToIntersection(line, cr, set, r, out)
+                    EraseMath.piecesToIntersection(line, cr, set, reach, out)
                     val old = removed[i]
                     if (old == null || total(old) != total(out) || old.size != out.size) {
                         removed[i] = out
@@ -221,23 +227,41 @@ internal class TargetCache {
     fun boundsOf(o: VObject): FloatArray {
         bounds[o]?.let { return it }
         if (bounds.size >= MAX) bounds.clear()
-        val b = if (o is com.brushwork.paint.vector.VStroke) {
-            val p = o.points
-            var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
-            var r = Float.NEGATIVE_INFINITY; var bt = Float.NEGATIVE_INFINITY
-            for (k in 0 until p.size) {
-                val x = p.x[k]; val y = p.y[k]
-                if (!x.isFinite() || !y.isFinite()) continue
-                if (x < l) l = x
-                if (x > r) r = x
-                if (y < t) t = y
-                if (y > bt) bt = y
+        val b = when (o) {
+            is VStroke -> {
+                val p = o.points
+                var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
+                var r = Float.NEGATIVE_INFINITY; var bt = Float.NEGATIVE_INFINITY
+                for (k in 0 until p.size) {
+                    val x = p.x[k]; val y = p.y[k]
+                    if (!x.isFinite() || !y.isFinite()) continue
+                    if (x < l) l = x
+                    if (x > r) r = x
+                    if (y < t) t = y
+                    if (y > bt) bt = y
+                }
+                val e = EraseTarget.strokeRadius(o)
+                floatArrayOf(l - e, t - e, r + e, bt + e)
             }
-            val e = EraseTarget.strokeRadius(o)
-            floatArrayOf(l - e, t - e, r + e, bt + e)
-        } else {
-            val tg = of(o)
-            floatArrayOf(tg.left, tg.top, tg.right, tg.bottom)
+            is VPath -> {
+                // The control box (it holds the curves) plus the paint's reach: no flattening,
+                // so a layer of many imported paths is not flattened whole at the first touch,
+                // only the paths near the finger are.
+                var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
+                var r = Float.NEGATIVE_INFINITY; var bt = Float.NEGATIVE_INFINITY
+                for (s in o.subpaths) {
+                    val cb = EraseTarget.subpathGeometry(o, s).controlBounds() ?: continue
+                    if (!(cb.left.isFinite() && cb.top.isFinite() && cb.right.isFinite() && cb.bottom.isFinite())) continue
+                    l = min(l, cb.left); t = min(t, cb.top); r = max(r, cb.right); bt = max(bt, cb.bottom)
+                }
+                // (EraseTarget's reach, and a pixel to spare.)
+                val e = max(EraseTarget.halfWidth(o), 1f) + 1f
+                floatArrayOf(l - e, t - e, r + e, bt + e)
+            }
+            is VShape -> {
+                val tg = of(o)
+                floatArrayOf(tg.left, tg.top, tg.right, tg.bottom)
+            }
         }
         bounds[o] = b
         return b
@@ -247,6 +271,9 @@ internal class TargetCache {
         targets.clear()
         bounds.clear()
     }
+
+    /** Objects whose full geometry is cached now. */
+    val targetCount: Int get() = targets.size
 
     /** Forgets the geometry of objects that are not in [objects] once the cache holds many more (deleted or replaced ones). */
     fun trimTo(objects: List<VObject>) {

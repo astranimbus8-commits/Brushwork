@@ -1098,8 +1098,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         preview.interacting = on
         val was = dragging
         dragging = on
-        // An opened shape layer drawn in the overlay during the drag goes back into the layer.
-        if (was && !on && editingLayer != null && box != null) refreshPreview()
+        // An opened shape layer (or a shape on a vector layer) drawn in the overlay during the
+        // drag goes back into the layer.
+        if (was && !on && box != null && (editingLayer != null || vectorLayerOfPending() != null)) refreshPreview()
     }
 
     /** A finger (or two) is dragging the shape (see [setDragging]). */
@@ -1494,6 +1495,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * brush outline is the painting tool's live stroke (the one dragged out, else the pending
      * one), adopted inside the same override; brush outlines that can't be shown live (smudge or
      * blur, a selection, alpha lock) are shown as guides.
+     *
+     * While a finger drags plain shapes that look the same over the finished image (see
+     * [editDrawsInOverlay]) they are drawn in the overlay instead, as on raster layers: the canvas
+     * tiles are not recomposited on every frame of the drag. They go back into the layer when
+     * the finger lifts.
      */
     private fun refreshVectorPreview(layer: Layer) {
         preview.release()
@@ -1519,9 +1525,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             ShapeOutlines.paintSpec(o, o.paintsWithBrush)?.let { specs += it }
             if (o.paintsWithBrush && !(live && o === brushObj)) guides += ShapeOutlines.brushOutline(o).toAndroidPath()
         }
+        val inOverlay = dragging && !live && specs.isNotEmpty() && editDrawsInOverlay(layer)
+        setVectorSpecs(layer, if (inOverlay) emptyList() else specs)
+        if (inOverlay) overlaySpecs = specs
         vectorGuides = guides
-        setVectorSpecs(layer, specs)
-        val path = if (live && brushObj != null) ShapeOutlines.brushOutline(brushObj) else null
+        // (live implies brushObj != null.)
+        val path = if (live) ShapeOutlines.brushOutline(brushObj) else null
         if (path != null) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
     }
@@ -1537,10 +1546,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             session.drawPreview = if (shown.isEmpty()) null else { cv -> drawSpecs(cv, shown) }
             if (controller.renderOverride !== session) session.adoptInner()
         } else if (specs.isEmpty() && !brushPreview.isLive) {
-            releaseVectorPreview()
+            releaseVectorPreview(keepGuides = true)
         } else {
             val ov = vectorPreview?.takeIf { it.layer === layer } ?: run {
-                releaseVectorPreview()
+                releaseVectorPreview(keepGuides = true)
                 VectorShapePreview(layer).also { vectorPreview = it }
             }
             ov.specs = specs.toList()
@@ -1560,9 +1569,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         for (s in specs) renderer.draw(canvas, s, false, mode)
     }
 
-    /** Removes the new-shape preview of a vector layer (and its guides). */
-    private fun releaseVectorPreview() {
-        vectorGuides = emptyList()
+    /** Removes the new-shape preview of a vector layer (and its guides, unless [keepGuides]). */
+    private fun releaseVectorPreview(keepGuides: Boolean = false) {
+        if (!keepGuides) vectorGuides = emptyList()
         val ov = vectorPreview ?: return
         vectorPreview = null
         if (controller.renderOverride === ov) controller.renderOverride = ov.inner?.takeIf { it !== ov && brushPreview.isLive }
@@ -1711,6 +1720,15 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         refreshPreview()
     }
 
+    /**
+     * Frees the floating bitmap of an ended [session] (the edited object rendered alone, up to
+     * 2048 px: the shape tool draws the shape itself and never uses it; its holder frees it).
+     */
+    private fun recycleFloating(session: VectorEditSession) {
+        val f = session.floating ?: return
+        if (!session.isOpen && !f.isRecycled) f.recycle()
+    }
+
     /** Stops editing the shape object (no change): the session ends, the user's options come back. */
     private fun endObjectEdit() {
         val s = vectorSession
@@ -1719,7 +1737,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (s != null) {
             s.inner = null
             s.drawPreview = null
-            s.cancel()
+            // (After a commit the session already ended: its floating preview is freed when the
+            // change lands, see commitVectorEdit.)
+            if (s.isOpen) {
+                s.cancel()
+                recycleFloating(s)
+            }
         }
         invalidateTiles(vectorShown)
         vectorShown = emptyList()
@@ -1764,10 +1787,17 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 if (ov != null && controller.renderOverride === ov) controller.renderOverride = ov.inner
                 vectorShown = emptyList()
                 resetPending()
+                var painted = false
                 controller.undoStepNamed(SHAPE_LABEL) {
+                    val um = controller.undoManager
+                    val mark = um.undoCount
                     controller.keepLayerData(layer) { brushPreview.commit(livePath.ops) { brushStrokeInput(livePath, out = it) } }
-                    ids = controller.vectors.appendData(layer, listOf(shape), SHAPE_LABEL)
+                    // The data goes with the pixels only (I1): a stroke that left nothing on the
+                    // layer is rendered from the object below instead.
+                    painted = um.undoCount > mark
+                    if (painted) ids = controller.vectors.appendData(layer, listOf(shape), SHAPE_LABEL)
                 }
+                if (!painted) ids = controller.vectors.addObjects(layer, listOf(shape), SHAPE_LABEL)
             } else {
                 brushPreview.cancel()
                 releaseVectorPreview()
@@ -1812,7 +1842,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             // The live stroke is gone: the session must not hand it back when it ends.
             session.inner = null
             session.drawPreview = null
-            session.commit(listOf(shape), EDIT_SHAPE_LABEL) { ok -> if (!ok) controller.toast("The shape couldn't be updated") }
+            session.commit(listOf(shape), EDIT_SHAPE_LABEL) { ok ->
+                // The session's floating preview is not used here: freed once the change landed.
+                recycleFloating(session)
+                if (!ok) controller.toast("The shape couldn't be updated")
+            }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to update the shape")
         } finally {

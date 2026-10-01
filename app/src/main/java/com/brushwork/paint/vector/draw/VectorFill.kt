@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector.draw
 
+import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
@@ -65,17 +66,43 @@ object VectorFill {
         val tol = t.screenToDocLength(t.dp(TAP_TOLERANCE_DP))
         val hit = FillHits.find(content, p, tol, state.targets)
         if (hit != null) {
-            recolor(c, layer, content, hit, c.color or 0xFF000000.toInt())
+            recolor(c, layer, content, p, tol, hit, fillColor(c))
             return true
         }
         fillEnclosed(c, layer, content, p)
         return true
     }
 
-    /** Recolors the part of the object [hit] (one step), nothing when it already has [color]. */
-    internal fun recolor(c: EditorController, layer: Layer, content: VectorContent, hit: FillHit, color: Int): Boolean {
-        val after = recolored(hit.obj, hit.part, color) ?: return false
-        c.vectors.update(layer, content.replaced(mapOf(hit.obj.id to listOf(after))), FILL_OBJECT_LABEL)
+    /**
+     * The main color as objects get it: opaque, and as the document shows it (gray or black and
+     * white documents), like the brush's strokes.
+     */
+    private fun fillColor(c: EditorController): Int =
+        ColorModeOps.displayColor(c.color or 0xFF000000.toInt(), c.doc.colorMode) or 0xFF000000.toInt()
+
+    /**
+     * Recolors the part of the object [hit] found at [p] in [content] (one step "Fill object"),
+     * nothing when it already has [color]. Applied after the eraser / bucket updates still on
+     * their way: when the layer changed by then, what is under [p] then is recolored (nothing
+     * when it was erased). False when nothing changes.
+     */
+    internal fun recolor(c: EditorController, layer: Layer, content: VectorContent, p: Vec2, tol: Float, hit: FillHit, color: Int): Boolean {
+        if (recolored(hit.obj, hit.part, color) == null) return false
+        val state = VectorDrawState.of(c)
+        state.serial(layer) { finish ->
+            val current = layer.vector
+            val now = when {
+                current == null || c.doc.indexOf(layer) < 0 -> null
+                current === content -> hit
+                else -> FillHits.find(current, p, tol, state.targets)
+            }
+            val after = now?.let { recolored(it.obj, it.part, color) }
+            if (current == null || now == null || after == null) {
+                finish()
+            } else {
+                state.update(layer, current.replaced(mapOf(now.obj.id to listOf(after))), FILL_OBJECT_LABEL) { finish() }
+            }
+        }
         return true
     }
 
@@ -122,7 +149,7 @@ object VectorFill {
             c.toast("Not enough memory to fill")
             return
         }
-        val color = c.color or 0xFF000000.toInt()
+        val color = fillColor(c)
         val w = doc.width
         val h = doc.height
         // Grown by at least a pixel: the fill goes under the line art, so it reaches under its
@@ -145,13 +172,19 @@ object VectorFill {
                     if (self?.isActive != false) c.toast("Nothing to fill here")
                     return@launch
                 }
-                if (doc.indexOf(layer) < 0 || layer.vector !== content || doc.width != w || doc.height != h) {
-                    c.toast("The layer changed while filling. Tap again.")
-                    return@launch
-                }
-                if (!c.checkEditable(layer)) return@launch
                 val path = VPath(0, subpaths = subpaths, polyline = true, fillRule = VFillRule.EVENODD, fill = VPaint.Solid(color))
-                c.vectors.update(layer, atBottom(content, path), FILL_AREA_LABEL)
+                // After the eraser / bucket updates still on their way: the area was traced from
+                // the layer as it was, so it is placed only if the layer is still that.
+                state.serial(layer) { finish ->
+                    when {
+                        doc.indexOf(layer) < 0 || layer.vector !== content || doc.width != w || doc.height != h -> {
+                            c.toast("The layer changed while filling. Tap again.")
+                            finish()
+                        }
+                        !c.checkEditable(layer) -> finish()
+                        else -> state.update(layer, atBottom(content, path), FILL_AREA_LABEL) { finish() }
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: OutOfMemoryError) {

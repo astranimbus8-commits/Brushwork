@@ -161,8 +161,9 @@ internal class EraseTarget private constructor(
             val half = halfWidth(p)
             val reach = if (p.fill != null) max(half, 1f) else max(half, 0.5f)
             val single = p.subpaths.singleOrNull()
-            val cuttable = single != null && !single.closed && p.fill == null && p.stroke != null && single.anchors.size >= 2
-            if (cuttable) return ofOpenPath(p, single!!, half, reach)
+            if (single != null && !single.closed && p.fill == null && p.stroke != null && single.anchors.size >= 2) {
+                return ofOpenPath(p, single, half, reach)
+            }
             val lines = ArrayList<FlatLine>()
             val fills = ArrayList<FlatLine>()
             for (s in p.subpaths) {

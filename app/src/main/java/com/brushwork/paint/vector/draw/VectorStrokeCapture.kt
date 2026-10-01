@@ -35,8 +35,17 @@ object VectorStrokeCapture {
         val layer = info.layer
         if (info.isPath || !layer.isVectorLayer || info.target != EditTarget.CONTENT) return StrokeHook.None
         return when {
-            info.toolId == ToolId.ERASER ->
-                StrokeHook.Record(VectorEraserRecorder(c, layer, info.preset, info.isStylus, VectorEraserModes.mode(c)))
+            info.toolId == ToolId.ERASER -> {
+                val state = VectorDrawState.of(c)
+                val mode = state.eraseMode.value
+                if (!state.eraserHintShown) {
+                    // Erasing objects surprises who expects pixels to go, and the mode chips sit
+                    // at the end of the options strip (off screen on a phone): say it once.
+                    state.eraserHintShown = true
+                    c.toast(eraserHint(mode))
+                }
+                StrokeHook.Record(VectorEraserRecorder(c, layer, info.preset, info.isStylus, mode))
+            }
             info.toolId != ToolId.BRUSH -> StrokeHook.Refuse(LayerToolRules.pixelOnlyMessage(info.toolId))
             info.kind.isDirect || info.kind != StrokeKind.PAINT -> StrokeHook.Refuse(directTipMessage(info))
             layer.alphaLocked -> StrokeHook.Refuse(ALPHA_LOCK_MESSAGE)
@@ -50,6 +59,11 @@ object VectorStrokeCapture {
             }
         }
     }
+
+    /** What the eraser does on a vector layer in [mode], and where the other modes are (shown once per editor). */
+    internal fun eraserHint(mode: VectorEraseMode): String =
+        "Vector eraser — ${mode.label}: ${mode.description.replaceFirstChar { it.lowercase() }}. " +
+            "Other modes are at the end of the options strip"
 
     /** "Watercolor needs a raster layer" (the brush's name, else its tip). */
     internal fun directTipMessage(info: StrokeInfo): String {

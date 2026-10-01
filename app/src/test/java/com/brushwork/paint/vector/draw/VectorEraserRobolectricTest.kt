@@ -174,7 +174,7 @@ class VectorEraserRobolectricTest {
         c.swipe(150f to 30f, 150f to 90f)
         val pieces = c.vec.vector!!.objects
         assertEquals(2, pieces.size)
-        assertTrue(pieces.all { it is VPath && (it as VPath).subpaths.single().anchors.size >= 2 })
+        assertTrue(pieces.all { it is VPath && it.subpaths.single().anchors.size >= 2 })
         assertNull(c.message)
         assertArrayEquals(render(c.vec.vector!!), pixels(c.vec.bitmap))
     }
