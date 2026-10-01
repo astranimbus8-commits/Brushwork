@@ -28,7 +28,7 @@ internal class VectorEraserRecorder(
     /** The eraser's (sanitized) brush: its size is the eraser's diameter. */
     private val preset: BrushPreset,
     private val stylus: Boolean,
-    mode: VectorEraseMode,
+    private val mode: VectorEraseMode,
 ) : StrokeRecorder {
     override val replacesStroke: Boolean = true
 
@@ -42,6 +42,10 @@ internal class VectorEraserRecorder(
     private var installed = false
     private var ended = false
 
+    /** The eraser's path (x, y, radius per point), to apply it again if the layer changes meanwhile. */
+    private var path = FloatArray(96)
+    private var pathSize = 0
+
     /** The eraser's radius at raw pressure [raw] (size follows a stylus' pressure like the brush). */
     private fun radius(raw: Float): Float {
         val p = StrokeRaster.pressureOf(stylus, raw)
@@ -51,7 +55,10 @@ internal class VectorEraserRecorder(
 
     override fun point(x: Float, y: Float, rawPressure: Float) {
         if (ended) return
-        session.add(x, y, radius(rawPressure))
+        val r = radius(rawPressure)
+        if (pathSize + 3 > path.size) path = path.copyOf(path.size * 2)
+        path[pathSize++] = x; path[pathSize++] = y; path[pathSize++] = r
+        session.add(x, y, r)
         val changed = session.takeChanged()
         if (changed.isEmpty()) return
         val dirty = preview.update(changed)
@@ -65,14 +72,24 @@ internal class VectorEraserRecorder(
 
     override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
         if (ended) return false
-        end()
-        val after = session.result() ?: return false
-        if (c.doc.indexOf(layer) < 0 || layer.vector !== session.content) return false
-        if (session.removedWholeInPartial && !state.partialWholeHintShown) {
+        val current = layer.vector
+        if (current == null || c.doc.indexOf(layer) < 0) { end(); return false }
+        // The layer changed during the gesture (a background update landed): the same eraser
+        // path is applied to what the layer holds now.
+        val final = if (current === session.content) session else EraseSession(current, mode, state.targets).also { s ->
+            var k = 0
+            while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
+        }
+        val after = final.result()
+        if (after == null) { end(); return false }
+        if (final.removedWholeInPartial && !state.partialWholeHintShown) {
             state.partialWholeHintShown = true
             c.toast("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)")
         }
-        c.vectors.update(layer, after, ERASE_LABEL)
+        // No more points; the dimmed preview stays until the new content is on the layer (the
+        // update may render in the background).
+        ended = true
+        c.vectors.update(layer, after, ERASE_LABEL) { removePreview() }
         return true
     }
 
@@ -83,6 +100,10 @@ internal class VectorEraserRecorder(
 
     private fun end() {
         ended = true
+        removePreview()
+    }
+
+    private fun removePreview() {
         if (installed) {
             installed = false
             if (c.renderOverride === preview) c.renderOverride = previous

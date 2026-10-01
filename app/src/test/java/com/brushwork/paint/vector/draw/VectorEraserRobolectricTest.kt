@@ -239,6 +239,25 @@ class VectorEraserRobolectricTest {
     }
 
     @Test
+    fun aGestureOverContentThatChangedMeanwhileAppliesToTheCurrentContent() {
+        val c = setup()
+        lines(c)
+        eraser(c, VectorEraseMode.OBJECT)
+        c.pointerDown(ToolPoint(150f, 60f))
+        c.pointerMove(ToolPoint(150f, 140f))
+        // Another edit lands on the layer during the gesture (a background update, a listener).
+        c.vectors.addObjects(c.vec, listOf(stroke(130f, 150f, 170f, 150f)), "Add")
+        val steps = c.undoManager.undoCount
+        c.pointerUp(ToolPoint(150f, 160f))
+        val after = c.vec.vector!!
+        // The horizontal line and the new stroke the path also crosses are gone; the rest stays.
+        assertEquals(listOf(2L, 3L), after.objects.map { it.id })
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertArrayEquals(render(after), pixels(c.vec.bitmap))
+        assertNull(c.renderOverride)
+    }
+
+    @Test
     fun theModeIsRememberedAndRasterLayersEraseAsBefore() {
         val c = setup()
         VectorEraserModes.setMode(c, VectorEraseMode.TO_INTERSECTION)
