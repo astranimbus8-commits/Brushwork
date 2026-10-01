@@ -12,6 +12,7 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.select.ObjectTestKit
 import com.brushwork.paint.vector.select.vec
@@ -305,6 +306,57 @@ class VectorLiftRobolectricTest {
             assertEquals(s1.points.y[i] + 5f, s2.points.y[i], 0f)
         }
         assertArrayEquals(kit.render(again), kit.pixels(layer.bitmap))
+    }
+
+    @Test
+    fun aBackgroundRenderKeepsShowingTheResultUntilItLands() {
+        val c = kit.controller()
+        val layer = c.vec
+        c.vectors.addObjects(layer, listOf(kit.box(40f, 40f, 140f, 120f), kit.stroke(200f, 200f, 300f, 220f)), "Add")
+        val before = layer.vector!!
+        c.vectors.setSelection(layer, setOf(1L))
+        val tool = kit.transform(c)
+        val provider = VectorLift.providerOf(c)
+        val floating = VectorLift.activeLift(c)!!.floating
+        var land: (() -> Unit)? = null
+        val hints = ArrayList<VectorLayers.ShiftHint?>()
+        provider.update = { l, after, label, shift, done ->
+            hints += shift
+            land = { c.vectors.update(l, after, label, shift = shift, onDone = done) }
+        }
+        tool.moveBy(256f, 100f)
+        tool.commit()
+        // A whole-pixel move: the vector service is told it may shift the cache.
+        assertEquals(listOf(VectorLayers.ShiftHint(setOf(1L), 256, 100)), hints)
+        // Still rendering: the layer is unchanged, but it shows the box where it goes.
+        assertNull(tool.transformState)
+        assertSame(before, layer.vector)
+        assertNotNull(c.renderOverride)
+        assertFalse("the preview is kept until then", floating.isRecycled)
+        val shown = BitmapUtils.createLayerBitmap(kit.w, kit.h)
+        c.compositor.drawDocument(Canvas(shown), null, useOverrides = true, target = null)
+        assertTrue(android.graphics.Color.alpha(shown.getPixel(90 + 256, 80 + 100)) == 255)
+        assertEquals("the hole", 0, shown.getPixel(90, 80))
+        assertTrue("the other objects stay", android.graphics.Color.alpha(shown.getPixel(250, 210)) > 0)
+        // The render lands: the real pixels, one step, everything freed.
+        land!!.invoke()
+        assertNull(c.renderOverride)
+        assertTrue(floating.isRecycled)
+        val after = layer.vector!!
+        assertEquals(anchorsOf(before.byId(1) as VPath).map { it + Vec2(256f, 100f) }, anchorsOf(after.byId(1) as VPath))
+        assertArrayEquals(kit.render(after), kit.pixels(layer.bitmap))
+        assertEquals(TransformTool.TRANSFORM_OBJECTS_LABEL, c.undoManager.undoLabel)
+        // A delete that renders in the background keeps the hole meanwhile.
+        tool.start()
+        tool.deleteContent()
+        assertSame(after, layer.vector)
+        val holed = BitmapUtils.createLayerBitmap(kit.w, kit.h)
+        c.compositor.drawDocument(Canvas(holed), null, useOverrides = true, target = null)
+        assertEquals(0, holed.getPixel(90 + 256, 80 + 100))
+        land!!.invoke()
+        assertNull(c.renderOverride)
+        assertNull(layer.vector!!.byId(1))
+        assertTrue(c.vectors.selectedIds.isEmpty())
     }
 
     @Test

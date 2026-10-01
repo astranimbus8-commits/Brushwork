@@ -55,7 +55,11 @@ object VectorObjectSelection {
             st.job = null
             apply(c, layer, touched, mode)
         }
-        if (job != null && job.isActive) st.job = job
+        if (job != null && job.isActive) {
+            st.job = job
+            // (A finished search is not kept: nothing here refers to the editor afterwards.)
+            job.invokeOnCompletion { if (st.job === job) st.job = null }
+        }
         return true
     }
 

@@ -8,16 +8,21 @@ import com.brushwork.paint.tools.transform.ObjectLift
 import com.brushwork.paint.tools.transform.ObjectLiftProvider
 import com.brushwork.paint.tools.transform.RefusingLiftProvider
 import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.select.ObjectTouch
 import kotlinx.coroutines.Job
+import java.lang.ref.WeakReference
 import java.util.WeakHashMap
 
 /**
  * The Transform tool on vector layers (v1.5 §4.9, owned by A2): lifts objects (the object
  * selection, else what the pixel selection touches, else all) instead of pixels. Reached through
  * `VectorLayers.liftProvider`, which asks for the provider every time: each editor gets ONE
- * stable provider (it remembers the last tap, for cycling through overlapping objects).
+ * stable provider (it remembers the last tap, for cycling through overlapping objects) for as long
+ * as the Transform tool holds it (its sessions keep it; the registry only refers to it weakly, so
+ * a closed editor is never kept alive by it).
  *
  * A vector layer without any object (and no pixel selection) gets [RefusingLiftProvider]: there
  * is nothing to lift as objects, and the pixel path finds nothing either (the cache of an empty
@@ -26,7 +31,7 @@ import java.util.WeakHashMap
  * pixels are never lifted (committing them would turn the layer into a raster layer).
  */
 object VectorLift {
-    private val providers = WeakHashMap<EditorController, VectorLiftProvider>()
+    private val providers = WeakHashMap<EditorController, WeakReference<VectorLiftProvider>>()
 
     fun provider(c: EditorController): ObjectLiftProvider {
         val content = c.activeLayer.vector
@@ -35,10 +40,11 @@ object VectorLift {
     }
 
     /** This editor's object provider. */
-    internal fun providerOf(c: EditorController): VectorLiftProvider = providers.getOrPut(c) { VectorLiftProvider(c) }
+    internal fun providerOf(c: EditorController): VectorLiftProvider =
+        providers[c]?.get() ?: VectorLiftProvider(c).also { providers[c] = WeakReference(it) }
 
     /** The objects the Transform tool holds lifted right now in [c] (null when none). */
-    internal fun activeLift(c: EditorController): VectorObjectLift? = providers[c]?.current?.takeIf { it.isOpen }
+    internal fun activeLift(c: EditorController): VectorObjectLift? = providers[c]?.get()?.current?.takeIf { it.isOpen }
 }
 
 /** Lifts the objects of one editor's vector layers for its Transform tool (see [VectorLift]). */
@@ -51,12 +57,23 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
     private var liftAllNext = false
 
     /** The last object a tap picked (and where), so tapping there again goes one object deeper. */
-    private class Tap(val layer: Layer, val p: Vec2, val id: Long)
+    private class Tap(layer: Layer, val p: Vec2, val id: Long) {
+        private val ref = WeakReference(layer)
+        val layer: Layer? get() = ref.get()
+    }
 
     private var lastTap: Tap? = null
 
     /** The search for the objects a large pixel selection touches. */
     private var search: Job? = null
+
+    /**
+     * How a lift applies its result as one step: `vectors.update` (which may render in the
+     * background and call back later). A test seam (e.g. to delay the callback, or to see the
+     * shift hint of a whole-pixel move).
+     */
+    internal var update: (Layer, VectorContent, String, VectorLayers.ShiftHint?, (Boolean) -> Unit) -> Unit =
+        { layer, after, label, shift, onDone -> c.vectors.update(layer, after, label, shift = shift, onDone = onDone) }
 
     override fun lift(layer: Layer, onReady: (ObjectLift?) -> Unit): Boolean {
         // A request that was still being prepared is replaced (the tool already let go of it).
@@ -134,7 +151,9 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
                 if (sync) refused = true else onReady(null)
                 return@beginEdit
             }
-            val lift = VectorObjectLift(c, session, session.ids) { ended -> if (current === ended) current = null }
+            val apply: (Layer, VectorContent, String, VectorLayers.ShiftHint?, (Boolean) -> Unit) -> Unit =
+                { l, after, label, shift, done -> update(l, after, label, shift, done) }
+            val lift = VectorObjectLift(c, session, session.ids, apply) { ended -> if (current === ended) current = null }
             current = lift
             onReady(lift)
         }
