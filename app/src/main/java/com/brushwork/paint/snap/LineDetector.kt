@@ -76,7 +76,14 @@ object LineDetector {
      * Lines in [bitmap] (document px), looking only inside [region] (e.g. the layer's content
      * bounds; null = everything). Line lengths are judged against the whole bitmap.
      */
-    fun detect(bitmap: Bitmap, region: Rect? = null, cancelled: () -> Boolean = { false }): List<DetectedLine> {
+    fun detect(bitmap: Bitmap, region: Rect? = null, cancelled: () -> Boolean = { false }): List<DetectedLine> =
+        detect(bitmap, region, null, cancelled)
+
+    /**
+     * Like [detect] for a layer whose [mask] (a grayscale bitmap the size of [bitmap]: white =
+     * shown, black = hidden; null = none) applies: what the mask hides has no lines.
+     */
+    fun detect(bitmap: Bitmap, region: Rect?, mask: Bitmap?, cancelled: () -> Boolean = { false }): List<DetectedLine> {
         val full = Rect(0, 0, bitmap.width, bitmap.height)
         val area = Rect(full)
         if (region != null && !area.intersect(region)) return emptyList()
@@ -91,13 +98,37 @@ object LineDetector {
         if (read.left == 0) borders = borders or LineScanner.BORDER_LEFT
         if (read.right == full.right) borders = borders or LineScanner.BORDER_RIGHT
         val w = read.width()
+        val masked = mask?.takeIf { it.width == bitmap.width && it.height == bitmap.height }
+        var maskRows = IntArray(0)
         val lines = LineScanner(w, read.height(), minLength(bitmap.width, bitmap.height), borders).run({ y0, rows, out ->
             bitmap.getPixels(out, 0, w, read.left, read.top + y0, w, rows)
+            if (masked != null) {
+                val n = rows * w
+                if (maskRows.size < n) maskRows = IntArray(out.size)
+                masked.getPixels(maskRows, 0, w, read.left, read.top + y0, w, rows)
+                applyMask(out, maskRows, n)
+            }
         }, cancelled)
         if (read.left == 0 && read.top == 0) return lines
         return lines.map { l ->
             if (l.axis == SnapAxis.Y) l.copy(pos = l.pos + read.top, start = l.start + read.left, end = l.end + read.left)
             else l.copy(pos = l.pos + read.left, start = l.start + read.top, end = l.end + read.top)
+        }
+    }
+
+    /**
+     * [pixels] (non-premultiplied ARGB) as the layer shows them through [mask] pixels: alpha
+     * times the mask's luminance, as the compositor applies masks.
+     */
+    internal fun applyMask(pixels: IntArray, mask: IntArray, n: Int) {
+        for (i in 0 until n) {
+            val c = pixels[i]
+            val a = c ushr 24
+            if (a == 0) continue
+            val m = mask[i]
+            val lum = (((m shr 16) and 255) * 299 + ((m shr 8) and 255) * 587 + (m and 255) * 114 + 500) / 1000
+            if (lum >= 255) continue
+            pixels[i] = ((a * lum + 127) / 255 shl 24) or (c and 0xFFFFFF)
         }
     }
 

@@ -212,6 +212,65 @@ class LineDetectorTest {
     }
 
     @Test
+    fun smallCellsWithSpaceBetweenThemAreFoundAsBoxSides() {
+        // Table (Size) with a Space: every cell is a separate box whose sides are shorter than
+        // the shortest line and too far apart to chain (cells 37 px tall, 100 px apart).
+        val phone = sizeLayout(1080, 2408, 150f, 37f, 3f, 100f, centered = false)!!
+        assertTableLines("37 px cells", detect(tableSize(background(Bg.WHITE, 1080, 2408), 150f, 37f, 3f, 100f, 10f, centered = false)), phone, 10f, 1080, 2408)
+        // 50 x 100 px gray boxes 30 px apart on a 2048 canvas (shortest line 82 px).
+        val big = sizeLayout(2048, 2048, 50f, 100f, 40f, 30f, centered = true)!!
+        val gray = 0xFF808080.toInt()
+        assertTableLines("50 px cells", detect(tableSize(background(Bg.WHITE, 2048, 2048), 50f, 100f, 40f, 30f, 4f, centered = true, color = gray)), big, 4f, 2048, 2048)
+        // 50 x 30 px boxes 20 px apart on a transparent layer.
+        val clear = sizeLayout(1080, 1200, 50f, 30f, 40f, 20f, centered = true)!!
+        assertTableLines("30 px cells", detect(tableSize(PixelBuffer(1080, 1200), 50f, 30f, 40f, 20f, 2f, centered = true)), clear, 2f, 1080, 1200)
+    }
+
+    @Test
+    fun thickLinesOverAPhotoAreTheLinesNotTheCells() {
+        // 40 px red lines cover about half of a grainy picture: the cells between them (not the
+        // lines) must not be taken for lines, whichever color covers more.
+        val w = 600
+        val h = 800
+        val layout = countLayout(w, h, 4, 7, 3f, 0f)!!
+        val found = detect(tableCount(background(Bg.NOISY, w, h), 4, 7, 3f, 0f, 40f, 0xFFE02020.toInt()))
+        assertTableLines("thick red lines on grain", found, layout, 40f, w, h)
+    }
+
+    @Test
+    fun doubleLinesOnAPageKeepTheirMiddles() {
+        // A Space a little wider than the lines: two lines with a thin gap of page between them.
+        for ((t, space) in listOf(6f to 10f, 4f to 6f)) {
+            val layout = sizeLayout(700, 700, 100f, 100f, 40f, space, centered = false)!!
+            val found = detect(tableSize(background(Bg.WHITE, 700, 700), 100f, 100f, 40f, space, t, centered = false))
+            assertTableLines("double lines t=$t space=$space", found, layout, t, 700, 700)
+        }
+    }
+
+    @Test
+    fun aVeryBusyImageStillFindsLongLinesBelow() {
+        // 4000 x 4000: rows of dashes above (each one a piece: more pieces than are kept), a
+        // long line near the bottom. Generated row by row.
+        val w = 4000
+        val h = 4000
+        val lines = LineDetector.detect(w, h, { y0, rows, out ->
+            for (r in 0 until rows) {
+                val y = y0 + r
+                for (x in 0 until w) {
+                    out[r * w + x] = when {
+                        y in 3950..3953 -> black
+                        y < 3900 && y % 2 == 0 && x % 56 < 48 -> black
+                        else -> white
+                    }
+                }
+            }
+        })
+        val bottom = lines.on(SnapAxis.Y).filter { abs(it.pos - 3952f) <= 0.5f }
+        assertEquals("${lines.on(SnapAxis.Y).takeLast(5)}", 1, bottom.size)
+        assertTrue("${bottom[0]}", bottom[0].end - bottom[0].start >= 3500f)
+    }
+
+    @Test
     fun fineGridsKeepTheirBorder() {
         // Graph paper: 20 px cells; ~50 lines end on the border lines (not text).
         val w = 1080

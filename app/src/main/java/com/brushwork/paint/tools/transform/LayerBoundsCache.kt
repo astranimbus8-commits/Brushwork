@@ -16,7 +16,8 @@ import kotlinx.coroutines.withContext
 /**
  * Tight content bounds (non-transparent pixels) of layers, for smart guides; an enabled layer
  * mask trims them to where the mask shows something. With [detectLines], also the straight
- * horizontal / vertical lines drawn in them ([LineDetector], looked for inside the bounds).
+ * horizontal / vertical lines drawn in them ([LineDetector], looked for inside the bounds, as
+ * the mask shows them).
  * Cached per layer by its content version (and bitmap / mask), computed lazily: tiny layers
  * right away, others one after another on a background thread (the main thread only reads the
  * cache). Bounds of a small layer are known at once while its lines may still be found in the
@@ -85,7 +86,7 @@ class LayerBoundsCache(
                 val r = scanBounds(bmp, mask) { false } ?: continue
                 val lines = when {
                     !detectLines || r.bounds == null -> emptyList()
-                    r.bounds.width().toLong() * r.bounds.height() <= LINES_SYNC_PIXELS -> scanLines(bmp, r.bounds) { false }
+                    r.bounds.width().toLong() * r.bounds.height() <= LINES_SYNC_PIXELS -> scanLines(bmp, r.bounds, mask) { false }
                     else -> null
                 }
                 store(layer, layer.contentVersion, bmp, mask, r.bounds, lines)
@@ -115,7 +116,7 @@ class LayerBoundsCache(
                     val scan = withContext(Dispatchers.Default) {
                         val bounds = if (known != null) Scan(known.bounds) else scanBounds(bmp, mask) { !isActive }
                         if (bounds == null || !detectLines || bounds.bounds == null) bounds
-                        else scanLines(bmp, bounds.bounds) { !isActive }?.let { Scan(bounds.bounds, it) }
+                        else scanLines(bmp, bounds.bounds, mask) { !isActive }?.let { Scan(bounds.bounds, it) }
                     } ?: continue
                     // Changed (or replaced) while it was being scanned: scan it again when asked.
                     if (layer.contentVersion != version || layer.bitmap !== bmp || activeMask(layer) !== mask) continue
@@ -135,7 +136,7 @@ class LayerBoundsCache(
      * shows something. Null when a bitmap could not be read (recycled meanwhile) or the scan was
      * cancelled.
      */
-    private fun scanBounds(bmp: Bitmap, mask: Bitmap?, cancelled: () -> Boolean): Scan? = guarded(cancelled) {
+    private fun scanBounds(bmp: Bitmap, mask: Bitmap?, cancelled: () -> Boolean): Scan? = guarded(cancelled, { Scan(null) }) {
         var r = ContentBounds.of(bmp, cancelled = cancelled)
         if (r != null && mask != null && mask.width == bmp.width && mask.height == bmp.height) {
             r = ContentBounds.of(mask, HIDDEN, region = r, cancelled = cancelled)
@@ -143,16 +144,29 @@ class LayerBoundsCache(
         Scan(r)
     }
 
-    /** Lines drawn in [bmp] inside [bounds], or null when it could not be read or was cancelled. */
-    private fun scanLines(bmp: Bitmap, bounds: Rect, cancelled: () -> Boolean): List<DetectedLine>? = guarded(cancelled) {
-        LineDetector.detect(bmp, bounds, cancelled)
-    }
+    /**
+     * Lines drawn in [bmp] inside [bounds] where [mask] (if any) shows them, or null when it could
+     * not be read or was cancelled.
+     */
+    private fun scanLines(bmp: Bitmap, bounds: Rect, mask: Bitmap?, cancelled: () -> Boolean): List<DetectedLine>? =
+        guarded(cancelled, { emptyList() }) { findLines(bmp, bounds, mask, cancelled) }
 
-    private inline fun <T : Any> guarded(noinline cancelled: () -> Boolean, block: () -> T): T? = try {
+    /** How lines are found (runs on a background thread; replaceable in tests). */
+    internal var findLines: (Bitmap, Rect, Bitmap?, () -> Boolean) -> List<DetectedLine> = { b, r, m, c -> LineDetector.detect(b, r, m, c) }
+
+    /**
+     * [block]'s result, or null when it was cancelled or failed (e.g. the bitmap was recycled
+     * while it was being read: asked again later). Out of memory, it gives up on this content
+     * with [onOutOfMemory] (nothing to snap to) instead of crashing the app from a background
+     * thread or trying again on every gesture.
+     */
+    private inline fun <T : Any> guarded(noinline cancelled: () -> Boolean, onOutOfMemory: () -> T, block: () -> T): T? = try {
         val r = block()
         if (cancelled()) null else r
     } catch (e: CancellationException) {
         throw e
+    } catch (e: OutOfMemoryError) {
+        if (cancelled()) null else onOutOfMemory()
     } catch (e: RuntimeException) {
         null // e.g. recycled while it was being read
     }

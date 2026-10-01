@@ -13,6 +13,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.distort.TableCountFilter
+import com.brushwork.paint.filters.distort.TableSizeFilter
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
@@ -107,6 +108,7 @@ class SnapLinesRobolectricTest {
     fun aPageOfTextGivesNoMoreThanAFewLines() {
         val words = "The quick brown fox jumps over the lazy dog, then 12 more lines of text follow here".split(' ')
         // Every row the same (letters stacked in columns) or different rows, as in real text.
+        val counts = ArrayList<Int>()
         for (same in listOf(true, false)) for (bg in listOf(WHITE, 0)) {
             val bmp = bitmap(1080, 1400, bg)
             val c = Canvas(bmp)
@@ -119,9 +121,10 @@ class SnapLinesRobolectricTest {
                 }
             }
             val lines = LineDetector.detect(bmp)
-            println("text page (same rows $same, bg ${Integer.toHexString(bg)}): ${lines.size} lines ${lines.map { "${it.axis}@${it.pos} ${it.start}..${it.end}" }}")
-            assertTrue("lines: $lines", lines.size <= 4)
+            println("text page (same rows $same, bg ${Integer.toHexString(bg)}): ${lines.size} lines ${lines.take(12).map { "${it.axis}@${it.pos} t${it.thickness} ${it.start}..${it.end}" }}")
+            counts += lines.size
         }
+        assertTrue("lines: $counts", counts.all { it <= 4 })
     }
 
     @Test
@@ -180,6 +183,107 @@ class SnapLinesRobolectricTest {
         // Deleted layers are forgotten.
         cache.request(emptyList(), all = listOf(small))
         assertFalse(cache.isKnown(layer))
+    }
+
+    @Test
+    fun aFailedScanNeverCrashesAndOutOfMemoryIsNotRetriedForever() {
+        // A bitmap recycled while it is being read throws (and the cache then drops that scan).
+        val bmp = bitmap(400, 400)
+        applyTable(bmp, 2, 2, 20f, 4f)
+        val e = runCatching { LineDetector.detect(bmp, null) { bmp.recycle(); false } }.exceptionOrNull()
+        assertTrue("$e", e is RuntimeException)
+
+        var scans = 0
+        val cache = LayerBoundsCache(scope, detectLines = true) {}
+        val layer = Layer(1, "Table", bitmap(400, 400))
+        applyTable(layer.bitmap, 2, 2, 20f, 4f)
+        layer.markChanged()
+        // Failing with an exception: not known, looked at again when asked.
+        cache.findLines = { _, _, _, _ -> scans++; throw IllegalStateException("recycled") }
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertFalse(cache.isKnown(layer))
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertEquals(2, scans)
+        // Out of memory: nothing to snap to for this content, and no new attempt each gesture.
+        cache.findLines = { _, _, _, _ -> scans++; throw OutOfMemoryError("test") }
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertTrue(cache.isKnown(layer))
+        assertTrue(cache.lines(layer).isEmpty())
+        assertEquals(Rect(18, 18, 382, 382), cache.bounds(layer))
+        cache.request(listOf(layer))
+        assertFalse(cache.isBusy)
+        assertEquals(3, scans)
+        // New content is looked at again.
+        cache.findLines = { b, r, m, c -> scans++; LineDetector.detect(b, r, m, c) }
+        layer.markChanged()
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertEquals(4, scans)
+        assertEquals(listOf(20f, 200f, 380f), cache.lines(layer).filter { it.axis == SnapAxis.X }.map { it.pos })
+    }
+
+    @Test
+    fun whatTheLayerMaskHidesHasNoLines() {
+        // A 2 x 2 table whose middle row line (y = 200) a black band of the mask hides.
+        val cache = LayerBoundsCache(scope, detectLines = true) {}
+        val layer = Layer(1, "Table", bitmap(400, 400))
+        applyTable(layer.bitmap, 2, 2, 20f, 4f)
+        layer.mask = bitmap(400, 400, WHITE).also { Canvas(it).drawRect(0f, 150f, 400f, 250f, Paint().apply { color = BLACK }) }
+        layer.markChanged()
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertEquals(Rect(18, 18, 382, 382), cache.bounds(layer))
+        assertEquals(listOf(20f, 380f), cache.lines(layer).filter { it.axis == SnapAxis.Y }.map { it.pos })
+        assertEquals(listOf(20f, 200f, 380f), cache.lines(layer).filter { it.axis == SnapAxis.X }.map { it.pos })
+        // The mask turned off: the line is back.
+        layer.maskEnabled = false
+        cache.request(listOf(layer))
+        waitFor { !cache.isBusy }
+        assertEquals(listOf(20f, 200f, 380f), cache.lines(layer).filter { it.axis == SnapAxis.Y }.map { it.pos })
+        // Half-transparent mask (mid gray): the lines show, so they are found.
+        val px = intArrayOf(0xFF102030.toInt(), 0x80FFFFFF.toInt(), 0)
+        LineDetector.applyMask(px, intArrayOf(0xFF808080.toInt(), WHITE, BLACK), 3)
+        assertEquals(0x80102030.toInt(), px[0])
+        assertEquals(0x80FFFFFF.toInt(), px[1])
+        assertEquals(0, px[2])
+    }
+
+    @Test
+    fun theTransformToolLetsGoOfTheLinesOfAFineGrid() {
+        // Graph paper (a line every 25 px) under a 50 x 50 block: a drag that leaves every side of
+        // the block 12 px from the lines moves it freely; 3 px from one, it snaps; back, it lets go.
+        val c = setup(500, 400, listOf("Grid", "Block"))
+        val grid = c.doc.layers[0]
+        grid.bitmap.eraseColor(WHITE)
+        val f = TableSizeFilter()
+        val v = f.defaultValues().set("cellW", 25f).set("cellH", 25f).set("margin", 0f).set("space", 0f)
+            .set("thickness", 2f).set("color", BLACK).set("align", 1f)
+        BitmapUtils.writePixelBuffer(grid.bitmap, f.apply(BitmapUtils.toPixelBuffer(grid.bitmap), v, FilterContext()))
+        grid.markChanged()
+        val block = c.doc.layers[1]
+        Canvas(block.bitmap).drawRect(100f, 300f, 150f, 350f, Paint().apply { color = RED })
+        block.markChanged()
+        c.selectTool(ToolId.TRANSFORM)
+        val t = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        waitFor { t.hasPendingWork && !t.isFindingSnapTargets }
+        c.snapping.prepare()
+        waitFor { !c.snapping.isBusy }
+        assertTrue(c.snapping.lines(grid).count { it.axis == SnapAxis.X } >= 15)
+        c.pointerDown(ToolPoint(125f, 325f))
+        c.pointerMove(ToolPoint(160f, 300f))
+        c.pointerMove(ToolPoint(137f, 337f))
+        assertEquals(DocBox(112f, 312f, 162f, 362f), t.transformState!!.bounds())
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.isEmpty())
+        c.pointerMove(ToolPoint(147f, 337f))
+        assertEquals(125f, t.transformState!!.bounds().left, 0f)
+        assertTrue("guides ${t.activeGuides}", t.activeGuides.any { it.axis == SnapAxis.X && it.label == "Grid line" })
+        c.pointerMove(ToolPoint(137f, 337f))
+        assertEquals(DocBox(112f, 312f, 162f, 362f), t.transformState!!.bounds())
+        c.pointerUp(ToolPoint(137f, 337f))
+        assertEquals(DocBox(112f, 312f, 162f, 362f), t.transformState!!.bounds())
     }
 
     // ------------------------------------------------------------------ snapping

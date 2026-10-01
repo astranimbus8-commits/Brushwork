@@ -30,9 +30,12 @@ import kotlin.math.min
  *     cover three quarters of their extent and [minLength] in all, where a gap that a line of the
  *     other axis, about as thick as the gap, crosses counts as covered (a table line is cut
  *     wherever a crossing line's color meets it; the gaps between letters of a text are crossed
- *     by nothing); otherwise a piece must be [minLength] long by itself. A line that the other
- *     axis' edges end on every few pixels is the top or bottom of a row of letters, not a line.
- *     The longest [LineDetector.MAX_LINES_PER_AXIS] per axis are kept.
+ *     by nothing); otherwise a piece must be [minLength] long by itself, or be one of several
+ *     collinear sides of boxes (lines of the other axis turn from both its ends to the same side
+ *     and a parallel line closes the box: the cells of a Table with a Space between them, even
+ *     small ones far apart). A line that the other axis' edges end on every few pixels is the top
+ *     or bottom of a row of letters, not a line. The longest [LineDetector.MAX_LINES_PER_AXIS]
+ *     per axis are kept.
  *
  * [borders] (bits [BORDER_TOP]...) are the sides of the scanned area that are real borders of
  * the image (where a line may be clipped); the others had a neighbouring row / column read along
@@ -56,8 +59,9 @@ internal class LineScanner(
         val buf = IntArray(stripRows * w)
         var prev = IntArray(w)
         var cur = IntArray(w)
-        val hp = Pieces()
-        val vp = Pieces()
+        val longPiece = kotlin.math.ceil(minLength).toInt()
+        val hp = Pieces(longPiece)
+        val vp = Pieces(longPiece)
         val runs = ColumnRuns(w, minSeg)
         val hist = IntArray(HIST_SIZE)
         var y0 = 0
@@ -88,8 +92,10 @@ internal class LineScanner(
         // Each axis' lines may be cut where the other axis' lines cross them, and are not lines
         // where the other axis' edges end on them all along (text) - except where the other
         // axis' lines meet them (the border of a fine grid).
-        val foundH = collect(horizontal, Crossings(vertical))
-        val foundV = collect(vertical, Crossings(horizontal))
+        val indexH = LineIndex(horizontal)
+        val indexV = LineIndex(vertical)
+        val foundH = collect(horizontal, Crossings(vertical), indexV, indexH)
+        val foundV = collect(vertical, Crossings(horizontal), indexH, indexV)
         if (cancelled()) return emptyList()
         val out = ArrayList<DetectedLine>()
         out += finish(foundH, SnapAxis.Y, Ends(vp), Meeting(foundV))
@@ -189,9 +195,11 @@ internal class LineScanner(
     /**
      * Pieces found on one axis, as packed ints: boundary, start, end (exclusive), summed
      * difference, number of edge pixels, mean color on the low side (above / left), mean color
-     * on the high side.
+     * on the high side. Memory is bounded: past half of [MAX_PIECES] (a very busy image) only
+     * pieces at least [longPiece] long are kept, so the rest of the image still gets its long
+     * lines; past [MAX_PIECES], nothing more.
      */
-    private class Pieces {
+    private class Pieces(private val longPiece: Int) {
         var size = 0
             private set
         private var data = IntArray(FIELDS * 64)
@@ -206,6 +214,7 @@ internal class LineScanner(
             ha: Int, hr: Int, hg: Int, hb: Int,
         ) {
             if (size >= MAX_PIECES || count <= 0 || count * 4 < (end - start) * 3) return
+            if (size >= MAX_PIECES / 2 && end - start < longPiece) return
             val i = size * FIELDS
             if (i + FIELDS > data.size) data = data.copyOf(data.size * 2)
             data[i] = boundary
@@ -439,6 +448,10 @@ internal class LineScanner(
             if (partner[i] >= 0 || partner[j] >= 0) continue
             partner[i] = j
             partner[j] = i
+        }
+        for (i in steps.indices) {
+            val j = partner[i]
+            if (j <= i) continue
             val a = steps[i]
             val b = steps[j]
             val t = b.pos - a.pos
@@ -594,6 +607,91 @@ internal class LineScanner(
     }
 
     /**
+     * All the candidate lines of one axis, short ones too, sorted by position: for telling
+     * whether a piece of a line of the other axis is a side of a box ([corner]) and whether a
+     * box has its opposite side ([covers]).
+     */
+    private inner class LineIndex(cands: List<Candidate>) {
+        private val list = cands.sortedBy { it.pos }
+        private val pos = FloatArray(list.size) { list[it].pos }
+
+        private fun lowerBound(v: Float): Int {
+            var lo = 0
+            var hi = pos.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (pos[mid] < v) lo = mid + 1 else hi = mid
+            }
+            return lo
+        }
+
+        /**
+         * Where the corner at [end] (an end of a piece of the line at [at], [thickness] thick,
+         * of the other axis) leads: one of these lines lies within the line's thickness inside the
+         * piece from [end] ([isStart]: [end] is where the piece starts) and one of its pieces
+         * starts or ends on that line, going away from it on one side only (a corner, not a
+         * crossing) for at least [minSeg] px. Returns where that piece ends far from the line,
+         * or NaN when there is no such corner.
+         */
+        fun corner(end: Int, at: Float, thickness: Float, isStart: Boolean): Float {
+            val t = max(thickness, 1f)
+            val from = if (isStart) end - CORNER_SLACK else end - t - CORNER_SLACK
+            val to = if (isStart) end + t + CORNER_SLACK else end + CORNER_SLACK
+            val reach = t / 2f + CROSS_REACH + CORNER_SLACK
+            var i = lowerBound(from)
+            while (i < list.size && pos[i] <= to) {
+                val s = list[i].segs
+                var k = 0
+                while (k < s.size) {
+                    val below = at - s[k]
+                    val above = s[k + 1] - at
+                    if (below <= reach && above >= minSeg) return s[k + 1].toFloat()
+                    if (above <= reach && below >= minSeg) return s[k].toFloat()
+                    k += 2
+                }
+                i++
+            }
+            return Float.NaN
+        }
+
+        /** Whether one of these lines between [from] and [to] runs along [s0, s1) for at least [part] of it. */
+        fun covers(from: Float, to: Float, s0: Int, s1: Int, part: Float): Boolean {
+            val need = part * (s1 - s0)
+            var i = lowerBound(from)
+            while (i < list.size && pos[i] <= to) {
+                val s = list[i].segs
+                var n = 0
+                var k = 0
+                while (k < s.size) {
+                    n += max(0, min(s[k + 1], s1) - max(s[k], s0))
+                    k += 2
+                }
+                if (n >= need) return true
+                i++
+            }
+            return false
+        }
+    }
+
+    /**
+     * Whether the piece [s0, s1) of the line at [pos] ([thickness] thick) is a side of a box:
+     * lines of the other axis ([across]) turn from both its ends to the same side, as far, and
+     * a line of this axis ([along]) runs there across most of it (the opposite side). The
+     * cells of a Table with a Space between them are such boxes; letters (an "n": no bottom)
+     * are not.
+     */
+    private fun boxSide(s0: Int, s1: Int, pos: Float, thickness: Float, across: LineIndex, along: LineIndex): Boolean {
+        val f0 = across.corner(s0, pos, thickness, isStart = true)
+        if (f0.isNaN()) return false
+        val f1 = across.corner(s1, pos, thickness, isStart = false)
+        if (f1.isNaN() || (f0 > pos) != (f1 > pos)) return false
+        val t = max(thickness, 1f)
+        if (abs(f0 - f1) > t + 2f * CORNER_SLACK) return false
+        val far = (f0 + f1) / 2f
+        return along.covers(far - t - CORNER_SLACK, far + t + CORNER_SLACK, s0, s1, BOX_OPPOSITE)
+    }
+
+    /**
      * Where the pieces of the other axis end ([p]): along a row of letters, their strokes end
      * on its top and bottom every few pixels; a ruled line only meets the lines that cross it.
      */
@@ -700,9 +798,10 @@ internal class LineScanner(
     /**
      * Collinear candidates join; chains of pieces across short gaps stay when they are long and
      * dense enough (gaps where [crossings] cross them count as covered), other pieces only when
-     * long by themselves.
+     * long by themselves or when they are sides of boxes in a row ([boxSide] with the lines
+     * [across] them and [along] them: all the candidates of the other axis and of this one).
      */
-    private fun collect(cands: List<Candidate>, crossings: Crossings): List<Found> {
+    private fun collect(cands: List<Candidate>, crossings: Crossings, across: LineIndex, along: LineIndex): List<Found> {
         if (cands.isEmpty()) return emptyList()
         val sorted = cands.sortedBy { it.pos }
         val lines = ArrayList<Found>()
@@ -722,7 +821,7 @@ internal class LineScanner(
                 thick = max(thick, sorted[k].thickness)
             }
             val pos = if (wSum > 0.0) (posSum / wSum).toFloat() else sorted[i].pos
-            val kept = accepted(segs, pos, thick, crossings)
+            val kept = accepted(segs, pos, thick, crossings, across, along)
             if (kept != null) lines += Found(pos, kept, thick)
             i = j
         }
@@ -756,12 +855,13 @@ internal class LineScanner(
      * The parts of [segs] (sorted, disjoint; of a line at [pos], [thickness] thick) that make a line, or null when
      * none: chains across gaps up to [MAX_GAP] that are [minLength] long and covered for at least
      * [CHAIN_COVERAGE] of their extent (gaps where [crossings] cross count as covered: the cells
-     * of a table), else single pieces [minLength] long.
+     * of a table), else single pieces [minLength] long; plus the sides of boxes in a row
+     * ([boxSide], at least [MIN_BOX_SIDES] of them).
      */
-    private fun accepted(segs: IntArray, pos: Float, thickness: Float, crossings: Crossings): IntArray? {
-        val out = ArrayList<Int>()
-        var i = 0
+    private fun accepted(segs: IntArray, pos: Float, thickness: Float, crossings: Crossings, across: LineIndex, along: LineIndex): IntArray? {
         val n = segs.size / 2
+        val keep = BooleanArray(n)
+        var i = 0
         while (i < n) {
             var j = i + 1
             var covered = segs[2 * i + 1] - segs[2 * i]
@@ -774,14 +874,32 @@ internal class LineScanner(
             }
             val span = segs[2 * j - 1] - segs[2 * i]
             if (covered >= minLength && covered >= CHAIN_COVERAGE * span) {
-                for (k in i until j) { out += segs[2 * k]; out += segs[2 * k + 1] }
+                for (k in i until j) keep[k] = true
             } else {
-                for (k in i until j) {
-                    if (segs[2 * k + 1] - segs[2 * k] >= minLength) { out += segs[2 * k]; out += segs[2 * k + 1] }
-                }
+                for (k in i until j) if (segs[2 * k + 1] - segs[2 * k] >= minLength) keep[k] = true
             }
             i = j
         }
+        // Sides of boxes side by side (the cells of a Table with a Space between them, smaller
+        // than [minLength]) when there are several of them, [minLength] long together, however
+        // far apart.
+        var boxed = 0
+        var boxedLength = 0
+        val side = BooleanArray(n)
+        for (k in 0 until n) {
+            if (keep[k]) continue
+            val s0 = segs[2 * k]
+            val s1 = segs[2 * k + 1]
+            if (s1 - s0 < max(MIN_BOX_SIDE * minLength, 2f * thickness)) continue
+            if (boxSide(s0, s1, pos, thickness, across, along)) {
+                side[k] = true
+                boxed++
+                boxedLength += s1 - s0
+            }
+        }
+        if (boxed >= MIN_BOX_SIDES && boxedLength >= minLength) for (k in 0 until n) if (side[k]) keep[k] = true
+        val out = ArrayList<Int>()
+        for (k in 0 until n) if (keep[k]) { out += segs[2 * k]; out += segs[2 * k + 1] }
         return if (out.isEmpty()) null else out.toIntArray()
     }
 
@@ -870,6 +988,18 @@ internal class LineScanner(
         /** A chain of pieces must cover this much of its extent (crossed gaps count). */
         private const val CHAIN_COVERAGE = 0.75f
 
+        /** Sides of boxes in a row make a line when there are at least this many. */
+        private const val MIN_BOX_SIDES = 2
+
+        /** Shortest box side counted, as a fraction of the shortest line. */
+        private const val MIN_BOX_SIDE = 0.5f
+
+        /** The opposite side of a box runs along at least this much of the side. */
+        private const val BOX_OPPOSITE = 0.6f
+
+        /** A corner's line may lie this much (px) beyond the end of a box side. */
+        private const val CORNER_SLACK = 2f
+
         /** A crossing line's pieces stop this close (px) to the sides of the line they cross. */
         private const val CROSS_REACH = 2f
 
@@ -955,9 +1085,11 @@ internal class LineScanner(
         }
 
         /**
-         * The background: the color (premultiplied, bucket center) of at least half of the
-         * samples, e.g. transparent or the white of a page; null when no color dominates (a
-         * photo, a gradient).
+         * The background: the color (premultiplied, bucket center) of at least two thirds of the
+         * samples, e.g. transparent or the white of a page; null when no color clearly dominates
+         * (a photo, a gradient). Not just a half: thick lines over a photo (a Table with 40 px
+         * lines and 150 px cells) can cover half of it, and taking their color for the page's
+         * would pair the cells between them as lines.
          */
         private fun background(hist: IntArray): Int? {
             var best = 0
@@ -966,7 +1098,7 @@ internal class LineScanner(
                 total += hist[k]
                 if (hist[k] > hist[best]) best = k
             }
-            if (total == 0L || hist[best] * 2L < total) return null
+            if (total == 0L || hist[best] * 3L < total * 2L) return null
             if (best == 0) return 0
             fun ch(q: Int) = (q shl 5) + 16
             return pack(ch(best shr 9), ch((best shr 6) and 7), ch((best shr 3) and 7), ch(best and 7))
