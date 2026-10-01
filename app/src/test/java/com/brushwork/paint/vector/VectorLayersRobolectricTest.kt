@@ -354,14 +354,21 @@ class VectorLayersRobolectricTest {
             for (p in pts.subList(1, pts.size - 1)) brush.onMove(p)
             brush.onUp(pts.last())
         }
-        assertEquals(5, layer.vector!!.objects.size)
-        assertEquals(5, c.undoManager.undoCount)
+        // A big soft stroke across the right and bottom edges, after the wide ones (the replay's
+        // reused buffer reaches past those edges; the live stroke's ends at them).
+        c.brush = BrushLibrary.byId("softround")!!.copy(size = 120f)
+        val edge = List(30) { k -> com.brushwork.paint.tools.ToolPoint(560f + 9f * k, 380f + 8f * k, 0.5f, k.toLong(), isStylus = false) }
+        brush.onDown(edge.first())
+        for (p in edge.subList(1, edge.size - 1)) brush.onMove(p)
+        brush.onUp(edge.last())
+        assertEquals(6, layer.vector!!.objects.size)
+        assertEquals(6, c.undoManager.undoCount)
         assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
         // A small box moved across the strokes: each re-render cuts through some of them.
         c.vectors.addObjects(layer, listOf(box(100f, 100f, 140f, 150f)), "Add")
-        for (m in listOf(floatArrayOf(1f, 0f, 133f, 0f, 1f, 57f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 251f, 0f, 1f, 181f, 0f, 0f, 1f), floatArrayOf(1f, 0f, -300f, 0f, 1f, 90f, 0f, 0f, 1f))) {
+        for (m in listOf(floatArrayOf(1f, 0f, 133f, 0f, 1f, 57f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 251f, 0f, 1f, 181f, 0f, 0f, 1f), floatArrayOf(1f, 0f, -300f, 0f, 1f, 90f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 530f, 0f, 1f, 260f, 0f, 0f, 1f))) {
             val content = layer.vector!!
-            c.vectors.update(layer, content.replaced(mapOf(6L to listOf(VectorOps.transformed(content.byId(6)!!, m)))), "Move")
+            c.vectors.update(layer, content.replaced(mapOf(7L to listOf(VectorOps.transformed(content.byId(7)!!, m)))), "Move")
             assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
         }
         // Deleting a stroke re-renders only its area: the others there are replayed.
