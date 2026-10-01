@@ -369,7 +369,20 @@ class ExportSceneBuilder(
                 try {
                     val canvas = Canvas(out)
                     canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
-                    Compositor(tmp) { null }.drawDocument(canvas, rect, useOverrides = false, target = CompositeTarget.translate(out, rect.left, rect.top))
+                    val compositor = Compositor(tmp) { null }
+                    val target = CompositeTarget.translate(out, rect.left, rect.top)
+                    // In bands, letting the main thread breathe between them (big canvases).
+                    var top = rect.top
+                    while (top < rect.bottom) {
+                        coroutineContext.ensureActive()
+                        val band = Rect(rect.left, top, rect.right, minOf(rect.bottom, top + COMPOSITE_BAND))
+                        canvas.save()
+                        canvas.clipRect(band)
+                        compositor.drawDocument(canvas, band, useOverrides = false, target = target)
+                        canvas.restore()
+                        top = band.bottom
+                        if (top < rect.bottom) yield()
+                    }
                     val px = IntArray(rect.width() * rect.height())
                     out.getPixels(px, 0, rect.width(), 0, 0, rect.width(), rect.height())
                     ArgbImage(rect.width(), rect.height(), px)
@@ -581,6 +594,9 @@ class ExportSceneBuilder(
     }
 
     companion object {
+        /** Rows of a merged picture composited between two breaks of the main thread. */
+        private const val COMPOSITE_BAND = 512
+
         /**
          * [content] rendered over [r] (document px) like a vector layer's cache: dabs cut at
          * [docRect], the document's color mode applied. Any thread.

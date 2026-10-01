@@ -134,13 +134,13 @@ class ExchangeUiState(internal val controller: EditorController) {
 
     /** The picked destination of Save as…. */
     internal fun exportTo(uri: Uri) {
-        val ctx = context ?: return
+        val ctx = context ?: controller.appContext
         ExportJob(controller, exportOptions).saveTo(ctx, uri)
     }
 
     /** Share from the sheet. */
     internal fun share() {
-        val ctx = context ?: return
+        val ctx = context ?: controller.appContext
         val options = exportOptions
         closeExportSheet()
         ExportJob(controller, options).share(ctx)
@@ -150,7 +150,7 @@ class ExchangeUiState(internal val controller: EditorController) {
 
     /** Imports the SVG / PDF file at [uri] into the open artwork (one undo step). */
     fun importUri(uri: Uri) {
-        val ctx = context ?: return
+        val ctx = context ?: controller.appContext
         val details = PendingImports.details(controller.doc.id, uri)
         if (!ready()) return
         busy("Importing") {
@@ -201,7 +201,7 @@ class ExchangeUiState(internal val controller: EditorController) {
 
     /** A foreign (or picture-wanted) PDF: its pages; true when the page picker now owns [file]. */
     private suspend fun pdfPages(file: ImportFile, details: PendingImport?): Boolean {
-        val ctx = context ?: return false
+        val ctx = context ?: controller.appContext
         val r = withContext(Dispatchers.IO) { rasterizers.open(ctx, file.file!!) }
         var owned = false
         try {
@@ -416,10 +416,16 @@ fun ExchangeHost(state: ExchangeUiState) {
     val createSvg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.SVG.mime)) { uri -> if (uri != null) state.exportTo(uri) }
     val createPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.PDF.mime)) { uri -> if (uri != null) state.exportTo(uri) }
     DisposableEffect(state, context, open, createSvg, createPdf) {
-        state.context = context.applicationContext
+        // The activity's own context: Share starts the chooser from it.
+        state.context = context
         state.openPicker = { open.launch(IMPORT_MIME_TYPES) }
         state.createPicker = { f, name -> if (f == VectorFormat.SVG) createSvg.launch(name) else createPdf.launch(name) }
-        onDispose { state.dispose() }
+        onDispose {
+            state.dispose()
+            state.context = null
+            state.openPicker = null
+            state.createPicker = null
+        }
     }
     state.exportSheet?.let { ExportOptionsSheet(state) }
     when (val d = state.dialog) {
