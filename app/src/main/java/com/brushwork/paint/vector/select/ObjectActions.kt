@@ -178,12 +178,18 @@ object ObjectActions {
         var result: Boolean? = null
         // Edits and lifts asked for until it landed wait for it.
         val landed = PendingRenders.begin(c)
-        c.vectors.update(layer, after, label) { applied ->
-            if (result == null) {
-                result = applied
-                if (applied) then()
-                landed()
+        try {
+            c.vectors.update(layer, after, label) { applied ->
+                if (result == null) {
+                    result = applied
+                    if (applied) then()
+                    landed()
+                }
             }
+        } catch (e: Throwable) {
+            // (Never leave later edits waiting for an update that failed outright.)
+            landed()
+            throw e
         }
         return result ?: true
     }

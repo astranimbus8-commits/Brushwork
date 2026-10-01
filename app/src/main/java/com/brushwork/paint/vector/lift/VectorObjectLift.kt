@@ -129,21 +129,29 @@ internal class VectorObjectLift(
         var waiting: LayerRenderOverride? = null
         // Work on these objects queued meanwhile (a new lift, an Object bar action) waits for it.
         val landed = PendingRenders.begin(c)
-        update(layer, after, label, hint) { applied ->
-            if (result != null) return@update // (reported twice: once is enough)
-            result = applied
-            if (applied) then()
-            val w = waiting
-            if (w != null) {
-                // The background render landed: the real pixels replace the preview.
-                if (c.renderOverride === w) c.renderOverride = null
-                c.invalidateDoc(null)
-                applying = false
-                landingMatrix = null
-                end()
-                if (releaseWanted && !floating.isRecycled) floating.recycle()
-                landed()
+        try {
+            update(layer, after, label, hint) { applied ->
+                if (result != null) return@update // (reported twice: once is enough)
+                result = applied
+                if (applied) then()
+                val w = waiting
+                if (w != null) {
+                    // The background render landed: the real pixels replace the preview.
+                    if (c.renderOverride === w) c.renderOverride = null
+                    c.invalidateDoc(null)
+                    applying = false
+                    landingMatrix = null
+                    end()
+                    if (releaseWanted && !floating.isRecycled) floating.recycle()
+                    landed()
+                }
             }
+        } catch (e: Throwable) {
+            // The update failed outright: nothing waits for it, the lift ends unchanged.
+            applying = false
+            end()
+            landed()
+            throw e
         }
         val r = result
         if (r != null) {
