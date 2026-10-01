@@ -89,7 +89,7 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
         // Everything the old text covered (its real pixels) and the new text.
         val dirty = Rect()
         textInkOf(layer, item)?.let { dirty.union(it) }
-        textRectOf(next)?.let { dirty.union(it) }
+        textRectOf(next, prep)?.let { dirty.union(it) }
         if (dirty.isEmpty) return
         dirty.inset(-1, -1)
         val json = TextCodec.encode(next)

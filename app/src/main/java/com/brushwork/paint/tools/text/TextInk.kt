@@ -5,9 +5,8 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.transform.ContentBounds
 import kotlin.math.max
 
-/** Pixel rect (rounded out) of everything [t] paints, or null when it paints nothing. */
-internal fun textRectOf(t: TextItem): Rect? {
-    val prep = TextRenderer.prepare(t)
+/** Pixel rect (rounded out) of everything [t] paints ([prep]: [t] laid out), or null when it paints nothing. */
+internal fun textRectOf(t: TextItem, prep: PreparedText = TextRenderer.prepare(t)): Rect? {
     if (prep.isEmpty) return null
     val r = Rect()
     prep.docBounds(t).roundOut(r)
