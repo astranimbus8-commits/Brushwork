@@ -11,7 +11,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -416,12 +415,10 @@ fun ExchangeHost(state: ExchangeUiState) {
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) state.importUri(uri) }
     val createSvg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.SVG.mime)) { uri -> if (uri != null) state.exportTo(uri) }
     val createPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.PDF.mime)) { uri -> if (uri != null) state.exportTo(uri) }
-    SideEffect {
+    DisposableEffect(state, context, open, createSvg, createPdf) {
         state.context = context.applicationContext
         state.openPicker = { open.launch(IMPORT_MIME_TYPES) }
         state.createPicker = { f, name -> if (f == VectorFormat.SVG) createSvg.launch(name) else createPdf.launch(name) }
-    }
-    DisposableEffect(state) {
         onDispose { state.dispose() }
     }
     state.exportSheet?.let { ExportOptionsSheet(state) }

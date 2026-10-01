@@ -52,9 +52,10 @@ object NewArtwork {
     /** [w] x [h] with the long side scaled into [MIN_LONG_SIDE] .. the memory limit (aspect kept). */
     fun clampLongSide(w: Float, h: Float, maxHeap: Long): Pair<Int, Int> {
         val long = max(w, h)
-        val wi = max(1, w.roundToInt())
-        val hi = max(1, h.roundToInt())
-        val cap = CanvasLimits.importMaxSide(wi, hi, maxHeap)
+        // The largest long side memory allows for this shape (asked at the largest import size:
+        // importMaxSide never answers above the size it is given).
+        val up = CanvasLimits.IMPORT_MAX_SIDE / long
+        val cap = CanvasLimits.importMaxSide(max(1, (w * up).roundToInt()), max(1, (h * up).roundToInt()), maxHeap)
         val target = long.coerceIn(minOf(MIN_LONG_SIDE, cap).toFloat(), cap.toFloat())
         val k = target / long
         return max(1, (w * k).roundToInt()) to max(1, (h * k).roundToInt())

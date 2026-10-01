@@ -74,7 +74,8 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
         if (mask != null) {
             text("<defs><mask id=\"${esc(mask.key)}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"${scene.width}\" height=\"${scene.height}\" style=\"mask-type:luminance\">")
             text("<rect x=\"0\" y=\"0\" width=\"${scene.width}\" height=\"${scene.height}\" fill=\"${gray(mask.fillGray)}\"/>")
-            mask.image?.let { image(it, null) }
+            // (Its id lets the Brushwork payload find the picture.)
+            mask.image?.let { image(it, it.key) }
             text("</mask></defs>\n")
         }
         val style = StringBuilder()

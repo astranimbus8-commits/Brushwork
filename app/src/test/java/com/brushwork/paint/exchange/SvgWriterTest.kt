@@ -44,7 +44,7 @@ class SvgWriterTest {
 
     private fun scene(): ExportScene {
         val img = SceneImage("img-1", 3, 4, 6, 4, false) { photo }
-        val m = SceneImage("mask-2", 10, 10, 5, 5, true) { mask }
+        val m = SceneImage("maskimg-3", 10, 10, 5, 5, true) { mask }
         val path = VectorPath(listOf(PathOp.MoveTo(Vec2(1f, 2f)), PathOp.LineTo(Vec2(10.5f, 2f)), PathOp.CubicTo(Vec2(11f, 3f), Vec2(12f, 4f), Vec2(13.25f, 5f)), PathOp.Close))
         return ExportScene(
             w, h, 300f, "A & B <test>", 0xFFFFFFFF.toInt(),
@@ -96,7 +96,7 @@ class SvgWriterTest {
     fun goldenSnippets() {
         val svg = write()
         assertTrue(svg, svg.contains("<rect id=\"background\" x=\"0\" y=\"0\" width=\"120\" height=\"80\" fill=\"#ffffff\"/>"))
-        assertTrue(svg, svg.contains("<mask id=\"mask-2\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"120\" height=\"80\" style=\"mask-type:luminance\"><rect x=\"0\" y=\"0\" width=\"120\" height=\"80\" fill=\"#000000\"/><image x=\"10\" y=\"10\" width=\"5\" height=\"5\" preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64,"))
+        assertTrue(svg, svg.contains("<mask id=\"mask-2\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"120\" height=\"80\" style=\"mask-type:luminance\"><rect x=\"0\" y=\"0\" width=\"120\" height=\"80\" fill=\"#000000\"/><image id=\"maskimg-3\" x=\"10\" y=\"10\" width=\"5\" height=\"5\" preserveAspectRatio=\"none\" xlink:href=\"data:image/png;base64,"))
         assertTrue(svg, svg.contains("<path d=\"M1 2 L10.5 2 C11 3 12 4 13.25 5 Z\" fill=\"#ff8000\" fill-opacity=\"0.502\" fill-rule=\"evenodd\" stroke=\"#0000ff\" stroke-width=\"2.5\" stroke-linecap=\"square\" stroke-linejoin=\"miter\" stroke-miterlimit=\"7\" opacity=\"0.75\"/>"))
         assertTrue(svg, svg.contains("<linearGradient id=\"grad-1\" gradientUnits=\"userSpaceOnUse\" x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\"><stop offset=\"0\" stop-color=\"#ff0000\"/><stop offset=\"1\" stop-color=\"#0000ff\" stop-opacity=\"0.251\"/></linearGradient>"))
         assertTrue(svg, svg.contains("fill=\"url(#grad-1)\""))

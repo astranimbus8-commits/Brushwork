@@ -7,6 +7,7 @@ import com.brushwork.paint.brush.StrokeCost
 import com.brushwork.paint.brush.StrokeDynamics
 import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.brush.StrokeSampler
+import com.brushwork.paint.brush.TipShapes
 import com.brushwork.paint.brush.sanitized
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.core.Vec2
@@ -17,11 +18,13 @@ import com.brushwork.paint.vector.VStroke
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.ln
 import kotlin.math.hypot
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sin
+import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
@@ -39,8 +42,11 @@ import kotlin.math.sqrt
 object StrokeEnvelopeExport {
     private val SOLID_TIPS = setOf(BrushTip.ROUND_HARD, BrushTip.CALLIGRAPHY, BrushTip.SQUARE, BrushTip.MARKER)
 
+    /** How much further the drawn tip's edge reaches than its analytic profile (px). */
+    private const val FILTER_SPREAD = 0.15f
+
     /** Largest deviation (document px) allowed when dropping dabs from the outline. */
-    private const val TOLERANCE = 0.2f
+    private const val TOLERANCE = 0.1f
 
     /** True when strokes of [preset] can be exported as a filled outline. */
     fun isSolid(preset: BrushPreset): Boolean {
@@ -67,17 +73,20 @@ object StrokeEnvelopeExport {
     ): VectorPath? {
         if (!isSolid(preset) || points.size == 0) return null
         val p = StrokeRaster.replayPreset(preset, sizeScale, taperIn, taperOut)
-        val edge = (1f + p.hardness) / 2f
         val dabs = dabs(p, stylus, seed, points)
         if (dabs.isEmpty()) return null
         val n = dabs.size
         val xs = FloatArray(n)
         val ys = FloatArray(n)
         val rs = FloatArray(n)
+        val edges = HashMap<Int, Float>()
         var m = 0
         for (d in dabs) {
             if (!(d.alpha > 0f) || !d.cx.isFinite() || !d.cy.isFinite()) continue
-            xs[m] = d.cx; ys[m] = d.cy; rs[m] = d.diameter / 2f * edge
+            xs[m] = d.cx; ys[m] = d.cy
+            // Edge radii per 1 % of diameter (strokes with pressure have many diameters).
+            val q = (ln(max(d.diameter, 0.5f)) * 100f).roundToInt()
+            rs[m] = edges.getOrPut(q) { edgeRadius(p, exp(q / 100f)) } * d.diameter / exp(q / 100f)
             m++
         }
         if (m == 0) return null
@@ -107,6 +116,55 @@ object StrokeEnvelopeExport {
         if (toTip == null) return circleSpace
         val f = toTip.forward
         return circleSpace.transformed { q -> Vec2(f[0] * q.x + f[1] * q.y, f[2] * q.x + f[3] * q.y) }
+    }
+
+    /**
+     * The size (in the tip's circle space: the radius of a round tip, the half side of a square
+     * one) whose shape's outline matches the edge of a run of dabs of [diameter]: the 50 % point
+     * of the coverage that overlapping dabs build up (each dab's tip profile — hardness falloff
+     * and anti-aliasing — accumulated over the dabs spaced along the run). Round tips look the
+     * same in every direction; square and marker tips are measured along a side and along a
+     * diagonal, and the two are averaged (a stroke turns through both).
+     */
+    internal fun edgeRadius(p: BrushPreset, diameter: Float): Float {
+        val r = diameter / 2f
+        if (r <= 0.5f) return r
+        val boxy = p.tip == BrushTip.SQUARE || p.tip == BrushTip.MARKER
+        val side = runEdge(p, diameter, 0.0)
+        // The tip is drawn from a bitmap scaled with bilinear filtering, which spreads its edge
+        // a little further than the analytic profile (measured: about 0.15 px).
+        if (!boxy) return side + FILTER_SPREAD
+        val diagonal = runEdge(p, diameter, PI / 4)
+        // The shape's extent across a diagonal run: sqrt 2 (square), 2^(1/4) (marker squircle).
+        val extent = if (p.tip == BrushTip.SQUARE) sqrt(2f) else 2f.pow(0.25f)
+        return (side + diagonal / extent) / 2f + FILTER_SPREAD
+    }
+
+    /** Distance from a straight run of dabs (direction [angle] in the tip's frame) to its 50 % coverage. */
+    private fun runEdge(p: BrushPreset, diameter: Float, angle: Double): Float {
+        val r = diameter / 2f
+        val step = max(StrokeDynamics.MIN_SPACING_PX, p.spacing * diameter)
+        val k = (r * 1.5f / step).toInt() + 2
+        val flow = p.flow.coerceIn(0f, 1f)
+        val ux = cos(angle).toFloat(); val uy = sin(angle).toFloat()
+        val nx = -uy; val ny = ux
+        fun coverage(dist: Float): Float {
+            var clear = 1f
+            for (j in -k..k) {
+                val along = j * step
+                val c = TipShapes.coverage(p.tip, p.hardness, 1f, dist * nx + along * ux, dist * ny + along * uy, r, antiAlias = true)
+                if (c > 0f) clear *= 1f - flow * c
+            }
+            return 1f - clear
+        }
+        var lo = 0f
+        var hi = r * 1.5f + 1f
+        if (coverage(hi) >= 0.5f) return hi
+        repeat(24) {
+            val mid = (lo + hi) / 2f
+            if (coverage(mid) >= 0.5f) lo = mid else hi = mid
+        }
+        return (lo + hi) / 2f
     }
 
     /** The RGB of [color] at the stroke opacity (the coverage is painted with the color's RGB only). */
