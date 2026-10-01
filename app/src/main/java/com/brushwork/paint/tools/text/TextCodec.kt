@@ -18,10 +18,12 @@ data class TextLayerData(
 object TextCodec {
     /**
      * Current format version (1 = v1.2: box, vertical style, text path; 2 = v1.3: imported fonts
-     * `fontId` / `fontName`, box `minHeight` / `minWidth`). Version 1 data reads as is (the new
-     * fields take their defaults); v1.2 apps ignore the new fields and draw the built-in font.
+     * `fontId` / `fontName`, box `minHeight` / `minWidth`; 3 = v1.5: `wrap`, text flowing around a
+     * picture). Older data reads as is (the new fields take their defaults: version 2 text is not
+     * wrapped); older apps ignore the new fields and show the committed pixels until the text is
+     * edited there.
      */
-    const val VERSION = 2
+    const val VERSION = 3
 
     private val json = Json {
         ignoreUnknownKeys = true
