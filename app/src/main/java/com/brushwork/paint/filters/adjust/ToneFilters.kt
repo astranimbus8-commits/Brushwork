@@ -9,6 +9,7 @@ import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
+import com.brushwork.paint.filters.PixelMapper
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -152,9 +153,27 @@ class InvertFilter : Filter("adjust.invert", "Invert Color", FilterCategory.ADJU
         FilterParam.Slider("amount", "Amount", 0f, 100f, 100f, 1f, "%"),
     )
 
-    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+    override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer =
+        AdjustMath.applyRgbLut(src, ctx, lut(values))
+
+    /**
+     * The same mapping as [apply] per pixel (v1.5 F2: the first non-identity live effect for
+     * adjustment layers): fully transparent pixels are left alone, alpha is kept.
+     */
+    override fun pixelMapper(values: FilterValues): PixelMapper {
+        val lut = lut(values)
+        return PixelMapper { px, from, until ->
+            for (i in from until until) {
+                val c = px[i]
+                if (c ushr 24 == 0) continue
+                px[i] = (c and 0xFF000000.toInt()) or (lut[(c shr 16) and 0xFF] shl 16) or (lut[(c shr 8) and 0xFF] shl 8) or lut[c and 0xFF]
+            }
+        }
+    }
+
+    private fun lut(values: FilterValues): IntArray {
         val s = (values.float("amount") / 100f).coerceIn(0f, 1f)
-        return AdjustMath.applyRgbLut(src, ctx, IntArray(256) { v -> ColorUtils.clamp255(v + (255 - 2 * v) * s) })
+        return IntArray(256) { v -> ColorUtils.clamp255(v + (255 - 2 * v) * s) }
     }
 }
 
