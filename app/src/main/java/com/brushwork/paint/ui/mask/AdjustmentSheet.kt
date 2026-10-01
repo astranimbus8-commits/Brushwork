@@ -87,7 +87,16 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
     if (c.layersVersion < 0) return
     val spec = layer.adjustment ?: return
     val filter = AdjustmentEffects.filterOf(spec)
-    EffectPicker(c, layer, filter, preview)
+    val enabled = !layer.locked
+    if (!enabled) {
+        Text(
+            "\"${layer.name}\" is locked: unlock it in the layers window to change its effect.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = BrushworkColors.OnChromeDim,
+            modifier = Modifier.padding(vertical = 8.dp),
+        )
+    }
+    EffectPicker(c, layer, filter, enabled, preview)
     if (filter == null) {
         Text(
             "This adjustment uses an effect this version doesn't have (${spec.filterId}), so it shows no effect. Pick another effect to use it.",
@@ -119,7 +128,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
         if (filter.params.isEmpty()) {
             Text("${filter.name} has no settings.", style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim, modifier = Modifier.padding(vertical = 8.dp))
         }
-        filter.params.forEach { p -> FilterParamControl(paramHost, p, enabled = true) }
+        filter.params.forEach { p -> FilterParamControl(paramHost, p, enabled = enabled) }
     }
     LabeledSlider(
         label = "Amount",
@@ -128,17 +137,18 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
         valueRange = 0f..1f,
         valueText = "${(layer.opacity * 100f).toInt()}%",
         typing = SliderTyping.Percent,
+        enabled = enabled,
         modifier = Modifier.padding(top = 4.dp),
     )
 }
 
 /** "Effect ▾": every pointwise filter; switching starts from its defaults (the default name follows). */
 @Composable
-private fun EffectPicker(c: EditorController, layer: Layer, filter: Filter?, preview: (com.brushwork.paint.masks.AdjustmentSpec?, Float, String) -> Unit) {
+private fun EffectPicker(c: EditorController, layer: Layer, filter: Filter?, enabled: Boolean, preview: (com.brushwork.paint.masks.AdjustmentSpec?, Float, String) -> Unit) {
     var open by remember { mutableStateOf(false) }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.weight(1f)) {
-            OutlinedButton(onClick = { open = true }, modifier = Modifier.heightIn(min = 44.dp)) {
+            OutlinedButton(onClick = { open = true }, enabled = enabled, modifier = Modifier.heightIn(min = 44.dp)) {
                 Icon(Icons.Filled.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(filter?.name ?: "Unknown effect", maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -158,7 +168,7 @@ private fun EffectPicker(c: EditorController, layer: Layer, filter: Filter?, pre
             }
         }
         if (filter != null) {
-            IconButton(onClick = { preview(AdjustmentEffects.defaultSpec(filter, c.color), layer.opacity, layer.name) }) {
+            IconButton(onClick = { preview(AdjustmentEffects.defaultSpec(filter, c.color), layer.opacity, layer.name) }, enabled = enabled) {
                 Icon(Icons.Filled.RestartAlt, contentDescription = "Reset the effect")
             }
         }

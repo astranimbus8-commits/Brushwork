@@ -428,6 +428,21 @@ class MaskToolRobolectricTest {
     }
 
     @Test
+    fun theSafeCompositingSwitchTakesEffectWhenTheEditorStarts() {
+        val app = RuntimeEnvironment.getApplication()
+        val settings = AppSettings(app)
+        settings.prefs.edit().clear().commit()
+        settings.safeCompositing = true
+        val doc = Document("s", "s", 40, 30)
+        doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(40, 30))
+        c = EditorController(app, doc, scope, settings)
+        // The editor's first frame reads the tools (the options strip): the switch is loaded then.
+        assertNotNull(c.tools[ToolId.BRUSH])
+        assertTrue(AdjustmentStage.safeCompositing)
+        AdjustmentStage.safeCompositing = false
+    }
+
+    @Test
     fun deleteAndDuplicateComponents() {
         setup()
         val adj = radialLayer()

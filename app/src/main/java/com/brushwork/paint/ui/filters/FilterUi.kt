@@ -175,9 +175,16 @@ fun FilterBrowser(controller: EditorController, onDismiss: () -> Unit) {
  */
 @Composable
 private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit) {
-    val active by remember(controller) { derivedStateOf { controller.layersVersion; controller.activeLayer } }
-    val adjustment = active.isAdjustmentLayer
-    if (!adjustment && !active.isVectorLayer) return
+    // The layer and what kind it is (a layer can turn into a vector or raster layer).
+    val kind by remember(controller) {
+        derivedStateOf {
+            controller.layersVersion
+            val l = controller.activeLayer
+            Triple(l, l.isAdjustmentLayer, l.isVectorLayer)
+        }
+    }
+    val (active, adjustment, vector) = kind
+    if (!adjustment && !vector) return
     Row(
         Modifier
             .fillMaxWidth()

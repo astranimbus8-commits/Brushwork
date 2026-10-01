@@ -806,9 +806,13 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
     private var adjustEdit: AdjustmentEdit? = null
 
-    /** The live edit of [layer]'s effect (the previous one is recorded first). */
+    /**
+     * The live edit of [layer]'s effect. No side effects (the Adjust sheet asks for it while it
+     * composes): a previous edit with pending changes stays registered as a deferred step, so it
+     * is still recorded first — before any other step and before undo / redo.
+     */
     fun adjustmentEdit(layer: Layer): AdjustmentEdit {
-        adjustEdit?.let { if (it.layer === layer) return it; it.flush() }
+        adjustEdit?.let { if (it.layer === layer) return it }
         return AdjustmentEdit(controller, layer).also { adjustEdit = it }
     }
 

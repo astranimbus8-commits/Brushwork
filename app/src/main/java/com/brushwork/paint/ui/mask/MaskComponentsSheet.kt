@@ -116,6 +116,8 @@ internal fun MaskComponentsSheet(tool: MaskTool) {
                 label = "Hardness",
                 value = brush.hardness,
                 onValueChange = { c.updatePreset(ToolId.MASK, c.maskBrush.copy(hardness = it.coerceIn(0f, 1f))) },
+                // Kept with the mask brush (like the side sliders' size and flow).
+                onValueChangeFinished = { com.brushwork.paint.brush.BrushPresetStore.get(c.appContext).persist(c, ToolId.MASK) },
                 valueRange = 0f..1f,
                 valueText = "${(brush.hardness * 100f).toInt()}%",
                 typing = SliderTyping.Percent,

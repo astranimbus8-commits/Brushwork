@@ -53,10 +53,12 @@ class AdjustmentScratch {
         return m
     }
 
-    // Painted-mask bounds, per mask bitmap and layer content version.
-    private var boundsMask: Bitmap? = null
-    private var boundsVersion = Long.MIN_VALUE
-    private var boundsValue: Rect? = null
+    // Painted-mask bounds, per mask bitmap and layer content version (a few adjustment layers).
+    // Weak: a deleted layer's mask must not be kept alive by the cache.
+    private val boundsMasks = arrayOfNulls<java.lang.ref.WeakReference<Bitmap>>(BOUNDS_CACHE)
+    private val boundsVersions = LongArray(BOUNDS_CACHE)
+    private val boundsValues = arrayOfNulls<Rect>(BOUNDS_CACHE)
+    private var boundsNext = 0
 
     /**
      * Document area where [layer]'s [mask] lets the effect through (null = nowhere): the spec's
@@ -65,11 +67,20 @@ class AdjustmentScratch {
      */
     internal fun maskCoverage(layer: Layer, mask: Bitmap): Rect? {
         layer.maskSpec?.let { return MaskSpecs.coverageBounds(it, mask.width, mask.height) }
-        if (boundsMask === mask && boundsVersion == layer.contentVersion) return boundsValue?.let { Rect(it) }
+        for (i in 0 until BOUNDS_CACHE) {
+            if (boundsMasks[i]?.get() === mask) {
+                if (boundsVersions[i] == layer.contentVersion) return boundsValues[i]?.let { Rect(it) }
+                val r = nonBlackBounds(mask)
+                boundsVersions[i] = layer.contentVersion
+                boundsValues[i] = r
+                return r?.let { Rect(it) }
+            }
+        }
         val r = nonBlackBounds(mask)
-        boundsMask = mask
-        boundsVersion = layer.contentVersion
-        boundsValue = r
+        boundsMasks[boundsNext] = java.lang.ref.WeakReference(mask)
+        boundsVersions[boundsNext] = layer.contentVersion
+        boundsValues[boundsNext] = r
+        boundsNext = (boundsNext + 1) % BOUNDS_CACHE
         return r?.let { Rect(it) }
     }
 
@@ -97,14 +108,15 @@ class AdjustmentScratch {
         bitmap?.recycle()
         bitmap = null
         pixels = IntArray(0)
-        boundsMask = null
-        boundsValue = null
+        boundsMasks.fill(null)
+        boundsValues.fill(null)
         effectSpecs.fill(null)
         effectMappers.fill(null)
     }
 
     private companion object {
         const val EFFECT_CACHE = 8
+        const val BOUNDS_CACHE = 8
 
         /** Bounds of the pixels of [mask] whose color isn't black, or null when all are black. */
         fun nonBlackBounds(mask: Bitmap): Rect? {
