@@ -201,6 +201,32 @@ class SelectionSnapRobolectricTest {
     }
 
     @Test
+    fun aPolygonCornerCancelledBySecondFingerLeavesNoTrace() {
+        val c = setup()
+        val tool = lasso(c, LassoKind.POLYGON)
+        c.tap(103f, 63f); c.tap(157f, 58f)
+        assertEquals(2, tool.vertexCount)
+        // A new corner near the canvas center: it snaps there as the finger lands (guides shown)...
+        c.pointerDown(ToolPoint(197f, 148f))
+        assertTrue(tool.activeGuides.any { it.label == "Canvas center" })
+        c.pointerMove(ToolPoint(199f, 149f))
+        // ...and a second finger (pinch / two-finger undo) cancels it: no corner, no guides.
+        c.pointerCancel()
+        assertEquals(2, tool.vertexCount)
+        assertTrue(tool.activeGuides.isEmpty())
+        // A dragged corner cancelled: back where it was, no guides, its history step dropped.
+        c.pointerDown(ToolPoint(157f, 58f))
+        c.pointerMove(ToolPoint(170f, 80f))
+        c.pointerMove(ToolPoint(197f, 148f))
+        assertEquals(200f to 150f, tool.corner(1))
+        c.pointerCancel()
+        assertEquals(160f to 60f, tool.corner(1))
+        assertTrue(tool.activeGuides.isEmpty())
+        assertTrue(tool.undoStep())
+        assertEquals("the undo took back the corner placed before, not the cancelled drag", 1, tool.vertexCount)
+    }
+
+    @Test
     fun polygonCornersFollowTheFingerWithSnappingOff() {
         val c = setup()
         c.snapping.enabled = false
@@ -261,6 +287,31 @@ class SelectionSnapRobolectricTest {
         c.pointerCancel()
         assertTrue(tool.activeGuides.isEmpty())
         assertNull(c.selection)
+    }
+
+    @Test
+    fun aDragWhoseCornersSnapOntoOneLineKeepsTheSelection() {
+        val c = setup()
+        val tool = marquee(c)
+        c.drag(250f to 200f, 280f to 230f, 320f to 260f)
+        awaitSelection(c) { tool.busy }
+        val before = c.selection!!
+        // Down 3 px right of the layer's left edge, dragged down along it: both corners snap to
+        // x = 100, the rectangle has no width. That is no tap: the selection must stay.
+        c.pointerDown(ToolPoint(103f, 40f))
+        c.pointerMove(ToolPoint(104f, 120f))
+        c.pointerMove(ToolPoint(105f, 200f))
+        assertTrue(tool.activeGuides.any { it.axis == SnapAxis.X && it.pos == 100f })
+        c.pointerUp(ToolPoint(105f, 200f))
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(tool.activeGuides.isEmpty())
+        assertFalse(tool.busy)
+        assertTrue("the selection was kept", c.selection === before)
+        // The same drag with snapping off selects the 2 px wide strip under the finger, as before.
+        c.snapping.enabled = false
+        c.drag(103f to 40f, 104f to 120f, 105f to 200f)
+        awaitSelection(c) { tool.busy }
+        assertEquals(Rect(103, 40, 105, 200), c.selection!!.bounds)
     }
 
     @Test

@@ -7,6 +7,7 @@ import android.graphics.Rect
 import android.os.Looper
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -194,5 +195,64 @@ class TextSnapRobolectricTest {
         assertEquals("Path point", g.label)
         c.pointerUp(ToolPoint(370f, 205f))
         assertTrue(tool.activeGuides.isEmpty())
+    }
+
+    @Test
+    fun theCircleRadiusHandleSnapsSoTheCircleTouchesALine() {
+        val (c, tool) = setup()
+        text(tool, 300f, 230f)
+        tool.setPath(TextPathSpec(type = TextPathType.CIRCLE))
+        // Center (300, 40), radius 50: the radius handle sits below the center (opposite the text).
+        tool.setPath(tool.item!!.path.copy(cx = 300f, cy = 40f, radius = 50f, startAngleDeg = -90f))
+        assertEquals(Vec2(300f, 90f), TextOnPath.handles(tool.item!!.path)[1])
+        c.pointerDown(ToolPoint(300f, 90f))
+        c.pointerMove(ToolPoint(301f, 100f))
+        // The finger 3 px right of the handle's line: radius hypot(3, 77) = 77.06, so the circle's
+        // bottom (117.06) is 3 px from the layer's bottom edge (120); its sides (223 / 377) and
+        // top are clear. The radius makes the circle touch that edge exactly.
+        c.pointerMove(ToolPoint(303f, 117f))
+        assertEquals(80f, tool.item!!.path.radius, 1e-3f)
+        val g = tool.activeGuides.single()
+        assertEquals(SnapAxis.Y, g.axis)
+        assertEquals(120f, g.pos)
+        assertEquals("Layer 1 bottom", g.label)
+        // Farther than the snap distance (radius 65: every side clear): it follows the finger again.
+        c.pointerMove(ToolPoint(300f, 105f))
+        assertEquals(65f, tool.item!!.path.radius, 1e-3f)
+        assertTrue(tool.activeGuides.isEmpty())
+        c.pointerMove(ToolPoint(303f, 117f))
+        c.pointerUp(ToolPoint(303f, 117f))
+        assertEquals(80f, tool.item!!.path.radius, 1e-3f)
+        assertTrue("guides are hidden when the finger lifts", tool.activeGuides.isEmpty())
+        // Snapping off: exactly the finger's distance from the center, as before.
+        c.snapping.enabled = false
+        c.drag(300f to 120f, 300f to 105f, 303f to 117f)
+        assertEquals(Vec2(3f, 77f).length, tool.item!!.path.radius, 1e-3f)
+        assertTrue(tool.activeGuides.isEmpty())
+    }
+
+    @Test
+    fun aSquarePathsSizeCornerSnapsItsSideOntoALine() {
+        val (c, tool) = setup()
+        text(tool, 300f, 230f)
+        tool.setPath(TextPathSpec(type = TextPathType.RECT))
+        tool.setPath(tool.item!!.path.copy(cx = 300f, cy = 200f, width = 60f, height = 60f, rotationDeg = 0f, keepSquare = true))
+        assertEquals(Vec2(330f, 230f), TextOnPath.handles(tool.item!!.path)[1])
+        c.pointerDown(ToolPoint(330f, 230f))
+        c.pointerMove(ToolPoint(340f, 238f))
+        // Half side (45 + 49) / 2 = 47: the top (153) is 3 px from the canvas center line (150).
+        c.pointerMove(ToolPoint(345f, 249f))
+        val p = tool.item!!.path
+        assertEquals(100f, p.width, 1e-3f)
+        assertEquals(100f, p.height, 1e-3f)
+        assertTrue(tool.activeGuides.any { it.axis == SnapAxis.Y && it.pos == 150f })
+        c.pointerUp(ToolPoint(345f, 249f))
+        assertTrue(tool.activeGuides.isEmpty())
+    }
+
+    private fun EditorController.drag(vararg pts: Pair<Float, Float>) {
+        pointerDown(ToolPoint(pts[0].first, pts[0].second))
+        for (i in 1 until pts.size) pointerMove(ToolPoint(pts[i].first, pts[i].second))
+        pointerUp(ToolPoint(pts.last().first, pts.last().second))
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.assist.RulerHandleSnap
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.LayerRenderOverride
@@ -23,7 +24,6 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
-import com.brushwork.paint.tools.select.snapPointWhenOn
 import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
@@ -61,9 +61,10 @@ import kotlin.math.max
  * "Snap to objects" (the app-wide setting, the Snap chip): dragging the text snaps its box like
  * the transform tool does (left / center / right, top / center / bottom to the canvas, the
  * selection, other layers' content, the lines drawn in layers, shape vertices), the box edge
- * handles snap the dragged edge (text turned by a multiple of 90°), and the point handles of a
- * text path snap to the same and to the path's other points. The text layer being edited is
- * never a target. Pinching isn't snapped.
+ * handles snap the dragged edge (text turned by a multiple of 90°), the point handles of a text
+ * path snap to the same and to the path's other points, and the circle's radius (a square's size)
+ * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
+ * isn't snapped.
  */
 class TextTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TEXT
@@ -800,12 +801,64 @@ class TextTool(controller: EditorController) : Tool(controller) {
         TextPathType.CURVE -> index in 0..4
     }
 
-    /** Handles of the same path that stay put while handle [index] moves and that it can line up with. */
+    /**
+     * Handles of the same path that stay put while handle [index] moves and that it can line up
+     * with (none for the circle's radius and the rectangle's size: only the size changes there).
+     */
     private fun fixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
         TextPathType.LINE -> when (index) { 0 -> listOf(1); 1 -> listOf(0); else -> emptyList() }
         TextPathType.CURVE -> if (index in 0..3) (0..3).filter { it != index } else emptyList()
-        TextPathType.CIRCLE -> if (index == 1) listOf(0) else emptyList()
         else -> emptyList()
+    }
+
+    /**
+     * Path handle [index] of [path] at [at] (what the finger alone gives) snapped while "Snap to
+     * objects" is on. The circle's radius handle and a square's size corner only change the size:
+     * it snaps so the outline touches the closest line (its top, bottom, left or right side, or a
+     * corner of a turned square). Every other handle snaps per axis like a point (then the square
+     * grid on axes that didn't snap, when grid snapping is on). Off: [at] unchanged.
+     */
+    private fun snapPathHandle(path: TextPathSpec, index: Int, at: Vec2): Vec2 {
+        if (!controller.snapping.enabled) {
+            snap.clearGuides()
+            snapMoving = null
+            return at
+        }
+        val c = Vec2(path.cx, path.cy)
+        return when {
+            path.type == TextPathType.CIRCLE && index == 1 -> {
+                val d = at - c
+                val r = d.length
+                snapSize(c, r, AXIS_DIRS) { nr -> if (r > 1e-3f) c + d * (nr / r) else c + Vec2(nr, 0f) } ?: at
+            }
+            path.type == TextPathType.RECT && index == 1 && path.keepSquare -> {
+                // moveHandle makes the half side the mean of the corner's local offsets.
+                val rot = Math.toRadians(path.rotationDeg.toDouble()).toFloat()
+                val local = (at - c).rotated(-rot)
+                val half = TextPathGeometry.MIN_EXTENT / 2f
+                val s = (max(abs(local.x), half) + max(abs(local.y), half)) / 2f
+                snapSize(c, s, SQUARE_DIRS.map { it.rotated(rot) }) { ns -> c + Vec2(ns, ns).rotated(rot) } ?: at
+            }
+            else -> snap.snapPoint(at).also { snapMoving = pointBox(it) }
+        }
+    }
+
+    /**
+     * A size [size] (radius / half side) of a shape centered at [c] snapped so one of its points
+     * `c ± dir * size` ([dirs]) lands on the closest line; [place] turns the snapped size into the
+     * handle position. Null (guides hidden) when no line is within reach.
+     */
+    private fun snapSize(c: Vec2, size: Float, dirs: List<Vec2>, place: (Float) -> Vec2): Vec2? {
+        val hit = RulerHandleSnap.radius(c, size, dirs, TextPathGeometry.MIN_EXTENT) { v, axis -> snap.snapValue(v, axis) }
+        if (hit == null) {
+            snap.clearGuides()
+            snapMoving = null
+            return null
+        }
+        val (snapped, touching) = hit
+        snap.showGuidesFor(pointBox(touching), POINT_GUIDE_EPS)
+        snapMoving = pointBox(touching)
+        return place(snapped)
     }
 
     /**
@@ -952,10 +1005,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
             Mode.DEPTH -> item = depthResized(start, q)
             Mode.PATH_HANDLE -> {
                 var at = q + handleGrab
-                if (handleSnaps(start.path.type, handleIndex)) {
-                    at = snap.snapPointWhenOn(at, controller.snapping)
-                    snapMoving = pointBox(at)
-                }
+                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, at)
                 item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))
             }
             Mode.NONE, Mode.CREATE -> return
@@ -1312,5 +1362,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
         private const val PATH_POINT_LABEL = "Path point"
         /** A box edge counts as upright / level (and snaps) when its direction is this close to an axis (cos ~0.8°). */
         private const val AXIS_ALIGNED = 0.9999f
+        /** A circle touches lines with its right / left and bottom / top. */
+        private val AXIS_DIRS = listOf(Vec2(1f, 0f), Vec2(0f, 1f))
+        /** A square (half side s) touches lines with its sides (`c ± s` on an axis) or its corners. */
+        private val SQUARE_DIRS = listOf(Vec2(1f, 0f), Vec2(0f, 1f), Vec2(1f, 1f), Vec2(1f, -1f))
     }
 }

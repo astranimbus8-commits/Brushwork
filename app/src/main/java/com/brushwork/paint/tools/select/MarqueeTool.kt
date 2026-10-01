@@ -139,12 +139,16 @@ class MarqueeTool(controller: EditorController) : Tool(controller) {
         snap.end()
         val t = controller.viewTransform
         val r = shapeRect(startX, startY, curX, curY, settings)
-        // A tap is judged by the finger, not by where the corners snapped.
-        val tooSmall = max(abs(fingerX - downX), abs(fingerY - downY)) < t.screenToDocLength(t.dp(8f)) || r.width() < 1f || r.height() < 1f
-        if (tooSmall) {
-            if (mode == SelectionMode.REPLACE && controller.selection != null) controller.deselect()
-        } else {
-            apply(shapePath(r, settings.shape), settings.shape == MarqueeShape.ELLIPSE)
+        // A tap is judged by the finger, not by where the corners snapped: what the finger alone
+        // drew decides, exactly as before snapping (with snapping off it is the same rectangle).
+        val raw = shapeRect(downX, downY, fingerX, fingerY, settings)
+        val tap = max(abs(fingerX - downX), abs(fingerY - downY)) < t.screenToDocLength(t.dp(8f)) || raw.width() < 1f || raw.height() < 1f
+        when {
+            tap -> if (mode == SelectionMode.REPLACE && controller.selection != null) controller.deselect()
+            // A real drag whose corners snapped onto one line (e.g. along a layer's edge) encloses
+            // nothing: nothing is selected and the current selection stays.
+            r.width() < 1f || r.height() < 1f -> {}
+            else -> apply(shapePath(r, settings.shape), settings.shape == MarqueeShape.ELLIPSE)
         }
         controller.invalidateOverlay()
     }
