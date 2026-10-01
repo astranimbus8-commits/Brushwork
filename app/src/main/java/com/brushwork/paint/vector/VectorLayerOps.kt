@@ -90,7 +90,7 @@ object VectorLayerOps {
                 c.structural { c.doc.activeLayerIndex = c.doc.indexOf(lower) }
             }
         } finally {
-            lowerPixels?.recycle()
+            lowerPixels?.takeIf { it !== lower.bitmap }?.recycle()
         }
         return ok
     }

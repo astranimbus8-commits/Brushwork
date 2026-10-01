@@ -181,9 +181,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
      *
      * [shift]: the objects [ShiftHint.ids] moved by whole pixels ([ShiftHint.dx], [ShiftHint.dy])
      * and nothing else changed. Their cache pixels are moved instead of re-rendered when that is
-     * equivalent: no other object's paint bounds reach the moved objects' old or new area, no
-     * moved object paints with paper grain (grain is anchored to the document) unless the move
-     * is a multiple of [PaperGrain.SIZE] px, and every pixel that lands on the canvas was on it.
+     * equivalent: no other object's paint bounds reach the box around the moved objects' old or
+     * new paint bounds, no moved object paints with paper grain (grain is anchored to the
+     * document) unless the move is a multiple of [PaperGrain.SIZE] px, and every pixel that lands
+     * on the canvas was on it.
      * The result is the old cache shifted exactly (it can differ from a re-render only at the
      * anti-aliased edges where the renderer's tile grid cuts a path). Otherwise it is re-rendered
      * (also when [dirty] is given).
@@ -922,7 +923,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 if (src != null) canvas.drawBitmap(src, landing.left.toFloat(), landing.top.toFloat(), null)
             }
         } finally {
-            src?.recycle()
+            // (createBitmap may hand back its source for a whole-bitmap subset: never recycle the layer.)
+            src?.takeIf { it !== layer.bitmap }?.recycle()
         }
         return true
     }

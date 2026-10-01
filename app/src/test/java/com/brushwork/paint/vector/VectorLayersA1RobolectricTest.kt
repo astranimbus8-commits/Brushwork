@@ -235,13 +235,21 @@ class VectorLayersA1RobolectricTest {
             val scan = content.objects.lastOrNull { VectorOps.hit(it, p, 3f) }
             assertEquals("hit at $p", scan?.id, c.vectors.hitTest(c.layer, p, 3f)?.id)
         }
-        // Warm up, then time: a tap among 2000 objects looks at a few of them only.
-        repeat(50) { c.vectors.hitTest(c.layer, pts[it % pts.size], 3f) }
-        val t0 = System.nanoTime()
-        for (p in pts) c.vectors.hitTest(c.layer, p, 3f)
-        val perTapMs = (System.nanoTime() - t0) / 1e6 / pts.size
-        println("hit test among 2000 objects: ${"%.3f".format(perTapMs)} ms per tap")
-        assertTrue("$perTapMs ms per tap", perTapMs < 5.0)
+        // Warm up, then time (relative to a scan of every object, so it holds on any machine):
+        // a tap among 2000 objects looks at a few of them only.
+        repeat(50) { c.vectors.hitTest(c.layer, pts[it % pts.size], 3f); content.objects.lastOrNull { o -> VectorOps.hit(o, pts[it % pts.size], 3f) } }
+        var indexed = Long.MAX_VALUE
+        var scanned = Long.MAX_VALUE
+        repeat(3) {
+            val t0 = System.nanoTime()
+            for (p in pts) c.vectors.hitTest(c.layer, p, 3f)
+            val t1 = System.nanoTime()
+            for (p in pts) content.objects.lastOrNull { VectorOps.hit(it, p, 3f) }
+            val t2 = System.nanoTime()
+            indexed = minOf(indexed, t1 - t0); scanned = minOf(scanned, t2 - t1)
+        }
+        println("hit test among 2000 objects: ${"%.3f".format(indexed / 1e6 / pts.size)} ms per tap (a scan: ${"%.3f".format(scanned / 1e6 / pts.size)} ms)")
+        assertTrue("indexed ${indexed / 1000} us vs scan ${scanned / 1000} us", indexed * 4 <= scanned)
     }
 
     @Test
