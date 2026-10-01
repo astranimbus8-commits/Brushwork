@@ -80,6 +80,10 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
     private var grab = Vec2(0f, 0f)
     private var sourceBefore: Vec2? = null
     private var fixedBefore: CloneOffset? = null
+    /** The source was placed by a long-press and the finger has not moved since. */
+    private var heldStill = false
+    /** The "sampling this layer instead" message was shown (once per use of the tool). */
+    private var fallbackShown = false
 
     /** True while a clone stroke is painted. */
     val isPainting: Boolean get() = gesture == Gesture.PAINT
@@ -124,6 +128,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         if (on == sampleAllState) return
         sampleAllState = on
         settings.cloneSampleAllLayers = on
+        fallbackShown = false
         if (!on) source.releaseSnapshot()
     }
 
@@ -198,7 +203,10 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         val wanted = if (sampleAllLayers) CloneSource.Sample.ALL_LAYERS else CloneSource.Sample.THIS_LAYER
         val used = source.beginStroke(layer, target, wanted, offset)
         // (A mask always clones its own values: that is not a fallback.)
-        if (used != wanted && target == EditTarget.CONTENT) controller.toast(FALLBACK_MESSAGE)
+        if (used != wanted && target == EditTarget.CONTENT && !fallbackShown) {
+            fallbackShown = true
+            controller.toast(FALLBACK_MESSAGE)
+        }
         strokeOffset = offset
         gesture = Gesture.PAINT
         brush.onDown(p)
@@ -207,17 +215,31 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
             source.endStroke()
             gesture = Gesture.NONE
             strokeOffset = null
+            return
         }
+        notePath(at)
+    }
+
+    /** Tells the source where the stroke went (All layers composites only what it can sample). */
+    private fun notePath(to: Vec2) {
+        val from = finger ?: to
+        val preset = controller.cloneBrush
+        val reach = preset.size * 0.5f * (1f + 2f * preset.scatter) + 2f
+        source.notePath(from.x, from.y, to.x, to.y, reach)
+        finger = to
     }
 
     override fun onMove(p: ToolPoint) {
         val at = Vec2(p.x, p.y)
         when (gesture) {
             Gesture.PAINT -> {
-                finger = at
+                notePath(at)
                 brush.onMove(p)
             }
-            Gesture.PLACE -> setSource(at)
+            Gesture.PLACE -> {
+                heldStill = false
+                setSource(at)
+            }
             Gesture.DRAG -> setSource(at + grab)
             Gesture.NONE, Gesture.WAITING -> {}
         }
@@ -227,11 +249,14 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         val at = Vec2(p.x, p.y)
         when (gesture) {
             Gesture.PAINT -> {
+                notePath(at) // before the brush commits
                 brush.onUp(p)
                 strokeOffset?.let { anchor.strokeCompleted(it, aligned, at) }
             }
             Gesture.PLACE -> {
-                setSource(at)
+                // After a long-press without moving, the exact point held stays (the lift point
+                // went through the ruler / stabilizer).
+                if (!heldStill) setSource(at)
                 armed = false
             }
             Gesture.DRAG -> setSource(at + grab)
@@ -257,6 +282,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         fixedBefore = anchor.fixed
         armed = false
         gesture = Gesture.PLACE
+        heldStill = true
         setSource(Vec2(p.x, p.y))
         return true
     }
@@ -282,7 +308,12 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         finger = null
         sourceBefore = null
         fixedBefore = null
+        heldStill = false
         controller.invalidateOverlay()
+    }
+
+    override fun onSelected() {
+        fallbackShown = false
     }
 
     override fun onDeactivate() {

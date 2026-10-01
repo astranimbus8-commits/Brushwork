@@ -18,6 +18,9 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
+import kotlin.math.ceil
+import kotlin.math.floor
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -138,7 +141,11 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
     private var snapshotCanvas: Canvas? = null
     private var snapshotTarget: CompositeTarget? = null
     private var filled = BooleanArray(0)
+    /** Snapshot tiles the stroke's path can sample ([notePath]); the commit fills only those. */
+    private var needed = BooleanArray(0)
+    private var neededAny = false
     private var cols = 0
+    private var rows = 0
 
     private var scratch: Bitmap? = null
     private var scratchCanvas: Canvas? = null
@@ -166,6 +173,8 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
             bmp = ensureSnapshot()
             if (bmp == null) mode = Sample.THIS_LAYER else filled.fill(false)
         }
+        needed.fill(false)
+        neededAny = false
         if (bmp == null) bmp = (if (maskTarget) layer.mask else null) ?: layer.bitmap
         backing = bmp
         direct = shaderOf(bmp, dx, dy)
@@ -173,6 +182,40 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         sample = mode
         isActive = true
         return mode
+    }
+
+    /**
+     * The stroke went from ([ax], [ay]) to ([bx], [by]) (document px, destination) with dabs
+     * reaching [radius] around it. All layers: the commit then composites only the snapshot
+     * tiles this path can sample instead of every tile of the stroke's bounding box (a long
+     * diagonal stroke would otherwise composite most of the document at once).
+     */
+    fun notePath(ax: Float, ay: Float, bx: Float, by: Float, radius: Float) {
+        if (!isActive || sample != Sample.ALL_LAYERS || needed.isEmpty()) return
+        neededAny = true
+        val len = hypot(bx - ax, by - ay)
+        val step = TILE / 4f
+        val n = max(1, ceil(len / step).toInt())
+        // Samples are at most step / 2 from any point of the segment, and the brush's smoothed
+        // path (quadratic curves between the midpoints of input segments) strays from the input
+        // polyline by less than a quarter of a segment.
+        val r = radius + step / 2f + max(PATH_MARGIN, len * 0.5f)
+        for (i in 0..n) {
+            val t = i.toFloat() / n
+            markNeeded(ax + (bx - ax) * t - dx, ay + (by - ay) * t - dy, r)
+        }
+    }
+
+    private fun markNeeded(cx: Float, cy: Float, r: Float) {
+        val l = max(0, floor(cx - r).toInt())
+        val t = max(0, floor(cy - r).toInt())
+        val rr = min(doc.width, ceil(cx + r).toInt())
+        val b = min(doc.height, ceil(cy + r).toInt())
+        if (rr <= l || b <= t) return
+        for (row in t / TILE..(b - 1) / TILE) for (col in l / TILE..(rr - 1) / TILE) {
+            val idx = row * cols + col
+            if (idx in needed.indices) needed[idx] = true
+        }
     }
 
     /** True when everything [destBounds] (document px) samples lies outside the document: the stroke copies nothing. */
@@ -194,7 +237,7 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         if (!isActive || commitRect.isEmpty) return
         src.set(commitRect)
         src.offset(-dx, -dy)
-        if (sample == Sample.ALL_LAYERS) fill(src)
+        if (sample == Sample.ALL_LAYERS) fill(src, onlyNeeded = neededAny)
         // This layer: the commit writes the layer it reads, tile by tile; where the regions meet
         // it must read the pixels as they were before the stroke (a 1 px margin for filtering).
         val overlaps = sample == Sample.THIS_LAYER &&
@@ -233,6 +276,8 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         snapshotCanvas = null
         snapshotTarget = null
         filled = BooleanArray(0)
+        needed = BooleanArray(0)
+        neededAny = false
     }
 
     /** Frees everything (the editor closes). */
@@ -307,13 +352,17 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         snapshotCanvas = Canvas(bmp)
         snapshotTarget = CompositeTarget.identity(bmp)
         cols = (w + TILE - 1) / TILE
-        val rows = (h + TILE - 1) / TILE
+        rows = (h + TILE - 1) / TILE
         filled = BooleanArray(cols * rows)
+        needed = BooleanArray(cols * rows)
         return bmp
     }
 
-    /** Composites every snapshot tile of [region] (document px) that is not filled yet. */
-    private fun fill(region: Rect) {
+    /**
+     * Composites every snapshot tile of [region] (document px) that is not filled yet; with
+     * [onlyNeeded], only those [notePath] marked.
+     */
+    private fun fill(region: Rect, onlyNeeded: Boolean = false) {
         val canvas = snapshotCanvas ?: return
         val target = snapshotTarget ?: return
         val w = doc.width
@@ -327,6 +376,7 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
             for (col in l / TILE..(r - 1) / TILE) {
                 val idx = row * cols + col
                 if (idx !in filled.indices || filled[idx]) continue
+                if (onlyNeeded && !needed[idx]) continue
                 filled[idx] = true
                 tile.set(col * TILE, row * TILE, min(w, (col + 1) * TILE), min(h, (row + 1) * TILE))
                 canvas.save()
@@ -346,6 +396,9 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
 
         /** Larger off-document regions are sampled directly (their edge pixels repeat). */
         private const val MAX_SCRATCH_PIXELS = 4L * 1024 * 1024
+
+        /** Least slack around a noted path (document px). */
+        private const val PATH_MARGIN = 32f
 
         const val LOW_MEMORY_MESSAGE = "Low memory: the clone may repeat what it just painted"
 

@@ -291,6 +291,27 @@ class CloneToolRobolectricTest {
     }
 
     @Test
+    fun aLongAllLayersStrokeCompositesOnlyTheTilesItsPathSamples() {
+        val c = setup(800, 600)
+        val bottom = c.doc.layers[0]
+        gradient(bottom.bitmap)
+        val t = tool(c)
+        t.setSampleAllLayers(true)
+        t.setSource(Vec2(20f, 20f))
+        // A diagonal stroke with the offset (40, 40): its bounding box covers 9 of the 12 tiles.
+        c.pointerDown(ToolPoint(60f, 60f))
+        for (i in 1..20) c.pointerMove(ToolPoint(60f + i * 35f, 60f + i * 26f))
+        c.pointerUp(ToolPoint(760f, 580f))
+        val top = c.activeLayer
+        for (i in 0..20) {
+            val x = 60 + i * 35
+            val y = 60 + i * 26
+            assertEquals("($x, $y)", bottom.bitmap.getPixel(x - 40, y - 40), top.bitmap.getPixel(x, y))
+        }
+        assertTrue("tiles composited: ${t.source.tilesRendered}", t.source.tilesRendered in 1..7)
+    }
+
+    @Test
     fun withoutMemoryForTheSnapshotItSamplesThisLayer() {
         val c = setup()
         val t = tool(c)
@@ -303,6 +324,10 @@ class CloneToolRobolectricTest {
         assertEquals(CloneTool.FALLBACK_MESSAGE, c.message)
         assertEquals(RED, c.activeLayer.bitmap.getPixel(137, 55))
         assertFalse(t.source.hasSnapshot)
+        // Said once, not at every stroke.
+        c.message = null
+        stroke(c, 135f, 60f, 140f)
+        assertNull(c.message)
     }
 
     @Test
@@ -394,7 +419,8 @@ class CloneToolRobolectricTest {
         assertTrue(t.isPainting)
         assertTrue(c.pointerLongPress(ToolPoint(150f, 60f)))
         assertFalse(t.isPainting)
-        c.pointerUp(ToolPoint(150f, 60f))
+        // The lift point went through the ruler / stabilizer: without a move the held point stays.
+        c.pointerUp(ToolPoint(153f, 64f))
         assertEquals(Vec2(150f, 60f), t.anchor.source)
         assertArrayEquals(before, pixels(layer.bitmap))
         assertEquals(0, c.undoManager.undoCount)
