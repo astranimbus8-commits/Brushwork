@@ -48,6 +48,12 @@ internal class EraseTarget private constructor(
     val reach: Float,
     /** Half the painted width of a cut line (a cut end keeps paint this far from its centerline end). */
     val cutReach: Float,
+    /**
+     * A stroke or a line of one open sub-path (also a dot, which has nothing to cut and goes
+     * whole): what the partial and "to intersection" erasers work on. Closed or filled objects,
+     * shapes and paths of several sub-paths are not lines.
+     */
+    val isLine: Boolean,
     /** [CutKind.OPEN_PATH]: the cubic (8 values) of every segment of the sub-path, and their anchors. */
     val cubics: List<FloatArray>? = null,
     val anchors: List<VAnchor>? = null,
@@ -104,12 +110,17 @@ internal class EraseTarget private constructor(
             return d / 2f + max(0f, s.preset.scatter) * d
         }
 
+        /** A line shorter than this (document px) is a dot: nothing to cut, it goes whole. */
+        const val MIN_LINE = 0.5f
+
         private fun ofStroke(s: VStroke): EraseTarget {
             val p = s.points
             val line = FlatLine(p.x, p.y, p.size)
             val k = if (s.sizeScale.isFinite() && s.sizeScale > 0f) s.sizeScale else 1f
             val half = max(0.5f, s.preset.size * k / 2f)
-            return EraseTarget(s, if (p.size >= 2) CutKind.STROKE else CutKind.WHOLE, listOf(line), emptyList(), false, strokeRadius(s), half)
+            // A tap (its down and up points at the same place) is a dot.
+            val cut = if (p.size >= 2 && EraseMath.lengthBetween(line, 0f, line.uMax) >= MIN_LINE) CutKind.STROKE else CutKind.WHOLE
+            return EraseTarget(s, cut, listOf(line), emptyList(), false, strokeRadius(s), half, isLine = true)
         }
 
         /** The Curve tool's anchors of a sub-path (handles kept when both coordinates are set). */
@@ -162,7 +173,7 @@ internal class EraseTarget private constructor(
                     if (p.fill != null) fills += FlatLine(xs, ys, xs.size, true)
                 }
             }
-            return EraseTarget(p, CutKind.WHOLE, lines, fills, p.fillRule == VFillRule.EVENODD, reach, half)
+            return EraseTarget(p, CutKind.WHOLE, lines, fills, p.fillRule == VFillRule.EVENODD, reach, half, isLine = false)
         }
 
         private fun ofOpenPath(p: VPath, s: VSubpath, half: Float, reach: Float): EraseTarget {
@@ -190,7 +201,11 @@ internal class EraseTarget private constructor(
                 }
             }
             val line = FlatLine(xs.toFloatArray(), ys.toFloatArray())
-            return EraseTarget(p, CutKind.OPEN_PATH, listOf(line), emptyList(), false, reach, max(half, 0.5f), cubics, s.anchors, starts, steps)
+            // Every anchor at one place: a dot, erased whole.
+            if (EraseMath.lengthBetween(line, 0f, line.uMax) < MIN_LINE) {
+                return EraseTarget(p, CutKind.WHOLE, listOf(line), emptyList(), false, reach, max(half, 0.5f), isLine = true)
+            }
+            return EraseTarget(p, CutKind.OPEN_PATH, listOf(line), emptyList(), false, reach, max(half, 0.5f), true, cubics, s.anchors, starts, steps)
         }
 
         private fun ofShape(v: VShape): EraseTarget {
@@ -212,7 +227,7 @@ internal class EraseTarget private constructor(
             } else {
                 add(ShapeOutlines.outline(o), !o.type.isLineLike && o.style.fill)
             }
-            return EraseTarget(v, CutKind.WHOLE, lines, fills, false, max(ShapeOutlines.reach(o), 1f), ShapeOutlines.reach(o))
+            return EraseTarget(v, CutKind.WHOLE, lines, fills, false, max(ShapeOutlines.reach(o), 1f), ShapeOutlines.reach(o), isLine = false)
         }
     }
 }

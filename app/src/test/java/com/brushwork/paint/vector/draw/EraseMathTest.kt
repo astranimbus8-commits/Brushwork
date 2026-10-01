@@ -337,6 +337,30 @@ class EraseMathTest {
     }
 
     @Test
+    fun dotsGoWholeInEveryMode() {
+        // A tap with the brush: its down and up points at the same place.
+        val p = PackedPoints(floatArrayOf(50f, 50f), floatArrayOf(40f, 40f), floatArrayOf(1f, 1f))
+        val dot = VStroke(0, preset = pen, color = 0xFF000000.toInt(), seed = 1L, stylus = false, points = p)
+        val content = VectorContent.EMPTY.plus(listOf(dot, stroke(0f, 100f, 100f, 100f))).first
+        assertEquals(CutKind.WHOLE, EraseTarget.of(content.objects[0]).cut)
+        assertTrue(EraseTarget.of(content.objects[0]).isLine)
+        for (mode in VectorEraseMode.entries) {
+            val s = EraseSession(content, mode)
+            s.add(45f, 30f, 6f)
+            s.add(55f, 50f, 6f)
+            assertFalse("$mode: a dot is no closed shape", s.removedWholeInPartial)
+            assertEquals("$mode removes the dot", listOf(2L), s.result()!!.objects.map { it.id })
+        }
+        // A path whose anchors are all at one place is a dot too.
+        val flat = VPath(0, subpaths = listOf(VSubpath(listOf(VAnchor(10f, 10f), VAnchor(10f, 10f)))), stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 6f))
+        val t = EraseTarget.of(flat)
+        assertEquals(CutKind.WHOLE, t.cut)
+        assertTrue(t.isLine)
+        val c2 = VectorContent.EMPTY.plus(listOf(flat)).first
+        assertTrue(EraseSession(c2, VectorEraseMode.TO_INTERSECTION).also { it.add(10f, 12f, 3f) }.result()!!.objects.isEmpty())
+    }
+
+    @Test
     fun aGrazeDoesNotSplit() {
         // The eraser passes exactly at its reach from the line: nothing is cut.
         val content = VectorContent.EMPTY.plus(listOf(stroke(0f, 0f, 100f, 0f))).first

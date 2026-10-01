@@ -109,7 +109,11 @@ internal class EraseSession(
                 VectorEraseMode.OBJECT -> if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
                 VectorEraseMode.PARTIAL -> {
                     if (tg.cut == CutKind.WHOLE) {
-                        if (tg.touchedBy(cx, cy, dx, dy, r)) { doom(i); removedWholeInPartial = true }
+                        if (tg.touchedBy(cx, cy, dx, dy, r)) {
+                            doom(i)
+                            // (A dot is a line with nothing to cut: no hint for it.)
+                            if (!tg.isLine) removedWholeInPartial = true
+                        }
                     } else {
                         val set = removed[i] ?: Intervals().also { removed[i] = it }
                         val size0 = set.size
@@ -119,7 +123,13 @@ internal class EraseSession(
                     }
                 }
                 VectorEraseMode.TO_INTERSECTION -> {
-                    if (tg.cut == CutKind.WHOLE) continue
+                    // Closed or filled objects and shapes are only boundaries here.
+                    if (!tg.isLine) continue
+                    if (tg.cut == CutKind.WHOLE) {
+                        // A dot: the touched piece is all of it.
+                        if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
+                        continue
+                    }
                     val line = tg.lines[0]
                     val set = touched[i] ?: Intervals().also { touched[i] = it }
                     val sum0 = total(set)
