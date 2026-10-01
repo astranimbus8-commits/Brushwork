@@ -33,6 +33,8 @@ class TextToolRobolectricTest {
         val doc = Document("t", "t", w, h)
         doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(w, h))
         val c = EditorController(ctx, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(ctx))
+        // Drags land exactly under the finger here; snapping is covered by TextSnapRobolectricTest.
+        c.snapping.enabled = false
         c.selectTool(ToolId.TEXT)
         return c to (c.tools.getValue(ToolId.TEXT) as TextTool)
     }

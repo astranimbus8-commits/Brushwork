@@ -48,7 +48,9 @@ class LassoCurveTest {
         ctx.getSharedPreferences("brushwork_settings", Context.MODE_PRIVATE).edit().clear().commit()
         val doc = Document("t", "t", size, size)
         doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(size, size))
+        // Points land exactly under the finger here; snapping is covered by SelectionSnapRobolectricTest.
         return EditorController(ctx, doc, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), AppSettings(ctx))
+            .also { it.snapping.enabled = false }
     }
 
     private fun lasso(c: EditorController): LassoTool {

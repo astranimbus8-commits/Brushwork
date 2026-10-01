@@ -7,12 +7,14 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.transform.SnapGuide
 import kotlinx.serialization.builtins.serializer
 import kotlin.math.hypot
 import kotlin.math.max
@@ -31,6 +33,13 @@ enum class LassoKind(val label: String) {
  * can be dragged to a new place, and undo / redo (the app's buttons and two-finger tap too)
  * take back / bring back one corner edit at a time. Curve: tap points and the outline runs
  * smoothly through them ([LassoCurve]). A plain tap in "New" mode deselects (freehand).
+ *
+ * "Snap to objects" (the app-wide setting), polygon and curve modes: a new corner / point and a
+ * dragged one (past the touch slop) snap per axis to the canvas, other layers' content bounds,
+ * the lines drawn in layers (Table filter lines...), shape vertices and the other corners, and on
+ * axes that didn't snap to the square grid when grid snapping is on; the existing selection is a
+ * target only in add / subtract / intersect modes. Freehand strokes don't snap. Off: exactly as
+ * before.
  */
 class LassoTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.LASSO
@@ -50,7 +59,19 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         }
 
     /** The points of the curve mode (Compose state; the options strip edits them). */
-    val curve = LassoCurve(controller) { commit() }
+    val curve = LassoCurve(controller, snapToSelection = { snapsToSelection }) { commit() }
+
+    /**
+     * The existing selection is a snap target only when the new outline is combined with it
+     * (add / subtract / intersect); in "New" mode it is being replaced.
+     */
+    private val snapsToSelection: Boolean get() = mode != SelectionMode.REPLACE
+
+    /** Snapping of polygon corners (the curve mode has its own). */
+    private val snap = controller.newSnapSession()
+
+    /** Guides shown right now (document px); empty when nothing is aligned. */
+    internal val activeGuides: List<SnapGuide> get() = if (kind == LassoKind.CURVE) curve.activeGuides else snap.guides
 
     /** Committed polygon corners (Compose state so ✓/✕ appear). */
     var vertexCount by mutableIntStateOf(0)
@@ -116,6 +137,9 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             gestureRedo = redo.toList()
             grabbed = nearestVertex(p.x, p.y, docLength(GRAB_DP))
             if (grabbed >= 0) { grabStartX = vertices.x(grabbed); grabStartY = vertices.y(grabbed) }
+            beginSnap(except = grabbed)
+            // A new corner snaps as soon as the finger lands (the rubber band shows where).
+            if (grabbed < 0) setCursor(snapped(p.x, p.y))
         } else {
             stroke.clear()
             stroke.add(p.x, p.y)
@@ -136,7 +160,10 @@ class LassoTool(controller: EditorController) : Tool(controller) {
                     pushHistory()
                     grabMoved = true
                 }
-                vertices.set(grabbed, p.x, p.y)
+                val q = snapped(p.x, p.y)
+                vertices.set(grabbed, q.x, q.y)
+            } else {
+                setCursor(snapped(p.x, p.y))
             }
         } else {
             if (!dragging) return
@@ -154,16 +181,21 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             cursorDown = false
             val grab = grabbed
             grabbed = -1
+            // A moved corner and a new one land where they snap (a tap on a corner never moves it).
+            val q = snapped(p.x, p.y)
+            snap.end()
             if (grab >= 0 && grabMoved) {
-                vertices.set(grab, p.x, p.y)
+                vertices.set(grab, q.x, q.y)
                 controller.invalidateOverlay()
                 return
             }
             when {
+                // (Where the finger is, not where it snapped: tapping the first corner closes.)
                 vertices.size >= 3 && hypot(p.x - vertices.x(0), p.y - vertices.y(0)) <= docLength(CLOSE_DP) -> commit()
-                vertices.size == 0 || hypot(p.x - vertices.lastX, p.y - vertices.lastY) > docLength(3f) -> {
+                // A corner snapped onto the last one isn't added twice.
+                vertices.size == 0 || hypot(q.x - vertices.lastX, q.y - vertices.lastY) > docLength(3f) -> {
                     pushHistory()
-                    vertices.add(p.x, p.y)
+                    vertices.add(q.x, q.y)
                     vertexCount = vertices.size
                 }
             }
@@ -197,6 +229,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         grabMoved = false
         dragging = false
         cursorDown = false
+        snap.end()
         stroke.clear()
         curve.onCancel()
         controller.invalidateOverlay()
@@ -208,6 +241,27 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     private fun docLength(dp: Float): Float {
         val t = controller.viewTransform
         return t.screenToDocLength(t.dp(dp))
+    }
+
+    /**
+     * Starts snapping for this polygon touch: the corners (all but [except]) are point targets as
+     * they are now (a copy, so the dragged corner never becomes its own target).
+     */
+    private fun beginSnap(except: Int) {
+        val others = ArrayList<Vec2>(vertices.size)
+        for (i in 0 until vertices.size) if (i != except) others += Vec2(vertices.x(i), vertices.y(i))
+        snap.begin(includeSelection = snapsToSelection) { pointLines(others, CORNER_LABEL) }
+    }
+
+    /**
+     * A corner at ([x], [y]) snapped while "Snap to objects" is on (objects, the other corners,
+     * then the square grid on axes that didn't snap when grid snapping is on); unchanged when off.
+     */
+    private fun snapped(x: Float, y: Float): Vec2 = snap.snapPointWhenOn(Vec2(x, y), controller.snapping)
+
+    private fun setCursor(q: Vec2) {
+        cursorX = q.x
+        cursorY = q.y
     }
 
     private fun nearestVertex(x: Float, y: Float, tol: Float): Int {
@@ -305,12 +359,14 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         clearHistory()
         cursorDown = false
         grabbed = -1
+        snap.end()
         curve.clear()
         controller.invalidateOverlay()
     }
 
     override fun onDeactivate() {
         curve.onDeactivate()
+        snap.end()
         super.onDeactivate()
     }
 
@@ -352,6 +408,11 @@ class LassoTool(controller: EditorController) : Tool(controller) {
                 map(t, vertices.x(i), vertices.y(i))
                 SelectionOverlay.drawVertex(canvas, t, mapped[0], mapped[1], highlighted = i == dragged || (i == 0 && vertices.size >= 3))
             }
+            // Smart guides of the new / dragged corner (labels away from it).
+            if (cursorDown) {
+                val at = if (dragged in 0 until vertices.size) Vec2(vertices.x(dragged), vertices.y(dragged)) else Vec2(cursorX, cursorY)
+                snap.draw(canvas, t, pointBox(at))
+            }
         }
         if (kind == LassoKind.CURVE) curve.drawOverlay(canvas, t)
     }
@@ -368,6 +429,8 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         private const val SLOP_DP = 6f
         /** Tapping this close (dp) to the first corner closes the polygon. */
         private const val CLOSE_DP = 22f
+        /** Guide label of the other corners. */
+        private const val CORNER_LABEL = "Corner"
         private const val MAX_HISTORY = 200
 
         /** Rasterizes a closed lasso path into a document-sized selection (blocking; any thread). */
