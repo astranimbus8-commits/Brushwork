@@ -122,11 +122,11 @@ class ShapePointsToolTest {
         tool.setPointEditing(true)
         assertEquals(4, tool.points!!.size)
         val before = c.composite()
-        // A tap on the top edge.
-        c.tap(120f, 61f)
+        // A tap on the top edge (away from its "+").
+        c.tap(125f, 61f)
         assertEquals(5, tool.points!!.size)
         assertEquals(1, tool.selectedPoint)
-        assertVec(Vec2(120f, 60f), tool.docAnchors()!![1].pos)
+        assertVec(Vec2(125f, 60f), tool.docAnchors()!![1].pos)
         assertEquals(0, diff(before, c.composite()))
         // A tap on the "+" in the middle of the right edge.
         c.tap(150f, 100f)
@@ -134,9 +134,9 @@ class ShapePointsToolTest {
         assertVec(Vec2(150f, 100f), tool.docAnchors()!![3].pos)
         assertEquals(0, diff(before, c.composite()))
         // Pressing on the outline and dragging inserts a point and moves it.
-        c.drag(80f to 140f, 80f to 160f, 80f to 175f)
+        c.drag(75f to 140f, 75f to 160f, 75f to 175f)
         assertEquals(7, tool.points!!.size)
-        assertTrue(tool.docAnchors()!!.any { it.pos.distanceTo(Vec2(80f, 175f)) < 1e-2f })
+        assertTrue(tool.docAnchors()!!.any { it.pos.distanceTo(Vec2(75f, 175f)) < 1e-2f })
     }
 
     @Test

@@ -1368,6 +1368,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /** The live brush stroke started or ended: it is shown inside the edit override. */
     private fun onBrushLiveChanged() {
+        // Committing paints the stroke into the layer for real: the edit override is going away.
+        if (inCommit) return
         val ov = editOverride ?: return
         if (editingLayer !== ov.layer) return
         val cur = controller.renderOverride
@@ -1902,8 +1904,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         private const val HIT_TOLERANCE_DP = 16f
         /** Segments shorter than this on screen (dp) show no "+" (it would crowd the points). */
         private const val PLUS_MIN_SEGMENT_DP = 64f
-        /** Grab radius of a "+" as a fraction of a point's. */
-        private const val PLUS_TOUCH = 0.8f
+        /** Grab radius of a "+" as a fraction of a point's (44 dp across: points are tested first). */
+        private const val PLUS_TOUCH = 1f
         /** Handles shorter than this (document px) are not shown or grabbed. */
         private const val HANDLE_MIN_PX = 1e-2f
         /** A custom outline flatter than this (document px) shows no handles across it. */

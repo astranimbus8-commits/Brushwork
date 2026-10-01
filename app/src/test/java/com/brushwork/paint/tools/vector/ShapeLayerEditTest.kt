@@ -407,6 +407,8 @@ class ShapeLayerEditTest {
         tool.flushPreview()
         tool.commit()
         assertEquals("Edit shape", c.undoManager.undoLabel)
+        assertNull("the live stroke's preview is gone", c.renderOverride)
+        assertNull(tool.editingLayer)
         assertTrue("still a shape layer", layer.isShapeLayer)
         assertEquals(0, thickness(layer.bitmap, 100, 30, 70))
         val t2 = thickness(layer.bitmap, 100, 100, 140)
