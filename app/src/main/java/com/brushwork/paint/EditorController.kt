@@ -1162,7 +1162,11 @@ class EditorController(
 
     /** Merges [layer] into the layer below it. */
     fun mergeDown(layer: Layer = activeLayer) {
-        if (doc.indexOf(layer) <= 0) { toast("There is no layer below to merge into"); return }
+        val idx = doc.indexOf(layer)
+        if (idx <= 0) { toast("There is no layer below to merge into"); return }
+        // An adjustment layer has no pixels to receive the merge (its effect on the layers below
+        // would be lost); merging one DOWN applies its effect.
+        if (doc.layers[idx - 1].isAdjustmentLayer) { toast("Layers can't be merged into an adjustment layer"); return }
         withToolPaused { mergeDownNow(layer) }
     }
 
@@ -1170,6 +1174,11 @@ class EditorController(
         val idx = doc.indexOf(layer)
         if (idx <= 0) return
         val lower = doc.layers[idx - 1]
+        if (lower.isAdjustmentLayer) return
+        editScope { mergeDownInto(layer, idx, lower) }
+    }
+
+    private fun mergeDownInto(layer: Layer, idx: Int, lower: Layer) {
         // Two vector layers can keep their objects (A1); otherwise the result is pixels.
         if (layer.isVectorLayer && lower.isVectorLayer && VectorLayerOps.mergeVector(this, layer, lower)) return
         // Flatten lower (+ its mask, opacity) and upper (with blend, opacity, mask, clipping) via a
@@ -1207,6 +1216,8 @@ class EditorController(
         remove.redo(this)
         structural { doc.activeLayerIndex = doc.indexOf(lower) }
         pushUndo(CompositeAction("Merge down", listOf(replace, remove)))
+        // A committed edit of the lower layer (text wrapped around it re-flows).
+        queueEdit(EditEvent(lower, EditTarget.CONTENT, null, "Merge down"))
     }
 
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
@@ -1215,7 +1226,7 @@ class EditorController(
         withToolPaused { flipLayerNow(layer, horizontal) }
     }
 
-    private fun flipLayerNow(layer: Layer, horizontal: Boolean) {
+    private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
                 val old = layer.bitmap
@@ -1242,6 +1253,8 @@ class EditorController(
             LayerDataAction(rasterizeMessage(layer, before, after), layer, before, after)
         } else null
         pushUndo(if (dataAction == null) flipAction else CompositeAction(label, listOf(flipAction, dataAction)))
+        // A committed edit of the layer (text wrapped around it re-flows).
+        queueEdit(EditEvent(layer, EditTarget.CONTENT, null, label))
     }
 
     /** Applies property changes with undo. Use [previewLayerProps] for live slider dragging. */
@@ -1351,22 +1364,42 @@ class EditorController(
 
     fun deleteMask(layer: Layer = activeLayer) {
         val m = layer.mask ?: return
-        val action = MaskChangeAction(layer, m, null, "Delete mask")
-        action.redo(this)
-        pushUndo(action)
+        editScope {
+            // An editable mask's spec goes with its mask (I1), in the same step.
+            val dataBefore = layer.dataSnapshot()
+            val action = MaskChangeAction(layer, m, null, "Delete mask")
+            action.redo(this)
+            val dataAfter = dataBefore.rasterizedMask()
+            val dataAction = if (dataAfter != dataBefore) {
+                layer.restoreData(dataAfter)
+                LayerDataAction("Delete mask", layer, dataBefore, dataAfter)
+            } else null
+            pushUndo(if (dataAction == null) action else CompositeAction("Delete mask", listOf(action, dataAction)))
+            queueEdit(EditEvent(layer, EditTarget.MASK, null, "Delete mask"))
+        }
     }
 
     /** Bakes the mask into the layer's pixels and removes it. */
     fun applyMask(layer: Layer = activeLayer) {
         val m = layer.mask ?: return
-        val rec = beginEdit(layer, EditTarget.CONTENT)
-        rec.touchAll()
-        Canvas(layer.bitmap).drawBitmap(m, 0f, 0f, BitmapUtils.newMaskApplyPaint())
-        val pix = rec.finish("Apply mask")
-        val maskAction = MaskChangeAction(layer, m, null, "Apply mask")
-        maskAction.redo(this)
-        layer.markChanged()
-        pushUndo(CompositeAction("Apply mask", listOfNotNull(pix, maskAction)))
+        editScope {
+            val rec = beginEdit(layer, EditTarget.CONTENT)
+            rec.touchAll()
+            Canvas(layer.bitmap).drawBitmap(m, 0f, 0f, BitmapUtils.newMaskApplyPaint())
+            val pix = rec.finish("Apply mask")
+            val maskAction = MaskChangeAction(layer, m, null, "Apply mask")
+            maskAction.redo(this)
+            // New pixels and no mask: the content data and the mask spec no longer match (I1).
+            val dataBefore = layer.dataSnapshot()
+            val dataAfter = dataBefore.rasterizedContent().rasterizedMask()
+            val dataAction = if (dataAfter != dataBefore) {
+                layer.restoreData(dataAfter)
+                LayerDataAction(rasterizeMessage(layer, dataBefore, dataAfter), layer, dataBefore, dataAfter)
+            } else null
+            layer.markChanged()
+            pushUndo(CompositeAction("Apply mask", listOfNotNull(pix, maskAction, dataAction)))
+            queueEdit(EditEvent(layer, EditTarget.CONTENT, null, "Apply mask"))
+        }
     }
 
     fun invertMask(layer: Layer = activeLayer) {

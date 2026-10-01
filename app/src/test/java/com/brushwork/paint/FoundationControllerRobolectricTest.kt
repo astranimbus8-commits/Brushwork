@@ -228,6 +228,65 @@ class FoundationControllerRobolectricTest {
     }
 
     @Test
+    fun deletingOrApplyingAMaskTakesItsSpecAlong() {
+        val c = setup()
+        val l = c.activeLayer
+        l.mask = BitmapUtils.createMaskBitmap(w, h, -1)
+        val before = LayerData(vector = content(), maskSpec = MaskSpec(startFull = true))
+        l.restoreData(before)
+        // Delete: the spec goes with its mask (no stale spec on a later new mask); one step.
+        c.deleteMask(l)
+        assertNull(l.mask)
+        assertNull(l.maskSpec)
+        assertSame("the content data stays", before.vector, l.vector)
+        assertEquals(1, c.undoManager.undoCount)
+        c.undo()
+        assertNotNull(l.mask)
+        assertEquals(before, l.dataSnapshot())
+        // Apply: new pixels and no mask; content data and spec are cleared, undo restores them.
+        c.applyMask(l)
+        assertNull(l.mask)
+        assertTrue(l.dataSnapshot().isEmpty)
+        assertEquals("one step", 1, c.undoManager.undoCount)
+        c.undo()
+        assertEquals(before, l.dataSnapshot())
+        assertNotNull(l.mask)
+    }
+
+    @Test
+    fun flipAndMergeAreReportedToEditListeners() {
+        val c = setup(3)
+        val events = ArrayList<EditEvent>()
+        c.addEditListener { events += it }
+        val mid = c.doc.layers[1]
+        paint(mid)
+        c.flipLayer(mid, horizontal = true)
+        assertEquals(listOf(mid), events.map { it.layer })
+        val top = c.doc.layers[2]
+        paint(top)
+        c.mergeDown(top)
+        assertEquals("the lower layer changed", mid, events.last().layer)
+        assertEquals("Merge down", events.last().label)
+        val n = events.size
+        c.undo(); c.redo()
+        assertEquals(n, events.size)
+    }
+
+    @Test
+    fun nothingMergesIntoAnAdjustmentLayer() {
+        val c = setup()
+        val adj = c.addAdjustmentLayer(AdjustmentSpec(), null)!!
+        val above = c.addLayer()!!
+        paint(above)
+        val steps = c.undoManager.undoCount
+        c.mergeDown(above)
+        assertTrue(c.doc.indexOf(above) >= 0)
+        assertTrue(adj.isAdjustmentLayer)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals("Layers can't be merged into an adjustment layer", c.message)
+    }
+
+    @Test
     fun canvasOperationsCarryTheDataAndUndoRestoresIt() {
         val c = setup()
         val l = c.doc.layers[0]
