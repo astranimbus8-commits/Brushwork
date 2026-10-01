@@ -318,9 +318,12 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                 val paintTool = controller.lastPaintTool
                 val preset = controller.presetFor(paintTool)
                 Hint(
-                    (if (preset != null) "Painted with ${paintTool.label.lowercase()} \"${preset.name}\" at full pressure" else "Painted with the ${paintTool.label.lowercase()}") +
-                        ". The stroke shows while you edit the points.",
+                    (if (preset != null) "Painted with ${paintTool.label.lowercase()} \"${preset.name}\"" else "Painted with the ${paintTool.label.lowercase()}") +
+                        ". The stroke shows while you edit the points; each point's thickness sets the brush size there.",
                 )
+                if (tool.brushDrawsPlain) {
+                    Hint("This brush needs pixels: on this vector layer the curve is drawn as a plain line")
+                }
                 ToggleRow("Taper ends", s.taper, { v -> set { it.copy(taper = v) } }, description = "Pressure fades in and out along the path")
                 if (s.taper) {
                     LabeledSlider(

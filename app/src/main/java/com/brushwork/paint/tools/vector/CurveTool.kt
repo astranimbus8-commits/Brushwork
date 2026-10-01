@@ -943,6 +943,16 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     /** Message shown once per path when the brush can't be used on a vector layer. */
     private var warnedPlain = false
 
+    /**
+     * True when "Current brush" draws a plain line instead: the brush needs pixels (smudge,
+     * blur, watercolor) and the path goes onto a vector layer (follows layer changes in Compose).
+     */
+    val brushDrawsPlain: Boolean
+        get() {
+            controller.layersVersion
+            return settings.stroke == CurveStroke.BRUSH && strokeMode(targetLayer ?: controller.doc.activeLayer) == CurveStroke.PLAIN
+        }
+
     // ------------------------------------------------------------------ preview
 
     /** Plain items of the path: the fill (when on) and the plain line (when that is the stroke). */
@@ -1247,7 +1257,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val g = brushGeometry(path, settings)
         val a = anchors
         val closed = settings.closed && a.size > 2
-        if (vp.stroke?.kind != VStrokeKind.BRUSH) {
+        // (The painting tool paints the active layer: a path on another layer is drawn by its layer.)
+        if (vp.stroke?.kind != VStrokeKind.BRUSH || layer !== controller.doc.activeLayer) {
             brushPreview.cancel()
             val ids = controller.vectors.addObjects(layer, listOf(vp), label)
             // Refused (no memory...): the path stays pending.

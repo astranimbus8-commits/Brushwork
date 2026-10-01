@@ -618,6 +618,53 @@ class CurveV15RobolectricTest {
     }
 
     @Test
+    fun aListenersAmendJoinsEveryCurveStep() {
+        // I2: an edit listener that records a follow-up step (text wrap re-flow) folds it into the
+        // step of a plain object, a brush object (fill + stroke + data: three edits) and an
+        // "Edit path": each stays ONE step, and one undo takes back both.
+        val c = controller(vector = true)
+        val layer = c.activeLayer
+        var followUps = 0
+        var undone = 0
+        c.addEditListener { e ->
+            if (e.layer !== layer) return@addEditListener
+            c.amendLastStep {
+                c.pushUndo(object : com.brushwork.paint.engine.UndoAction {
+                    override val label = "Follow-up"
+                    override val byteSize = 0L
+                    override fun undo(c: EditorController) { undone++ }
+                    override fun redo(c: EditorController) { undone-- }
+                })
+            }
+            followUps++
+        }
+        val tool = curveTool(c)
+        tool.update { it.copy(stroke = CurveStroke.PLAIN) }
+        c.tap(40f, 60f); c.tap(320f, 60f)
+        tool.commit()
+        assertEquals(1, c.undoManager.undoCount)
+        assertTrue(followUps >= 1)
+        tool.update { it.copy(stroke = CurveStroke.BRUSH, fill = true, closed = true) }
+        c.tap(60f, 220f); c.tap(180f, 120f); c.tap(300f, 220f)
+        tool.flushPreview()
+        tool.commit()
+        assertEquals(2, c.undoManager.undoCount)
+        assertEquals("Curve", c.undoManager.undoLabel)
+        val q = onPath(layer.vector!!.objects[0] as VPath)
+        c.tap(q.x, q.y)
+        assertTrue(tool.isReopened)
+        tool.setWidth(0, 2f)
+        tool.commit()
+        assertEquals(3, c.undoManager.undoCount)
+        assertEquals(CurveTool.EDIT_PATH_LABEL, c.undoManager.undoLabel)
+        val before = undone
+        c.undo()
+        assertTrue("the follow-up went with the step", undone > before)
+        assertEquals(2, c.undoManager.undoCount)
+        assertEquals(2, layer.vector!!.objects.size)
+    }
+
+    @Test
     fun thePolylineToolReopensPolylinesOnly() {
         val c = controller(vector = true)
         val layer = c.activeLayer
