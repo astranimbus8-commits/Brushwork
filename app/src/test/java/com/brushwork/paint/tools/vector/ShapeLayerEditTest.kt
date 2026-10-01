@@ -211,6 +211,27 @@ class ShapeLayerEditTest {
     }
 
     @Test
+    fun anOpenedShapeIsDrawnInTheOverlayWhileDragged() {
+        val c = controller()
+        val tool = shapeTool(c)
+        placeRect(c, tool, ShapeStyle.FILL)
+        c.tap(70f, 60f)
+        c.pointerDown(ToolPoint(70f, 60f))
+        c.pointerMove(ToolPoint(90f, 60f))
+        c.pointerMove(ToolPoint(110f, 60f))
+        // The layer's own pixels stay hidden and the canvas tiles untouched: the moving shape is
+        // drawn over them in the overlay.
+        assertEquals(0, c.composite().getPixel(140, 60))
+        assertEquals(0, c.composite().getPixel(50, 60))
+        val overlay = BitmapUtils.createLayerBitmap(200, 200)
+        c.drawOverlays(Canvas(overlay), 0f)
+        assertEquals(red, overlay.getPixel(140, 60))
+        c.pointerUp(ToolPoint(110f, 60f))
+        assertEquals(red, c.composite().getPixel(140, 60))
+        assertEquals(0, c.composite().getPixel(50, 60))
+    }
+
+    @Test
     fun committingAnUnchangedShapeRecordsNothing() {
         val c = controller()
         val tool = shapeTool(c)

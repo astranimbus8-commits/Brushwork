@@ -19,7 +19,9 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -945,7 +947,14 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun setDragging(on: Boolean) {
         brushPreview.interacting = on
         preview.interacting = on
+        val was = dragging
+        dragging = on
+        // An opened shape layer drawn in the overlay during the drag goes back into the layer.
+        if (was && !on && editingLayer != null && box != null) refreshPreview()
     }
+
+    /** A finger (or two) is dragging the shape (see [setDragging]). */
+    private var dragging = false
 
     /**
      * Holding a finger still on the pending shape (a handle, a point, or the shape to move it)
@@ -1245,12 +1254,37 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val brush = o.paintsWithBrush
         val live = brush && liveBrushWhileEditing(layer)
         val ov = installEditOverride(layer)
-        setEditSpecs(ov, listOfNotNull(buildSpec(o, brush)))
-        overlaySpecs = listOfNotNull(creatingBox?.let { buildSpec(objectFor(it, null), brush = false) })
+        val specs = listOfNotNull(buildSpec(o, brush))
+        // While a finger drags a plain shape that looks the same over the finished image, it is
+        // drawn in the overlay: the canvas tiles (the layer's hidden pixels) stay as they are.
+        val inOverlay = dragging && !brush && editDrawsInOverlay(layer)
+        setEditSpecs(ov, if (inOverlay) emptyList() else specs)
+        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { buildSpec(objectFor(it, null), brush = false) })
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         editGuide = if (path != null && !live) path.toAndroidPath(guidePath) else null
         if (path != null && live) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
+    }
+
+    /**
+     * True when drawing the edited shape over the finished image looks exactly like drawing it
+     * into [layer] (see PreviewHost): a normal, opaque, unmasked, unclipped layer with nothing
+     * visible above it, no selection (a re-edited shape ignores it, the overlay would not), a
+     * color document, at a zoom where the canvas is drawn smoothed.
+     */
+    private fun editDrawsInOverlay(layer: Layer): Boolean {
+        if (controller.viewTransform.zoom >= OVERLAY_MAX_ZOOM) return false
+        val doc = controller.doc
+        val index = doc.indexOf(layer)
+        if (index < 0 || !layer.visible || layer.opacity < 1f) return false
+        if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping) return false
+        if (layer.mask != null && layer.maskEnabled) return false
+        if (doc.colorMode == ColorMode.MONOCHROME || controller.selection != null) return false
+        val layers = doc.layers
+        for (i in index + 1 until layers.size) {
+            if (layers[i].visible && layers[i].opacity > 0f) return false
+        }
+        return true
     }
 
     /** The edited shape's brush stroke can be shown live (a stroke drawn through a buffer, on the layer's content). */
@@ -1796,7 +1830,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val b = creating ?: box ?: return
         preview.drawOverlay(canvas, t)
         if (overlaySpecs.isNotEmpty()) {
-            val asNew = editingLayer == null && settings.editable
+            // Drawn as the content of a new layer / of the edited shape layer (never into a mask).
+            val asNew = editingLayer != null || settings.editable
             specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive, asNewLayer = asNew)
         }
         editGuide?.let { if (creating == null) painter.path(canvas, t, it) }
@@ -1877,5 +1912,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         private const val COALESCE_MS = 1500L
         private const val LAYER_CACHE_SIZE = 64
         private const val DRAW_TILE = 512
+        /** From this zoom on the canvas pixels are drawn as crisp squares (see PreviewHost). */
+        private const val OVERLAY_MAX_ZOOM = 2.5f
     }
 }
