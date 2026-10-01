@@ -333,10 +333,11 @@ internal object EraseMath {
      * sorted. Touching end points count; overlapping collinear parts do not. A segment grid over
      * [a] keeps this near linear for long lines.
      */
-    fun crossings(a: FlatLine, b: FlatLine, out: MutableList<Float>) {
+    fun crossings(a: FlatLine, b: FlatLine, out: MutableList<Float>, grid: SegmentGrid? = null) {
         if (a.n < 2 || b.n < 2) return
         if (a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom) return
-        val grid = SegmentGrid.of(a)
+        // (A grid of [a] built once serves all the lines it is tested against.)
+        val grid = grid ?: SegmentGrid.of(a)
         val bx = b.xs; val by = b.ys
         val tmp = FloatArray(2)
         for (j in 0 until b.segments) {

@@ -177,11 +177,16 @@ internal class EraseSession(
         val tg = target(i)
         val line = tg.lines[0]
         val out = ArrayList<Float>()
+        var grid: SegmentGrid? = null
         for (k in 0 until n) {
             if (k == i) continue
             val bb = targets.boundsOf(objects[k])
             if (bb[0] > tg.right || bb[2] < tg.left || bb[1] > tg.bottom || bb[3] < tg.top) continue
-            for (other in target(k).lines) EraseMath.crossings(line, other, out)
+            for (other in target(k).lines) {
+                if (other.n < 2 || other.right < line.left || other.left > line.right || other.bottom < line.top || other.top > line.bottom) continue
+                val g = grid ?: SegmentGrid.of(line).also { grid = it }
+                EraseMath.crossings(line, other, out, g)
+            }
         }
         out.sort()
         return out

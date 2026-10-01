@@ -81,5 +81,14 @@ class VectorEraserOptionsUiTest {
         c.selectTool(ToolId.BRUSH)
         RobolectricUi.settle(10, 50)
         assertFalse(SmokeUi.has(VectorEraseMode.TO_INTERSECTION.label, exact = true))
+        // Painting the vector layer's mask: the eraser erases mask pixels, no modes then.
+        c.selectTool(ToolId.ERASER)
+        c.addMask(c.doc.layers[1], fromSelection = false)
+        c.notifyLayersChanged()
+        RobolectricUi.settle(10, 50)
+        assertFalse(SmokeUi.has(VectorEraseMode.PARTIAL.label, exact = true))
+        c.setEditingMask(c.doc.layers[1], false)
+        RobolectricUi.settle(10, 50)
+        assertTrue(SmokeUi.has(VectorEraseMode.PARTIAL.label, exact = true))
     }
 }
