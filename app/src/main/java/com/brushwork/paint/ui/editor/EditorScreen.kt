@@ -350,8 +350,10 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // A new copy shows the paste bar again (and the hidden one's pixels aren't kept alive here).
     LaunchedEffect(clipboard) { if (clipboard !== hiddenClipboard) hiddenClipboard = null }
     val hasSelection = controller.selection != null
-    val objectsSelected = controller.vectors.selectedIds.isNotEmpty()
-    val vectorMode = controller.isVectorMode
+    // Derived: both read layersVersion, which changes with every committed edit; only the flags
+    // flipping may recompose the whole screen.
+    val objectsSelected by remember(controller) { derivedStateOf { controller.vectors.selectedIds.isNotEmpty() } }
+    val vectorMode by remember(controller) { derivedStateOf { controller.isVectorMode } }
     // The selection bar steps aside for the user's tool work in progress (its ✓/✕ come first:
     // a paste being placed, curve points...), filters, long operations and the selection menu
     // itself. The transform tool's own untouched lift doesn't count: selecting it to move the

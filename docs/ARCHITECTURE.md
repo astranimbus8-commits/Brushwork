@@ -20,7 +20,10 @@ background dispatcher on *copies* of pixels and comes back to the main thread to
   `updateLayerData`, `setLayerData`, `groupUndo` or `undoStepNamed` returns, the history grew by
   exactly one step (or none). They run inside `editScope`; the `EditEvent`s they queue reach the
   `EditListener`s when the outermost scope ends, and a listener that edits folds its steps into the
-  triggering one with `amendLastStep { }`. Undo and redo never fire edit events.
+  triggering one with `amendLastStep { }`. Undo and redo never fire edit events. The history is not
+  trimmed while a scope runs (`UndoManager.holdTrim`), so grouping by a mark also works when the
+  history is full. A live edit that records its step only when it ends (the Adjust sheet) registers
+  a `DeferredStep`: it is flushed into its own step before any other push and before undo / redo.
 - **I3 Threads.** Document, layers and controller on the main thread only. Background renders work
   from immutable data (`VectorContent`, `MaskSpec`) and are applied on the main thread only if the
   layer's data is still the same instance. Busy overlay for anything over 400 ms.
