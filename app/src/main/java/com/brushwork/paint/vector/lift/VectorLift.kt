@@ -3,6 +3,7 @@ package com.brushwork.paint.vector.lift
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.ObjectLift
 import com.brushwork.paint.tools.transform.ObjectLiftProvider
 import com.brushwork.paint.tools.transform.RefusingLiftProvider
@@ -88,6 +89,12 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
                 if (sync) accepted = false else onReady(null)
             }) { touched ->
                 search = null
+                // Found in the background: the Transform tool may have gone (or the layer changed)
+                // meanwhile; then no preview is installed (it would replace another tool's).
+                if (!sync && (c.activeToolId != ToolId.TRANSFORM || c.activeLayer !== layer || c.doc.indexOf(layer) < 0)) {
+                    onReady(null)
+                    return@run
+                }
                 val now = layer.vector?.objects.orEmpty().mapTo(HashSet()) { it.id }
                 val ids = touched.filterTo(LinkedHashSet()) { it in now }
                 if (ids.isEmpty()) {
