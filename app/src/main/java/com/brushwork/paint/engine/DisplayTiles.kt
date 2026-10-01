@@ -47,17 +47,18 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
 
     /**
      * Re-renders dirty tiles with [compositor]. Returns true if anything changed. [visibleDoc]
-     * (document px; v1.5) is the area on screen: tiles there may be rendered first and the
-     * others left dirty until they become visible (owned by A5; currently every dirty tile is
-     * rendered).
+     * (document px; v1.5) is the area on screen: only dirty tiles that intersect it are rendered,
+     * the others stay dirty until they become visible (a full-canvas adjustment slider drag then
+     * only pays for what is on screen). Null renders every dirty tile.
      */
     fun update(compositor: Compositor, visibleDoc: Rect? = null): Boolean {
         var changed = false
         for (idx in tiles.indices) {
             val d = dirty[idx] ?: continue
-            dirty[idx] = null
             val col = idx % cols; val row = idx / cols
             val tr = tileRect(col, row)
+            if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
+            dirty[idx] = null
             var bmp = tiles[idx]
             if (bmp == null || bmp.isRecycled) {
                 bmp = Bitmap.createBitmap(tr.width(), tr.height(), Bitmap.Config.ARGB_8888)
