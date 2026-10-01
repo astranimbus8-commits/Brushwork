@@ -33,6 +33,10 @@ internal class EraseSession(
     private val objects: List<VObject> = content.objects
     private val n = objects.size
 
+    init {
+        targets.trimTo(objects)
+    }
+
     /** Per object: erased whole. */
     private val whole = BooleanArray(n)
     /** Per object: the removed parameters of its centerline (cut kinds). */
@@ -234,7 +238,18 @@ internal class TargetCache {
         bounds.clear()
     }
 
+    /** Forgets the geometry of objects that are not in [objects] once the cache holds many more (deleted or replaced ones). */
+    fun trimTo(objects: List<VObject>) {
+        if (targets.size <= objects.size * 2 + SLACK && bounds.size <= objects.size * 2 + SLACK) return
+        val keep = IdentityHashMap<VObject, Boolean>(objects.size * 2)
+        for (o in objects) keep[o] = true
+        targets.keys.retainAll { keep.containsKey(it) }
+        bounds.keys.retainAll { keep.containsKey(it) }
+    }
+
     private companion object {
         const val MAX = 8192
+        /** Entries kept beyond twice the live objects before [trimTo] trims. */
+        const val SLACK = 256
     }
 }
