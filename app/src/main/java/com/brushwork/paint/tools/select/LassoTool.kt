@@ -382,7 +382,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             busy = false
             committing = null
             controller.invalidateOverlay()
-        }) { cancelled ->
+        }, toObjects = true) { cancelled ->
             if (cancelled()) null else rasterize(work, docW, docH, aa)
         }
     }

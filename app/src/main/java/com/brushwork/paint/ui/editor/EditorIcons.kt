@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.editor
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Approval
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.AutoFixNormal
 import androidx.compose.material.icons.filled.CenterFocusWeak
@@ -10,8 +11,10 @@ import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.Gesture
+import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.PhotoFilter
 import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.TextFields
@@ -19,6 +22,7 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.automirrored.filled.ViewQuilt
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -58,6 +62,47 @@ object EditorIcons {
             .build()
     }
 
+    /**
+     * The Vector button (v1.5): a pen nib under a Bezier handle with two anchor squares (the
+     * universal "pen tool" sign of vector apps).
+     */
+    val Vector: ImageVector by lazy {
+        ImageVector.Builder(name = "Vector", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f)
+            .path(fill = SolidColor(Color.Black), pathFillType = PathFillType.EvenOdd) {
+                // Nib with its breather hole.
+                moveTo(12f, 21f)
+                lineTo(7.2f, 13f)
+                lineTo(9.6f, 7.6f)
+                lineTo(14.4f, 7.6f)
+                lineTo(16.8f, 13f)
+                close()
+                moveTo(12f, 11.3f)
+                arcTo(1.5f, 1.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, 12f, 14.3f)
+                arcTo(1.5f, 1.5f, 0f, isMoreThanHalf = true, isPositiveArc = true, 12f, 11.3f)
+                close()
+            }
+            .path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.5f) {
+                // The handle line between the anchors.
+                moveTo(6f, 4.5f)
+                lineTo(18f, 4.5f)
+            }
+            .path(fill = SolidColor(Color.Black)) {
+                // Anchor squares.
+                moveTo(2.5f, 2.5f); lineTo(6.5f, 2.5f); lineTo(6.5f, 6.5f); lineTo(2.5f, 6.5f); close()
+                moveTo(17.5f, 2.5f); lineTo(21.5f, 2.5f); lineTo(21.5f, 6.5f); lineTo(17.5f, 6.5f); close()
+            }
+            .build()
+    }
+
+    /** Clone stamp tool (v1.5). */
+    val CloneStamp: ImageVector get() = Icons.Filled.Approval
+
+    /** Masks tool (v1.5): a gradient square. */
+    val Masks: ImageVector get() = Icons.Filled.Gradient
+
+    /** The Filters tile of the tools grid (v1.5; it used to be a top-bar action). */
+    val FiltersTile: ImageVector get() = Icons.Filled.PhotoFilter
+
     fun tool(id: ToolId): ImageVector = when (id) {
         ToolId.BRUSH -> Icons.Filled.Brush
         ToolId.ERASER -> Eraser
@@ -77,5 +122,7 @@ object EditorIcons {
         ToolId.RULER -> Icons.Filled.Straighten
         ToolId.OBJECT_SELECT -> Icons.Filled.CenterFocusWeak
         ToolId.REMOVE -> Icons.Filled.AutoFixNormal
+        ToolId.CLONE -> CloneStamp
+        ToolId.MASK -> Masks
     }
 }

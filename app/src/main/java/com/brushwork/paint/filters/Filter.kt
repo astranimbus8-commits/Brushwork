@@ -31,9 +31,27 @@ abstract class Filter(
 
     abstract fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer
 
+    /**
+     * Non-null for pointwise filters (each output pixel depends only on the same input pixel and
+     * [values]): maps pixels exactly like [apply] does, per pixel (contract-tested). Adjustment
+     * layers use it to apply the effect live (v1.5). Content-dependent filters return null.
+     */
+    open fun pixelMapper(values: FilterValues): PixelMapper? = null
+
+    /** True when this filter can be the live effect of an adjustment layer. */
+    val isAdjustmentCapable: Boolean get() = !generatesContent && pixelMapper(defaultValues()) != null
+
     fun defaultValues(): FilterValues = FilterValues(params.associate { it.key to it.defaultValue() })
 
     override fun toString(): String = "Filter($id)"
+}
+
+/**
+ * A pointwise color mapping (v1.5): maps the NON-premultiplied ARGB pixels [from] until [until]
+ * of [px] in place, preserving alpha. Must be thread-safe (rows are mapped in parallel).
+ */
+fun interface PixelMapper {
+    fun map(px: IntArray, from: Int, until: Int)
 }
 
 enum class FilterCategory(val title: String) {

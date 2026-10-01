@@ -121,7 +121,7 @@ class VectorRenderTest {
 
     private fun composite(c: EditorController): Bitmap {
         val out = BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height)
-        c.compositor.drawDocument(Canvas(out), null)
+        c.compositor.drawDocument(Canvas(out), null, target = null)
         return out
     }
 

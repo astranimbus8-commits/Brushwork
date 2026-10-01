@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -134,7 +135,7 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         patchCanvas.save()
         patchCanvas.clipRect(0, 0, patchRect.width(), patchRect.height())
         patchCanvas.translate(-left.toFloat(), -top.toFloat())
-        controller.compositor.drawDocument(patchCanvas, patchRect, useOverrides = false)
+        controller.compositor.drawDocument(patchCanvas, patchRect, useOverrides = false, target = CompositeTarget.translate(patch, left, top))
         patchCanvas.restore()
         patchValid = true
     }

@@ -48,11 +48,15 @@ enum class StrokeKind {
     val isDirect: Boolean get() = this == SMUDGE || this == BLUR || this == WATERCOLOR
 
     companion object {
-        /** The stroke kind [toolId] uses with [preset]. */
+        /**
+         * The stroke kind [toolId] uses with [preset]. The clone stamp and mask brushes always
+         * paint through the coverage buffer (PAINT), whatever their tip (V13).
+         */
         fun of(toolId: ToolId, preset: BrushPreset): StrokeKind = when (toolId) {
             ToolId.ERASER -> ERASE
             ToolId.SMUDGE -> SMUDGE
             ToolId.BLUR -> BLUR
+            ToolId.CLONE, ToolId.MASK -> PAINT
             else -> when (preset.tip) {
                 BrushTip.WATERCOLOR -> WATERCOLOR
                 BrushTip.SMUDGE -> SMUDGE

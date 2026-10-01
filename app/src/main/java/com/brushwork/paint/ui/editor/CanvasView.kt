@@ -286,11 +286,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
         // Composite tiles under the view matrix.
         val tiles = controller.tiles
-        tiles.update(controller.compositor)
         val t = controller.viewTransform
         visibleF.set(0f, 0f, width.toFloat(), height.toFloat())
         t.inverse.mapRect(visibleF)
         visibleF.roundOut(visible)
+        tiles.update(controller.compositor, visible)
         val save = canvas.save()
         canvas.concat(t.matrix)
         tiles.draw(canvas, visible, smooth = viewport.scale < SMOOTH_ZOOM_LIMIT)

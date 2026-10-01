@@ -53,6 +53,11 @@ data class CurveSettings(
     val taperPercent: Float = 20f,
     val unit: LengthUnit = LengthUnit.PX,
     val nudgeStepPx: Float = 1f,
+    /**
+     * The plain line is as wide as the current brush (v1.5, like `ShapeSettings.useBrushSize`);
+     * false uses [plainWidth]. Stored settings without the field take this default.
+     */
+    val useBrushSize: Boolean = true,
 ) {
     /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
     fun sanitized(fallback: CurveSettings = DEFAULT) = copy(

@@ -2,6 +2,7 @@ package com.brushwork.paint.engine
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -36,29 +37,59 @@ interface LayerRenderOverride {
 }
 
 /**
+ * The bitmap a [Compositor.drawDocument] canvas draws into, and how document px map onto it
+ * (v1.5): live adjustment layers read the composite below them from it. Every caller owns such a
+ * backing bitmap: a display tile (translate), a flattened image (identity), a thumbnail (scale),
+ * an eyedropper or fill patch (translate).
+ */
+class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix) {
+    companion object {
+        /** A bitmap whose pixel (0, 0) is document pixel ([left], [top]) at 1:1. */
+        fun translate(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
+            CompositeTarget(bitmap, Matrix().apply { setTranslate(-left.toFloat(), -top.toFloat()) })
+
+        /** A document-sized bitmap at 1:1. */
+        fun identity(bitmap: Bitmap): CompositeTarget = CompositeTarget(bitmap, Matrix())
+    }
+}
+
+/**
  * Flattens the document's layers (blend modes, opacity, masks, clipping groups) into a canvas.
  * Clipping groups follow Photoshop semantics: the base layer's opacity and blend mode apply to
  * the whole group; clipped layers are limited to the base's (masked) alpha.
+ *
+ * Adjustment layers (v1.5) are applied on the fly to what is below them ([AdjustmentStage]); an
+ * adjustment layer is never a clipping base and never clipped (a layer marked clipping right
+ * above one draws unclipped). Without adjustment layers the drawing is exactly v1.4's (I5).
  */
 class Compositor(private val doc: Document, private val overrideProvider: () -> LayerRenderOverride?) {
 
     private val maskPaint = BitmapUtils.newMaskApplyPaint()
     private val dstInPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
     private val plainPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val adjustmentScratch = AdjustmentScratch()
 
     /**
      * Draws all visible layers into [canvas] (document coordinates). [clip] limits work to a
      * region (the canvas should already be clipped to it; it's used for saveLayer bounds).
+     * [target] is the bitmap [canvas] draws into (adjustment layers read the composite below
+     * them from it); null draws adjustment layers as pass-through.
      */
-    fun drawDocument(canvas: Canvas, clip: Rect?, useOverrides: Boolean = true) {
+    fun drawDocument(canvas: Canvas, clip: Rect?, useOverrides: Boolean = true, target: CompositeTarget?) {
         val bounds = RectF(clip ?: doc.bounds)
         val override = if (useOverrides) overrideProvider() else null
         val layers = doc.layers
         var i = 0
         while (i < layers.size) {
             val base = layers[i]
+            if (base.isAdjustmentLayer) {
+                // Its own group: never a clipping base (layers marked clipping above it draw unclipped).
+                if (base.visible && base.opacity > 0f) AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                i++
+                continue
+            }
             var j = i + 1
-            while (j < layers.size && layers[j].clipping) j++
+            while (j < layers.size && layers[j].clipping && !layers[j].isAdjustmentLayer) j++
             if (base.visible && base.opacity > 0f) {
                 val clips = if (j > i + 1) layers.subList(i + 1, j).filter { it.visible && it.opacity > 0f } else emptyList()
                 drawGroup(canvas, base, clips, bounds, override)
@@ -106,7 +137,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
         val c = Canvas(out)
         if (background != null) c.drawColor(background)
-        drawDocument(c, null, useOverrides = false)
+        drawDocument(c, null, useOverrides = false, target = CompositeTarget.identity(out))
         return out
     }
 
@@ -127,8 +158,10 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val mid = BitmapUtils.createLayerBitmap(w2, h2)
         val c = Canvas(mid)
         if (background != null) c.drawColor(background)
-        c.scale(w2.toFloat() / doc.width, h2.toFloat() / doc.height)
-        drawDocument(c, null, useOverrides = false)
+        val sx = w2.toFloat() / doc.width
+        val sy = h2.toFloat() / doc.height
+        c.scale(sx, sy)
+        drawDocument(c, null, useOverrides = false, target = CompositeTarget(mid, Matrix().apply { setScale(sx, sy) }))
         val out = Bitmap.createScaledBitmap(mid, w, h, true)
         if (out !== mid) mid.recycle()
         return out

@@ -161,7 +161,7 @@ class FilterSessionRobolectricTest {
     /** The composite as shown on screen (with the preview override). */
     private fun onScreen(c: EditorController): Bitmap {
         val out = BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height)
-        c.compositor.drawDocument(Canvas(out), null, useOverrides = true)
+        c.compositor.drawDocument(Canvas(out), null, useOverrides = true, target = null)
         return out
     }
 

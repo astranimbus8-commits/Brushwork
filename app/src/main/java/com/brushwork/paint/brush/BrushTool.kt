@@ -12,6 +12,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
@@ -49,6 +50,19 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     /** The preset this tool paints with. */
     val preset: BrushPreset get() = controller.presetFor(id) ?: BrushLibrary.defaultFor(id)
 
+    /**
+     * Decides, when a stroke starts, whether it is a normal raster stroke, refused, or recorded
+     * (v1.5 seam: vector layers record strokes as objects). Path strokes ([beginPath]) are never
+     * asked: they always get [StrokeHook.None].
+     */
+    var strokeHook: (StrokeInfo) -> StrokeHook = { controller.vectors.strokeHook(it) }
+
+    /** Non-null: the coverage is painted with this source's shader instead of the color (clone stamp). */
+    var coverageSource: CoverageSource? = null
+
+    /** Non-null: the undo label of every stroke instead of "Brush" / "Eraser"... (e.g. "Clone stamp"). */
+    var undoLabelOverride: String? = null
+
     /** True while a stroke is in progress. */
     val isStroking: Boolean get() = stroke != null
 
@@ -70,22 +84,33 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         s.begin(p)
     }
 
-    /** Cancels any stroke and creates a new one starting at [p] (null when the layer refuses). */
-    private fun start(p: ToolPoint, seed: Long): Stroke? {
+    /**
+     * Cancels any stroke and creates a new one starting at [p] (null when the layer or the
+     * [strokeHook] refuses). [isPath]: a stroke along a vector path (never hooked).
+     */
+    private fun start(p: ToolPoint, seed: Long, isPath: Boolean = false): Stroke? {
         stroke?.let { stroke = null; it.cancel() }
         val layer = controller.activeLayer
         if (!controller.checkEditable(layer)) return null
         val preset = preset.sanitized()
         val kind = StrokeKind.of(id, preset)
-        val maskTarget = controller.editTargetOf(layer) == EditTarget.MASK
+        val target = controller.editTargetOf(layer)
+        val maskTarget = target == EditTarget.MASK
         if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget) {
             controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
             return null
         }
+        val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false))
+        val recorder = when (hook) {
+            StrokeHook.None -> null
+            is StrokeHook.Refuse -> { controller.toast(hook.message); return null }
+            is StrokeHook.Record -> hook.recorder
+        }
         val s = try {
-            if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget)
-            else BufferStroke(layer, preset, kind, p, seed, maskTarget)
+            if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget, recorder)
+            else BufferStroke(layer, preset, kind, p, seed, maskTarget, recorder)
         } catch (e: OutOfMemoryError) {
+            recorder?.cancel()
             controller.toast("Not enough memory for this brush")
             return null
         }
@@ -109,7 +134,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     fun beginPath(input: PathStrokeInput, seed: Long, draftBudget: Float = 0f): Boolean {
         if (input.size < 2) return false
         val first = ToolPoint(input.x[0], input.y[0], input.pressure[0], isStylus = true)
-        val s = start(first, seed) ?: return false
+        val s = start(first, seed, isPath = true) ?: return false
         if (s is BufferStroke) {
             s.startPath(input, draftBudget)
         } else {
@@ -183,9 +208,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         StrokeResources.releaseFor(controller)
     }
 
+    /** A recorded stroke's own feedback (e.g. what the vector eraser will remove). */
+    override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        stroke?.recorder?.drawOverlay(canvas, t)
+    }
+
     // ------------------------------------------------------------------ strokes
 
-    private fun undoLabel(kind: StrokeKind) = when (kind) {
+    private fun undoLabel(kind: StrokeKind) = undoLabelOverride ?: when (kind) {
         StrokeKind.PAINT -> "Brush"
         StrokeKind.ERASE -> "Eraser"
         StrokeKind.SMUDGE -> "Smudge"
@@ -205,10 +235,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val kind: StrokeKind,
         first: ToolPoint,
         seed: Long,
+        /** Receives the input points and the commit ([StrokeHook.Record]); null for normal strokes. */
+        val recorder: StrokeRecorder?,
     ) {
         val isStylus = first.isStylus
         val dynamics = StrokeDynamics(preset, isStylus, seed)
-        val selection: Selection? = controller.selection
+        /** True when BrushTool paints nothing (the recorder replaces the stroke, e.g. the vector eraser). */
+        val replaces: Boolean = recorder?.replacesStroke == true
+        val selection: Selection? = if (recorder?.ignoresSelection == true) null else controller.selection
         val dirty = Rect()
         protected var spacingScale = 1f
         /** Draft spacing multiplier of a path stroke (see [updatePath]); 1 = exact. */
@@ -234,14 +268,20 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         fun pressureOf(pressure: Float): Float =
             if (isStylus && !pressure.isNaN()) pressure.coerceIn(0f, 1f) else 1f
 
-        fun begin(p: ToolPoint) = begin(p.x, p.y, pressureOf(p))
+        fun begin(p: ToolPoint) {
+            recorder?.point(p.x, p.y, p.pressure)
+            begin(p.x, p.y, pressureOf(p))
+        }
 
         fun begin(x: Float, y: Float, pressure: Float) {
             sampler.begin(x, y, pressure)
             afterEvent()
         }
 
-        fun move(p: ToolPoint) = move(p.x, p.y, pressureOf(p))
+        fun move(p: ToolPoint) {
+            recorder?.point(p.x, p.y, p.pressure)
+            move(p.x, p.y, pressureOf(p))
+        }
 
         /** Adds an input point ([pressure] already resolved by [pressureOf]). */
         fun move(x: Float, y: Float, pressure: Float) {
@@ -253,6 +293,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         /** Ends the stroke (adding [p] as the last point) and commits it. */
         open fun finish(p: ToolPoint?) {
             if (p != null) {
+                recorder?.point(p.x, p.y, p.pressure)
                 limitCost(p.x, p.y)
                 sampler.add(p.x, p.y, pressureOf(p))
             }
@@ -265,10 +306,16 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val len = hypot(x - lastX, y - lastY)
             lastX = x
             lastY = y
-            val d = max(1f, dynamics.size)
-            val nominal = max(StrokeDynamics.MIN_SPACING_PX, preset.spacing * d)
-            val cost = len / nominal * dabCost(d)
-            spacingScale = if (cost > budget) cost / budget else 1f
+            spacingScale = StrokeCost.spacingScale(len, dynamics.size, preset.spacing, { d -> dabCost(d) }, budget)
+        }
+
+        /**
+         * Commits through the [recorder] when there is one ([commitPixels] is the normal commit),
+         * else directly. [bounds] = what the stroke painted.
+         */
+        protected fun commitThrough(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
+            val r = recorder ?: return commitPixels()
+            return r.commit(label, Rect(bounds), commitPixels)
         }
 
         protected fun flushDirty() {
@@ -291,7 +338,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         first: ToolPoint,
         seed: Long,
         private val maskTarget: Boolean,
-    ) : Stroke(layer, preset, kind, first, seed) {
+        recorder: StrokeRecorder?,
+    ) : Stroke(layer, preset, kind, first, seed, recorder) {
         private val docW = controller.doc.width
         private val docH = controller.doc.height
         private val coverage: Bitmap = res.coverage(docW, docH)
@@ -299,7 +347,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val dabs = ArrayList<Dab>()
         /** Union of all dab bounds, clipped to the document. */
         private val bounds = Rect()
-        private val style = CoverageStyle(
+        /** Paints the coverage with pixels from elsewhere (clone stamp); fixed for the stroke. */
+        private val source: CoverageSource? = coverageSource
+        private var style = CoverageStyle(
             mode = when {
                 maskTarget -> PorterDuff.Mode.SRC_OVER
                 kind == StrokeKind.ERASE -> PorterDuff.Mode.DST_OUT
@@ -309,7 +359,25 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             color = if (kind == StrokeKind.ERASE) 0xFF000000.toInt() else strokeColor(maskTarget),
             opacity = preset.opacity,
             grain = preset.grain,
+            shader = source?.shader,
         )
+        private val clipRect = Rect()
+
+        /** The style to draw [region] with: the coverage source prepares it and may have a new shader. */
+        private fun styleFor(region: Rect?): CoverageStyle {
+            val src = source ?: return style
+            if (region != null && !region.isEmpty) src.prepare(region)
+            val sh = src.shader
+            if (style.shader !== sh) style = style.copy(shader = sh)
+            return style
+        }
+
+        /** The part of the stroke [canvas] redraws (document px). */
+        private fun drawRegion(canvas: Canvas): Rect? {
+            if (source == null) return null
+            if (!canvas.getClipBounds(clipRect)) return null
+            return if (clipRect.intersect(bounds)) clipRect else null
+        }
 
         /** 1-bit documents: the preview is thresholded like the commit will be (no gray edges). */
         private val monochrome: Paint? =
@@ -322,7 +390,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 if (maskTarget) return false
                 val save = monochrome?.let { canvas.saveLayer(null, it) }
                 canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
-                res.painter.draw(canvas, coverage, bounds, style, selection?.mask)
+                res.painter.draw(canvas, coverage, bounds, styleFor(drawRegion(canvas)), selection?.mask)
                 if (save != null) canvas.restoreToCount(save)
                 return true
             }
@@ -332,23 +400,24 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 if (!maskTarget || mask == null) return false
                 val save = canvas.saveLayer(null, maskPaint)
                 canvas.drawBitmap(mask, 0f, 0f, null)
-                res.painter.draw(canvas, coverage, bounds, style, selection?.mask)
+                res.painter.draw(canvas, coverage, bounds, styleFor(drawRegion(canvas)), selection?.mask)
                 canvas.restoreToCount(save)
                 return true
             }
         }
 
-        override val budget: Float get() = 6_000_000f
+        override val budget: Float get() = StrokeCost.BUFFER_BUDGET
 
         init {
-            controller.renderOverride = override
+            // A replaced stroke (vector eraser) shows nothing of its own: its recorder draws feedback.
+            if (!replaces) controller.renderOverride = override
         }
 
         override fun onDab(dab: Dab) {
             dynamics.resolve(dab, null)
             // Spread draft dabs each lay down as much paint as the dabs they stand for together.
             if (drafting && draftScale > 1f) dab.alpha = 1f - (1f - dab.alpha).pow(draftScale)
-            res.stamper.stamp(canvas, preset, dab, draft = drafting)
+            if (replaces) res.stamper.measure(preset, dab) else res.stamper.stamp(canvas, preset, dab, draft = drafting)
             dabs += dab
             addBounds(dab)
         }
@@ -687,28 +756,43 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
 
         override fun complete() {
+            if (replaces) {
+                // Nothing was painted: the recorder does the whole edit.
+                dirty.setEmpty()
+                commitThrough(undoLabel(kind), bounds) { false }
+                release()
+                return
+            }
             retaper()
             dirty.setEmpty()
             val commitRect = Rect(bounds)
             val sel = selection
             if (sel != null && !commitRect.intersect(sel.bounds)) commitRect.setEmpty()
-            if (!commitRect.isEmpty && res.painter.isVisible(style)) {
-                val rec = controller.beginEdit(layer)
-                val target = if (rec.target == EditTarget.MASK) layer.mask else layer.bitmap
-                if (target != null) {
-                    // Composite tile by tile, only where dabs landed: long diagonal strokes skip
-                    // their empty bounding box, and the grain/selection offscreen layer stays
-                    // tile-sized instead of stroke-sized. Coverage, grain and selection are all
-                    // document-anchored and drawn unscaled, so the result equals one big draw.
-                    val canvas = Canvas(target)
-                    for (r in touchedTiles(commitRect)) {
-                        rec.touch(r)
-                        res.painter.draw(canvas, coverage, r, style, sel?.mask)
-                    }
-                    controller.commitEdit(rec, undoLabel(kind))
-                }
-            }
+            commitThrough(undoLabel(kind), bounds) { commitPixels(commitRect, sel) }
             release()
+        }
+
+        /** Composites the coverage into the layer (or its mask) within [commitRect]: the normal commit. */
+        private fun commitPixels(commitRect: Rect, sel: Selection?): Boolean {
+            if (commitRect.isEmpty || !res.painter.isVisible(style)) return false
+            val rec = controller.beginEdit(layer)
+            val target = (if (rec.target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
+            // The clone stamp copies its source region first: painting must never read pixels
+            // this very commit has already changed (V13).
+            source?.let { src ->
+                src.prepareCommit(commitRect)
+                styleFor(null)
+            }
+            // Composite tile by tile, only where dabs landed: long diagonal strokes skip
+            // their empty bounding box, and the grain/selection offscreen layer stays
+            // tile-sized instead of stroke-sized. Coverage, grain and selection are all
+            // document-anchored and drawn unscaled, so the result equals one big draw.
+            val canvas = Canvas(target)
+            for (r in touchedTiles(commitRect)) {
+                rec.touch(r)
+                res.painter.draw(canvas, coverage, r, style, sel?.mask)
+            }
+            return controller.commitEdit(rec, undoLabel(kind))
         }
 
         /** [COMMIT_TILE]-aligned tiles (clipped to [clip]) that contain part of a dab. */
@@ -736,10 +820,19 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             return out
         }
 
-        override fun cancel() = release()
+        override fun cancel() {
+            recorder?.cancel()
+            release()
+        }
+
+        private var released = false
 
         private fun release() {
             if (controller.renderOverride === override) controller.renderOverride = null
+            if (!released) {
+                released = true
+                source?.endStroke()
+            }
             val grid = cleared
             if (isPath && grid != null) {
                 // Only the cells under the current dabs hold coverage (rewinds cleared the rest):
@@ -767,7 +860,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         first: ToolPoint,
         seed: Long,
         maskTarget: Boolean,
-    ) : Stroke(layer, preset, kind, first, seed) {
+        recorder: StrokeRecorder?,
+    ) : Stroke(layer, preset, kind, first, seed, recorder) {
         private val rec = controller.beginEdit(layer)
         private val painter = DirectPainter(
             kind = kind,
@@ -806,7 +900,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (monochrome != null) controller.renderOverride = monochrome
         }
 
-        override val budget: Float get() = 1_500_000f
+        override val budget: Float get() = StrokeCost.DIRECT_BUDGET
 
         override fun dabCost(d: Float): Float = if (kind == StrokeKind.BLUR) 2.5f * d * d else d * d
 
@@ -831,10 +925,15 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
         }
 
+        /** What the dabs reached (document px), also when the recorder replaces the stroke. */
+        private val reached = Rect()
+
         private fun render(dab: Dab) {
             // Snapshot for undo only what the painter is really about to change, so a smudge
             // tap (which moves nothing) leaves no undo entry.
             if (!painter.prepare(dab, box)) return
+            reached.union(box.left, box.top, box.right, box.bottom)
+            if (replaces) return
             touchRect.set(box.left, box.top, box.right, box.bottom)
             rec.touch(touchRect)
             painter.paint()
@@ -845,10 +944,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             drain(final = true)
             dirty.setEmpty()
             dropOverride()
-            controller.commitEdit(rec, undoLabel(kind))
+            commitThrough(undoLabel(kind), reached) { controller.commitEdit(rec, undoLabel(kind)) }
         }
 
         override fun cancel() {
+            recorder?.cancel()
             pending.clear()
             dirty.setEmpty()
             dropOverride()

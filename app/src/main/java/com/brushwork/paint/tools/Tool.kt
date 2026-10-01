@@ -26,6 +26,10 @@ enum class ToolId(val label: String) {
     OBJECT_SELECT("Object select"),
     /** Brush over something to remove it (content-aware fill of the painted area). */
     REMOVE("Remove"),
+    /** Paints with pixels copied from a source point that travels with the stroke (v1.5). */
+    CLONE("Clone stamp"),
+    /** Editable linear / radial / brush masks and adjustment layers (v1.5). */
+    MASK("Masks"),
 }
 
 /**

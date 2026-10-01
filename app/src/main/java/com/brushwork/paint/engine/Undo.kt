@@ -5,6 +5,7 @@ import android.graphics.Rect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.Selection
 import kotlin.math.min
@@ -100,11 +101,11 @@ private fun Layer.bitmapFor(target: EditTarget): Bitmap? = if (target == EditTar
  */
 class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val tileSize: Int = 256) {
     /**
-     * Set by the text / shape tools when they re-render their layer: the layer stays an editable
-     * text / shape layer. Any other edit of such a layer turns it into a raster layer (see
-     * commitEdit).
+     * Set when the layer's editable data is re-rendered together with this edit (text, shape and
+     * vector layers, editable masks; see `EditorController.updateLayerData`): the layer keeps its
+     * data. Any other edit of such a layer clears the data of its target (see commitEdit).
      */
-    var preserveText: Boolean = false
+    var preserveData: Boolean = false
     private val bitmap: Bitmap = requireNotNull(layer.bitmapFor(target)) { "Layer has no ${target.name.lowercase()} bitmap" }
     private val cols = (bitmap.width + tileSize - 1) / tileSize
     private val rows = (bitmap.height + tileSize - 1) / tileSize
@@ -272,12 +273,20 @@ class DocumentBitmapsAction(
     private val modeBefore: ColorMode,
     private val modeAfter: ColorMode,
 ) : UndoAction {
-    class Entry(val layer: Layer, val bitmapBefore: Bitmap, val maskBefore: Bitmap?, val bitmapAfter: Bitmap, val maskAfter: Bitmap?) {
-        /** Editable text of a text layer: new pixels make it a raster layer, undo restores it. */
-        val textBefore: String? = layer.textData
-        /** Editable shape of a shape layer (same rule as [textBefore]). */
-        val shapeBefore: String? = layer.shapeData
-    }
+    /**
+     * One layer's bitmaps and editable data before and after. By default new pixels make the
+     * layer a raster layer ([LayerData.rasterizedContent]); canvas operations pass the data mapped
+     * along with the pixels (`LayerDataTransforms.transformed`). Undo restores [dataBefore].
+     */
+    class Entry(
+        val layer: Layer,
+        val bitmapBefore: Bitmap,
+        val maskBefore: Bitmap?,
+        val bitmapAfter: Bitmap,
+        val maskAfter: Bitmap?,
+        val dataBefore: LayerData = layer.dataSnapshot(),
+        val dataAfter: LayerData = dataBefore.rasterizedContent(),
+    )
 
     override val byteSize: Long
         get() = entries.sumOf { it.bitmapBefore.byteCount.toLong() + (it.maskBefore?.byteCount ?: 0) }
@@ -290,10 +299,7 @@ class DocumentBitmapsAction(
         for (e in entries) {
             e.layer.bitmap = if (before) e.bitmapBefore else e.bitmapAfter
             e.layer.mask = if (before) e.maskBefore else e.maskAfter
-            if (e.bitmapBefore !== e.bitmapAfter) {
-                e.layer.textData = if (before) e.textBefore else null
-                e.layer.shapeData = if (before) e.shapeBefore else null
-            }
+            e.layer.restoreData(if (before) e.dataBefore else e.dataAfter)
             e.layer.markChanged()
         }
         c.onDocumentGeometryChanged()
@@ -301,6 +307,33 @@ class DocumentBitmapsAction(
 
     override fun undo(c: EditorController) = apply(c, true)
     override fun redo(c: EditorController) = apply(c, false)
+}
+
+/**
+ * Data-only step (v1.5): sets [layer]'s editable data ([LayerData]) to [after] (redo) or [before]
+ * (undo), marks the layer changed (so saving picks it up), refreshes the layer panels and redraws
+ * [dirty] (document px, null = nothing). The pixels must already match the data, or be changed
+ * by another action of the same step (tiles of `EditorController.updateLayerData`).
+ */
+class LayerDataAction(
+    override val label: String,
+    private val layer: Layer,
+    private val before: LayerData,
+    private val after: LayerData,
+    private val dirty: Rect? = null,
+) : UndoAction {
+    // The data is immutable: measured once (UndoManager.trim sums every step on each push).
+    override val byteSize: Long = before.approxBytes() + after.approxBytes()
+
+    private fun set(c: EditorController, d: LayerData) {
+        layer.restoreData(d)
+        layer.markChanged()
+        c.notifyLayersChanged()
+        dirty?.let { c.invalidateDoc(it) }
+    }
+
+    override fun undo(c: EditorController) = set(c, before)
+    override fun redo(c: EditorController) = set(c, after)
 }
 
 /** Generic action from lambdas, for simple state changes. */

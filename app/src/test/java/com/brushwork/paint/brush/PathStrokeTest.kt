@@ -54,7 +54,7 @@ class PathStrokeTest {
 
     private fun EditorController.composite(): IntArray {
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
-        compositor.drawDocument(Canvas(out), null)
+        compositor.drawDocument(Canvas(out), null, target = null)
         return out.pixels()
     }
 

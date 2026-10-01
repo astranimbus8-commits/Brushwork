@@ -16,6 +16,7 @@ import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.vector.LayerDataTransforms
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
@@ -321,12 +322,28 @@ object CanvasOps {
             require(result.layers.size == snap.layers.size) { "Every layer needs new bitmaps" }
             var bytesBefore = 0L
             var bytesAfter = 0L
+            // The layers' editable data follows the artwork (v1.5): vector content and mask specs
+            // are mapped by the same affine; data the pixels no longer match is cleared.
+            val geometry = result.geometry
+            val matrix = Matrix().apply {
+                setValues(floatArrayOf(
+                    geometry.a.toFloat(), geometry.b.toFloat(), geometry.tx.toFloat(),
+                    geometry.c.toFloat(), geometry.d.toFloat(), geometry.ty.toFloat(),
+                    0f, 0f, 1f,
+                ))
+            }
             val entries = result.layers.mapIndexed { i, r ->
                 val s = snap.layers[i]
                 require(s.layer === r.layer)
                 if (s.bitmap !== r.bitmap) { bytesBefore += s.bitmap.byteCount; bytesAfter += r.bitmap.byteCount }
                 if (s.mask !== r.mask) { bytesBefore += s.mask?.byteCount ?: 0; bytesAfter += r.mask?.byteCount ?: 0 }
-                DocumentBitmapsAction.Entry(r.layer, s.bitmap, s.mask, r.bitmap, r.mask)
+                val dataBefore = r.layer.dataSnapshot()
+                val dataAfter = if (s.bitmap !== r.bitmap || s.mask !== r.mask) {
+                    LayerDataTransforms.transformed(dataBefore, matrix, result.width, result.height)
+                } else {
+                    dataBefore
+                }
+                DocumentBitmapsAction.Entry(r.layer, s.bitmap, s.mask, r.bitmap, r.mask, dataBefore, dataAfter)
             }
             val inner = DocumentBitmapsAction(
                 label, entries,

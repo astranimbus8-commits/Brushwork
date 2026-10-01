@@ -121,7 +121,39 @@ object BrushLibrary {
     val smudges: List<BrushPreset> = listOf(defaultSmudge, smudgeStrong, blender)
     val blurs: List<BrushPreset> = listOf(defaultBlur, blurStrong)
 
-    private val index: Map<String, BrushPreset> = (all + erasers + smudges + blurs).associateBy { it.id }
+    /** Clone stamp default (v1.5): soft round, 80 px, hardness 0.4, full opacity and flow, size follows a stylus. */
+    val defaultClone = BrushPreset(
+        "clone_soft", "Soft round", BrushTip.ROUND_SOFT,
+        size = 80f, minSizeRatio = 0.35f, hardness = 0.4f, spacing = 0.08f,
+    )
+
+    /** Mask brush default (v1.5): soft round, 120 px, hardness 0.3. */
+    val defaultMaskBrush = BrushPreset(
+        "mask_soft", "Soft round", BrushTip.ROUND_SOFT,
+        size = 120f, minSizeRatio = 0.35f, hardness = 0.3f, spacing = 0.08f, pressureSize = false,
+    )
+    private val maskHard = BrushPreset(
+        "mask_hard", "Hard round", BrushTip.ROUND_HARD,
+        size = 60f, minSizeRatio = 0.5f, hardness = 0.85f, spacing = 0.08f, pressureSize = false,
+    )
+
+    /**
+     * Clone stamp presets: coverage tips only (pen, soft, airbrush, pencil, chalk, marker), as
+     * own copies so their sizes and edits are kept apart from the brush's.
+     */
+    val clones: List<BrushPreset> = listOf(
+        defaultClone,
+        defaultBrush.copy(id = "clone_pen"),
+        airbrush.copy(id = "clone_airbrush"),
+        pencil.copy(id = "clone_pencil"),
+        chalk.copy(id = "clone_chalk"),
+        marker.copy(id = "clone_marker"),
+    )
+
+    /** Mask brush presets: soft and hard round. */
+    val maskBrushes: List<BrushPreset> = listOf(defaultMaskBrush, maskHard)
+
+    private val index: Map<String, BrushPreset> = (all + erasers + smudges + blurs + clones + maskBrushes).associateBy { it.id }
 
     /** Presets offered for a painting tool (empty for other tools). */
     fun presetsFor(toolId: ToolId): List<BrushPreset> = when (toolId) {
@@ -129,6 +161,8 @@ object BrushLibrary {
         ToolId.ERASER -> erasers
         ToolId.SMUDGE -> smudges
         ToolId.BLUR -> blurs
+        ToolId.CLONE -> clones
+        ToolId.MASK -> maskBrushes
         else -> emptyList()
     }
 
@@ -137,6 +171,8 @@ object BrushLibrary {
         ToolId.ERASER -> defaultEraser
         ToolId.SMUDGE -> defaultSmudge
         ToolId.BLUR -> defaultBlur
+        ToolId.CLONE -> defaultClone
+        ToolId.MASK -> defaultMaskBrush
         else -> defaultBrush
     }
 
@@ -149,6 +185,8 @@ object BrushLibrary {
         erasers.any { it.id == presetId } -> ToolId.ERASER
         smudges.any { it.id == presetId } -> ToolId.SMUDGE
         blurs.any { it.id == presetId } -> ToolId.BLUR
+        clones.any { it.id == presetId } -> ToolId.CLONE
+        maskBrushes.any { it.id == presetId } -> ToolId.MASK
         else -> null
     }
 }

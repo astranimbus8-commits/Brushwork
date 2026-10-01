@@ -52,7 +52,7 @@ class VectorToolsTest {
 
     private fun EditorController.composite(): Bitmap {
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
-        compositor.drawDocument(Canvas(out), null)
+        compositor.drawDocument(Canvas(out), null, target = null)
         return out
     }
 

@@ -59,7 +59,7 @@ class TextLayerEditRobolectricTest {
 
     /** The document as the compositor draws it now (tool previews included). */
     private fun composite(c: EditorController): Bitmap =
-        BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height).also { c.compositor.drawDocument(Canvas(it), null) }
+        BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height).also { c.compositor.drawDocument(Canvas(it), null, target = null) }
 
     /** What the screen shows: the display tiles after redrawing whatever was invalidated. */
     private fun screen(c: EditorController): Bitmap {

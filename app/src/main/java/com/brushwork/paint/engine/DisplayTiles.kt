@@ -45,8 +45,13 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
 
     val hasDirty: Boolean get() = dirty.any { it != null }
 
-    /** Re-renders dirty tiles with [compositor]. Returns true if anything changed. */
-    fun update(compositor: Compositor): Boolean {
+    /**
+     * Re-renders dirty tiles with [compositor]. Returns true if anything changed. [visibleDoc]
+     * (document px; v1.5) is the area on screen: tiles there may be rendered first and the
+     * others left dirty until they become visible (owned by A5; currently every dirty tile is
+     * rendered).
+     */
+    fun update(compositor: Compositor, visibleDoc: Rect? = null): Boolean {
         var changed = false
         for (idx in tiles.indices) {
             val d = dirty[idx] ?: continue
@@ -63,7 +68,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             c.translate(-tr.left.toFloat(), -tr.top.toFloat())
             c.clipRect(d)
             c.drawColor(0, PorterDuff.Mode.CLEAR)
-            compositor.drawDocument(c, d)
+            compositor.drawDocument(c, d, target = CompositeTarget.translate(bmp, tr.left, tr.top))
             changed = true
         }
         return changed

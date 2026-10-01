@@ -2,6 +2,9 @@ package com.brushwork.paint.model
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.MaskSpec
+import com.brushwork.paint.vector.VectorContent
 import kotlinx.serialization.Serializable
 
 enum class LayerBlendMode(val label: String) {
@@ -76,8 +79,43 @@ class Layer(
 
     val isShapeLayer: Boolean get() = shapeData != null
 
-    /** True for layers that keep an editable object (text or shape) besides their pixels. */
-    val hasEditableData: Boolean get() = textData != null || shapeData != null
+    /**
+     * Non-null for a VECTOR LAYER (v1.5): its editable objects; [bitmap] is their render cache.
+     * Like [textData], a raster pixel edit of the content clears it (undoably), and the cache and
+     * the data always change together in one undo step (see `EditorController.updateLayerData`).
+     */
+    var vector: VectorContent? = null
+
+    /**
+     * Non-null when [mask] is an EDITABLE MASK (v1.5): the mask bitmap is rendered from this
+     * spec. A pixel edit of the mask clears it (undoably).
+     */
+    var maskSpec: MaskSpec? = null
+
+    /**
+     * Non-null for an ADJUSTMENT LAYER (v1.5): instead of its (empty) pixels, the effect is
+     * applied to the composite of the layers below, through the layer's mask and opacity.
+     */
+    var adjustment: AdjustmentSpec? = null
+
+    val isVectorLayer: Boolean get() = vector != null
+
+    val isAdjustmentLayer: Boolean get() = adjustment != null
+
+    /** True for layers that keep an editable object (text, shape or vector content) besides their pixels. */
+    val hasEditableData: Boolean get() = textData != null || shapeData != null || vector != null
+
+    /** Every editable-data field as one immutable snapshot. */
+    fun dataSnapshot(): LayerData = LayerData(textData, shapeData, vector, maskSpec, adjustment)
+
+    /** Sets every editable-data field from [d] (pixels are not touched). */
+    fun restoreData(d: LayerData) {
+        textData = d.text
+        shapeData = d.shape
+        vector = d.vector
+        maskSpec = d.maskSpec
+        adjustment = d.adjustment
+    }
 
     /** Incremented on every pixel change (content or mask). Used for thumbnails and dirty saving. */
     var contentVersion: Long = 0
@@ -140,6 +178,13 @@ class Document(
 
     var grid: GridSettings = GridSettings()
     var ruler: RulerSettings = RulerSettings()
+
+    /**
+     * Problems found while loading that did not stop the project from opening (a layer's vector
+     * or mask data could not be read, an unknown adjustment effect...). The editor shows them
+     * once; main thread only.
+     */
+    val loadWarnings: MutableList<String> = mutableListOf()
 
     private var nextLayerId: Long = 1
 

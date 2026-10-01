@@ -15,7 +15,9 @@ class ToneFiltersTest {
 
     @Test
     fun registryContainsEveryAdjustFilter() {
-        assertEquals(15, adjustFilters.size)
+        // v1.5: Tone joined, first in the list.
+        assertEquals(16, adjustFilters.size)
+        assertEquals("adjust.tone", adjustFilters.first().id)
         assertEquals(adjustFilters.size, adjustFilters.map { it.id }.toSet().size)
         for (f in adjustFilters) {
             assertTrue(f.id, f.id.startsWith("adjust."))

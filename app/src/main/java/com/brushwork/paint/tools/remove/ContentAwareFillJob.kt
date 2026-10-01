@@ -11,6 +11,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeAction
+import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.inpaint.ContentAwareFill
@@ -325,7 +326,7 @@ object ContentAwareFillJob {
                     val c = Canvas(bmp)
                     c.translate(-rect.left.toFloat(), -rect.top.toFloat())
                     c.clipRect(rect)
-                    controller.compositor.drawDocument(c, rect, useOverrides = false)
+                    controller.compositor.drawDocument(c, rect, useOverrides = false, target = CompositeTarget.translate(bmp, rect.left, rect.top))
                     BitmapUtils.toPixelBuffer(bmp)
                 } finally {
                     bmp.recycle()

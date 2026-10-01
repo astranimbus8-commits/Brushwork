@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
@@ -18,6 +19,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.vector.draw.VectorFill
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -49,6 +51,8 @@ class FillTool(controller: EditorController) : Tool(controller) {
         down = null
         val t = controller.viewTransform
         if (hypot(p.x - d.x, p.y - d.y) > t.screenToDocLength(t.dp(24f))) return
+        // On a vector layer a tap recolors the object under it (v1.5 seam).
+        if (controller.activeLayer.isVectorLayer && VectorFill.tap(controller, Vec2(d.x, d.y))) return
         fillAt(d.x, d.y)
     }
 

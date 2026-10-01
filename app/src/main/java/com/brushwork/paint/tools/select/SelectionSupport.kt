@@ -134,6 +134,10 @@ internal object SelectionJobs {
      * selection that is current when it finishes. Undoable (setSelection records it). [build]
      * returns null to change nothing. If [emptyMessage] is given, an empty result shows it
      * instead of changing the selection. [onFinished] runs on the main thread in every case.
+     *
+     * [toObjects] (lasso, select shape; v1.5): when the active layer is a vector layer, the area
+     * selects the objects it touches (`controller.vectors.selectObjects`) instead of pixels; a
+     * selection the vector service doesn't take is published as pixels as before.
      */
     fun applyAsync(
         controller: EditorController,
@@ -142,6 +146,7 @@ internal object SelectionJobs {
         busyLabel: String,
         emptyMessage: String? = null,
         onFinished: () -> Unit = {},
+        toObjects: Boolean = false,
         build: (cancelled: () -> Boolean) -> Selection?,
     ): Job {
         val base = controller.selection
@@ -160,6 +165,8 @@ internal object SelectionJobs {
                     return@launch
                 }
                 if (controller.doc.width != docW || controller.doc.height != docH) return@launch
+                // On a vector layer the area selects objects (the funnel of every area tool).
+                if (toObjects && controller.activeLayer.isVectorLayer && controller.vectors.selectObjects(fresh, mode)) return@launch
                 val current = controller.selection
                 val result = if (current === base) combined else SelectionMasks.combine(current, fresh, mode)
                 controller.setSelection(result, label = label)

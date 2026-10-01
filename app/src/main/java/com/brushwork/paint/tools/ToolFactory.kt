@@ -3,7 +3,9 @@ package com.brushwork.paint.tools
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.RulerTool
 import com.brushwork.paint.brush.BrushTool
+import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.frame.FrameDividerTool
+import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.FillTool
 import com.brushwork.paint.tools.select.LassoTool
@@ -32,6 +34,8 @@ object ToolFactory {
             ToolId.RULER -> RulerTool(c)
             ToolId.OBJECT_SELECT -> com.brushwork.paint.tools.select.ObjectSelectTool(c)
             ToolId.REMOVE -> com.brushwork.paint.tools.remove.RemoveTool(c)
+            ToolId.CLONE -> CloneTool(c)
+            ToolId.MASK -> MaskTool(c)
         }
     }
 }

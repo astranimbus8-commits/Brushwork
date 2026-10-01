@@ -7,7 +7,9 @@ import kotlin.math.min
 /**
  * One anchor of the curve / polyline tools (document pixels). A smooth anchor gets an automatic
  * Catmull-Rom tangent unless [handleIn]/[handleOut] (offsets from the anchor) override it; a
- * [sharp] anchor breaks the curve into a corner.
+ * [sharp] anchor breaks the curve into a corner, and each of its handles that is set is used as
+ * is (broken tangents, e.g. imported SVG cubics) while an unset one follows its chord.
+ * [width] is the line thickness factor at this anchor (0..3, v1.5).
  */
 data class CurveAnchor(
     val x: Float,
@@ -15,6 +17,7 @@ data class CurveAnchor(
     val sharp: Boolean = false,
     val handleIn: Vec2? = null,
     val handleOut: Vec2? = null,
+    val width: Float = 1f,
 ) {
     val pos: Vec2 get() = Vec2(x, y)
     val hasCustomTangent: Boolean get() = handleIn != null && handleOut != null
@@ -29,8 +32,10 @@ object CurveGeometry {
 
     /**
      * Bezier handles (in, out) of anchor [i] as offsets from the anchor. Smooth anchors use the
-     * cardinal-spline tangent `(1 - tension) * (next - prev) / 2` (one-sided at open ends); sharp
-     * anchors point each handle along its own chord, so the curve meets there at an angle.
+     * cardinal-spline tangent `(1 - tension) * (next - prev) / 2` (one-sided at open ends) unless
+     * both custom handles are set; sharp anchors point each handle along its own chord, so the
+     * curve meets there at an angle, except a custom handle that is set (broken tangents: a null
+     * handle on a sharp anchor keeps the chord handle, so v1.4 paths are unchanged).
      */
     fun handles(anchors: List<CurveAnchor>, i: Int, closed: Boolean, tension: Float): Pair<Vec2, Vec2> {
         val a = anchors[i]
@@ -42,8 +47,8 @@ object CurveGeometry {
         val k = (1f - tension).coerceIn(0f, 1f)
         val p = a.pos
         if (a.sharp) {
-            val hIn = prev?.let { (it - p) * (k / 6f) } ?: Vec2.ZERO
-            val hOut = next?.let { (it - p) * (k / 6f) } ?: Vec2.ZERO
+            val hIn = hi ?: prev?.let { (it - p) * (k / 6f) } ?: Vec2.ZERO
+            val hOut = ho ?: next?.let { (it - p) * (k / 6f) } ?: Vec2.ZERO
             return hIn to hOut
         }
         val m = when {

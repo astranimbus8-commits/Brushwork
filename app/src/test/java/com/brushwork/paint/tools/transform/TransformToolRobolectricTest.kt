@@ -82,7 +82,7 @@ class TransformToolRobolectricTest {
         c.pointerUp(ToolPoint(60f, 45f))
         // Preview goes through the compositor while the layer itself is untouched.
         val preview = BitmapUtils.createLayerBitmap(128, 128)
-        c.compositor.drawDocument(Canvas(preview), null)
+        c.compositor.drawDocument(Canvas(preview), null, target = null)
         assertEquals(RED, preview.getPixel(70, 50))
         assertEquals(0, preview.getPixel(25, 25))
         assertEquals(RED, layer.bitmap.getPixel(25, 25))
@@ -337,7 +337,7 @@ class TransformToolRobolectricTest {
 
         // Preview composes the moved mask (saveLayer + mask paint).
         val preview = BitmapUtils.createLayerBitmap(64, 64)
-        c.compositor.drawDocument(Canvas(preview), null)
+        c.compositor.drawDocument(Canvas(preview), null, target = null)
         assertEquals(RED, preview.getPixel(15, 15))
         assertEquals(0, preview.getPixel(45, 15))
 
@@ -520,7 +520,7 @@ class TransformToolRobolectricTest {
         assertEquals(BLUE, layer.bitmap.getPixel(5, 5))
         assertEquals(BLUE, layer.bitmap.getPixel(35, 35))
         val preview = BitmapUtils.createLayerBitmap(64, 64)
-        c.compositor.drawDocument(Canvas(preview), null)
+        c.compositor.drawDocument(Canvas(preview), null, target = null)
         assertTrue(pixels(preview).contentEquals(pixels(layer.bitmap)))
         // Two undo steps: fill, then the transform.
         c.undo()

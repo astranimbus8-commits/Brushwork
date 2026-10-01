@@ -91,7 +91,7 @@ class PointEditingTouchTest {
 
     private fun composite(): Bitmap {
         val out = BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height)
-        c.compositor.drawDocument(Canvas(out), null)
+        c.compositor.drawDocument(Canvas(out), null, target = null)
         return out
     }
 

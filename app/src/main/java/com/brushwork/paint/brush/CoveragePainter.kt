@@ -21,6 +21,11 @@ data class CoverageStyle(
     val opacity: Float,
     /** Paper grain strength 0..1 (document-anchored texture). */
     val grain: Float,
+    /**
+     * Paints the coverage with this shader instead of [color] (clone stamp, v1.5): document
+     * anchored, its local matrix places the source. Null = the tint color, exactly as before.
+     */
+    val shader: Shader? = null,
 )
 
 /** Tileable ALPHA_8 paper texture used for pencil/chalk grain (document-anchored). */
@@ -76,7 +81,7 @@ class CoveragePainter {
         canvas.save()
         canvas.clipRect(bounds)
         if (selectionMask == null && style.grain <= 0f) {
-            tint.shader = null
+            tint.shader = style.shader
             tint.xfermode = xfer(style.mode)
             tint.color = style.color
             tint.alpha = alpha
@@ -86,7 +91,7 @@ class CoveragePainter {
             layerPaint.xfermode = xfer(style.mode)
             layerPaint.alpha = alpha
             canvas.saveLayer(boundsF, layerPaint)
-            tint.shader = null
+            tint.shader = style.shader
             tint.xfermode = null
             tint.color = style.color
             tint.alpha = 255
@@ -102,6 +107,8 @@ class CoveragePainter {
             if (selectionMask != null) com.brushwork.paint.engine.BitmapUtils.maskWith(canvas, selectionMask)
             canvas.restore()
         }
+        // Don't keep a clone source alive through the shared paint.
+        if (style.shader != null) tint.shader = null
         canvas.restore()
     }
 }

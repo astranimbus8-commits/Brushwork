@@ -55,11 +55,29 @@ object SliderFormat {
     }
 }
 
+/** Short descriptions and extra search words of filters (v1.5; owned by A5 after the foundation). */
+object FilterDescriptions {
+    private val descriptions = mapOf(
+        "adjust.tone" to "Exposure, contrast, highlights, shadows, whites and blacks, like Lightroom's tone panel. Colors keep their hue.",
+    )
+
+    private val keywords = mapOf(
+        "adjust.tone" to "exposure lightroom shadows highlights whites blacks",
+    )
+
+    /** One-sentence description of [f], or null. */
+    fun of(f: Filter): String? = descriptions[f.id]
+
+    /** Extra lowercase words [f] is found by in the search (empty when none). */
+    fun keywords(f: Filter): String = keywords[f.id] ?: ""
+}
+
 /** Filter search for the browser. */
 object FilterSearch {
     /**
-     * Filters whose name or category title contains every word of [query] (case-insensitive).
-     * Name-prefix matches come first, then other name matches, then category-only matches.
+     * Filters whose name, category title or search keywords ([FilterDescriptions.keywords])
+     * contain every word of [query] (case-insensitive). Name-prefix matches come first, then
+     * other name matches, then category / keyword matches.
      */
     fun search(filters: List<Filter>, query: String): List<Filter> {
         val words = query.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }
@@ -67,7 +85,8 @@ object FilterSearch {
         fun rank(f: Filter): Int? {
             val name = f.name.lowercase()
             val cat = f.category.title.lowercase()
-            if (!words.all { name.contains(it) || cat.contains(it) }) return null
+            val extra = FilterDescriptions.keywords(f)
+            if (!words.all { name.contains(it) || cat.contains(it) || extra.contains(it) }) return null
             return when {
                 name.startsWith(words.first()) -> 0
                 words.all { name.contains(it) } -> 1
