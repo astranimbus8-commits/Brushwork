@@ -115,6 +115,14 @@ class VectorAsyncRobolectricTest {
     private fun objects() = listOf(stroke(40f, 60f, 660f, 120f), ellipse(300f, 300f), box(450f, 380f, 620f, 560f), stroke(60f, 540f, 640f, 420f, "softround", 9L), ellipse(200f, 450f, 0.6f))
 
     @Test
+    fun unitTestsRenderOnTheMainThreadByDefault() {
+        // Other test suites rely on synchronous renders unless they opt in.
+        val settings = AppSettings(app)
+        val doc = Document("d", "d", 10, 10).also { it.layers += Layer(it.newLayerId(), "L", BitmapUtils.createLayerBitmap(10, 10)) }
+        assertEquals(VectorLayers.Policy.SYNC, EditorController(app, doc, scope, settings).vectors.policy)
+    }
+
+    @Test
     fun aBackgroundRenderLandsAsOneStepEqualToASynchronousOne() {
         val sync = setup(VectorLayers.Policy.SYNC)
         val async = setup()

@@ -157,6 +157,9 @@ object VectorLayerRenderer {
         return units
     }
 
+    /** Forgets the per-object cost figures kept by identity (an editor closes). */
+    internal fun clearCaches() = ObjectCost.clear()
+
     /** [estimateUnits] of several disjoint regions (a tile set). */
     internal fun estimateUnits(content: VectorContent, regions: List<Rect>): Double = regions.sumOf { estimateUnits(content, it) }
 
@@ -181,6 +184,8 @@ object VectorLayerRenderer {
             private val cache = object : LinkedHashMap<Key, ObjectCost>(256, 0.75f, true) {
                 override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Key, ObjectCost>?): Boolean = size > 4096
             }
+
+            fun clear() = synchronized(cache) { cache.clear() }
 
             fun of(o: VObject): ObjectCost {
                 val k = Key(o)

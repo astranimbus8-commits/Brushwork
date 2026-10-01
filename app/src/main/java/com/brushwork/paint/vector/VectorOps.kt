@@ -375,13 +375,6 @@ object VectorOps {
 
     // ------------------------------------------------------------------ hit tests
 
-    /** The visible radius of a stroke's largest dab (no rendering margins). */
-    private fun strokeRadius(o: VStroke): Float {
-        val s = if (o.sizeScale.isFinite() && o.sizeScale > 0f) o.sizeScale else 1f
-        val d = max(1f, o.preset.size * s)
-        return d / 2f + o.preset.scatter.coerceAtLeast(0f) * d
-    }
-
     /** Exact: within [tol] of the replayed dab chain (see [StrokeHits]). */
     private fun strokeHit(o: VStroke, p: Vec2, tol: Float): Boolean {
         if (o.points.size == 0) return false

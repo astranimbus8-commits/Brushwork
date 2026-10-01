@@ -31,6 +31,7 @@ import com.brushwork.paint.vector.draw.VectorStrokeCapture
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.geom.ContentDiff
 import com.brushwork.paint.vector.geom.ObjectIndex
+import com.brushwork.paint.vector.geom.StrokeHits
 import com.brushwork.paint.vector.geom.TileSet
 import com.brushwork.paint.vector.lift.VectorLift
 import com.brushwork.paint.vector.render.RenderCache
@@ -184,7 +185,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * moved object paints with paper grain (grain is anchored to the document) unless the move
      * is a multiple of [PaperGrain.SIZE] px, and every pixel that lands on the canvas was on it.
      * The result is the old cache shifted exactly (it can differ from a re-render only at the
-     * anti-aliased edges where the renderer's tile grid cuts a path). Otherwise it is re-rendered.
+     * anti-aliased edges where the renderer's tile grid cuts a path). Otherwise it is re-rendered
+     * (also when [dirty] is given).
      */
     fun update(
         layer: Layer,
@@ -569,6 +571,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
         rendering = false
         tips.clear()
         renderCache.clear()
+        // Process-wide caches keyed by objects of this document.
+        ObjectIndex.clearCache()
+        StrokeHits.clear()
+        VectorLayerRenderer.clearCaches()
     }
 
     // ------------------------------------------------------------------ background renders
@@ -767,6 +773,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             p.onDone(ok && layer.vector === p.after)
         } finally {
             pieces?.forEach { if (!it.isRecycled) it.recycle() }
+            p.copies?.forEach { if (!it.isRecycled) it.recycle() }
             p.completion.complete(Unit)
         }
     }
