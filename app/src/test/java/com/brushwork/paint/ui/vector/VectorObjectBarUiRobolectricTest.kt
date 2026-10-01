@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -71,10 +72,25 @@ class VectorObjectBarUiRobolectricTest {
             assertTrue("\"$label\" shown", SmokeUi.has(label, exact = true))
         }
         assertTrue(SmokeUi.has("2 objects selected", exact = true))
-        // Finger-sized buttons.
+        // Finger-sized buttons, all nine on the 392 dp screen (no scrolling to reach Deselect),
+        // every label whole (long words are set smaller, never clipped).
         val density = activity.resources.displayMetrics.density
-        val deleteButton = clickableOf("Delete the selected objects")
-        assertTrue(deleteButton.bounds.width >= 46 * density - 1 && deleteButton.bounds.height >= 46 * density - 1)
+        val screen = activity.resources.displayMetrics.widthPixels
+        val buttons = listOf(
+            "Delete the selected objects", "Duplicate the selected objects", "Bring forward", "Send backward", "Bring to front",
+            "Send to back", "Recolor with the main color", "Transform the selected objects", "Deselect the objects",
+        ).map { clickableOf(it) }
+        for (b in buttons) assertTrue(b.bounds.width >= 40 * density - 1 && b.bounds.height >= 46 * density - 1)
+        assertTrue("Deselect is on screen (${buttons.last().bounds.right} of $screen)", buttons.last().bounds.right <= screen - 8 * density + 1)
+        for (i in 1 until buttons.size) assertTrue(buttons[i - 1].bounds.right <= buttons[i].bounds.left + 1)
+        for (label in listOf("Delete", "Duplicate", "Forward", "Backward", "Front", "Back", "Recolor", "Transform", "Deselect")) {
+            val node = RobolectricUi.byText(label).node
+            val layouts = ArrayList<TextLayoutResult>()
+            node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
+            assertTrue("\"$label\" laid out", layouts.isNotEmpty())
+            assertFalse("\"$label\" fits its button", layouts[0].didOverflowWidth)
+            assertEquals(1, layouts[0].lineCount)
+        }
 
         // Duplicate: one step, the copies are selected.
         var steps = c.undoManager.undoCount

@@ -33,6 +33,9 @@ object VectorObjectSelection {
     /** Per editor: the background search of a large selection still running. */
     private class State {
         var job: Job? = null
+
+        /** The newest selection asked for (an older one still waiting never lands). */
+        var request: Any? = null
     }
 
     private val states = WeakHashMap<EditorController, State>()
@@ -43,22 +46,29 @@ object VectorObjectSelection {
      * Selects the objects of the active vector layer that [sel] touches, combined by [mode] with
      * the objects selected there now; false = not handled (not a vector layer). Small searches
      * finish before this returns; large ones in the background (the selection changes when they
-     * are done; a newer selection cancels them).
+     * are done; a newer selection cancels them). While a vector update still renders, the search
+     * waits for it (it looks at the landed objects).
      */
     fun select(c: EditorController, sel: Selection, mode: SelectionMode): Boolean {
         val layer = c.activeLayer
-        val content = layer.vector ?: return false
+        if (layer.vector == null) return false
         val st = state(c)
         st.job?.cancel()
         st.job = null
-        val job = ObjectTouch.run(c, content, sel, "Selecting objects…") { touched ->
-            st.job = null
-            apply(c, layer, touched, mode)
-        }
-        if (job != null && job.isActive) {
-            st.job = job
-            // (A finished search is not kept: nothing here refers to the editor afterwards.)
-            job.invokeOnCompletion { if (st.job === job) st.job = null }
+        val ticket = Any()
+        st.request = ticket
+        PendingRenders.whenIdle(c) {
+            if (st.request !== ticket || c.activeLayer !== layer) return@whenIdle
+            val content = layer.vector ?: return@whenIdle
+            val job = ObjectTouch.run(c, content, sel, "Selecting objects…") { touched ->
+                st.job = null
+                if (st.request === ticket) apply(c, layer, touched, mode)
+            }
+            if (job != null && job.isActive) {
+                st.job = job
+                // (A finished search is not kept: nothing here refers to the editor afterwards.)
+                job.invokeOnCompletion { if (st.job === job) st.job = null }
+            }
         }
         return true
     }
@@ -126,15 +136,25 @@ object VectorObjectSelection {
         if (layer !== c.activeLayer) return
         val content = layer.vector ?: return
         val transformActive = c.activeToolId == ToolId.TRANSFORM
-        // Lifted objects being transformed: their boxes go where the transform puts them.
+        // Lifted objects being transformed: their boxes go where the transform puts them (also
+        // while the result renders in the background; objects being deleted show no box).
         var m: FloatArray? = null
         var lifted: Set<Long> = emptySet()
+        var gone = false
         if (transformActive) {
             val st = (c.tools[ToolId.TRANSFORM] as? TransformTool)?.transformState
             val lift = VectorLift.activeLift(c)
             if (st != null && lift != null && lift.layer === layer) {
                 m = LiftGeometry.matrix(st, lift.sourceRect.left, lift.sourceRect.top)
                 lifted = lift.ids
+            }
+        }
+        if (lifted.isEmpty()) {
+            val landing = VectorLift.landingLift(c)
+            if (landing != null && landing.layer === layer) {
+                lifted = landing.ids
+                m = landing.landingMatrix
+                gone = m == null
             }
         }
         boxPath.rewind()
@@ -145,6 +165,7 @@ object VectorObjectSelection {
         val each = count <= MAX_BOXES
         for (o in content.objects) {
             if (o.id !in ids) continue
+            if (gone && o.id in lifted) continue
             val b = ObjectBounds.of(content, o)
             if (b.isEmpty) continue
             val mm = if (o.id in lifted) m else null

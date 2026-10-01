@@ -5,6 +5,9 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.lift.VectorLift
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * The Object bar's actions on the selected vector objects (v1.5 §4.9, A2): Delete, Duplicate,
@@ -13,28 +16,67 @@ import com.brushwork.paint.vector.VectorContent
  *
  * Pending tool work is committed first (a transform of these very objects, a reopened shape or
  * path), so an action never works on objects that are still being edited (their edit session would
- * otherwise bring them back on ✓). A transform that was pending is lifted again afterwards when
- * the objects are still there, so the box stays under the finger.
+ * otherwise bring them back on ✓). Delete while the Transform tool holds exactly these objects
+ * deletes them through the transform instead (one step; the pending move goes with them). A
+ * transform that was pending is lifted again afterwards when the objects are still there, so the
+ * box stays under the finger.
+ *
+ * An edit asked for while a vector update is still rendering in the background waits for it
+ * ([PendingRenders]) and then works on the landed content (never on the content before it).
  */
 object ObjectActions {
-    /** How far (document px, right and down) Duplicate places the copies. */
+    /** How far (document px, right and down) Duplicate places the copies, at least. */
     const val DUPLICATE_OFFSET = 16f
+
+    /** Duplicate's offset on screen, at least (dp): 16 document px alone vanish on a big zoomed-out canvas. */
+    const val DUPLICATE_OFFSET_DP = 16f
 
     const val DELETE_LABEL = "Delete objects"
     const val DUPLICATE_LABEL = "Duplicate objects"
     const val RECOLOR_LABEL = "Recolor objects"
     const val RECOLOR_LINES_LABEL = "Recolor lines"
 
-    /** Deletes the selected objects (one step); the selection is cleared. */
-    fun delete(c: EditorController): Boolean = edit(c, relift = false) { layer, content, ids ->
-        val after = ObjectEdits.delete(content, ids) ?: return@edit false
-        apply(c, layer, after, DELETE_LABEL) { c.vectors.setSelection(null, emptySet()) }
+    /**
+     * Deletes the selected objects (one step); the selection is cleared. True when it was done
+     * (or will be, once the render in flight landed).
+     */
+    fun delete(c: EditorController): Boolean {
+        // The Transform tool holds exactly these objects: its Delete removes them (one step,
+        // instead of applying the pending move first and deleting afterwards).
+        val transform = pendingTransform(c)
+        val lift = VectorLift.activeLift(c)
+        val sel = VectorObjectSelection.selected(c)
+        if (transform != null && lift != null && sel != null && lift.layer === sel.first && lift.ids == c.vectors.selectedIds) {
+            val done = transform.deleteContent()
+            c.invalidateOverlay()
+            return done
+        }
+        return edit(c, relift = false) { layer, content, ids ->
+            val after = ObjectEdits.delete(content, ids) ?: return@edit false
+            apply(c, layer, after, DELETE_LABEL) { c.vectors.setSelection(null, emptySet()) }
+        }
     }
 
-    /** Copies the selected objects [DUPLICATE_OFFSET] px right and down, on top of them (one step); the copies are selected. */
+    /**
+     * Copies the selected objects right and down ([duplicateOffset]: 16 document px, more when
+     * that is less than 16 dp on screen), on top of them (one step); the copies are selected.
+     */
     fun duplicate(c: EditorController): Boolean = edit(c, relift = true) { layer, content, ids ->
-        val (after, copies) = ObjectEdits.duplicate(content, ids, DUPLICATE_OFFSET, DUPLICATE_OFFSET) ?: return@edit false
+        val d = duplicateOffset(c)
+        val (after, copies) = ObjectEdits.duplicate(content, ids, d, d) ?: return@edit false
         apply(c, layer, after, DUPLICATE_LABEL) { c.vectors.setSelection(layer, copies) }
+    }
+
+    /**
+     * Duplicate's offset (document px, whole pixels so the copies stay on the pixel grid): 16 px,
+     * or the document length of 16 dp on screen when that is more (a zoomed-out large canvas).
+     */
+    fun duplicateOffset(c: EditorController): Float {
+        val t = c.viewTransform
+        val onScreen = t.screenToDocLength(t.dp(DUPLICATE_OFFSET_DP))
+        val d = if (onScreen.isFinite() && onScreen > 0f) max(DUPLICATE_OFFSET, onScreen.roundToInt().toFloat()) else DUPLICATE_OFFSET
+        // (Never more than a tenth of the canvas: the copy stays near.)
+        return minOf(d, max(DUPLICATE_OFFSET, (minOf(c.doc.width, c.doc.height) / 10).toFloat()))
     }
 
     /** Moves the selected objects in the stacking order (one step); "Already …" when nothing would change. */
@@ -96,33 +138,42 @@ object ObjectActions {
         if (c.activeToolId == ToolId.TRANSFORM) (c.tools[ToolId.TRANSFORM] as? TransformTool)?.takeIf { it.hasPendingWork } else null
 
     /**
-     * Runs [block] on the selected objects of the active layer after committing pending tool work.
+     * Runs [block] on the selected objects of the active layer after committing pending tool work
+     * — right away, or once the updates still rendering landed (then true: it is on its way).
      * With [relift], a transform that was pending is started again afterwards.
      */
-    private inline fun edit(c: EditorController, relift: Boolean, block: (Layer, VectorContent, Set<Long>) -> Boolean): Boolean {
+    private fun edit(c: EditorController, relift: Boolean, block: (Layer, VectorContent, Set<Long>) -> Boolean): Boolean {
         val transform = pendingTransform(c)
         val tool = c.currentTool
         if (tool.hasPendingWork) {
             tool.commit()
             c.invalidateOverlay()
         }
-        val (layer, _) = VectorObjectSelection.selected(c) ?: return false
-        val content = layer.vector ?: return false
-        val ids = c.vectors.selectedIds
-        val done = block(layer, content, ids)
-        if (relift && transform != null && c.activeToolId == ToolId.TRANSFORM && !transform.hasPendingWork && c.vectors.selectedIds.isNotEmpty()) {
-            transform.start()
+        var done = false
+        val now = PendingRenders.whenIdle(c) {
+            val (layer, _) = VectorObjectSelection.selected(c) ?: return@whenIdle
+            val content = layer.vector ?: return@whenIdle
+            done = block(layer, content, c.vectors.selectedIds)
+            if (relift && transform != null && c.activeToolId == ToolId.TRANSFORM && !transform.hasPendingWork && c.vectors.selectedIds.isNotEmpty()) {
+                // (Waits by itself when this edit renders in the background: it lifts the result.)
+                transform.start()
+            }
+            c.invalidateOverlay()
         }
-        c.invalidateOverlay()
-        return done
+        return if (now) done else true
     }
 
     /** Applies [after] to [layer] as one step [label]; [then] runs when it was applied. */
     private inline fun apply(c: EditorController, layer: Layer, after: VectorContent, label: String, crossinline then: () -> Unit): Boolean {
         var result: Boolean? = null
+        // Edits and lifts asked for until it landed wait for it.
+        val landed = PendingRenders.begin(c)
         c.vectors.update(layer, after, label) { applied ->
-            result = applied
-            if (applied) then()
+            if (result == null) {
+                result = applied
+                if (applied) then()
+                landed()
+            }
         }
         return result ?: true
     }

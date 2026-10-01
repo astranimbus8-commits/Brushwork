@@ -15,6 +15,7 @@ import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.edit.VectorEditSession
+import com.brushwork.paint.vector.select.PendingRenders
 
 /**
  * Vector objects lifted by the Transform tool (v1.5 §4.9, A2): a [VectorEditSession] (the layer's
@@ -26,7 +27,9 @@ import com.brushwork.paint.vector.edit.VectorEditSession
  *
  * When `vectors.update` renders in the background, the result keeps showing (the hole plus the
  * objects where the transform put them, as a render override) until the new pixels land; the
- * preview's bitmaps are freed then, even if the Transform tool released the lift before.
+ * preview's bitmaps are freed then, even if the Transform tool released the lift before. Lifts and
+ * Object bar actions asked for meanwhile wait for it ([PendingRenders]), so they start from the
+ * landed content.
  */
 internal class VectorObjectLift(
     private val c: EditorController,
@@ -56,6 +59,16 @@ internal class VectorObjectLift(
 
     /** True while the Transform tool can still commit, delete or show it. */
     val isOpen: Boolean get() = !ended && !applying
+
+    /** True while its result renders in the background (the preview shows it where it goes). */
+    val isLanding: Boolean get() = !ended && applying
+
+    /**
+     * Where the lifted objects go while [isLanding] (document -> document, 3x3 row-major), null
+     * when they are being deleted (or not landing).
+     */
+    var landingMatrix: FloatArray? = null
+        private set
 
     override fun drawBase(canvas: Canvas) {
         if (!ended) session.drawBase(canvas)
@@ -114,7 +127,10 @@ internal class VectorObjectLift(
         applying = true
         var result: Boolean? = null
         var waiting: LayerRenderOverride? = null
+        // Work on these objects queued meanwhile (a new lift, an Object bar action) waits for it.
+        val landed = PendingRenders.begin(c)
         update(layer, after, label, hint) { applied ->
+            if (result != null) return@update // (reported twice: once is enough)
             result = applied
             if (applied) then()
             val w = waiting
@@ -123,21 +139,25 @@ internal class VectorObjectLift(
                 if (c.renderOverride === w) c.renderOverride = null
                 c.invalidateDoc(null)
                 applying = false
+                landingMatrix = null
                 end()
                 if (releaseWanted && !floating.isRecycled) floating.recycle()
+                landed()
             }
         }
         val r = result
         if (r != null) {
             applying = false
-            return finish(r)
+            val done = finish(r)
+            landed()
+            return done
         }
         // Rendering in the background: keep showing the result meanwhile.
+        landingMatrix = m
         val preview = Pending(m)
         waiting = preview
         c.renderOverride = preview
         c.invalidateDoc(null)
-        onEnded(this)
         return true
     }
 
