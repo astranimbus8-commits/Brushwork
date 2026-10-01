@@ -5,11 +5,13 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.brushwork.paint.exchange.export.Payload
 import com.brushwork.paint.exchange.svg.SvgDocument
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.SequenceInputStream
 import java.util.UUID
 import java.util.zip.GZIPInputStream
 
@@ -39,31 +41,31 @@ object ImportSource {
 
     fun open(context: Context, uri: Uri): ImportFile {
         val resolver = context.contentResolver
-        val name = displayName(context, uri)?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Imported"
-        val head = resolver.openInputStream(uri)?.use { readUpTo(it, SNIFF) } ?: throw ImportException("The file could not be opened")
-        return when (sniff(head)) {
-            ImportKind.PDF -> {
-                val dir = File(context.cacheDir, "imports").apply { mkdirs() }
-                prune(dir)
-                val f = File(dir, "import-${UUID.randomUUID()}.pdf")
-                try {
-                    resolver.openInputStream(uri)?.use { input -> f.outputStream().use { input.copyTo(it, 256 * 1024) } }
-                        ?: throw ImportException("The file could not be opened")
-                } catch (e: Throwable) {
-                    f.delete()
-                    throw e
+        val name = displayName(context, uri)?.substringAfterLast('/')?.substringAfterLast('\\')?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "Imported"
+        // One read of the file (cloud providers may download it again for every open).
+        val raw = resolver.openInputStream(uri) ?: throw ImportException("The file could not be opened")
+        return raw.use { input ->
+            val head = readUpTo(input, SNIFF)
+            val whole: InputStream = SequenceInputStream(ByteArrayInputStream(head), input)
+            when (sniff(head)) {
+                ImportKind.PDF -> {
+                    val dir = File(context.cacheDir, "imports").apply { mkdirs() }
+                    prune(dir)
+                    val f = File(dir, "import-${UUID.randomUUID()}.pdf")
+                    try {
+                        f.outputStream().use { whole.copyTo(it, 256 * 1024) }
+                    } catch (e: Throwable) {
+                        f.delete()
+                        throw e
+                    }
+                    ImportFile(ImportKind.PDF, name, null, f)
                 }
-                ImportFile(ImportKind.PDF, name, null, f)
+                ImportKind.SVG -> {
+                    val gz = head.size >= 2 && head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()
+                    ImportFile(ImportKind.SVG, name, readSvg(if (gz) GZIPInputStream(whole) else whole), null)
+                }
+                null -> throw ImportException("This file is neither an SVG nor a PDF")
             }
-            ImportKind.SVG -> {
-                val gz = head.size >= 2 && head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()
-                val bytes = resolver.openInputStream(uri)?.use { raw ->
-                    val input: InputStream = if (gz) GZIPInputStream(raw) else raw
-                    readSvg(input)
-                } ?: throw ImportException("The file could not be opened")
-                ImportFile(ImportKind.SVG, name, bytes, null)
-            }
-            null -> throw ImportException("This file is neither an SVG nor a PDF")
         }
     }
 

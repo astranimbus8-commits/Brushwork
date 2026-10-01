@@ -64,7 +64,7 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
             try {
                 val scene = ExportSceneBuilder(c, options).build()
                 withContext(Dispatchers.IO) {
-                    val stream = resolver.openOutputStream(uri, "wt") ?: throw IOException("The file could not be opened")
+                    val stream = openForWriting(resolver, uri)
                     stream.use { s -> writeScene(scene, BufferedOutputStream(s, BUFFER), ::progress) }
                 }
                 done = true
@@ -117,6 +117,21 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
                 if (!done) withContext(NonCancellable + Dispatchers.IO) { file.delete() }
             }
         }
+    }
+
+    /**
+     * The picked file for writing, truncated ("wt"); providers that refuse that mode get "w"
+     * (a file just created by the picker is empty anyway).
+     */
+    private fun openForWriting(resolver: android.content.ContentResolver, uri: Uri): OutputStream {
+        val stream = try {
+            resolver.openOutputStream(uri, "wt")
+        } catch (e: IllegalArgumentException) {
+            null
+        } catch (e: java.io.FileNotFoundException) {
+            null
+        } ?: resolver.openOutputStream(uri, "w")
+        return stream ?: throw IOException("The file could not be opened")
     }
 
     private fun progress(f: Float) {
