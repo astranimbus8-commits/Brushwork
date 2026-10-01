@@ -18,6 +18,10 @@ import com.brushwork.paint.tools.text.WrapFixtures.render
 import com.brushwork.paint.tools.text.WrapFixtures.setup
 import com.brushwork.paint.tools.text.WrapFixtures.wrappedText
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VPaint
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VSubpath
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -175,6 +179,31 @@ class TextWrapReflowRobolectricTest {
         s.c.editWholeLayer(s.picture, "Mask", EditTarget.MASK) { m -> Canvas(m).drawRect(0f, 0f, 400f, 120f, Paint().apply { color = WrapFixtures.BLACK }) }
         assertEquals(reflows + 2, s.c.textWrap.reflowCount)
         assertTrue("the hidden part no longer blocks", itemOf(text).wrap.polygons.all { p2 -> p2.ys.min() >= 118f })
+    }
+
+    @Test
+    fun aVectorEditOfThePictureReflows() {
+        val s = setup(context, scope = scope)
+        val vector = s.c.addVectorLayer()!!
+        val text = wrappedText(s, source = vector)
+        assertTrue("an empty vector layer: nothing to wrap around yet", itemOf(text).wrap.polygons.isEmpty())
+        val square = VPath(
+            0,
+            subpaths = listOf(VSubpath(listOf(VAnchor(60f, 100f, sharp = true), VAnchor(160f, 100f, sharp = true), VAnchor(160f, 200f, sharp = true), VAnchor(60f, 200f, sharp = true)), closed = true)),
+            polyline = true,
+            fill = VPaint.Solid(WrapFixtures.BLACK),
+        )
+        val steps = s.c.undoManager.undoCount
+        assertEquals(1, s.c.vectors.addObjects(vector, listOf(square), "Add square").size)
+        assertEquals(steps + 1, s.c.undoManager.undoCount)
+        val polys = itemOf(text).wrap.polygons
+        assertEquals(1, polys.size)
+        assertEquals(60f, polys[0].xs.min(), 1.5f)
+        assertEquals(200f, polys[0].ys.max(), 1.5f)
+        assertRendered(text, s.c)
+        assertTrue("the vector layer stays a vector layer", vector.isVectorLayer)
+        s.c.undo()
+        assertTrue(itemOf(text).wrap.polygons.isEmpty())
     }
 
     @Test
