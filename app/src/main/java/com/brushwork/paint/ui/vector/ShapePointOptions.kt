@@ -106,11 +106,12 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
 
 /**
  * "Editable": new shapes go into a layer of their own that can be edited again (hidden while a
- * shape layer is being edited, which already is one).
+ * shape layer is being edited, which already is one, and on a vector layer, where every shape
+ * stays editable as an object of the layer).
  */
 @Composable
 internal fun ShapeEditableChip(tool: ShapeTool) {
-    if (tool.editingLayer != null) return
+    if (tool.editingLayer != null || tool.drawsOnVectorLayer) return
     val on = tool.settings.editable
     OptionChip("Editable", on, { tool.update { it.copy(editable = !on) } }, icon = Icons.Filled.Layers)
 }
@@ -122,16 +123,24 @@ internal fun ShapeEditableChip(tool: ShapeTool) {
 @Composable
 internal fun ShapeEditingSettings(tool: ShapeTool) {
     val s = tool.settings
-    if (tool.editingLayer == null) {
+    val vector = tool.drawsOnVectorLayer
+    if (tool.editingLayer == null && !vector) {
         ToggleRow(
             "Editable (own layer)", s.editable, { v -> tool.update { it.copy(editable = v) } },
             description = if (s.editable) "Each new shape goes into a layer of its own and can be edited again later"
             else "New shapes are painted into the active layer",
         )
     }
+    if (vector) {
+        Hint(
+            "On a vector layer every shape is an object of the layer: tap it with the shape tool to edit it again " +
+                "(✓ keeps the change, ✕ leaves it as it was). A drag always draws a new shape.",
+            Modifier.padding(top = 4.dp),
+        )
+    }
     Hint(
-        "Tap a placed shape with the shape tool to edit it again (it is also in the layers window: Edit shape). " +
-            "A drag always draws a new shape, also when it starts on a placed one; a tap outside the open shape places it. " +
+        (if (vector) "" else "Tap a placed shape with the shape tool to edit it again (it is also in the layers window: Edit shape). " +
+            "A drag always draws a new shape, also when it starts on a placed one; a tap outside the open shape places it. ") +
             "Points: drag a point to move it, tap the outline or a + to add one, tap a point for sharp / smooth / delete and its tangent handles; " +
             "drag inside the shape to move it.",
         Modifier.padding(top = 4.dp),

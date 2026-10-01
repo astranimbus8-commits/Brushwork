@@ -313,8 +313,13 @@ internal class BrushStrokePreview(
     internal var dragReplayLimitMs = MAX_DRAG_REPLAY_MS
     /** The waiting replay is held back until the drag ends (see [flush]). */
     private var deferred = false
-    /** Random values of the brush for this editing session: a replay never changes its texture. */
-    private var seed = newSeed()
+    /**
+     * Random values of the brush for this editing session: a replay never changes its texture.
+     * Readable (v1.5: a vector shape stores the seed its outline was painted with, so its replay
+     * equals the preview) and settable while no stroke is live (a reopened shape shows its own
+     * texture); [end] picks a new one.
+     */
+    internal var seed = newSeed()
     private val input = PathStrokeInput(1024)
 
     /** True while an unfinished preview stroke is shown. */

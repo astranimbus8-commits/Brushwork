@@ -205,7 +205,9 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                         " at full pressure, with its own size, opacity and texture",
                     Modifier.padding(top = 4.dp),
                 )
-                if (s.editable && tool.editingLayer == null && !tool.newShapesEditable) {
+                if (tool.outlineNeedsRaster) {
+                    Hint("The ${paintTool.label.lowercase()} works on the pixels that are already there: on a vector layer outlines need \"Plain line\" or a painting brush")
+                } else if (s.editable && tool.editingLayer == null && !tool.drawsOnVectorLayer && !tool.newShapesEditable) {
                     Hint("The ${paintTool.label.lowercase()} works on the pixels that are already there: these outlines are painted into the active layer and can't be edited again")
                 }
             }
