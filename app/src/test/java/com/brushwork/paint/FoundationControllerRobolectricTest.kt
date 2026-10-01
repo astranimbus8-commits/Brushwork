@@ -254,6 +254,26 @@ class FoundationControllerRobolectricTest {
     }
 
     @Test
+    fun cutToNewLayerRasterizesAnEditableSourceInTheSameStep() {
+        val c = setup()
+        val l = c.activeLayer
+        paint(l)
+        l.vector = content()
+        val cut = com.brushwork.paint.tools.select.SelectionEdits.cut(c, l, Selection.all(w, h))!!
+        assertNull("the cut pixels no longer render the objects", l.vector)
+        assertTrue(pixels(l).all { it == 0 })
+        assertEquals(1, c.undoManager.undoCount)
+        assertEquals("Cut to new layer", c.undoManager.undoLabel)
+        c.undo()
+        assertEquals(-1, c.doc.indexOf(cut))
+        assertNotNull(l.vector)
+        assertTrue(pixels(l).any { it != 0 })
+        c.redo()
+        assertTrue(c.doc.indexOf(cut) >= 0)
+        assertNull(l.vector)
+    }
+
+    @Test
     fun flipAndMergeAreReportedToEditListeners() {
         val c = setup(3)
         val events = ArrayList<EditEvent>()

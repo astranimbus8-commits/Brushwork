@@ -248,15 +248,16 @@ object SelectionEdits {
             drawBitmap(sel.mask, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) })
         }
         ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode)
-        val pixels = rec.finish("Cut to new layer")
-        src.markChanged()
         val layer = Layer(doc.newLayerId(), uniqueLayerName(controller, "${src.name} cut"), bmp)
         val at = doc.indexOf(src) + 1
         controller.structural {
             doc.layers.add(at, layer)
             doc.activeLayerIndex = at
         }
-        controller.pushUndo(CompositeAction("Cut to new layer", listOfNotNull(pixels, AddLayerAction(layer, at, "Cut to new layer"))))
+        val add = AddLayerAction(layer, at, "Cut to new layer")
+        // One step with the new layer; like any pixel edit it turns an editable (text, shape,
+        // vector) source into a raster layer in that step (I1).
+        if (!controller.commitEdit(rec, "Cut to new layer", listOf(add))) controller.pushUndo(add)
         return layer
     }
 
