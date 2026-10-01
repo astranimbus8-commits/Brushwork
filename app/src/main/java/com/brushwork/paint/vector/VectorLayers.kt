@@ -44,8 +44,9 @@ import kotlin.math.sqrt
  * tiles and data and never re-render.
  *
  * F2 reference: everything runs synchronously on the main thread ([isRendering] stays false);
- * dirty regions are the union bounding box of what changed (A1: 256 px tile sets); [update]
- * ignores its [ShiftHint].
+ * dirty regions are the union bounding box of what changed, grown to whole squares of the
+ * renderer's tile grid ([VectorLayerRenderer.TILE]: re-rendering whole tiles gives exactly the
+ * pixels of a full render; A1: 256 px tile sets); [update] ignores its [ShiftHint].
  */
 class VectorLayers internal constructor(private val c: EditorController) {
 
@@ -64,7 +65,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val (content, ids) = current.plus(objects)
         val added = content.objects.subList(content.objects.size - objects.size, content.objects.size)
         val after = before.copy(vector = content)
-        val area = docRect(unionBounds(added))
+        val area = gridRect(docRect(unionBounds(added)))
         c.editScope {
             if (area.isEmpty) {
                 // Nothing of it lands on the canvas: the data alone.
@@ -116,7 +117,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
      *
      * F2 reference: synchronous. The re-rendered area is the bounding box of [dirty], else of
      * everything that changed (objects added, removed, replaced or moved in z-order, old and new
-     * bounds); every object reaching it is replayed there.
+     * bounds), grown to whole tiles of the renderer's grid; every object reaching it is
+     * replayed there.
      */
     fun update(
         layer: Layer,
@@ -131,12 +133,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
         if (before == null || c.doc.indexOf(layer) < 0) { onDone(false); return }
         // Nothing changes (also an equal copy): no re-render and no step.
         if (after === before || after == before) { onDone(true); return }
-        val region = if (dirty != null) {
-            val r = Rect()
-            for (d in dirty) r.union(d)
-            r
-        } else docRect(changedBounds(before, after))
-        if (!region.intersect(0, 0, c.doc.width, c.doc.height)) region.setEmpty()
+        val region = gridRect(
+            if (dirty != null) {
+                val r = Rect()
+                for (d in dirty) r.union(d)
+                r
+            } else docRect(changedBounds(before, after)),
+        )
         val data = layer.dataSnapshot().copy(vector = after)
         val ok = try {
             if (region.isEmpty) {
@@ -212,8 +215,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
         // The edited objects' box, kept within a document's size around the canvas.
         val floatingRect = roundOut(unionBounds(edited))
         if (!floatingRect.intersect(-docW, -docH, 2 * docW, 2 * docH)) floatingRect.setEmpty()
+        // On the renderer's tile grid, so the other objects re-rendered there are exactly the cache's pixels.
         val holeRect = Rect(floatingRect)
         if (!holeRect.intersect(0, 0, docW, docH)) holeRect.setEmpty()
+        holeRect.set(gridRect(holeRect))
 
         val budget = Runtime.getRuntime().maxMemory() / 8
         val fw = floatingRect.width().toLong()
@@ -392,6 +397,23 @@ class VectorLayers internal constructor(private val c: EditorController) {
     private fun docRect(r: RectF): Rect {
         val out = roundOut(r)
         if (out.isEmpty || !out.intersect(0, 0, c.doc.width, c.doc.height)) return Rect()
+        return out
+    }
+
+    /**
+     * [r] grown to whole squares of the renderer's tile grid ([VectorLayerRenderer.TILE]) and
+     * clipped to the document (empty when outside): every re-render covers whole tiles, so it
+     * gives exactly the pixels of a full render there (the cache stays equal to a fresh
+     * rendering, I1).
+     */
+    private fun gridRect(r: Rect): Rect {
+        if (r.isEmpty) return Rect()
+        val t = VectorLayerRenderer.TILE
+        val out = Rect(
+            Math.floorDiv(r.left, t) * t, Math.floorDiv(r.top, t) * t,
+            -Math.floorDiv(-r.right, t) * t, -Math.floorDiv(-r.bottom, t) * t,
+        )
+        if (!out.intersect(0, 0, c.doc.width, c.doc.height)) return Rect()
         return out
     }
 

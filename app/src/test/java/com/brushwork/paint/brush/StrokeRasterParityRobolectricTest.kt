@@ -20,6 +20,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -32,7 +33,8 @@ import kotlin.math.sin
 /**
  * v1.5 F2 (§5.10 item 10): [StrokeRaster] replays a recorded stroke like the live BrushTool drew
  * it — same seed, same points — for Pen, Soft, Pencil, Chalk and Airbrush, with a finger and a
- * stylus (≥ 99 % of pixels within ±2; A1 tightens the bar to §4.9's).
+ * stylus (≥ 99 % of pixels within ±2; A1 tightens the bar to §4.9's). Shares are taken over the
+ * stroke's pixels (painted live or by the replay), not the whole canvas.
  */
 @RunWith(RobolectricTestRunner::class)
 class StrokeRasterParityRobolectricTest {
@@ -45,16 +47,16 @@ class StrokeRasterParityRobolectricTest {
     private val w = 420
     private val h = 300
 
-    private fun setup(): EditorController {
+    private fun setup(docW: Int = w, docH: Int = h): EditorController {
         val settings = AppSettings(app)
         settings.prefs.edit().clear().commit()
-        val doc = Document("t", "t", w, h)
-        repeat(2) { i -> doc.layers += Layer(doc.newLayerId(), "Layer ${i + 1}", BitmapUtils.createLayerBitmap(w, h)) }
+        val doc = Document("t", "t", docW, docH)
+        repeat(2) { i -> doc.layers += Layer(doc.newLayerId(), "Layer ${i + 1}", BitmapUtils.createLayerBitmap(docW, docH)) }
         doc.activeLayerIndex = 1
         return EditorController(app, doc, scope, settings).also { it.viewTransform.set(Matrix()) }
     }
 
-    private fun pixels(b: Bitmap) = IntArray(w * h).also { b.getPixels(it, 0, w, 0, 0, w, h) }
+    private fun pixels(b: Bitmap) = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
 
     /** Records what the live stroke was fed and commits its pixels normally. */
     private class Capture : StrokeRecorder {
@@ -81,10 +83,21 @@ class StrokeRasterParityRobolectricTest {
         }
     }
 
+    /**
+     * [within]: the share of the stroke's pixels (painted live or by the replay; the empty rest
+     * of the canvas would hide differences) whose channels differ by at most 2.
+     */
     private class Result(val live: IntArray, val replay: IntArray, val within: Double, val painted: Int, val maxDiff: Int)
 
-    private fun drawAndReplay(preset: BrushPreset, stylus: Boolean, color: Int = 0xFF2050C0.toInt()): Result {
-        val c = setup()
+    private fun drawAndReplay(
+        preset: BrushPreset,
+        stylus: Boolean,
+        color: Int = 0xFF2050C0.toInt(),
+        docW: Int = w,
+        docH: Int = h,
+        pts: List<ToolPoint> = strokePoints(stylus),
+    ): Result {
+        val c = setup(docW, docH)
         c.selectTool(ToolId.BRUSH)
         val b = c.tools.getValue(ToolId.BRUSH) as BrushTool
         c.brush = preset
@@ -92,26 +105,26 @@ class StrokeRasterParityRobolectricTest {
         val cap = Capture()
         var info: StrokeInfo? = null
         b.strokeHook = { i -> info = i; StrokeHook.Record(cap) }
-        val pts = strokePoints(stylus)
         b.onDown(pts.first())
         for (p in pts.subList(1, pts.size - 1)) b.onMove(p)
         b.onUp(pts.last())
         val i = info!!
         assertEquals(1, c.undoManager.undoCount)
-        val out = BitmapUtils.createLayerBitmap(w, h)
-        StrokeRaster().render(Canvas(out), Rect(0, 0, w, h), i.preset, i.color, i.seed, i.isStylus, cap.points())
+        val out = BitmapUtils.createLayerBitmap(docW, docH)
+        StrokeRaster().render(Canvas(out), Rect(0, 0, docW, docH), i.preset, i.color, i.seed, i.isStylus, cap.points())
         val live = pixels(c.activeLayer.bitmap)
         val replay = pixels(out)
         var ok = 0
         var painted = 0
         var maxDiff = 0
         for (k in live.indices) {
+            if (live[k] == 0 && replay[k] == 0) continue
+            painted++
             val d = channelDiff(live[k], replay[k])
             if (d <= 2) ok++
             maxDiff = max(maxDiff, d)
-            if (live[k] != 0) painted++
         }
-        return Result(live, replay, ok.toDouble() / live.size, painted, maxDiff)
+        return Result(live, replay, if (painted == 0) 0.0 else ok.toDouble() / painted, painted, maxDiff)
     }
 
     private fun channelDiff(a: Int, b: Int): Int {
@@ -157,6 +170,8 @@ class StrokeRasterParityRobolectricTest {
             )) {
                 val r = drawAndReplay(p, stylus)
                 val what = "${preset.name} $label"
+                println("bar $what: ${"%.4f".format(r.within * 100)} % within ±2, max diff ${r.maxDiff}, painted ${r.painted}")
+                assertTrue("$what painted something", r.painted > 50)
                 assertTrue("$what: ${"%.4f".format(r.within * 100)} % within ±2", r.within >= 0.995)
                 assertTrue("$what: max diff ${r.maxDiff}", r.maxDiff <= 12)
             }
@@ -168,6 +183,37 @@ class StrokeRasterParityRobolectricTest {
         // Without grain or soft edges in play the replay is the very same composite.
         val r = drawAndReplay(BrushLibrary.defaultBrush, stylus = true)
         assertArrayEquals(r.live, r.replay)
+    }
+
+    @Test
+    fun aLongGrainStrokeIsCompositedTileByTileExactly() {
+        // A stroke across several composite tiles (StrokeRaster.COMPOSITE_TILE) in both
+        // directions: grain strokes (document-anchored grain, tile-sized offscreen layers) and a
+        // big soft brush replay exactly like the live stroke, whose commit composites in its own
+        // 256 px tiles. (Two strokes each: the live seed is random.)
+        val docW = 1300
+        val docH = 1150
+        val n = 90
+        fun pts(stylus: Boolean) = List(n + 1) { i ->
+            val t = i.toFloat() / n
+            ToolPoint(30f + 1240f * t, 60f + 1020f * t + 60f * sin(t * 6f * PI.toFloat()), if (stylus) 0.3f + 0.7f * sin(t * PI.toFloat()) else 0.5f, i.toLong(), isStylus = stylus)
+        }
+        assertTrue(StrokeRaster.COMPOSITE_TILE % PaperGrain.SIZE == 0 && 2 * StrokeRaster.COMPOSITE_TILE < docW && 2 * StrokeRaster.COMPOSITE_TILE < docH)
+        for ((name, preset) in listOf(
+            "Chalk" to BrushLibrary.byId("chalk")!!,
+            "Soft" to BrushLibrary.byId("softround")!!.copy(size = 140f),
+            "Pencil" to BrushLibrary.byId("pencil")!!,
+        )) {
+            for (stylus in listOf(false, true, false, true)) {
+                val r = drawAndReplay(preset, stylus, docW = docW, docH = docH, pts = pts(stylus))
+                val what = "$name ${if (stylus) "stylus" else "finger"}"
+                assertTrue("$what painted something", r.painted > 2000)
+                if (!r.live.contentEquals(r.replay)) {
+                    val k = r.live.indices.first { r.live[it] != r.replay[it] }
+                    fail("$what: (${k % docW}, ${k / docW}) live ${Integer.toHexString(r.live[k])} replay ${Integer.toHexString(r.replay[k])}")
+                }
+            }
+        }
     }
 
     @Test

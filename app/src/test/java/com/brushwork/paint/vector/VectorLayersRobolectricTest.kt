@@ -253,6 +253,125 @@ class VectorLayersRobolectricTest {
         assertArrayEquals(render(after), pixels(layer.bitmap))
     }
 
+    @Test
+    fun partialReRendersOfLargeCurvedObjectsEqualAFreshRender() {
+        // Skia's anti-aliasing of a path depends on where the clip cuts it, so dirty regions that
+        // cut through large curved, rotated and faded objects must still leave the cache exactly
+        // equal to a fresh render (re-renders cover whole renderer tiles, I1).
+        val dw = 900
+        val dh = 700
+        val settings = AppSettings(app)
+        settings.prefs.edit().clear().commit()
+        val doc = Document("t", "t", dw, dh)
+        doc.layers += Layer(doc.newLayerId(), "Vector 1", BitmapUtils.createLayerBitmap(dw, dh)).also { it.vector = VectorContent.EMPTY }
+        val c = EditorController(app, doc, scope, settings).also { it.viewTransform.set(Matrix()) }
+        val layer = doc.layers[0]
+        fun px(b: Bitmap) = IntArray(dw * dh).also { b.getPixels(it, 0, dw, 0, 0, dw, dh) }
+        fun fresh(content: VectorContent): IntArray {
+            val b = BitmapUtils.createLayerBitmap(dw, dh)
+            VectorLayerRenderer.render(Canvas(b), content, Rect(0, 0, dw, dh), tips = TipCache())
+            return px(b)
+        }
+        val ring = VShape(
+            0, shape = ShapeObject(ShapeType.ELLIPSE, cx = 450f, cy = 350f, w = 760f, h = 470f, rotation = 23f, style = ShapeStyle.STROKE_FILL, strokeWidth = 9f, strokeColor = 0xFF203060.toInt(), fillColor = 0xFFB0D0F0.toInt()),
+        )
+        val wave = VPath(
+            0, subpaths = listOf(VSubpath(listOf(VAnchor(30f, 600f), VAnchor(250f, 80f), VAnchor(520f, 640f), VAnchor(870f, 90f)))), tension = 0.2f,
+            stroke = VStrokeStyle(color = 0xFF802010.toInt(), width = 7f),
+        )
+        val blob = VPath(
+            0, opacity = 0.55f,
+            subpaths = listOf(VSubpath(listOf(VAnchor(150f, 150f), VAnchor(760f, 200f), VAnchor(700f, 560f), VAnchor(180f, 520f)), closed = true)),
+            fill = VPaint.Radial(450f, 350f, 330f, listOf(VStop(0f, 0xFFF0E040.toInt()), VStop(1f, 0xFF40A060.toInt()))),
+        )
+        val star = VShape(0, opacity = 0.7f, shape = ShapeObject(ShapeType.STAR, cx = 420f, cy = 330f, w = 300f, h = 280f, rotation = 11f, style = ShapeStyle.STROKE_FILL, strokeWidth = 5f))
+        c.vectors.addObjects(layer, listOf(ring, blob, wave, star, box(100f, 300f, 140f, 340f)), "Add")
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        // Small edits whose regions cut through the large objects.
+        val moves = listOf(floatArrayOf(1f, 0f, 37f, 0f, 1f, 11f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 260f, 0f, 1f, -90f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 133f, 0f, 1f, 171f, 0f, 0f, 1f))
+        for (m in moves) {
+            val content = layer.vector!!
+            c.vectors.update(layer, content.replaced(mapOf(5L to listOf(VectorOps.transformed(content.byId(5)!!, m)))), "Move")
+            assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        }
+        val s = layer.vector!!
+        c.vectors.update(layer, s.copy(objects = s.objects.sortedBy { if (it.id == 5L) 0 else 1 }), "To back")
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        c.vectors.update(layer, layer.vector!!.without(setOf(4L)), "Delete")
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        repeat(3) { c.undo() }
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        repeat(3) { c.redo() }
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+    }
+
+    @Test
+    fun aListenersAmendJoinsTheVectorEditsStep() {
+        // I2: an edit listener that records a follow-up step (text wrap re-flow) amends the step
+        // of addObjects / update / appendData / an edit-session commit: each stays ONE step,
+        // and one undo takes back both.
+        val c = setup()
+        val layer = c.vec
+        var followUps = 0
+        var undone = 0
+        val listener = com.brushwork.paint.EditListener { e ->
+            if (e.layer !== layer) return@EditListener
+            c.amendLastStep {
+                c.pushUndo(object : com.brushwork.paint.engine.UndoAction {
+                    override val label = "Follow-up"
+                    override val byteSize = 0L
+                    override fun undo(c: EditorController) { undone++ }
+                    override fun redo(c: EditorController) { undone-- }
+                })
+            }
+            followUps++
+        }
+        c.addEditListener(listener)
+        c.vectors.addObjects(layer, listOf(box(40f, 40f, 120f, 120f), stroke(30f, 160f, 280f, 200f)), "Add")
+        assertEquals(1, c.undoManager.undoCount)
+        assertEquals(1, followUps)
+        // Off the canvas: the data-only step is amended too.
+        c.vectors.addObjects(layer, listOf(box(-300f, -300f, -200f, -200f)), "Add")
+        assertEquals(2, c.undoManager.undoCount)
+        assertEquals(2, followUps)
+        val s0 = layer.vector!!
+        c.vectors.update(layer, s0.without(setOf(1L)), "Delete")
+        assertEquals(3, c.undoManager.undoCount)
+        assertEquals(3, followUps)
+        // A live brush stroke (A3's pattern): pixels kept as data, then the data appended. Both
+        // edits are reported; both follow-ups join the one step.
+        val s = stroke(60f, 60f, 200f, 90f, seed = 3L)
+        c.groupUndo("Brush") {
+            c.keepLayerData(layer) {
+                val rec = c.beginEdit(layer)
+                rec.touch(Rect(0, 0, w, h))
+                VectorLayerRenderer.render(Canvas(layer.bitmap), VectorContent(objects = listOf(s)), Rect(0, 0, w, h), tips = TipCache())
+                c.commitEdit(rec, "Brush")
+            }
+            c.vectors.appendData(layer, listOf(s), "Brush")
+        }
+        assertEquals(4, c.undoManager.undoCount)
+        assertEquals(5, followUps)
+        var session: VectorEditSession? = null
+        c.vectors.beginEdit(layer, setOf(2L)) { session = it }
+        session!!.commit(listOf(VectorOps.transformed(layer.vector!!.byId(2)!!, floatArrayOf(1f, 0f, 10f, 0f, 1f, 5f, 0f, 0f, 1f))), "Edit")
+        assertEquals(5, c.undoManager.undoCount)
+        assertEquals(6, followUps)
+        assertArrayEquals(render(layer.vector!!), pixels(layer.bitmap))
+        // Undo / redo fire no listeners and take back each step with its follow-up.
+        c.undo()
+        assertEquals(1, undone)
+        assertEquals(6, followUps)
+        c.undo()
+        assertEquals(3, undone)
+        c.redo()
+        c.redo()
+        assertEquals(0, undone)
+        assertEquals(6, followUps)
+        assertArrayEquals(render(layer.vector!!), pixels(layer.bitmap))
+        c.removeEditListener(listener)
+    }
+
     // ------------------------------------------------------------------ hit tests, touching
 
     @Test

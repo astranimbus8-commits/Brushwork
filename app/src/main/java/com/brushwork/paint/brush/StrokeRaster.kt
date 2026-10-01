@@ -22,10 +22,15 @@ import kotlin.math.min
  * resolved with the final length (what the live stroke's end-taper pass leaves), then stamped in
  * order into an ALPHA_8 coverage buffer that is composited with the stroke opacity and grain.
  *
- * F2 reference: the coverage buffer covers [render]'s clip (∩ the stroke) with its origin on the
- * paper-grain grid ([PaperGrain.SIZE]), so grain stays anchored to the document. Only PAINT
- * coverage strokes are replayed (smudge / blur / watercolor tips are drawn as coverage too; vector
- * layers never record them).
+ * The coverage buffer covers the part of [render]'s clip the stroke reaches (at most the clip,
+ * like the live stroke's document-sized buffer), with its origin on the paper-grain grid
+ * ([PaperGrain.SIZE]), so grain stays anchored to the document; a grain stroke is composited in
+ * [COMPOSITE_TILE] squares, so its offscreen layer stays small however large the stroke. Dabs are
+ * stamped whole (a dab cut by a clip can round a pixel by one level differently, so a clip
+ * cutting through a stroke may differ from the live pixels there by that much). Only PAINT
+ * coverage strokes are replayed (smudge / blur / watercolor tips are drawn as coverage too;
+ * vector layers never record them). The replay always composites SRC_OVER (an alpha-locked
+ * layer's live stroke is SRC_ATOP: vector strokes must not be recorded there).
  */
 class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     private val stamper = DabStamper(tips)
@@ -86,28 +91,70 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         // Coverage buffer whose origin lies on the 256 px grain grid (document-anchored grain).
         val left = Math.floorDiv(region.left, PaperGrain.SIZE) * PaperGrain.SIZE
         val top = Math.floorDiv(region.top, PaperGrain.SIZE) * PaperGrain.SIZE
-        val cov = coverage(region.right - left, region.bottom - top)
-        val cc = bufferCanvas!!
-        cc.save()
-        cc.clipRect(0, 0, region.right - left, region.bottom - top)
-        cc.drawColor(0, PorterDuff.Mode.CLEAR)
-        cc.translate(-left.toFloat(), -top.toFloat())
-        cc.clipRect(region)
-        val tmp = Rect()
+        val w = region.right - left
+        val h = region.bottom - top
+        try {
+            val cov = coverage(w, h)
+            val cc = bufferCanvas!!
+            cc.save()
+            cc.clipRect(0, 0, w, h)
+            cc.drawColor(0, PorterDuff.Mode.CLEAR)
+            cc.translate(-left.toFloat(), -top.toFloat())
+            cc.clipRect(region)
+            // Every dab whole (the region holds them all, except where [clip] cuts the stroke):
+            // stamping a dab cut by a clip can round a pixel differently from the live stroke.
+            val tmp = Rect()
+            for (dab in dabs) {
+                if (!dab.hasBounds) continue
+                tmp.set(dab.left, dab.top, dab.right, dab.bottom)
+                if (Rect.intersects(region, tmp)) stamper.stamp(cc, p, dab)
+            }
+            cc.restore()
+
+            canvas.save()
+            canvas.translate(left.toFloat(), top.toFloat())
+            if (style.grain <= 0f) {
+                // One plain draw of the coverage, with no offscreen layer.
+                painter.draw(canvas, cov, Rect(region).apply { offset(-left, -top) }, style, null)
+            } else {
+                // Grain composites through an offscreen layer as large as what is drawn: tile by
+                // tile ([COMPOSITE_TILE] squares on the buffer's grid, only where dabs landed),
+                // like the live commit, so that layer stays tile-sized however large the stroke.
+                // Unscaled, clipped composites of the same coverage give the same pixels.
+                val tiles = touchedTiles(region, left, top, w, h)
+                val cols = (w + COMPOSITE_TILE - 1) / COMPOSITE_TILE
+                val t = Rect()
+                for (i in tiles.indices) {
+                    if (!tiles[i]) continue
+                    val x = (i % cols) * COMPOSITE_TILE
+                    val y = (i / cols) * COMPOSITE_TILE
+                    t.set(x, y, x + COMPOSITE_TILE, y + COMPOSITE_TILE)
+                    if (t.intersect(region.left - left, region.top - top, w, h)) painter.draw(canvas, cov, t, style, null)
+                }
+            }
+            canvas.restore()
+        } finally {
+            dabs.clear()
+        }
+        return region
+    }
+
+    /** [COMPOSITE_TILE] squares of the buffer (origin [left], [top], [w] x [h]) that hold part of a dab within [region]. */
+    private fun touchedTiles(region: Rect, left: Int, top: Int, w: Int, h: Int): BooleanArray {
+        val cols = (w + COMPOSITE_TILE - 1) / COMPOSITE_TILE
+        val rows = (h + COMPOSITE_TILE - 1) / COMPOSITE_TILE
+        val hit = BooleanArray(cols * rows)
+        val r = Rect()
         for (dab in dabs) {
             if (!dab.hasBounds) continue
-            tmp.set(dab.left, dab.top, dab.right, dab.bottom)
-            if (Rect.intersects(region, tmp)) stamper.stamp(cc, p, dab)
+            r.set(dab.left, dab.top, dab.right, dab.bottom)
+            if (!r.intersect(region)) continue
+            r.offset(-left, -top)
+            for (row in r.top / COMPOSITE_TILE..(r.bottom - 1) / COMPOSITE_TILE) {
+                for (col in r.left / COMPOSITE_TILE..(r.right - 1) / COMPOSITE_TILE) hit[row * cols + col] = true
+            }
         }
-        cc.restore()
-        dabs.clear()
-
-        canvas.save()
-        canvas.translate(left.toFloat(), top.toFloat())
-        val local = Rect(region).apply { offset(-left, -top) }
-        painter.draw(canvas, cov, local, style, null)
-        canvas.restore()
-        return region
+        return hit
     }
 
     /** Everything the stroke can paint (document px). */
@@ -144,6 +191,8 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         val b = buffer
         if (b != null && !b.isRecycled && b.width >= w && b.height >= h) return b
         b?.recycle()
+        // Grown to hold both shapes: every region lies within its render's clip (+ the grain grid
+        // margin), so a buffer never outgrows the largest clip rendered since it was freed.
         val nw = max(w, b?.width ?: 0)
         val nh = max(h, b?.height ?: 0)
         val n = Bitmap.createBitmap(max(1, nw), max(1, nh), Bitmap.Config.ALPHA_8)
@@ -170,6 +219,12 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     }
 
     companion object {
+        /**
+         * Side of the squares a grain stroke is composited in (a multiple of [PaperGrain.SIZE]):
+         * the grain's offscreen layer is at most this square (1 MB) whatever the stroke's size.
+         */
+        const val COMPOSITE_TILE = 512
+
         /** The live stroke's `pressureOf`: stylus pressure clamped, 1 for fingers (and NaN). */
         fun pressureOf(stylus: Boolean, raw: Float): Float = if (stylus && !raw.isNaN()) raw.coerceIn(0f, 1f) else 1f
 

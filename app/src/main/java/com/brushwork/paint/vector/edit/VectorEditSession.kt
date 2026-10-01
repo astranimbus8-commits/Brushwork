@@ -44,7 +44,10 @@ class VectorEditSession internal constructor(
 
     /**
      * A painting tool's live override (its stroke) shown inside this session's preview. Set to
-     * null when that stroke ends while this session stays installed.
+     * null when that stroke ends while this session stays installed. While it draws its content,
+     * the layer's bitmap is a 1 x 1 transparent stand-in (so the edited objects don't ghost
+     * through it): it may draw `layer.bitmap`, but must not size or place anything by it
+     * (BrushTool's, ShapeTool's and the vector previews' overrides only draw it at the origin).
      */
     var inner: LayerRenderOverride? = null
 
@@ -97,6 +100,12 @@ class VectorEditSession internal constructor(
             }
         }
         return true
+    }
+
+    /** The mask as the adopted [inner] override shows it (a live stroke into the mask), else as it is. */
+    override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean {
+        val i = inner
+        return i != null && i !== this && i.layer === layer && i.drawMask(canvas, maskPaint)
     }
 
     /**

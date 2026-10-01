@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Rect
+import android.graphics.RectF
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
@@ -94,16 +95,22 @@ class VectorLayerRendererRobolectricTest {
         return m
     }
 
-    /** Fraction of pixels within ±2 and the largest difference. */
+    /**
+     * Fraction of the painted pixels (painted in [a] or [b]; the empty rest of the canvas would
+     * hide differences) within ±2, and the largest difference.
+     */
     private fun compare(a: IntArray, b: IntArray): Pair<Double, Int> {
         var ok = 0
+        var painted = 0
         var worst = 0
         for (i in a.indices) {
+            if (a[i] == 0 && b[i] == 0) continue
+            painted++
             val d = channelDiff(a[i], b[i])
             if (d <= 2) ok++
             worst = max(worst, d)
         }
-        return ok.toDouble() / a.size to worst
+        return (if (painted == 0) 0.0 else ok.toDouble() / painted) to worst
     }
 
     // ------------------------------------------------------------------ brush outlines
@@ -170,21 +177,40 @@ class VectorLayerRendererRobolectricTest {
 
     // ------------------------------------------------------------------ plain lines and widths
 
+    /**
+     * [draw] (document px) rasterized the way the renderer draws paths and shapes: clipped to
+     * each square of its tile grid (Skia's anti-aliasing depends on where a clip cuts a path).
+     */
+    private fun tiled(draw: (Canvas) -> Unit): IntArray {
+        val b = BitmapUtils.createLayerBitmap(w, h)
+        val c = Canvas(b)
+        val t = VectorLayerRenderer.TILE
+        for (y in 0 until h step t) for (x in 0 until w step t) {
+            c.save()
+            c.clipRect(x, y, x + t, y + t)
+            draw(c)
+            c.restore()
+        }
+        return pixels(b)
+    }
+
     @Test
     fun aPlainLineIsAPaintStroke() {
         val p = VPath(
             1, subpaths = listOf(curve), tension = 0.3f,
             stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 9f, cap = com.brushwork.paint.tools.vector.LineCapStyle.BUTT, join = com.brushwork.paint.tools.vector.JoinStyle.BEVEL),
         )
-        val expected = BitmapUtils.createLayerBitmap(w, h)
-        Canvas(expected).drawPath(
-            VectorOps.toVectorPath(p).toAndroidPath(),
-            Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                style = Paint.Style.STROKE; color = 0xFF000000.toInt(); strokeWidth = 9f
-                strokeCap = Paint.Cap.BUTT; strokeJoin = Paint.Join.BEVEL; strokeMiter = 4f
-            },
-        )
-        assertArrayEquals(pixels(expected), render(listOf(p)))
+        val path = VectorOps.toVectorPath(p).toAndroidPath()
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE; color = 0xFF000000.toInt(); strokeWidth = 9f
+            strokeCap = Paint.Cap.BUTT; strokeJoin = Paint.Join.BEVEL; strokeMiter = 4f
+        }
+        assertTrue(w > VectorLayerRenderer.TILE && h > VectorLayerRenderer.TILE)
+        assertArrayEquals(tiled { it.drawPath(path, paint) }, render(listOf(p)))
+        // A re-render of any region made of whole tiles gives exactly those pixels.
+        val whole = render(listOf(p))
+        val part = render(listOf(p), Rect(VectorLayerRenderer.TILE, 0, w, h))
+        for (y in 0 until h) for (x in VectorLayerRenderer.TILE until w) assertEquals(whole[y * w + x], part[y * w + x])
     }
 
     /** Height of the painted run (alpha ≥ 128) in column [x]. */
@@ -268,15 +294,71 @@ class VectorLayerRendererRobolectricTest {
     }
 
     @Test
+    fun aFadedObjectIsDrawnTileByTileLikeOneOffscreenLayer() {
+        // Objects over many renderer tiles (VectorLayerRenderer.TILE) at opacity < 1 are faded
+        // tile by tile: the same pixels as the opaque rendering faded through ONE offscreen
+        // layer of the whole canvas.
+        val bw = 1100
+        val bh = 700
+        val region = Rect(0, 0, bw, bh)
+        fun px(b: Bitmap) = IntArray(bw * bh).also { b.getPixels(it, 0, bw, 0, 0, bw, bh) }
+        fun draw(o: VObject): Bitmap = BitmapUtils.createLayerBitmap(bw, bh).also {
+            VectorLayerRenderer.render(Canvas(it), VectorContent(objects = listOf(o), nextId = 100), region, tips = TipCache())
+        }
+        val stops = listOf(VStop(0f, 0xFF102080.toInt()), VStop(1f, 0xFFF0C020.toInt()))
+        val big = VPath(
+            1, subpaths = listOf(VSubpath(listOf(VAnchor(40f, 60f, true), VAnchor(1050f, 90f, true), VAnchor(990f, 660f, true), VAnchor(70f, 630f, true)), closed = true)),
+            fill = VPaint.Linear(40f, 0f, 1050f, 0f, stops), stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 30f),
+        )
+        val brushed = VPath(
+            2, subpaths = listOf(VSubpath(listOf(VAnchor(60f, 400f), VAnchor(380f, 120f), VAnchor(700f, 620f), VAnchor(1040f, 300f)))),
+            stroke = VStrokeStyle(VStrokeKind.BRUSH, 0xFF802040.toInt(), 40f, brushTool = ToolId.BRUSH, brush = BrushLibrary.byId("chalk")!!.copy(size = 40f), seed = 9L),
+        )
+        assertTrue(bw > 3 * VectorLayerRenderer.TILE && bh > 2 * VectorLayerRenderer.TILE)
+        for (o in listOf(big, brushed)) {
+            for (alpha in listOf(0.6f, 0.35f)) {
+                val expected = BitmapUtils.createLayerBitmap(bw, bh)
+                val cv = Canvas(expected)
+                cv.saveLayerAlpha(RectF(region), (alpha * 255f + 0.5f).toInt())
+                VectorLayerRenderer.render(cv, VectorContent(objects = listOf(o), nextId = 100), region, tips = TipCache())
+                cv.restore()
+                val faded = px(draw(o.copy(opacity = alpha)))
+                val ref = px(expected)
+                // The path is drawn into the same tiles either way: exact. A faded brush outline
+                // is replayed per tile (a dab cut by a tile can round a pixel by one level, see
+                // StrokeRaster): premultiplied values within 1, nearly all exact.
+                if (o === big) assertArrayEquals("object ${o.id} at $alpha", ref, faded)
+                var painted = 0
+                var exact = 0
+                for (k in ref.indices) {
+                    if (ref[k] == 0 && faded[k] == 0) continue
+                    painted++
+                    if (ref[k] == faded[k]) { exact++; continue }
+                    assertTrue("object ${o.id} at $alpha, (${k % bw}, ${k / bw}): ${Integer.toHexString(ref[k])} / ${Integer.toHexString(faded[k])}", premultipliedDiff(ref[k], faded[k]) <= 1)
+                }
+                assertTrue(painted > 20_000)
+                assertTrue("object ${o.id} at $alpha: $exact of $painted exact", exact >= painted * 0.995)
+            }
+        }
+    }
+
+    /** Largest difference of the premultiplied channels of two (unpremultiplied) colors. */
+    private fun premultipliedDiff(a: Int, b: Int): Int {
+        fun pm(c: Int, s: Int): Int { val al = c ushr 24; return if (s == 24) al else (((c ushr s) and 0xFF) * al + 127) / 255 }
+        var m = 0
+        for (s in intArrayOf(24, 16, 8, 0)) m = max(m, abs(pm(a, s) - pm(b, s)))
+        return m
+    }
+
+    @Test
     fun shapesDrawLikeTheShapeTool() {
         for (type in ShapeType.entries) {
             val o = ShapeObject(
                 type, cx = 180f, cy = 130f, w = if (type.isLineLike) 220f else 200f, h = if (type.isLineLike) 0f else 140f, rotation = 15f,
                 style = ShapeStyle.STROKE_FILL, strokeWidth = 7f, strokeColor = 0xFF102040.toInt(), fillColor = 0xFFE0B020.toInt(),
             )
-            val expected = BitmapUtils.createLayerBitmap(w, h)
-            VectorRenderer().draw(Canvas(expected), ShapeOutlines.paintSpec(o, false)!!, false, ColorMode.RGB)
-            assertArrayEquals(type.name, pixels(expected), render(listOf(VShape(1, shape = o))))
+            val spec = ShapeOutlines.paintSpec(o, false)!!
+            assertArrayEquals(type.name, tiled { VectorRenderer().draw(it, spec, false, ColorMode.RGB) }, render(listOf(VShape(1, shape = o))))
         }
     }
 

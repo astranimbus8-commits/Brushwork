@@ -227,6 +227,33 @@ class VectorOpsRobolectricTest {
         assertEquals(setOf(1L, 2L), VectorOps.touching(content, sel(30, 30, 60, 60)))
     }
 
+    @Test
+    fun touchingTestsLargeFootprintsTileByTile() {
+        // Objects spanning many test tiles: a hit in a far tile counts, and a large box alone
+        // (the footprint not under the selection) does not.
+        val dw = 1700
+        val dh = 1500
+        val ring = VPath(1, subpaths = listOf(rect(20f, 20f, 1650f, 1450f)), stroke = VStrokeStyle(color = -1, width = 4f))
+        val diagonal = stroke(10f, 10f, 1680f, 1480f, size = 12f).withId(2)
+        val filled = VPath(3, subpaths = listOf(rect(1100f, 1100f, 1600f, 1400f)), fill = VPaint.Solid(-1))
+        val content = VectorContent(objects = listOf(ring, diagonal, filled), nextId = 4)
+        fun sel(l: Int, t: Int, r: Int, b: Int): Selection {
+            val m = Bitmap.createBitmap(dw, dh, Bitmap.Config.ALPHA_8)
+            Canvas(m).drawRect(Rect(l, t, r, b), Paint().apply { color = -0x1000000 })
+            return Selection.wrap(m)
+        }
+        // On the diagonal near its far end (inside the filled box too).
+        assertEquals(setOf(2L, 3L), VectorOps.touching(content, sel(1395, 1225, 1425, 1255)))
+        // On the ring's right edge, half way down.
+        assertEquals(setOf(1L), VectorOps.touching(content, sel(1640, 700, 1660, 760)))
+        // Inside the ring, away from everything: nothing.
+        assertEquals(emptySet<Long>(), VectorOps.touching(content, sel(1200, 300, 1260, 360)))
+        // A long strip (several 512 px test tiles) inside the ring: the diagonal crosses it only
+        // in its third tile, the filled box from the third on, the ring nowhere.
+        assertEquals(setOf(2L, 3L), VectorOps.touching(content, sel(40, 1300, 1630, 1330)))
+        assertEquals(setOf(1L, 2L), VectorOps.touching(content, sel(10, 10, 30, 1700)))
+    }
+
     // ------------------------------------------------------------------ transforms
 
     @Test

@@ -53,9 +53,11 @@ import kotlin.math.max
  *   brush outline as a [StrokeRaster] replay along `brushStrokeSamples` (each sub-path, seed + its
  *   index, sized up to the thickest anchor with the widths as pressure, §4.5);
  * - [VShape]: `ShapeOutlines.paintSpec` like the Shape tool, then its brush outline;
- * - opacity < 1 (paths, shapes): `saveLayerAlpha`.
- * No spatial grid (every object's bounds are tested) and no color-mode constraint (the editor's
- * commit constrains the touched tiles). Brush outlines are drawn as paint whatever their tool.
+ * - opacity < 1 (paths, shapes): `saveLayerAlpha`, one [TILE] square at a time.
+ * Paths and shapes are rasterized per [TILE] grid square (see there: the same pixels whatever the
+ * region, and bounded offscreen layers). No spatial grid (every object's bounds are tested) and no
+ * color-mode constraint (the editor's commit constrains the touched tiles). Brush outlines are
+ * drawn as paint whatever their tool.
  */
 object VectorLayerRenderer {
     /** Flattening tolerance of varying-width outlines (document px). */
@@ -67,10 +69,21 @@ object VectorLayerRenderer {
     /** Most points one flattened piece of a varying-width line is cut into. */
     private const val MAX_PIECES = 1024
 
+    /**
+     * Side of the document-anchored grid squares paths and shapes are rasterized in. Skia's
+     * anti-aliasing of a path depends on where the canvas clip cuts it (measured: up to ~40
+     * levels at edge pixels, for paths of any size), so a path or shape is always drawn clipped to
+     * grid tiles (∩ the region): re-rendering a region made of whole tiles gives exactly the
+     * pixels a full render gives there, which keeps a vector layer's cache equal to a fresh
+     * rendering (I1) however its dirty regions fell. `VectorLayers` keeps its dirty regions on
+     * this grid. Tile-sized clips also bound the offscreen layer of a semi-transparent object.
+     */
+    const val TILE = 256
+
     /** Draws [content] (document px) clipped to [region], leaving out the objects [exclude]. */
     fun render(canvas: Canvas, content: VectorContent, region: Rect, exclude: Set<Long> = emptySet(), tips: TipCache) {
         if (region.isEmpty || content.objects.isEmpty()) return
-        val ctx = Context(StrokeRaster(tips), VectorRenderer())
+        val ctx = Context(StrokeRaster(tips))
         val regionF = RectF(region)
         val save = canvas.save()
         try {
@@ -136,12 +149,17 @@ object VectorLayerRenderer {
     }
 
     /** One render call's (thread-confined) helpers. */
-    private class Context(val raster: StrokeRaster, val shapes: VectorRenderer) {
-        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private class Context(val raster: StrokeRaster) {
         val input = PathStrokeInput(512)
     }
 
+    /**
+     * Draws [o] (paint [bounds]) within [region]: a stroke as one replay; a path or shape tile by
+     * tile ([TILE] grid squares ∩ the region; the same pixels whatever the region, see [TILE]),
+     * through a tile-sized offscreen layer when it is semi-transparent (fill and outline fade
+     * together). A brush outline is replayed once over the region (like the live path stroke
+     * that painted it), or per tile inside the offscreen layers of a semi-transparent object.
+     */
     private fun draw(canvas: Canvas, o: VObject, region: Rect, bounds: RectF, ctx: Context) {
         val opacity = o.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
         if (opacity <= 0f) return
@@ -149,58 +167,105 @@ object VectorLayerRenderer {
             ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut)
             return
         }
-        val save = if (opacity < 1f) {
-            val layer = RectF(bounds).apply { intersect(RectF(region)) }
-            canvas.saveLayerAlpha(layer, (opacity * 255f + 0.5f).toInt())
-        } else -1
+        val faded = opacity < 1f
+        val plain = plainParts(o)
+        if (plain != null || faded) {
+            val area = Rect()
+            RectF(bounds).roundOut(area)
+            if (!area.intersect(region)) return
+            val alpha = (opacity * 255f + 0.5f).toInt()
+            val tile = Rect()
+            var top = Math.floorDiv(area.top, TILE) * TILE
+            while (top < area.bottom) {
+                var left = Math.floorDiv(area.left, TILE) * TILE
+                while (left < area.right) {
+                    tile.set(left, top, left + TILE, top + TILE)
+                    if (tile.intersect(area)) {
+                        val save = canvas.save()
+                        canvas.clipRect(tile)
+                        if (faded) canvas.saveLayerAlpha(RectF(tile), alpha)
+                        plain?.invoke(canvas)
+                        if (faded) drawBrush(canvas, o, tile, ctx)
+                        canvas.restoreToCount(save)
+                    }
+                    left += TILE
+                }
+                top += TILE
+            }
+        }
+        if (!faded) drawBrush(canvas, o, region, ctx)
+    }
+
+    /** The brush outline of [o] (if it has one) within [region]. */
+    private fun drawBrush(canvas: Canvas, o: VObject, region: Rect, ctx: Context) {
         when (o) {
-            is VPath -> drawPath(canvas, o, region, ctx)
-            is VShape -> drawShape(canvas, o, region, ctx)
+            is VPath -> o.stroke?.takeIf { it.kind == VStrokeKind.BRUSH }?.let { drawBrushOutline(canvas, o, it, region, ctx) }
+            is VShape -> if (o.shape.paintsWithBrush) drawShapeBrush(canvas, o, region, ctx)
             is VStroke -> {}
         }
-        if (save >= 0) canvas.restoreToCount(save)
     }
 
     // ------------------------------------------------------------------ paths
 
-    private fun drawPath(canvas: Canvas, p: VPath, region: Rect, ctx: Context) {
+    /**
+     * What [o] draws besides a brush outline (built once, drawn into each tile): a path's fill
+     * and plain outline, a shape's `ShapeOutlines.paintSpec` like the Shape tool; null when
+     * there is nothing of the kind.
+     */
+    private fun plainParts(o: VObject): ((Canvas) -> Unit)? = when (o) {
+        is VPath -> pathParts(o)
+        is VShape -> ShapeOutlines.paintSpec(o.shape, o.shape.paintsWithBrush)?.let { spec ->
+            val renderer = VectorRenderer()
+            val draw: (Canvas) -> Unit = { c -> renderer.draw(c, spec, false, ColorMode.RGB) }
+            draw
+        }
+        is VStroke -> null
+    }
+
+    private fun pathParts(p: VPath): ((Canvas) -> Unit)? {
         val geometry = VectorOps.toVectorPath(p)
-        if (geometry.ops.isEmpty()) return
-        p.fill?.let { paint ->
+        if (geometry.ops.isEmpty()) return null
+        val parts = ArrayList<(Canvas) -> Unit>(2)
+        p.fill?.let { v ->
             val path = geometry.toAndroidPath()
             path.fillType = if (p.fillRule == VFillRule.EVENODD) Path.FillType.EVEN_ODD else Path.FillType.WINDING
-            if (applyPaint(ctx.fill, paint)) canvas.drawPath(path, ctx.fill)
-            ctx.fill.shader = null
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+            if (applyPaint(paint, v)) parts += { c -> c.drawPath(path, paint) }
         }
-        val st = p.stroke ?: return
-        when (st.kind) {
-            VStrokeKind.PLAIN -> drawPlainOutline(canvas, p, st, geometry, ctx)
-            VStrokeKind.BRUSH -> drawBrushOutline(canvas, p, st, region, ctx)
+        val st = p.stroke
+        if (st != null && st.kind == VStrokeKind.PLAIN) plainOutline(p, st, geometry)?.let { parts += it }
+        return when (parts.size) {
+            0 -> null
+            1 -> parts[0]
+            else -> { c -> for (d in parts) d(c) }
         }
     }
 
-    private fun drawPlainOutline(canvas: Canvas, p: VPath, st: VStrokeStyle, geometry: VectorPath, ctx: Context) {
-        if (!(st.width > 0f) || !st.width.isFinite()) return
+    /** A plain outline: a stroked path, or with varying anchor widths a filled outline per sub-path (round joins and caps). */
+    private fun plainOutline(p: VPath, st: VStrokeStyle, geometry: VectorPath): ((Canvas) -> Unit)? {
+        if (!(st.width > 0f) || !st.width.isFinite()) return null
         val uniform = p.subpaths.all { s -> s.anchors.all { it.width == 1f } }
         if (uniform) {
-            val paint = ctx.stroke
-            paint.shader = null
-            paint.color = st.color
-            paint.strokeWidth = st.width
-            paint.strokeCap = when (st.cap) { LineCapStyle.BUTT -> Paint.Cap.BUTT; LineCapStyle.ROUND -> Paint.Cap.ROUND; LineCapStyle.SQUARE -> Paint.Cap.SQUARE }
-            paint.strokeJoin = when (st.join) { JoinStyle.MITER -> Paint.Join.MITER; JoinStyle.ROUND -> Paint.Join.ROUND; JoinStyle.BEVEL -> Paint.Join.BEVEL }
-            paint.strokeMiter = max(1f, st.miter)
-            canvas.drawPath(geometry.toAndroidPath(), paint)
-            return
+            val path = geometry.toAndroidPath()
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                style = Paint.Style.STROKE
+                color = st.color
+                strokeWidth = st.width
+                strokeCap = when (st.cap) { LineCapStyle.BUTT -> Paint.Cap.BUTT; LineCapStyle.ROUND -> Paint.Cap.ROUND; LineCapStyle.SQUARE -> Paint.Cap.SQUARE }
+                strokeJoin = when (st.join) { JoinStyle.MITER -> Paint.Join.MITER; JoinStyle.ROUND -> Paint.Join.ROUND; JoinStyle.BEVEL -> Paint.Join.BEVEL }
+                strokeMiter = max(1f, st.miter)
+            }
+            return { c -> c.drawPath(path, paint) }
         }
-        // Varying thickness: a filled outline per sub-path (round joins and caps).
-        ctx.fill.shader = null
-        ctx.fill.color = st.color
+        val outlines = ArrayList<Path>()
         for (s in p.subpaths) {
             val line = widthLine(s, p.tension, p.polyline, st.width) ?: continue
             val outline = VariableWidthOutline.build(line.xs, line.ys, line.ws, line.n, s.closed && s.anchors.size > 2, WIDTH_TOLERANCE)
-            if (!outline.isEmpty) canvas.drawPath(outline.toAndroidPath(), ctx.fill)
+            if (!outline.isEmpty) outlines += outline.toAndroidPath()
         }
+        if (outlines.isEmpty()) return null
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = st.color }
+        return { c -> for (o in outlines) c.drawPath(o, paint) }
     }
 
     /** A sub-path flattened with the full line width at every point (§4.5: smoothstep between anchors along arc length). */
@@ -310,11 +375,9 @@ object VectorLayerRenderer {
 
     // ------------------------------------------------------------------ shapes
 
-    private fun drawShape(canvas: Canvas, s: VShape, region: Rect, ctx: Context) {
+    /** A brush-stroked shape's outline, replayed along `brushStrokeSamples(brushOutline)` with the shape's seed. */
+    private fun drawShapeBrush(canvas: Canvas, s: VShape, region: Rect, ctx: Context) {
         val o = s.shape
-        val brush = o.paintsWithBrush
-        ShapeOutlines.paintSpec(o, brush)?.let { ctx.shapes.draw(canvas, it, false, ColorMode.RGB) }
-        if (!brush) return
         val input = brushStrokeSamples(ShapeOutlines.brushOutline(o), 0f, null, ctx.input)
         if (input.size < 2) return
         val n = input.size

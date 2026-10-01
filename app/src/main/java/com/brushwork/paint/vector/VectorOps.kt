@@ -1,17 +1,20 @@
 package com.brushwork.paint.vector
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.Vec2
-import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveAnchor
@@ -25,6 +28,7 @@ import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
+import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
@@ -71,33 +75,84 @@ object VectorOps {
     /**
      * Ids of the objects of [content] that [sel] touches: the object's footprint (what it paints,
      * a stroke at its largest width) has a pixel where the selection is not empty.
+     *
+     * The footprint is rasterized against the selection in [TOUCH_TILE] squares of one reused
+     * buffer (memory stays bounded however large the objects), stopping at the first touched
+     * pixel.
      */
     fun touching(content: VectorContent, sel: Selection): Set<Long> {
         if (sel.isEmpty || content.objects.isEmpty()) return emptySet()
         val out = LinkedHashSet<Long>()
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt() }
-        for (o in content.objects) {
-            val b = bounds(o)
-            val r = Rect(floor(b.left).toInt() - 1, floor(b.top).toInt() - 1, ceil(b.right).toInt() + 1, ceil(b.bottom).toInt() + 1)
-            if (b.isEmpty || !r.intersect(sel.bounds)) continue
-            val bmp = try {
-                Bitmap.createBitmap(r.width(), r.height(), Bitmap.Config.ALPHA_8)
-            } catch (e: OutOfMemoryError) {
-                // No memory for an exact test: the boxes overlap, count it as touched.
-                out += o.id
-                continue
+        var probe: FootprintProbe? = null
+        try {
+            for (o in content.objects) {
+                val b = bounds(o)
+                if (b.isEmpty) continue
+                val r = Rect(floor(b.left).toInt() - 1, floor(b.top).toInt() - 1, ceil(b.right).toInt() + 1, ceil(b.bottom).toInt() + 1)
+                if (!r.intersect(sel.bounds)) continue
+                val p = probe ?: try {
+                    FootprintProbe(sel).also { probe = it }
+                } catch (e: OutOfMemoryError) {
+                    // No memory for an exact test: the boxes overlap, count it as touched.
+                    out += o.id
+                    continue
+                }
+                if (p.touches(footprint(o), r)) out += o.id
             }
-            try {
-                val c = Canvas(bmp)
-                c.translate(-r.left.toFloat(), -r.top.toFloat())
-                drawFootprint(c, o, paint)
-                BitmapUtils.maskWith(c, sel.mask)
-                if (BitmapUtils.alpha8ToBytes(bmp).any { it.toInt() != 0 }) out += o.id
-            } finally {
-                bmp.recycle()
-            }
+        } finally {
+            probe?.release()
         }
         return out
+    }
+
+    /** Side of the squares footprints are tested in by [touching] (one reused ALPHA_8 buffer). */
+    private const val TOUCH_TILE = 512
+
+    /** Rasterizes footprints against [sel] tile by tile (one reused tile buffer). Not thread-safe. */
+    private class FootprintProbe(sel: Selection) {
+        private val bmp = Bitmap.createBitmap(TOUCH_TILE, TOUCH_TILE, Bitmap.Config.ALPHA_8)
+        private val canvas = Canvas(bmp)
+        private val bytes = ByteBuffer.allocate(bmp.rowBytes * bmp.height)
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF000000.toInt() }
+        // (drawBitmap(A8, DST_IN) would be a no-op: Skia treats A8 bitmaps as coverage.)
+        private val maskPaint = Paint().apply {
+            xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            shader = BitmapShader(sel.mask, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        }
+        private val maskW = sel.mask.width.toFloat()
+        private val maskH = sel.mask.height.toFloat()
+
+        /** True when [draw] (document px) paints a pixel inside [area] where the selection is set. */
+        fun touches(draw: (Canvas, Paint) -> Unit, area: Rect): Boolean {
+            val rb = bmp.rowBytes
+            var top = area.top
+            while (top < area.bottom) {
+                val th = min(TOUCH_TILE, area.bottom - top)
+                var left = area.left
+                while (left < area.right) {
+                    val tw = min(TOUCH_TILE, area.right - left)
+                    bmp.eraseColor(0)
+                    canvas.save()
+                    canvas.clipRect(0, 0, tw, th)
+                    canvas.translate(-left.toFloat(), -top.toFloat())
+                    draw(canvas, paint)
+                    canvas.drawRect(0f, 0f, maskW, maskH, maskPaint)
+                    canvas.restore()
+                    bytes.rewind()
+                    bmp.copyPixelsToBuffer(bytes)
+                    val a = bytes.array()
+                    for (y in 0 until th) {
+                        val base = y * rb
+                        for (x in 0 until tw) if (a[base + x].toInt() != 0) return true
+                    }
+                    left += TOUCH_TILE
+                }
+                top += TOUCH_TILE
+            }
+            return false
+        }
+
+        fun release() = bmp.recycle()
     }
 
     /**
@@ -373,53 +428,66 @@ object VectorOps {
 
     // ------------------------------------------------------------------ footprints (touching)
 
-    /** Draws everything [o] paints, opaque (strokes at their largest width), in document px. */
-    private fun drawFootprint(c: Canvas, o: VObject, paint: Paint) {
-        when (o) {
-            is VStroke -> {
-                val pts = o.points
-                val r = strokeRadius(o)
-                if (pts.size == 1) {
-                    paint.style = Paint.Style.FILL
-                    c.drawCircle(pts.x[0], pts.y[0], r, paint)
-                    return
-                }
+    /**
+     * What [o] paints, opaque (strokes at their largest width), in document px: its paths are
+     * built once, the returned function draws them (with the given paint) as often as needed.
+     */
+    private fun footprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
+        is VStroke -> {
+            val pts = o.points
+            val r = strokeRadius(o)
+            if (pts.size == 1) {
+                val x = pts.x[0]
+                val y = pts.y[0]
+                val dot: (Canvas, Paint) -> Unit = { c, paint -> paint.style = Paint.Style.FILL; c.drawCircle(x, y, r, paint) }
+                dot
+            } else {
                 val path = Path()
                 path.moveTo(pts.x[0], pts.y[0])
                 for (i in 1 until pts.size) path.lineTo(pts.x[i], pts.y[i])
-                strokePaint(paint, 2f * r, Paint.Cap.ROUND, Paint.Join.ROUND)
-                c.drawPath(path, paint)
+                val line: (Canvas, Paint) -> Unit = { c, paint -> strokePaint(paint, 2f * r, Paint.Cap.ROUND, Paint.Join.ROUND); c.drawPath(path, paint) }
+                line
             }
-            is VPath -> {
-                val path = toVectorPath(o).toAndroidPath()
-                if (o.fill != null) {
-                    path.fillType = if (o.fillRule == VFillRule.EVENODD) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+        }
+        is VPath -> {
+            val path = toVectorPath(o).toAndroidPath()
+            val filled = o.fill != null
+            if (filled) path.fillType = if (o.fillRule == VFillRule.EVENODD) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+            val st = o.stroke
+            val width = when {
+                st == null -> if (o.fill == null) 1f else 0f
+                st.kind == VStrokeKind.PLAIN -> max(0f, st.width) * maxWidth(o)
+                else -> brushOf(st, max(maxWidth(o), 1e-3f)).size
+            }
+            val draw: (Canvas, Paint) -> Unit = { c, paint ->
+                if (filled) {
                     paint.style = Paint.Style.FILL
                     c.drawPath(path, paint)
-                }
-                val st = o.stroke
-                val width = when {
-                    st == null -> if (o.fill == null) 1f else 0f
-                    st.kind == VStrokeKind.PLAIN -> max(0f, st.width) * maxWidth(o)
-                    else -> brushOf(st, max(maxWidth(o), 1e-3f)).size
                 }
                 if (width > 0f) {
                     strokePaint(paint, width, Paint.Cap.ROUND, Paint.Join.ROUND)
                     c.drawPath(path, paint)
                 }
             }
-            is VShape -> {
-                val sh = o.shape
-                ShapeOutlines.paintSpec(sh, sh.paintsWithBrush)?.let { spec ->
+            draw
+        }
+        is VShape -> {
+            val sh = o.shape
+            val spec = ShapeOutlines.paintSpec(sh, sh.paintsWithBrush)
+            val brushPath = if (sh.paintsWithBrush) ShapeOutlines.brushOutline(sh).toAndroidPath() else null
+            val brushSize = if (brushPath != null) brushPresetOf(sh).size else 0f
+            val draw: (Canvas, Paint) -> Unit = { c, paint ->
+                if (spec != null) {
                     spec.fill?.let { paint.style = Paint.Style.FILL; c.drawPath(it, paint) }
                     spec.stroke?.let { strokePaint(paint, spec.strokeWidth, spec.cap, Paint.Join.ROUND); c.drawPath(it, paint) }
                     spec.strokeFill?.let { paint.style = Paint.Style.FILL; c.drawPath(it, paint) }
                 }
-                if (sh.paintsWithBrush) {
-                    strokePaint(paint, brushPresetOf(sh).size, Paint.Cap.ROUND, Paint.Join.ROUND)
-                    c.drawPath(ShapeOutlines.brushOutline(sh).toAndroidPath(), paint)
+                if (brushPath != null) {
+                    strokePaint(paint, brushSize, Paint.Cap.ROUND, Paint.Join.ROUND)
+                    c.drawPath(brushPath, paint)
                 }
             }
+            draw
         }
     }
 
