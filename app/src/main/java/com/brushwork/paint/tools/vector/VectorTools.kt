@@ -67,6 +67,19 @@ internal class OverlayPainter {
         }
     }
 
+    /** A small "+" handle at a screen position (tap it to insert a point there). */
+    fun plus(canvas: Canvas, t: ViewTransform, x: Float, y: Float) {
+        val r = t.dp(6f)
+        handleFill.color = 0xE61E1F22.toInt()
+        handleEdge.color = ACCENT
+        handleEdge.strokeWidth = t.dp(1.5f)
+        canvas.drawCircle(x, y, r, handleFill)
+        canvas.drawCircle(x, y, r, handleEdge)
+        val a = r * 0.55f
+        canvas.drawLine(x - a, y, x + a, y, handleEdge)
+        canvas.drawLine(x, y - a, x, y + a, handleEdge)
+    }
+
     private fun prepare(t: ViewTransform, dashed: Boolean) {
         dark.strokeWidth = t.dp(3.5f)
         light.strokeWidth = t.dp(1.5f)

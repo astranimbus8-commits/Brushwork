@@ -17,6 +17,7 @@ import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.vector.ShapeTool
 
 /**
  * Layer operations as offered by the layers panel. Wraps the controller with the guards it leaves
@@ -265,6 +266,22 @@ object LayerOps {
         c.selectTool(ToolId.TEXT)
         val tool = c.tools[ToolId.TEXT] as? TextTool ?: return false
         return tool.editLayer(layer, openEditor = true)
+    }
+
+    /**
+     * Edits the shape of the shape layer [layer] again: switches to the shape tool and opens the
+     * shape (the layer becomes active; its handles, points and options are then editable). False
+     * (with a message) when the layer isn't an editable shape layer or can't be changed.
+     */
+    fun editShape(c: EditorController, layer: Layer): Boolean {
+        if (!layer.isShapeLayer) {
+            c.toast("\"${layer.name}\" is not a shape layer")
+            return false
+        }
+        if (!c.checkEditable(layer)) return false
+        c.selectTool(ToolId.SHAPE)
+        val tool = c.tools[ToolId.SHAPE] as? ShapeTool ?: return false
+        return tool.editLayer(layer)
     }
 
     /** Makes [layer] active and chooses whether painting edits its mask or its pixels. */

@@ -307,6 +307,7 @@ private fun LayerList(
                 onEditMask = { controller.fromPanel { LayerOps.editTarget(controller, layer, mask = true) } },
                 modifier = itemModifier.padding(vertical = 1.dp),
                 onEditText = { controller.fromPanel { LayerOps.editText(controller, layer) } },
+                onEditShape = { controller.fromPanel { LayerOps.editShape(controller, layer) } },
             )
         }
     }

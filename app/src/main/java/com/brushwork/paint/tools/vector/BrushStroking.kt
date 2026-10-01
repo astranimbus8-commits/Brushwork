@@ -192,9 +192,42 @@ private object FlatScratch {
  */
 internal class BrushStrokePreview(
     private val controller: EditorController,
+    /**
+     * The brush to paint with instead of the painting tool's current one (looked up at every
+     * replay; null = the current one), e.g. the brush a shape layer was drawn with. It is only
+     * handed to the painting tool while a stroke starts, so the user's brush and its saved
+     * settings never change.
+     */
+    private val presetOverride: () -> BrushPreset? = { null },
     /** The painting tool to use (looked up at every replay). */
     private val paintToolId: () -> ToolId = { controller.lastPaintTool },
 ) {
+    /**
+     * Called whenever the live stroke started, changed tool or ended (the painting tool may have
+     * installed or removed its render override): a tool that shows the stroke inside its own
+     * override (an edited shape layer) adopts it here.
+     */
+    var onLiveChanged: (() -> Unit)? = null
+
+    /** The brush the stroke is painted with ([presetOverride], else the tool's current one). */
+    private fun presetOf(id: ToolId): BrushPreset? = presetOverride() ?: controller.presetFor(id)
+
+    /**
+     * Runs [block] (which starts a stroke of painting tool [id]) with the [presetOverride] as the
+     * tool's brush; the current brush is back right after (a stroke keeps the brush it started with).
+     */
+    private inline fun <T> withPreset(id: ToolId, block: () -> T): T {
+        val o = presetOverride()
+        val cur = controller.presetFor(id)
+        if (o == null || cur == null || o == cur) return block()
+        controller.updatePreset(id, o)
+        try {
+            return block()
+        } finally {
+            controller.updatePreset(id, cur)
+        }
+    }
+
     /** A replay waiting to run: [key] identifies the geometry, [points] computes the input. */
     private class Request(val key: Any, val points: (PathStrokeInput) -> Unit)
 
@@ -296,7 +329,7 @@ internal class BrushStrokePreview(
     private fun keyFor(geometry: Any, id: ToolId, tool: Tool): Key {
         val layer = controller.doc.activeLayer
         return Key(
-            geometry, id, tool, controller.presetFor(id), controller.color, layer, layer.props(),
+            geometry, id, tool, presetOf(id), controller.color, layer, layer.props(),
             controller.editTargetOf(layer), controller.selection, controller.doc.colorMode,
         )
     }
@@ -420,6 +453,7 @@ internal class BrushStrokePreview(
         if (tool is BrushTool) measure(tool, w0, System.nanoTime() - n0)
         val exact = !(tool is BrushTool && tool.isDraft)
         live = Live(tool, key, req, exact = exact, last = lastPoint(t0))
+        if (!updated) onLiveChanged?.invoke()
         ran(t0)
         // Refined part by part once the path rests (not while a finger drags it).
         if (!exact && !interacting) schedule(req, refineDelay())
@@ -434,8 +468,10 @@ internal class BrushStrokePreview(
     /** Starts the stroke for [input] from scratch; false when the painting tool refused. */
     private fun start(tool: Tool, key: Key, budget: Float): Boolean {
         val before = controller.message
-        if (tool is BrushTool) tool.beginPath(input, seed, budget)
-        else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
+        withPreset(key.toolId) {
+            if (tool is BrushTool) tool.beginPath(input, seed, budget)
+            else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
+        }
         val msg = controller.message
         if (msg !== before && msg != null) {
             // Say it once per editing session, not on every replay.
@@ -476,6 +512,7 @@ internal class BrushStrokePreview(
             }
             live = null
             tool.onUp(cur.last.copy(time = cur.last.time + 1))
+            onLiveChanged?.invoke()
             return true
         }
         input.clear()
@@ -485,16 +522,18 @@ internal class BrushStrokePreview(
         if (cur != null && tool is BrushTool && cur.tool === tool && tool.isStroking && cur.key.sameStroke(key) && tool.updatePath(input, 0f)) {
             live = null
             tool.onUp(lastPoint(t0))
+            onLiveChanged?.invoke()
             return true
         }
         cancelLive()
         if (tool is BrushTool) {
-            if (tool.beginPath(input, seed)) tool.onUp(lastPoint(t0))
+            if (withPreset(id) { tool.beginPath(input, seed) }) tool.onUp(lastPoint(t0))
         } else {
-            tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true))
+            withPreset(id) { tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true)) }
             for (i in 1 until input.size - 1) tool.onMove(ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true))
             tool.onUp(lastPoint(t0))
         }
+        onLiveChanged?.invoke()
         return true
     }
 
@@ -522,6 +561,7 @@ internal class BrushStrokePreview(
         val l = live ?: return
         live = null
         l.tool.onCancel()
+        onLiveChanged?.invoke()
     }
 
     private fun unschedule() {
@@ -627,18 +667,30 @@ internal class SpecOverlay {
         hasBand = true
     }
 
-    /** Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. */
-    fun draw(canvas: Canvas, t: ViewTransform, controller: EditorController, layer: Layer, specs: List<VectorPaintSpec>, keepBandFree: Boolean = false) {
-        if (specs.isEmpty() || !layer.visible) return
+    /**
+     * Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. With
+     * [asNewLayer] they are drawn as the content of a new (visible, opaque, normal) layer that
+     * will be added above [layer]: not into its mask, not with its visibility or opacity.
+     */
+    fun draw(
+        canvas: Canvas,
+        t: ViewTransform,
+        controller: EditorController,
+        layer: Layer,
+        specs: List<VectorPaintSpec>,
+        keepBandFree: Boolean = false,
+        asNewLayer: Boolean = false,
+    ) {
+        if (specs.isEmpty() || (!asNewLayer && !layer.visible)) return
         val doc = controller.doc
-        val maskMode = controller.editTargetOf(layer) == EditTarget.MASK
+        val maskMode = !asNewLayer && controller.editTargetOf(layer) == EditTarget.MASK
         clip.set(0, 0, doc.width, doc.height)
         bounds.setEmpty()
         for (s in specs) bounds.union(s.bounds)
         if (!bounds.intersect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())) return
         canvas.save()
         canvas.concat(t.matrix)
-        val alpha = (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
+        val alpha = if (asNewLayer) 255 else (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
         val band = keepBandFree && hasBand
         // The band is erased inside an isolated layer (from the items only, not the canvas).
         val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()

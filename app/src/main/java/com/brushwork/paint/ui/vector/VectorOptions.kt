@@ -107,6 +107,8 @@ fun ShapeToolOptions(tool: ShapeTool) {
         optionLeading = { Icon(shapeIcon(it), contentDescription = null) },
         contentDescription = "Shape type",
     )
+    // Points of the pending shape (and the selected point's actions).
+    ShapePointsStrip(tool)
     if (s.type.isLineLike) {
         // A brush paints its own ends: the line caps only apply to plain lines.
         if (s.strokeWith == ShapeStroke.PLAIN) DropdownChip(
@@ -144,6 +146,7 @@ fun ShapeToolOptions(tool: ShapeTool) {
             ActionChip(Units.format(tool.strokeWidth.toDouble(), s.unit, dpi.toDouble()), if (s.useBrushSize) Icons.Filled.Brush else Icons.Filled.LineWeight) { showSettings = true }
         }
     }
+    ShapeEditableChip(tool)
     OptionChip("Center", s.fromCenter, { set { it.copy(fromCenter = !it.fromCenter) } }, icon = Icons.Filled.CenterFocusStrong)
     if (!s.type.isLineLike) {
         OptionChip(
@@ -187,7 +190,10 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             SectionHeader("Stroke")
             MainColorNote(controller.color)
             ChoiceChips(ShapeStroke.entries.map { it.label }, s.strokeWith.ordinal, { i -> set { it.copy(strokeWith = ShapeStroke.entries[i]) } })
-            if (s.strokeWith == ShapeStroke.BRUSH) {
+            if (s.strokeWith == ShapeStroke.BRUSH && tool.editedShapeBrush != null) {
+                // An opened shape keeps the brush it was drawn with.
+                ShapeOwnBrushNote(tool)
+            } else if (s.strokeWith == ShapeStroke.BRUSH) {
                 val paintTool = controller.lastPaintTool
                 val preset = controller.presetFor(paintTool)
                 Hint(
@@ -195,6 +201,9 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                         " at full pressure, with its own size, opacity and texture",
                     Modifier.padding(top = 4.dp),
                 )
+                if (s.editable && tool.editingLayer == null && !tool.newShapesEditable) {
+                    Hint("The ${paintTool.label.lowercase()} works on the pixels that are already there: these outlines are painted into the active layer and can't be edited again")
+                }
             }
             StrokeWidthControls(tool, unit = s.unit, onUnit = onUnit, dpi = dpi, showSlider = true, showUnit = true)
             if (s.type.isLineLike && s.strokeWith == ShapeStroke.PLAIN) {
@@ -239,6 +248,7 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             "Snap angle", s.snapAngle, { v -> set { it.copy(snapAngle = v) } },
             description = if (s.type.isLineLike) "Lines snap to 15° steps" else "Rotation snaps to 15° steps",
         )
+        ShapeEditingSettings(tool)
     }
 }
 
@@ -285,7 +295,11 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
     val dpi = tool.controller.doc.dpi
     fun set(f: (ShapeSettings) -> ShapeSettings) = tool.update(f)
     val range = ShapeGeometry.MIN_SIDES..ShapeGeometry.MAX_SIDES
-    when (s.type) {
+    // A shape with its own points has no sides / star points any more (Reset shape brings them back).
+    val custom by remember(tool) { derivedStateOf { tool.points != null && tool.box != null } }
+    if (custom && (s.type == ShapeType.POLYGON || s.type == ShapeType.STAR)) {
+        Hint("This shape has its own points: \"Reset shape\" goes back to a regular ${s.type.label.lowercase()}", Modifier.padding(top = 8.dp))
+    } else when (s.type) {
         ShapeType.POLYGON -> {
             SectionHeader("Polygon")
             IntSliderField("Number of sides", s.sides, { n -> set { it.copy(sides = n) } }, range)
@@ -342,7 +356,10 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
         onDismiss = onDismiss,
         actions = { UnitSelector(unit, { u -> set { it.copy(unit = u) } }) },
     ) {
-        if (s.type.isLineLike) {
+        // The selected point (points mode) of a shape with its own points.
+        ShapePointFields(tool, unit, dpi)
+        // A line with its own points is placed by its box like the other shapes.
+        if (s.type.isLineLike && tool.points == null) {
             val st = b.start
             val en = b.end
             SectionHeader("Start point")
@@ -415,7 +432,7 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             stepPx = s.nudgeStepPx,
             onStep = { v -> set { it.copy(nudgeStepPx = v) } },
             unit = unit, dpi = dpi,
-            hint = "Each arrow moves the shape by one step",
+            hint = if (tool.pointsMode && tool.selectedPoint >= 0) "Each arrow moves point ${tool.selectedPoint + 1} by one step" else "Each arrow moves the shape by one step",
             onNudge = { dx, dy -> tool.nudge(dx, dy) },
         )
     }

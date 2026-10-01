@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -380,6 +381,10 @@ private fun OverflowMenuButton(
             if (!maskPage) {
                 if (row.isText) {
                     MenuItem("Edit text", Icons.Filled.TextFields) { act { LayerOps.editText(controller, layer) } }
+                    HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                }
+                if (row.isShape) {
+                    MenuItem("Edit shape", Icons.Outlined.Category) { act { LayerOps.editShape(controller, layer) } }
                     HorizontalDivider(color = BrushworkColors.ChromeBorder)
                 }
                 MenuItem("Import picture", Icons.Filled.AddPhotoAlternate, enabled = canAddLayer) { close(); onImportPicture() }

@@ -223,7 +223,7 @@ class VectorFastPathTest {
         val h = 1000
         val c = controller(w, h, deterministicBrush)
         c.selectTool(ToolId.SHAPE)
-        val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        val tool = (c.tools.getValue(ToolId.SHAPE) as ShapeTool).also { it.update { s -> s.copy(editable = false) } }
         tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, strokeWith = ShapeStroke.BRUSH, useBrushSize = true, corner = CornerStyle.ROUND, cornerRadius = 40f, fromCenter = false, keepProportions = false, snapAngle = false) }
         // Drag-create, then drag the bottom-right handle.
         c.slowDrag(Vec2(100f, 100f), Vec2(300f, 260f), Vec2(600f, 520f), Vec2(700f, 640f))
@@ -255,7 +255,7 @@ class VectorFastPathTest {
     fun plainShapeIsDrawnInTheOverlayOnlyWhileDragged() {
         val c = controller(200, 200)
         c.selectTool(ToolId.SHAPE)
-        val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        val tool = (c.tools.getValue(ToolId.SHAPE) as ShapeTool).also { it.update { s -> s.copy(editable = false) } }
         tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE, strokeWith = ShapeStroke.PLAIN, useBrushSize = false, strokeWidth = 6f, fromCenter = false, keepProportions = false) }
         c.pointerDown(ToolPoint(20f, 20f))
         c.pointerMove(ToolPoint(100f, 100f))
@@ -308,7 +308,7 @@ class VectorFastPathTest {
             val c = controller(200, 200, layers = 2)
             setUp(c)
             c.selectTool(ToolId.SHAPE)
-            val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+            val tool = (c.tools.getValue(ToolId.SHAPE) as ShapeTool).also { it.update { s -> s.copy(editable = false) } }
             tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE_FILL, strokeWith = ShapeStroke.PLAIN) }
             c.pointerDown(ToolPoint(20f, 20f))
             c.pointerMove(ToolPoint(100f, 100f))
@@ -322,7 +322,7 @@ class VectorFastPathTest {
         c.doc.activeLayerIndex = 0
         c.doc.layers[1].visible = false
         c.selectTool(ToolId.SHAPE)
-        val tool = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        val tool = (c.tools.getValue(ToolId.SHAPE) as ShapeTool).also { it.update { s -> s.copy(editable = false) } }
         tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, strokeWith = ShapeStroke.PLAIN) }
         c.pointerDown(ToolPoint(20f, 20f))
         c.pointerMove(ToolPoint(120f, 150f))

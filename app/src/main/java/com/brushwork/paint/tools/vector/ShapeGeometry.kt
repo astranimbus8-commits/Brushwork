@@ -196,44 +196,62 @@ object ShapeGeometry {
         val ops = ArrayList<PathOp>(n * 4 + 2)
         for (i in 0 until n) {
             val p = v[i]
-            val prev = v[(i - 1 + n) % n]
-            val next = v[(i + 1) % n]
-            val toPrev = prev - p; val toNext = next - p
-            val lp = toPrev.length; val ln = toNext.length
-            val d = cuts[i]
-            val uA = if (lp > 1e-6f) toPrev / lp else Vec2.ZERO
-            val uB = if (ln > 1e-6f) toNext / ln else Vec2.ZERO
-            val theta = acos(uA.dot(uB).coerceIn(-1f, 1f))
-            val sharp = d < 1e-3f || lp < 1e-6f || ln < 1e-6f || theta > PI.toFloat() - 1e-3f
-            if (sharp) {
+            val c = corner(p, v[(i - 1 + n) % n], v[(i + 1) % n], cuts[i])
+            if (c == null) {
                 ops += if (i == 0) PathOp.MoveTo(p) else PathOp.LineTo(p)
                 continue
             }
-            val a = p + uA * d
-            val b = p + uB * d
-            ops += if (i == 0) PathOp.MoveTo(a) else PathOp.LineTo(a)
-            when (style) {
-                CornerStyle.BEVEL -> ops += PathOp.LineTo(b)
-                CornerStyle.ROUND -> {
-                    val bis = (uA + uB).normalized()
-                    val center = p + bis * (d / cos(theta / 2f))
-                    val r = d * tan(theta / 2f)
-                    val a0 = (a - center).angle
-                    val sweep = signedAngle(a - center, b - center)
-                    arcToCubics(center, r, r, a0, sweep, ops)
-                    ops[ops.lastIndex] = (ops.last() as PathOp.CubicTo).copy(p = b)
-                }
-                CornerStyle.INVERTED -> {
-                    val a0 = uA.angle
-                    val sweep = signedAngle(uA, uB)
-                    arcToCubics(p, d, d, a0, sweep, ops)
-                    ops[ops.lastIndex] = (ops.last() as PathOp.CubicTo).copy(p = b)
-                }
-                CornerStyle.SHARP -> {}
-            }
+            ops += if (i == 0) PathOp.MoveTo(c.a) else PathOp.LineTo(c.a)
+            appendCorner(c, style, ops)
         }
         ops += PathOp.Close
         return VectorPath(ops)
+    }
+
+    /**
+     * One treated corner at vertex [p]: the cut points [a] (towards the previous vertex) and [b]
+     * (towards the next one), [d] from [p], the unit directions [uA] / [uB] of the two edges and
+     * the angle [theta] between them.
+     */
+    internal class Corner(val p: Vec2, val a: Vec2, val b: Vec2, val uA: Vec2, val uB: Vec2, val theta: Float, val d: Float)
+
+    /**
+     * The corner at [p] between straight edges to [prev] and [next], cut back by [d]; null when
+     * it stays sharp (no cut, a degenerate edge or a straight angle).
+     */
+    internal fun corner(p: Vec2, prev: Vec2, next: Vec2, d: Float): Corner? {
+        val toPrev = prev - p; val toNext = next - p
+        val lp = toPrev.length; val ln = toNext.length
+        val uA = if (lp > 1e-6f) toPrev / lp else Vec2.ZERO
+        val uB = if (ln > 1e-6f) toNext / ln else Vec2.ZERO
+        val theta = acos(uA.dot(uB).coerceIn(-1f, 1f))
+        val sharp = d < 1e-3f || lp < 1e-6f || ln < 1e-6f || theta > PI.toFloat() - 1e-3f
+        if (sharp) return null
+        return Corner(p, p + uA * d, p + uB * d, uA, uB, theta, d)
+    }
+
+    /** Appends the treatment of corner [c] from its cut point a (already reached) to b. */
+    internal fun appendCorner(c: Corner, style: CornerStyle, ops: MutableList<PathOp>) {
+        val p = c.p; val a = c.a; val b = c.b; val d = c.d
+        when (style) {
+            CornerStyle.BEVEL -> ops += PathOp.LineTo(b)
+            CornerStyle.ROUND -> {
+                val bis = (c.uA + c.uB).normalized()
+                val center = p + bis * (d / cos(c.theta / 2f))
+                val r = d * tan(c.theta / 2f)
+                val a0 = (a - center).angle
+                val sweep = signedAngle(a - center, b - center)
+                arcToCubics(center, r, r, a0, sweep, ops)
+                ops[ops.lastIndex] = (ops.last() as PathOp.CubicTo).copy(p = b)
+            }
+            CornerStyle.INVERTED -> {
+                val a0 = c.uA.angle
+                val sweep = signedAngle(c.uA, c.uB)
+                arcToCubics(p, d, d, a0, sweep, ops)
+                ops[ops.lastIndex] = (ops.last() as PathOp.CubicTo).copy(p = b)
+            }
+            CornerStyle.SHARP -> ops += PathOp.LineTo(b)
+        }
     }
 
     /** Signed angle (radians, -PI..PI) rotating [a] onto [b]. */
@@ -325,7 +343,7 @@ object ShapeGeometry {
     }
 
     /** Arrowhead length and half width for an arrow of length [len] (see [arrow]). */
-    private fun arrowHeadSize(len: Float, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): Pair<Float, Float> {
+    internal fun arrowHeadSize(len: Float, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): Pair<Float, Float> {
         val count = (if (heads.start) 1 else 0) + (if (heads.end) 1 else 0)
         val headLen = min(max(strokeWidth * headScale, 4f), len * (if (count == 2) 0.45f else 0.9f))
         val halfW = headLen * (if (style == ArrowHeadStyle.FILLED) 0.5f else 0.6f)
@@ -356,6 +374,103 @@ object ShapeGeometry {
         if (heads.start) head(a, -u, first = true) else pts += a
         if (heads.end) head(b, u, first = false) else pts += b
         return VectorPath.polyline(pts)
+    }
+
+    // ------------------------------------------------------------------ arrows along a path
+
+    /** Unit direction in which the open polyline [pts] leaves its last point (null when it has no length). */
+    private fun endDirection(pts: List<Vec2>): Vec2? {
+        val tip = pts.last()
+        for (i in pts.lastIndex - 1 downTo 0) {
+            val d = tip - pts[i]
+            if (d.length > 1e-3f) return d.normalized()
+        }
+        return null
+    }
+
+    /** [pts] shortened by [d] at its end (along the polyline). */
+    internal fun trimEnd(pts: List<Vec2>, d: Float): List<Vec2> {
+        if (d <= 0f || pts.size < 2) return pts
+        var left = d
+        var i = pts.lastIndex
+        var end = pts[i]
+        while (i > 0) {
+            val prev = pts[i - 1]
+            val seg = end.distanceTo(prev)
+            if (seg >= left) {
+                val cut = end.lerp(prev, if (seg > 0f) left / seg else 0f)
+                return pts.subList(0, i) + cut
+            }
+            left -= seg
+            i--
+            end = prev
+        }
+        return listOf(pts[0], pts[0])
+    }
+
+    /** [pts] shortened by [d] at its start. */
+    internal fun trimStart(pts: List<Vec2>, d: Float): List<Vec2> = trimEnd(pts.asReversed(), d).asReversed()
+
+    /**
+     * An arrow along the open polyline [pts] (a custom line with several points): like [arrow],
+     * but each head points along the first / last segment and the shaft follows the polyline.
+     */
+    fun arrowAlong(pts: List<Vec2>, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): ArrowGeometry {
+        if (pts.size < 2) return ArrowGeometry(VectorPath.EMPTY, VectorPath.EMPTY)
+        val len = VectorPath.length(pts)
+        val uEnd = endDirection(pts)
+        val uStart = endDirection(pts.asReversed())
+        if (len < 1e-3f || uEnd == null || uStart == null) return ArrowGeometry(VectorPath.EMPTY, VectorPath.EMPTY)
+        val (headLen, halfW) = arrowHeadSize(len, strokeWidth, heads, style, headScale)
+        val strokeOps = ArrayList<PathOp>()
+        val fillOps = ArrayList<PathOp>()
+        fun head(tip: Vec2, dir: Vec2) {
+            val perp = dir.perpendicular()
+            val base = tip - dir * headLen
+            val l = base + perp * halfW
+            val r = base - perp * halfW
+            if (style == ArrowHeadStyle.FILLED) {
+                fillOps += PathOp.MoveTo(tip); fillOps += PathOp.LineTo(l); fillOps += PathOp.LineTo(r); fillOps += PathOp.Close
+            } else {
+                strokeOps += PathOp.MoveTo(l); strokeOps += PathOp.LineTo(tip); strokeOps += PathOp.LineTo(r)
+            }
+        }
+        val inset = min(if (style == ArrowHeadStyle.FILLED) headLen * 0.6f else strokeWidth / 2f, len / 2f)
+        var shaft = pts
+        if (heads.end) { head(pts.last(), uEnd); shaft = trimEnd(shaft, inset) }
+        if (heads.start) { head(pts.first(), uStart); shaft = trimStart(shaft, inset) }
+        val ops = ArrayList<PathOp>(shaft.size + strokeOps.size)
+        ops += PathOp.MoveTo(shaft[0])
+        for (i in 1 until shaft.size) ops += PathOp.LineTo(shaft[i])
+        ops += strokeOps
+        return ArrowGeometry(VectorPath(ops), VectorPath(fillOps))
+    }
+
+    /** [arrowAlong] as ONE continuous open path for a brush (see [arrowBrushOutline]). */
+    fun arrowBrushOutlineAlong(pts: List<Vec2>, strokeWidth: Float, heads: ArrowHeads, style: ArrowHeadStyle, headScale: Float): VectorPath {
+        if (pts.size < 2) return VectorPath.EMPTY
+        val len = VectorPath.length(pts)
+        val uEnd = endDirection(pts)
+        val uStart = endDirection(pts.asReversed())
+        if (len < 1e-3f || uEnd == null || uStart == null) return VectorPath.EMPTY
+        val (headLen, halfW) = arrowHeadSize(len, strokeWidth, heads, style, headScale)
+        fun part(tip: Vec2, dir: Vec2): List<Vec2> {
+            val perp = dir.perpendicular()
+            val base = tip - dir * headLen
+            val l = base + perp * halfW
+            val r = base - perp * halfW
+            return if (style == ArrowHeadStyle.FILLED) listOf(base, l, tip, r, base) else listOf(tip, l, tip, r)
+        }
+        // Filled heads join the shaft at their base, open heads at their tip.
+        val trim = if (style == ArrowHeadStyle.FILLED) min(headLen, len / 2f) else 0f
+        var shaft = pts
+        if (heads.end) shaft = trimEnd(shaft, trim)
+        if (heads.start) shaft = trimStart(shaft, trim)
+        val out = ArrayList<Vec2>(shaft.size + 10)
+        if (heads.start) out += part(pts.first(), uStart).asReversed()
+        out += shaft
+        if (heads.end) out += part(pts.last(), uEnd)
+        return VectorPath.polyline(out)
     }
 
     /**
