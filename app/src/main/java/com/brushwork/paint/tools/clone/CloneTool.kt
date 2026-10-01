@@ -215,6 +215,11 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         }
         strokeOffset = offset
         gesture = Gesture.PAINT
+        // The stroke keeps the preset it starts with (the side slider may move meanwhile). A dab
+        // reaches size / 2 from its center (a rotated square tip size · 0.71) and is scattered up
+        // to scatter · size away from the path.
+        val preset = controller.cloneBrush
+        strokeReach = preset.size * (0.75f + preset.scatter.coerceAtLeast(0f)) + 2f
         brush.onDown(p)
         if (!brush.isStroking) {
             // Refused (locked or hidden layer...): the brush said why.
@@ -226,14 +231,13 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         notePath(at)
     }
 
+    /** How far the current stroke's dabs reach from its path (document px). */
+    private var strokeReach = 0f
+
     /** Tells the source where the stroke went (All layers composites only what it can sample). */
     private fun notePath(to: Vec2) {
         val from = finger ?: to
-        val preset = controller.cloneBrush
-        // A dab reaches size / 2 from its center (a rotated square tip size · 0.71) and is
-        // scattered up to scatter · size away from the path.
-        val reach = preset.size * (0.75f + preset.scatter) + 2f
-        source.notePath(from.x, from.y, to.x, to.y, reach)
+        source.notePath(from.x, from.y, to.x, to.y, strokeReach)
         finger = to
     }
 
