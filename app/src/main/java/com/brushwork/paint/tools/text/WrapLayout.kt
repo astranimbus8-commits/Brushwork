@@ -13,8 +13,9 @@ import java.text.BreakIterator
  * - break opportunities come from `java.text.BreakIterator.getLineInstance()` (CJK included);
  *   trailing spaces hang past the edge and don't count;
  * - a word wider than the whole width is broken between characters (grapheme clusters);
- * - line pitch = cell (descent - ascent) + extra (the line spacing), except after the line that
- *   reaches the end of the text (StaticLayout adds no spacing after its last line).
+ * - line pitch = cell (descent - ascent) + extra (the line spacing); the height ends at the last
+ *   line's cell (StaticLayout adds no spacing below its last line, even an empty one after a
+ *   final line break).
  *
  * Wrapping: every line slot ("band") is the glyph cell of one line. The picture blocks parts of
  * it; the free parts ("runs") narrower than the shortest run are left empty, and a band with no
@@ -192,14 +193,12 @@ object WrapLayout {
         for (p in 0 until t.paragraphCount) {
             val ps = t.paragraphs[2 * p]
             val pe = t.paragraphs[2 * p + 1]
-            // The end of this paragraph's last line, its line break included.
-            val paraEnd = if (pe < n) pe + 1 else pe
             if (ps == pe) {
                 // An empty line takes a band, wherever the picture is (it draws nothing).
                 lines += WrapLine(ps, ps, aligned(fullRun[0], 0f, align), (top + metrics.ascent).toFloat(), 0f)
                 lastTop = top
                 bands++
-                top += cell + if (paraEnd == n) 0f else extra
+                top += cell + extra
                 continue
             }
             val brk = t.breaks[p]
@@ -221,10 +220,10 @@ object WrapLayout {
                 if (!placed) skipped++
                 lastTop = top
                 bands++
-                val lineEnd = if (pos >= pe) paraEnd else pos
-                top += cell + if (lineEnd == n) 0f else extra
+                top += cell + extra
             }
         }
+        // The spacing is added between lines: none below the last one.
         val height = if (bands == 0) 0f else (lastTop + cell).toFloat()
         return WrapResult(lines, height, bands, skipped)
     }

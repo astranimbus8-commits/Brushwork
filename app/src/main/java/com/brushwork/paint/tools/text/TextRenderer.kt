@@ -510,24 +510,27 @@ object TextRenderer {
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
         val overflow = if (measureInk && spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
         // The same placement as the drawing below, as outlines (for export).
-        val outline: (Path, TextPaint) -> Unit = { out, p ->
+        val outline: (Path, TextPaint) -> Unit = { out, centered ->
+            // Glyph paths of left-aligned text moved by half their advance: the drawing centers them.
+            val p = TextPaint(centered).apply { textAlign = Paint.Align.LEFT }
             val tmp = Path()
             val m = Matrix()
             for (i in glyphs.indices) {
                 val g = glyphs[i]
+                val half = p.measureText(g.text) / 2f
                 tmp.rewind()
                 when (g.kind) {
-                    VerticalGlyphKind.UPRIGHT -> p.getTextPath(g.text, 0, g.text.length, g.cx + shift, g.cy + baseline, tmp)
-                    VerticalGlyphKind.PUNCTUATION -> p.getTextPath(g.text, 0, g.text.length, g.cx + punct + shift, g.cy + baseline - punct, tmp)
-                    VerticalGlyphKind.SMALL_KANA -> p.getTextPath(g.text, 0, g.text.length, g.cx + small + shift, g.cy + baseline - small, tmp)
+                    VerticalGlyphKind.UPRIGHT -> p.getTextPath(g.text, 0, g.text.length, g.cx + shift - half, g.cy + baseline, tmp)
+                    VerticalGlyphKind.PUNCTUATION -> p.getTextPath(g.text, 0, g.text.length, g.cx + punct + shift - half, g.cy + baseline - punct, tmp)
+                    VerticalGlyphKind.SMALL_KANA -> p.getTextPath(g.text, 0, g.text.length, g.cx + small + shift - half, g.cy + baseline - small, tmp)
                     VerticalGlyphKind.ROTATED -> {
-                        p.getTextPath(g.text, 0, g.text.length, 0f, baseline, tmp)
+                        p.getTextPath(g.text, 0, g.text.length, -half, baseline, tmp)
                         m.setRotate(90f)
                         m.postTranslate(g.cx + shift, g.cy)
                         tmp.transform(m)
                     }
                     VerticalGlyphKind.TATE_CHU_YOKO -> {
-                        p.getTextPath(g.text, 0, g.text.length, 0f, 0f, tmp)
+                        p.getTextPath(g.text, 0, g.text.length, -half, 0f, tmp)
                         m.setScale(tcyScale[i], 1f)
                         m.postTranslate(g.cx + shift, g.cy + baseline)
                         tmp.transform(m)

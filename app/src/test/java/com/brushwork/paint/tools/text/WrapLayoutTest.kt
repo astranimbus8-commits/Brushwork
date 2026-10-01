@@ -147,11 +147,11 @@ class WrapLayoutTest {
 
     @Test
     fun spacingFollowsStaticLayoutAtTheEnd() {
-        // "a\n": the first line reaches the text end (its line break included): no extra after it.
+        // "a\n": two lines (the second empty), spaced; nothing below the last one.
         val r = layout("a\n", 100f, m = WrapMetrics(8f, 2f, extra = 4f))
         assertEquals(2, r.lines.size)
-        assertEquals(listOf(8f, 18f), r.lines.map { it.baseline })
-        assertEquals(20f, r.height, 0f)
+        assertEquals(listOf(8f, 22f), r.lines.map { it.baseline })
+        assertEquals(24f, r.height, 0f)
         val two = layout("a\nb", 100f, m = WrapMetrics(8f, 2f, extra = 4f))
         assertEquals(listOf(8f, 22f), two.lines.map { it.baseline })
         assertEquals(24f, two.height, 0f)
