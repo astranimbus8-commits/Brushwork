@@ -88,6 +88,8 @@ internal object HistoryLabels {
     fun stepName(id: ToolId): String = when (id) {
         ToolId.CURVE, ToolId.POLYLINE -> "last point"
         ToolId.LASSO -> "last corner"
+        // A shape with its own points steps back one point / shape edit.
+        ToolId.SHAPE -> "last shape edit"
         else -> "last ${id.label.lowercase()} step"
     }
 }
