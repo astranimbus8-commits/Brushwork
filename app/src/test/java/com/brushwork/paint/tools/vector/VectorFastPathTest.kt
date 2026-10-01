@@ -337,7 +337,7 @@ class VectorFastPathTest {
         val c = controller(240, 200)
         c.selectTool(ToolId.POLYLINE)
         val tool = c.tools.getValue(ToolId.POLYLINE) as CurveTool
-        tool.update { it.copy(stroke = CurveStroke.PLAIN, plainWidth = 16f, fill = false) }
+        tool.update { it.copy(stroke = CurveStroke.PLAIN, plainWidth = 16f, useBrushSize = false, fill = false) }
         for (p in listOf(Vec2(20f, 100f), Vec2(120f, 40f), Vec2(220f, 100f))) {
             c.pointerDown(ToolPoint(p.x, p.y)); c.pointerUp(ToolPoint(p.x, p.y))
         }

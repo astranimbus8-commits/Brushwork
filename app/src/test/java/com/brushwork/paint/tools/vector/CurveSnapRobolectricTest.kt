@@ -241,7 +241,7 @@ class CurveSnapRobolectricTest {
     @Test
     fun aCommittedSnappedCurveIsOneUndoStepAndDrawnThroughTheSnappedPoints() {
         val (c, tool) = setup(polyline = true)
-        tool.update { it.copy(plainWidth = 2f) }
+        tool.update { it.copy(plainWidth = 2f, useBrushSize = false) }
         c.tap(103f, 250f); c.tap(103f, 280f)
         assertEquals(Vec2(100f, 250f), pos(tool, 0))
         // The second point lines up with the first: an upright line at x = 100.
