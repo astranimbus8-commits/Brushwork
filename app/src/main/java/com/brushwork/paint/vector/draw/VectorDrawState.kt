@@ -45,7 +45,8 @@ internal class VectorDrawState(private val c: EditorController) {
 
     /** Per layer: when the running update started (uptime ms) and the jobs waiting for it. */
     private val running = IdentityHashMap<Layer, Long>()
-    private val generation = IdentityHashMap<Layer, Int>()
+    /** Per layer: the number of the latest run (weak: a deleted layer is not kept alive by it; layers compare by identity). */
+    private val generation = WeakHashMap<Layer, Int>()
     private val waiting = IdentityHashMap<Layer, ArrayDeque<(() -> Unit) -> Unit>>()
 
     /**
@@ -90,8 +91,9 @@ internal class VectorDrawState(private val c: EditorController) {
         val job = queue?.removeFirstOrNull()
         if (queue != null && queue.isEmpty()) waiting.remove(layer)
         if (job == null) {
+            // (The generation keeps counting: a job that outlived the stuck guard and reports
+            // back much later never matches a newer run.)
             running.remove(layer)
-            generation.remove(layer)
             return
         }
         run(layer, job)
