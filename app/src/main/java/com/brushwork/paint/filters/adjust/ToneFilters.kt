@@ -39,7 +39,11 @@ class BrightnessContrastFilter : Filter("adjust.brightness_contrast", "Brightnes
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer =
-        AdjustMath.applyRgbLut(src, ctx, lut(values.float("brightness") / 100f, values.float("contrast") / 100f))
+        AdjustMath.applyRgbLut(src, ctx, lutOf(values))
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = AdjustMath.lutMapper(lutOf(values))
+
+    private fun lutOf(values: FilterValues): IntArray = lut(values.float("brightness") / 100f, values.float("contrast") / 100f)
 
     companion object {
         /** [brightness] and [contrast] in -1..1. */
@@ -63,9 +67,16 @@ class ToneCurveFilter : Filter("adjust.tone_curve", "Tone Curve", FilterCategory
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val (r, g, b) = channelLuts(values.choice("channel"), AdjustMath.curveLut(values.curve("curve")))
+        val (r, g, b) = lutsOf(values)
         return AdjustMath.applyRgbLut(src, ctx, r, g, b)
     }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper {
+        val (r, g, b) = lutsOf(values)
+        return AdjustMath.lutMapper(r, g, b)
+    }
+
+    private fun lutsOf(values: FilterValues) = channelLuts(values.choice("channel"), AdjustMath.curveLut(values.curve("curve")))
 }
 
 /**
@@ -85,14 +96,25 @@ class LevelsFilter : Filter("adjust.levels", "Level Adjustment", FilterCategory.
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val (mr, mg, mb) = manualLuts(values)
+        if (!values.bool("auto")) return AdjustMath.applyRgbLut(src, ctx, mr, mg, mb)
+        val auto = autoLuts(src, ctx)
+        return AdjustMath.applyRgbLut(src, ctx, AdjustMath.compose(mr, auto[0]), AdjustMath.compose(mg, auto[1]), AdjustMath.compose(mb, auto[2]))
+    }
+
+    /** The manual levels are pointwise; "Auto" depends on the image's histogram (no mapper then). */
+    override fun pixelMapper(values: FilterValues): PixelMapper? {
+        if (values.bool("auto")) return null
+        val (mr, mg, mb) = manualLuts(values)
+        return AdjustMath.lutMapper(mr, mg, mb)
+    }
+
+    private fun manualLuts(values: FilterValues): Triple<IntArray, IntArray, IntArray> {
         val manual = AdjustMath.levelsLut(
             values.float("inBlack"), values.float("inWhite"), values.float("gamma"),
             values.float("outBlack"), values.float("outWhite"),
         )
-        val (mr, mg, mb) = channelLuts(values.choice("channel"), manual)
-        if (!values.bool("auto")) return AdjustMath.applyRgbLut(src, ctx, mr, mg, mb)
-        val auto = autoLuts(src, ctx)
-        return AdjustMath.applyRgbLut(src, ctx, AdjustMath.compose(mr, auto[0]), AdjustMath.compose(mg, auto[1]), AdjustMath.compose(mb, auto[2]))
+        return channelLuts(values.choice("channel"), manual)
     }
 
     companion object {
@@ -136,6 +158,8 @@ class PosterizeFilter : Filter("adjust.posterize", "Posterize", FilterCategory.A
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer =
         AdjustMath.applyRgbLut(src, ctx, lut(values.int("levels")))
 
+    override fun pixelMapper(values: FilterValues): PixelMapper = AdjustMath.lutMapper(lut(values.int("levels")))
+
     companion object {
         fun lut(levels: Int): IntArray {
             val n = levels.coerceIn(2, 256)
@@ -157,19 +181,10 @@ class InvertFilter : Filter("adjust.invert", "Invert Color", FilterCategory.ADJU
         AdjustMath.applyRgbLut(src, ctx, lut(values))
 
     /**
-     * The same mapping as [apply] per pixel (v1.5 F2: the first non-identity live effect for
-     * adjustment layers): fully transparent pixels are left alone, alpha is kept.
+     * The same mapping as [apply] per pixel (v1.5: a live effect for adjustment layers): fully
+     * transparent pixels are left alone, alpha is kept.
      */
-    override fun pixelMapper(values: FilterValues): PixelMapper {
-        val lut = lut(values)
-        return PixelMapper { px, from, until ->
-            for (i in from until until) {
-                val c = px[i]
-                if (c ushr 24 == 0) continue
-                px[i] = (c and 0xFF000000.toInt()) or (lut[(c shr 16) and 0xFF] shl 16) or (lut[(c shr 8) and 0xFF] shl 8) or lut[c and 0xFF]
-            }
-        }
-    }
+    override fun pixelMapper(values: FilterValues): PixelMapper = AdjustMath.lutMapper(lut(values))
 
     private fun lut(values: FilterValues): IntArray {
         val s = (values.float("amount") / 100f).coerceIn(0f, 1f)
@@ -185,11 +200,19 @@ class GrayscaleFilter : Filter("adjust.grayscale", "Grayscale", FilterCategory.A
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val m = mapperOrNull(values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperOrNull(values) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** Null when nothing changes (amount 0). */
+    private fun mapperOrNull(values: FilterValues): PixelMapper? {
         val amount = (values.float("amount") / 100f).coerceIn(0f, 1f)
-        if (amount <= 0f) return src.copy()
+        if (amount <= 0f) return null
         val method = values.choice("method")
         val k = (amount * 256f).roundToInt()
-        return FilterMath.mapPixels(src, ctx) { c ->
+        return AdjustMath.pointwise { c ->
             if (c ushr 24 == 0) c else {
                 val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
                 val v = when (method) {
@@ -220,16 +243,10 @@ class BlackWhiteFilter : Filter("adjust.black_white", "Black & White", FilterCat
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val t = (values.float("threshold") / 100f).coerceIn(0f, 1f)
+        val t = threshold(values)
         val sigma = ctx.px(values.float("smoothing").coerceAtLeast(0f))
         val aa = values.bool("antialias")
-        val black = 0xFF000000.toInt(); val white = -1
-        if (sigma < 0.3f && !aa) {
-            val t255 = t * 255f
-            return FilterMath.mapPixels(src, ctx) { c ->
-                if (c ushr 24 == 0) c else (c and black) or ((if (AdjustMath.luma(c) < t255) black else white) and 0xFFFFFF)
-            }
-        }
+        if (sigma < 0.3f && !aa) return AdjustMath.applyMapper(src, ctx, thresholdMapper(t))
         val w = src.width; val h = src.height; val sp = src.pixels
         val lum = FloatArray(src.size) { AdjustMath.luma(sp[it]) / 255f }
         if (sigma >= 0.3f) {
@@ -264,5 +281,24 @@ class BlackWhiteFilter : Filter("adjust.black_white", "Black & White", FilterCat
             }
         }
         return out
+    }
+
+    /**
+     * Pointwise only without smoothing and anti-aliasing (both look at neighbours): then the
+     * plain threshold, exactly as [apply] does it at full resolution.
+     */
+    override fun pixelMapper(values: FilterValues): PixelMapper? {
+        if (values.bool("antialias") || !(values.float("smoothing").coerceAtLeast(0f) < 0.3f)) return null
+        return thresholdMapper(threshold(values))
+    }
+
+    private fun threshold(values: FilterValues): Float = (values.float("threshold") / 100f).coerceIn(0f, 1f)
+
+    private fun thresholdMapper(t: Float): PixelMapper {
+        val t255 = t * 255f
+        val black = 0xFF000000.toInt(); val white = -1
+        return AdjustMath.pointwise { c ->
+            if (c ushr 24 == 0) c else (c and black) or ((if (AdjustMath.luma(c) < t255) black else white) and 0xFFFFFF)
+        }
     }
 }
