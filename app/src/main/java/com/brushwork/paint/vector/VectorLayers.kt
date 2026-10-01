@@ -37,13 +37,19 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /** New topmost objects: drawn over the cache (no re-render), tiles + LayerDataAction, one step. Returns the new ids. */
     fun addObjects(layer: Layer, objects: List<VObject>, label: String): List<Long> = emptyList()
 
-    /** Data-only append; the caller already committed the pixels inside keepLayerData (live brush stroke). Call inside groupUndo. */
+    /**
+     * Data-only append; the caller already committed the pixels inside keepLayerData (live brush
+     * stroke). Call inside groupUndo. Only for vector layers (a raster layer's pixels are not a
+     * rendering of objects): returns no ids otherwise.
+     */
     fun appendData(layer: Layer, objects: List<VObject>, label: String): List<Long> {
         if (objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
         val before = layer.dataSnapshot()
-        val (content, ids) = (before.vector ?: VectorContent.EMPTY).plus(objects)
+        val current = before.vector ?: return emptyList()
+        val (content, ids) = current.plus(objects)
         c.setLayerData(layer, before.copy(vector = content), label)
-        return ids
+        // Refused (locked or hidden layer): nothing was added.
+        return if (layer.vector === content) ids else emptyList()
     }
 
     /**

@@ -153,6 +153,44 @@ class BrushSeamsRobolectricTest {
     }
 
     @Test
+    fun theVectorStrokeCommitPatternIsOneStepOfPixelsAndObject() {
+        // What A3's capturing recorder does: the live pixels are the cache, the object is appended.
+        val c = setup()
+        val b = brush(c)
+        val layer = c.activeLayer
+        layer.vector = VectorContent.EMPTY
+        var ids: List<Long> = emptyList()
+        val rec = FakeRecorder(ignoresSelection = true) { label, _, commitPixels ->
+            c.groupUndo(label) {
+                c.keepLayerData(layer) { commitPixels() }
+                val pts = com.brushwork.paint.core.PackedPoints(floatArrayOf(20f, 100f), floatArrayOf(50f, 50f), floatArrayOf(1f, 1f))
+                ids = c.vectors.appendData(layer, listOf(com.brushwork.paint.vector.VStroke(0, preset = c.brush, color = c.color, seed = 1, stylus = false, points = pts)), label)
+            }
+            true
+        }
+        b.strokeHook = { StrokeHook.Record(rec) }
+        draw(b)
+        assertEquals(listOf(1L), ids)
+        assertEquals(1, c.undoManager.undoCount)
+        assertEquals("Brush", c.undoManager.undoLabel)
+        assertEquals(1, layer.vector!!.objects.size)
+        assertTrue(pixels(layer.bitmap).any { it != 0 })
+        c.undo()
+        assertEquals(VectorContent.EMPTY, layer.vector)
+        assertTrue(pixels(layer.bitmap).all { it == 0 })
+        c.redo()
+        assertEquals(1, layer.vector!!.objects.size)
+        // A raster layer is never turned into a vector layer by an append; a locked one refuses.
+        val raster = c.doc.layers[0]
+        val stroke = layer.vector!!.objects[0]
+        assertTrue(c.vectors.appendData(raster, listOf(stroke), "Brush").isEmpty())
+        assertNull(raster.vector)
+        layer.locked = true
+        assertTrue(c.vectors.appendData(layer, listOf(stroke), "Brush").isEmpty())
+        assertEquals(1, layer.vector!!.objects.size)
+    }
+
+    @Test
     fun aReplacingRecorderPaintsNothing() {
         val c = setup()
         val b = brush(c)
