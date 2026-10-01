@@ -73,6 +73,10 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             isReturnDefaultValues = true
+            all {
+                // ~1450 Robolectric tests with real Skia need more than the default 512 MB.
+                it.maxHeapSize = "1536m"
+            }
         }
     }
 

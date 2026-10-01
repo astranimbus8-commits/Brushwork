@@ -75,6 +75,28 @@ editing (tap its text, or "Edit text" in the layers window) and re-renders the s
 lays one line of text along a line, circle, rectangle or cubic curve, either bending the glyph
 outlines along the path or rotating each letter rigidly.
 
+## Shape layers (`tools/vector/Shape*`)
+With "Editable (own layer)" on (the default), each new shape goes into its own layer whose
+`Layer.shapeData` holds the serialized `ShapeObject` (`ShapeCodec`: type, box, look settings,
+colors, the brush preset of brush outlines, optional custom points stored relative to the box).
+The shape tool re-opens it when the shape is tapped (or "Edit shape" in the layers window), hides
+the layer's pixels while it is edited, and re-renders it with `EditorController.updateShapeLayer`
+(one undo step; brush outlines are replayed inside `keepLayerData` so they don't rasterize the
+layer). "Points" mode turns any shape into anchors (`ShapePoints.kt`) that can be inserted, moved,
+deleted and made sharp or smooth. As with text, any other pixel edit rasterizes the layer.
+
+## Snapping (`snap/`)
+One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
+are the canvas edges and center, the selection, the content bounds of other visible layers, points
+(other anchors of the path being edited, vertices of shape layers via `addLayerFeatures`), long
+straight lines found in layer pixels (`LineDetector` / `LineScanner`: Table filter lines, frame
+borders, box sides; works on transparent and opaque layers) and the grid. Bounds and lines are found
+in the background and cached per layer content version (`LayerBoundsCache`). A tool takes one
+`SnapSession` (`controller.newSnapSession()`): `begin()` per gesture, `snapPoint` / `snapMove` /
+`snapValue` with what the finger alone gives, `draw()` for the magenta guides, `end()`. The
+transform, shape, curve, polyline, lasso (polygon / curve), marquee, text, ruler and frame divider
+tools use it; the math is `tools/transform/SnapGuides.kt`.
+
 ## Storage (`storage/`)
 Each project is a folder in app-private storage: `project.json` (document + layer properties),
 one compressed raw pixel file per layer/mask, and `thumb.png`. Saves are incremental (only layers

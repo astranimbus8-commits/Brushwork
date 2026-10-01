@@ -37,8 +37,9 @@ Requires Android 8.0 or newer. Every release is signed with the same key, so a n
 - Transform: move/scale/rotate/distort with two-finger pinch, exact numbers with a reference point (scale from the center), delete, and Illustrator-style smart guides that snap to other layers and the canvas.
 - Content-aware fill for selections and a Remove brush that fills what you paint over from its surroundings.
 - Text: editable text layers, text boxes with wrapping / background / border, upright vertical text, text on a line / circle / square / curve (bending or rotating letters), placeholder text, imported fonts (dafont .zip / .ttf / .otf) with favorites.
-- Shapes: line, rectangle, ellipse/circle, polygon with any number of sides, star, arrow; sharp, round, bevel or inverted corners like Illustrator; exact numeric editing.
+- Shapes: line, rectangle, ellipse/circle, polygon with any number of sides, star, arrow; sharp, round, bevel or inverted corners like Illustrator; exact numeric editing. Shapes stay editable on their own layer (tap one to change it again), and "Points" mode lets you add, move, delete and smooth its vertices.
 - Bezier curve tool (tap to add points, long-press a point to make it a sharp corner) and polyline tool.
+- Snap to objects in every tool (one switch): points, shapes, vertices, selections, text, rulers and frame cuts line up with the canvas, other layers, other points and straight lines in your drawing, such as the lines of the Table filters.
 - Smart selection: subject, background, sky, nature, buildings, people, water (on-device).
 - Canvas: resize image, canvas size with anchor, trim, crop, rotate/flip canvas, resolution, color mode (RGB / grayscale / 1-bit monochrome).
 
@@ -59,7 +60,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the code is organized.
 
 ## Testing status
 
-The app is covered by 900+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
+The app is covered by 1500+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
 
 ## Credits
 
