@@ -15,6 +15,7 @@ import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.LayerBoundsCache
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapBox
+import com.brushwork.paint.tools.transform.SnapEdge
 import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.transform.SnapGuideRenderer
 import com.brushwork.paint.tools.transform.SnapGuides
@@ -24,6 +25,7 @@ import com.brushwork.paint.tools.transform.SnapResult
 import com.brushwork.paint.tools.transform.SnapSource
 import com.brushwork.paint.tools.transform.SnapTargets
 import com.brushwork.paint.tools.vector.ShapeGeometry
+import kotlin.math.abs
 
 /**
  * "Snap to objects" for every tool (one setting, [enabled]): what dragged things align to and
@@ -110,7 +112,9 @@ class SnapService(private val controller: EditorController) {
      * Everything to snap to (whether or not snapping is [enabled]: callers check that): the
      * canvas, the selection's bounds when [includeSelection], [boxes], the content bounds of
      * the candidate layers (top-most first) when [includeLayers], then [extra] lines, the layers'
-     * features and drawn lines, and the grid lines when [includeGrid] and grid snapping is on.
+     * features and drawn lines (labelled "<layer> line"; those on a line of the layer's bounds or
+     * of the canvas are left out, see [duplicatesBoxLine]), and the grid lines when
+     * [includeGrid] and grid snapping is on.
      */
     fun targets(
         exclude: Collection<Layer> = emptyList(),
@@ -129,7 +133,13 @@ class SnapService(private val controller: EditorController) {
             val layers = candidateLayers(exclude).asReversed()
             for (layer in layers) cache.bounds(layer)?.let { allBoxes += SnapBox(it.toDocBox(), layer.name, SnapSource.OBJECT) }
             for (layer in layers) for (src in featureSources) lines += runCatching { src(layer) }.getOrDefault(emptyList())
-            for (layer in layers) for (l in cache.lines(layer)) lines += SnapLine.drawn(l.axis, l.pos, l.start, l.end, layer.name)
+            for (layer in layers) {
+                val bounds = cache.bounds(layer)?.toDocBox()
+                for (l in cache.lines(layer)) {
+                    if (duplicatesBoxLine(l, bounds, doc.width.toFloat(), doc.height.toFloat())) continue
+                    lines += SnapLine.drawn(l.axis, l.pos, l.start, l.end, layer.name)
+                }
+            }
         }
         val grid = if (includeGrid) controller.grid.takeIf { it.snap }?.let { SnapGuides.gridLines(it, doc.width, doc.height) } else null
         return SnapTargets.build(doc.width.toFloat(), doc.height.toFloat(), allBoxes, grid, extra = lines)
@@ -160,6 +170,20 @@ class SnapService(private val controller: EditorController) {
         const val PREF_SNAP = "transform.snapToObjects"
 
         internal fun Rect.toDocBox() = DocBox(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
+
+        /** A drawn line this close (doc px) to a line of its layer's bounds or of the canvas adds nothing. */
+        const val DUPLICATE_LINE_PX = 0.5f
+
+        /**
+         * Whether [line] lies on (within [DUPLICATE_LINE_PX]) the left / center / right (or top /
+         * center / bottom) line of its layer's [bounds] or of the [canvasW] x [canvasH] canvas:
+         * those are targets already (e.g. the sides of a filled box, a table border on the canvas
+         * edge), and they win ties as OBJECT / CANVAS lines.
+         */
+        fun duplicatesBoxLine(line: DetectedLine, bounds: DocBox?, canvasW: Float, canvasH: Float): Boolean {
+            fun on(box: DocBox) = SnapEdge.entries.any { e -> abs(SnapGuides.feature(box, line.axis, e) - line.pos) <= DUPLICATE_LINE_PX }
+            return (bounds != null && on(bounds)) || (canvasW > 0f && canvasH > 0f && on(DocBox(0f, 0f, canvasW, canvasH)))
+        }
     }
 }
 
