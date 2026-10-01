@@ -117,6 +117,30 @@ class CurveOptionsUiRobolectricTest {
         settle(4)
         assertEquals(1f, tool.anchors[1].width, 0f)
 
+        // A real finger drag along the slider moves the thickness, not the scrolling strip.
+        val before = slider("Point thickness slider").bounds
+        val y1 = before.center.y
+        val xa = before.left + before.width * 0.2f
+        val xb = before.left + before.width * 0.9f
+        val d0 = SystemClock.uptimeMillis()
+        var at = d0
+        fun drag(action: Int, px: Float) {
+            val ev = MotionEvent.obtain(d0, at, action, px, y1, 0).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
+            b.window.dispatchTouchEvent(ev)
+            ev.recycle()
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16))
+            at += 16
+        }
+        drag(MotionEvent.ACTION_DOWN, xa)
+        for (k in 1..12) drag(MotionEvent.ACTION_MOVE, xa + (xb - xa) * k / 12f)
+        drag(MotionEvent.ACTION_UP, xb)
+        settle(4)
+        assertTrue("dragged to ${tool.anchors[1].width}", tool.anchors[1].width > 2.4f)
+        assertEquals("the strip didn't scroll", before.left, slider("Point thickness slider").bounds.left, 1f)
+        assertFalse(tool.thicknessRing)
+        assertTrue(tool.undoStep())
+        assertEquals("the drag was one step", 1f, tool.anchors[1].width, 0f)
+
         // "All points 100 %".
         tool.setWidth(0, 2f)
         settle()
