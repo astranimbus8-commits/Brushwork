@@ -429,7 +429,11 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         if (!gestureActive || removeMode || !cutAllowed) return
         val a = cutStart ?: return
         val b = cutEnd ?: return
-        if (a == b) return
+        if (a == b) {
+            // Only the start so far: show where it snapped.
+            snap.draw(canvas, t, pointBox(a))
+            return
+        }
         haloPaint.strokeWidth = t.dp(3.5f)
         accentPaint.strokeWidth = t.dp(2f)
         for (panel in previewPanels) {
