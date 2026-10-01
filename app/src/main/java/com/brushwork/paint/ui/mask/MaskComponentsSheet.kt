@@ -45,6 +45,7 @@ import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.masks.BrushMask
 import com.brushwork.paint.masks.LinearMask
 import com.brushwork.paint.masks.MaskComponent
+import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskGeometry
 import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.masks.MaskMode
@@ -245,9 +246,10 @@ private fun MaskActions(tool: MaskTool) {
     }
     if (layer.maskSpec != null) ActionRow(Icons.Filled.FilterBAndW, "Convert to pixel mask") { MaskLayerOps.toPixelMask(c, layer); tool.touch() }
     ActionRow(Icons.Filled.Delete, "Delete mask", danger = true) {
-        c.deleteMask(layer)
-        tool.select(null)
-        tool.touch()
+        if (MaskEdits.deleteMask(c, layer)) {
+            tool.select(null)
+            tool.touch()
+        }
     }
     if (layer.isAdjustmentLayer) {
         ActionRow(Icons.Filled.Layers, "Apply to layer below") {

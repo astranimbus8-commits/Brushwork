@@ -140,6 +140,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     private var hintShown = false
 
     private val preview = MaskPreview(controller)
+    private val tint = MaskTint()
     private var cache: MaskBrushCache? = null
 
     // ------------------------------------------------------------------ what is edited
@@ -338,6 +339,13 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     /** A tap or drag on nothing (deselects on a tap). */
     private class Idle(val start: Vec2) : Gesture() { var moved = false }
 
+    /**
+     * A finger down on the pin of component [compId] while [kind] is armed (or a brush component
+     * paints): a tap selects the pin's component, a drag does [kind] from [start], a long press
+     * moves the component.
+     */
+    private class PinTap(val kind: Kind, val compId: Long, val start: Vec2, val pressure: Float) : Gesture()
+
     /** Creating a linear or radial component by dragging. */
     private class Create(val kind: Kind, val start: Vec2, val layer: Layer?, val base: MaskSpec, val compId: Long) : Gesture() {
         var moved = false
@@ -368,6 +376,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val rec: PixelEditRecorder?,
     ) : Gesture() {
         val xs = FloatList(); val ys = FloatList(); val ps = FloatList()
+        /** The layer's content version when the stroke began. */
+        val versionAtStart: Long = layer?.contentVersion ?: 0L
         var renderedDabs = 0
         var lastDab: RectF? = null
         val touched = Rect()
@@ -392,33 +402,51 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val layer = editLayer
         val s = spec
         val sel = selected
-        // The selected component's handles.
-        if (layer != null && s != null && sel != null) {
-            val h = MaskHandles.hit(sel, pos, t)
-            if (h != null) {
-                if (!MaskEdits.usable(controller, layer)) return
-                gesture = Drag(layer, s, sel, h, pos)
-                return
-            }
-        }
-        // A pin selects its component (and dragging it moves the component).
-        if (layer != null && s != null) {
-            val hit = MaskHandles.hitPin(s, pos, t, selectedId)
-            if (hit != null) {
-                val was = hit.id == selectedId
-                armed = null
-                selectedId = hit.id
-                controller.invalidateOverlay()
-                if (!MaskEdits.usable(controller, layer)) return
-                gesture = Drag(layer, s, hit, MaskHandles.Kind.PIN, pos, was)
-                return
-            }
-        }
+        // What a drag away from the handles does: add the armed kind, or paint into the selected
+        // brush component (Brush / Erase).
         val kind = armed ?: if (sel is BrushMask) Kind.BRUSH else null
         if (kind == null) {
+            // The selected component's handles.
+            if (layer != null && s != null && sel != null) {
+                val h = MaskHandles.hit(sel, pos, t)
+                if (h != null) {
+                    if (!MaskEdits.usable(controller, layer)) return
+                    gesture = Drag(layer, s, sel, h, pos)
+                    return
+                }
+            }
+            // A pin selects its component (and dragging it moves the component).
+            if (layer != null && s != null) {
+                val hit = MaskHandles.hitPin(s, pos, t, selectedId)
+                if (hit != null) {
+                    val was = hit.id == selectedId
+                    selectedId = hit.id
+                    controller.invalidateOverlay()
+                    if (!MaskEdits.usable(controller, layer)) return
+                    gesture = Drag(layer, s, hit, MaskHandles.Kind.PIN, pos, was)
+                    return
+                }
+            }
             gesture = Idle(pos)
             return
         }
+        // Creating or painting starts anywhere, on pins too (a brush component's pin sits in the
+        // middle of what it paints): a pin under the finger is selected by a TAP, and moved after
+        // a long press; a drag does what is armed.
+        if (layer != null && s != null) {
+            val hit = MaskHandles.hitPin(s, pos, t, selectedId)
+            if (hit != null) {
+                gesture = PinTap(kind, hit.id, pos, p.pressure)
+                controller.invalidateOverlay()
+                return
+            }
+        }
+        begin(kind, pos, p.pressure)
+    }
+
+    /** Starts what a drag of [kind] from [pos] does: a creating drag or a brush stroke. */
+    private fun begin(kind: Kind, pos: Vec2, pressure: Float) {
+        val layer = editLayer
         if (needsReplace) {
             replacePrompt = layer
             return
@@ -431,16 +459,42 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         } else if (!MaskEdits.usable(controller, layer)) {
             return
         }
-        val base = s ?: MaskSpec()
+        val base = spec ?: MaskSpec()
         when (kind) {
             Kind.LINEAR, Kind.RADIAL -> gesture = Create(kind, pos, layer, base, MaskGeometry.nextId(base))
-            Kind.BRUSH -> startPaint(layer, base, pos, p.pressure)
+            Kind.BRUSH -> startPaint(layer, base, pos, pressure)
         }
+    }
+
+    /**
+     * Held still on a pin: the pin's component is selected and the finger moves it (the way to
+     * move a brush component with one finger; two fingers and the X / Y strip work too).
+     */
+    override fun onLongPress(p: ToolPoint): Boolean {
+        val g = gesture as? PinTap ?: return false
+        val layer = editLayer ?: return false
+        val s = spec ?: return false
+        val comp = s.components.firstOrNull { it.id == g.compId } ?: return false
+        armed = null
+        selectedId = comp.id
+        controller.invalidateOverlay()
+        if (!MaskEdits.usable(controller, layer)) {
+            gesture = null
+            return true
+        }
+        gesture = Drag(layer, s, comp, MaskHandles.Kind.PIN, g.start, wasSelected = false)
+        return true
     }
 
     override fun onMove(p: ToolPoint) {
         val pos = Vec2(p.x, p.y)
         when (val g = gesture) {
+            is PinTap -> if (movedEnough(g.start, pos)) {
+                // A drag that started on a pin: what is armed (or painting) from where it began.
+                gesture = null
+                begin(g.kind, g.start, g.pressure)
+                if (gesture != null) onMove(p)
+            }
             is Idle -> if (!g.moved && movedEnough(g.start, pos)) {
                 g.moved = true
                 if (!hintShown) {
@@ -481,6 +535,18 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val g = gesture ?: return
         val pos = Vec2(p.x, p.y)
         when (g) {
+            is PinTap -> {
+                gesture = null
+                // A tap on a pin: its component is selected (what was armed is put away); a tap on
+                // the selected one deselects it.
+                if (g.compId == selectedId) {
+                    selectedId = null
+                } else {
+                    armed = null
+                    selectedId = g.compId
+                }
+                controller.invalidateOverlay()
+            }
             is Idle -> {
                 gesture = null
                 if (!g.moved && selectedId != null) { selectedId = null; controller.invalidateOverlay() }
@@ -523,7 +589,10 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         if (g is Paint && g.live) {
             g.rec?.abort()
             removePaintOverride()
-            if (!g.touched.isEmpty) controller.invalidateDoc(g.touched)
+            if (!g.touched.isEmpty) {
+                controller.invalidateDoc(g.touched)
+                g.layer?.mask?.let { tint.refresh(it, g.touched) }
+            }
         }
         preview.end()
         liveSpec = null
@@ -647,14 +716,19 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
             }
         }
         val w = region.width(); val h = region.height()
-        val px = IntArray(w * h)
+        if (liveBuffer.size < w * h) liveBuffer = IntArray(w * h)
+        val px = liveBuffer
         MaskSpecRenderer.renderGrid(g.spec, SampleGrid.pixels(region.left, region.top, w, h), px, w, source)
         rec.touch(region)
         mask.setPixels(px, 0, w, region.left, region.top, w, h)
         g.touched.union(region)
+        tint.refresh(mask, region)
         controller.invalidateDoc(region)
         flashOverlay()
     }
+
+    /** Reused pixels of live brush renders (a stroke's dab boxes; freed with the tool). */
+    private var liveBuffer = IntArray(0)
 
     private fun finishPaint(g: Paint) {
         val label = when {
@@ -671,6 +745,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val rec = g.rec ?: return
         removePaintOverride()
         MaskEdits.commitStroke(controller, rec, layer, g.spec, label)
+        // The overlay's copy already shows the stroke (patched while painting).
+        layer.mask?.let { tint.adopt(layer, it, g.versionAtStart) }
         liveSpec = null
         selectedId = g.compId
         // The cache follows the component (incrementally: the strokes so far are the same objects).
@@ -848,12 +924,15 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         adjustEdit = null
         cache?.clear()
         cache = null
+        tint.release()
+        liveBuffer = IntArray(0)
         selectedId = null
         armed = null
     }
 
     override fun onDispose() {
         preview.release()
+        tint.release()
         cache?.clear()
         cache = null
     }
@@ -882,9 +961,11 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         if (showTint) {
             val pb = preview.bitmap
             val layer = editLayer
+            val mask = layer?.mask
             when {
                 preview.isActive && pb != null -> MaskPreview.drawTint(canvas, pb, preview.scale, t)
-                layer?.mask != null && layer.maskEnabled -> MaskPreview.drawTint(canvas, layer.mask!!, 1f, t)
+                // A reduced copy: the full mask would be uploaded again on every frame it changes.
+                layer != null && mask != null && layer.maskEnabled -> tint.of(layer, mask)?.let { MaskPreview.drawTint(canvas, it, tint.scale, t) }
             }
         }
         // The brush ring follows the finger while painting.

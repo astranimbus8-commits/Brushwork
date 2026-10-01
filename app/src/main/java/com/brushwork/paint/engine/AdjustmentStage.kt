@@ -8,11 +8,13 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.filters.PixelMapper
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.MaskSpecs
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import kotlin.math.ceil
@@ -37,6 +39,13 @@ class AdjustmentScratch {
     internal val dstOutPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
     internal val plusPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.ADD) }
     internal val inverse = Matrix()
+
+    /**
+     * Color mode of the document being composited (set by the compositor): in a grayscale or
+     * 1-bit document the effect's colors are constrained like every committed pixel edit, so an
+     * effect never shows colors the document can't have.
+     */
+    internal var colorMode: ColorMode = ColorMode.RGB
 
     /** Resolved effects of the last specs seen (by identity: specs are immutable). */
     private val effectSpecs = arrayOfNulls<AdjustmentSpec>(EFFECT_CACHE)
@@ -213,6 +222,7 @@ object AdjustmentStage {
         val alpha = (o * 255f + 0.5f).toInt()
         if (alpha <= 0) return
         val normal = layer.blendMode == LayerBlendMode.NORMAL
+        val mode = scratch.colorMode
         val blendPaint = BlendModes.paint(layer.blendMode, o).apply { isFilterBitmap = false }
         val cw0 = min(CHUNK, t.width()); val ch0 = min(CHUNK, t.height())
         val s = scratch.scratchBitmap(cw0, ch0)
@@ -229,8 +239,8 @@ object AdjustmentStage {
                 val n = cw * ch
                 var opaque = true
                 for (i in 0 until n) if (px[i] ushr 24 != 0xFF) { opaque = false; break }
-                if (n < PARALLEL_MIN) mapper.map(px, 0, n)
-                else Parallel.forRange(ch, 8) { r0, r1 -> mapper.map(px, r0 * cw, r1 * cw) }
+                if (n < PARALLEL_MIN) mapRange(mapper, mode, px, 0, n)
+                else Parallel.forRange(ch, 8) { r0, r1 -> mapRange(mapper, mode, px, r0 * cw, r1 * cw) }
                 s.setPixels(px, 0, cw, 0, 0, cw, ch)
                 src.set(0, 0, cw, ch)
                 dst.set(x, y, x + cw, y + ch)
@@ -264,6 +274,21 @@ object AdjustmentStage {
                 x += cw
             }
             y += ch
+        }
+    }
+
+    /**
+     * Maps [px] from [from] until [until] with [mapper]; in a grayscale or 1-bit document the
+     * colors are then constrained to it (alpha kept: the composite's coverage never changes).
+     */
+    private fun mapRange(mapper: PixelMapper, mode: ColorMode, px: IntArray, from: Int, until: Int) {
+        mapper.map(px, from, until)
+        if (mode == ColorMode.RGB) return
+        for (i in from until until) {
+            val c = px[i]
+            val a = c and 0xFF000000.toInt()
+            if (a == 0) continue
+            px[i] = a or (ColorModeOps.constrainPixel(c or 0xFF000000.toInt(), mode) and 0xFFFFFF)
         }
     }
 

@@ -4,7 +4,6 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditorController
-import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerDataAction
@@ -203,9 +202,14 @@ object MaskEdits {
         false
     }
 
-    /** A mask bitmap filled from a selection-sized byte mask (255 = visible). */
-    fun maskFromBytes(bytes: ByteArray, w: Int, h: Int): Bitmap {
-        val px = IntArray(w * h) { i -> val v = bytes[i].toInt() and 0xFF; (0xFF shl 24) or (v shl 16) or (v shl 8) or v }
-        return BitmapUtils.createMaskBitmap(w, h, 0xFF000000.toInt()).also { it.setPixels(px, 0, w, 0, 0, w, h) }
+    /**
+     * "Delete mask" of the Masks tool's sheet: the mask and its spec go in one step (the effect of
+     * an adjustment layer then shows everywhere). False (with a message) when [layer] is gone,
+     * locked or hidden.
+     */
+    fun deleteMask(c: EditorController, layer: Layer): Boolean {
+        if (layer.mask == null || !usable(c, layer)) return false
+        c.deleteMask(layer)
+        return true
     }
 }

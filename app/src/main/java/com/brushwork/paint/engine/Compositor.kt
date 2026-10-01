@@ -89,7 +89,10 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
             val base = layers[i]
             if (base.isAdjustmentLayer) {
                 // Its own group: never a clipping base (layers marked clipping above it draw unclipped).
-                if (base.visible && base.opacity > 0f) AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                if (base.visible && base.opacity > 0f) {
+                    adjustmentScratch.colorMode = doc.colorMode
+                    AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                }
                 i++
                 continue
             }
@@ -137,14 +140,27 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         canvas.restoreToCount(save)
     }
 
-    /** Full-resolution flattened image (no tool previews). Caller owns the bitmap. */
+    /**
+     * Full-resolution flattened image (no tool previews), on [background] when given. Caller owns
+     * the bitmap.
+     *
+     * With a visible adjustment layer the [background] is put BEHIND the composite (a matte, as
+     * the canvas shows transparency): an effect never changes it, so a JPG export of an Invert or
+     * Tone adjustment over transparent areas stays [background] there, as on the canvas. Without
+     * one the drawing is exactly v1.4's (I5).
+     */
     fun renderFlattened(background: Int? = null): Bitmap {
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
         val c = Canvas(out)
-        if (background != null) c.drawColor(background)
+        val matte = background != null && hasLiveAdjustment()
+        if (background != null && !matte) c.drawColor(background)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget.identity(out))
+        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
         return out
     }
+
+    /** True when a visible adjustment layer can change the composite (see [renderFlattened]). */
+    private fun hasLiveAdjustment(): Boolean = doc.layers.any { it.isAdjustmentLayer && it.visible && it.opacity > 0f }
 
     /** Flattened image scaled to fit in [maxSize] x [maxSize]. */
     fun renderThumbnail(maxSize: Int, background: Int? = null): Bitmap {
@@ -162,11 +178,15 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val w2 = max(1, (doc.width * s2).roundToInt()); val h2 = max(1, (doc.height * s2).roundToInt())
         val mid = BitmapUtils.createLayerBitmap(w2, h2)
         val c = Canvas(mid)
-        if (background != null) c.drawColor(background)
+        val matte = background != null && hasLiveAdjustment()
+        if (background != null && !matte) c.drawColor(background)
         val sx = w2.toFloat() / doc.width
         val sy = h2.toFloat() / doc.height
+        c.save()
         c.scale(sx, sy)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget(mid, Matrix().apply { setScale(sx, sy) }))
+        c.restore()
+        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
         val out = Bitmap.createScaledBitmap(mid, w, h, true)
         if (out !== mid) mid.recycle()
         return out

@@ -13,6 +13,10 @@ import com.brushwork.paint.model.Layer
  * adjustment" is recorded when the edit is [flush]ed — when the sheet closes or is minimized,
  * when the Masks tool is deactivated, and (as a [DeferredStep]) before any other history push and
  * before undo / redo. Main thread.
+ *
+ * The "before" values are taken from the layer when a pending change begins (the first
+ * [preview] after a flush), never earlier: undo / redo may have changed the layer in between, and
+ * the step must go back to what the layer showed when the user started this change.
  */
 class AdjustmentEdit(private val c: EditorController, val layer: Layer) : DeferredStep {
     private var specStart: AdjustmentSpec? = layer.adjustment
@@ -26,24 +30,30 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
     /** Shows [spec] / [opacity] / [name] now (no step yet). */
     fun preview(spec: AdjustmentSpec? = layer.adjustment, opacity: Float = layer.opacity, name: String = layer.name) {
         if (c.doc.indexOf(layer) < 0 || layer.locked) return
-        if (spec == layer.adjustment && opacity == layer.opacity && name == layer.name) return
-        layer.adjustment = spec
-        layer.opacity = opacity.coerceIn(0f, 1f)
-        layer.name = name
+        val o = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else layer.opacity
+        if (spec == layer.adjustment && o == layer.opacity && name == layer.name) return
         if (!registered) {
+            // A new pending change starts from what the layer shows now.
+            specStart = layer.adjustment
+            opacityStart = layer.opacity
+            nameStart = layer.name
             c.addDeferredStep(this)
             registered = true
         }
+        layer.adjustment = spec
+        layer.opacity = o
+        layer.name = name
         c.notifyLayersChanged()
         c.invalidateDoc(MaskEdits.effectRegion(c, layer))
     }
 
-    /** Records the pending changes as one step (nothing when they cancel out). */
+    /** Records the pending changes as one step (nothing when there are none or they cancel out). */
     override fun flush() {
-        if (registered) {
-            c.removeDeferredStep(this)
-            registered = false
-        }
+        if (!registered) return
+        c.removeDeferredStep(this)
+        registered = false
+        // A layer that is gone can't take a step (its removal recorded the pending change first).
+        if (c.doc.indexOf(layer) < 0) return
         val spec = layer.adjustment; val opacity = layer.opacity; val name = layer.name
         if (spec == specStart && opacity == opacityStart && name == nameStart) return
         val action = AdjustmentAction(LABEL, layer, specStart, spec, opacityStart, opacity, nameStart, name)
@@ -52,12 +62,11 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
         c.pushUndo(action)
     }
 
-    /** Puts back what the edit changed (no step). */
+    /** Puts back what the pending change did (no step). */
     fun revert() {
-        if (registered) {
-            c.removeDeferredStep(this)
-            registered = false
-        }
+        if (!registered) return
+        c.removeDeferredStep(this)
+        registered = false
         if (layer.adjustment == specStart && layer.opacity == opacityStart && layer.name == nameStart) return
         layer.adjustment = specStart
         layer.opacity = opacityStart
