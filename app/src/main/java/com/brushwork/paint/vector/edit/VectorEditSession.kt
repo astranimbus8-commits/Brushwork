@@ -99,7 +99,14 @@ class VectorEditSession internal constructor(
         return true
     }
 
-    /** Re-installs this session as the controller's override with its current one as [inner]. */
+    /**
+     * Re-installs this session as the controller's override with the override installed now as
+     * [inner] (a painting tool's live stroke on the same layer, e.g. from
+     * `BrushStrokePreview.onLiveChanged`). When this session is still the installed override
+     * nothing changes: once the live stroke ends, set [inner] to null (the session can't tell a
+     * finished stroke from a running one), e.g. `onLiveChanged = { if (preview.isLive)
+     * session.adoptInner() else session.inner = null }`. Does nothing once the session ended.
+     */
     fun adoptInner() {
         if (ended) return
         val cur = c.renderOverride
@@ -113,17 +120,18 @@ class VectorEditSession internal constructor(
     /**
      * Replaces the edited objects by [replacements] (one step [label]); [onDone] tells whether it
      * was applied. A replacement whose id is one of [ids] takes that object's place (same z
-     * position); edited objects without one are removed; replacements with any other id are new
-     * objects placed right above the topmost edited one (they get new ids). The session ends
-     * (it is uninstalled) first.
+     * position, same id); edited objects without one are removed; replacements with any other id
+     * are new objects placed right above the topmost edited one, with new ids. The session ends
+     * (it is uninstalled, see [cancel]) first.
      */
     fun commit(replacements: List<VObject>, label: String, onDone: (Boolean) -> Unit = {}) {
         if (ended) { onDone(false); return }
         cancel()
         val content = layer.vector
         if (content == null || c.doc.indexOf(layer) < 0) { onDone(false); return }
-        val present = ids.filter { content.byId(it) != null }
+        val present = ids.filterTo(HashSet()) { content.byId(it) != null }
         val after = if (present.isEmpty()) {
+            // The edited objects are gone meanwhile: the replacements become new top objects.
             content.plus(replacements).first
         } else {
             val byId = HashMap<Long, VObject>()
@@ -132,14 +140,24 @@ class VectorEditSession internal constructor(
                 if (r.id in present && r.id !in byId) byId[r.id] = r else extras += r
             }
             val top = present.maxBy { content.indexOf(it) }
-            val map = present.associateWith { id -> listOfNotNull(byId[id]) + (if (id == top) extras else emptyList()) }
-            content.replaced(map)
+            var next = content.nextId
+            val out = ArrayList<VObject>(content.objects.size + extras.size)
+            for (o in content.objects) {
+                if (o.id !in present) { out += o; continue }
+                byId[o.id]?.let { out += it.withId(o.id) }
+                if (o.id == top) for (e in extras) out += e.withId(next++)
+            }
+            content.copy(objects = out, nextId = next)
         }
         if (after == content) { onDone(true); return }
         c.vectors.update(layer, after, label, onDone = onDone)
     }
 
-    /** Ends the preview without changes. */
+    /**
+     * Ends the preview without changes: the session is uninstalled (when it is the controller's
+     * override, [inner] is installed again, so a live stroke it showed keeps showing) and its
+     * hole bitmap is freed; [floating] is left to its holder. Safe to call more than once.
+     */
     fun cancel() {
         if (ended) return
         ended = true

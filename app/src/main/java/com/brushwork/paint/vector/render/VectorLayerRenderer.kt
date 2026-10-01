@@ -24,6 +24,7 @@ import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.VariableWidthOutline
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.VectorRenderer
+import com.brushwork.paint.tools.vector.WidthProfile
 import com.brushwork.paint.tools.vector.brushStrokeSamples
 import com.brushwork.paint.tools.vector.toAndroidPath
 import com.brushwork.paint.vector.VFillRule
@@ -37,6 +38,7 @@ import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.max
 
@@ -59,20 +61,32 @@ object VectorLayerRenderer {
     /** Flattening tolerance of varying-width outlines (document px). */
     private const val WIDTH_TOLERANCE = 0.25f
 
+    /** Largest distance between two points of a varying-width line (document px). */
+    private const val WIDTH_STEP = 2f
+
+    /** Most points one flattened piece of a varying-width line is cut into. */
+    private const val MAX_PIECES = 1024
+
     /** Draws [content] (document px) clipped to [region], leaving out the objects [exclude]. */
     fun render(canvas: Canvas, content: VectorContent, region: Rect, exclude: Set<Long> = emptySet(), tips: TipCache) {
         if (region.isEmpty || content.objects.isEmpty()) return
         val ctx = Context(StrokeRaster(tips), VectorRenderer())
         val regionF = RectF(region)
-        canvas.save()
-        canvas.clipRect(region)
-        for (o in content.objects) {
-            if (o.id in exclude) continue
-            val b = VectorOps.bounds(o)
-            if (b.isEmpty || !RectF.intersects(b, regionF)) continue
-            draw(canvas, o, region, b, ctx)
+        val save = canvas.save()
+        try {
+            canvas.clipRect(region)
+            for (o in content.objects) {
+                if (o.id in exclude) continue
+                val b = VectorOps.bounds(o)
+                if (b.isEmpty || !RectF.intersects(b, regionF)) continue
+                draw(canvas, o, region, b, ctx)
+            }
+        } finally {
+            canvas.restoreToCount(save)
+            // The stroke coverage buffer lives for one call: freed now, not whenever the GC runs
+            // (the tips stay in the caller's cache).
+            ctx.raster.releaseCoverage()
         }
-        canvas.restore()
     }
 
     /**
@@ -213,30 +227,52 @@ object VectorLayerRenderer {
             var acc = 0f
             val wa = w(seg); val wb = w(seg + 1)
             for (i in 1 until pts.size) {
-                acc += pts[i - 1].distanceTo(pts[i])
-                val t = if (total > 0f) acc / total else 1f
-                val e = t * t * (3f - 2f * t)
-                xs += pts[i].x; ys += pts[i].y; ws += wa + (wb - wa) * e
+                val a = pts[i - 1]; val b = pts[i]
+                val len = a.distanceTo(b)
+                // A changing width needs points along straight pieces too (they flatten to their
+                // ends), or the outline would blend linearly instead of with smoothstep.
+                val pieces = if (wa == wb) 1 else ceil(len / WIDTH_STEP).toInt().coerceIn(1, MAX_PIECES)
+                for (k in 1..pieces) {
+                    val f = k.toFloat() / pieces
+                    val t = if (total > 0f) ((acc + len * f) / total).coerceIn(0f, 1f) else 1f
+                    val e = t * t * (3f - 2f * t)
+                    val q = if (k == pieces) b else a.lerp(b, f)
+                    xs += q.x; ys += q.y; ws += wa + (wb - wa) * e
+                }
+                acc += len
             }
         }
         return WidthLine(xs.toFloatArray(), ys.toFloatArray(), ws.toFloatArray(), xs.size)
     }
 
+    /**
+     * A brush along each sub-path, as the live path stroke paints it (BrushTool.beginPath with
+     * the `brushStrokeSamples` input, then onUp at the last point): the same samples, seed
+     * ([VStrokeStyle.seed] + the sub-path's index) and brush. Varying anchor widths (§4.5 / V15)
+     * are fed as a [WidthProfile] (pressure × w / wMax) to the brush sized up to the thickest
+     * sample, with size following pressure and opacity not.
+     */
     private fun drawBrushOutline(canvas: Canvas, p: VPath, st: VStrokeStyle, region: Rect, ctx: Context) {
-        val wMax = VectorOps.maxWidth(p)
-        if (!(wMax > 0f)) return
+        if (!(VectorOps.maxWidth(p) > 0f)) return
         val uniform = p.subpaths.all { s -> s.anchors.all { it.width == 1f } }
-        var brush = VectorOps.brushOf(st)
-        // §4.5 / V15: per-anchor thickness is fed as pressure to the brush sized up to the thickest anchor.
-        if (!uniform) brush = brush.copy(size = brush.size * wMax, pressureSize = true, minSizeRatio = 0f, pressureOpacity = false)
+        val base = VectorOps.brushOf(st)
         val taper = (st.taperPercent / 100f).let { if (it.isFinite()) it.coerceIn(0f, 0.5f) else 0f }
         p.subpaths.forEachIndexed { index, s ->
             if (s.anchors.size < 2) return@forEachIndexed
             val single = VPath(p.id, subpaths = listOf(s), tension = p.tension, polyline = p.polyline)
             val path = VectorOps.toVectorPath(single)
-            val input = brushStrokeSamples(path, taper, null, ctx.input)
+            var input = brushStrokeSamples(path, taper, null, ctx.input)
             if (input.size < 2) return@forEachIndexed
-            if (!uniform) applyWidths(input, s, p.tension, p.polyline, wMax)
+            var brush = base
+            if (!uniform) {
+                val widths = widthsAtSamples(input, s, p.tension, p.polyline)
+                var wMax = 0f
+                for (v in widths) if (v > wMax) wMax = v
+                if (!(wMax > 0f) || !wMax.isFinite()) return@forEachIndexed
+                // Bit-identical sample points; only the pressures change.
+                input = brushStrokeSamples(path, taper, WidthProfile(widths), ctx.input)
+                brush = base.copy(size = base.size * wMax, pressureSize = true, minSizeRatio = 0f, pressureOpacity = false)
+            }
             // The live path stroke ends with its last point once more (onUp).
             val n = input.size
             val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
@@ -246,9 +282,14 @@ object VectorLayerRenderer {
         }
     }
 
-    /** Multiplies the samples' pressures by the thickness at the nearest flattened point / [wMax]. */
-    private fun applyWidths(input: PathStrokeInput, s: VSubpath, tension: Float, polyline: Boolean, wMax: Float) {
-        val line = widthLine(s, tension, polyline, 1f) ?: return
+    /**
+     * The thickness factor at every sample of [input] (one per sample, for a [WidthProfile]):
+     * the factor at the nearest point of the flattened sub-path, whose factors blend with
+     * smoothstep along arc length between anchors (§4.5). A reference; A4 owns the real profile.
+     */
+    private fun widthsAtSamples(input: PathStrokeInput, s: VSubpath, tension: Float, polyline: Boolean): FloatArray {
+        val out = FloatArray(input.size) { 1f }
+        val line = widthLine(s, tension, polyline, 1f) ?: return out
         var j = 0
         for (i in 0 until input.size) {
             val x = input.x[i]; val y = input.y[i]
@@ -262,8 +303,9 @@ object VectorLayerRenderer {
                 k++
             }
             j = best
-            input.pressure[i] *= (line.ws[best] / wMax).coerceIn(0f, 1f)
+            out[i] = line.ws[best]
         }
+        return out
     }
 
     // ------------------------------------------------------------------ shapes

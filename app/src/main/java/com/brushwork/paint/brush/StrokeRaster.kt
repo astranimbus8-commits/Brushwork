@@ -152,12 +152,20 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         return n
     }
 
-    /** Frees the coverage buffer and the tips (they are recreated on demand). */
-    fun release() {
+    /**
+     * Frees the coverage buffer (it is allocated again on demand, as large as the largest region
+     * rendered since); the tips are kept. Call it when this instance's renders are done.
+     */
+    fun releaseCoverage() {
         buffer?.recycle()
         buffer = null
         bufferCanvas = null
         dabs.clear()
+    }
+
+    /** Frees the coverage buffer and the tips (they are recreated on demand). */
+    fun release() {
+        releaseCoverage()
         tips.clear()
     }
 

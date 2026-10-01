@@ -327,13 +327,14 @@ object VectorOps {
         val polys = toVectorPath(o).flatten(FLATTEN)
         if (polys.isEmpty()) return false
         if (o.fill != null && insideFill(polys, p, o.fillRule)) return true
+        // Near the outline: half the line (none for a fill alone) plus the tolerance, so a tap
+        // just beside a filled shape's edge still hits it (as ShapeOutlines.hits does).
         val st = o.stroke
         val half = when {
-            st == null -> if (o.fill == null) 0f else -1f
+            st == null -> 0f
             st.kind == VStrokeKind.PLAIN -> max(0f, st.width) * maxWidth(o) / 2f
             else -> brushOf(st, max(maxWidth(o), 1e-3f)).size / 2f
         }
-        if (half < 0f) return false
         return distanceToOutline(polys, p) <= half + tol
     }
 

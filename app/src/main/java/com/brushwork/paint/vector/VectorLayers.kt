@@ -111,8 +111,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /**
      * New content; re-renders [dirty] (null = union of changed objects' tiles). Sync or async;
      * data and pixels are applied together (I1). [onDone] tells whether it was applied (true
-     * also when [after] is already the content; false for a layer that is not a vector layer,
-     * is gone, locked or hidden).
+     * also when [after] equals the content: then nothing is recorded and the layer keeps its
+     * instance; false for a layer that is not a vector layer, is gone, locked or hidden).
      *
      * F2 reference: synchronous. The re-rendered area is the bounding box of [dirty], else of
      * everything that changed (objects added, removed, replaced or moved in z-order, old and new
@@ -129,7 +129,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
     ) {
         val before = layer.vector
         if (before == null || c.doc.indexOf(layer) < 0) { onDone(false); return }
-        if (after === before) { onDone(true); return }
+        // Nothing changes (also an equal copy): no re-render and no step.
+        if (after === before || after == before) { onDone(true); return }
         val region = if (dirty != null) {
             val r = Rect()
             for (d in dirty) r.union(d)
@@ -189,13 +190,15 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     /**
      * Prepares an edit preview of the objects [ids] (hole + floating) and installs it as the
-     * render override; [onReady] gets null when refused (not a vector layer, no such objects,
-     * locked or hidden layer, no memory).
+     * render override (with no [VectorEditSession.inner]: a painting tool's live stroke is
+     * adopted later through [VectorEditSession.adoptInner]); [onReady] gets null when refused
+     * (not a vector layer, none of the ids exist, locked or hidden layer, no memory). Ids that no
+     * longer exist are left out of the session's [VectorEditSession.ids].
      *
-     * F2 reference: rendered synchronously, [onReady] runs before this returns. Lifting every
-     * object uses a cropped copy of the cache as the floating bitmap and an empty hole. Memory
-     * guard: hole + floating within a heap / 8 budget (else both are rendered smaller), floating
-     * at most 2048 px.
+     * F2 reference: rendered synchronously, [onReady] runs before this returns (A1 may call it
+     * later). Lifting every object uses a cropped copy of the cache as the floating bitmap and an
+     * empty hole. Memory guard: hole + floating within a heap / 8 budget (else both are rendered
+     * smaller), floating at most 2048 px.
      */
     fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) {
         val content = layer.vector
@@ -264,7 +267,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
             return
         }
         val session = VectorEditSession(c, layer, present, floating, floatingRect, fScale, holeRect, hole, hScale)
-        session.adoptInner()
+        // Installed on its own: a painting tool's live stroke is adopted by the caller
+        // (VectorEditSession.adoptInner), never whatever override happens to be installed.
+        c.renderOverride = session
+        c.invalidateDoc(null)
         onReady(session)
     }
 

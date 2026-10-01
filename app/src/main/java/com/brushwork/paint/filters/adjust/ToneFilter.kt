@@ -13,7 +13,8 @@ import com.brushwork.paint.filters.PixelMapper
  * Shadows, Whites and Blacks, hue-preserving (luminance ratio), first in Color Adjustment and the
  * default effect of adjustment layers. The parameter keys and ranges are frozen.
  *
- * Foundation stub: the identity (F2 / A6 write the real mapping).
+ * Foundation stub: the identity (A6 writes the real mapping). Until then Invert Color is the
+ * non-identity live effect to test adjustment layers with (`InvertFilter.pixelMapper`).
  */
 class ToneFilter : Filter("adjust.tone", "Tone", FilterCategory.ADJUST) {
     override val params: List<FilterParam> = listOf(

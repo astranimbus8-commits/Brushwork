@@ -134,8 +134,14 @@ pixels). `controller.vectors` (`VectorLayers`) is the service behind them: objec
 (`addObjects`, `appendData` after a live stroke, `update` with sync or async re-renders), hit tests,
 the runtime object selection and edit sessions (`VectorEditSession`: the cache with a hole plus a
 preview). Every vector edit is pixel tiles plus a `LayerDataAction` in one step, so undo and redo
-never re-render. Each vector layer is saved in its own `vector_<id>_r<rev>.vec` (Deflate of JSON,
-`VectorCodec`), written only when the layer changed.
+never re-render. `vector/render/VectorLayerRenderer` draws content: a `VStroke` is replayed by
+`StrokeRaster` with the live stroke's sampler, dynamics, cost-limited spacing and final-length
+tapers (a re-render equals the pixels the live stroke left), brush outlines of paths and shapes
+follow the live path stroke (`brushStrokeSamples`), plain lines and fills are Skia paths (varying
+widths through `VariableWidthOutline`). `VectorOps` holds the geometry: paint bounds, hit tests,
+`touching` a selection, and exact transforms (a `VShape` stays a shape under similarities and
+becomes a `VPath` otherwise). Each vector layer is saved in its own `vector_<id>_r<rev>.vec`
+(Deflate of JSON, `VectorCodec`), written only when the layer changed.
 
 ## Adjustment layers & editable masks (`masks/`, v1.5)
 `Layer.maskSpec` (`masks/MaskModel.kt`) is a parametric mask — linear, radial and brush components
