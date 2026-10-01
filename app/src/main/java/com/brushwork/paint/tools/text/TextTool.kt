@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.assist.RulerHandleSnap
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.LayerRenderOverride
@@ -20,8 +21,16 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
+import com.brushwork.paint.tools.select.pointBox
+import com.brushwork.paint.tools.select.pointLines
 import com.brushwork.paint.tools.transform.ContentBounds
+import com.brushwork.paint.tools.transform.DocBox
+import com.brushwork.paint.tools.transform.SnapAxis
+import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.transform.TransformHandles
+import com.brushwork.paint.tools.transform.offset
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -48,6 +57,14 @@ import kotlin.math.max
  * The editor dialog and the "Numbers" sheet are hosted by `TextToolOptions` and driven by the
  * Compose state here. While the editor is open the text can still be dragged, resized and
  * pinched on the canvas (taps don't apply or reopen it).
+ *
+ * "Snap to objects" (the app-wide setting, the Snap chip): dragging the text snaps its box like
+ * the transform tool does (left / center / right, top / center / bottom to the canvas, the
+ * selection, other layers' content, the lines drawn in layers, shape vertices), the box edge
+ * handles snap the dragged edge (text turned by a multiple of 90°), the point handles of a text
+ * path snap to the same and to the path's other points, and the circle's radius (a square's size)
+ * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
+ * isn't snapped.
  */
 class TextTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TEXT
@@ -558,11 +575,13 @@ class TextTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         gestureStart = null
         pinchStart = null
+        endSnap()
         endLayerEdit()
         controller.invalidateOverlay()
     }
 
     override fun onDeactivate() {
+        endSnap()
         if (hasPendingWork && !commitItem()) discard()
         // Never leave the old pixels of a text layer hidden.
         if (item == null && layerPreview != null) endLayerEdit()
@@ -724,10 +743,159 @@ class TextTool(controller: EditorController) : Tool(controller) {
     private var handleIndex = -1
     private var handleGrab = Vec2.ZERO
 
+    /**
+     * "Snap to objects" (the app-wide setting) for drags: a moved text's box (left / center /
+     * right, top / center / bottom), the dragged edge of a fixed box and the point handles of a
+     * text path align to the canvas, the selection, other layers' content bounds (never the text
+     * layer being edited), the lines drawn in layers (Table filter lines...) and shape vertices.
+     * Pinching is not snapped.
+     */
+    private val snap = controller.newSnapSession()
+
+    /** The text's box when the move started (document px), or null. */
+    private var startBox: DocBox? = null
+
+    /** What the guide labels keep away from (the moving box or point), or null. */
+    private var snapMoving: DocBox? = null
+
+    /** Guides shown right now (document px); empty when nothing is aligned. */
+    internal val activeGuides: List<SnapGuide> get() = snap.guides
+
+    /** Starts snapping for a drag; [points] (e.g. the other ends of a text path) are targets too. */
+    private fun beginSnap(points: List<Vec2> = emptyList()) {
+        snapMoving = null
+        snap.begin(exclude = listOfNotNull(editingLayer), includeSelection = true) { pointLines(points, PATH_POINT_LABEL) }
+    }
+
+    private fun endSnap() {
+        startBox = null
+        snapMoving = null
+        snap.end()
+    }
+
+    /**
+     * The box [t] occupies (document px, axis-aligned): its text box (straight text, turned
+     * with it) or the bounds of the text along its path; null when it draws nothing.
+     */
+    private fun snapBox(t: TextItem, prep: PreparedText): DocBox? {
+        if (prep.isEmpty) return null
+        val block = prep.block
+        if (block == null) {
+            val b = prep.docBounds(t)
+            return if (b.isEmpty) null else DocBox(b.left, b.top, b.right, b.bottom)
+        }
+        val c = t.corners(block.width, block.height)
+        val box = DocBox(c.minOf { it.x }, c.minOf { it.y }, c.maxOf { it.x }, c.maxOf { it.y })
+        return box.takeIf { it.left.isFinite() && it.top.isFinite() && it.right.isFinite() && it.bottom.isFinite() }
+    }
+
+    /**
+     * The text path handles that snap: those that put the path somewhere (line ends and middle,
+     * circle center and radius, rectangle center and size corner, curve points and middle), not
+     * the angle, corner rounding or text position ones.
+     */
+    private fun handleSnaps(type: TextPathType, index: Int): Boolean = when (type) {
+        TextPathType.NONE -> false
+        TextPathType.LINE -> index in 0..2
+        TextPathType.CIRCLE, TextPathType.RECT -> index == 0 || index == 1
+        TextPathType.CURVE -> index in 0..4
+    }
+
+    /**
+     * Handles of the same path that stay put while handle [index] moves and that it can line up
+     * with (none for the circle's radius and the rectangle's size: only the size changes there).
+     */
+    private fun fixedHandles(type: TextPathType, index: Int): List<Int> = when (type) {
+        TextPathType.LINE -> when (index) { 0 -> listOf(1); 1 -> listOf(0); else -> emptyList() }
+        TextPathType.CURVE -> if (index in 0..3) (0..3).filter { it != index } else emptyList()
+        else -> emptyList()
+    }
+
+    /**
+     * Path handle [index] of [path] at [at] (what the finger alone gives) snapped while "Snap to
+     * objects" is on. The circle's radius handle and a square's size corner only change the size:
+     * it snaps so the outline touches the closest line (the circle's top, bottom, left or right,
+     * a square's side or, turned, its corner). Every other handle snaps per axis like a point
+     * (then the square grid on axes that didn't snap, when grid snapping is on). Off: [at]
+     * unchanged.
+     */
+    private fun snapPathHandle(path: TextPathSpec, index: Int, at: Vec2): Vec2 {
+        if (!controller.snapping.enabled) {
+            snap.clearGuides()
+            snapMoving = null
+            return at
+        }
+        val c = Vec2(path.cx, path.cy)
+        return when {
+            path.type == TextPathType.CIRCLE && index == 1 -> {
+                val d = at - c
+                val r = d.length
+                snapSize(c, r, AXIS_DIRS) { nr -> if (r > 1e-3f) c + d * (nr / r) else c + Vec2(nr, 0f) } ?: at
+            }
+            path.type == TextPathType.RECT && index == 1 && path.keepSquare -> {
+                // moveHandle makes the half side the mean of the corner's local offsets.
+                val rot = Math.toRadians(path.rotationDeg.toDouble()).toFloat()
+                val local = (at - c).rotated(-rot)
+                val half = TextPathGeometry.MIN_EXTENT / 2f
+                val s = (max(abs(local.x), half) + max(abs(local.y), half)) / 2f
+                snapSize(c, s, SQUARE_DIRS.map { it.rotated(rot) }) { ns -> c + Vec2(ns, ns).rotated(rot) } ?: at
+            }
+            else -> snap.snapPoint(at).also { snapMoving = pointBox(it) }
+        }
+    }
+
+    /**
+     * A size [size] (radius / half side) of a shape centered at [c] snapped so one of its points
+     * `c ± dir * size` ([dirs]) lands on the closest line; [place] turns the snapped size into the
+     * handle position. Null (guides hidden) when no line is within reach.
+     */
+    private fun snapSize(c: Vec2, size: Float, dirs: List<Vec2>, place: (Float) -> Vec2): Vec2? {
+        val hit = RulerHandleSnap.radius(c, size, dirs, TextPathGeometry.MIN_EXTENT) { v, axis -> snap.snapValue(v, axis) }
+        if (hit == null) {
+            snap.clearGuides()
+            snapMoving = null
+            return null
+        }
+        val (snapped, touching) = hit
+        snap.showGuidesFor(pointBox(touching), POINT_GUIDE_EPS)
+        snapMoving = pointBox(touching)
+        return place(snapped)
+    }
+
+    /**
+     * The dragged edge of a box resize, snapped: [outer] is how far it is from the corner that
+     * stays ([origin] in [start]'s local box coordinates, [dir] the local direction it moves in).
+     * Snaps only when the edge is upright or level on the canvas (the text turned by a multiple
+     * of 90°). Returns the snapped [outer] (or [outer]) and the edge's guide box.
+     */
+    private fun snapEdge(start: TextItem, b0: TextBlock, origin: Vec2, dir: Vec2, outer: Float): Pair<Float, DocBox?> {
+        if (!controller.snapping.enabled) return outer to null
+        val rot = Math.toRadians(start.rotationDeg.toDouble()).toFloat()
+        val d = dir.rotated(rot)
+        val axis = when {
+            abs(d.x) >= AXIS_ALIGNED -> SnapAxis.X
+            abs(d.y) >= AXIS_ALIGNED -> SnapAxis.Y
+            else -> { snap.clearGuides(); return outer to null }
+        }
+        val edge = start.localToDoc(origin.x + dir.x * outer, origin.y + dir.y * outer, b0.width, b0.height)
+        val v = if (axis == SnapAxis.X) edge.x else edge.y
+        val hit = snap.snapValue(v, axis)
+        if (hit == null) { snap.clearGuides(); return outer to null }
+        val k = if (axis == SnapAxis.X) d.x else d.y
+        val snapped = outer + (hit.pos - v) / k
+        if (!snapped.isFinite()) { snap.clearGuides(); return outer to null }
+        // The edge's extent across (the box's other side), for the guide.
+        val c = start.corners(b0.width, b0.height)
+        val guide = if (axis == SnapAxis.X) DocBox(hit.pos, c.minOf { it.y }, hit.pos, c.maxOf { it.y })
+        else DocBox(c.minOf { it.x }, hit.pos, c.maxOf { it.x }, hit.pos)
+        return snapped to guide
+    }
+
     override fun onDown(p: ToolPoint) {
         val t = controller.viewTransform
         downDoc = Vec2(p.x, p.y)
         moved = false
+        endSnap()
         val cur = item
         if (cur == null) {
             mode = Mode.CREATE
@@ -755,8 +923,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
                 mode = Mode.PATH_HANDLE
                 handleIndex = best
                 handleGrab = hs[best] - downDoc
+                // Its other ends are targets too (a level / upright line, aligned curve points).
+                if (handleSnaps(cur.path.type, best)) beginSnap(fixedHandles(cur.path.type, best).mapNotNull { hs.getOrNull(it) })
             } else {
                 mode = Mode.MOVE
+                startBox = snapBox(cur, prep)
+                beginSnap()
             }
             return
         }
@@ -784,6 +956,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
                 else -> l.x
             }
         }
+        when (mode) {
+            Mode.MOVE -> {
+                startBox = snapBox(cur, prep)
+                beginSnap()
+            }
+            Mode.BOX, Mode.DEPTH -> beginSnap()
+            else -> {}
+        }
     }
 
     override fun onMove(p: ToolPoint) {
@@ -797,7 +977,15 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val c = Vec2(start.cx, start.cy)
         when (mode) {
             Mode.MOVE -> {
-                val dx = q.x - downDoc.x; val dy = q.y - downDoc.y
+                var dx = q.x - downDoc.x; var dy = q.y - downDoc.y
+                // The box the finger alone gives snaps (never the last snapped one), so moving
+                // farther than the snap distance lets go of a guide.
+                startBox?.let { b ->
+                    val r = snap.snapMove(b.offset(dx, dy))
+                    if (r.snappedX) dx += r.dx
+                    if (r.snappedY) dy += r.dy
+                    snapMoving = if (r.snappedX || r.snappedY) b.offset(dx, dy) else null
+                }
                 val next = translated(start, dx, dy)
                 // Text on a path: offset the measured bounds instead of measuring every frame.
                 gesturePrepared?.let { if (it.onPath && it.matches(start)) prepared = it.translatedTo(next, dx, dy) }
@@ -816,7 +1004,11 @@ class TextTool(controller: EditorController) : Tool(controller) {
             }
             Mode.BOX -> item = boxResized(start, q)
             Mode.DEPTH -> item = depthResized(start, q)
-            Mode.PATH_HANDLE -> item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, q + handleGrab))
+            Mode.PATH_HANDLE -> {
+                var at = q + handleGrab
+                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, at)
+                item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))
+            }
             Mode.NONE, Mode.CREATE -> return
         }
         controller.invalidateOverlay()
@@ -834,10 +1026,30 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val inset = spec.box.inset
         val min = spec.sizePx.coerceAtMost(maxBoxPx)
         val vertical = spec.vertical
-        val outer = if (vertical) l.y - boxGrab else l.x - boxGrab
+        val raw = if (vertical) l.y - boxGrab else l.x - boxGrab
+        // The dragged edge (right of horizontal text, bottom of vertical text) snaps.
+        val outer = snappedOuter(start, b0, Vec2.ZERO, if (vertical) Vec2(0f, 1f) else Vec2(1f, 0f), raw, inset, min)
         val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
         val ns = if (vertical) spec.copy(box = spec.box.copy(height = content)) else spec.copy(box = spec.box.copy(width = content))
         return anchored(start, b0, start.copy(spec = ns))
+    }
+
+    /**
+     * [raw] (the dragged box edge's distance from the corner that stays) snapped to objects (see
+     * [snapEdge]); the guide shows only when the box really reaches the line (not held back by
+     * its smallest / largest size).
+     */
+    private fun snappedOuter(start: TextItem, b0: TextBlock, origin: Vec2, dir: Vec2, raw: Float, inset: Float, min: Float): Float {
+        val (outer, guide) = snapEdge(start, b0, origin, dir, raw)
+        val content = outer - 2f * inset
+        if (guide == null || content < min || content > maxBoxPx) {
+            snap.clearGuides()
+            snapMoving = null
+            return raw
+        }
+        snap.showGuidesFor(guide, POINT_GUIDE_EPS)
+        snapMoving = guide
+        return outer
     }
 
     /**
@@ -851,10 +1063,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val l = start.docToLocal(q, b0.width, b0.height)
         val inset = spec.box.inset
         val min = spec.sizePx.coerceAtMost(maxBoxPx)
-        val outer = when {
+        val raw = when {
             !spec.vertical -> l.y - boxGrab
             spec.columnsLeftToRight -> l.x - boxGrab
             else -> b0.width - (l.x - boxGrab)
+        }
+        // The dragged edge (bottom of horizontal text, else the right or left side) snaps.
+        val outer = when {
+            !spec.vertical -> snappedOuter(start, b0, Vec2.ZERO, Vec2(0f, 1f), raw, inset, min)
+            spec.columnsLeftToRight -> snappedOuter(start, b0, Vec2.ZERO, Vec2(1f, 0f), raw, inset, min)
+            else -> snappedOuter(start, b0, Vec2(b0.width, 0f), Vec2(-1f, 0f), raw, inset, min)
         }
         val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
         val ns = if (spec.vertical) spec.copy(box = spec.box.copy(minWidth = content)) else spec.copy(box = spec.box.copy(minHeight = content))
@@ -879,6 +1097,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         gestureStart = null
         gesturePrepared = null
+        endSnap()
         when {
             moved -> {}
             // The editor is open (minimized to its pill while the canvas is used): the text can
@@ -916,6 +1135,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         gestureStart = null
         gesturePrepared = null
+        endSnap()
         controller.invalidateOverlay()
     }
 
@@ -932,6 +1152,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
      */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         pinchStart = null
+        // Pinching isn't snapped (and no guide of a cancelled drag stays).
+        endSnap()
         val cur = item ?: return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
@@ -1030,6 +1252,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val block = prep.block
         if (block == null) {
             drawPathOverlay(canvas, t, cur, prep)
+            snap.draw(canvas, t, snapMoving)
             return
         }
         val h = handles(cur, block, t)
@@ -1045,6 +1268,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
         h.depth?.let { drawBoxHandle(canvas, t, it, h.depthDir, fixed = cur.spec.box.depthFor(cur.spec.vertical) > 0f) }
         drawHandle(canvas, t, h.rotate, filled = false)
         drawHandle(canvas, t, h.scale, filled = true)
+        // Smart guides of a drag (labels away from the moving box).
+        snap.draw(canvas, t, snapMoving)
     }
 
     /** Guide of the path (dashed), the text's bounds and the path's handles. */
@@ -1134,5 +1359,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
         /** Extra document px redrawn around the in-layer preview. */
         private const val PREVIEW_SLACK_PX = 2
         private const val LAYER_CACHE_SIZE = 16
+        /** Guide label of a text path's other points. */
+        private const val PATH_POINT_LABEL = "Path point"
+        /** A box edge counts as upright / level (and snaps) when its direction is this close to an axis (cos ~0.8°). */
+        private const val AXIS_ALIGNED = 0.9999f
+        /** A circle touches lines with its right / left and bottom / top. */
+        private val AXIS_DIRS = listOf(Vec2(1f, 0f), Vec2(0f, 1f))
+        /**
+         * A square (half side s) touches lines with its corners `c ± (s, ±s)` (turned with it):
+         * upright, they lie on its sides' lines; turned, they are the points that stick out.
+         */
+        private val SQUARE_DIRS = listOf(Vec2(1f, 1f), Vec2(1f, -1f))
     }
 }

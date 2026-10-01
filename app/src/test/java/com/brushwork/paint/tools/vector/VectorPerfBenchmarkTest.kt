@@ -69,6 +69,8 @@ class VectorPerfBenchmarkTest {
 
     private fun curve(polyline: Boolean, settings: (CurveSettings) -> CurveSettings): CurveTool {
         val id = if (polyline) ToolId.POLYLINE else ToolId.CURVE
+        // The same geometry as always (points exactly under the finger): snapping has its own tests.
+        c.snapping.enabled = false
         c.selectTool(id)
         val tool = c.tools.getValue(id) as CurveTool
         tool.update(settings)

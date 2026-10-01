@@ -14,6 +14,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.vector.CurveAnchor
 import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.tools.vector.VectorPath
@@ -28,11 +29,20 @@ import com.brushwork.paint.tools.vector.toAndroidPath
  * tapping the first point (or ✓) closes the outline into a selection. Undo / redo take back one
  * point edit at a time. While points are placed the outline is previewed with marching ants.
  *
+ * "Snap to objects" (the app-wide setting): a new point (snapped as soon as the finger lands) and
+ * a dragged point (once it moved past the touch slop, so a tap never moves it) snap per axis to
+ * the canvas, other layers' content bounds, the lines drawn in layers (Table filter lines...),
+ * shape vertices and the other points, and on axes that didn't snap to the square grid when grid
+ * snapping is on. The selection being replaced is not a target (it is being made); in add /
+ * subtract / intersect modes the existing selection is. Off: exactly as before (no grid either).
+ *
  * Owned by [LassoTool], which forwards input in curve mode and turns the closed outline into
  * the selection ([close]). Main thread only.
  */
 class LassoCurve internal constructor(
     private val controller: EditorController,
+    /** Whether the existing selection is a snap target (it is not while it is being replaced). */
+    private val snapToSelection: () -> Boolean = { false },
     /** The user closed the curve (tapped the first point): the tool turns it into the selection. */
     private val close: () -> Unit,
 ) {
@@ -70,6 +80,12 @@ class LassoCurve internal constructor(
     private var gestureSelected = -1
     private var gestureHistorySize = 0
     private var gestureRedo: List<List<CurveAnchor>> = emptyList()
+
+    /** Snapping of the new / dragged point (one session, begun on every touch). */
+    private val snap = controller.newSnapSession()
+
+    /** Guides shown right now (document px); empty when nothing is aligned. */
+    internal val activeGuides: List<SnapGuide> get() = snap.guides
 
     /** Outline being previewed (document px), rebuilt only when the points change. */
     private val previewPath = Path()
@@ -175,6 +191,7 @@ class LassoCurve internal constructor(
         redoCount = 0
         drag = Drag.NONE
         floating = null
+        snap.end()
         changed()
         stopTicking()
     }
@@ -198,15 +215,17 @@ class LassoCurve internal constructor(
         val tol = controller.docLength(GRAB_DP)
         val idx = nearestAnchor(pt, tol)
         if (idx >= 0) {
-            // Every point can be grabbed and moved at any time.
+            // Every point can be grabbed and moved at any time (it snaps once it moves).
             drag = Drag.ANCHOR
             dragIndex = idx
+            beginSnap(except = idx)
         } else {
             // A new point: on the outline it is inserted there, elsewhere it is appended (which
-            // on a closed outline is the same as inserting on the closing stretch).
+            // on a closed outline is the same as inserting on the closing stretch). It snaps at once.
             drag = Drag.NEW
             dragIndex = LassoCurveGeometry.insertIndex(anchors, pt, tol * INSERT_FRACTION)
-            floating = pt
+            beginSnap(except = -1)
+            floating = snapped(pt)
         }
         changed()
     }
@@ -222,10 +241,10 @@ class LassoCurve internal constructor(
                     pushHistory()
                     moved = true
                 }
-                moveTo(dragIndex, pt)
+                moveTo(dragIndex, snapped(pt))
             }
             Drag.NEW -> {
-                floating = pt
+                floating = snapped(pt)
                 changed()
             }
         }
@@ -233,10 +252,16 @@ class LassoCurve internal constructor(
 
     fun onUp(p: ToolPoint) {
         // (A non-finite lift-off sample keeps the last good position.)
-        val pt = Vec2(p.x, p.y).takeIf { it.x.isFinite() && it.y.isFinite() }
-            ?: floating ?: anchors.getOrNull(dragIndex)?.pos ?: downPoint
+        val raw = Vec2(p.x, p.y).takeIf { it.x.isFinite() && it.y.isFinite() }
+        val pt = when {
+            raw == null -> floating ?: anchors.getOrNull(dragIndex)?.pos ?: downPoint
+            // A point that never moved stays where it is (a tap doesn't jump it onto a guide).
+            drag == Drag.ANCHOR && !moved -> raw
+            else -> snapped(raw)
+        }
         val d = drag
         drag = Drag.NONE
+        snap.end()
         when (d) {
             Drag.NONE -> return
             Drag.ANCHOR -> when {
@@ -259,6 +284,7 @@ class LassoCurve internal constructor(
 
     /** Drops the current gesture only: the points go back to how they were when it began. */
     fun onCancel() {
+        snap.end()
         if (drag == Drag.NONE) return
         drag = Drag.NONE
         floating = null
@@ -286,8 +312,22 @@ class LassoCurve internal constructor(
     /** The lasso stops being the current tool (or the editor closes). */
     fun onDeactivate() {
         if (drag != Drag.NONE) onCancel()
+        snap.end()
         stopTicking()
     }
+
+    /**
+     * Starts snapping for this touch: the points (all but [except]) are point targets as they are
+     * now (a copy, so the dragged point never becomes its own target).
+     */
+    private fun beginSnap(except: Int) {
+        val others = ArrayList<Vec2>(anchors.size)
+        anchors.forEachIndexed { i, a -> if (i != except) others += a.pos }
+        snap.begin(includeSelection = snapToSelection()) { pointLines(others, POINT_LABEL) }
+    }
+
+    /** [p] snapped while "Snap to objects" is on (see the class docs); unchanged when off. */
+    private fun snapped(p: Vec2): Vec2 = snap.snapPointWhenOn(p, controller.snapping)
 
     private fun moveTo(index: Int, p: Vec2) {
         val a = anchors.getOrNull(index) ?: return
@@ -342,6 +382,13 @@ class LassoCurve internal constructor(
                 drawAnchor(canvas, t, pts[0], pts[1], sharp = false, active = true, closeHint = false)
             }
         }
+        // Smart guides of the new / dragged point (labels away from it).
+        val moving = when {
+            drag == Drag.NEW -> floating
+            drag == Drag.ANCHOR && moved -> anchors.getOrNull(dragIndex)?.pos
+            else -> null
+        }
+        snap.draw(canvas, t, moving?.let { pointBox(it) })
     }
 
     private fun map(t: ViewTransform, p: Vec2) {
@@ -379,6 +426,8 @@ class LassoCurve internal constructor(
         /** A new point lands ON the outline when the tap is this share of [GRAB_DP] from it. */
         private const val INSERT_FRACTION = 0.6f
         private const val MAX_HISTORY = 200
+        /** Guide label of the other points. */
+        private const val POINT_LABEL = "Point"
         /** Marching-ants frame time, as for the selection outline (~15 fps). */
         private const val ANTS_FRAME_MS = 66L
         private const val ACCENT = 0xFF4DA3FF.toInt()

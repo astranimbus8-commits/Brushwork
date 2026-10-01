@@ -19,9 +19,20 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
+import com.brushwork.paint.tools.select.pointBox
+import com.brushwork.paint.tools.select.snapPointWhenOn
+import com.brushwork.paint.tools.transform.DocBox
+import com.brushwork.paint.tools.transform.SnapAxis
+import com.brushwork.paint.tools.transform.SnapEdge
+import com.brushwork.paint.tools.transform.SnapGuide
+import com.brushwork.paint.tools.transform.SnapLine
+import com.brushwork.paint.tools.transform.SnapSource
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Manga frame divider (like the "frame border" tools of ibisPaint / Clip Studio). "New frame
@@ -33,6 +44,9 @@ import kotlin.math.max
  * edit restores the matching model (see [FrameEditAction]); if the layer is changed by something
  * else (brush, filter, canvas resize...) the frame becomes [Status.OUT_OF_SYNC] and the UI offers
  * to redraw it from the model or to start a new frame layer.
+ *
+ * Cuts snap to objects with the app-wide "Snap to objects" setting (see [snap]): their start, the
+ * end of slanted cuts, never fighting the cut's own straightening.
  */
 class FrameDividerTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.FRAME_DIVIDER
@@ -256,17 +270,33 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
 
     private var cutStart: Vec2? = null
     private var cutEnd: Vec2? = null
+    /** Where the finger went down (taps are told from cuts by the finger, not the snapped start). */
+    private var downPoint = Vec2.ZERO
     /** Panels that the cut in progress would create (drawn as a preview). */
     private var previewPanels: List<Panel> = emptyList()
     private var gestureActive = false
     /** The frame was usable when the gesture started (else no cut preview is shown). */
     private var cutAllowed = false
 
+    /**
+     * "Snap to objects" (the app-wide setting) for the cut: its start, and the end of a slanted cut,
+     * snap to the canvas, other layers' content bounds and drawn lines (never the frame layer's own
+     * borders: a cut along a border can't divide anything) and to the "gutter lines" of the frame
+     * (half a gutter outside the level / upright panel edges: a cut there lines its panels up with
+     * the neighbouring ones). The frame's own straightening ([FrameMath.snapCut]) keeps priority:
+     * the end of a cut it made level or upright isn't moved (that would tilt it again).
+     */
+    private val snap = controller.newSnapSession()
+
+    /** Guides shown right now (document px); empty when nothing is aligned. */
+    internal val activeGuides: List<SnapGuide> get() = snap.guides
+
     private fun cancelCut() {
         gestureActive = false
         cutStart = null
         cutEnd = null
         previewPanels = emptyList()
+        snap.end()
         controller.invalidateOverlay()
     }
 
@@ -276,15 +306,72 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         gestureActive = true
         refreshSync()
         cutAllowed = status() == Status.READY
-        cutStart = Vec2(p.x, p.y)
+        downPoint = Vec2(p.x, p.y)
+        snap.end()
+        var start = downPoint
+        if (cutAllowed && !removeMode) {
+            val frame = targetLayer()
+            val gutters = model?.let { gutterLines(it) } ?: emptyList()
+            snap.begin(exclude = listOfNotNull(frame)) { gutters }
+            // The start of a cut is a new point: it may snap right away.
+            start = snap.snapPointWhenOn(downPoint, controller.snapping)
+        }
+        cutStart = start
         cutEnd = cutStart
         previewPanels = emptyList()
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * The end of the cut from [a] for the finger at [raw]: straightened by [FrameMath.snapCut]
+     * first; a cut it left slanted has its end snapped to objects (and straightened again if that
+     * brings it within the straightening angle). Shows the guides of the cut.
+     */
+    private fun cutEndFor(a: Vec2, raw: Vec2): Vec2 {
+        val straight = FrameMath.snapCut(a, raw)
+        val b = if (straight.x == a.x || straight.y == a.y) straight
+        else FrameMath.snapCut(a, snap.snapPointWhenOn(raw, controller.snapping))
+        if (controller.snapping.enabled && a != b) {
+            snap.showGuidesFor(DocBox(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y)), POINT_GUIDE_EPS)
+        } else {
+            snap.clearGuides()
+        }
+        return b
+    }
+
+    /**
+     * Lines a cut can line its panels up with: half a gutter outside every level / upright panel
+     * edge (a cut on such a line leaves a panel edge exactly in line with that one, and with the
+     * gutters of this frame's settings the gutters line up too).
+     */
+    private fun gutterLines(m: FrameModel): List<SnapLine> {
+        val s = settings
+        val out = ArrayList<SnapLine>()
+        for (panel in m.panels) {
+            val pts = panel.points
+            if (pts.size < 3) continue
+            var cx = 0f; var cy = 0f
+            for (v in pts) { cx += v.x; cy += v.y }
+            cx /= pts.size; cy /= pts.size
+            for (i in pts.indices) {
+                val u = pts[i]
+                val v = pts[(i + 1) % pts.size]
+                if (abs(u.y - v.y) <= EDGE_EPS && abs(u.x - v.x) > EDGE_EPS) {
+                    val y = if (u.y < cy) u.y - s.gutterH / 2f else u.y + s.gutterH / 2f
+                    out += SnapLine(SnapAxis.Y, y, SnapEdge.CENTER, SnapSource.LINE, GUTTER_LABEL, min(u.x, v.x), max(u.x, v.x))
+                } else if (abs(u.x - v.x) <= EDGE_EPS && abs(u.y - v.y) > EDGE_EPS) {
+                    val x = if (u.x < cx) u.x - s.gutterV / 2f else u.x + s.gutterV / 2f
+                    out += SnapLine(SnapAxis.X, x, SnapEdge.CENTER, SnapSource.LINE, GUTTER_LABEL, min(u.y, v.y), max(u.y, v.y))
+                }
+            }
+        }
+        return out
     }
 
     override fun onMove(p: ToolPoint) {
         val a = cutStart ?: return
         if (!gestureActive || removeMode || !cutAllowed) return
-        val b = FrameMath.snapCut(a, Vec2(p.x, p.y))
+        val b = cutEndFor(a, Vec2(p.x, p.y))
         cutEnd = b
         val m = model
         previewPanels = if (m != null && status() == Status.READY) {
@@ -298,11 +385,13 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
     override fun onUp(p: ToolPoint) {
         val a = cutStart
         val wasActive = gestureActive
+        val raw = Vec2(p.x, p.y)
+        // The cut as shown (snapped like the last move), before the session ends.
+        val end = if (wasActive && a != null && !removeMode && cutAllowed) cutEndFor(a, raw) else null
         cancelCut()
         if (!wasActive || a == null) return
         val t = controller.viewTransform
-        val raw = Vec2(p.x, p.y)
-        val isTap = t.docToScreen(raw).distanceTo(t.docToScreen(a)) < t.dp(MIN_CUT_DP)
+        val isTap = t.docToScreen(raw).distanceTo(t.docToScreen(downPoint)) < t.dp(MIN_CUT_DP)
         if (isTap && !removeMode) return
         when (status()) {
             Status.NONE -> { controller.toast("Create a frame layer first (\"New frame layer\")"); return }
@@ -318,7 +407,7 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
             applyModel(layer, rec, rec.model.copy(panels = rec.model.panels.filterIndexed { j, _ -> j != i }), "Remove panel", incremental = true)
             return
         }
-        val b = FrameMath.snapCut(a, raw)
+        val b = end ?: FrameMath.snapCut(a, raw)
         val s = settings
         val result = FrameMath.divide(rec.model.panels, a, b, s.gutterH, s.gutterV, minPieceSize(rec.model.style))
         if (result == null) { controller.toast("Drag across a panel to divide it"); return }
@@ -340,7 +429,11 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         if (!gestureActive || removeMode || !cutAllowed) return
         val a = cutStart ?: return
         val b = cutEnd ?: return
-        if (a == b) return
+        if (a == b) {
+            // Only the start so far: show where it snapped.
+            snap.draw(canvas, t, pointBox(a))
+            return
+        }
         haloPaint.strokeWidth = t.dp(3.5f)
         accentPaint.strokeWidth = t.dp(2f)
         for (panel in previewPanels) {
@@ -368,9 +461,15 @@ class FrameDividerTool(controller: EditorController) : Tool(controller) {
         canvas.drawLine(sa.x, sa.y, sb.x, sb.y, accentPaint)
         canvas.drawCircle(sa.x, sa.y, t.dp(4f), dotPaint)
         canvas.drawCircle(sb.x, sb.y, t.dp(4f), dotPaint)
+        // Smart guides of the cut (labels away from the finger at its end).
+        snap.draw(canvas, t, pointBox(b))
     }
 
     companion object {
+        /** Guide label of the lines a cut lines its panels up on (see gutterLines). */
+        private const val GUTTER_LABEL = "Gutter"
+        /** Panel edges this close (px) to level / upright count as such. */
+        private const val EDGE_EPS = 0.01f
         private const val ACCENT = 0xFF4DA3FF.toInt()
         /** Shorter drags (screen dp) count as taps. */
         private const val MIN_CUT_DP = 20f

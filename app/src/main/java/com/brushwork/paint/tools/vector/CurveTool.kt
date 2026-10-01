@@ -17,6 +17,10 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.pointBox
+import com.brushwork.paint.tools.select.pointLines
+import com.brushwork.paint.tools.select.snapPointToObjects
+import com.brushwork.paint.tools.transform.SnapGuide
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -70,6 +74,14 @@ data class CurveSettings(
  * app's undo button and two-finger tap included) takes back one anchor edit at a time, redo
  * brings it back. With "Current brush" the painting tool's real stroke is shown live while the
  * path is edited; ✓ paints it (plus the optional fill) as one undo step.
+ *
+ * "Snap to objects" (the app-wide setting): a new anchor (also one inserted on the path, and one
+ * just tapped) and a dragged anchor (once it moved past the touch slop, so a tap never moves it)
+ * snap per axis to the canvas edges and center, the selection, other layers' content bounds, the
+ * lines drawn in layers (Table filter lines...), shape vertices and the path's other anchors
+ * (lining up with them or landing on them), with magenta guides while the finger is down; an axis
+ * that didn't snap follows the square grid when grid snapping is on (exactly as before when
+ * snapping is off). Tangent handle ends snap to the same targets, their own anchor included.
  */
 class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(controller) {
     override val id = if (polyline) ToolId.POLYLINE else ToolId.CURVE
@@ -131,6 +143,19 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private val painter = OverlayPainter()
     private val docPath = Path()
     private val pts = FloatArray(2)
+
+    /**
+     * "Snap to objects" for the dragged / new anchor and tangent handle: the canvas, the selection,
+     * other layers' content and drawn lines (Table filter lines...), shape vertices, the grid and
+     * the path's other anchors. One per tool, begun on every touch.
+     */
+    private val snap = controller.newSnapSession()
+
+    /** Where the dragged point snapped to (keeps the guide labels off it), or null. */
+    private var snapMoving: Vec2? = null
+
+    /** Guides shown right now (document px); empty when nothing is aligned. */
+    internal val activeGuides: List<SnapGuide> get() = snap.guides
 
     private val tension: Float get() = if (polyline) 1f else settings.tension
 
@@ -306,6 +331,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         gestureSelected = selected
         gestureHistorySize = history.size
         gestureRedo = redo.toList()
+        snap.end()
+        snapMoving = null
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
         val tol = controller.docLength(HANDLE_TOUCH_DP)
         val sel = selected
@@ -318,26 +345,31 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             if (minOf(dOut, dIn) <= tol && minOf(dOut, dIn) < pt.distanceTo(a)) {
                 drag = if (dOut <= dIn) Drag.HANDLE_OUT else Drag.HANDLE_IN
                 dragIndex = sel
+                // Its own anchor is a target too: the tangent then lies level or upright.
+                beginSnap(except = -1)
                 return
             }
         }
         val idx = nearestAnchor(pt, tol)
         if (idx >= 0) {
-            // Every existing point can be grabbed and moved at any time.
+            // Every existing point can be grabbed and moved at any time (it snaps once it moves).
             drag = Drag.ANCHOR
             dragIndex = idx
+            beginSnap(except = idx)
             return
         }
-        // New anchor: inserted when tapping on the path, appended otherwise.
+        // New anchor: inserted when tapping on the path, appended otherwise. It snaps right away
+        // (to objects, the other anchors and, with grid snapping, the grid).
+        beginSnap(except = -1)
         pushHistory()
         val hit = if (anchors.size >= 2) CurveGeometry.nearest(anchors, pt, settings.closed, tension, polyline) else null
         val list = anchors.toMutableList()
         if (hit != null && hit.distance <= tol * 0.6f) {
             dragIndex = hit.segment + 1
-            val q = controller.snapToGrid(hit.point)
+            val q = snapAnchor(hit.point)
             list.add(dragIndex, CurveAnchor(q.x, q.y, sharp = polyline))
         } else {
-            val q = controller.snapToGrid(pt)
+            val q = snapAnchor(pt)
             list.add(CurveAnchor(q.x, q.y, sharp = polyline))
             dragIndex = list.lastIndex
         }
@@ -362,7 +394,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                 // The preview follows the finger as cheaply as possible until it lifts.
                 setDragging(true)
                 val a = anchors.getOrNull(dragIndex) ?: return
-                replace(dragIndex, a.moved(controller.snapToGrid(pt)))
+                // What the finger alone gives is snapped (never the last snapped place), so moving
+                // farther than the snap distance lets go of a guide.
+                replace(dragIndex, a.moved(snapAnchor(pt)))
             }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> {
                 val a = anchors.getOrNull(dragIndex) ?: return
@@ -372,7 +406,16 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
                     setDragging(true)
                 }
                 val (hIn, hOut) = handlesOf(dragIndex)
-                val v = pt - a.pos
+                // The handle's end snaps to objects and anchors (never to the grid, as before).
+                val end = snap.snapPointToObjects(pt)
+                var v = end - a.pos
+                snapMoving = end
+                if (v.length < 1e-3f) {
+                    // Snapped onto its own anchor: no tangent there, follow the finger instead.
+                    snap.clearGuides()
+                    snapMoving = null
+                    v = pt - a.pos
+                }
                 if (v.length < 1e-3f) return
                 // Smooth anchor: the other handle stays collinear and keeps its length.
                 replace(dragIndex, if (drag == Drag.HANDLE_OUT) {
@@ -399,6 +442,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             Drag.NONE, Drag.IGNORE -> {}
         }
         drag = Drag.NONE
+        endSnap()
         // The drag is over: a plain line / fill goes back into the layer, a brush stroke is drawn
         // exactly once the path rests a moment.
         setDragging(false)
@@ -418,6 +462,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             if (anchors.isEmpty()) targetLayer = null
         }
         drag = Drag.NONE
+        endSnap()
         changed()
     }
 
@@ -445,6 +490,29 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private fun setDragging(on: Boolean) {
         brushPreview.interacting = on
         preview.interacting = on
+    }
+
+    /**
+     * Starts snapping for this touch. The anchors (all but [except]) are point targets as they
+     * are now (a copy: the dragged point never becomes its own target when targets are rebuilt);
+     * the selection and other objects are found by the snapping service.
+     */
+    private fun beginSnap(except: Int) {
+        val others = ArrayList<Vec2>(anchors.size)
+        anchors.forEachIndexed { i, a -> if (i != except) others += a.pos }
+        snap.begin(includeSelection = true) { pointLines(others, POINT_LABEL) }
+    }
+
+    /**
+     * An anchor at [p]: snapped to objects / the other anchors when "Snap to objects" is on, and
+     * on axes that didn't snap to the square grid when grid snapping is on (with snapping off it
+     * is exactly the old grid snap).
+     */
+    private fun snapAnchor(p: Vec2): Vec2 = snap.snapPoint(p).also { snapMoving = it }
+
+    private fun endSnap() {
+        snapMoving = null
+        snap.end()
     }
 
     private fun nearestAnchor(p: Vec2, tol: Float): Int {
@@ -558,6 +626,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         historyKey = null
         canUndoStep = false
         drag = Drag.NONE
+        endSnap()
         targetLayer = null
         docPath.rewind()
         overlaySpecs = emptyList()
@@ -635,9 +704,13 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             val q = map(t, list[i].pos)
             painter.handle(canvas, t, q[0], q[1], square = list[i].sharp || polyline, active = i == sel)
         }
+        // Smart guides of the dragged point (on top, labels away from the finger).
+        snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
     }
 
     companion object {
+        /** Guide label of the path's other anchors. */
+        private const val POINT_LABEL = "Point"
         private const val MAX_HISTORY = 200
         /** Keyed numeric edits closer together than this share one in-tool undo step. */
         private const val COALESCE_MS = 1500L
