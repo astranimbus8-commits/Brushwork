@@ -38,7 +38,9 @@ import kotlin.math.sqrt
 internal const val BRUSH_SAMPLE_SPACING = 0.75f
 
 /** Flattening tolerance of the path a brush follows (document px). */
-private const val BRUSH_FLATTEN_TOLERANCE = 0.1f
+internal const val BRUSH_SAMPLE_TOLERANCE = 0.1f
+
+private const val BRUSH_FLATTEN_TOLERANCE = BRUSH_SAMPLE_TOLERANCE
 
 /**
  * Per-sample line widths along a path stroke (v1.5 §4.5, filled by A4): [widthsAtSamples] has
@@ -85,13 +87,32 @@ private fun strokeSamples(scratch: FlatScratch, path: VectorPath, taperFraction:
         if (i > 0) dist += hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
         ps[i] = if (taperLen > 0f) CurveGeometry.taperPressure(dist, total, taperLen) else 1f
     }
+    applyWidthProfile(out, widths)
+    return out
+}
+
+/**
+ * Multiplies the pressures of [out] by `w / max(w)` of [widths] (one factor per sample; ignored
+ * when shorter than the input or when its largest factor is not > 0). Exactly what
+ * [brushStrokeInput] does with its `widths`, for an input computed without them.
+ */
+internal fun applyWidthProfile(out: PathStrokeInput, widths: WidthProfile?) {
+    val n = out.size
+    val ps = out.pressure
     val w = widths?.widthsAtSamples
     if (w != null && w.size >= n) {
         var wMax = 0f
         for (i in 0 until n) if (w[i] > wMax) wMax = w[i]
         if (wMax > 0f && wMax.isFinite()) for (i in 0 until n) ps[i] *= (w[i] / wMax).coerceIn(0f, 1f)
     }
-    return out
+}
+
+/** Largest factor of the first [n] entries of [widths] (0 when none is > 0). */
+internal fun profileMax(widths: WidthProfile, n: Int = widths.widthsAtSamples.size): Float {
+    val w = widths.widthsAtSamples
+    var m = 0f
+    for (i in 0 until minOf(n, w.size)) if (w[i] > m) m = w[i]
+    return if (m.isFinite()) m else 0f
 }
 
 /**
@@ -241,6 +262,55 @@ internal class BrushStrokePreview(
      * override (an edited shape layer) adopts it here.
      */
     var onLiveChanged: (() -> Unit)? = null
+
+    /**
+     * While this returns true, strokes start as if there were no pixel selection and the
+     * layer's transparency were not locked (v1.5: the path will be an object of a vector layer,
+     * which neither clips; its replay must equal the live pixels). Both are only lifted for the
+     * moment the painting tool starts the stroke (it keeps what it saw then).
+     */
+    var unclipped: () -> Boolean = { false }
+
+    /** The random values of the brush for this editing session (a replay with it gives the same texture). */
+    val sessionSeed: Long get() = seed
+
+    /**
+     * Paints with the random values [s] from now on (a reopened path keeps the texture it was
+     * painted with). A live stroke with other values is dropped first.
+     */
+    fun useSeed(s: Long) {
+        if (s == seed) return
+        cancel()
+        seed = s
+    }
+
+    /**
+     * True while a stroke starts with the selection lifted (see [unclipped]): the tool hears
+     * `onSelectionChanged` twice then, and should ignore it.
+     */
+    var liftingClip = false
+        private set
+
+    /** Runs [block] (which starts a stroke on [layer]) without the selection and alpha lock when [unclipped]. */
+    private inline fun <T> clipFree(layer: Layer, block: () -> T): T {
+        if (!unclipped()) return block()
+        val sel = controller.selection
+        val locked = layer.alphaLocked
+        if (sel == null && !locked) return block()
+        liftingClip = true
+        try {
+            if (sel != null) controller.setSelection(null, recordUndo = false)
+            layer.alphaLocked = false
+            try {
+                return block()
+            } finally {
+                layer.alphaLocked = locked
+                if (sel != null) controller.setSelection(sel, recordUndo = false)
+            }
+        } finally {
+            liftingClip = false
+        }
+    }
 
     /** The brush the stroke is painted with ([presetOverride], else the tool's current one). */
     private fun presetOf(id: ToolId): BrushPreset? = presetOverride() ?: controller.presetFor(id)
@@ -502,8 +572,10 @@ internal class BrushStrokePreview(
     private fun start(tool: Tool, key: Key, budget: Float): Boolean {
         val before = controller.message
         withPreset(key.toolId) {
-            if (tool is BrushTool) tool.beginPath(input, seed, budget)
-            else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
+            clipFree(key.layer) {
+                if (tool is BrushTool) tool.beginPath(input, seed, budget)
+                else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
+            }
         }
         val msg = controller.message
         if (msg !== before && msg != null) {
@@ -560,9 +632,9 @@ internal class BrushStrokePreview(
         }
         cancelLive()
         if (tool is BrushTool) {
-            if (withPreset(id) { tool.beginPath(input, seed) }) tool.onUp(lastPoint(t0))
+            if (withPreset(id) { clipFree(key.layer) { tool.beginPath(input, seed) } }) tool.onUp(lastPoint(t0))
         } else {
-            withPreset(id) { tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true)) }
+            withPreset(id) { clipFree(key.layer) { tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true)) } }
             for (i in 1 until input.size - 1) tool.onMove(ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true))
             tool.onUp(lastPoint(t0))
         }
@@ -703,7 +775,9 @@ internal class SpecOverlay {
     /**
      * Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. With
      * [asNewLayer] they are drawn as the content of a new (visible, opaque, normal) layer that
-     * will be added above [layer]: not into its mask, not with its visibility or opacity.
+     * will be added above [layer]: not into its mask, not with its visibility or opacity. With
+     * [ignoreSelection] the items are not limited to the pixel selection (objects of a vector
+     * layer, v1.5).
      */
     fun draw(
         canvas: Canvas,
@@ -713,6 +787,7 @@ internal class SpecOverlay {
         specs: List<VectorPaintSpec>,
         keepBandFree: Boolean = false,
         asNewLayer: Boolean = false,
+        ignoreSelection: Boolean = false,
     ) {
         if (specs.isEmpty() || (!asNewLayer && !layer.visible)) return
         val doc = controller.doc
@@ -728,7 +803,7 @@ internal class SpecOverlay {
         // The band is erased inside an isolated layer (from the items only, not the canvas).
         val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
         canvas.clipRect(clip)
-        val sel = controller.selection
+        val sel = if (ignoreSelection) null else controller.selection
         for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
         if (band) {
             bandPaint.strokeWidth = bandWidth
