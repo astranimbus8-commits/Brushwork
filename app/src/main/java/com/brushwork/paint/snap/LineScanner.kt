@@ -86,10 +86,14 @@ internal class LineScanner(
         val vertical = candidates(vp, w, bg, BORDER_LEFT, BORDER_RIGHT, cancelled)
         if (cancelled()) return emptyList()
         // Each axis' lines may be cut where the other axis' lines cross them, and are not lines
-        // where the other axis' edges end on them all along (text).
+        // where the other axis' edges end on them all along (text) - except where the other
+        // axis' lines meet them (the border of a fine grid).
+        val foundH = collect(horizontal, Crossings(vertical))
+        val foundV = collect(vertical, Crossings(horizontal))
+        if (cancelled()) return emptyList()
         val out = ArrayList<DetectedLine>()
-        out += finish(horizontal, SnapAxis.Y, Crossings(vertical), Ends(vp))
-        out += finish(vertical, SnapAxis.X, Crossings(horizontal), Ends(hp))
+        out += finish(foundH, SnapAxis.Y, Ends(vp), Meeting(foundV))
+        out += finish(foundV, SnapAxis.X, Ends(hp), Meeting(foundH))
         return if (cancelled()) emptyList() else out
     }
 
@@ -611,9 +615,9 @@ internal class LineScanner(
         /**
          * How many places (ends closer than [JUNCTION_MERGE] px make one) inside [segs] (not
          * within [JUNCTION_MERGE] px of their ends: crossings and corners) pieces of the other
-         * axis end within [reach] of [pos].
+         * axis end within [reach] of [pos], leaving out where a line of [meeting] ends on it.
          */
-        fun junctions(pos: Float, reach: Float, segs: IntArray): Int {
+        fun junctions(pos: Float, reach: Float, segs: IntArray, meeting: Meeting): Int {
             val lo = ceilInt(pos - reach)
             val hi = floorInt(pos + reach)
             if (hi < lo) return 0
@@ -621,7 +625,7 @@ internal class LineScanner(
             var i = lowerBound(lo.toLong() shl 32)
             while (i < keys.size && (keys[i] ushr 32).toInt() <= hi) {
                 val x = (keys[i] and 0xFFFFFFFFL).toInt()
-                if (insideSegs(segs, x)) xs += x
+                if (insideSegs(segs, x) && !meeting.meets(x, pos, reach)) xs += x
                 i++
             }
             if (xs.isEmpty()) return 0
@@ -654,16 +658,54 @@ internal class LineScanner(
         private fun floorInt(v: Float) = kotlin.math.floor(v).toInt()
     }
 
+    /** A line of one axis that passed [collect]: at [pos], over [segs], [thickness] thick. */
+    private class Found(val pos: Float, val segs: IntArray, val thickness: Float) {
+        val length: Int = Segs.length(segs)
+    }
+
+    /** The [Found] lines of one axis, for telling where they meet a line of the other axis. */
+    private class Meeting(found: List<Found>) {
+        private val list = found.sortedBy { it.pos }
+        private val pos = FloatArray(list.size) { list[it].pos }
+
+        /**
+         * Whether one of these lines covers [x] (across it) and one of its pieces reaches [at]
+         * within [reach]: it crosses or ends on the line at [at] there.
+         */
+        fun meets(x: Int, at: Float, reach: Float): Boolean {
+            var lo = 0
+            var hi = pos.size
+            val from = x - MEETING_SPAN
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (pos[mid] < from) lo = mid + 1 else hi = mid
+            }
+            var i = lo
+            while (i < list.size && pos[i] <= x + MEETING_SPAN) {
+                val l = list[i]
+                if (abs(l.pos - x) <= l.thickness / 2f + JUNCTION_MERGE) {
+                    val s = l.segs
+                    var k = 0
+                    while (k < s.size) {
+                        if (s[k] <= at + reach + 1f && s[k + 1] >= at - reach - 1f) return true
+                        k += 2
+                    }
+                }
+                i++
+            }
+            return false
+        }
+    }
+
     /**
-     * Final merge: collinear candidates join; chains of pieces across short gaps stay when they
-     * are long and dense enough (gaps where [crossings] cross them count as covered), other
-     * pieces only when long by themselves; lines that pieces of the other axis end on all along
-     * ([ends]: text) are dropped. Longest first, at most [LineDetector.MAX_LINES_PER_AXIS].
+     * Collinear candidates join; chains of pieces across short gaps stay when they are long and
+     * dense enough (gaps where [crossings] cross them count as covered), other pieces only when
+     * long by themselves.
      */
-    private fun finish(cands: List<Candidate>, axis: SnapAxis, crossings: Crossings, ends: Ends): List<DetectedLine> {
+    private fun collect(cands: List<Candidate>, crossings: Crossings): List<Found> {
         if (cands.isEmpty()) return emptyList()
         val sorted = cands.sortedBy { it.pos }
-        val lines = ArrayList<Pair<DetectedLine, Int>>()
+        val lines = ArrayList<Found>()
         var i = 0
         while (i < sorted.size) {
             var j = i + 1
@@ -681,25 +723,33 @@ internal class LineScanner(
             }
             val pos = if (wSum > 0.0) (posSum / wSum).toFloat() else sorted[i].pos
             val kept = accepted(segs, pos, thick, crossings)
-            if (kept != null && !endedOnAllAlong(kept, pos, thick, ends)) {
-                lines += DetectedLine(axis, pos, kept[0].toFloat(), kept[kept.size - 1].toFloat(), thick) to Segs.length(kept)
-            }
+            if (kept != null) lines += Found(pos, kept, thick)
             i = j
         }
-        val top = if (lines.size > LineDetector.MAX_LINES_PER_AXIS) {
-            lines.sortedByDescending { it.second }.take(LineDetector.MAX_LINES_PER_AXIS)
-        } else lines
-        return top.map { it.first }.sortedBy { it.pos }
+        return lines
     }
 
     /**
-     * Whether pieces of the other axis end on the line at [pos] ([thickness] thick, over [segs])
-     * at more than [MAX_JUNCTIONS] places, closer together than [JUNCTION_SPACING] px on average:
-     * the top or bottom of a row of letters, not a line.
+     * The lines of [found] on [axis], without those that pieces of the other axis end on all
+     * along ([ends]: text; where a line of [meeting] ends on them does not count); longest first,
+     * at most [LineDetector.MAX_LINES_PER_AXIS].
      */
-    private fun endedOnAllAlong(segs: IntArray, pos: Float, thickness: Float, ends: Ends): Boolean {
-        val n = ends.junctions(pos, thickness / 2f + CROSS_REACH, segs)
-        return n > MAX_JUNCTIONS && n * JUNCTION_SPACING > Segs.length(segs)
+    private fun finish(found: List<Found>, axis: SnapAxis, ends: Ends, meeting: Meeting): List<DetectedLine> {
+        val lines = found.filter { !endedOnAllAlong(it, ends, meeting) }
+        val top = if (lines.size > LineDetector.MAX_LINES_PER_AXIS) {
+            lines.sortedByDescending { it.length }.take(LineDetector.MAX_LINES_PER_AXIS)
+        } else lines
+        return top.sortedBy { it.pos }.map { DetectedLine(axis, it.pos, it.segs[0].toFloat(), it.segs[it.segs.size - 1].toFloat(), it.thickness) }
+    }
+
+    /**
+     * Whether pieces of the other axis end on [line] at more than [MAX_JUNCTIONS] places (not
+     * counting where lines of [meeting] meet it), closer together than [JUNCTION_SPACING] px on
+     * average: the top or bottom of a row of letters, not a line.
+     */
+    private fun endedOnAllAlong(line: Found, ends: Ends, meeting: Meeting): Boolean {
+        val n = ends.junctions(line.pos, line.thickness / 2f + CROSS_REACH, line.segs, meeting)
+        return n > MAX_JUNCTIONS && n * JUNCTION_SPACING > line.length
     }
 
     /**
@@ -834,6 +884,9 @@ internal class LineScanner(
 
         /** More junctions than one per this many px along a line: text, not a line. */
         private const val JUNCTION_SPACING = 12
+
+        /** Lines are looked for this far (px) around a junction (half the thickest band, and some). */
+        private const val MEETING_SPAN = 70
 
         /** Mean colors this close (any channel) are the same color. */
         private const val SIMILAR = 40

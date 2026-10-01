@@ -212,6 +212,18 @@ class LineDetectorTest {
     }
 
     @Test
+    fun fineGridsKeepTheirBorder() {
+        // Graph paper: 20 px cells; ~50 lines end on the border lines (not text).
+        val w = 1080
+        val h = 1080
+        for (bg in listOf(Bg.TRANSPARENT, Bg.WHITE)) for (t in listOf(2f, 4f)) {
+            val layout = sizeLayout(w, h, 20f, 20f, 40f, 0f, true)!!
+            val found = detect(tableSize(background(bg, w, h), 20f, 20f, 40f, 0f, t, true))
+            assertTableLines("graph paper $bg t=$t", found, layout, t, w, h)
+        }
+    }
+
+    @Test
     fun coloredAndTranslucentLines() {
         val w = 500
         val h = 400
