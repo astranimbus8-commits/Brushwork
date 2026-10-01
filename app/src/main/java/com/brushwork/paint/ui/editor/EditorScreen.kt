@@ -359,6 +359,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     val selectionBarVisible = session == null && busy == null && !toolHasUserChanges &&
         (panel != EditorPanel.SELECTION || sheetHost.minimized) &&
         (hasSelection || (clipboard != null && clipboard !== hiddenClipboard))
+    // Selected vector objects (v1.5): their bar takes the selection bar's place.
+    val objectBarVisible = objectsSelected && session == null && busy == null
 
     Box(
         Modifier
@@ -488,7 +490,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
         val topDp = with(density) { topChromePx.toDp() }
         val bottomDp = with(density) { bottomChromePx.toDp() }
-        val selectionBarDp = if (selectionBarVisible) with(density) { selectionBarPx.toDp() } + 6.dp else 0.dp
+        val selectionBarDp = if (selectionBarVisible || objectBarVisible) with(density) { selectionBarPx.toDp() } + 6.dp else 0.dp
 
         // ------------------------------------------------------------ bottom chrome
         Column(
@@ -549,7 +551,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
 
         // ------------------------------------------------------------ selection actions
-        if (objectsSelected && session == null && busy == null) {
+        if (objectBarVisible) {
             // Selected vector objects get their own bar in the selection bar's place (v1.5).
             VectorObjectBar(
                 controller,
