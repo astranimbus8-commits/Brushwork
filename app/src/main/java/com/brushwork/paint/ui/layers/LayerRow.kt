@@ -87,6 +87,8 @@ internal data class LayerRowModel(
     val baseHidden: Boolean,
     /** An editable text layer (its text can be edited again with the text tool). */
     val isText: Boolean = false,
+    /** An editable shape layer (its shape can be edited again with the shape tool). */
+    val isShape: Boolean = false,
 ) {
     companion object {
         /** Rows for [topFirst] (display order). */
@@ -113,6 +115,7 @@ internal data class LayerRowModel(
                     clip = clip,
                     baseHidden = clip.clipped && !docOrder[clip.baseIndex].visible,
                     isText = l.isTextLayer,
+                    isShape = l.isShapeLayer,
                 )
             }
         }
@@ -132,6 +135,8 @@ internal fun LayerRow(
     modifier: Modifier = Modifier,
     /** Double-tapping a text layer's row edits its text (null = rows without text). */
     onEditText: (() -> Unit)? = null,
+    /** Double-tapping a shape layer's row opens its shape in the shape tool. */
+    onEditShape: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(8.dp)
     val background = when {
@@ -140,15 +145,20 @@ internal fun LayerRow(
         else -> Color.Transparent
     }
     val dim = if (!row.visible || row.baseHidden) 0.45f else 1f
-    // A tap selects at once (selecting again is harmless); a second tap on a text row within the
-    // double-tap time edits its text. (combinedClickable would hold every single tap back.)
+    // A tap selects at once (selecting again is harmless); a second tap on a text / shape row
+    // within the double-tap time edits its text / shape. (combinedClickable would hold every
+    // single tap back.)
     val doubleTapMs = LocalViewConfiguration.current.doubleTapTimeoutMillis
     val lastTap = remember(row.layer) { longArrayOf(-1L) }
     val click = Modifier.clickable(onClickLabel = "Select layer") {
         val now = SystemClock.uptimeMillis()
-        val edit = onEditText
+        val edit = when {
+            row.isText -> onEditText
+            row.isShape -> onEditShape
+            else -> null
+        }
         val last = lastTap[0]
-        if (row.isText && edit != null && last >= 0L && now - last <= doubleTapMs) {
+        if (edit != null && last >= 0L && now - last <= doubleTapMs) {
             lastTap[0] = -1L
             edit()
         } else {
@@ -207,6 +217,7 @@ internal fun LayerRow(
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (row.isText) { TextLayerBadge(); Spacer(Modifier.width(4.dp)) }
+                if (row.isShape) { ShapeLayerBadge(); Spacer(Modifier.width(4.dp)) }
                 Text(
                     "${row.blendMode.label} · ${(row.opacity * 100f).roundToInt()}%",
                     style = MaterialTheme.typography.labelSmall,
@@ -329,6 +340,24 @@ internal fun TextLayerBadge(tint: Color = BrushworkColors.Accent) {
             .padding(horizontal = 3.dp)
             .semantics { contentDescription = "Text layer" },
     )
+}
+
+/** Small badge of editable shape layers (a square and a circle, like a shape tool icon). */
+@Composable
+internal fun ShapeLayerBadge(tint: Color = BrushworkColors.Accent) {
+    Box(
+        Modifier
+            .border(1.dp, tint, RoundedCornerShape(3.dp))
+            .padding(horizontal = 2.dp, vertical = 1.dp)
+            .semantics { contentDescription = "Shape layer" },
+    ) {
+        Canvas(Modifier.size(width = 13.dp, height = 10.dp)) {
+            val s = 1.2.dp.toPx()
+            val h = size.height
+            drawRect(tint, topLeft = Offset(s / 2f, h * 0.3f), size = androidx.compose.ui.geometry.Size(h * 0.6f, h * 0.6f), style = androidx.compose.ui.graphics.drawscope.Stroke(s))
+            drawCircle(tint, radius = h * 0.32f, center = Offset(size.width - h * 0.34f, h * 0.36f), style = androidx.compose.ui.graphics.drawscope.Stroke(s))
+        }
+    }
 }
 
 /** Small "α + lock" badge for alpha-locked layers. */

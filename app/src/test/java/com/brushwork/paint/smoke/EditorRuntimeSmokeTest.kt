@@ -302,10 +302,15 @@ class EditorRuntimeSmokeTest {
         assertFalse("fill committed the shape first", shape.hasPendingWork)
         assertEquals(listOf("Shape", "Fill"), labels())
         Smoke.assertQuiet(c, "shape + fill")
+        // v1.4: the shape went into a shape layer of its own, right above the filled layer.
+        val shapeLayer = c.doc.layers[c.doc.indexOf(layer) + 1]
+        assertTrue(shapeLayer.isShapeLayer)
         c.undo()
         assertEquals("undo reverts the fill only", listOf("Shape"), labels())
-        assertTrue("the shape stays", painted(layer) > 0)
+        assertTrue("the shape stays", painted(shapeLayer) > 0)
+        assertEquals(0, painted(layer))
         c.undo()
+        assertTrue("the shape layer is gone", c.doc.indexOf(shapeLayer) < 0)
         assertEquals(0, painted(layer))
         Smoke.assertQuiet(c, "shape undone")
     }
@@ -320,7 +325,10 @@ class EditorRuntimeSmokeTest {
         c.selectLayer(bottom)
         assertSame(bottom, c.activeLayer)
         assertFalse(shape.hasPendingWork)
-        assertTrue("shape landed on the layer it was drawn on", painted(top) > 0)
+        // v1.4: in a shape layer of its own, right above the layer it was drawn on.
+        val shapeLayer = c.doc.layers[c.doc.indexOf(top) + 1]
+        assertTrue("shape landed above the layer it was drawn on", shapeLayer.isShapeLayer && painted(shapeLayer) > 0)
+        assertEquals(0, painted(top))
         assertEquals(0, painted(bottom))
         Smoke.assertQuiet(c, "shape + select layer")
     }
@@ -528,6 +536,9 @@ class EditorRuntimeSmokeTest {
         bottom.bitmap.eraseColor(-1)
         seed(top)
         c.undoManager.clear()
+        // Shapes are painted into the active layer here (editable shapes add a layer of their own
+        // every time: ShapeLayerEditTest covers them in these layer states).
+        (c.tools.getValue(ToolId.SHAPE) as ShapeTool).update { it.copy(editable = false) }
         c.selectTool(ToolId.BRUSH)
         val original = allPixels()
         val states = listOf<Pair<String, () -> Unit>>(

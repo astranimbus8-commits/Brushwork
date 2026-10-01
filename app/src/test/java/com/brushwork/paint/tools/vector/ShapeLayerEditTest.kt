@@ -417,6 +417,46 @@ class ShapeLayerEditTest {
     }
 
     @Test
+    fun editableShapesInEveryLayerState() {
+        val states = listOf<Pair<String, (EditorController) -> Unit>>(
+            "selection" to { c ->
+                c.setSelection(com.brushwork.paint.model.Selection.fromBytes(ByteArray(200 * 200) { i -> if (i % 200 < 70) -1 else 0 }, 200, 200))
+            },
+            "mask" to { c -> c.addMask(c.activeLayer, fromSelection = false) },
+            "alpha locked" to { c -> c.toggleAlphaLock(c.activeLayer) },
+            "grayscale" to { c -> c.doc.colorMode = com.brushwork.paint.model.ColorMode.GRAYSCALE; c.onDocumentGeometryChanged() },
+        )
+        for ((state, setUp) in states) {
+            val c = controller()
+            val tool = shapeTool(c)
+            setUp(c)
+            c.undoManager.clear()
+            val base = c.activeLayer
+            val before = copyOf(base.bitmap)
+            tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL) }
+            c.drag(30f to 30f, 110f to 90f)
+            tool.commit()
+            assertEquals("$state: own layer", 2, c.doc.layers.size)
+            val layer = c.activeLayer
+            assertTrue("$state: shape layer", layer.isShapeLayer)
+            assertEquals("$state: base untouched", 0, diff(base.bitmap, before))
+            assertTrue("$state: painted", (layer.bitmap.getPixel(50, 60) ushr 24) > 0)
+            if (state == "selection") assertEquals("clipped to the selection", 0, layer.bitmap.getPixel(90, 60))
+            // Edited again: re-rendered whole (a re-edit ignores the selection, like text).
+            c.tap(50f, 60f)
+            assertTrue("$state: opened", tool.editingLayer === layer)
+            c.drag(50f to 60f, 60f to 70f, 70f to 80f)
+            tool.commit()
+            assertEquals("$state: Edit shape", "Edit shape", c.undoManager.undoLabel)
+            assertTrue("$state: moved", (layer.bitmap.getPixel(120, 100) ushr 24) > 0)
+            assertNull("$state: preview gone", c.renderOverride)
+            c.undo(); c.undo()
+            assertEquals("$state: all undone", 1, c.doc.layers.size)
+            assertEquals(0, diff(base.bitmap, before))
+        }
+    }
+
+    @Test
     fun lockedOrHiddenShapeLayersDoNotOpen() {
         val c = controller()
         val tool = shapeTool(c)
