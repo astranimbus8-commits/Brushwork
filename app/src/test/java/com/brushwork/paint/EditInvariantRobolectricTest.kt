@@ -6,7 +6,9 @@ import android.graphics.Paint
 import android.graphics.Rect
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.UndoAction
+import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
@@ -183,6 +185,110 @@ class EditInvariantRobolectricTest {
         // Afterwards listeners hear edits again.
         touchEdit(c, source)
         assertEquals(1, r.runs)
+    }
+
+    @Test
+    fun aFullHistoryStillGroupsAndAmends() {
+        val (c, text, r) = prepare()
+        // Fill the history past its step limit: every further push drops the oldest step.
+        repeat(170) { i -> c.pushUndo(LambdaAction("Step $i", onUndo = {}, onRedo = {})) }
+        val full = c.undoManager.undoCount
+        assertTrue("the history is at its limit", full < 170)
+        val source = c.doc.layers[1]
+        // commitEdit + the listener's amend: still one step (it replaced the oldest one).
+        assertTrue(touchEdit(c, source))
+        assertEquals(full, c.undoManager.undoCount)
+        assertEquals("Paint", c.undoManager.undoLabel)
+        assertEquals(1, r.runs)
+        c.undo()
+        assertEquals("{}", text.textData)
+        assertEquals(0, text.bitmap.getPixel(5, 5))
+        assertEquals(0, source.bitmap.getPixel(40, 40))
+        assertEquals("Step 169", c.undoManager.undoLabel)
+        c.redo()
+        assertEquals("{\"run\":1}", text.textData)
+        // groupUndo of two commits (plus two amends): one step.
+        val other = c.doc.layers[0]
+        c.groupUndo("Curve") {
+            touchEdit(c, other)
+            touchEdit(c, source)
+        }
+        assertEquals(full, c.undoManager.undoCount)
+        assertEquals("Curve", c.undoManager.undoLabel)
+        assertEquals("{\"run\":3}", text.textData)
+        c.undo()
+        assertEquals(0, other.bitmap.getPixel(40, 40))
+        assertEquals("{\"run\":1}", text.textData)
+        assertEquals("Paint", c.undoManager.undoLabel)
+        c.redo()
+        // undoStepNamed too.
+        c.undoStepNamed("Shape") { touchEdit(c, other, "Brush") }
+        assertEquals(full, c.undoManager.undoCount)
+        assertEquals("Shape", c.undoManager.undoLabel)
+        // An amend outside any scope (a listener reacting later) folds into the newest step.
+        c.amendLastStep { c.setLayerData(text, text.dataSnapshot().copy(text = "{\"late\":1}"), "Late") }
+        assertEquals(full, c.undoManager.undoCount)
+        assertEquals("Shape", c.undoManager.undoLabel)
+        c.undo()
+        assertEquals("{\"run\":3}", text.textData)
+    }
+
+    @Test
+    fun aDeferredStepIsRecordedBeforeAnyOtherStepAndBeforeUndo() {
+        val c = setup()
+        val adj = c.doc.layers[0]
+        fun spec(id: String) = LayerData(adjustment = AdjustmentSpec(filterId = id))
+        // A live edit (like the Adjust sheet's sliders) that records its step only when flushed.
+        var pending: LayerData? = null
+        var flushes = 0
+        val d = DeferredStep {
+            flushes++
+            val p = pending ?: return@DeferredStep
+            pending = null
+            c.setLayerData(adj, p, "Edit adjustment")
+        }
+        c.addDeferredStep(d)
+        // Another edit: the pending change is recorded first, as its own step.
+        pending = spec("adjust.a")
+        assertTrue(touchEdit(c, c.doc.layers[1]))
+        assertEquals(2, c.undoManager.undoCount)
+        assertEquals("Paint", c.undoManager.undoLabel)
+        assertEquals("adjust.a", adj.adjustment!!.filterId)
+        c.undo()
+        assertEquals("Edit adjustment", c.undoManager.undoLabel)
+        // Undo with a pending change: it is recorded, then taken back.
+        pending = spec("adjust.b")
+        c.undo()
+        assertEquals("adjust.a", adj.adjustment!!.filterId)
+        assertEquals(1, c.undoManager.undoCount)
+        assertTrue(c.undoManager.canRedo)
+        c.redo()
+        assertEquals("adjust.b", adj.adjustment!!.filterId)
+        // A step pushed outside any edit scope (layer properties) flushes too.
+        pending = spec("adjust.c")
+        c.toggleVisibility(c.doc.layers[2])
+        assertEquals(4, c.undoManager.undoCount)
+        assertEquals("Visibility", c.undoManager.undoLabel)
+        c.undo()
+        assertEquals("Edit adjustment", c.undoManager.undoLabel)
+        assertEquals("adjust.c", adj.adjustment!!.filterId)
+        // Inside a group, the flush happens once, before the group's own steps.
+        pending = spec("adjust.d")
+        c.groupUndo("Curve") {
+            touchEdit(c, c.doc.layers[1])
+            touchEdit(c, c.doc.layers[2])
+        }
+        assertEquals("Curve", c.undoManager.undoLabel)
+        c.undo()
+        assertEquals("Edit adjustment", c.undoManager.undoLabel)
+        assertEquals("adjust.d", adj.adjustment!!.filterId)
+        // Removed: nothing is flushed any more.
+        c.removeDeferredStep(d)
+        val n = flushes
+        pending = spec("adjust.e")
+        touchEdit(c, c.doc.layers[1])
+        assertEquals(n, flushes)
+        assertEquals("adjust.d", adj.adjustment!!.filterId)
     }
 
     @Test

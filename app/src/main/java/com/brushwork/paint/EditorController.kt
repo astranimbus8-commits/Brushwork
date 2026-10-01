@@ -90,6 +90,19 @@ fun interface EditListener {
 }
 
 /**
+ * A live edit that records its undo step only when it ends (v1.5; e.g. the Masks tool's Adjust
+ * sheet previews effect values with no undo, then records one "Edit adjustment" step). While it
+ * is registered ([EditorController.addDeferredStep]), [flush] is called before any other step is
+ * pushed and before undo / redo, so it records its step first and the history stays in order.
+ * [flush] may push one step (it is not called again for its own pushes) and must leave nothing
+ * pending; it is not called while undo / redo run or while edit listeners are notified. Main
+ * thread.
+ */
+fun interface DeferredStep {
+    fun flush()
+}
+
+/**
  * Central editor state + operations. One instance per open document; lives in a ViewModel.
  * EVERYTHING here must be called on the main thread (use [scope] + withContext for background
  * work and come back to the main thread to touch the document).
@@ -231,6 +244,9 @@ class EditorController(
     val canAddLayer: Boolean get() = doc.layers.size < maxLayers
 
     fun pushUndo(action: UndoAction) {
+        // A pending live edit records its step first (inside an edit scope that was done when
+        // the scope began).
+        if (editDepth == 0) flushDeferredSteps()
         undoManager.push(action)
         editCount++
         doc.touch()
@@ -282,15 +298,49 @@ class EditorController(
      * Runs [block] as part of one user action: [commitEdit], [updateLayerData], [setLayerData],
      * [groupUndo] and `undoStepNamed` run inside it. The edit events they queue are delivered
      * when the OUTERMOST scope ends (so the action's undo step is complete and listeners can
-     * [amendLastStep] it), never during undo / redo.
+     * [amendLastStep] it), never during undo / redo. The history is not trimmed until the
+     * outermost scope (and the listeners) are done ([UndoManager.holdTrim]): steps grouped by a
+     * mark taken inside a scope stay grouped also when the history is full.
      */
     inline fun <T> editScope(block: () -> T): T {
+        // A pending live edit records its step before this action's steps (see [DeferredStep]).
+        if (editDepth == 0) flushDeferredSteps()
         editDepth++
+        undoManager.holdTrim()
         try {
             return block()
         } finally {
             editDepth--
-            if (editDepth == 0) deliverEdits()
+            try {
+                if (editDepth == 0) deliverEdits()
+            } finally {
+                undoManager.releaseTrim()
+            }
+        }
+    }
+
+    private val deferredSteps = ArrayList<DeferredStep>()
+
+    /** True while [DeferredStep]s record their steps (their own pushes don't flush again). */
+    private var flushingDeferred = false
+
+    /** Registers a live edit that records its step later (see [DeferredStep]). */
+    fun addDeferredStep(d: DeferredStep) {
+        if (deferredSteps.none { it === d }) deferredSteps += d
+    }
+
+    fun removeDeferredStep(d: DeferredStep) {
+        deferredSteps.removeAll { it === d }
+    }
+
+    /** Lets every [DeferredStep] record its step now (not during undo / redo or listener delivery). */
+    @PublishedApi internal fun flushDeferredSteps() {
+        if (deferredSteps.isEmpty() || flushingDeferred || inHistory || delivering) return
+        flushingDeferred = true
+        try {
+            for (d in deferredSteps.toList()) d.flush()
+        } finally {
+            flushingDeferred = false
         }
     }
 
@@ -323,22 +373,28 @@ class EditorController(
     /**
      * Runs [block] and folds every undo step it pushes INTO the newest existing step (which keeps
      * its label), so a listener's follow-up edit undoes together with the edit that caused it
-     * (I2). Without any step yet, what [block] pushes stays as it is.
+     * (I2). Without any step yet, what [block] pushes stays as it is. Works when the history is
+     * full too (trimming waits until the step is complete).
      */
     fun amendLastStep(block: () -> Unit) {
         val um = undoManager
-        val mark = um.undoCount
+        um.holdTrim()
         try {
-            block()
-        } finally {
-            if (mark > 0) {
-                val added = um.takeSince(mark)
-                if (added.isNotEmpty()) {
-                    val last = um.popLast()
-                    if (last != null) um.pushRaw(CompositeAction(last.label, listOf(last) + added))
-                    else added.forEach { um.pushRaw(it) }
+            val mark = um.undoCount
+            try {
+                block()
+            } finally {
+                if (mark > 0) {
+                    val added = um.takeSince(mark)
+                    if (added.isNotEmpty()) {
+                        val last = um.popLast()
+                        if (last != null) um.pushRaw(CompositeAction(last.label, listOf(last) + added))
+                        else added.forEach { um.pushRaw(it) }
+                    }
                 }
             }
+        } finally {
+            um.releaseTrim()
         }
     }
 
@@ -358,6 +414,8 @@ class EditorController(
     fun undo() {
         val session = filterSession
         if (session != null) { session.cancel(); return }
+        // A pending live edit becomes its step first: undo then takes it back.
+        flushDeferredSteps()
         val tool = currentTool
         if (tool.hasPendingWork) {
             // Tools with steps (points of a curve/polygon) take back only the last one.
@@ -374,6 +432,8 @@ class EditorController(
 
     fun redo() {
         if (filterSession != null) return
+        // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
+        flushDeferredSteps()
         val tool = currentTool
         if (tool.hasPendingWork) {
             if (tool.redoStep()) { invalidateOverlay(); return }
@@ -1374,11 +1434,12 @@ class EditorController(
     // ------------------------------------------------------------------ filters
 
     fun startFilter(filter: Filter) {
+        // An adjustment layer's effect is edited with the Masks tool (vector layers are
+        // allowed: applying the filter turns them into raster layers, undoably). Refused before
+        // anything else happens, so the tool stays as it was.
+        if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         filterSession?.cancel()
         currentTool.onDeactivate()
-        // An adjustment layer's effect is edited with the Masks tool (vector layers are
-        // allowed: applying the filter turns them into raster layers, undoably).
-        if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         if (!checkEditable()) return
         // A session that closes itself during start() (target not usable) must not stay installed.
         filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
@@ -1460,6 +1521,9 @@ class EditorController(
      */
     fun toggleVectorMode() {
         if (filterSession != null) return
+        // Pending tool work (a shape being placed...) is committed first: it may paint the active
+        // layer or add one, so what happens next is decided on the result.
+        commitToolWork()
         val layer = activeLayer
         if (layer.isVectorLayer) {
             val back = vectorReturnLayer?.takeIf { doc.indexOf(it) >= 0 && isRasterLayer(it) } ?: nearestRasterLayer(layer)
@@ -1470,7 +1534,8 @@ class EditorController(
         val idx = doc.indexOf(layer)
         val above = doc.layers.getOrNull(idx + 1)
         val ok = when {
-            isEmptyPlainLayer(layer) -> convertToVectorLayer(layer)
+            // (A hidden layer can't be edited: a new vector layer goes above it instead.)
+            layer.visible && isEmptyPlainLayer(layer) -> convertToVectorLayer(layer)
             above != null && above.isVectorLayer && above.visible && !above.locked -> { selectLayer(above); true }
             else -> addVectorLayer() != null
         }
@@ -1479,6 +1544,15 @@ class EditorController(
         if (!vectorHintShown) {
             vectorHintShown = true
             toast("Vector mode: what you draw stays editable. Tap Vector again to go back.")
+        }
+    }
+
+    /** Commits the current tool's pending work (a shape or text being placed, a transform...). */
+    private fun commitToolWork() {
+        val tool = currentTool
+        if (tool.hasPendingWork) {
+            tool.commit()
+            invalidateOverlay()
         }
     }
 
@@ -1513,6 +1587,8 @@ class EditorController(
      * becomes one VShape object; the pixels stay). False (with a message) for anything else.
      */
     fun convertToVectorLayer(layer: Layer, label: String = "Convert to vector layer"): Boolean {
+        // Pending tool work may still paint the layer: it is decided on the committed result.
+        commitToolWork()
         if (doc.indexOf(layer) < 0 || layer.isVectorLayer) return false
         if (!checkUsable(layer)) return false
         val before = layer.dataSnapshot()

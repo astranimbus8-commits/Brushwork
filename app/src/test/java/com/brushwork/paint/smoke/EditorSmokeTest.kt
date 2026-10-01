@@ -199,6 +199,10 @@ class EditorSmokeTest {
         // ---- v1.5: the top bar starts with Vector; Filters is a tile of the tools grid
         assertTrue("Vector action in the top bar", has("Vector", exact = true))
         assertFalse("no Filters action in the top bar", has("Filters", exact = true))
+        val vectorLeft = SmokeUi.find("Vector", exact = true)!!.bounds.left
+        val selectionLeft = SmokeUi.find("Selection", exact = true)?.bounds?.left
+        assertNotNull("Selection still fits the 360 dp top bar", selectionLeft)
+        assertTrue("Vector is the first top-bar action", vectorLeft < selectionLeft!!)
         click("Tools (current: Brush)")
         SmokeUi.assertPanelShown("Tools")
         click("Filters", exact = true)

@@ -82,7 +82,32 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
 
     private fun totalBytes(): Long = undoStack.sumOf { it.byteSize } + redoStack.sumOf { it.byteSize }
 
+    /** Nesting depth of [holdTrim] (0 = the history is trimmed on every push). */
+    private var trimHolds = 0
+
+    /**
+     * Stops trimming the oldest steps until the matching [releaseTrim] (nestable; v1.5). While
+     * held, a mark taken as [undoCount] stays valid: code that groups the steps pushed since a
+     * mark ([takeSince]) also works when the history is full (it would otherwise lose track of
+     * them as the oldest steps are dropped). `EditorController.editScope` holds it.
+     */
+    fun holdTrim() {
+        trimHolds++
+    }
+
+    /** Ends one [holdTrim]; the last one trims the history down to its limits again. */
+    fun releaseTrim() {
+        if (trimHolds == 0) return
+        trimHolds--
+        if (trimHolds == 0) {
+            val before = undoStack.size
+            trim()
+            if (undoStack.size != before) onChanged?.invoke()
+        }
+    }
+
     private fun trim() {
+        if (trimHolds > 0) return
         while (undoStack.size > 1 && (undoStack.size > maxSteps || totalBytes() > maxBytes)) {
             undoStack.removeFirst().dispose()
         }
@@ -275,8 +300,10 @@ class DocumentBitmapsAction(
 ) : UndoAction {
     /**
      * One layer's bitmaps and editable data before and after. By default new pixels make the
-     * layer a raster layer ([LayerData.rasterizedContent]); canvas operations pass the data mapped
-     * along with the pixels (`LayerDataTransforms.transformed`). Undo restores [dataBefore].
+     * layer a raster layer ([LayerData.rasterizedContent]) and a new mask a painted mask
+     * ([LayerData.rasterizedMask]); a bitmap that stays the same keeps its data (as in v1.4).
+     * Canvas operations pass the data mapped along with the pixels
+     * (`LayerDataTransforms.transformed`). Undo restores [dataBefore].
      */
     class Entry(
         val layer: Layer,
@@ -285,7 +312,9 @@ class DocumentBitmapsAction(
         val bitmapAfter: Bitmap,
         val maskAfter: Bitmap?,
         val dataBefore: LayerData = layer.dataSnapshot(),
-        val dataAfter: LayerData = dataBefore.rasterizedContent(),
+        val dataAfter: LayerData = dataBefore
+            .let { if (bitmapBefore !== bitmapAfter) it.rasterizedContent() else it }
+            .let { if (maskBefore !== maskAfter) it.rasterizedMask() else it },
     )
 
     override val byteSize: Long

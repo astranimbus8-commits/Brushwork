@@ -322,6 +322,56 @@ class FoundationControllerRobolectricTest {
     }
 
     @Test
+    fun aHiddenEmptyLayerGetsAVectorLayerAbove() {
+        val c = newCanvas()
+        val l1 = c.doc.layers[1]
+        l1.visible = false
+        c.toggleVectorMode()
+        assertFalse("a hidden layer is not converted", l1.isVectorLayer)
+        assertEquals(3, c.doc.layers.size)
+        assertTrue(c.isVectorMode)
+        assertEquals(2, c.doc.indexOf(c.activeLayer))
+        assertEquals("Add vector layer", c.undoManager.undoLabel)
+    }
+
+    @Test
+    fun pendingToolWorkIsCommittedBeforeTheVectorButtonDecides() {
+        val c = newCanvas()
+        c.selectTool(ToolId.SHAPE)
+        val shape = c.tools.getValue(ToolId.SHAPE) as com.brushwork.paint.tools.vector.ShapeTool
+        assertTrue(shape.ensurePending())
+        assertTrue(shape.hasPendingWork)
+        c.toggleVectorMode()
+        assertFalse("the pending shape was committed first", shape.hasPendingWork)
+        val v = c.activeLayer
+        assertTrue(v.isVectorLayer)
+        // Whatever layer the shape went into, the vector layer holds no stray pixels: its (empty)
+        // content and its pixels agree (I1).
+        assertTrue(v.vector!!.objects.isEmpty())
+        assertTrue("the vector layer is empty", pixels(v).all { it == 0 })
+        assertTrue("the shape is painted somewhere", c.doc.layers.any { l -> l !== c.doc.layers[0] && pixels(l).any { it != 0 } })
+    }
+
+    @Test
+    fun documentBitmapsEntriesKeepTheDataOfUnchangedBitmaps() {
+        val c = setup()
+        val l = c.activeLayer
+        l.mask = BitmapUtils.createMaskBitmap(w, h)
+        val data = LayerData(vector = content(), maskSpec = MaskSpec(startFull = true))
+        l.restoreData(data)
+        val other = BitmapUtils.createLayerBitmap(w, h)
+        val otherMask = BitmapUtils.createMaskBitmap(w, h)
+        val same = com.brushwork.paint.engine.DocumentBitmapsAction.Entry(l, l.bitmap, l.mask, l.bitmap, l.mask)
+        assertEquals(data, same.dataAfter)
+        val newPixels = com.brushwork.paint.engine.DocumentBitmapsAction.Entry(l, l.bitmap, l.mask, other, l.mask)
+        assertEquals(data.rasterizedContent(), newPixels.dataAfter)
+        val newMask = com.brushwork.paint.engine.DocumentBitmapsAction.Entry(l, l.bitmap, l.mask, l.bitmap, otherMask)
+        assertEquals(data.rasterizedMask(), newMask.dataAfter)
+        val both = com.brushwork.paint.engine.DocumentBitmapsAction.Entry(l, l.bitmap, l.mask, other, otherMask)
+        assertEquals(data.rasterizedContent().rasterizedMask(), both.dataAfter)
+    }
+
+    @Test
     fun addVectorAndConvertShapeLayers() {
         val c = setup(1)
         val v = c.addVectorLayer()!!
