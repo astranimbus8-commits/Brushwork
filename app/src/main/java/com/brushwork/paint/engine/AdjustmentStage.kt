@@ -164,7 +164,8 @@ class AdjustmentScratch {
  * composite onto it like a layer of that mode.
  *
  * An unknown effect, an effect without a mapper or one that is exactly the identity draws
- * nothing (pass-through), as does every adjustment layer while [safeCompositing] is on.
+ * nothing (pass-through), as does every adjustment layer on the canvas while [safeCompositing]
+ * is on.
  */
 object AdjustmentStage {
     /** Largest side of one processed chunk (target px). */
@@ -172,8 +173,10 @@ object AdjustmentStage {
 
     /**
      * "Safe compositing" kill switch (`AppSettings.safeCompositing`, I5): adjustment layers draw
-     * as pass-through. Process-wide; the Masks tool loads it from the settings when the editor
-     * starts and its sheet toggles it.
+     * as pass-through ON THE CANVAS (display tiles); flattened images, exports, thumbnails, merges
+     * and tool patches keep the effect, so the switch never changes what the artwork is.
+     * Process-wide; the Masks tool loads it from the settings when the editor starts and its sheet
+     * toggles it.
      */
     @Volatile
     var safeCompositing: Boolean = false
@@ -188,7 +191,7 @@ object AdjustmentStage {
      * (null = pass-through).
      */
     fun draw(canvas: Canvas, layer: Layer, bounds: RectF, override: LayerRenderOverride?, target: CompositeTarget?, scratch: AdjustmentScratch) {
-        if (safeCompositing || target == null) return
+        if (target == null || (safeCompositing && target.display)) return
         val spec = layer.adjustment ?: return
         val mapper = scratch.mapperFor(spec) ?: return
         val bmp = target.bitmap

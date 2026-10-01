@@ -69,7 +69,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             c.translate(-tr.left.toFloat(), -tr.top.toFloat())
             c.clipRect(d)
             c.drawColor(0, PorterDuff.Mode.CLEAR)
-            compositor.drawDocument(c, d, target = CompositeTarget.translate(bmp, tr.left, tr.top))
+            compositor.drawDocument(c, d, target = CompositeTarget.displayTile(bmp, tr.left, tr.top))
             changed = true
         }
         return changed

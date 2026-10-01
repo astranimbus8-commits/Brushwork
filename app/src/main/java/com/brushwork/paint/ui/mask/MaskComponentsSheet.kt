@@ -139,7 +139,7 @@ internal fun MaskComponentsSheet(tool: MaskTool) {
                 c.invalidateDoc(null)
                 tool.touch()
             },
-            description = "Show adjustment layers without their effect (if the canvas misbehaves). Exports and the layers stay as they are.",
+            description = "Show adjustment layers on the canvas without their effect (if the canvas misbehaves). Exports, merging and the eyedropper still use the effect.",
         )
     }
 }

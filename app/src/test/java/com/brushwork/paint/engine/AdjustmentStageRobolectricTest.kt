@@ -201,8 +201,21 @@ class AdjustmentStageRobolectricTest {
         assertArrayEquals("hidden", before, with(adjustment(doc).also { it.visible = false }))
         assertArrayEquals("no opacity", before, with(adjustment(doc).also { it.opacity = 0f }))
         assertArrayEquals("an empty mask", before, with(adjustment(doc, mask = MaskSpec())))
+        // Safe compositing: the canvas (display tiles) shows no effect; flattened images (exports,
+        // merges) keep it, so the switch never changes the artwork.
+        val effect = with(adjustment(doc))
+        assertTrue(!effect.contentEquals(before))
         AdjustmentStage.safeCompositing = true
-        assertArrayEquals("safe compositing", before, with(adjustment(doc)))
+        assertArrayEquals("safe compositing keeps exports", effect, with(adjustment(doc)))
+        val adj = adjustment(doc)
+        doc.layers += adj
+        val tiles = DisplayTiles(w, h, tileSize = 32)
+        tiles.update(Compositor(doc) { null }, null)
+        val screen = BitmapUtils.createLayerBitmap(w, h)
+        tiles.draw(Canvas(screen), null, smooth = false)
+        assertArrayEquals("safe compositing: the canvas shows what is below", before, pixels(screen))
+        tiles.release()
+        doc.layers.remove(adj)
         AdjustmentStage.safeCompositing = false
         // Without a target (old callers) adjustment layers are pass-through too.
         doc.layers += adjustment(doc)

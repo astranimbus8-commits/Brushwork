@@ -40,13 +40,18 @@ interface LayerRenderOverride {
  * The bitmap a [Compositor.drawDocument] canvas draws into, and how document px map onto it
  * (v1.5): live adjustment layers read the composite below them from it. Every caller owns such a
  * backing bitmap: a display tile (translate), a flattened image (identity), a thumbnail (scale),
- * an eyedropper or fill patch (translate).
+ * an eyedropper or fill patch (translate). [display]: the bitmap is a display tile of the canvas
+ * (the "Safe compositing" switch only changes what the canvas shows, never exports or merges).
  */
-class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix) {
+class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix, val display: Boolean = false) {
     companion object {
         /** A bitmap whose pixel (0, 0) is document pixel ([left], [top]) at 1:1. */
         fun translate(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
             CompositeTarget(bitmap, Matrix().apply { setTranslate(-left.toFloat(), -top.toFloat()) })
+
+        /** A display tile of the canvas whose pixel (0, 0) is document pixel ([left], [top]). */
+        fun displayTile(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
+            CompositeTarget(bitmap, Matrix().apply { setTranslate(-left.toFloat(), -top.toFloat()) }, display = true)
 
         /** A document-sized bitmap at 1:1. */
         fun identity(bitmap: Bitmap): CompositeTarget = CompositeTarget(bitmap, Matrix())
