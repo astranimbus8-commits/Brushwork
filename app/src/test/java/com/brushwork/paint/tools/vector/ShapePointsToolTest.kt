@@ -16,6 +16,8 @@ import com.brushwork.paint.ui.editor.HistoryLabels
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -36,12 +38,22 @@ class ShapePointsToolTest {
 
     private val red = 0xFFFF0000.toInt()
 
+    private val scopes = ArrayList<CoroutineScope>()
+
+    /** Ends what the test's editors still observe (a global snapshot observer would keep them). */
+    @After
+    fun releaseEditors() {
+        for (s in scopes) s.cancel()
+        scopes.clear()
+    }
+
     private fun controller(w: Int = 200, h: Int = 200): EditorController {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
         ctx.getSharedPreferences("brushwork_settings", Context.MODE_PRIVATE).edit().clear().commit()
         val doc = Document("t", "t", w, h)
         doc.layers += Layer(doc.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(w, h))
-        return EditorController(ctx, doc, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), AppSettings(ctx)).also {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined).also { scopes += it }
+        return EditorController(ctx, doc, scope, AppSettings(ctx)).also {
             it.color = red
             it.tools
         }
@@ -178,6 +190,7 @@ class ShapePointsToolTest {
         // Grabbed a little off the point: it moves with the finger, it doesn't jump.
         c.drag(53f to 63f, 40f to 50f, 33f to 43f)
         assertVec(Vec2(30f, 40f), tool.docAnchors()!![0].pos)
+        assertEquals("the dragged point is selected", 0, tool.selectedPoint)
         assertTrue(diff(before, c.composite()) > 100)
         val b = tool.box!!
         assertEquals(30f, b.cx - b.w / 2f, 1e-2f)

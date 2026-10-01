@@ -18,7 +18,9 @@ import com.brushwork.paint.ui.layers.LayerOps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -43,11 +45,26 @@ class ShapeLayerEditTest {
     private val red = 0xFFFF0000.toInt()
     private val blue = 0xFF0000FF.toInt()
 
+    private val scopes = ArrayList<CoroutineScope>()
+
+    private fun newScope() = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined).also { scopes += it }
+
+    /**
+     * Ends what the editors of the test still observe (the shape tool's state observer is a
+     * global snapshot observer: left running, it would keep the whole editor for the rest of the
+     * test run).
+     */
+    @After
+    fun releaseEditors() {
+        for (s in scopes) s.cancel()
+        scopes.clear()
+    }
+
     private fun controller(doc: Document? = null, w: Int = 200, h: Int = 200): EditorController {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
         ctx.getSharedPreferences("brushwork_settings", Context.MODE_PRIVATE).edit().clear().commit()
         val d = doc ?: Document("t", "t", w, h).also { it.layers += Layer(it.newLayerId(), "Layer 1", BitmapUtils.createLayerBitmap(w, h)) }
-        return EditorController(ctx, d, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), AppSettings(ctx)).also {
+        return EditorController(ctx, d, newScope(), AppSettings(ctx)).also {
             it.color = red
             it.tools
             it.brush = BrushLibrary.defaultBrush.copy(size = 6f, pressureSize = false, taperStart = 0f, taperEnd = 0f)

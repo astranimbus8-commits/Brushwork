@@ -813,6 +813,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             started = true
             // A shape with its own points: every change can be undone one at a time.
             if (mode != Mode.CREATE && !gesturePushed && points != null) { pushHistory(); gesturePushed = true }
+            // The point being dragged is the selected one (its actions and numbers follow it).
+            if (mode == Mode.POINT && dragIndex >= 0) selectedPoint = dragIndex
             // The preview follows the finger as cheaply as possible until it lifts.
             setDragging(true)
         }

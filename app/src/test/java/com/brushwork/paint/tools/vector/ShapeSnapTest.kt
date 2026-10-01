@@ -21,6 +21,8 @@ import com.brushwork.paint.tools.transform.SnapSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,6 +40,15 @@ class ShapeSnapTest {
 
     private val red = 0xFFFF0000.toInt()
 
+    private val scopes = ArrayList<CoroutineScope>()
+
+    /** Ends what the test's editors still observe (a global snapshot observer would keep them). */
+    @After
+    fun releaseEditors() {
+        for (s in scopes) s.cancel()
+        scopes.clear()
+    }
+
     /** A 200 x 200 canvas whose bottom layer holds a filled box (150..190, 20..60). */
     private fun controller(): EditorController {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
@@ -49,7 +60,8 @@ class ShapeSnapTest {
         doc.layers += art
         doc.layers += Layer(doc.newLayerId(), "Layer 2", BitmapUtils.createLayerBitmap(200, 200))
         doc.activeLayerIndex = 1
-        return EditorController(ctx, doc, CoroutineScope(SupervisorJob() + Dispatchers.Unconfined), AppSettings(ctx)).also {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined).also { scopes += it }
+        return EditorController(ctx, doc, scope, AppSettings(ctx)).also {
             it.color = red
             it.viewTransform.set(Matrix())
             it.tools
