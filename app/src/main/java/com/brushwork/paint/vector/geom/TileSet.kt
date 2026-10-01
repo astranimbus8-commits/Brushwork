@@ -70,9 +70,10 @@ class TileSet(val docW: Int, val docH: Int, val tile: Int) {
 
     /**
      * Adds the tiles [o] can paint: a stroke's tiles along its points, any other object's paint
-     * [bounds]. The stroke sampler smooths the input with quadratic curves from midpoint to
-     * midpoint (each inside the triangle of three consecutive points), so each point's box with
-     * both neighbours, grown by the brush reach, holds everything the stroke paints there.
+     * [bounds]. The stroke sampler smooths the input into quadratic curves from midpoint to
+     * midpoint with the input points as control points (a straight piece from the first point
+     * and to the last), each inside the triangle of its control points: those triangles' boxes,
+     * grown by the brush reach, hold everything the stroke paints.
      */
     fun addObject(o: VObject, bounds: RectF) {
         if (bounds.isEmpty) return
@@ -82,9 +83,13 @@ class TileSet(val docW: Int, val docH: Int, val tile: Int) {
         for (i in 0 until n) if (!(xs[i].isFinite() && ys[i].isFinite())) { addRect(bounds); return }
         val e = StrokeRaster.reach(o.preset, o.sizeScale)
         for (i in 0 until n) {
-            val a = max(0, i - 1); val c = min(n - 1, i + 1)
-            val l = min(xs[a], min(xs[i], xs[c])); val r = max(xs[a], max(xs[i], xs[c]))
-            val t = min(ys[a], min(ys[i], ys[c])); val b = max(ys[a], max(ys[i], ys[c]))
+            // From the midpoint before point i (or the point itself) to the midpoint after it.
+            val ax = if (i > 0) (xs[i - 1] + xs[i]) / 2f else xs[i]
+            val ay = if (i > 0) (ys[i - 1] + ys[i]) / 2f else ys[i]
+            val cx = if (i < n - 1) (xs[i] + xs[i + 1]) / 2f else xs[i]
+            val cy = if (i < n - 1) (ys[i] + ys[i + 1]) / 2f else ys[i]
+            val l = min(ax, min(xs[i], cx)); val r = max(ax, max(xs[i], cx))
+            val t = min(ay, min(ys[i], cy)); val b = max(ay, max(ys[i], cy))
             addRect(l - e, t - e, r + e, b + e)
         }
     }

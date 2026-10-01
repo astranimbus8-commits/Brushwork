@@ -110,8 +110,6 @@ object ContentDiff {
         for (o in base.objects) baseById[o.id] = o
         val theirsById = HashMap<Long, VObject>(theirs.objects.size * 2)
         for (o in theirs.objects) theirsById[o.id] = o
-        val oursIds = HashSet<Long>(ours.objects.size * 2)
-        for (o in ours.objects) oursIds += o.id
         var next = maxOf(ours.nextId, theirs.nextId)
         for (o in ours.objects) if (o.id >= next) next = o.id + 1
         for (o in theirs.objects) if (o.id >= next) next = o.id + 1
@@ -131,8 +129,9 @@ object ContentDiff {
                 out += v
             }
         }
-        // Theirs' additions, each right above the object it followed in theirs.
-        val added = theirs.objects.indices.filter { theirs.objects[it].id !in baseById && theirs.objects[it].id !in oursIds }
+        // Theirs' additions (ours' additions with the same ids got new ones above), each right
+        // above the object it followed in theirs.
+        val added = theirs.objects.indices.filter { theirs.objects[it].id !in baseById }
         for (i in added) {
             val o = theirs.objects[i]
             if (o.id in used) continue

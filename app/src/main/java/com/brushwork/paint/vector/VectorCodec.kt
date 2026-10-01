@@ -56,8 +56,11 @@ object VectorCodec {
     }
 
     /** The content stored in [b]; throws [CorruptVectorException] when it can't be read. */
-    fun decode(b: ByteArray): VectorContent {
-        val text = inflate(b)
+    fun decode(b: ByteArray): VectorContent = decode(b, MAX_JSON_BYTES)
+
+    /** [decode] accepting at most [maxJsonBytes] of inflated JSON (tests use a small cap). */
+    internal fun decode(b: ByteArray, maxJsonBytes: Long): VectorContent {
+        val text = inflate(b, maxJsonBytes)
         val content = try {
             json.decodeFromString(VectorContent.serializer(), String(text, Charsets.UTF_8))
         } catch (e: OutOfMemoryError) {
@@ -70,12 +73,12 @@ object VectorCodec {
         return sanitized(content)
     }
 
-    private fun inflate(b: ByteArray): ByteArray {
+    private fun inflate(b: ByteArray, maxJsonBytes: Long): ByteArray {
         if (b.isEmpty()) throw CorruptVectorException("The vector data is empty")
         val inflater = Inflater()
         try {
             inflater.setInput(b)
-            val out = ByteArrayOutputStream(minOf(MAX_JSON_BYTES, maxOf(64L, b.size * 3L)).toInt())
+            val out = ByteArrayOutputStream(minOf(maxJsonBytes, maxOf(64L, b.size * 3L)).toInt())
             val buf = ByteArray(64 * 1024)
             while (!inflater.finished()) {
                 val n = inflater.inflate(buf)
@@ -84,7 +87,7 @@ object VectorCodec {
                     throw CorruptVectorException("The vector data is truncated")
                 }
                 out.write(buf, 0, n)
-                if (out.size() > MAX_JSON_BYTES) throw CorruptVectorException("The vector data is too large")
+                if (out.size() > maxJsonBytes) throw CorruptVectorException("The vector data is too large")
             }
             return out.toByteArray()
         } catch (e: DataFormatException) {

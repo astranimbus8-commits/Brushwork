@@ -329,7 +329,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
         p.done = true
         p.job?.cancel()
         if (preparing === p) preparing = null
+        updateRendering()
         p.onReady(null)
+    }
+
+    /** [isRendering]: a background render or an edit preparation is running. */
+    private fun updateRendering() {
+        rendering = pending != null || preparing != null
     }
 
     private class EditPlan(
@@ -363,6 +369,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         // In the background, from the immutable content; installed only if nothing changed.
         val prep = PreparingEdit(onReady)
         preparing = prep
+        updateRendering()
         val version = layer.contentVersion
         val bitmap = layer.bitmap
         val job = c.scope.async(worker.dispatcher) {
@@ -379,6 +386,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             if (prep.done) { parts?.let { recycle(it.first, it.second) }; return@launch }
             prep.done = true
             if (preparing === prep) preparing = null
+            updateRendering()
             if (parts == null) {
                 c.toast("Not enough memory to edit these objects")
                 onReady(null)
@@ -681,7 +689,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         } else null
         val p = Pending(layer, base, after, label, pieces, added, copies, beforeApply, onDone, attempt)
         pending = p
-        rendering = true
+        updateRendering()
         c.addDeferredStep(deferredStep)
         val doc = docBounds()
         val units = VectorLayerRenderer.estimateUnits(added?.let { VectorContent(objects = it) } ?: after, rects)
@@ -733,7 +741,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         p.finished = true
         if (pending === p) pending = null
         c.removeDeferredStep(deferredStep)
-        rendering = false
+        updateRendering()
         try {
             if (pieces == null || pieces.size != p.pieces.size) {
                 c.toast("Not enough memory for \"${p.label}\"")
@@ -895,6 +903,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             return false
         }
         beforeApply?.invoke()
+        shiftCount++
         try {
             applyRender(layer, target, label, touch) { canvas ->
                 for (r in touch) {
@@ -910,6 +919,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
         }
         return true
     }
+
+    /** Moves applied by shifting cache pixels (tests). */
+    internal var shiftCount = 0
+        private set
 
     /** True when [o] paints with paper grain (anchored to the document: a shifted copy would not match). */
     private fun usesGrain(o: VObject): Boolean = when (o) {
