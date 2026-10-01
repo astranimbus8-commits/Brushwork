@@ -669,8 +669,8 @@ internal class SpecOverlay {
 
     /**
      * Draws [specs]; with [keepBandFree] the brush band ([setBand]) is left out of them. With
-     * [asNewLayer] they are drawn as the content of a new layer that will be added above [layer]
-     * (not into its mask).
+     * [asNewLayer] they are drawn as the content of a new (visible, opaque, normal) layer that
+     * will be added above [layer]: not into its mask, not with its visibility or opacity.
      */
     fun draw(
         canvas: Canvas,
@@ -681,7 +681,7 @@ internal class SpecOverlay {
         keepBandFree: Boolean = false,
         asNewLayer: Boolean = false,
     ) {
-        if (specs.isEmpty() || !layer.visible) return
+        if (specs.isEmpty() || (!asNewLayer && !layer.visible)) return
         val doc = controller.doc
         val maskMode = !asNewLayer && controller.editTargetOf(layer) == EditTarget.MASK
         clip.set(0, 0, doc.width, doc.height)
@@ -690,7 +690,7 @@ internal class SpecOverlay {
         if (!bounds.intersect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())) return
         canvas.save()
         canvas.concat(t.matrix)
-        val alpha = (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
+        val alpha = if (asNewLayer) 255 else (layer.opacity.coerceIn(0f, 1f) * 255f).toInt()
         val band = keepBandFree && hasBand
         // The band is erased inside an isolated layer (from the items only, not the canvas).
         val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()

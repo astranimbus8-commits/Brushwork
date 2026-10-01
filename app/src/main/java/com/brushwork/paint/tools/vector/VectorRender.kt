@@ -372,6 +372,8 @@ internal class PreviewHost(private val controller: EditorController) {
     private var overlaySpecs: List<VectorPaintSpec> = emptyList()
     private var overlayLayer: Layer? = null
     private var overlayAsNewLayer = false
+    /** The items are always drawn in the overlay (see [show]'s overlayOnly), not only while dragged. */
+    private var overlayOnly = false
     private val overlay = SpecOverlay()
 
     /**
@@ -385,22 +387,27 @@ internal class PreviewHost(private val controller: EditorController) {
             if (!value) {
                 val layer = overlayLayer
                 val specs = overlaySpecs
-                if (layer != null && specs.isNotEmpty()) show(layer, specs, overlayAsNewLayer)
+                if (layer != null && specs.isNotEmpty()) show(layer, specs, overlayAsNewLayer, overlayOnly)
             }
         }
 
     /**
      * Previews [specs] on [layer] ([asNewLayer]: as the content of a new layer that will be
-     * added above it, see [VectorPreview.asNewLayer]); an empty list removes the preview.
+     * added above it, see [VectorPreview.asNewLayer]); an empty list removes the preview. With
+     * [overlayOnly] (only for [asNewLayer]) they are always drawn over the canvas instead: a new
+     * layer above a layer that changes how its content looks (hidden, opacity, blend mode, mask)
+     * looks like that, not like the layer's content.
      */
-    fun show(layer: Layer, specs: List<VectorPaintSpec>, asNewLayer: Boolean = false) {
+    fun show(layer: Layer, specs: List<VectorPaintSpec>, asNewLayer: Boolean = false, overlayOnly: Boolean = false) {
         if (specs.isEmpty()) { release(); return }
-        if (interacting && drawsInOverlay(layer, asNewLayer)) {
+        val always = overlayOnly && asNewLayer
+        if (always || (interacting && drawsInOverlay(layer, asNewLayer))) {
             // Out of the layer (its tiles redraw once without the items) and into the overlay.
             removeOverride()
             overlayLayer = layer
             overlaySpecs = specs
             overlayAsNewLayer = asNewLayer
+            this.overlayOnly = always
             controller.invalidateOverlay()
             return
         }
@@ -434,7 +441,7 @@ internal class PreviewHost(private val controller: EditorController) {
         overlay.draw(canvas, t, controller, layer, specs, asNewLayer = asNew)
         // The layers changed under the drag (props, order): back into the layer from the next
         // frame on.
-        if (!drawsInOverlay(layer, asNew)) {
+        if (!overlayOnly && !drawsInOverlay(layer, asNew)) {
             clearOverlay()
             show(layer, specs, asNew)
         }
@@ -465,6 +472,7 @@ internal class PreviewHost(private val controller: EditorController) {
     }
 
     private fun clearOverlay() {
+        overlayOnly = false
         if (overlaySpecs.isEmpty() && overlayLayer == null) return
         overlaySpecs = emptyList()
         overlayLayer = null

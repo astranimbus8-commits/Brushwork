@@ -234,6 +234,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /** The user's own options while a shape layer is edited (the strip shows the shape's). */
     private var userSettings: ShapeSettings? = null
+    /** The user's main color when the shape layer was opened (it comes back unless they picked another one). */
+    private var userColor: Int? = null
+    /** The main color the opened shape set (its stroke color). */
+    private var openedColor = 0
     /** The shape as opened (committing it unchanged records nothing). */
     private var loadedObject: ShapeObject? = null
     /** Where the edited layer's pixels are (hidden while it is edited). */
@@ -244,6 +248,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** The outline a brush follows, drawn as a guide when the brush can't be shown live. */
     private var editGuide: Path? = null
     private val guidePath = Path()
+    /** The brush outline of a NEW shape drawn as a guide when it can't be shown live (see [refreshPreview]). */
+    private var brushGuide: Path? = null
+    private val brushGuidePath = Path()
 
     // ------------------------------------------------------------------ gestures
 
@@ -350,7 +357,37 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /** The stroke width in use: the brush size when "Use brush size" is on (Compose state). */
     val strokeWidth: Float
-        get() = settings.let { s -> if (s.useBrushSize) brushSize ?: s.strokeWidth else s.strokeWidth }
+        get() = strokeWidthOf(settings)
+
+    private fun strokeWidthOf(s: ShapeSettings): Float = if (s.useBrushSize) brushSize ?: s.strokeWidth else s.strokeWidth
+
+    /**
+     * The options a NEW shape is drawn with: the user's own, also while a shape layer is edited
+     * (the strip then shows the opened shape's, which come back to the user's when it closes).
+     */
+    private fun newShapeSettings(): ShapeSettings = userSettings ?: settings
+
+    /** The main color a NEW shape gets: the user's own color comes back when the opened shape closes. */
+    private fun newShapeColor(): Int {
+        val uc = userColor
+        return if (editingLayer != null && uc != null && controller.color == openedColor) uc else controller.color
+    }
+
+    /**
+     * True when a NEW shape goes into a layer of its own ("Editable"). Smudge and blur outlines
+     * only move pixels that are already there, so they are painted into the active layer.
+     */
+    private fun placesInNewLayer(s: ShapeSettings = newShapeSettings()): Boolean {
+        if (!s.editable) return false
+        if (s.strokeWith != ShapeStroke.BRUSH || !s.strokes) return true
+        val tool = controller.lastPaintTool
+        val preset = controller.presetFor(tool) ?: return true
+        val kind = StrokeKind.of(tool, preset)
+        return kind != StrokeKind.SMUDGE && kind != StrokeKind.BLUR
+    }
+
+    /** True when a new shape needs the active layer: when it is painted into it, it must be editable. */
+    private fun checkCanPlaceNew(): Boolean = placesInNewLayer() || controller.checkEditable()
 
     /**
      * Sets the stroke width. With "Use brush size" the width IS the brush size, so the brush
@@ -395,7 +432,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Proportion to keep when "keep proportions" is on (natural shape aspect). */
-    private fun naturalAspect(): Float = ShapeGeometry.naturalAspect(settings.type, settings.outlineParams)
+    private fun naturalAspect(s: ShapeSettings = settings): Float = ShapeGeometry.naturalAspect(s.type, s.outlineParams)
 
     /** The shape is a line / arrow shown with its two end handles (no custom points). */
     private val lineHandles: Boolean get() = settings.type.isLineLike && points == null
@@ -405,19 +442,26 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ the shape object
 
-    /** The pending shape [b] (with custom [pts]) as it would be placed now. */
-    private fun objectFor(b: ShapeBox, pts: List<ShapePoint>?): ShapeObject {
-        val s = settings
-        val color = controller.color
+    /**
+     * The pending shape [b] (with custom [pts]) as it would be placed now: with the options [s],
+     * main color [color] and, for a brush outline, the opened shape's own brush [own] (else the
+     * current one).
+     */
+    private fun objectFor(
+        b: ShapeBox,
+        pts: List<ShapePoint>?,
+        s: ShapeSettings = settings,
+        color: Int = controller.color,
+        own: Pair<ToolId, BrushPreset>? = editBrush,
+    ): ShapeObject {
         val brush = s.strokeWith == ShapeStroke.BRUSH && s.strokes
-        val eb = editBrush
-        val tool = if (!brush) null else eb?.first ?: controller.lastPaintTool
-        val preset = if (!brush) null else eb?.second ?: controller.presetFor(controller.lastPaintTool)
+        val tool = if (!brush) null else own?.first ?: controller.lastPaintTool
+        val preset = if (!brush) null else own?.second ?: controller.presetFor(controller.lastPaintTool)
         return ShapeObject(
             type = s.type,
             cx = b.cx, cy = b.cy, w = b.w, h = b.h, rotation = b.rotationDeg,
             style = s.style,
-            strokeWidth = strokeWidth,
+            strokeWidth = strokeWidthOf(s),
             strokeWith = s.strokeWith,
             strokeColor = color,
             fillColor = s.fillColor ?: color,
@@ -440,15 +484,19 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** The pending shape as it would be placed now (null when there is none). */
     fun pendingObject(): ShapeObject? = box?.let { objectFor(it, points) }
 
+    /** A NEW shape being dragged out in [b] (the user's own options and color, also while a shape layer is open). */
+    private fun newObject(b: ShapeBox): ShapeObject = objectFor(b, null, newShapeSettings(), newShapeColor(), own = null)
+
     // ------------------------------------------------------------------ numeric editing
 
     /**
      * Makes sure a shape is pending (a default one centered on the canvas is created for numeric
-     * entry). Returns false when the active layer can't be edited.
+     * entry). Returns false when the shape would be painted into an active layer that can't be
+     * edited.
      */
     fun ensurePending(): Boolean {
         if (box != null) return true
-        if (!controller.checkEditable()) return false
+        if (!checkCanPlaceNew()) return false
         val d = controller.doc
         val size = max(1f, min(d.width, d.height) / 3f)
         val cx = d.width / 2f; val cy = d.height / 2f
@@ -702,15 +750,25 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             if (hit != null) {
                 mode = hit
                 startBox = box
+                // Handles are dragged by the finger's motion (they don't jump under the finger).
+                when (hit) {
+                    Mode.RESIZE -> handle?.let { grabStart = handlePoint(b, it) }
+                    Mode.LINE_START -> grabStart = b.start
+                    Mode.LINE_END -> grabStart = b.end
+                    else -> {}
+                }
                 beginSnap()
                 return
             }
         }
-        // A drag draws a new shape (its first corner may snap: it is a new point); a tap
-        // commits the pending one and opens the shape under the finger (see onUp).
+        // A drag draws a new shape (its first corner may snap once the finger really moves: it
+        // is a new point); a tap commits the pending one and opens the shape under the finger
+        // (see onUp). The pending shape is not a layer yet: its points are targets too, so
+        // shapes drawn one after the other line up.
         mode = Mode.CREATE
-        snap.begin(exclude = listOfNotNull(editingLayer))
-        anchor = snap.snapPoint(pt)
+        anchor = pt
+        val pending = b?.let { pb -> ShapeOutlines.featurePoints(objectFor(pb, points)).flatMap { SnapLine.point(it, settings.type.label) } } ?: emptyList()
+        snap.begin(exclude = listOfNotNull(editingLayer), extra = { pending })
     }
 
     /** Starts snapping for a gesture on the pending shape (see the class comment). */
@@ -740,8 +798,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (!started) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             if (mode == Mode.CREATE) {
-                if (!controller.checkEditable()) { mode = Mode.NONE; snap.end(); return }
+                if (!checkCanPlaceNew()) { mode = Mode.NONE; snap.end(); return }
                 if (box == null) targetLayer = controller.doc.activeLayer
+                // The first corner is a new point: it may snap (from where the finger landed).
+                anchor = snap.snapPoint(downPoint)
             }
             started = true
             // A shape with its own points: every change can be undone one at a time.
@@ -757,7 +817,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 val start = startBox ?: return
                 val h = handle ?: return
                 val aspect = if (s.keepProportions && start.h > 0f) start.w / start.h else null
-                val target = resizeTarget(start, h, pt)
+                val target = resizeTarget(start, h, grabStart + (pt - downPoint))
                 val nb = clean(ShapeGeometry.resize(start, h, target.first, s.fromCenter, aspect))
                 box = nb
                 resizeGuides = resizeGuidesFor(nb, target.second, target.third)
@@ -775,7 +835,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             Mode.LINE_START, Mode.LINE_END -> {
                 val start = startBox ?: return
                 val fixed = if (mode == Mode.LINE_START) start.end else start.start
-                var q = snap.snapPoint(pt)
+                var q = snap.snapPoint(grabStart + (pt - downPoint))
                 if (s.snapAngle) {
                     val a = ShapeGeometry.snapAngle(fixed, q)
                     if (a.distanceTo(q) > 1e-3f) snap.clearGuides()
@@ -1036,8 +1096,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ geometry helpers
 
+    /** The new shape dragged out from [anchor] to [pt] (with the options a new shape gets). */
     private fun creationBox(pt: Vec2): ShapeBox {
-        val s = settings
+        val s = newShapeSettings()
         var cur = snap.snapPoint(pt)
         return if (s.type.isLineLike) {
             if (s.snapAngle) {
@@ -1047,13 +1108,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             }
             if (s.fromCenter) ShapeBox.line(anchor * 2f - cur, cur) else ShapeBox.line(anchor, cur)
         } else {
-            ShapeGeometry.dragBox(anchor, cur, s.fromCenter, if (s.keepProportions) naturalAspect() else null)
+            ShapeGeometry.dragBox(anchor, cur, s.fromCenter, if (s.keepProportions) naturalAspect(s) else null)
         }
     }
 
     private fun isBigEnough(b: ShapeBox): Boolean {
         val minLen = controller.docLength(MIN_SIZE_DP)
-        return if (settings.type.isLineLike) b.w >= minLen else max(b.w, b.h) >= minLen && min(b.w, b.h) >= 1f
+        return if (newShapeSettings().type.isLineLike) b.w >= minLen else max(b.w, b.h) >= minLen && min(b.w, b.h) >= 1f
     }
 
     private fun rotationHandle(b: ShapeBox): Vec2 = b.toDoc(Vec2(0f, -b.h / 2f - controller.docLength(ROTATE_OFFSET_DP)))
@@ -1209,10 +1270,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             return
         }
         val layer = targetLayer ?: controller.doc.activeLayer
-        val asNew = settings.editable
+        val asNew = placesInNewLayer()
         val pending = box?.let { objectFor(it, points) }
-        val creating = creatingBox?.let { objectFor(it, null) }
+        val creating = creatingBox?.let { newObject(it) }
         val brushObj = if (paintsWithBrush(layer)) creating ?: pending else null
+        brushGuide = null
         if (brushObj != null) {
             ensureObserving()
             preview.release()
@@ -1221,17 +1283,57 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             val older = if (creating != null) pending else null
             overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushObj, brush = true))
             val path = ShapeOutlines.brushOutline(brushObj)
-            if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
-            brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
+            if (asNew && !liveBrushForNewLayer(layer)) {
+                // The brush would paint the active layer differently from the new layer the
+                // shape goes into (locked, hidden, alpha lock, mask): its outline is shown as a
+                // guide and painted exactly when the shape is placed.
+                brushPreview.cancel()
+                specOverlay.setBand(null, 0f)
+                brushGuide = path.toAndroidPath(brushGuidePath)
+            } else {
+                if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
+                brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
+            }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
             val specs = listOfNotNull(pending?.let { buildSpec(it, brush = false) }, creating?.let { buildSpec(it, brush = false) })
             if (specs.isNotEmpty()) ensureObserving()
-            preview.show(layer, specs, asNewLayer = asNew)
+            preview.show(layer, specs, asNewLayer = asNew, overlayOnly = asNew && newLayerPreviewInOverlay(layer))
         }
         controller.invalidateOverlay()
     }
+
+    /**
+     * A new shape that goes into a layer of its own is normally previewed inside the active
+     * layer (just above its pixels: that looks exactly like a new layer above it when the active
+     * layer is a plain one). When the active layer would change how it looks (hidden, opacity,
+     * blend mode, mask, clipping) it is drawn over the canvas instead, unless layers above would
+     * then be covered (a hidden active layer always uses the overlay: inside it, it would not show).
+     */
+    private fun newLayerPreviewInOverlay(layer: Layer): Boolean {
+        if (!layer.visible) return true
+        if (isPlain(layer)) return false
+        val layers = controller.doc.layers
+        val index = controller.doc.indexOf(layer)
+        if (index < 0) return false
+        for (i in index + 1 until layers.size) {
+            if (layers[i].visible && layers[i].opacity > 0f) return false
+        }
+        return true
+    }
+
+    /** [layer] shows its content as it is: fully opaque, normal blending, no mask, not clipped. */
+    private fun isPlain(layer: Layer): Boolean =
+        layer.opacity >= 1f && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping && !(layer.mask != null && layer.maskEnabled)
+
+    /**
+     * The brush outline of a new shape that goes into a layer of its own can be shown live on the
+     * active layer (as it will look in the new one): the active layer takes a plain stroke and
+     * shows it as it is.
+     */
+    private fun liveBrushForNewLayer(layer: Layer): Boolean =
+        layer.visible && !layer.locked && !layer.alphaLocked && controller.editTargetOf(layer) == EditTarget.CONTENT && isPlain(layer)
 
     /**
      * The preview while a shape layer is edited: the layer's pixels are hidden and the edited
@@ -1259,7 +1361,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         // drawn in the overlay: the canvas tiles (the layer's hidden pixels) stay as they are.
         val inOverlay = dragging && !brush && editDrawsInOverlay(layer)
         setEditSpecs(ov, if (inOverlay) emptyList() else specs)
-        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { buildSpec(objectFor(it, null), brush = false) })
+        // A new shape dragged out meanwhile looks as it will once the opened one is closed.
+        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { buildSpec(newObject(it), brush = false) })
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         editGuide = if (path != null && !live) path.toAndroidPath(guidePath) else null
         if (path != null && live) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
@@ -1287,9 +1390,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         return true
     }
 
-    /** The edited shape's brush stroke can be shown live (a stroke drawn through a buffer, on the layer's content). */
+    /**
+     * The edited shape's brush stroke can be shown live (a stroke drawn through a buffer, on the
+     * layer's content; not with alpha lock: the outline is repainted over cleared pixels, which
+     * the lock would keep empty in the preview, see [commitLayerEdit]).
+     */
     private fun liveBrushWhileEditing(layer: Layer): Boolean {
-        if (controller.editTargetOf(layer) != EditTarget.CONTENT) return false
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT || layer.alphaLocked) return false
         val tool = brushToolId()
         val preset = brushPresetInUse() ?: return false
         return !StrokeKind.of(tool, preset).isDirect
@@ -1425,7 +1532,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         pointsMode = false
         selectedPoint = -1
         clearHistory()
-        // The main color shows the shape's stroke color (changing it recolors the shape).
+        // The main color shows the shape's stroke color (changing it recolors the shape); the
+        // user's own comes back when the shape closes, unless they picked another one meanwhile.
+        userColor = controller.color
+        openedColor = obj.strokeColor
         controller.color = obj.strokeColor
         loadedObject = objectFor(obj.box, obj.points)
         loadedInk = inkOf(layer, obj)
@@ -1532,6 +1642,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         editGuide = null
         userSettings?.let { u -> settings = u.withBehaviourOf(settings) }
         userSettings = null
+        val uc = userColor
+        userColor = null
+        if (uc != null && controller.color == openedColor) controller.color = uc
         controller.invalidateOverlay()
     }
 
@@ -1547,6 +1660,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         targetLayer = null
         pinchStart = null
         overlaySpecs = emptyList()
+        brushGuide = null
         preview.release()
         preview.interacting = false
         clearHistory()
@@ -1560,7 +1674,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             return
         }
         val layer = targetLayer ?: controller.doc.activeLayer
-        if (settings.editable) {
+        if (placesInNewLayer(settings)) {
             commitNewLayer(b)
             return
         }
@@ -1700,18 +1814,23 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         var done = false
         inCommit = true
         val maskEditing = layer.editingMask
+        val alphaLocked = layer.alphaLocked
         try {
             controller.undoStepNamed("Edit shape") {
                 done = controller.updateShapeLayer(layer, data, "Edit shape", dirty) { c ->
                     spec?.let { renderer.draw(c, it, false, doc.colorMode) }
                 }
                 if (done && path != null) {
-                    // The outline is painted on the layer's pixels, never into its mask.
+                    // The outline is painted on the layer's pixels, never into its mask, and the
+                    // shape is drawn again from scratch: alpha lock (which would keep the just
+                    // cleared outline empty) doesn't apply, like it doesn't to the fill.
                     layer.editingMask = false
+                    layer.alphaLocked = false
                     try {
                         controller.keepLayerData(layer) { brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) } }
                     } finally {
                         layer.editingMask = maskEditing
+                        layer.alphaLocked = alphaLocked
                     }
                 }
             }
@@ -1833,10 +1952,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         preview.drawOverlay(canvas, t)
         if (overlaySpecs.isNotEmpty()) {
             // Drawn as the content of a new layer / of the edited shape layer (never into a mask).
-            val asNew = editingLayer != null || settings.editable
+            val asNew = editingLayer != null || placesInNewLayer()
             specOverlay.draw(canvas, t, controller, targetLayer ?: controller.doc.activeLayer, overlaySpecs, keepBandFree = brushPreview.isLive, asNewLayer = asNew)
         }
         editGuide?.let { if (creating == null) painter.path(canvas, t, it) }
+        brushGuide?.let { painter.path(canvas, t, it) }
         val pending = box
         val pts = points
         if (creating == null && pending != null && pointsMode && pts != null) {
@@ -1848,7 +1968,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             map(t, b.end).let { painter.handle(canvas, t, it[0], it[1]) }
             return
         }
-        if (creating != null && settings.type.isLineLike) return
+        if (creating != null && newShapeSettings().type.isLineLike) return
         val c = b.corners()
         boxPath.rewind()
         boxPath.moveTo(c[0].x, c[0].y)
