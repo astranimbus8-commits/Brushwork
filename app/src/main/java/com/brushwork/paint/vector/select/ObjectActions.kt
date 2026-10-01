@@ -36,6 +36,9 @@ object ObjectActions {
     const val RECOLOR_LABEL = "Recolor objects"
     const val RECOLOR_LINES_LABEL = "Recolor lines"
 
+    /** Said when an action is pressed while the previous one still waits for a render. */
+    const val STILL_UPDATING = "Still updating the drawing…"
+
     /**
      * Deletes the selected objects (one step); the selection is cleared. True when it was done
      * (or will be, once the render in flight landed).
@@ -143,6 +146,11 @@ object ObjectActions {
      * With [relift], a transform that was pending is started again afterwards.
      */
     private fun edit(c: EditorController, relift: Boolean, block: (Layer, VectorContent, Set<Long>) -> Boolean): Boolean {
+        // One action waits at a time: taps while it waits would pile up surprises for later.
+        if (PendingRenders.isWaiting(c, this)) {
+            c.toast(STILL_UPDATING)
+            return false
+        }
         val transform = pendingTransform(c)
         val tool = c.currentTool
         if (tool.hasPendingWork) {
@@ -150,8 +158,10 @@ object ObjectActions {
             c.invalidateOverlay()
         }
         var done = false
-        val now = PendingRenders.whenIdle(c) {
+        val now = PendingRenders.whenIdle(c, key = this) {
             val (layer, _) = VectorObjectSelection.selected(c) ?: return@whenIdle
+            // (Only the layer being worked on: the bar drops another layer's selection.)
+            if (layer !== c.activeLayer) return@whenIdle
             val content = layer.vector ?: return@whenIdle
             done = block(layer, content, c.vectors.selectedIds)
             if (relift && transform != null && c.activeToolId == ToolId.TRANSFORM && !transform.hasPendingWork && c.vectors.selectedIds.isNotEmpty()) {

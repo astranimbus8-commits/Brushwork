@@ -134,6 +134,10 @@ class VectorLiftReviewRobolectricTest {
         assertTrue(ObjectActions.duplicate(c))
         assertEquals(listOf(1L, 2L), ids(c))
         assertEquals(steps, c.undoManager.undoCount)
+        // ... and more presses meanwhile don't pile up (one action waits at a time).
+        assertFalse(ObjectActions.duplicate(c))
+        assertFalse(ObjectActions.delete(c))
+        assertEquals(ObjectActions.STILL_UPDATING, c.message)
         // ... and when the move landed, the moved box is copied (two steps: the move, the copy).
         landing()()
         assertEquals(listOf(1L, 3L, 2L), ids(c))

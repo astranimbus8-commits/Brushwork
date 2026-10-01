@@ -27,8 +27,8 @@ internal object PendingRenders {
         /** A2 updates sent and not reported back yet. */
         var inFlight = 0
 
-        /** Work waiting for everything to land (oldest first). */
-        val waiting = ArrayDeque<() -> Unit>()
+        /** Work waiting for everything to land (oldest first), with the key it was queued under. */
+        val waiting = ArrayDeque<Pair<Any?, () -> Unit>>()
 
         /** Waits for the vector service's own background render (`vectors.isRendering`). */
         var poll: Job? = null
@@ -52,14 +52,15 @@ internal object PendingRenders {
     /**
      * Runs [block] now when nothing is in flight (true), else queues it behind what is (false):
      * it then runs, on the main thread, once everything landed (in the order it was queued).
+     * [key] tags it (see [isWaiting]).
      */
-    fun whenIdle(c: EditorController, block: () -> Unit): Boolean {
+    fun whenIdle(c: EditorController, key: Any? = null, block: () -> Unit): Boolean {
         if (!busy(c)) {
             block()
             return true
         }
         val st = state(c)
-        st.waiting.addLast(block)
+        st.waiting.addLast(key to block)
         watch(c, st)
         return false
     }
@@ -95,9 +96,12 @@ internal object PendingRenders {
 
     /** Runs the queued work that may run now; each piece may start a new update (then the rest waits for it). */
     private fun drain(c: EditorController, st: State) {
-        while (st.waiting.isNotEmpty() && !busy(c)) st.waiting.removeFirst().invoke()
+        while (st.waiting.isNotEmpty() && !busy(c)) st.waiting.removeFirst().second.invoke()
         if (st.waiting.isNotEmpty()) watch(c, st)
     }
+
+    /** True while work queued under [key] waits (e.g. one Object bar action at a time). */
+    fun isWaiting(c: EditorController, key: Any): Boolean = states[c]?.get()?.waiting?.any { it.first == key } == true
 
     /** Looks for the end of the vector service's own render (A2's own updates drain when they report back). */
     private fun watch(c: EditorController, st: State) {
