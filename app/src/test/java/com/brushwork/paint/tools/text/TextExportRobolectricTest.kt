@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
 import android.text.TextPaint
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.engine.BitmapUtils
@@ -101,9 +102,72 @@ class TextExportRobolectricTest {
     fun linesAreNullWhereTextNeedsOutlines() {
         assertNull(TextExport.lines(TextItem("縦", TextSpec(vertical = true))))
         assertNull(TextExport.lines(TextItem("On a path", path = TextPathSpec(type = TextPathType.CIRCLE, cx = 100f, cy = 100f, radius = 60f))))
-        assertNull("a box with a background", TextExport.lines(TextItem("Boxed", TextSpec(box = TextBoxPreset.CAPTION.applyTo(TextBoxSpec(), 48f)))))
         assertEquals(emptyList<TextLineRun>(), TextExport.lines(TextItem("")))
         assertNotNull(TextExport.lines(TextItem("Plain")))
+    }
+
+    @Test
+    fun boxedTextHasLinesAndItsBoxAsParts() {
+        // Horizontal text in a caption box: its letters as lines (the frozen contract), its box
+        // from outlineParts, drawn under them.
+        val boxed = TextItem("Boxed words", TextSpec(sizePx = 48f, color = WrapFixtures.BLACK, box = TextBoxPreset.CAPTION.applyTo(TextBoxSpec(), 48f)), 250f, 200f, 8f)
+        val runs = TextExport.lines(boxed)!!
+        assertEquals(1, runs.size)
+        val block = TextRenderer.prepare(boxed).block!!
+        assertEquals(block.staticLayout!!.getLineBaseline(0) + block.inset, runs[0].baseline, 0.5f)
+        assertTrue("the inset is in x", runs[0].x >= block.inset - 0.5f)
+        val parts = TextExport.outlineParts(boxed)!!
+        assertEquals(listOf(TextOutlinePart.Kind.BOX_FILL, TextOutlinePart.Kind.BOX_BORDER, TextOutlinePart.Kind.TEXT), parts.map { it.kind })
+
+        // Box parts, then the runs: the layer's look.
+        val b = BitmapUtils.createLayerBitmap(w, h)
+        val c = Canvas(b)
+        for (p in parts.filter { it.kind != TextOutlinePart.Kind.TEXT }) c.drawPath(p.path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = p.color })
+        for (r in runs) {
+            val v = r.paintSpec.matrix
+            c.save()
+            c.concat(Matrix().apply { setValues(floatArrayOf(v[0], v[2], v[4], v[1], v[3], v[5], 0f, 0f, 1f)) })
+            c.drawText(r.text, r.x, r.baseline, paintFor(r.paintSpec.spec))
+            c.restore()
+        }
+        val ref = render(boxed, w, h)
+        val pa = pixels(ref)
+        val pb = pixels(b)
+        var bad = 0
+        var ink = 0
+        for (i in pa.indices) {
+            if ((pa[i] ushr 24) > 0 || (pb[i] ushr 24) > 0) ink++
+            val d = maxOf(kotlin.math.abs(((pa[i] shr 16) and 0xFF) - ((pb[i] shr 16) and 0xFF)), kotlin.math.abs((pa[i] ushr 24) - (pb[i] ushr 24)))
+            if (d > 24) bad++
+        }
+        assertTrue("box + lines draw like the layer: $bad of $ink", ink > 0 && bad.toFloat() / ink < 0.02f)
+    }
+
+    @Test
+    fun outlinesAreTheLettersOnly() {
+        // A white caption box with a black border and red letters outlined in blue: outlines()
+        // is only the letters (filled with the text color it never paints the box over them).
+        val item = TextItem(
+            "Letters", TextSpec(sizePx = 80f, color = 0xFFFF0000.toInt(), strokeWidthPx = 3f, strokeColor = 0xFF0000FF.toInt(), box = TextBoxPreset.CAPTION.applyTo(TextBoxSpec(), 80f)),
+            250f, 200f,
+        )
+        val doc = Document("x", "x", w, h)
+        val layer = Layer(doc.newLayerId(), "Text", render(item, w, h)).also { it.textData = TextCodec.encode(item) }
+        val letters = TextExport.outlines(doc, layer)!!
+        val parts = TextExport.outlineParts(item)!!
+        val text = parts.single { it.kind == TextOutlinePart.Kind.TEXT }.path
+        val lb = RectF().also { letters.computeBounds(it, true) }
+        val tb = RectF().also { text.computeBounds(it, true) }
+        assertEquals(tb, lb)
+        // The box is bigger than the letters; the coverage of everything includes it.
+        val box = RectF().also { parts.first { it.kind == TextOutlinePart.Kind.BOX_FILL }.path.computeBounds(it, true) }
+        assertTrue(box.width() > lb.width() && box.height() > lb.height())
+        val all = RectF().also { TextExport.coverage(item)!!.computeBounds(it, true) }
+        assertTrue(all.contains(box))
+        // A pixel of the box between the letters is not in the letters.
+        val filled = BitmapUtils.createLayerBitmap(w, h)
+        Canvas(filled).drawPath(letters, Paint().apply { color = WrapFixtures.BLACK })
+        assertEquals(0, filled.getPixel(box.left.toInt() + 3, box.centerY().toInt()) ushr 24)
     }
 
     /**
@@ -117,7 +181,9 @@ class TextExportRobolectricTest {
     private fun iou(item: TextItem, size: Int = 1000): Pair<Float, Float> {
         val doc = Document("x", "x", size, size)
         val layer = Layer(doc.newLayerId(), "Text", render(item, size, size)).also { it.textData = TextCodec.encode(item) }
-        val path = TextExport.outlines(doc, layer)!!
+        // The letters alone are all a plain text paints; a box or an outline stroke adds parts.
+        val decorated = item.spec.box.hasFrame || item.spec.strokeWidthPx > 0f
+        val path = if (decorated) TextExport.coverage(item)!! else TextExport.outlines(doc, layer)!!
         val filled = BitmapUtils.createLayerBitmap(size, size)
         Canvas(filled).drawPath(path, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WrapFixtures.BLACK })
         val a = pixels(layer.bitmap).let { p -> BooleanArray(p.size) { (p[it] ushr 24) >= 128 } }

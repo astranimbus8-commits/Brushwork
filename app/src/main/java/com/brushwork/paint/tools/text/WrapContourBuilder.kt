@@ -144,7 +144,37 @@ object WrapContourBuilder {
      * [factor] px: holes dropped, simplified to at most [maxPoints] points in total.
      */
     fun polygons(cells: ByteArray, gw: Int, gh: Int, factor: Int, maxPoints: Int = TextWrapSpec.MAX_POINTS): List<WrapPolygon> {
-        val traced = MarchingSquares.contours(cells, gw, gh) ?: return emptyList()
+        // Traced only where something is: the covered cells' bounds (a picture usually fills a
+        // small part of the canvas; outside them the grid is empty and has no contour).
+        var l = gw; var t = gh; var r = -1; var b = -1
+        for (gy in 0 until gh) {
+            val row = gy * gw
+            var first = -1
+            var last = -1
+            for (gx in 0 until gw) {
+                if (cells[row + gx].toInt() != 0) {
+                    if (first < 0) first = gx
+                    last = gx
+                }
+            }
+            if (first < 0) continue
+            if (first < l) l = first
+            if (last > r) r = last
+            if (gy < t) t = gy
+            b = gy
+        }
+        if (r < 0) return emptyList()
+        val cw = r - l + 1
+        val ch = b - t + 1
+        val crop = if (cw == gw && ch == gh) cells else ByteArray(cw * ch).also { out ->
+            for (gy in 0 until ch) System.arraycopy(cells, (t + gy) * gw + l, out, gy * cw, cw)
+        }
+        val traced = (MarchingSquares.contours(crop, cw, ch) ?: return emptyList()).onEach { pts ->
+            if (l != 0 || t != 0) for (i in 0 until pts.size / 2) {
+                pts[2 * i] += l.toFloat()
+                pts[2 * i + 1] += t.toFloat()
+            }
+        }
         if (traced.isEmpty()) return emptyList()
         val areas = FloatArray(traced.size) { signedArea(traced[it]) }
         // The biggest contour is an outer one (a hole lies inside a bigger outline): its

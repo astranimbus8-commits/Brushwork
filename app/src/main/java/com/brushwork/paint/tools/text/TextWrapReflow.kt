@@ -1,9 +1,13 @@
 package com.brushwork.paint.tools.text
 
+import android.graphics.Canvas
+import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditListener
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.model.Layer
 import java.lang.ref.WeakReference
 
@@ -58,7 +62,8 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
             alive += layer.id
             val item = itemOf(layer, data) ?: continue
             if (!item.wrapActive || item.wrap.sourceLayerId != source.id) continue
-            if (layer === open || layer.locked || !layer.visible) continue
+            // A locked text stays as it is (locked = no edits); a hidden one follows its picture.
+            if (layer === open || layer.locked) continue
             reflow(layer, item, source)
         }
         if (decoded.size > (alive?.size ?: 0) + CACHE_SLACK) decoded.keys.retainAll(alive ?: emptySet())
@@ -88,13 +93,54 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
         if (dirty.isEmpty) return
         dirty.inset(-1, -1)
         val json = TextCodec.encode(next)
+        val draw: (Canvas) -> Unit = { cv -> TextRenderer.drawItem(cv, next, prep, null) }
         try {
             c.amendLastStep {
-                if (c.updateTextLayer(layer, json, REFLOW_LABEL, dirty) { cv -> TextRenderer.drawItem(cv, next, prep, null) }) reflowCount++
+                val done = if (layer.visible) c.updateTextLayer(layer, json, REFLOW_LABEL, dirty, draw) else updateHidden(layer, json, dirty, draw)
+                if (done) reflowCount++
             }
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory to re-flow \"${layer.name}\"")
         }
+    }
+
+    /**
+     * [EditorController.updateTextLayer] for a HIDDEN text layer (it refuses hidden layers: tools
+     * must not edit what can't be seen). A hidden text still follows its picture, so it is right
+     * when it is shown again: the same step by hand, pixels (tiles of [dirty]) and text together
+     * (I1); [EditorController.commitEdit] keeps the text data ([PixelEditRecorder.preserveData]).
+     */
+    private fun updateHidden(layer: Layer, json: String, dirty: Rect, draw: (Canvas) -> Unit): Boolean {
+        val doc = c.doc
+        if (doc.indexOf(layer) < 0 || layer.locked) return false
+        val before = layer.dataSnapshot()
+        val after = before.copy(text = json)
+        val area = Rect(dirty)
+        if (!area.intersect(0, 0, doc.width, doc.height)) area.setEmpty()
+        val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
+        try {
+            if (!area.isEmpty) {
+                rec.touch(area)
+                val cv = Canvas(layer.bitmap)
+                cv.save()
+                cv.clipRect(area)
+                cv.drawColor(0, PorterDuff.Mode.CLEAR)
+                draw(cv)
+                cv.restore()
+            }
+        } catch (e: OutOfMemoryError) {
+            rec.abort()
+            throw e
+        }
+        layer.restoreData(after)
+        val data = LayerDataAction(REFLOW_LABEL, layer, before, after)
+        if (!c.commitEdit(rec, REFLOW_LABEL, listOf(data))) {
+            // No pixel on the canvas (the text is off it): the text alone.
+            layer.markChanged()
+            c.pushUndo(data)
+            c.notifyLayersChanged()
+        }
+        return true
     }
 
     companion object {

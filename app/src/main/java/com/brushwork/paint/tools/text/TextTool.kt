@@ -231,6 +231,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
         layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
         loadedInk?.let { controller.tiles.invalidate(it) }
         item = loaded
+        // A wrapped text whose picture changed while it couldn't follow (it was locked, or the
+        // picture's mask was switched on or off): shown, and on ✓ committed, around the picture
+        // as it is now. (Unchanged: nothing is pending, a tap records no step.)
+        refreshedWrap(loaded)?.let { item = it }
         if (TextRenderer.isFontMissing(loaded.spec)) {
             controller.toast("The font \"${loaded.spec.fontLabel}\" isn't on this device: the text shows in ${loaded.spec.font.label} until it is imported again")
         }
@@ -518,7 +522,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * Turns the fixed box size on (lines wrap at the current natural width; columns at the
      * current natural height) or off (the box fits the text).
      */
-    fun setFixedBox(on: Boolean) = updateSpec { s ->
+    fun setFixedBox(on: Boolean) {
+        // Lines can only flow around a picture inside a box of fixed width (a box fitting the
+        // text would be one long line).
+        if (!on && item?.wrapActive == true) {
+            controller.toast(WRAP_NEEDS_WIDTH)
+            return
+        }
+        setFixedBoxSpec(on)
+    }
+
+    private fun setFixedBoxSpec(on: Boolean) = updateSpec { s ->
         val box = s.box
         // Off: the box fits the text again (its fixed other side goes too).
         if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f, minWidth = 0f) else box.copy(width = 0f, minHeight = 0f))
@@ -632,11 +646,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * text on a path can't wrap (a message says so).
      */
     fun openWrapSheet() {
-        val cur = item
-        if (cur == null) {
-            controller.toast("Tap the canvas to add a text, then wrap it around a picture")
-            return
+        if (item == null) {
+            val active = controller.activeLayer
+            // No pending text but a text layer is active (the strip offers "Edit text"): wrap that
+            // one (editLayer says why when it can't be edited).
+            if (!active.isTextLayer) {
+                controller.toast("Tap the canvas to add a text, then wrap it around a picture")
+                return
+            }
+            if (!editLayer(active)) return
         }
+        val cur = item ?: return
         if (!cur.canWrap) {
             controller.toast(WRAP_HORIZONTAL_ONLY)
             return
@@ -704,6 +724,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     fun setWrapSides(sides: WrapSides) = update { if (it.wrap.sides == sides) it else it.copy(wrap = it.wrap.copy(sides = sides)) }
+
+    /**
+     * [t] with the current outline of its picture, or null when that is what [t] already has (or
+     * it doesn't wrap, its picture is gone or can't be traced).
+     */
+    private fun refreshedWrap(t: TextItem): TextItem? {
+        if (!t.wrapActive) return null
+        val src = doc.layerById(t.wrap.sourceLayerId)?.takeIf { !it.isTextLayer && !it.isAdjustmentLayer } ?: return null
+        val polys = contours.polygons(src, t.wrap.contour) ?: return null
+        return if (polys == t.wrap.polygons) null else t.copy(wrap = t.wrap.copy(polygons = polys))
+    }
 
     /**
      * The picture of the pending text was edited (the re-flow listener skips text open here):
@@ -1276,8 +1307,23 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val rot = Math.toRadians(start.rotationDeg.toDouble()).toFloat()
         val anchorRight = start.spec.vertical && !start.spec.columnsLeftToRight
         val anchor = start.localToDoc(if (anchorRight) b0.width else 0f, 0f, b0.width, b0.height)
-        val half = Vec2(if (anchorRight) -nb.width / 2f else nb.width / 2f, nb.height / 2f).rotated(rot)
-        return moved.copy(cx = anchor.x + half.x, cy = anchor.y + half.y)
+        fun place(b: TextBlock): TextItem {
+            val half = Vec2(if (anchorRight) -b.width / 2f else b.width / 2f, b.height / 2f).rotated(rot)
+            return moved.copy(cx = anchor.x + half.x, cy = anchor.y + half.y)
+        }
+        var placed = place(nb)
+        // Wrapped text: its height depends on where it is (the picture), so the corner is kept
+        // for the block it has where it lands.
+        if (moved.wrapActive) {
+            var last = nb
+            repeat(ANCHOR_REFINE_PASSES) {
+                val b = preparedFor(placed).block ?: return placed
+                if (b.width == last.width && b.height == last.height) return placed
+                last = b
+                placed = place(b)
+            }
+        }
+        return placed
     }
 
     override fun onUp(p: ToolPoint) {
@@ -1295,8 +1341,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
             // While the editor is open a tap neither applies the text nor reopens the editor.
             editorOpen -> {}
             m == Mode.MOVE && downInside -> openEditor()
-            // Tap away from the text: place it, then edit the text tapped or start a new one there.
-            m == Mode.MOVE -> if (commitItem()) tapAt(p.x, p.y)
+            // Tap away from the text: place it (like ✓, back to the vector layer it came from),
+            // then edit the text tapped or start a new one there.
+            m == Mode.MOVE -> if (commitItem()) {
+                returnToVectorLayer()
+                tapAt(p.x, p.y)
+            }
         }
         controller.invalidateOverlay()
     }
@@ -1579,6 +1629,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
         /** Shown when vertical text or text on a path is asked to wrap. */
         const val WRAP_HORIZONTAL_ONLY = "Wrap works with horizontal text"
 
+        /** Shown when the fixed width of a text that wraps around a picture is turned off. */
+        const val WRAP_NEEDS_WIDTH = "Text that wraps around a picture needs a fixed width: turn Wrap off first"
+
         /** A layer whose content covers this much of the text box is never the default picture (a background). */
         private const val WRAP_DEFAULT_MAX_COVER = 0.9f
 
@@ -1589,6 +1642,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
         private const val WRAP_MIN_WIDTH_EM = 8f
 
         private const val WRAP_OUTLINE_COLOR = 0xFFFF3DD8.toInt()
+
+        /** Layouts a resized wrapped text gets to keep its corner (its height depends on its place). */
+        private const val ANCHOR_REFINE_PASSES = 2
 
         private const val ACCENT = 0xFF4DA3FF.toInt()
         private const val HANDLE_RADIUS_DP = 9f

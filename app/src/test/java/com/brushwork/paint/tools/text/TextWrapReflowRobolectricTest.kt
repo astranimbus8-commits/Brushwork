@@ -207,7 +207,7 @@ class TextWrapReflowRobolectricTest {
     }
 
     @Test
-    fun lockedHiddenAndOpenTextsAreLeftAlone() {
+    fun lockedTextsStayHiddenOnesFollowAndOpenOnesReflowLive() {
         val s = setup(context, scope = scope)
         disc(s.picture, 110f, 150f, 30f)
         val text = wrappedText(s)
@@ -218,18 +218,34 @@ class TextWrapReflowRobolectricTest {
         assertEquals(data, text.textData)
         assertNull("no locked-layer message", s.c.message)
         text.locked = false
+
+        // Hidden: it still follows its picture (right when shown again), inside the edit's step.
         text.visible = false
+        val hiddenSteps = s.c.undoManager.undoCount
+        val hiddenReflows = s.c.textWrap.reflowCount
         scribble(80f)
-        assertEquals(data, text.textData)
+        assertEquals("one step", hiddenSteps + 1, s.c.undoManager.undoCount)
+        assertEquals(hiddenReflows + 1, s.c.textWrap.reflowCount)
+        assertNotEquals(data, text.textData)
+        assertNull("no hidden-layer message", s.c.message)
+        assertEquals(s.c.textWrap.contours.polygons(s.picture, WrapContour.SHAPE), itemOf(text).wrap.polygons)
+        assertRendered(text, s.c)
+        assertFalse("still hidden", text.visible)
+        val hiddenData = text.textData
+        s.c.undo()
+        assertEquals("undo restores the hidden text too", data, text.textData)
+        s.c.redo()
+        assertEquals(hiddenData, text.textData)
         text.visible = true
 
         // Open in the Text tool: the layer is left alone, the pending text re-flows live.
         s.c.selectTool(ToolId.TEXT)
         assertTrue(s.tool.editLayer(text))
+        assertFalse("up to date: opening changes nothing", s.tool.hasUserChanges)
         val pending = s.tool.item!!.wrap.polygons
         val steps = s.c.undoManager.undoCount
         scribble(200f)
-        assertEquals(data, text.textData)
+        assertEquals(hiddenData, text.textData)
         assertNotEquals("re-flowed live", pending, s.tool.item!!.wrap.polygons)
         assertEquals(steps + 1, s.c.undoManager.undoCount)
         s.tool.commit()

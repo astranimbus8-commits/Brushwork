@@ -263,10 +263,12 @@ object TextRenderer {
                 PreparedText(item.text, item.spec, item.path, null, paints, b)
             }
             item.wrapActive -> {
-                // Same words and look (the text or its picture moved): measured characters and the
-                // last height are reused, so a drag re-breaks lines without measuring again.
+                // Same words and look (the text or its picture moved): the measured characters are
+                // reused, so a drag re-breaks lines without measuring again. The layout itself
+                // never depends on an earlier one: the same item always gives the same lines (I1:
+                // the committed pixels equal a fresh rendering of the stored item).
                 val same = reuse?.takeIf { sameLook && it.text == item.text && it.wrapText != null }
-                val (block, measured) = layoutWrapped(item, same?.block?.height, same?.wrapText)
+                val (block, measured) = layoutWrapped(item, same?.wrapText)
                 PreparedText(item.text, item.spec, item.path, block, null, null, wrapKey = WrapKey.of(item), wrapText = measured)
             }
             else -> {
@@ -350,12 +352,14 @@ object TextRenderer {
      * Lays out [item] flowing around its picture ([TextItem.wrap], horizontal straight text):
      * [WrapLayout] lines with StaticLayout's metrics, the picture seen through [WrapObstacle].
      * The block is centered on the item's position, so where the picture falls on the lines
-     * depends on the block's height: up to 3 passes find a height that agrees with its lines
-     * (starting from [heightHint], e.g. the last layout while the text is dragged); if they don't
-     * agree, the tallest height seen is laid out and kept (the box gets a little room below).
-     * [measured] is reused when the text and look are unchanged.
+     * depends on the block's height: up to 3 passes, starting from the height of the text
+     * without the picture, find a height that agrees with its lines; if they don't agree, the
+     * tallest height seen is laid out (grown until the lines fit) and kept (the box gets a little
+     * room below). The lines are always laid out for the height the block gets, so they keep
+     * clear of the picture. The result depends only on [item] (the same item always gives the
+     * same lines). [measured] is reused when the text and look are unchanged.
      */
-    internal fun layoutWrapped(item: TextItem, heightHint: Float? = null, measured: WrapText? = null, measureInk: Boolean = true): Pair<TextBlock, WrapText?> {
+    internal fun layoutWrapped(item: TextItem, measured: WrapText? = null, measureInk: Boolean = true): Pair<TextBlock, WrapText?> {
         val spec = item.spec
         val text = item.text
         if (text.isEmpty()) return layoutHorizontal(text, spec, measureInk) to null
@@ -377,7 +381,7 @@ object TextRenderer {
             val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - blockW / 2f, inset - blockH / 2f, gap)
             return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, minRun)
         }
-        var bh = heightHint?.takeIf { it.isFinite() && it > 0f } ?: blockHeight(WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, item.wrap.sides, spec.align, minRun).height)
+        var bh = blockHeight(WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, item.wrap.sides, spec.align, minRun).height)
         var res = run(bh)
         var next = blockHeight(res.height)
         var tallest = max(bh, next)
@@ -393,6 +397,15 @@ object TextRenderer {
             bh = tallest
             res = run(bh)
             next = blockHeight(res.height)
+            // The lines must fit the block they were laid out for (else they would sit lower than
+            // where the picture was looked at): grow it until they do.
+            var grow = 0
+            while (next > bh && grow < WRAP_GROW_PASSES) {
+                bh = next
+                res = run(bh)
+                next = blockHeight(res.height)
+                grow++
+            }
         }
         val finalH = max(next, bh)
         val contentH = finalH - 2f * inset
@@ -449,6 +462,9 @@ object TextRenderer {
 
     /** Layout passes looking for a block height that agrees with its wrapped lines. */
     private const val WRAP_PASSES = 3
+
+    /** Extra passes growing a block that didn't settle until its lines fit it. */
+    private const val WRAP_GROW_PASSES = 4
 
     private fun staticLayout(text: String, spec: TextSpec, paint: TextPaint): StaticLayout {
         val wrap = spec.box.width

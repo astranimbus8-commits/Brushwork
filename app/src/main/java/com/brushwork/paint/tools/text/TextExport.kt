@@ -11,8 +11,9 @@ import kotlin.math.min
 
 /**
  * Text layers for SVG / PDF export (v1.5 §4.10; owned by A7, used by A8): the laid-out lines of
- * horizontal text (to write real, selectable text) and the outlines of any text (vertical, on a
- * path, with a box...), both exactly where the text layer's pixels are.
+ * horizontal text (to write real, selectable text), the glyph outlines of any text (vertical, on a
+ * path...) and every painted part with its color ([outlineParts]: box, outline stroke, letters),
+ * all exactly where the text layer's pixels are.
  */
 object TextExport {
     /**
@@ -22,11 +23,15 @@ object TextExport {
      * Draw each run with [TextRunPaint.spec]'s font, size, letter spacing and colors (the outline,
      * [TextSpec.strokeWidthPx], is centered on the glyph edges and drawn under the fill).
      *
-     * Null for vertical text, text on a path, and text whose box draws something (background or
-     * border): their exact look needs [outlineParts]. Empty for an empty text.
+     * The lines are the letters only: a text whose box draws something ([TextBoxSpec.hasFrame]:
+     * background, border) gets that box from [outlineParts] (its [TextOutlinePart.Kind.BOX_FILL] and
+     * [TextOutlinePart.Kind.BOX_BORDER] parts, drawn under the lines).
+     *
+     * Null for vertical text and text on a path (use [outlines] / [outlineParts]). Empty for an
+     * empty text.
      */
     fun lines(item: TextItem): List<TextLineRun>? {
-        if (item.spec.vertical || item.path.isActive || item.spec.box.hasFrame) return null
+        if (item.spec.vertical || item.path.isActive) return null
         val prep = TextRenderer.prepare(item)
         val block = prep.block ?: return null
         val paint = TextRunPaint(item.spec, affine(TextRenderer.matrix(item, block)))
@@ -48,14 +53,25 @@ object TextExport {
     }
 
     /**
-     * Everything text layer [layer] paints, as ONE outline in document px (box, outline stroke
-     * and letters together); null when [layer] is not a text layer or draws nothing. The parts
-     * have different colors: an exporter that keeps them should use [outlineParts].
+     * The glyph outlines of text layer [layer] in document px (any text: horizontal, wrapped,
+     * vertical, on a path), to fill with the text's color ([TextSpec.color]); null when [layer] is
+     * not a text layer or draws no letters. The letters only: the box (background, border) and the
+     * text's outline stroke have other colors and come from [outlineParts], which gives every part
+     * of the exact look with its color.
      */
     fun outlines(doc: Document, layer: Layer): Path? {
         val item = TextCodec.decode(layer.textData) ?: return null
+        return outlineParts(item)?.lastOrNull { it.kind == TextOutlinePart.Kind.TEXT }?.path
+    }
+
+    /**
+     * Everything [item] paints as ONE outline in document px (box, outline stroke and letters
+     * united), e.g. for a clip or a hit area; null when nothing is drawn. Its parts have different
+     * colors: to draw the text, use [outlineParts].
+     */
+    fun coverage(item: TextItem): Path? {
         val parts = outlineParts(item) ?: return null
-        if (parts.size == 1) return parts[0].path
+        if (parts.size == 1) return Path(parts[0].path)
         var union: Path? = null
         for (part in parts) {
             val u = union
