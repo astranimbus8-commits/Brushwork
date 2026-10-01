@@ -70,9 +70,14 @@ internal data class LayerEntryDto(
  * File names, JSON configuration and small file helpers of the on-disk project format.
  *
  * Folder layout: `project.json`, `thumb.png` and one pixel file per layer and per mask
- * (`layer_<id>_r<revision>.bin`, `mask_<id>_r<revision>.bin`, see [LayerCodec]). A save writes
- * changed layers to NEW files, then atomically replaces `project.json`, then deletes files that
- * are no longer referenced — so a crash at any point leaves either the old or the new project.
+ * (`layer_<id>_r<revision>.bin`, `mask_<id>_r<revision>.bin`, see [LayerCodec]), plus one
+ * `vector_<id>_r<revision>.vec` per vector layer (v1.5, see VectorCodec; mask specs and
+ * adjustments are small and live inside `project.json`). A save writes changed layers to NEW
+ * files, then atomically replaces `project.json`, then deletes files that are no longer
+ * referenced — so a crash at any point leaves either the old or the new project.
+ *
+ * Compatibility (I4): `formatVersion` is 1 unless the project has an adjustment layer (then 2,
+ * which v1.4 refuses); v1.4 ignores the vector files and shows the layers' cached pixels.
  */
 internal object ProjectFormat {
     /** Highest format this version reads. */

@@ -134,7 +134,13 @@ object LayerOps {
         val idx = c.doc.indexOf(layer)
         if (idx <= 0) { c.toast("There is no layer below to merge into"); return }
         val lower = c.doc.layers[idx - 1]
-        if (!c.checkEditable(layer)) return
+        // An adjustment layer has no pixels of its own (checkEditable refuses those without a
+        // mask): merging it applies its effect to the layer below ("Apply to layer below").
+        if (layer.isAdjustmentLayer) {
+            if (!ensureUnlocked(c, layer)) return
+        } else if (!c.checkEditable(layer)) {
+            return
+        }
         if (!ensureUnlocked(c, lower)) return
         // The controller renders the pair as a two-layer document where the lower layer is the
         // base, so a clipped upper layer would be cut to the lower layer's alpha. Present it as

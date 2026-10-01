@@ -132,7 +132,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
     val liftProvider: ObjectLiftProvider get() = VectorLift.provider(c)
 
     /** Lasso / Select shape results on a vector layer select objects (A2). True when handled. */
-    fun selectObjects(sel: Selection, mode: SelectionMode): Boolean = VectorObjectSelection.select(c, sel, mode)
+    fun selectObjects(sel: Selection, mode: SelectionMode): Boolean =
+        selectObjectsHook?.invoke(sel, mode) ?: VectorObjectSelection.select(c, sel, mode)
+
+    /** Test seam: replaces [selectObjects]' delegate (null = the A2 object selection). */
+    internal var selectObjectsHook: ((Selection, SelectionMode) -> Boolean)? = null
 
     /** Object selection feedback (A2). */
     fun drawOverlay(canvas: Canvas, t: ViewTransform) = VectorObjectSelection.drawOverlay(c, canvas, t)
