@@ -97,9 +97,10 @@ class MaskSpecRendererTest {
         val both = MaskSpec(components = listOf(radial, left.copy(id = 3, mode = MaskMode.INTERSECT), radial.copy(id = 4, visible = false, mode = MaskMode.SUBTRACT)))
         assertEquals(0.5f, MaskSpecRenderer.valueAt(both, 50f, 0f), eps)
         assertEquals(0f, MaskSpecRenderer.valueAt(both, 150f, 0f), eps)
-        // Brush components are not drawn by the reference: an INTERSECT with one keeps 1 - amount.
+        // Brush components (A5): an INTERSECT keeps everything on its stroke and 1 - amount away from it.
         val brush = BrushMask(5, mode = MaskMode.INTERSECT, amount = 0.25f, strokes = listOf(MaskStroke(false, 10f, 0.5f, 1f, PackedPoints(floatArrayOf(1f), floatArrayOf(1f), floatArrayOf(1f)))))
-        assertEquals(0.75f, MaskSpecRenderer.valueAt(MaskSpec(startFull = true, components = listOf(brush)), 1f, 1f), eps)
+        assertEquals(1f, MaskSpecRenderer.valueAt(MaskSpec(startFull = true, components = listOf(brush)), 1f, 1f), eps)
+        assertEquals(0.75f, MaskSpecRenderer.valueAt(MaskSpec(startFull = true, components = listOf(brush)), 40f, 40f), eps)
     }
 
     @Test
