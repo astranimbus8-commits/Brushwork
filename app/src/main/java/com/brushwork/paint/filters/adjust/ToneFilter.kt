@@ -39,11 +39,21 @@ class ToneFilter : Filter(ID, "Tone", FilterCategory.ADJUST) {
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
-        val m = ToneMath.mapper(ToneSettings.of(values)) ?: return src.copy()
+        val m = mapperFor(ToneSettings.of(values)) ?: return src.copy()
         return AdjustMath.applyMapper(src, ctx, m)
     }
 
-    override fun pixelMapper(values: FilterValues): PixelMapper = ToneMath.mapper(ToneSettings.of(values)) ?: AdjustMath.IDENTITY_MAPPER
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperFor(ToneSettings.of(values)) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** The last mapper built: a live adjustment layer asks for the same one every frame. */
+    @Volatile
+    private var cached: Pair<ToneSettings, PixelMapper>? = null
+
+    private fun mapperFor(s: ToneSettings): PixelMapper? {
+        if (s.isIdentity) return null
+        cached?.let { (k, m) -> if (k == s) return m }
+        return ToneMath.mapper(s)?.also { cached = s to it }
+    }
 
     companion object {
         const val ID = "adjust.tone"

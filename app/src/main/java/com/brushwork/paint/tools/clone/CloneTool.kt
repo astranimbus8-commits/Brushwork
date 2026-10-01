@@ -24,7 +24,8 @@ import com.brushwork.paint.tools.ToolPoint
  * Clone stamp (v1.5 §4.2), like Photoshop's: paints with pixels copied from a source point.
  *
  * - A long-press (or the "Set source" chip, then a tap) sets the source; dragging its ⊕
- *   crosshair moves it. Moving the finger after a long-press keeps moving it.
+ *   crosshair ([GRAB_RADIUS_DP]) moves it. Moving the finger after a long-press keeps moving it.
+ *   With Aligned the ⊕ travels with the strokes: after a stroke it marks what its end sampled.
  * - Painting copies what is under the source to under the finger, with the real brush engine: a
  *   private [BrushTool] (`ToolId.CLONE` presets: coverage tips only) whose coverage is painted
  *   through [CloneSource]'s shader, so the live stroke equals the result. Selection, alpha lock

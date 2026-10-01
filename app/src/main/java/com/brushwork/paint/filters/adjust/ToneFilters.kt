@@ -6,7 +6,6 @@ import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterContext
-import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.filters.PixelMapper
