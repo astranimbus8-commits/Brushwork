@@ -225,22 +225,29 @@ class StrokeRasterParityRobolectricTest {
         val raster = StrokeRaster()
         val all = raster.render(Canvas(whole), Rect(0, 0, w, h), preset, 0xFF000000.toInt(), 99L, true, packed)
         assertTrue(!all.isEmpty)
-        // Tiles of a different grid than the grain's: every piece is drawn with the whole stroke's coverage.
-        val tiled = BitmapUtils.createLayerBitmap(w, h)
-        var y = 0
-        while (y < h) {
-            var x = 0
-            while (x < w) {
-                val clip = Rect(x, y, minOf(w, x + 100), minOf(h, y + 70))
-                val cv = Canvas(tiled)
-                cv.save(); cv.clipRect(clip)
-                raster.render(cv, clip, preset, 0xFF000000.toInt(), 99L, true, packed)
-                cv.restore()
-                x += 100
+        // Tiles of a different grid than the grain's: every piece is drawn with the whole stroke's
+        // coverage, its dabs cut only at the document (`cut`), so the pieces are exactly the
+        // whole stroke (whatever the random values: several seeds and brushes).
+        val doc = Rect(0, 0, w, h)
+        for ((p, seed) in listOf(preset to 99L, preset to 5L, BrushLibrary.byId("softround")!!.copy(size = 40f) to 7L, BrushLibrary.byId("pencil")!! to 11L, BrushLibrary.byId("airbrush")!! to 13L)) {
+            val ref = BitmapUtils.createLayerBitmap(w, h)
+            raster.render(Canvas(ref), Rect(0, 0, w, h), p, 0xFF000000.toInt(), seed, true, packed)
+            val tiled = BitmapUtils.createLayerBitmap(w, h)
+            var y = 0
+            while (y < h) {
+                var x = 0
+                while (x < w) {
+                    val clip = Rect(x, y, minOf(w, x + 100), minOf(h, y + 70))
+                    val cv = Canvas(tiled)
+                    cv.save(); cv.clipRect(clip)
+                    raster.render(cv, clip, p, 0xFF000000.toInt(), seed, true, packed, cut = doc)
+                    cv.restore()
+                    x += 100
+                }
+                y += 70
             }
-            y += 70
+            assertArrayEquals("${p.name} seed $seed", pixels(ref), pixels(tiled))
         }
-        assertArrayEquals(pixels(whole), pixels(tiled))
         // Everything painted lies inside the conservative bounds.
         val bounds = raster.bounds(preset, 1f, packed)
         val px = pixels(whole)

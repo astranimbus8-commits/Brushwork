@@ -306,6 +306,70 @@ class VectorLayersRobolectricTest {
     }
 
     @Test
+    fun liveStrokesStayEqualToTheirReplayUnderPartialReRenders() {
+        // Strokes drawn live (random seeds) and kept as objects (A3's commit pattern), then edits
+        // whose re-rendered regions cut through them: the cache stays exactly a fresh render.
+        val dw = 800
+        val dh = 600
+        val settings = AppSettings(app)
+        settings.prefs.edit().clear().commit()
+        val doc = Document("t", "t", dw, dh)
+        doc.layers += Layer(doc.newLayerId(), "Vector 1", BitmapUtils.createLayerBitmap(dw, dh)).also { it.vector = VectorContent.EMPTY }
+        val c = EditorController(app, doc, scope, settings).also { it.viewTransform.set(Matrix()) }
+        val layer = doc.layers[0]
+        fun px(b: Bitmap) = IntArray(dw * dh).also { b.getPixels(it, 0, dw, 0, 0, dw, dh) }
+        fun fresh(content: VectorContent): IntArray {
+            val b = BitmapUtils.createLayerBitmap(dw, dh)
+            VectorLayerRenderer.render(Canvas(b), content, Rect(0, 0, dw, dh), tips = TipCache())
+            return px(b)
+        }
+        c.selectTool(com.brushwork.paint.tools.ToolId.BRUSH)
+        val brush = c.tools.getValue(com.brushwork.paint.tools.ToolId.BRUSH) as com.brushwork.paint.brush.BrushTool
+        brush.strokeHook = { info ->
+            val xs = ArrayList<Float>(); val ys = ArrayList<Float>(); val ps = ArrayList<Float>()
+            com.brushwork.paint.brush.StrokeHook.Record(object : com.brushwork.paint.brush.StrokeRecorder {
+                override val replacesStroke = false
+                override val ignoresSelection = true
+                override fun point(x: Float, y: Float, rawPressure: Float) { xs += x; ys += y; ps += rawPressure }
+                override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
+                    val s = VStroke(0, preset = info.preset, color = info.color, seed = info.seed, stylus = info.isStylus, points = PackedPoints(xs.toFloatArray(), ys.toFloatArray(), ps.toFloatArray()))
+                    var ok = false
+                    c.groupUndo(label) {
+                        ok = c.keepLayerData(info.layer) { commitPixels() }
+                        c.vectors.appendData(info.layer, listOf(s), label)
+                    }
+                    return ok
+                }
+                override fun cancel() {}
+            })
+        }
+        for ((i, id) in listOf("chalk", "softround", "pencil", "airbrush", "gpen").withIndex()) {
+            c.brush = BrushLibrary.byId(id)!!
+            val stylus = i % 2 == 1
+            val pts = List(40) { k ->
+                val t = k / 39f
+                com.brushwork.paint.tools.ToolPoint(40f + 700f * t, 80f + 100f * i + 60f * kotlin.math.sin(t * 9f), if (stylus) 0.3f + 0.7f * t else 0.5f, k.toLong(), isStylus = stylus)
+            }
+            brush.onDown(pts.first())
+            for (p in pts.subList(1, pts.size - 1)) brush.onMove(p)
+            brush.onUp(pts.last())
+        }
+        assertEquals(5, layer.vector!!.objects.size)
+        assertEquals(5, c.undoManager.undoCount)
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        // A small box moved across the strokes: each re-render cuts through some of them.
+        c.vectors.addObjects(layer, listOf(box(100f, 100f, 140f, 150f)), "Add")
+        for (m in listOf(floatArrayOf(1f, 0f, 133f, 0f, 1f, 57f, 0f, 0f, 1f), floatArrayOf(1f, 0f, 251f, 0f, 1f, 181f, 0f, 0f, 1f), floatArrayOf(1f, 0f, -300f, 0f, 1f, 90f, 0f, 0f, 1f))) {
+            val content = layer.vector!!
+            c.vectors.update(layer, content.replaced(mapOf(6L to listOf(VectorOps.transformed(content.byId(6)!!, m)))), "Move")
+            assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+        }
+        // Deleting a stroke re-renders only its area: the others there are replayed.
+        c.vectors.update(layer, layer.vector!!.without(setOf(2L)), "Delete")
+        assertArrayEquals(fresh(layer.vector!!), px(layer.bitmap))
+    }
+
+    @Test
     fun aListenersAmendJoinsTheVectorEditsStep() {
         // I2: an edit listener that records a follow-up step (text wrap re-flow) amends the step
         // of addObjects / update / appendData / an edit-session commit: each stays ONE step,

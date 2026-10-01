@@ -77,7 +77,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 rec.touch(area)
                 val canvas = Canvas(layer.bitmap)
                 canvas.clipRect(area)
-                VectorLayerRenderer.render(canvas, VectorContent(objects = added), area, tips = tips)
+                VectorLayerRenderer.render(canvas, VectorContent(objects = added), area, tips = tips, document = docBounds())
             } catch (e: OutOfMemoryError) {
                 rec.abort()
                 c.toast("Not enough memory for \"$label\"")
@@ -146,7 +146,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 c.updateLayerData(layer, data, label, null, EditTarget.CONTENT, null)
             } else {
                 c.updateLayerData(layer, data, label, region, EditTarget.CONTENT) { canvas ->
-                    VectorLayerRenderer.render(canvas, after, region, tips = tips)
+                    VectorLayerRenderer.render(canvas, after, region, tips = tips, document = docBounds())
                 }
             }
         } catch (e: OutOfMemoryError) {
@@ -247,7 +247,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                         // Every object is lifted: the cache is exactly their rendering.
                         cv.drawBitmap(layer.bitmap, 0f, 0f, if (fScale == 1f) null else Paint(Paint.FILTER_BITMAP_FLAG))
                     } else {
-                        VectorLayerRenderer.render(cv, VectorContent(objects = edited), floatingRect, tips = tips)
+                        VectorLayerRenderer.render(cv, VectorContent(objects = edited), floatingRect, tips = tips, document = docBounds())
                     }
                 }
             }
@@ -260,7 +260,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                         val cv = Canvas(b)
                         cv.scale(hScale, hScale)
                         cv.translate(-holeRect.left.toFloat(), -holeRect.top.toFloat())
-                        VectorLayerRenderer.render(cv, others, holeRect, tips = tips)
+                        VectorLayerRenderer.render(cv, others, holeRect, tips = tips, document = docBounds())
                     }
                 }
             }
@@ -392,6 +392,9 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     private fun roundOut(r: RectF): Rect =
         if (r.isEmpty) Rect() else Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt())
+
+    /** The document rect: where brush dabs are cut in every render (as the live stroke cuts them). */
+    private fun docBounds(): Rect = Rect(0, 0, c.doc.width, c.doc.height)
 
     /** [r] rounded out and clipped to the document (empty when outside). */
     private fun docRect(r: RectF): Rect {

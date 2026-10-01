@@ -22,15 +22,17 @@ import kotlin.math.min
  * resolved with the final length (what the live stroke's end-taper pass leaves), then stamped in
  * order into an ALPHA_8 coverage buffer that is composited with the stroke opacity and grain.
  *
- * The coverage buffer covers the part of [render]'s clip the stroke reaches (at most the clip,
- * like the live stroke's document-sized buffer), with its origin on the paper-grain grid
- * ([PaperGrain.SIZE]), so grain stays anchored to the document; a grain stroke is composited in
- * [COMPOSITE_TILE] squares, so its offscreen layer stays small however large the stroke. Dabs are
- * stamped whole (a dab cut by a clip can round a pixel by one level differently, so a clip
- * cutting through a stroke may differ from the live pixels there by that much). Only PAINT
- * coverage strokes are replayed (smudge / blur / watercolor tips are drawn as coverage too;
- * vector layers never record them). The replay always composites SRC_OVER (an alpha-locked
- * layer's live stroke is SRC_ATOP: vector strokes must not be recorded there).
+ * Every dab that reaches [render]'s clip is stamped into the coverage buffer cut only by the
+ * `cut` rect (the document, where the live stroke's document-sized buffer cuts it; the buffer
+ * covers those dabs: about the clip plus a dab's size), whose origin lies on the paper-grain grid
+ * ([PaperGrain.SIZE]) so grain stays anchored to the document, and only the clip is composited:
+ * a dab cut by a clip can round a pixel by one level differently, so with `cut` = the document
+ * the pixels inside a clip never depend on where the clip is, and equal the live stroke's. A
+ * grain stroke is composited in [COMPOSITE_TILE] squares, so its offscreen layer stays small
+ * however large the stroke. Only PAINT coverage strokes are replayed (smudge / blur / watercolor
+ * tips are drawn as coverage too; vector layers never record them). The replay always composites
+ * SRC_OVER (an alpha-locked layer's live stroke is SRC_ATOP: vector strokes must not be recorded
+ * there).
  */
 class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     private val stamper = DabStamper(tips)
@@ -45,6 +47,12 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
      * the ends unless [taperIn] / [taperOut] are false. [sizeScale] multiplies the brush size and
      * the taper lengths (a scaled stroke); [opacity] multiplies the stroke opacity. Returns what
      * was painted (document px, within [clip]).
+     *
+     * [cut] (v1.5 F2 review, additive): where the dabs are cut, as the live stroke's coverage
+     * buffer cuts them — pass the document rect. The dabs reaching [clip] are then stamped whole
+     * within it, so the pixels inside [clip] are exactly those of a full render and of the live
+     * stroke wherever the clip lies. Null cuts the dabs at [clip] itself: a clip cutting through
+     * the stroke can then differ from a full render by one level at a few pixels.
      */
     fun render(
         canvas: Canvas,
@@ -58,6 +66,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         opacity: Float = 1f,
         taperIn: Boolean = true,
         taperOut: Boolean = true,
+        cut: Rect? = null,
     ): Rect {
         val n = points.size
         if (n == 0 || clip.isEmpty) return Rect()
@@ -76,23 +85,29 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         val dynamics = StrokeDynamics(p, stylus, seed)
         sample(dynamics, p, stylus, points)
 
-        // The dabs as the live stroke leaves them, and the part of the clip they reach.
+        // The dabs as the live stroke leaves them. Those reaching the clip are stamped whole but
+        // for [cut] (the buffer covers [area], their parts within it, past the clip if need be): a
+        // dab cut by a clip can round a pixel by one level differently, so the pixels inside the
+        // clip must not depend on where the clip is. Only [region], within the clip, is composited.
+        val bound = cut ?: clip
         val total = lastLength
-        val region = Rect()
+        val area = Rect()
+        val tmp = Rect()
         for (dab in dabs) {
             dynamics.resolve(dab, total)
             stamper.measure(p, dab)
             if (!dab.hasBounds) continue
-            if (!Rect.intersects(clip, Rect(dab.left, dab.top, dab.right, dab.bottom))) continue
-            region.union(dab.left, dab.top, dab.right, dab.bottom)
+            tmp.set(dab.left, dab.top, dab.right, dab.bottom)
+            if (Rect.intersects(clip, tmp) && tmp.intersect(bound)) area.union(tmp)
         }
-        if (region.isEmpty || !region.intersect(clip)) { dabs.clear(); return Rect() }
+        val region = Rect(area)
+        if (area.isEmpty || !region.intersect(clip)) { dabs.clear(); return Rect() }
 
         // Coverage buffer whose origin lies on the 256 px grain grid (document-anchored grain).
-        val left = Math.floorDiv(region.left, PaperGrain.SIZE) * PaperGrain.SIZE
-        val top = Math.floorDiv(region.top, PaperGrain.SIZE) * PaperGrain.SIZE
-        val w = region.right - left
-        val h = region.bottom - top
+        val left = Math.floorDiv(area.left, PaperGrain.SIZE) * PaperGrain.SIZE
+        val top = Math.floorDiv(area.top, PaperGrain.SIZE) * PaperGrain.SIZE
+        val w = area.right - left
+        val h = area.bottom - top
         try {
             val cov = coverage(w, h)
             val cc = bufferCanvas!!
@@ -100,14 +115,12 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
             cc.clipRect(0, 0, w, h)
             cc.drawColor(0, PorterDuff.Mode.CLEAR)
             cc.translate(-left.toFloat(), -top.toFloat())
-            cc.clipRect(region)
-            // Every dab whole (the region holds them all, except where [clip] cuts the stroke):
-            // stamping a dab cut by a clip can round a pixel differently from the live stroke.
-            val tmp = Rect()
+            // Within [area] only where [cut] ends (no dab reaching the clip extends past it otherwise).
+            cc.clipRect(area)
             for (dab in dabs) {
                 if (!dab.hasBounds) continue
                 tmp.set(dab.left, dab.top, dab.right, dab.bottom)
-                if (Rect.intersects(region, tmp)) stamper.stamp(cc, p, dab)
+                if (Rect.intersects(clip, tmp) && Rect.intersects(area, tmp)) stamper.stamp(cc, p, dab)
             }
             cc.restore()
 
@@ -191,8 +204,9 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         val b = buffer
         if (b != null && !b.isRecycled && b.width >= w && b.height >= h) return b
         b?.recycle()
-        // Grown to hold both shapes: every region lies within its render's clip (+ the grain grid
-        // margin), so a buffer never outgrows the largest clip rendered since it was freed.
+        // Grown to hold both shapes: every buffer area lies within its render's clip grown by a
+        // dab's size (+ the grain grid margin), so a buffer never outgrows the largest clip
+        // rendered since it was freed by much.
         val nw = max(w, b?.width ?: 0)
         val nh = max(h, b?.height ?: 0)
         val n = Bitmap.createBitmap(max(1, nw), max(1, nh), Bitmap.Config.ALPHA_8)

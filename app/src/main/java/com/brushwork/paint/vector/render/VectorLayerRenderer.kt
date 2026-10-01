@@ -80,10 +80,18 @@ object VectorLayerRenderer {
      */
     const val TILE = 256
 
-    /** Draws [content] (document px) clipped to [region], leaving out the objects [exclude]. */
-    fun render(canvas: Canvas, content: VectorContent, region: Rect, exclude: Set<Long> = emptySet(), tips: TipCache) {
+    /**
+     * Draws [content] (document px) clipped to [region], leaving out the objects [exclude].
+     *
+     * [document] (v1.5 F2 review, additive): the document rect, where brush dabs are cut as the
+     * live stroke cuts them (`StrokeRaster.render`'s `cut`): pass it whenever the pixels must
+     * equal the layer's cache or a full render (re-renders, edit-session holes). Null cuts dabs at
+     * [region]: a region cutting through a stroke can then differ from a full render by one level
+     * at a few pixels.
+     */
+    fun render(canvas: Canvas, content: VectorContent, region: Rect, exclude: Set<Long> = emptySet(), tips: TipCache, document: Rect? = null) {
         if (region.isEmpty || content.objects.isEmpty()) return
-        val ctx = Context(StrokeRaster(tips))
+        val ctx = Context(StrokeRaster(tips), document ?: Rect(region))
         val regionF = RectF(region)
         val save = canvas.save()
         try {
@@ -148,8 +156,8 @@ object VectorLayerRenderer {
         return s
     }
 
-    /** One render call's (thread-confined) helpers. */
-    private class Context(val raster: StrokeRaster) {
+    /** One render call's (thread-confined) helpers; [cut]: where brush dabs are cut (see [render]). */
+    private class Context(val raster: StrokeRaster, val cut: Rect) {
         val input = PathStrokeInput(512)
     }
 
@@ -164,7 +172,7 @@ object VectorLayerRenderer {
         val opacity = o.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
         if (opacity <= 0f) return
         if (o is VStroke) {
-            ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut)
+            ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut, cut = ctx.cut)
             return
         }
         val faded = opacity < 1f
@@ -343,7 +351,7 @@ object VectorLayerRenderer {
             val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
             input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
             xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
-            ctx.raster.render(canvas, region, brush, st.color, st.seed + index, true, PackedPoints(xs, ys, ps))
+            ctx.raster.render(canvas, region, brush, st.color, st.seed + index, true, PackedPoints(xs, ys, ps), cut = ctx.cut)
         }
     }
 
@@ -384,7 +392,7 @@ object VectorLayerRenderer {
         val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
         input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
         xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
-        ctx.raster.render(canvas, region, VectorOps.brushPresetOf(o), o.strokeColor, s.seed, true, PackedPoints(xs, ys, ps))
+        ctx.raster.render(canvas, region, VectorOps.brushPresetOf(o), o.strokeColor, s.seed, true, PackedPoints(xs, ys, ps), cut = ctx.cut)
     }
 
     // ------------------------------------------------------------------ paints

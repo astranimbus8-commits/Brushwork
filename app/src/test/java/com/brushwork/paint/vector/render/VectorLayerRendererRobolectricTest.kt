@@ -324,30 +324,12 @@ class VectorLayerRendererRobolectricTest {
                 cv.restore()
                 val faded = px(draw(o.copy(opacity = alpha)))
                 val ref = px(expected)
-                // The path is drawn into the same tiles either way: exact. A faded brush outline
-                // is replayed per tile (a dab cut by a tile can round a pixel by one level, see
-                // StrokeRaster): premultiplied values within 1, nearly all exact.
-                if (o === big) assertArrayEquals("object ${o.id} at $alpha", ref, faded)
-                var painted = 0
-                var exact = 0
-                for (k in ref.indices) {
-                    if (ref[k] == 0 && faded[k] == 0) continue
-                    painted++
-                    if (ref[k] == faded[k]) { exact++; continue }
-                    assertTrue("object ${o.id} at $alpha, (${k % bw}, ${k / bw}): ${Integer.toHexString(ref[k])} / ${Integer.toHexString(faded[k])}", premultipliedDiff(ref[k], faded[k]) <= 1)
-                }
-                assertTrue(painted > 20_000)
-                assertTrue("object ${o.id} at $alpha: $exact of $painted exact", exact >= painted * 0.995)
+                // The path is drawn into the same tiles either way, and a brush outline replayed
+                // per tile stamps its dabs whole (StrokeRaster): exact.
+                assertTrue(faded.count { it != 0 } > 20_000)
+                assertArrayEquals("object ${o.id} at $alpha", ref, faded)
             }
         }
-    }
-
-    /** Largest difference of the premultiplied channels of two (unpremultiplied) colors. */
-    private fun premultipliedDiff(a: Int, b: Int): Int {
-        fun pm(c: Int, s: Int): Int { val al = c ushr 24; return if (s == 24) al else (((c ushr s) and 0xFF) * al + 127) / 255 }
-        var m = 0
-        for (s in intArrayOf(24, 16, 8, 0)) m = max(m, abs(pm(a, s) - pm(b, s)))
-        return m
     }
 
     @Test

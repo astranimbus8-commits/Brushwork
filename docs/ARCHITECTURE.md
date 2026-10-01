@@ -138,7 +138,11 @@ never re-render. `vector/render/VectorLayerRenderer` draws content: a `VStroke` 
 `StrokeRaster` with the live stroke's sampler, dynamics, cost-limited spacing and final-length
 tapers (a re-render equals the pixels the live stroke left), brush outlines of paths and shapes
 follow the live path stroke (`brushStrokeSamples`), plain lines and fills are Skia paths (varying
-widths through `VariableWidthOutline`). `VectorOps` holds the geometry: paint bounds, hit tests,
+widths through `VariableWidthOutline`). Skia's anti-aliasing of a path changes wherever a clip
+cuts it, so paths and shapes are always rasterized per 256 px document grid tile
+(`VectorLayerRenderer.TILE`) and re-renders cover whole tiles, and brush dabs are cut only at the
+document's edges (`document` / `cut`), as the live stroke cuts them: the cache stays exactly a
+fresh rendering of the data (and of the live strokes), whatever the dirty regions were. `VectorOps` holds the geometry: paint bounds, hit tests,
 `touching` a selection, and exact transforms (a `VShape` stays a shape under similarities and
 becomes a `VPath` otherwise). Each vector layer is saved in its own `vector_<id>_r<rev>.vec`
 (Deflate of JSON, `VectorCodec`), written only when the layer changed.
