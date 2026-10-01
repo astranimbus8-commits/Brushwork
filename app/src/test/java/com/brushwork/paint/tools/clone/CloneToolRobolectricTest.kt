@@ -550,6 +550,124 @@ class CloneToolRobolectricTest {
         assertTrue(pixels(screen).all { it == 0 })
     }
 
+    @Test
+    fun aStrokeContinuingFromTheLastEndPaintsInsteadOfGrabbingTheSource() {
+        val c = setup()
+        val layer = c.activeLayer
+        gradient(layer.bitmap)
+        val t = tool(c)
+        // Retouching zoomed in (×2): a 20 px offset is 40 px on screen, the first stroke paints.
+        c.viewTransform.set(Matrix().apply { setScale(2f, 2f) })
+        t.setSource(Vec2(100f, 70f))
+        stroke(c, 120f, 70f, 130f)
+        assertEquals(CloneOffset(20, 0), t.anchor.fixed)
+        assertEquals("the ⊕ travelled to what the end sampled", Vec2(110f, 70f), t.anchor.source)
+        // Zoomed out again, the offset is 20 px on screen, closer than the 28 dp grab radius.
+        // The next stroke starts where the last one ended, 20 px from the ⊕: it paints.
+        c.viewTransform.set(Matrix())
+        val steps = c.undoManager.undoCount
+        c.pointerDown(ToolPoint(130f, 70f))
+        assertTrue("continuing the stroke paints", t.isPainting)
+        c.pointerMove(ToolPoint(136f, 72f))
+        c.pointerUp(ToolPoint(140f, 74f))
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        // A touch right on the ⊕ (well within half the offset) still grabs it.
+        val before = t.anchor.source!!
+        c.pointerDown(ToolPoint(before.x + 2f, before.y))
+        assertFalse(t.isPainting)
+        // Holding the ⊕ still is no long-press command (no haptic tick for nothing).
+        assertFalse(c.pointerLongPress(ToolPoint(before.x + 2f, before.y)))
+        c.pointerMove(ToolPoint(before.x + 12f, before.y + 5f))
+        c.pointerUp(ToolPoint(before.x + 12f, before.y + 5f))
+        assertEquals(Vec2(before.x + 10f, before.y + 5f), t.anchor.source)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        // Without Aligned the ⊕ keeps the full grab radius.
+        t.setAligned(false)
+        assertTrue(t.isOnCrosshair(Vec2(t.anchor.source!!.x + 20f, t.anchor.source!!.y), t.anchor.source!!))
+    }
+
+    @Test
+    fun nonFiniteOrHugeSourcePositionsAreSafe() {
+        val c = setup()
+        val layer = c.activeLayer
+        gradient(layer.bitmap)
+        val t = tool(c)
+        t.setSource(Vec2(10f, 10f))
+        val pos = t.objectPosition!!
+        pos.setPosition(Float.NaN, null)
+        pos.setPosition(null, Float.POSITIVE_INFINITY)
+        t.setSource(Vec2(Float.NaN, 3f))
+        assertEquals("non-finite values are ignored", Vec2(10f, 10f), t.anchor.source)
+        // A typed value far off the canvas is kept within range: painting copies nothing, no crash.
+        pos.setPosition(5e9f, -5e9f)
+        assertEquals(Vec2(CloneAnchor.MAX_COORD, -CloneAnchor.MAX_COORD), t.anchor.source)
+        val before = pixels(layer.bitmap)
+        stroke(c, 100f, 70f, 110f)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        assertEquals(0, c.undoManager.undoCount)
+        assertNull(c.renderOverride)
+        // Aligned moved the far source along by the stroke; it stays finite and in range.
+        val s = t.anchor.source!!
+        assertTrue(s.x.isFinite() && s.y.isFinite() && kotlin.math.abs(s.x) <= CloneAnchor.MAX_COORD)
+    }
+
+    @Test
+    fun aLongPressOnALockedLayerStillSetsTheSource() {
+        val c = setup()
+        val layer = c.activeLayer
+        layer.locked = true
+        val t = tool(c)
+        t.setSource(Vec2(10f, 10f))
+        c.pointerDown(ToolPoint(50f, 60f))
+        assertEquals("Layer \"${layer.name}\" is locked", c.message)
+        assertTrue(c.pointerLongPress(ToolPoint(50f, 60f)))
+        c.pointerUp(ToolPoint(50f, 60f))
+        assertEquals(Vec2(50f, 60f), t.anchor.source)
+        assertEquals(0, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun aStillFingerAfterALongPressKeepsTheHeldPoint() {
+        val c = setup()
+        val t = tool(c)
+        c.pointerDown(ToolPoint(30f, 50f))
+        assertTrue(c.pointerLongPress(ToolPoint(30f, 50f)))
+        // Jitter of a still finger (within 6 dp) leaves the source where it was held.
+        c.pointerMove(ToolPoint(32f, 51f))
+        c.pointerMove(ToolPoint(29f, 52f))
+        assertEquals(Vec2(30f, 50f), t.anchor.source)
+        // Moving on drags it along.
+        c.pointerMove(ToolPoint(40f, 60f))
+        assertEquals(Vec2(40f, 60f), t.anchor.source)
+        c.pointerUp(ToolPoint(44f, 62f))
+        assertEquals(Vec2(44f, 62f), t.anchor.source)
+    }
+
+    @Test
+    fun allLayersLiveStrokeEqualsTheCommittedResult() {
+        val c = setup(600, 400)
+        val bottom = c.doc.layers[0]
+        gradient(bottom.bitmap)
+        fill(c.activeLayer.bitmap, 300, 0, 600, 120, 0x80FF00FF.toInt())
+        val t = tool(c)
+        t.setSampleAllLayers(true)
+        val live = captureLiveAtCommit(c)
+        t.setSource(Vec2(60f, 50f))
+        // A diagonal stroke over three snapshot tiles, its source crossing tile borders.
+        c.pointerDown(ToolPoint(240f, 150f))
+        for (i in 1..12) c.pointerMove(ToolPoint(240f + i * 25f, 150f + i * 18f))
+        c.pointerUp(ToolPoint(560f, 380f))
+        assertEquals(CloneSource.Sample.ALL_LAYERS, t.source.sample)
+        assertArrayEquals("the live stroke equals the result", composite(c), live()!!)
+        assertEquals(1, c.undoManager.undoCount)
+        // And it copied the composite: the start pixel is the source pixel (180, 100 away).
+        val reference = BitmapUtils.createLayerBitmap(w, h)
+        c.undo()
+        c.compositor.drawDocument(Canvas(reference), null, useOverrides = false, target = CompositeTarget.identity(reference))
+        c.redo()
+        assertEquals(reference.getPixel(60, 50), c.activeLayer.bitmap.getPixel(240, 150))
+    }
+
     private companion object {
         const val RED = 0xFFFF0000.toInt()
         const val BLUE = 0xFF0000FF.toInt()

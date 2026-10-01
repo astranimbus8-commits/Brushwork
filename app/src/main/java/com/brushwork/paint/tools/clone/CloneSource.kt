@@ -16,6 +16,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.CoverageSource
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.CompositeTarget
+import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
 import kotlin.math.ceil
@@ -49,9 +50,14 @@ class CloneAnchor {
     var fixed: CloneOffset? = null
         private set
 
-    /** A new source: the next stroke fixes the offset again. */
+    /**
+     * A new source: the next stroke fixes the offset again. A point that is not finite is ignored
+     * (a typed or computed NaN must never reach the offset math); coordinates are kept within
+     * ±[MAX_COORD] so offsets and source rectangles stay far from integer overflow.
+     */
     fun set(p: Vec2) {
-        source = p
+        if (!p.x.isFinite() || !p.y.isFinite()) return
+        source = Vec2(p.x.coerceIn(-MAX_COORD, MAX_COORD), p.y.coerceIn(-MAX_COORD, MAX_COORD))
         fixed = null
     }
 
@@ -85,8 +91,14 @@ class CloneAnchor {
     fun strokeCompleted(offset: CloneOffset, aligned: Boolean, end: Vec2) {
         if (!aligned || source == null) return
         val kept = fixed ?: offset
+        val s = kept.sourceOf(end)
+        if (s.x.isFinite() && s.y.isFinite()) source = Vec2(s.x.coerceIn(-MAX_COORD, MAX_COORD), s.y.coerceIn(-MAX_COORD, MAX_COORD))
         fixed = kept
-        source = kept.sourceOf(end)
+    }
+
+    companion object {
+        /** The source stays within ±this many document px (far beyond any canvas, far below Int overflow). */
+        const val MAX_COORD = 1_000_000f
     }
 }
 
@@ -140,6 +152,14 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
     private var snapshot: Bitmap? = null
     private var snapshotCanvas: Canvas? = null
     private var snapshotTarget: CompositeTarget? = null
+
+    /**
+     * Composites the snapshot tiles. Its own instance, never the controller's: tiles are filled
+     * while the display compositor is in the middle of drawing (from the stroke's render
+     * override), and a compositor keeps per-instance scratch (adjustment layers) that a nested
+     * call must not share. No overrides: the stroke in progress is not part of what it samples.
+     */
+    private val snapshotCompositor = Compositor(controller.doc) { null }
     private var filled = BooleanArray(0)
     /** Snapshot tiles the stroke's path can sample ([notePath]); the commit fills only those. */
     private var needed = BooleanArray(0)
@@ -206,15 +226,21 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         }
     }
 
+    /** Marks the snapshot tiles that come within [r] of ([cx], [cy]) (a disc, not its bounding square). */
     private fun markNeeded(cx: Float, cy: Float, r: Float) {
         val l = max(0, floor(cx - r).toInt())
         val t = max(0, floor(cy - r).toInt())
         val rr = min(doc.width, ceil(cx + r).toInt())
         val b = min(doc.height, ceil(cy + r).toInt())
         if (rr <= l || b <= t) return
+        val r2 = r * r
         for (row in t / TILE..(b - 1) / TILE) for (col in l / TILE..(rr - 1) / TILE) {
             val idx = row * cols + col
-            if (idx in needed.indices) needed[idx] = true
+            if (idx !in needed.indices || needed[idx]) continue
+            // Distance from the point to the tile (0 inside it).
+            val ex = max(0f, max(col * TILE - cx, cx - (col + 1) * TILE))
+            val ey = max(0f, max(row * TILE - cy, cy - (row + 1) * TILE))
+            if (ex * ex + ey * ey <= r2) needed[idx] = true
         }
     }
 
@@ -317,8 +343,13 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
             scratch = bmp
             scratchCanvas = Canvas(bmp)
         }
-        bmp.eraseColor(0)
-        copyRegion(scratchCanvas!!, dest)
+        // Only the part this region uses (the scratch keeps the size of the largest region).
+        val canvas = scratchCanvas!!
+        canvas.save()
+        canvas.clipRect(0, 0, w, h)
+        canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+        canvas.restore()
+        copyRegion(canvas, dest)
         return shaderOf(bmp, dest.left, dest.top)
     }
 
@@ -382,8 +413,7 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
                 canvas.save()
                 canvas.clipRect(tile)
                 canvas.drawColor(0, PorterDuff.Mode.CLEAR)
-                // No overrides: the stroke in progress is not part of what it samples.
-                controller.compositor.drawDocument(canvas, tile, useOverrides = false, target = target)
+                snapshotCompositor.drawDocument(canvas, tile, useOverrides = false, target = target)
                 canvas.restore()
                 tilesRendered++
             }

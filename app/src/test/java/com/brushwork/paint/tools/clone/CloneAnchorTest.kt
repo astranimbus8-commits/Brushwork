@@ -81,6 +81,24 @@ class CloneAnchorTest {
     }
 
     @Test
+    fun nonFiniteSourcesAreIgnoredAndHugeOnesClamped() {
+        val a = CloneAnchor()
+        a.set(Vec2(Float.NaN, 1f))
+        a.set(Vec2(1f, Float.NEGATIVE_INFINITY))
+        assertNull(a.source)
+        a.set(Vec2(4f, 5f))
+        a.set(Vec2(Float.POSITIVE_INFINITY, 0f))
+        assertEquals("a bad point leaves the source as it was", Vec2(4f, 5f), a.source)
+        val m = CloneAnchor.MAX_COORD
+        a.set(Vec2(3e9f, -3e9f))
+        assertEquals(Vec2(m, -m), a.source)
+        // The offset math stays in range (no NaN rounding, no Int overflow).
+        assertEquals(CloneOffset(-1_000_000, 1_000_000), a.offsetFor(Vec2(0f, 0f), aligned = false))
+        a.strokeCompleted(CloneOffset(-2_000_000, 0), aligned = true, end = Vec2(0f, 0f))
+        assertEquals("a source carried far by a stroke stays in range", Vec2(m, 0f), a.source)
+    }
+
+    @Test
     fun offsetsAreWholePixels() {
         val a = CloneAnchor()
         a.set(Vec2(20.2f, 50f))

@@ -19,6 +19,8 @@ import com.brushwork.paint.tools.PositionedTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import kotlin.math.hypot
+import kotlin.math.min
 
 /**
  * Clone stamp (v1.5 §4.2), like Photoshop's: paints with pixels copied from a source point.
@@ -80,8 +82,12 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
     private var grab = Vec2(0f, 0f)
     private var sourceBefore: Vec2? = null
     private var fixedBefore: CloneOffset? = null
-    /** The source was placed by a long-press and the finger has not moved since. */
-    private var heldStill = false
+    /**
+     * Where a long-press placed the source, while the finger has not moved away from it (more
+     * than [HOLD_SLOP_DP]): the source stays exactly at the held point, whatever the jitter of a
+     * still finger or the lift point (which went through the ruler / stabilizer) says.
+     */
+    private var heldAt: Vec2? = null
     /** The "sampling this layer instead" message was shown (once per use of the tool). */
     private var fallbackShown = false
 
@@ -224,7 +230,9 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
     private fun notePath(to: Vec2) {
         val from = finger ?: to
         val preset = controller.cloneBrush
-        val reach = preset.size * 0.5f * (1f + 2f * preset.scatter) + 2f
+        // A dab reaches size / 2 from its center (a rotated square tip size · 0.71) and is
+        // scattered up to scatter · size away from the path.
+        val reach = preset.size * (0.75f + preset.scatter) + 2f
         source.notePath(from.x, from.y, to.x, to.y, reach)
         finger = to
     }
@@ -237,7 +245,9 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
                 brush.onMove(p)
             }
             Gesture.PLACE -> {
-                heldStill = false
+                val held = heldAt
+                if (held != null && screenDistance(at, held) <= controller.viewTransform.dp(HOLD_SLOP_DP)) return
+                heldAt = null
                 setSource(at)
             }
             Gesture.DRAG -> setSource(at + grab)
@@ -256,7 +266,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
             Gesture.PLACE -> {
                 // After a long-press without moving, the exact point held stays (the lift point
                 // went through the ruler / stabilizer).
-                if (!heldStill) setSource(at)
+                if (heldAt == null) setSource(at)
                 armed = false
             }
             Gesture.DRAG -> setSource(at + grab)
@@ -266,7 +276,11 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         endGesture()
     }
 
-    /** A long-press sets the source where the finger is (the stroke it started leaves nothing). */
+    /**
+     * A long-press sets the source where the finger is (the stroke it started leaves nothing).
+     * It also works where the stroke was refused (a locked or hidden layer: the source is only
+     * tool state, and All layers may sample other layers).
+     */
     override fun onLongPress(p: ToolPoint): Boolean {
         when (gesture) {
             Gesture.PAINT -> {
@@ -274,16 +288,19 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
                 source.endStroke()
                 strokeOffset = null
             }
-            Gesture.WAITING -> {}
-            Gesture.PLACE, Gesture.DRAG -> return true
-            Gesture.NONE -> return false
+            Gesture.WAITING, Gesture.NONE -> {}
+            // Placing already: the source is where the finger is.
+            Gesture.PLACE -> return true
+            // Holding the ⊕ still while dragging it is no command (no haptic tick).
+            Gesture.DRAG -> return false
         }
         sourceBefore = anchor.source
         fixedBefore = anchor.fixed
         armed = false
         gesture = Gesture.PLACE
-        heldStill = true
-        setSource(Vec2(p.x, p.y))
+        val at = Vec2(p.x, p.y)
+        setSource(at)
+        heldAt = anchor.source ?: at
         return true
     }
 
@@ -308,7 +325,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         finger = null
         sourceBefore = null
         fixedBefore = null
-        heldStill = false
+        heldAt = null
         controller.invalidateOverlay()
     }
 
@@ -336,9 +353,25 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
 
     // ------------------------------------------------------------------ overlay
 
-    private fun isOnCrosshair(p: Vec2, src: Vec2): Boolean {
+    /**
+     * True when a touch at [p] grabs the ⊕ at [src] instead of painting: within [GRAB_RADIUS_DP]
+     * on screen. With Aligned and a kept offset the ⊕ sits one offset behind where the last
+     * stroke ended, so a stroke that continues from there lands one offset away from it; such a
+     * stroke must paint. The ⊕ is then grabbed only by touches nearer to it than half the
+     * offset (painting wins when a short offset makes the two ambiguous; a long-press, Set
+     * source or the X / Y strip still move the source).
+     */
+    internal fun isOnCrosshair(p: Vec2, src: Vec2): Boolean {
         val t = controller.viewTransform
-        return t.docToScreen(p).distanceTo(t.docToScreen(src)) <= t.dp(GRAB_RADIUS_DP)
+        var radius = t.dp(GRAB_RADIUS_DP)
+        val kept = anchor.fixed
+        if (aligned && kept != null) radius = min(radius, 0.5f * hypot(kept.dx.toFloat(), kept.dy.toFloat()) * t.zoom)
+        return screenDistance(p, src) <= radius
+    }
+
+    private fun screenDistance(a: Vec2, b: Vec2): Float {
+        val t = controller.viewTransform
+        return t.docToScreen(a).distanceTo(t.docToScreen(b))
     }
 
     private val shadow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0x99000000.toInt(); strokeCap = Paint.Cap.ROUND }
@@ -391,6 +424,9 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
 
         /** Touching this close to the ⊕ (on screen) drags the source instead of painting. */
         const val GRAB_RADIUS_DP = 28f
+
+        /** A finger still holding a long-press may wobble this much (on screen) without moving the source. */
+        const val HOLD_SLOP_DP = 6f
 
         private const val ACCENT = 0xFF4DA3FF.toInt()
         private const val WHITE = -1
