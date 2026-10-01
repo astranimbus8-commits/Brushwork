@@ -84,6 +84,18 @@ object MaskGeometry {
             }
             is RadialMask -> {
                 val cx = m.mapX(c.cx, c.cy); val cy = m.mapY(c.cx, c.cy)
+                // A similarity (with or without a reflection) turns and scales the ellipse as it is,
+                // so its handles follow the turn (also for a circle, whose angle is otherwise free).
+                val s = sqrt(abs(det))
+                val tol = 1e-4f * max(1f, s)
+                if (abs(m.a - m.d) <= tol && abs(m.b + m.c) <= tol) {
+                    val phi = Math.toDegrees(atan2(m.c, m.a).toDouble()).toFloat()
+                    return c.copy(cx = cx, cy = cy, rx = c.rx * s, ry = c.ry * s, rotationDeg = normalizeDegrees(c.rotationDeg + phi))
+                }
+                if (abs(m.a + m.d) <= tol && abs(m.b - m.c) <= tol) {
+                    val phi = Math.toDegrees(atan2(m.c, m.a).toDouble()).toFloat()
+                    return c.copy(cx = cx, cy = cy, rx = c.rx * s, ry = c.ry * s, rotationDeg = normalizeDegrees(phi - c.rotationDeg))
+                }
                 // The ellipse is c + R(θ)·diag(rx, ry)·u, |u| <= 1; after the map, M = A·R(θ)·diag(rx, ry).
                 val t = Math.toRadians(c.rotationDeg.toDouble())
                 val ct = cos(t).toFloat(); val st = sin(t).toFloat()
