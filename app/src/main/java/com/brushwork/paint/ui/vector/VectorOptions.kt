@@ -294,7 +294,7 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
     val range = ShapeGeometry.MIN_SIDES..ShapeGeometry.MAX_SIDES
     // A shape with its own points has no sides / star points any more (Reset shape brings them back).
     val custom by remember(tool) { derivedStateOf { tool.points != null && tool.box != null } }
-    if (custom &&(s.type == ShapeType.POLYGON || s.type == ShapeType.STAR)) {
+    if (custom && (s.type == ShapeType.POLYGON || s.type == ShapeType.STAR)) {
         Hint("This shape has its own points: \"Reset shape\" goes back to a regular ${s.type.label.lowercase()}", Modifier.padding(top = 8.dp))
     } else when (s.type) {
         ShapeType.POLYGON -> {

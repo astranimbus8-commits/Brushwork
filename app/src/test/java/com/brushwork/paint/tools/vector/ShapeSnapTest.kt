@@ -15,6 +15,8 @@ import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.transform.SnapAxis
+import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.SnapSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -191,6 +193,21 @@ class ShapeSnapTest {
         val goal = inner + Vec2(3f, -3f)
         c.drag(p0.x to p0.y, (p0.x + goal.x) / 2f to (p0.y + goal.y) / 2f, goal.x to goal.y)
         assertVec(inner, tool.docAnchors()!![0].pos, 1e-3f)
+    }
+
+    @Test
+    fun pointsSnapToLinesDrawnInLayers() {
+        val c = controller()
+        val art = c.doc.layers[0]
+        // Stands in for the lines the line detector finds in a layer (a Table filter's grid).
+        c.snapping.addLayerFeatures { l ->
+            if (l === art) listOf(SnapLine.drawn(SnapAxis.Y, 125f, 0f, 200f, l.name), SnapLine.drawn(SnapAxis.X, 75f, 0f, 200f, l.name)) else emptyList()
+        }
+        val tool = shapeTool(c)
+        pendingRect(c, tool)
+        tool.setPointEditing(true)
+        c.drag(120f to 80f, 100f to 100f, 78f to 121f)
+        assertVec(Vec2(75f, 125f), tool.docAnchors()!![1].pos)
     }
 
     @Test
