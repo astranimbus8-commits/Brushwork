@@ -137,6 +137,35 @@ class ShapePointsToolTest {
         c.drag(75f to 140f, 75f to 160f, 75f to 175f)
         assertEquals(7, tool.points!!.size)
         assertTrue(tool.docAnchors()!!.any { it.pos.distanceTo(Vec2(75f, 175f)) < 1e-2f })
+        tool.discard()
+        // Big round corners (limited by half the shorter edge): a point added on an edge, also
+        // close to a corner, doesn't make the corners smaller.
+        pending(c, tool, ShapeType.RECTANGLE, ShapeBox(100f, 100f, 100f, 80f)) { it.copy(corner = CornerStyle.ROUND, cornerRadius = 60f) }
+        tool.setPointEditing(true)
+        val rounded = c.composite()
+        c.tap(125f, 61f)
+        c.tap(100f, 140f)
+        assertEquals(6, tool.points!!.size)
+        assertEquals(0, diff(rounded, c.composite()))
+        // Pulled off the edge, the new point is a round corner like the others.
+        c.drag(100f to 140f, 100f to 160f, 100f to 180f)
+        assertTrue(diff(rounded, c.composite()) > 100)
+    }
+
+    @Test
+    fun resetShapeAfterFlatteningTheShape() {
+        val c = controller()
+        val tool = shapeTool(c)
+        pending(c, tool, ShapeType.RECTANGLE, ShapeBox(100f, 100f, 100f, 80f))
+        tool.setPointEditing(true)
+        // Every point onto one horizontal line: the custom outline has no height.
+        for (i in 0 until 4) tool.movePoint(i, Vec2(tool.docAnchors()!![i].pos.x, 100f))
+        assertEquals(0f, tool.box!!.h, 1e-3f)
+        tool.resetShape()
+        assertNull(tool.points)
+        assertTrue("a regular rectangle has a size: ${tool.box}", tool.box!!.h >= 1f && tool.box!!.w >= 1f)
+        tool.commit()
+        assertTrue(c.activeLayer.isShapeLayer)
     }
 
     @Test

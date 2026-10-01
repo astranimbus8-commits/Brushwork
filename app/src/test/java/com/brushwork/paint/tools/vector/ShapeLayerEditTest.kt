@@ -479,6 +479,25 @@ class ShapeLayerEditTest {
     }
 
     @Test
+    fun aTapJustOutsideAnOpenedShapeClosesIt() {
+        val c = controller()
+        val tool = shapeTool(c)
+        val layer = placeRect(c, tool)
+        c.tap(30f, 60f)
+        assertSame(layer, tool.editingLayer)
+        c.drag(70f to 60f, 75f to 60f, 80f to 60f)
+        // 14 px below the bottom edge, between two handles: outside the open shape (it is placed)
+        // but close enough to its outline to open it; it must not open again right away.
+        c.tap(60f, 104f)
+        assertNull(tool.editingLayer)
+        assertFalse(tool.hasPendingWork)
+        assertEquals("Edit shape", c.undoManager.undoLabel)
+        // A second tap there opens it.
+        c.tap(60f, 104f)
+        assertSame(layer, tool.editingLayer)
+    }
+
+    @Test
     fun editShapeFromTheLayersWindow() {
         val c = controller()
         val tool = shapeTool(c)

@@ -130,8 +130,10 @@ internal fun ShapeEditingSettings(tool: ShapeTool) {
         )
     }
     Hint(
-        "Tap a placed shape with the shape tool to edit it again; drag anywhere else to draw a new one. " +
-            "Points: drag a point to move it, tap the outline or a + to add one, tap a point for sharp / smooth / delete and its tangent handles.",
+        "Tap a placed shape with the shape tool to edit it again (it is also in the layers window: Edit shape). " +
+            "A drag always draws a new shape, also when it starts on a placed one; a tap outside the open shape places it. " +
+            "Points: drag a point to move it, tap the outline or a + to add one, tap a point for sharp / smooth / delete and its tangent handles; " +
+            "drag inside the shape to move it.",
         Modifier.padding(top = 4.dp),
     )
 }

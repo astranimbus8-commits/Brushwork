@@ -342,8 +342,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             pointsMode = false
             selectedPoint = -1
             clearHistory()
+            if (old.type.isLineLike == new.type.isLineLike) box = clean(b)
         }
-        if (b != null && old.type.isLineLike != new.type.isLineLike) box = convert(b, new.type)
+        if (b != null && old.type.isLineLike != new.type.isLineLike) box = clean(convert(b, new.type))
         refreshPreview()
     }
 
@@ -586,11 +587,14 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /** Goes back to the regular outline of the shape type (its box is kept). */
     fun resetShape() {
-        if (box == null || points == null) return
+        val b = box ?: return
+        if (points == null) return
         pushHistory()
         points = null
         pointsMode = false
         selectedPoint = -1
+        // A regular shape needs a size (custom points may have been put on one line).
+        box = clean(b)
         refreshPreview()
     }
 
@@ -944,16 +948,18 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         creatingBox = null
         if (created == null) {
             val tap = !started
-            var added: Layer? = null
+            var closed: Layer? = null
             if (box != null) {
                 // A tap (or a drag too small to make a shape) outside the pending shape commits it.
                 val before = controller.doc.layers.size
+                val edited = editingLayer
                 commit()
-                if (controller.doc.layers.size > before) added = controller.doc.activeLayer
+                if (box == null) closed = if (controller.doc.layers.size > before) controller.doc.activeLayer else edited
             }
             if (box == null) targetLayer = null
-            // The tap opens the shape under the finger (never the one it just placed).
-            if (tap && box == null) shapeLayerAt(pt, skip = added)?.let { editLayer(it) }
+            // The tap opens the shape under the finger, never the one it just placed or closed (a
+            // tap just outside an opened shape closes it: shapes open from a little farther away).
+            if (tap && box == null) shapeLayerAt(pt, skip = closed)?.let { editLayer(it) }
         } else {
             if (box != null) commit()
             if (box == null) {
