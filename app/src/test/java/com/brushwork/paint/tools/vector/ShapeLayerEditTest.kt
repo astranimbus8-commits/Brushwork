@@ -148,6 +148,155 @@ class ShapeLayerEditTest {
         assertNull(c.activeLayer.shapeData)
     }
 
+    private fun EditorController.overlay(): Bitmap {
+        val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
+        drawOverlays(Canvas(out), 0f)
+        return out
+    }
+
+    @Test
+    fun newShapesGoIntoTheirLayerAlsoOverALockedHiddenOrFadedLayer() {
+        // Locked: the shape doesn't paint the active layer, so it can be placed.
+        run {
+            val c = controller()
+            val tool = shapeTool(c)
+            val base = c.activeLayer
+            base.locked = true
+            tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL) }
+            c.drag(30f to 30f, 110f to 90f)
+            assertTrue(tool.hasPendingWork)
+            assertEquals(red, c.composite().getPixel(70, 60))
+            tool.commit()
+            assertEquals(2, c.doc.layers.size)
+            assertTrue(c.activeLayer.isShapeLayer)
+            assertEquals(red, c.activeLayer.bitmap.getPixel(70, 60))
+        }
+        // Hidden: the preview is drawn over the canvas (inside the hidden layer it would not show).
+        run {
+            val c = controller()
+            val tool = shapeTool(c)
+            c.activeLayer.visible = false
+            tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL) }
+            c.drag(30f to 30f, 110f to 90f)
+            assertEquals(red, c.overlay().getPixel(70, 60))
+            tool.commit()
+            assertEquals(2, c.doc.layers.size)
+            assertTrue(c.activeLayer.visible)
+            assertEquals(red, c.composite().getPixel(70, 60))
+        }
+        // Half transparent: the preview shows the shape as its own (opaque) layer will.
+        run {
+            val c = controller()
+            val tool = shapeTool(c)
+            c.setLayerProps(c.activeLayer, c.activeLayer.props().copy(opacity = 0.5f))
+            tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL) }
+            c.drag(30f to 30f, 110f to 90f)
+            assertEquals("not dimmed inside the faded layer", 0, c.composite().getPixel(70, 60))
+            assertEquals(red, c.overlay().getPixel(70, 60))
+            tool.commit()
+            assertEquals(red, c.composite().getPixel(70, 60))
+            assertNull(c.renderOverride)
+        }
+        // A brush outline over a locked layer: shown as a guide, painted into the new layer.
+        run {
+            val c = controller()
+            val tool = shapeTool(c)
+            c.activeLayer.locked = true
+            tool.update { it.copy(type = ShapeType.LINE, strokeWith = ShapeStroke.BRUSH) }
+            c.drag(20f to 50f, 180f to 50f)
+            tool.flushPreview()
+            assertNull("no live stroke on the locked layer", c.message)
+            tool.commit()
+            assertEquals(2, c.doc.layers.size)
+            val t = thickness(c.activeLayer.bitmap, 100, 30, 70)
+            assertTrue("painted: $t", t in 4..9)
+        }
+    }
+
+    @Test
+    fun smudgeOutlinesArePaintedIntoTheActiveLayer() {
+        val c = controller()
+        // Smudge moves the pixels that are there: a new empty layer would get nothing.
+        Canvas(c.activeLayer.bitmap).drawColor(blue)
+        c.activeLayer.markChanged()
+        c.selectTool(ToolId.SMUDGE)
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.LINE, strokeWith = ShapeStroke.BRUSH) }
+        c.drag(20f to 50f, 180f to 50f)
+        tool.flushPreview()
+        tool.commit()
+        assertEquals(1, c.doc.layers.size)
+        assertNull(c.activeLayer.shapeData)
+    }
+
+    @Test
+    fun theUserColorComesBackUnlessTheShapeWasRecolored() {
+        val c = controller()
+        val tool = shapeTool(c)
+        val layer = placeRect(c, tool)
+        c.color = blue
+        c.tap(30f, 60f)
+        assertSame(layer, tool.editingLayer)
+        assertEquals("the shape's color", red, c.color)
+        c.drag(70f to 60f, 80f to 60f, 90f to 60f)
+        tool.commit()
+        assertEquals("the user's color is back", blue, c.color)
+        assertEquals(red, ShapeCodec.decode(layer.shapeData)!!.strokeColor)
+        // Recolored: the new color stays the main color.
+        val green = 0xFF00FF00.toInt()
+        c.tap(50f, 60f)
+        assertEquals(red, c.color)
+        c.color = green
+        tool.commit()
+        assertEquals(green, c.color)
+        assertEquals(green, ShapeCodec.decode(layer.shapeData)!!.strokeColor)
+        // ✕ brings the user's color back too.
+        c.color = blue
+        c.tap(50f, 60f)
+        tool.discard()
+        assertEquals(blue, c.color)
+    }
+
+    @Test
+    fun aNewShapeDrawnWhileAnotherIsOpenUsesTheUserOptions() {
+        val c = controller()
+        val tool = shapeTool(c)
+        val layer = placeRect(c, tool, ShapeStyle.FILL)
+        tool.update { it.copy(type = ShapeType.ELLIPSE, style = ShapeStyle.STROKE) }
+        c.color = blue
+        c.tap(70f, 60f)
+        assertSame(layer, tool.editingLayer)
+        assertEquals(ShapeType.RECTANGLE, tool.settings.type)
+        // A drag elsewhere: the opened rectangle is placed and the new shape is the user's own.
+        c.drag(130f to 130f, 160f to 160f, 190f to 190f)
+        assertNull(tool.editingLayer)
+        assertEquals(ShapeType.ELLIPSE, tool.settings.type)
+        assertEquals(blue, c.color)
+        tool.commit()
+        val o = ShapeCodec.decode(c.activeLayer.shapeData)!!
+        assertEquals(ShapeType.ELLIPSE, o.type)
+        assertEquals(blue, o.strokeColor)
+        assertEquals(3, c.doc.layers.size)
+    }
+
+    @Test
+    fun handlesGrabbedOffCenterDoNotJump() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.STROKE, useBrushSize = false, strokeWidth = 4f) }
+        c.drag(30f to 30f, 110f to 90f)
+        // The bottom-right handle (110, 90) grabbed 7 px off: the corner follows the finger's motion.
+        c.drag(117f to 97f, 122f to 102f, 127f to 107f)
+        assertEquals(ShapeBox(75f, 65f, 90f, 70f, 0f), tool.box)
+        // Line ends too.
+        tool.discard()
+        tool.update { it.copy(type = ShapeType.LINE) }
+        c.drag(30f to 150f, 130f to 150f)
+        c.drag(136f to 154f, 140f to 154f, 146f to 154f)
+        assertEquals(140f, tool.box!!.end.x, 1e-3f)
+        assertEquals(150f, tool.box!!.end.y, 1e-3f)
+    }
+
     // ------------------------------------------------------------------ editing again
 
     @Test
@@ -417,6 +566,30 @@ class ShapeLayerEditTest {
         c.undo()
         assertTrue(thickness(layer.bitmap, 100, 30, 70) in 4..9)
         assertEquals(0, thickness(layer.bitmap, 100, 100, 140))
+        assertTrue(layer.isShapeLayer)
+    }
+
+    @Test
+    fun anAlphaLockedBrushShapeKeepsItsOutlineWhenEdited() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.LINE, strokeWith = ShapeStroke.BRUSH) }
+        c.drag(20f to 50f, 180f to 50f)
+        tool.flushPreview()
+        tool.commit()
+        val layer = c.activeLayer
+        c.toggleAlphaLock(layer)
+        assertTrue(layer.alphaLocked)
+        c.tap(100f, 50f)
+        assertSame(layer, tool.editingLayer)
+        c.drag(100f to 50f, 100f to 90f, 100f to 120f)
+        tool.flushPreview()
+        tool.commit()
+        assertEquals("Edit shape", c.undoManager.undoLabel)
+        assertEquals(0, thickness(layer.bitmap, 100, 30, 70))
+        val t = thickness(layer.bitmap, 100, 100, 140)
+        assertTrue("repainted where it moved: $t", t in 4..9)
+        assertTrue("still alpha locked", layer.alphaLocked)
         assertTrue(layer.isShapeLayer)
     }
 

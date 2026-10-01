@@ -210,6 +210,12 @@ object ShapePoints {
      * The outline through [a] with [corner] treatment (closed shapes only): when every edge is
      * straight it is exactly [ShapeGeometry.cornerPath]; otherwise the corners between two
      * straight edges are treated and the others stay as they are.
+     *
+     * A point in the middle of a straight run (e.g. just inserted on an edge: the edge goes on in
+     * the same direction, or a point on top of the previous one) is not a corner: it is left
+     * out, so the corners at both ends of the run are cut back exactly as without it (the radius
+     * is limited by half the run, not half of its pieces) and inserting a point never changes
+     * the outline.
      */
     fun outline(a: List<ShapeAnchor>, closed: Boolean, corner: CornerStyle, radius: Float): VectorPath {
         val n = a.size
@@ -217,21 +223,52 @@ object ShapePoints {
         val segs = List(n) { segment(a, it, true) }
         val straight = BooleanArray(n) { isStraight(segs[it]) }
         val verts = a.map { it.pos }
-        if (straight.all { it }) return ShapeGeometry.cornerPath(verts, corner, radius)
-        val cuts = ShapeGeometry.cornerCuts(verts, radius)
-        val corners = Array(n) { i ->
-            if (straight[i] && straight[(i - 1 + n) % n]) ShapeGeometry.corner(verts[i], verts[(i - 1 + n) % n], verts[(i + 1) % n], cuts[i]) else null
+        val through = BooleanArray(n) { i -> straight[i] && straight[(i - 1 + n) % n] && passesThrough(verts[(i - 1 + n) % n], verts[i], verts[(i + 1) % n]) }
+        // The corners, starting at the first one (point 0 unless it lies on a straight run).
+        val keep = (0 until n).filter { !through[it] }
+        if (keep.size < MIN_CLOSED) return path(a, closed)
+        if (straight.all { it }) return ShapeGeometry.cornerPath(keep.map { verts[it] }, corner, radius)
+        val m = keep.size
+        val corners = arrayOfNulls<ShapeGeometry.Corner>(n)
+        for (k in 0 until m) {
+            val i = keep[k]
+            if (!straight[i] || !straight[(i - 1 + n) % n]) continue
+            val prev = verts[keep[(k - 1 + m) % m]]
+            val next = verts[keep[(k + 1) % m]]
+            val v = verts[i]
+            val cut = minOf(radius, minOf(v.distanceTo(prev), v.distanceTo(next)) / 2f)
+            corners[i] = ShapeGeometry.corner(v, prev, next, cut)
         }
         val ops = ArrayList<PathOp>(n * 4 + 2)
-        ops += PathOp.MoveTo(corners[0]?.b ?: verts[0])
-        for (s in 0 until n) {
-            val seg = segs[s]
-            val c = corners[(s + 1) % n]
-            ops += if (straight[s]) PathOp.LineTo(c?.a ?: seg[3]) else PathOp.CubicTo(seg[1], seg[2], seg[3])
+        val first = keep[0]
+        ops += PathOp.MoveTo(corners[first]?.b ?: verts[first])
+        for (k in 0 until m) {
+            val i = keep[k]
+            val j = keep[(k + 1) % m]
+            val c = corners[j]
+            // From one corner to the next: a straight run (over the points on it) or one curve.
+            val seg = segs[i]
+            ops += if (straight[i]) PathOp.LineTo(c?.a ?: verts[j]) else PathOp.CubicTo(seg[1], seg[2], seg[3])
             if (c != null) ShapeGeometry.appendCorner(c, corner, ops)
         }
         ops += PathOp.Close
         return VectorPath(ops)
+    }
+
+    /**
+     * True when the outline goes straight on at [p] (coming from [prev], going to [next]): the
+     * same direction on both sides, or [p] on top of [prev]. Same angle limit as a corner that
+     * [ShapeGeometry.corner] leaves sharp.
+     */
+    private fun passesThrough(prev: Vec2, p: Vec2, next: Vec2): Boolean {
+        val toPrev = prev - p
+        val toNext = next - p
+        val lp = toPrev.length
+        val ln = toNext.length
+        if (lp < 1e-6f) return true
+        if (ln < 1e-6f) return false
+        val cos = (toPrev.dot(toNext) / (lp * ln)).coerceIn(-1f, 1f)
+        return kotlin.math.acos(cos) > PI.toFloat() - 1e-3f
     }
 
     // ------------------------------------------------------------------ editing

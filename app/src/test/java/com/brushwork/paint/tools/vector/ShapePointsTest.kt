@@ -122,6 +122,33 @@ class ShapePointsTest {
     }
 
     @Test
+    fun insertingOnAnEdgeWithCornerStylesKeepsTheOutline() {
+        // A big radius is limited by half the shorter edge: a point inserted on an edge must not
+        // make the neighboring corners smaller (it is not a corner while it lies on the edge).
+        val sq = listOf(Vec2(0f, 0f), Vec2(100f, 0f), Vec2(100f, 60f), Vec2(0f, 60f)).map { ShapeAnchor(it) }
+        for (corner in listOf(CornerStyle.ROUND, CornerStyle.BEVEL, CornerStyle.INVERTED)) {
+            val before = ShapePoints.outline(sq, true, corner, 40f)
+            for ((s, t) in listOf(1 to 0.5f, 0 to 0.1f, 3 to 0.85f, 2 to 0.3f)) {
+                val (list, _) = ShapePoints.insert(sq, closed = true, s = s, t = t)
+                sameOutline(before, ShapePoints.outline(list, true, corner, 40f), eps = 1e-2f)
+                // Two points inserted on the same edge, and one on the closing edge before point 0.
+                val (twice, _) = ShapePoints.insert(list, closed = true, s = s, t = 0.5f)
+                sameOutline(before, ShapePoints.outline(twice, true, corner, 40f), eps = 1e-2f)
+            }
+            // With a curved segment elsewhere (corners only between straight edges).
+            val mixed = sq.toMutableList().also { it.add(2, ShapeAnchor(Vec2(130f, 30f), smooth = true)) }
+            val m0 = ShapePoints.outline(mixed, true, corner, 40f)
+            val (m1, _) = ShapePoints.insert(mixed, closed = true, s = 4, t = 0.5f)
+            sameOutline(m0, ShapePoints.outline(m1, true, corner, 40f), eps = 1e-2f)
+            // Moved off the edge it is a corner like the others.
+            val (moved, at) = ShapePoints.insert(sq, closed = true, s = 1, t = 0.5f)
+            val bent = moved.mapIndexed { i, a -> if (i == at) a.moved(Vec2(130f, 30f)) else a }
+            val bentPath = ShapePoints.outline(bent, true, corner, 40f)
+            assertTrue("$corner: the moved point is treated", bentPath.ops.size > ShapePoints.path(bent, true).ops.size + 3)
+        }
+    }
+
+    @Test
     fun nearestFindsTheEdgeAndItsParameter() {
         val sq = listOf(Vec2(0f, 0f), Vec2(100f, 0f), Vec2(100f, 100f), Vec2(0f, 100f)).map { ShapeAnchor(it) }
         val hit = ShapePoints.nearest(sq, true, Vec2(103f, 60f))!!
