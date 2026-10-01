@@ -47,6 +47,7 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
 
@@ -59,7 +60,7 @@ sealed class ExchangeDialog {
     class MadeWithBrushwork(internal val file: ImportFile, internal val svg: SvgDocument?) : ExchangeDialog()
 
     /** An SVG over the limits: import what was read as a picture? */
-    class TooComplex(internal val file: ImportFile, internal val svg: SvgDocument) : ExchangeDialog()
+    class TooComplex(internal val file: ImportFile, internal val svg: SvgDocument, internal val newArtwork: Boolean = false) : ExchangeDialog()
 
     /** Pick the pages of a PDF. */
     class Pages(internal val file: ImportFile, val rasterizer: PageRasterizer, internal val newArtwork: Boolean) : ExchangeDialog()
@@ -173,7 +174,7 @@ class ExchangeUiState(internal val controller: EditorController) {
                 when {
                     svg.hasPayload && newArtwork -> restoreSvgPayload(svg, newArtwork = true)
                     svg.hasPayload -> { dialog = ExchangeDialog.MadeWithBrushwork(file, svg); return true }
-                    svg.truncated -> { dialog = ExchangeDialog.TooComplex(file, svg); return true }
+                    svg.truncated -> { dialog = ExchangeDialog.TooComplex(file, svg, newArtwork); return true }
                     else -> importSvg(svg, newArtwork, asPicture = false)
                 }
             }
@@ -238,7 +239,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         val layers = withContext(Dispatchers.IO) {
             PdfImport.prepare(r, pages, target.copy(room = target.room + replace.size), transparent) { job?.isActive == false }
         }
-        coroutineContext.ensureActive()
+        stopIfCancelled(layers)
         report(PdfImport.apply(controller, layers, pages.size, replace))
     }
 
@@ -246,7 +247,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         val replace = if (newArtwork) defaultLayers(includeBackground = false) else emptyList()
         val target = target().let { it.copy(room = it.room + replace.size) }
         val prepared = withContext(Dispatchers.Default) { VectorImport.prepare(svg, target, newArtwork, asPicture) }
-        coroutineContext.ensureActive()
+        stopIfCancelled(prepared.layers)
         report(VectorImport.apply(controller, prepared, replace))
     }
 
@@ -268,7 +269,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         if (newArtwork && replace.size == controller.doc.layers.size) controller.doc.colorMode = payload.colorMode
         val target = target().let { it.copy(room = it.room + replace.size) }
         val prepared = withContext(Dispatchers.IO) { PayloadImport.prepare(payload, images, target) }
-        coroutineContext.ensureActive()
+        stopIfCancelled(prepared.layers)
         report(PayloadImport.apply(controller, prepared, replace))
     }
 
@@ -308,7 +309,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         if (!import) { d.file.close(); return }
         busy("Importing") {
             try {
-                importSvg(d.svg, newArtwork = false, asPicture = true)
+                importSvg(d.svg, newArtwork = d.newArtwork, asPicture = true)
             } finally {
                 withContext(Dispatchers.IO) { d.file.close() }
             }
@@ -348,6 +349,16 @@ class ExchangeUiState(internal val controller: EditorController) {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /** Stopped meanwhile: the prepared layers are freed and nothing is inserted. */
+    private suspend fun stopIfCancelled(layers: List<com.brushwork.paint.exchange.NewLayer>) {
+        if (coroutineContext.isActive) return
+        layers.forEach { l ->
+            l.bitmap.recycle()
+            l.mask?.recycle()
+        }
+        coroutineContext.ensureActive()
+    }
 
     private fun target(): ImportTarget {
         val doc = controller.doc

@@ -140,6 +140,33 @@ class ExchangeRoundTripRobolectricTest {
     }
 
     @Test
+    fun grayscaleDocumentsExportGrayColorsAndRestoreTheirCache() {
+        val w = 200
+        val h = 120
+        val doc = Document("g", "Gray", w, h, dpi = 300f)
+        doc.colorMode = com.brushwork.paint.model.ColorMode.GRAYSCALE
+        val content = com.brushwork.paint.vector.VectorContent.EMPTY.plus(listOf(ExchangeFixtures.box(20f, 20f, 120f, 90f, fill = 0xFFE04020.toInt()))).first
+        val cache = render(content, w, h).also { com.brushwork.paint.ColorModeOps.constrain(it, android.graphics.Rect(0, 0, w, h), doc.colorMode) }
+        doc.layers += com.brushwork.paint.model.Layer(doc.newLayerId(), "Vector", cache).also { it.vector = content }
+        val bytes = export(controller(doc), VectorFormat.SVG)
+        val svg = SvgParser.parse(bytes)
+        // The red fill is written as the gray the canvas shows.
+        val path = com.brushwork.paint.exchange.svg.SvgToVector.convert(svg, 300f).items
+            .filterIsInstance<com.brushwork.paint.exchange.svg.SvgItem.Shape>().single().path
+        val fill = (path.fill as com.brushwork.paint.vector.VPaint.Solid).color
+        assertEquals((fill shr 16) and 0xFF, (fill shr 8) and 0xFF)
+        assertEquals((fill shr 8) and 0xFF, fill and 0xFF)
+        // Restored into a gray artwork: the cache is the gray rendering again.
+        val fresh = Smoke.document(w, h, layers = 1).also { it.colorMode = doc.colorMode }
+        val c = controller(fresh)
+        val payload = svg.payload()!!
+        val target = ImportTarget(w, h, 300f, fresh.colorMode, ImportLayers.room(c) + 1, c.maxLayers)
+        PayloadImport.apply(c, PayloadImport.prepare(payload, { key -> svg.imageData(key)?.let { PngDecoder.decode(it) } }, target), fresh.layers.toList())
+        assertEquals(content, c.doc.layers.single().vector)
+        assertArrayEquals(pixels(cache), pixels(c.doc.layers.single().bitmap))
+    }
+
+    @Test
     fun theSvgCarriesTheVisibleArtworkForOtherApps() {
         val doc = document()
         val svg = SvgParser.parse(export(controller(doc), VectorFormat.SVG))

@@ -67,7 +67,7 @@ class ExportSceneRobolectricTest {
         val mask = photo.mask!!
         assertEquals(255, mask.fillGray)
         assertEquals(60, mask.image!!.left)
-        assertEquals(40, mask.image!!.width)
+        assertEquals(40, mask.image.width)
         // The background is opaque white and becomes a full picture.
         assertNotNull(layerNamed(s, "Background").items.single() as SceneItem.Image)
     }

@@ -92,6 +92,12 @@ class ExportSceneBuilder(
 ) {
     private val doc: Document get() = c.doc
     private var keys = 0
+
+    // Read on the main thread when the build starts: vector objects are converted on another
+    // thread, which must not touch the document (I3).
+    private var docWidth = 0
+    private var docHeight = 0
+    private var docMode = ColorMode.RGB
     private val notes = LinkedHashSet<String>()
 
     /** What a layer becomes, decided on the main thread; converted to a [SceneLayer] later. */
@@ -117,6 +123,9 @@ class ExportSceneBuilder(
         val layers = doc.layers.toList()
         val w = doc.width
         val h = doc.height
+        docWidth = w
+        docHeight = h
+        docMode = doc.colorMode
         val plans = ArrayList<Plan>()
         // Pixels of each layer as written into the file (the payload points at them).
         val ownImage = HashMap<Layer, SceneImage>()
@@ -187,7 +196,9 @@ class ExportSceneBuilder(
                     is Content.Items -> ct.items
                     is Content.Objects -> objectItems(ct.objects)
                 }
-                SceneLayer(p.key, p.name, p.opacity, p.blend, p.hidden, p.mask, items)
+                // A grayscale or 1-bit document's colors, as its pixels show them.
+                val shown = if (docMode == ColorMode.RGB) items else items.map { constrained(it, docMode) }
+                SceneLayer(p.key, p.name, p.opacity, p.blend, p.hidden, p.mask, shown)
             }.filter { it.items.isNotEmpty() }
         }
         return ExportScene(
@@ -198,6 +209,22 @@ class ExportSceneBuilder(
     }
 
     private fun Layer.blend(): LayerBlendMode = blendMode
+
+    /** [item] with its colors in [mode] (pictures are already constrained pixels). */
+    private fun constrained(item: SceneItem, mode: ColorMode): SceneItem {
+        fun c(color: Int) = ColorModeOps.constrainPixel(color, mode)
+        fun paint(p: VPaint?): VPaint? = when (p) {
+            null -> null
+            is VPaint.Solid -> VPaint.Solid(c(p.color))
+            is VPaint.Linear -> p.copy(stops = p.stops.map { it.copy(color = c(it.color)) })
+            is VPaint.Radial -> p.copy(stops = p.stops.map { it.copy(color = c(it.color)) })
+        }
+        return when (item) {
+            is SceneItem.Image -> item
+            is SceneItem.Shape -> SceneItem.Shape(item.path, item.evenOdd, paint(item.fill), item.stroke?.let { it.copy(color = c(it.color)) }, item.opacity)
+            is SceneItem.Text -> SceneItem.Text(item.lines, item.style.copy(color = c(item.style.color), strokeColor = c(item.style.strokeColor)), item.matrix)
+        }
+    }
 
     // ------------------------------------------------------------------ layer content
 
@@ -536,10 +563,10 @@ class ExportSceneBuilder(
         }
         if (b.isEmpty) return null
         val r = Rect(floor(b.left).toInt(), floor(b.top).toInt(), ceil(b.right).toInt(), ceil(b.bottom).toInt())
-        if (!r.intersect(0, 0, doc.width, doc.height)) return null
+        val docRect = Rect(0, 0, docWidth, docHeight)
+        if (!r.intersect(docRect)) return null
         val content = VectorContent(objects = objects)
-        val docRect = Rect(0, 0, doc.width, doc.height)
-        val mode = doc.colorMode
+        val mode = docMode
         return SceneImage(key("img"), r.left, r.top, r.width(), r.height(), false) {
             withContext(renderDispatcher) { renderVector(content, r, docRect, mode) }
         }

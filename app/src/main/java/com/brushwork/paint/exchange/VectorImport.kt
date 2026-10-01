@@ -122,50 +122,56 @@ object VectorImport {
         val labels = content.items.filterIsInstance<SvgItem.Label>()
         var transformLayer = -1
 
-        if (asPicture) {
-            if (room <= 0 || (shapes.isEmpty() && pictures.isEmpty())) {
-                if (shapes.isNotEmpty() || pictures.isNotEmpty()) dropped["picture (layer limit)"] = 1
-            } else {
-                val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
-                drawPictures(bmp, content.items, target)
-                layers += NewLayer("Imported SVG (picture)", bmp)
-                transformLayer = layers.lastIndex
-                room--
-            }
-        } else {
-            // Pictures first: they go under the paths.
-            if (pictures.isNotEmpty()) {
-                // Reserve the vector layer's slot before the pictures' (priority: vector, pictures, texts).
-                val needVector = if (shapes.isNotEmpty()) 1 else 0
-                if (room - needVector > 0) {
+        try {
+            if (asPicture) {
+                if (room <= 0 || (shapes.isEmpty() && pictures.isEmpty())) {
+                    if (shapes.isNotEmpty() || pictures.isNotEmpty()) dropped["picture (layer limit)"] = 1
+                } else {
                     val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
-                    drawPictures(bmp, pictures, target)
-                    layers += NewLayer("SVG pictures", bmp)
+                    drawPictures(bmp, content.items, target)
+                    layers += NewLayer("Imported SVG (picture)", bmp)
+                    transformLayer = layers.lastIndex
                     room--
-                } else {
-                    dropped["pictures (layer limit)"] = pictures.size
                 }
-            }
-            if (shapes.isNotEmpty()) {
-                val groups = shapes.groupBy { it.group }.toSortedMap()
-                val perGroup = newArtwork && groups.size > 1 && groups.size <= min(8, target.maxLayers - 2) && groups.size <= room
-                val sets: List<Pair<String, List<SvgItem.Shape>>> = if (perGroup) {
-                    groups.map { (g, items) -> (content.groups.getOrNull(g) ?: "Imported SVG") to items }
-                } else {
-                    listOf("Imported SVG" to shapes)
-                }
-                for ((name, items) in sets) {
-                    if (room <= 0) {
-                        dropped["shapes (layer limit)"] = (dropped["shapes (layer limit)"] ?: 0) + items.size
-                        continue
+            } else {
+                // Pictures first: they go under the paths.
+                if (pictures.isNotEmpty()) {
+                    // Reserve the vector layer's slot before the pictures' (priority: vector, pictures, texts).
+                    val needVector = if (shapes.isNotEmpty()) 1 else 0
+                    if (room - needVector > 0) {
+                        val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
+                        drawPictures(bmp, pictures, target)
+                        layers += NewLayer("SVG pictures", bmp)
+                        room--
+                    } else {
+                        dropped["pictures (layer limit)"] = pictures.size
                     }
-                    val objects: List<VObject> = items.map { it.path }
-                    val data = VectorContent.EMPTY.plus(objects).first
-                    layers += NewLayer(name, renderVector(data, target), data = LayerData(vector = data))
-                    if (transformLayer < 0) transformLayer = layers.lastIndex
-                    room--
+                }
+                if (shapes.isNotEmpty()) {
+                    val groups = shapes.groupBy { it.group }.toSortedMap()
+                    val perGroup = newArtwork && groups.size > 1 && groups.size <= min(8, target.maxLayers - 2) && groups.size <= room
+                    val sets: List<Pair<String, List<SvgItem.Shape>>> = if (perGroup) {
+                        groups.map { (g, items) -> (content.groups.getOrNull(g) ?: "Imported SVG") to items }
+                    } else {
+                        listOf("Imported SVG" to shapes)
+                    }
+                    for ((name, items) in sets) {
+                        if (room <= 0) {
+                            dropped["shapes (layer limit)"] = (dropped["shapes (layer limit)"] ?: 0) + items.size
+                            continue
+                        }
+                        val objects: List<VObject> = items.map { it.path }
+                        val data = VectorContent.EMPTY.plus(objects).first
+                        layers += NewLayer(name, renderVector(data, target), data = LayerData(vector = data))
+                        if (transformLayer < 0) transformLayer = layers.lastIndex
+                        room--
+                    }
                 }
             }
+        } catch (e: Throwable) {
+            // Out of memory or stopped: nothing half made stays allocated.
+            layers.forEach { it.bitmap.recycle() }
+            throw e
         }
         val texts = ArrayList<SvgText>()
         for (l in labels) {
