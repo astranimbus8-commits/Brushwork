@@ -390,6 +390,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** True when a new shape needs the active layer: when it is painted into it, it must be editable. */
     private fun checkCanPlaceNew(): Boolean = placesInNewLayer() || controller.checkEditable()
 
+    /** New shapes go into a shape layer of their own (Compose state; see [placesInNewLayer]). */
+    val newShapesEditable: Boolean get() = placesInNewLayer()
+
     /**
      * Sets the stroke width. With "Use brush size" the width IS the brush size, so the brush
      * (and the size slider) change with it.
@@ -1361,6 +1364,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val o = objectFor(b, points)
         val brush = o.paintsWithBrush
         val live = brush && liveBrushWhileEditing(layer)
+        // The overlay only holds plain shapes here (the brush stroke is inside the override).
+        specOverlay.setBand(null, 0f)
         val ov = installEditOverride(layer)
         val specs = listOfNotNull(buildSpec(o, brush))
         // While a finger drags a plain shape that looks the same over the finished image, it is
@@ -1398,11 +1403,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /**
      * The edited shape's brush stroke can be shown live (a stroke drawn through a buffer, on the
-     * layer's content; not with alpha lock: the outline is repainted over cleared pixels, which
-     * the lock would keep empty in the preview, see [commitLayerEdit]).
+     * layer's content; not with alpha lock or a selection: the outline is repainted whole over
+     * cleared pixels, which the lock would keep empty and the selection would cut in the
+     * preview, see [commitLayerEdit]).
      */
     private fun liveBrushWhileEditing(layer: Layer): Boolean {
-        if (controller.editTargetOf(layer) != EditTarget.CONTENT || layer.alphaLocked) return false
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT || layer.alphaLocked || controller.selection != null) return false
         val tool = brushToolId()
         val preset = brushPresetInUse() ?: return false
         return !StrokeKind.of(tool, preset).isDirect
@@ -1828,15 +1834,19 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 }
                 if (done && path != null) {
                     // The outline is painted on the layer's pixels, never into its mask, and the
-                    // shape is drawn again from scratch: alpha lock (which would keep the just
-                    // cleared outline empty) doesn't apply, like it doesn't to the fill.
+                    // shape is drawn again whole, from scratch, like its fill: neither alpha lock
+                    // (which would keep the just cleared outline empty) nor a selection (which
+                    // would cut it) applies.
                     layer.editingMask = false
                     layer.alphaLocked = false
+                    val sel = controller.selection
+                    if (sel != null) controller.setSelection(null, recordUndo = false)
                     try {
                         controller.keepLayerData(layer) { brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) } }
                     } finally {
                         layer.editingMask = maskEditing
                         layer.alphaLocked = alphaLocked
+                        if (sel != null) controller.setSelection(sel, recordUndo = false)
                     }
                 }
             }
@@ -1889,6 +1899,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onSelectionChanged() {
+        // (Committing an edited brush shape sets the selection aside for a moment.)
+        if (inCommit) return
         if (box != null || creatingBox != null) refreshPreview()
     }
 

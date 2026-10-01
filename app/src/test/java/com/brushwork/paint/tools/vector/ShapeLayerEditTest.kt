@@ -613,6 +613,34 @@ class ShapeLayerEditTest {
     }
 
     @Test
+    fun anEditedBrushShapeIsPaintedWholeDespiteASelection() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.LINE, strokeWith = ShapeStroke.BRUSH) }
+        c.drag(20f to 50f, 180f to 50f)
+        tool.flushPreview()
+        tool.commit()
+        val layer = c.activeLayer
+        // A selection of the left part only (made for something else).
+        val sel = com.brushwork.paint.model.Selection.fromBytes(ByteArray(200 * 200) { i -> if (i % 200 < 70) -1 else 0 }, 200, 200)
+        c.setSelection(sel)
+        c.tap(100f, 50f)
+        assertSame(layer, tool.editingLayer)
+        c.drag(100f to 50f, 100f to 90f, 100f to 120f)
+        tool.flushPreview()
+        val undos = c.undoManager.undoCount
+        tool.commit()
+        assertEquals(undos + 1, c.undoManager.undoCount)
+        assertEquals("Edit shape", c.undoManager.undoLabel)
+        // Like its fill, the outline is drawn whole (the selection would cut it).
+        val t = thickness(layer.bitmap, 150, 100, 140)
+        assertTrue("painted outside the selection too: $t", t in 4..9)
+        assertTrue(thickness(layer.bitmap, 40, 100, 140) in 4..9)
+        assertSame("the selection is back", sel, c.selection)
+        assertTrue(layer.isShapeLayer)
+    }
+
+    @Test
     fun paintingOnAShapeLayerMakesItARegularLayer() {
         val c = controller()
         val tool = shapeTool(c)

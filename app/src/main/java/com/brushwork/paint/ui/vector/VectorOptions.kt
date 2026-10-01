@@ -201,6 +201,9 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                         " at full pressure, with its own size, opacity and texture",
                     Modifier.padding(top = 4.dp),
                 )
+                if (s.editable && tool.editingLayer == null && !tool.newShapesEditable) {
+                    Hint("The ${paintTool.label.lowercase()} works on the pixels that are already there: these outlines are painted into the active layer and can't be edited again")
+                }
             }
             StrokeWidthControls(tool, unit = s.unit, onUnit = onUnit, dpi = dpi, showSlider = true, showUnit = true)
             if (s.type.isLineLike && s.strokeWith == ShapeStroke.PLAIN) {
