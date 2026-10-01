@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!DOCTYPE svg [
+  <!ENTITY lol "lol">
+  <!ENTITY lol1 "&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;&lol;">
+  <!ENTITY lol2 "&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;&lol1;">
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+  <!-- a comment with ]> inside it -->
+]>
+<svg:svg xmlns:svg="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="5cm" height="40mm" viewBox="-10 -10 200 160" preserveAspectRatio="xMinYMax slice">
+  <svg:title>Edge cases &amp; oddities</svg:title>
+  <svg:style><![CDATA[
+    /* comment */ svg|rect { fill: red }
+    .a, .b{stroke:#0f0;stroke-width:2}
+    circle.c { fill: hsla(10, 50%, 50%, .5) }
+    @import url("x.css");
+    .bad > path { fill: pink }
+  ]]></svg:style>
+  <svg:text x="0" y="12">&lol2;&xxe;</svg:text>
+  <svg:path class="a" d="M0,0l10-10.5.5.5-.5-.5e1zM20 20a5 5 0 1120 0 5 5 0 0 1-20 0zm1 1q5-5 10 0t10 0T30 0"/>
+  <svg:path d="M 1e2 1E-2 L1e1,2e1 h-.5v.5Z garbage 1 2 3"/>
+  <svg:path d=""/>
+  <svg:path/>
+  <svg:circle class="c b" cx="50" cy="50" r="20" stroke-width="-3" stroke="blue"/>
+  <svg:rect x="10" y="80" width="40" height="30" rx="100" ry="2" fill="currentColor" color="#123"/>
+  <svg:rect x="60" y="80" width="40" height="30" transform="skewX(20) skewY(-10)" fill="#zzz"/>
+  <svg:g opacity="50%"><svg:g opacity=".5"><svg:ellipse cx="150" cy="100" rx="30" ry="10" fill-opacity="2"/></svg:g></svg:g>
+  <svg:a xlink:href="https://example.com"><svg:polygon points="100,10 110,30 90,30 95,40"/></svg:a>
+  <svg:use xlink:href="#nothing"/>
+  <svg:use xlink:href="#selfref" id="selfref"/>
+  <svg:image x="150" y="0" width="20" height="20" xlink:href="data:image/png;base64,%20iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" preserveAspectRatio="xMidYMid slice"/>
+  <svg:image x="150" y="30" width="20" height="20" xlink:href="file:///etc/passwd"/>
+  <svg:line x1="0" y1="150" x2="190" y2="150" stroke="black" stroke-dasharray="none" vector-effect="non-scaling-stroke"/>
+  <svg:g transform="translate(10 10) bogus(1)"><svg:rect width="5" height="5"/></svg:g>
+  <svg:switch><svg:rect systemLanguage="xx" width="3" height="3"/><svg:rect width="9" height="9"/></svg:switch>
+  <svg:animate attributeName="x" from="0" to="10" dur="1s"/>
+  <svg:set attributeName="fill" to="red"/>
+</svg:svg>

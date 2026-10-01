@@ -34,7 +34,14 @@ object SvgCss {
         var order = firstOrder
         var i = 0
         while (i < text.length) {
+            while (i < text.length && text[i].isWhitespace()) i++
+            if (i >= text.length) break
             val open = text.indexOf('{', i)
+            // A statement at-rule (@import, @charset...) ends at its semicolon.
+            if (text[i] == '@') {
+                val semi = text.indexOf(';', i)
+                if (semi >= 0 && (open < 0 || semi < open)) { i = semi + 1; continue }
+            }
             if (open < 0) break
             val prelude = text.substring(i, open).trim()
             val close = matchingBrace(text, open)

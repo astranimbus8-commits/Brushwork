@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="210mm"
+   height="297mm"
+   viewBox="0 0 210 297"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.2.2 (b0a8486541, 2022-12-01)"
+   sodipodi:docname="drawing.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="0.73"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs2">
+    <linearGradient
+       inkscape:collect="always"
+       id="linearGradient1234">
+      <stop
+         style="stop-color:#ff0000;stop-opacity:1;"
+         offset="0"
+         id="stop1230" />
+      <stop
+         style="stop-color:#ff0000;stop-opacity:0;"
+         offset="1"
+         id="stop1232" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient1234"
+       id="linearGradient1236"
+       x1="20"
+       y1="50"
+       x2="100"
+       y2="50"
+       gradientUnits="userSpaceOnUse" />
+    <radialGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient1234"
+       id="radialGradient2001"
+       cx="150"
+       cy="60"
+       fx="150"
+       fy="60"
+       r="30"
+       gradientTransform="matrix(1,0,0,0.5,0,30)"
+       gradientUnits="userSpaceOnUse" />
+    <marker
+       style="overflow:visible"
+       id="Arrow1"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Arrow1"
+       markerWidth="4.0614"
+       markerHeight="2.9154"
+       viewBox="0 0 4.0614 2.9154">
+      <path
+         transform="scale(0.7)"
+         d="M -2,-4 9,0 -2,4 c 2,-2.33 2,-5.66 0,-8 z"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:none"
+         id="arrow1path" />
+    </marker>
+  </defs>
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1">
+    <rect
+       style="fill:url(#linearGradient1236);fill-opacity:1;stroke:#000000;stroke-width:0.264583"
+       id="rect111"
+       width="80"
+       height="40"
+       x="20"
+       y="30" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1,2;marker-end:url(#Arrow1)"
+       d="m 30,120 c 10,-20 40,-20 50,0 s 40,20 50,0"
+       id="path222"
+       sodipodi:nodetypes="ccc" />
+    <ellipse
+       style="fill:url(#radialGradient2001);stroke:none"
+       id="path333"
+       cx="150"
+       cy="60"
+       rx="30"
+       ry="15" />
+    <path
+       sodipodi:type="star"
+       style="fill:#ffcc00;stroke:#aa8800;stroke-width:1.2;stroke-linejoin:miter"
+       id="path444"
+       inkscape:flatsided="false"
+       d="M 105,150 97.1,140.5 85.3,144.3 88.1,132.2 79.6,123 92,121.9 98.2,111.2 103.2,122.6 115.3,125.3 105.9,133.4 Z"
+       transform="translate(40,40)" />
+    <text
+       xml:space="preserve"
+       style="font-size:10.5833px;line-height:1.25;font-family:sans-serif;stroke-width:0.264583"
+       x="30"
+       y="200"
+       id="text333"><tspan
+         sodipodi:role="line"
+         id="tspan331"
+         style="stroke-width:0.264583"
+         x="30"
+         y="200">Hello</tspan><tspan
+         sodipodi:role="line"
+         style="stroke-width:0.264583"
+         x="30"
+         y="213.229"
+         id="tspan335">Inkscape</tspan></text>
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer2"
+     inkscape:label="Layer 2"
+     style="display:inline;opacity:0.5"
+     transform="translate(10,10)">
+    <path
+       style="fill:#00aa88;fill-rule:evenodd;stroke:none"
+       d="M 20,240 H 120 V 280 H 20 Z m 20,10 v 20 h 60 v -20 z"
+       id="path555" />
+    <use
+       x="0"
+       y="0"
+       xlink:href="#rect111"
+       id="use666"
+       transform="translate(100,180)" />
+  </g>
+  <g
+     inkscape:groupmode="layer"
+     id="layer3"
+     inkscape:label="Hidden"
+     style="display:none">
+    <circle
+       style="fill:#000000"
+       cx="10"
+       cy="10"
+       r="5"
+       id="hidden1" />
+  </g>
+</svg>

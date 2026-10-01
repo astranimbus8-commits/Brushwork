@@ -134,7 +134,7 @@ object DataUri {
         val head = t.substring(0, comma).lowercase()
         val body = t.substring(comma + 1)
         return try {
-            if (head.contains(";base64")) mime(head) to java.util.Base64.getMimeDecoder().decode(body.filterNot { it.isWhitespace() || it == '%' })
+            if (head.contains(";base64")) mime(head) to java.util.Base64.getMimeDecoder().decode(body.replace(ESCAPE, "").filterNot { it.isWhitespace() })
             else mime(head) to java.net.URLDecoder.decode(body, "UTF-8").toByteArray(Charsets.UTF_8)
         } catch (e: Exception) {
             null
@@ -142,6 +142,9 @@ object DataUri {
     }
 
     private fun mime(head: String): String = head.removePrefix("data:").substringBefore(';').trim()
+
+    /** URL escapes (`%20`, `%0A`): only whitespace is escaped in base64 data URIs. */
+    private val ESCAPE = Regex("%[0-9A-Fa-f]{2}")
 }
 
 /**
