@@ -65,6 +65,7 @@ import com.brushwork.paint.tools.select.MarqueeShape
 import com.brushwork.paint.tools.select.MarqueeTool
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.ToolIconButton
@@ -124,10 +125,12 @@ fun LassoOptions(tool: LassoTool) {
                 } else {
                     Text("Tap corners", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
                 }
+                SnapToObjectsChip(tool.controller)
                 StripDivider()
             }
             LassoKind.CURVE -> {
                 CurveLassoControls(tool)
+                SnapToObjectsChip(tool.controller)
                 StripDivider()
             }
             LassoKind.FREEHAND -> {}
@@ -236,6 +239,7 @@ fun MarqueeOptions(tool: MarqueeTool) {
         StripDivider()
         ToggleChip("1:1", s.square) { tool.settings = tool.settings.copy(square = it) }
         ToggleChip("From center", s.fromCenter) { tool.settings = tool.settings.copy(fromCenter = it) }
+        SnapToObjectsChip(tool.controller)
         StripDivider()
         SelectionModeButtons(tool.mode) { tool.mode = it }
         StripDivider()

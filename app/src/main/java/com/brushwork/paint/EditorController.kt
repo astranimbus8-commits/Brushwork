@@ -46,6 +46,8 @@ import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.StabilizerSettings
+import com.brushwork.paint.snap.SnapService
+import com.brushwork.paint.snap.SnapSession
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolFactory
 import com.brushwork.paint.tools.ToolId
@@ -136,6 +138,16 @@ class EditorController(
 
     /** Transform tools set this while the selection is being moved (hides the stale ants). */
     var hideSelectionOutline by mutableStateOf(false)
+
+    /**
+     * "Snap to objects" for every tool (one setting) and what dragged things align to: canvas,
+     * layer content, points, lines drawn in layers (Table filter lines...). Tools take a
+     * [newSnapSession] per drag.
+     */
+    val snapping = SnapService(this)
+
+    /** A snapping helper for one tool's drags (see [SnapSession]). */
+    fun newSnapSession() = SnapSession(snapping, this)
 
     var grid by mutableStateOf(doc.grid)
         private set
@@ -493,11 +505,36 @@ class EditorController(
      * returns the undo action that restores it (null otherwise).
      */
     private fun rasterizeTextAction(layer: Layer, keep: Boolean): UndoAction? {
-        val text = layer.textData ?: return null
-        if (keep) return null
+        if (keep || layer === keepDataLayer) return null
+        val text = layer.textData
+        val shape = layer.shapeData
+        if (text == null && shape == null) return null
         layer.textData = null
-        toast("\"${layer.name}\" is now a regular layer (its text can no longer be edited; undo to get it back)")
-        return LambdaAction("Rasterize text", onUndo = { c -> layer.textData = text; c.notifyLayersChanged() }, onRedo = { c -> layer.textData = null; c.notifyLayersChanged() })
+        layer.shapeData = null
+        if (text != null) {
+            toast("\"${layer.name}\" is now a regular layer (its text can no longer be edited; undo to get it back)")
+            return LambdaAction("Rasterize text", onUndo = { c -> layer.textData = text; c.notifyLayersChanged() }, onRedo = { c -> layer.textData = null; c.notifyLayersChanged() })
+        }
+        toast("\"${layer.name}\" is now a regular layer (its shape can no longer be edited; undo to get it back)")
+        return LambdaAction("Rasterize shape", onUndo = { c -> layer.shapeData = shape; c.notifyLayersChanged() }, onRedo = { c -> layer.shapeData = null; c.notifyLayersChanged() })
+    }
+
+    /** While [keepLayerData] runs: the layer whose text / shape data pixel edits don't clear. */
+    private var keepDataLayer: Layer? = null
+
+    /**
+     * Runs [block] (e.g. a brush replayed along a shape outline into its own shape layer) without
+     * turning [layer] into a raster layer: pixel edits of [layer] committed inside keep its
+     * text / shape data. Not reentrant for different layers (the innermost wins until it ends).
+     */
+    fun <T> keepLayerData(layer: Layer, block: () -> T): T {
+        val prev = keepDataLayer
+        keepDataLayer = layer
+        try {
+            return block()
+        } finally {
+            keepDataLayer = prev
+        }
     }
 
     /**
@@ -596,8 +633,11 @@ class EditorController(
         }
     }
 
-    /** Adds a new layer above the active one and lets [draw] paint into it (document coordinates). */
-    fun addLayerWithContent(name: String, label: String, textData: String? = null, draw: (Canvas) -> Unit): Layer? {
+    /**
+     * Adds a new layer above the active one and lets [draw] paint into it (document coordinates).
+     * [textData] / [shapeData] make it an editable text / shape layer.
+     */
+    fun addLayerWithContent(name: String, label: String, textData: String? = null, shapeData: String? = null, draw: (Canvas) -> Unit): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         val bmp = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height).also { b ->
@@ -608,7 +648,7 @@ class EditorController(
             toast("Not enough memory for another layer"); return null
         }
         return withToolPaused {
-            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData }
+            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData; it.shapeData = shapeData }
             val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
             structural {
                 doc.layers.add(at, layer)
@@ -626,8 +666,35 @@ class EditorController(
      * Returns false if the layer is gone or can't be edited.
      */
     fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, draw: (Canvas) -> Unit): Boolean {
-        if (doc.indexOf(layer) < 0 || !checkEditable(layer)) return false
         val before = layer.textData
+        val dataAction = LambdaAction("Edit text", onUndo = { ctl -> layer.textData = before; ctl.notifyLayersChanged() }, onRedo = { ctl -> layer.textData = textData; ctl.notifyLayersChanged() })
+        return rerenderDataLayer(layer, label, dirty, draw, dataAction, before != textData, "Not enough memory to update the text") { layer.textData = textData }
+    }
+
+    /**
+     * Re-renders the editable shape layer [layer]: clears [dirty] (document px; it must cover the
+     * old AND the new shape, null = the whole layer), lets [draw] paint the new shape and stores
+     * [shapeData] — one undo step named [label] that restores both pixels and shape data. Returns
+     * false if the layer is gone or can't be edited. To add a brush stroke to the same layer in the
+     * same step, run both inside [undoStepNamed]-style grouping and [keepLayerData].
+     */
+    fun updateShapeLayer(layer: Layer, shapeData: String, label: String, dirty: Rect? = null, draw: (Canvas) -> Unit): Boolean {
+        val before = layer.shapeData
+        val dataAction = LambdaAction("Edit shape", onUndo = { ctl -> layer.shapeData = before; ctl.notifyLayersChanged() }, onRedo = { ctl -> layer.shapeData = shapeData; ctl.notifyLayersChanged() })
+        return rerenderDataLayer(layer, label, dirty, draw, dataAction, before != shapeData, "Not enough memory to update the shape") { layer.shapeData = shapeData }
+    }
+
+    private fun rerenderDataLayer(
+        layer: Layer,
+        label: String,
+        dirty: Rect?,
+        draw: (Canvas) -> Unit,
+        dataAction: UndoAction,
+        dataChanged: Boolean,
+        oomMessage: String,
+        store: () -> Unit,
+    ): Boolean {
+        if (doc.indexOf(layer) < 0 || !checkEditable(layer)) return false
         val area = Rect(dirty ?: doc.bounds)
         if (!area.intersect(0, 0, doc.width, doc.height)) area.set(0, 0, 0, 0)
         val rec = beginEdit(layer, EditTarget.CONTENT).also { it.preserveText = true }
@@ -642,14 +709,13 @@ class EditorController(
             c.restore()
         } catch (e: OutOfMemoryError) {
             rec.abort()
-            toast("Not enough memory to update the text")
+            toast(oomMessage)
             return false
         }
-        layer.textData = textData
-        val textAction = LambdaAction("Edit text", onUndo = { ctl -> layer.textData = before; ctl.notifyLayersChanged() }, onRedo = { ctl -> layer.textData = textData; ctl.notifyLayersChanged() })
-        if (!commitEdit(rec, label, listOf(textAction))) {
-            // Nothing was touched (empty area): still record the text change.
-            if (before != textData) pushUndo(textAction)
+        store()
+        if (!commitEdit(rec, label, listOf(dataAction))) {
+            // Nothing was touched (empty area): still record the data change.
+            if (dataChanged) pushUndo(dataAction)
             notifyLayersChanged()
         }
         return true
@@ -687,7 +753,7 @@ class EditorController(
                 Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
                     it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
                     // A partial copy is no longer the text object: only whole copies stay editable.
-                    if (sel == null) it.textData = layer.textData
+                    if (sel == null) { it.textData = layer.textData; it.shapeData = layer.shapeData }
                 }
             } catch (e: OutOfMemoryError) {
                 toast("Not enough memory to duplicate this layer"); return@withToolPaused null
@@ -820,11 +886,11 @@ class EditorController(
         tmpDoc.layers += lowerView
         tmpDoc.layers += upperView
         val merged = Compositor(tmpDoc) { null }.renderFlattened()
-        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props(); val beforeText = lower.textData
+        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props(); val beforeText = lower.textData; val beforeShape = lower.shapeData
         val afterProps = beforeProps.copy(opacity = 1f, maskEnabled = true)
         val replace = LambdaAction("Merge down", byteSize = beforeBmp.byteCount.toLong() + (beforeMask?.byteCount ?: 0),
-            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.textData = beforeText; lower.copyPropsFrom(beforeProps); lower.markChanged() } },
-            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.textData = null; lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
+            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.textData = beforeText; lower.shapeData = beforeShape; lower.copyPropsFrom(beforeProps); lower.markChanged() } },
+            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.textData = null; lower.shapeData = null; lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
         )
         val remove = RemoveLayerAction(layer, idx, "Merge down")
         replace.redo(this)
@@ -1078,6 +1144,7 @@ class EditorController(
         runCatching { currentTool.onDeactivate() }
         filterSession?.cancel()
         if (toolsLazy.isInitialized()) tools.values.forEach { runCatching { it.onDispose() } }
+        snapping.clear()
         tiles.release()
         undoManager.clear()
     }

@@ -16,8 +16,12 @@ enum class SnapAxis { X, Y }
 /** One of the three alignment lines of a box on an axis: left / top, center, right / bottom. */
 enum class SnapEdge { START, CENTER, END }
 
-/** What a snap line belongs to (earlier entries win ties). */
-enum class SnapSource { CANVAS, SELECTION, OBJECT, GRID }
+/**
+ * What a snap line belongs to (earlier entries win ties): the canvas, the selection, an object's
+ * bounds (layer content), a POINT (an anchor / vertex: a line through it on each axis), a
+ * straight LINE found in a layer's pixels (e.g. the lines of a Table filter), the grid.
+ */
+enum class SnapSource { CANVAS, SELECTION, OBJECT, POINT, LINE, GRID }
 
 /** A box other things align to (document px). [name] is shown in guide labels (e.g. a layer name). */
 data class SnapBox(val box: DocBox, val name: String, val source: SnapSource = SnapSource.OBJECT)
@@ -40,8 +44,30 @@ data class SnapLine(
         get() = when (source) {
             SnapSource.CANVAS -> if (edge == SnapEdge.CENTER) "Canvas center" else "Canvas edge"
             SnapSource.GRID -> "Grid"
+            SnapSource.POINT -> name
+            SnapSource.LINE -> "$name line"
             else -> "$name ${SnapGuides.edgeWord(axis, edge)}"
         }
+
+    companion object {
+        /**
+         * The two lines through point [p] (a vertical one at its x, a horizontal one at its y),
+         * so a dragged point aligns with it on either axis or lands exactly on it. [name] is the
+         * guide label ("Point", "Vertex"...).
+         */
+        fun point(p: Vec2, name: String): List<SnapLine> = if (!p.x.isFinite() || !p.y.isFinite()) emptyList() else listOf(
+            SnapLine(SnapAxis.X, p.x, SnapEdge.CENTER, SnapSource.POINT, name, p.y, p.y),
+            SnapLine(SnapAxis.Y, p.y, SnapEdge.CENTER, SnapSource.POINT, name, p.x, p.x),
+        )
+
+        /**
+         * A straight line drawn in a layer: on [axis] at [pos] (X = vertical line at an x, Y =
+         * horizontal line at a y), running from [start] to [end] along the other axis. [name] is
+         * the layer name (label "<name> line").
+         */
+        fun drawn(axis: SnapAxis, pos: Float, start: Float, end: Float, name: String): SnapLine =
+            SnapLine(axis, pos, SnapEdge.CENTER, SnapSource.LINE, name, start, end)
+    }
 }
 
 /** Evenly spaced lines on one axis: `offset + k * spacing` ([spacing] > 0). */
@@ -79,9 +105,17 @@ class SnapTargets(
         /**
          * The canvas edges and center ([canvasW] x [canvasH], unless [includeCanvas] is false),
          * then the left / center / right and top / center / bottom lines of every box of
-         * [boxes] (in order: earlier boxes win ties), plus [grid].
+         * [boxes] (in order: earlier boxes win ties), then [extra] lines (points, drawn lines: see
+         * [SnapLine.point] / [SnapLine.drawn]), plus [grid].
          */
-        fun build(canvasW: Float, canvasH: Float, boxes: List<SnapBox>, grid: GridSnap? = null, includeCanvas: Boolean = true): SnapTargets {
+        fun build(
+            canvasW: Float,
+            canvasH: Float,
+            boxes: List<SnapBox>,
+            grid: GridSnap? = null,
+            includeCanvas: Boolean = true,
+            extra: List<SnapLine> = emptyList(),
+        ): SnapTargets {
             val xs = ArrayList<SnapLine>(boxes.size * 3 + 3)
             val ys = ArrayList<SnapLine>(boxes.size * 3 + 3)
             fun add(b: SnapBox) {
@@ -94,6 +128,10 @@ class SnapTargets(
             }
             if (includeCanvas && canvasW > 0f && canvasH > 0f) add(SnapBox(DocBox(0f, 0f, canvasW, canvasH), "Canvas", SnapSource.CANVAS))
             boxes.forEach(::add)
+            for (l in extra) {
+                if (!l.pos.isFinite() || !l.spanStart.isFinite() || !l.spanEnd.isFinite()) continue
+                if (l.axis == SnapAxis.X) xs += l else ys += l
+            }
             grid?.fixedX?.forEach { xs += SnapLine(SnapAxis.X, it, SnapEdge.CENTER, SnapSource.GRID, "Grid", 0f, canvasH) }
             grid?.fixedY?.forEach { ys += SnapLine(SnapAxis.Y, it, SnapEdge.CENTER, SnapSource.GRID, "Grid", 0f, canvasW) }
             return SnapTargets(xs, ys, grid?.x, grid?.y, canvasW, canvasH)

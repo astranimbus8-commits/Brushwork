@@ -148,6 +148,22 @@ class ProjectRepositoryTest {
     }
 
     @Test
+    fun editableTextAndShapeDataSurviveSaveAndLoad() = runBlocking<Unit> {
+        val doc = sampleDoc("proj-data")
+        doc.layers[0].shapeData = "{\"type\":\"STAR\",\"box\":[1,2,3,4]}"
+        doc.layers[1].textData = "{\"text\":\"Hi\"}"
+        repo.save(doc, null)
+        val loaded = repo.load(doc.id)
+        assertEquals(doc.layers[0].shapeData, loaded.layers[0].shapeData)
+        assertEquals(null, loaded.layers[0].textData)
+        assertEquals(doc.layers[1].textData, loaded.layers[1].textData)
+        assertEquals(null, loaded.layers[1].shapeData)
+        // Unchanged pixels (no rewrite) still keep the data.
+        repo.save(loaded, null)
+        assertEquals(doc.layers[0].shapeData, repo.load(doc.id).layers[0].shapeData)
+    }
+
+    @Test
     fun incrementalSaveOnlyRewritesChangedLayers() = runBlocking<Unit> {
         val doc = sampleDoc()
         val (ink, color) = doc.layers

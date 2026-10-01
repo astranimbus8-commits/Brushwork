@@ -54,6 +54,7 @@ import com.brushwork.paint.model.StabilizerSettings
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.BwSheet
+import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LabeledSlider
@@ -297,6 +298,7 @@ fun RulerToolOptions(tool: RulerTool) {
             Spacer(Modifier.width(4.dp))
             Text("Numbers")
         }
+        SnapToObjectsChip(controller)
         Button(
             onClick = { controller.selectTool(controller.lastPaintTool) },
             contentPadding = PaddingValues(horizontal = 14.dp),

@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
 
@@ -65,6 +66,7 @@ fun TextToolOptions(tool: TextTool) {
             selected = tool.isVertical && !onPath,
             enabled = !onPath,
         )
+        SnapToObjectsChip(c)
         Spacer(Modifier.width(4.dp))
         Hint(
             when {
@@ -109,6 +111,7 @@ fun FrameDividerOptions(tool: FrameDividerTool) {
                 ToolIconButton(Icons.Filled.GridView, "Rows × columns", onClick = { tool.gridOpen = true })
                 ToolIconButton(Icons.Filled.Delete, "Remove panels mode", onClick = { tool.removeMode = !tool.removeMode }, selected = tool.removeMode)
                 ToolIconButton(Icons.Filled.Settings, "Frame settings / new frame layer", onClick = { tool.settingsOpen = true })
+                SnapToObjectsChip(c)
             }
             FrameDividerTool.Status.OUT_OF_SYNC -> {
                 Icon(Icons.Filled.Warning, contentDescription = null, tint = BrushworkColors.Danger, modifier = Modifier.size(20.dp))

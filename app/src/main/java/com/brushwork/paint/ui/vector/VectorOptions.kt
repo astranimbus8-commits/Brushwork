@@ -63,6 +63,7 @@ import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
+import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
@@ -153,6 +154,7 @@ fun ShapeToolOptions(tool: ShapeTool) {
         )
     }
     OptionChip("15°", s.snapAngle, { set { it.copy(snapAngle = !it.snapAngle) } }, icon = Icons.Filled.Straighten)
+    SnapToObjectsChip(controller)
     ActionChip("Numbers", Icons.Filled.Pin) { if (tool.ensurePending()) showNumbers = true }
     ActionChip("Settings", Icons.Filled.Tune) { showSettings = true }
 
@@ -482,6 +484,7 @@ fun CurveToolOptions(tool: CurveTool) {
         contentDescription = "Stroke",
     )
     OptionChip("Fill", s.fill, { set { it.copy(fill = !it.fill) } }, icon = Icons.Filled.FormatColorFill)
+    SnapToObjectsChip(tool.controller)
     ActionChip("Numbers", Icons.Filled.Pin) { showNumbers = true }
     ActionChip("Settings", Icons.Filled.Tune) { showSettings = true }
 

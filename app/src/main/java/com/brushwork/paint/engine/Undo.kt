@@ -100,8 +100,9 @@ private fun Layer.bitmapFor(target: EditTarget): Bitmap? = if (target == EditTar
  */
 class PixelEditRecorder(val layer: Layer, val target: EditTarget, private val tileSize: Int = 256) {
     /**
-     * Set by the text tool when it re-renders a text layer: the layer stays an editable text
-     * layer. Any other edit of a text layer turns it into a raster layer (see commitEdit).
+     * Set by the text / shape tools when they re-render their layer: the layer stays an editable
+     * text / shape layer. Any other edit of such a layer turns it into a raster layer (see
+     * commitEdit).
      */
     var preserveText: Boolean = false
     private val bitmap: Bitmap = requireNotNull(layer.bitmapFor(target)) { "Layer has no ${target.name.lowercase()} bitmap" }
@@ -274,6 +275,8 @@ class DocumentBitmapsAction(
     class Entry(val layer: Layer, val bitmapBefore: Bitmap, val maskBefore: Bitmap?, val bitmapAfter: Bitmap, val maskAfter: Bitmap?) {
         /** Editable text of a text layer: new pixels make it a raster layer, undo restores it. */
         val textBefore: String? = layer.textData
+        /** Editable shape of a shape layer (same rule as [textBefore]). */
+        val shapeBefore: String? = layer.shapeData
     }
 
     override val byteSize: Long
@@ -287,7 +290,10 @@ class DocumentBitmapsAction(
         for (e in entries) {
             e.layer.bitmap = if (before) e.bitmapBefore else e.bitmapAfter
             e.layer.mask = if (before) e.maskBefore else e.maskAfter
-            if (e.bitmapBefore !== e.bitmapAfter) e.layer.textData = if (before) e.textBefore else null
+            if (e.bitmapBefore !== e.bitmapAfter) {
+                e.layer.textData = if (before) e.textBefore else null
+                e.layer.shapeData = if (before) e.shapeBefore else null
+            }
             e.layer.markChanged()
         }
         c.onDocumentGeometryChanged()

@@ -60,7 +60,8 @@ import kotlin.math.min
  *
  * Smart guides ([snapToObjects], on by default): while dragging, resizing or nudging, the box's
  * left / center / right and top / center / bottom lines snap to the canvas edges and center, the
- * content bounds of the other visible layers (found in the background by [LayerBoundsCache]),
+ * content bounds of the other visible layers and the lines drawn in them (found in the background
+ * by the app-wide [com.brushwork.paint.snap.SnapService]),
  * the selection while placing a picture and, with grid snapping on, the grid; the guides are
  * drawn by [SnapGuideRenderer] (the math is the reusable [SnapGuides]). The Numbers sheet's
  * reference point ([anchor]) is what typed sizes, scales and rotations keep in place;
@@ -106,20 +107,18 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             prefs.edit { putBoolean(PREF_FROM_CENTER, v) }
         }
 
-    private var snapState by mutableStateOf(prefs.getBoolean(PREF_SNAP, true))
-
     /**
      * Smart guides: while dragging, resizing or nudging, the box's left / center / right and top /
      * center / bottom lines snap to the canvas edges and center, the content of the other
-     * visible layers (the selection too while placing a picture) and, when grid snapping is on,
-     * the grid. Remembered; on by default.
+     * visible layers and the lines drawn in them (the selection too while placing a picture)
+     * and, when grid snapping is on, the grid. The app-wide "Snap to objects" setting
+     * ([EditorController.snapping]); remembered, on by default.
      */
     var snapToObjects: Boolean
-        get() = snapState
+        get() = controller.snapping.enabled
         set(v) {
-            if (v == snapState) return
-            snapState = v
-            prefs.edit { putBoolean(PREF_SNAP, v) }
+            if (v == controller.snapping.enabled) return
+            controller.snapping.enabled = v
             if (!v) clearGuides()
             else liveSession()?.let { requestSnapBounds(it) }
         }
@@ -301,14 +300,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ smart guides state
 
-    /** Content bounds of the other layers (what the box snaps to), computed in the background. */
-    private val layerBounds = LayerBoundsCache(controller.scope) {
-        snapTargetsVersion++
-        if (gesture != null) controller.invalidateOverlay()
-    }
-
-    /** Bumped when new layer bounds arrive (a gesture's snap targets are then rebuilt). */
-    private var snapTargetsVersion = 0
+    /**
+     * Content bounds and lines of the other layers (what the box snaps to) are found in the
+     * background by the app-wide snapping service; its version changes when new ones arrive (a
+     * gesture's snap targets are then rebuilt).
+     */
+    private val snapTargetsVersion: Int get() = controller.snapping.version
 
     /** Guides shown on the canvas right now (document px); empty when nothing is aligned. */
     private var guides: List<SnapGuide> = emptyList()
@@ -317,7 +314,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     val activeGuides: List<SnapGuide> get() = guides
 
     /** True while the content bounds of other (large) layers are still being found for snapping. */
-    val isFindingSnapTargets: Boolean get() = layerBounds.isBusy
+    val isFindingSnapTargets: Boolean get() = controller.snapping.isBusy
 
     /** Hides the guides a nudge showed after a moment. */
     private var guidesJob: Job? = null
@@ -363,12 +360,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         cancelJobs()
         if (hasPendingWork) commit()
         // Nothing to snap until the next transform (what is known stays cached).
-        layerBounds.cancel()
+        controller.snapping.cancel()
     }
 
     override fun onDispose() {
         cancelJobs()
-        layerBounds.clear()
     }
 
     /**
@@ -566,26 +562,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     /**
      * What the transformed box aligns to: the canvas edges and center, the content bounds of the
-     * other visible layers (top-most first), the selection while placing a picture, and the grid
-     * when grid snapping is on.
+     * other visible layers (top-most first) and the lines drawn in them, the selection while
+     * placing a picture, and the grid when grid snapping is on.
      */
-    private fun buildSnapTargets(s: Session): SnapTargets {
-        val doc = controller.doc
-        val boxes = ArrayList<SnapBox>()
-        if (s.placement) controller.selection?.bounds?.takeIf { !it.isEmpty }?.let { boxes += SnapBox(it.toDocBox(), "Selection", SnapSource.SELECTION) }
-        for (layer in doc.layers.asReversed()) {
-            if (layer === s.layer || !layer.visible || layer.opacity <= 0f) continue
-            layerBounds.bounds(layer)?.let { boxes += SnapBox(it.toDocBox(), layer.name, SnapSource.OBJECT) }
-        }
-        val grid = controller.grid.takeIf { it.snap }?.let { SnapGuides.gridLines(it, doc.width, doc.height) }
-        return SnapTargets.build(doc.width.toFloat(), doc.height.toFloat(), boxes, grid)
-    }
+    private fun buildSnapTargets(s: Session): SnapTargets =
+        controller.snapping.targets(exclude = listOf(s.layer), includeSelection = s.placement, includeGrid = true)
 
-    /** Starts finding the content bounds of the layers the box of [s] can snap to (cached). */
-    private fun requestSnapBounds(s: Session) {
-        val layers = controller.doc.layers
-        layerBounds.request(layers.filter { it !== s.layer && it.visible && it.opacity > 0f }, layers)
-    }
+    /** Starts finding the content bounds / lines of the layers the box of [s] can snap to (cached). */
+    private fun requestSnapBounds(s: Session) = controller.snapping.prepare(listOf(s.layer))
 
     /** A dragged box: moved onto the closest guide within reach (unscaled content stays on whole pixels). */
     private fun snapMove(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
@@ -755,8 +739,6 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         guides = emptyList()
         controller.invalidateOverlay()
     }
-
-    private fun Rect.toDocBox() = DocBox(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat())
 
     // ------------------------------------------------------------------ two-finger pinch
 
@@ -1614,7 +1596,6 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         /** How long a nudge shows the guides it lined up with. */
         private const val NUDGE_GUIDES_MS = 1200L
 
-        private const val PREF_SNAP = "transform.snapToObjects"
         private const val PREF_FROM_CENTER = "transform.scaleFromCenter"
         private const val PREF_ANCHOR = "transform.anchor"
 

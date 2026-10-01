@@ -66,6 +66,19 @@ class Layer(
 
     val isTextLayer: Boolean get() = textData != null
 
+    /**
+     * Non-null for an EDITABLE SHAPE LAYER: the shape tool's serialized shape object (type, box,
+     * vertices, appearance) that [bitmap] was rendered from, so the shape can be edited again.
+     * Like [textData], any other pixel edit turns the layer into a normal raster layer (the
+     * controller clears this, undoably). Opaque to everything except the shape tool and storage.
+     */
+    var shapeData: String? = null
+
+    val isShapeLayer: Boolean get() = shapeData != null
+
+    /** True for layers that keep an editable object (text or shape) besides their pixels. */
+    val hasEditableData: Boolean get() = textData != null || shapeData != null
+
     /** Incremented on every pixel change (content or mask). Used for thumbnails and dirty saving. */
     var contentVersion: Long = 0
         private set

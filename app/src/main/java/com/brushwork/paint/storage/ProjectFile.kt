@@ -48,6 +48,8 @@ internal data class LayerEntryDto(
     val maskFile: String? = null,
     /** Serialized editable text object for text layers (see Layer.textData). */
     val textData: String? = null,
+    /** Serialized editable shape object for shape layers (see Layer.shapeData). */
+    val shapeData: String? = null,
 ) {
     val contentFileName: String get() = file ?: "layer_$id.bin"
     val maskFileName: String get() = maskFile ?: "mask_$id.bin"

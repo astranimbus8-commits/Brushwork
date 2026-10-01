@@ -3,6 +3,8 @@ package com.brushwork.paint.tools.transform
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.snap.DetectedLine
+import com.brushwork.paint.snap.LineDetector
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,9 +21,14 @@ import kotlinx.coroutines.withContext
  * changed while it was being scanned. Everything here is called on the main thread;
  * [onUpdated] runs there whenever new bounds arrived.
  */
-class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated: () -> Unit) {
+class LayerBoundsCache(
+    private val scope: CoroutineScope,
+    /** Also find the straight horizontal / vertical lines drawn in each layer ([lines]). */
+    private val detectLines: Boolean = false,
+    private val onUpdated: () -> Unit,
+) {
 
-    private class Entry(val version: Long, val bitmapId: Int, val maskId: Int, val width: Int, val height: Int, val bounds: Rect?) {
+    private class Entry(val version: Long, val bitmapId: Int, val maskId: Int, val width: Int, val height: Int, val bounds: Rect?, val lines: List<DetectedLine>) {
         fun matches(layer: Layer): Boolean {
             val b = layer.bitmap
             return version == layer.contentVersion && bitmapId == System.identityHashCode(b) && maskId == maskIdOf(layer) &&
@@ -46,6 +53,15 @@ class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated:
     }
 
     /**
+     * Straight horizontal / vertical lines drawn in [layer] (document px; only with
+     * detectLines), or empty when it has none or they are not known (yet).
+     */
+    fun lines(layer: Layer): List<DetectedLine> {
+        val e = entries[layer.id] ?: return emptyList()
+        return if (e.matches(layer)) e.lines else emptyList()
+    }
+
+    /**
      * Makes sure the bounds of [layers] get known: stale ones are scanned (tiny ones now, the
      * others in the background). Entries of layers not in [all] (deleted) are forgotten.
      */
@@ -62,7 +78,7 @@ class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated:
             if (bmp.width.toLong() * bmp.height <= SYNC_PIXELS) {
                 val mask = activeMask(layer)
                 val r = scan(bmp, mask) { false } ?: continue
-                store(layer, layer.contentVersion, bmp, mask, r.bounds)
+                store(layer, layer.contentVersion, bmp, mask, r)
                 changed = true
             } else {
                 queue.addLast(layer)
@@ -86,7 +102,7 @@ class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated:
                     val r = withContext(Dispatchers.Default) { scan(bmp, mask) { !isActive } } ?: continue
                     // Changed (or replaced) while it was being scanned: scan it again when asked.
                     if (layer.contentVersion != version || layer.bitmap !== bmp || activeMask(layer) !== mask) continue
-                    store(layer, version, bmp, mask, r.bounds)
+                    store(layer, version, bmp, mask, r)
                     onUpdated()
                 }
             } finally {
@@ -95,7 +111,7 @@ class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated:
         }
     }
 
-    private class Scan(val bounds: Rect?)
+    private class Scan(val bounds: Rect?, val lines: List<DetectedLine>)
 
     /**
      * Content bounds of [bmp], trimmed by [mask] (the layer's enabled mask, if any) to where it
@@ -107,16 +123,17 @@ class LayerBoundsCache(private val scope: CoroutineScope, private val onUpdated:
         if (r != null && mask != null && mask.width == bmp.width && mask.height == bmp.height) {
             r = ContentBounds.of(mask, HIDDEN, region = r, cancelled = cancelled)
         }
-        if (cancelled()) null else Scan(r)
+        val lines = if (detectLines && r != null && !cancelled()) LineDetector.detect(bmp, r, cancelled) else emptyList()
+        if (cancelled()) null else Scan(r, lines)
     } catch (e: CancellationException) {
         throw e
     } catch (e: RuntimeException) {
         null // e.g. recycled while it was being read
     }
 
-    private fun store(layer: Layer, version: Long, bmp: Bitmap, mask: Bitmap?, bounds: Rect?) {
+    private fun store(layer: Layer, version: Long, bmp: Bitmap, mask: Bitmap?, scan: Scan) {
         val maskId = mask?.let { System.identityHashCode(it) } ?: 0
-        entries[layer.id] = Entry(version, System.identityHashCode(bmp), maskId, bmp.width, bmp.height, bounds)
+        entries[layer.id] = Entry(version, System.identityHashCode(bmp), maskId, bmp.width, bmp.height, scan.bounds, scan.lines)
     }
 
     /** Stops scanning (keeps what is known). */
