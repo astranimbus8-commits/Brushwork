@@ -814,9 +814,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
     /**
      * Path handle [index] of [path] at [at] (what the finger alone gives) snapped while "Snap to
      * objects" is on. The circle's radius handle and a square's size corner only change the size:
-     * it snaps so the outline touches the closest line (its top, bottom, left or right side, or a
-     * corner of a turned square). Every other handle snaps per axis like a point (then the square
-     * grid on axes that didn't snap, when grid snapping is on). Off: [at] unchanged.
+     * it snaps so the outline touches the closest line (the circle's top, bottom, left or right,
+     * a square's side or, turned, its corner). Every other handle snaps per axis like a point
+     * (then the square grid on axes that didn't snap, when grid snapping is on). Off: [at]
+     * unchanged.
      */
     private fun snapPathHandle(path: TextPathSpec, index: Int, at: Vec2): Vec2 {
         if (!controller.snapping.enabled) {
@@ -1364,7 +1365,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
         private const val AXIS_ALIGNED = 0.9999f
         /** A circle touches lines with its right / left and bottom / top. */
         private val AXIS_DIRS = listOf(Vec2(1f, 0f), Vec2(0f, 1f))
-        /** A square (half side s) touches lines with its sides (`c ± s` on an axis) or its corners. */
-        private val SQUARE_DIRS = listOf(Vec2(1f, 0f), Vec2(0f, 1f), Vec2(1f, 1f), Vec2(1f, -1f))
+        /**
+         * A square (half side s) touches lines with its corners `c ± (s, ±s)` (turned with it):
+         * upright, they lie on its sides' lines; turned, they are the points that stick out.
+         */
+        private val SQUARE_DIRS = listOf(Vec2(1f, 1f), Vec2(1f, -1f))
     }
 }

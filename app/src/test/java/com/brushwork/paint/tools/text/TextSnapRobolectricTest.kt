@@ -248,6 +248,18 @@ class TextSnapRobolectricTest {
         assertTrue(tool.activeGuides.any { it.axis == SnapAxis.Y && it.pos == 150f })
         c.pointerUp(ToolPoint(345f, 249f))
         assertTrue(tool.activeGuides.isEmpty())
+        // Turned 45°: its top corner sticks out; dragged 3 px short of the line, it touches it.
+        tool.setPath(tool.item!!.path.copy(cx = 300f, cy = 200f, width = 40f, height = 40f, rotationDeg = 45f))
+        val h = TextOnPath.handles(tool.item!!.path)[1]
+        assertEquals(300f, h.x, 1e-3f)
+        c.pointerDown(ToolPoint(h.x, h.y))
+        c.pointerMove(ToolPoint(300f, 240f))
+        c.pointerMove(ToolPoint(300f, 247f))
+        val half = 50f / kotlin.math.sqrt(2f)
+        assertEquals(2f * half, tool.item!!.path.width, 1e-3f)
+        assertTrue(tool.activeGuides.any { it.axis == SnapAxis.Y && it.pos == 150f })
+        c.pointerUp(ToolPoint(300f, 247f))
+        assertTrue(tool.activeGuides.isEmpty())
     }
 
     private fun EditorController.drag(vararg pts: Pair<Float, Float>) {
