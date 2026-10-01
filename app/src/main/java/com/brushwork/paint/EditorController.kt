@@ -95,8 +95,11 @@ fun interface EditListener {
  * is registered ([EditorController.addDeferredStep]), [flush] is called before any other step is
  * pushed and before undo / redo, so it records its step first and the history stays in order.
  * [flush] may push one step (it is not called again for its own pushes) and must leave nothing
- * pending; it is not called while undo / redo run or while edit listeners are notified. Main
- * thread.
+ * pending; it is not called while undo / redo run or while edit listeners are notified. It may
+ * run after the triggering action already changed the document but before that action's step is
+ * pushed, so it must only touch its own data (not depend on the active layer or on layer
+ * properties). Keep one pending only while its owner tool is active (grouping by step count, like
+ * a placement's `mergeLastUndo(2)`, assumes nothing is flushed in between). Main thread.
  */
 fun interface DeferredStep {
     fun flush()
