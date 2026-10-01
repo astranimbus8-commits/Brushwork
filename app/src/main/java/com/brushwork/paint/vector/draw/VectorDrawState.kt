@@ -64,9 +64,6 @@ internal class VectorDrawState(private val c: EditorController) {
         run(layer, job)
     }
 
-    /** True while an update of [layer] submitted through [serial] is on its way. */
-    fun isUpdating(layer: Layer): Boolean = running.containsKey(layer)
-
     private fun run(layer: Layer, job: (() -> Unit) -> Unit) {
         running[layer] = SystemClock.uptimeMillis()
         val gen = (generation[layer] ?: 0) + 1

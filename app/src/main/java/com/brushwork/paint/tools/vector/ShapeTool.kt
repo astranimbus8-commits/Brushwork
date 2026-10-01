@@ -1517,15 +1517,18 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             return
         }
         ensureObserving()
+        // A reopened object that is partly transparent: its plain parts are previewed with its
+        // opacity, its brush outline as a guide (a live stroke would show it opaque).
+        val opaque = vectorSession == null || vectorEditOpacity >= 1f
         val brushObj = (creating ?: pending)?.takeIf { it.paintsWithBrush }
-        val live = brushObj != null && liveBrushOnVector(layer)
+        val live = brushObj != null && opaque && liveBrushOnVector(layer)
         val specs = ArrayList<VectorPaintSpec>(2)
         val guides = ArrayList<Path>(2)
         for (o in listOfNotNull(pending, creating)) {
             ShapeOutlines.paintSpec(o, o.paintsWithBrush)?.let { specs += it }
             if (o.paintsWithBrush && !(live && o === brushObj)) guides += ShapeOutlines.brushOutline(o).toAndroidPath()
         }
-        val inOverlay = dragging && !live && specs.isNotEmpty() && editDrawsInOverlay(layer)
+        val inOverlay = dragging && !live && opaque && specs.isNotEmpty() && editDrawsInOverlay(layer)
         setVectorSpecs(layer, if (inOverlay) emptyList() else specs)
         if (inOverlay) overlaySpecs = specs
         vectorGuides = guides
@@ -1543,7 +1546,16 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val session = vectorSession
         if (session != null) {
             val shown = specs.toList()
-            session.drawPreview = if (shown.isEmpty()) null else { cv -> drawSpecs(cv, shown) }
+            val alpha = (vectorEditOpacity.coerceIn(0f, 1f) * 255f).roundToInt()
+            session.drawPreview = when {
+                shown.isEmpty() -> null
+                alpha >= 255 -> { cv -> drawSpecs(cv, shown) }
+                else -> { cv ->
+                    val save = cv.saveLayerAlpha(null, alpha)
+                    drawSpecs(cv, shown)
+                    cv.restoreToCount(save)
+                }
+            }
             if (controller.renderOverride !== session) session.adoptInner()
         } else if (specs.isEmpty() && !brushPreview.isLive) {
             releaseVectorPreview(keepGuides = true)

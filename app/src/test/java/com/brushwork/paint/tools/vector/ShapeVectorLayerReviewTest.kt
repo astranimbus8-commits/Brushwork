@@ -205,6 +205,26 @@ class ShapeVectorLayerReviewTest {
     }
 
     @Test
+    fun aHalfTransparentShapeObjectIsPreviewedWithItsOpacityAndKeepsIt() {
+        val c = controller()
+        val shape = ShapeObject(ShapeType.RECTANGLE, cx = 100f, cy = 90f, w = 100f, h = 80f, style = ShapeStyle.FILL, fillColor = fillColor, strokeColor = fillColor)
+        c.vectors.addObjects(c.vec, listOf(VShape(0, opacity = 0.5f, shape = shape)), "Add")
+        val cache = c.vec.bitmap.getPixel(100, 90)
+        assertEquals(128.0, (cache ushr 24).toDouble(), 2.0)
+        val tool = shapeTool(c)
+        c.pointerDown(ToolPoint(100f, 90f))
+        c.pointerUp(ToolPoint(100f, 90f))
+        assertTrue(tool.editingObject)
+        // The preview looks like the object: half transparent.
+        assertEquals((cache ushr 24).toDouble(), (shown(c).getPixel(100, 90) ushr 24).toDouble(), 2.0)
+        tool.place(tool.box!!.copy(cx = 140f))
+        tool.commit()
+        val moved = c.vec.vector!!.objects.single() as VShape
+        assertEquals(0.5f, moved.opacity)
+        assertArrayEquals(render(c.vec.vector!!), pixels(c.vec.bitmap))
+    }
+
+    @Test
     fun theReopenedShapesFloatingPreviewIsFreed() {
         val c = controller()
         val tool = shapeTool(c)
