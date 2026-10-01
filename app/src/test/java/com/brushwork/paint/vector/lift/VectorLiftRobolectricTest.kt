@@ -333,6 +333,7 @@ class VectorLiftRobolectricTest {
         assertSame(before, layer.vector)
         assertNotNull(c.renderOverride)
         assertFalse("the preview is kept until then", floating.isRecycled)
+        assertNull("no lift is open meanwhile (nothing can commit it twice)", VectorLift.activeLift(c))
         val shown = BitmapUtils.createLayerBitmap(kit.w, kit.h)
         c.compositor.drawDocument(Canvas(shown), null, useOverrides = true, target = null)
         assertTrue(android.graphics.Color.alpha(shown.getPixel(90 + 256, 80 + 100)) == 255)
