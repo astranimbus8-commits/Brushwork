@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterSession
+import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
@@ -38,41 +39,71 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
+/**
+ * What a parameter control reads and changes: a filter session's values, or (v1.5) an adjustment
+ * layer's effect values edited in the Masks tool's Adjust sheet. [pointsOnCanvas]: point
+ * parameters are dragged on the canvas (a session) or only shown and reset.
+ */
+internal class ParamHost(
+    private val valuesOf: () -> FilterValues,
+    val update: (key: String, value: Any) -> Unit,
+    val resetParam: (key: String) -> Unit,
+    private val histogramOf: () -> IntArray? = { null },
+    private val draggingPointOf: () -> String? = { null },
+    val pointsOnCanvas: Boolean = false,
+    /** A slider or editor drag ended (an adjustment records its step later; a session needs nothing). */
+    val onChangeFinished: () -> Unit = {},
+) {
+    /** The current values (read when used: repeated button presses always see the latest). */
+    val values: FilterValues get() = valuesOf()
+    val histogram: IntArray? get() = histogramOf()
+    val draggingPoint: String? get() = draggingPointOf()
+}
+
+/** The host of a filter session's controls. */
+internal fun FilterSession.paramHost(): ParamHost =
+    ParamHost({ values }, ::update, ::resetParam, { histogram }, { draggingPoint }, pointsOnCanvas = true)
+
 /** The control generated for one filter parameter. */
 @Composable
-internal fun FilterParamControl(session: FilterSession, param: FilterParam, enabled: Boolean, modifier: Modifier = Modifier) {
+internal fun FilterParamControl(session: FilterSession, param: FilterParam, enabled: Boolean, modifier: Modifier = Modifier) =
+    FilterParamControl(remember(session) { session.paramHost() }, param, enabled, modifier)
+
+/** The control generated for one filter parameter, on any [host] (v1.5: without a session too). */
+@Composable
+internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Boolean, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         when (param) {
-            is FilterParam.Slider -> SliderControl(session, param, enabled)
-            is FilterParam.Toggle -> ToggleRow(param.label, session.values.bool(param.key), { if (enabled) session.update(param.key, it) })
+            is FilterParam.Slider -> SliderControl(host, param, enabled)
+            is FilterParam.Toggle -> ToggleRow(param.label, host.values.bool(param.key), { if (enabled) host.update(param.key, it) })
             is FilterParam.Choice -> {
                 ParamLabel(param.label)
-                ChoiceChips(param.options, session.values.choice(param.key), { if (enabled) session.update(param.key, it) })
+                ChoiceChips(param.options, host.values.choice(param.key), { if (enabled) host.update(param.key, it) })
             }
-            is FilterParam.Color -> ColorControl(session, param, enabled)
-            is FilterParam.Point -> PointControl(session, param, enabled)
+            is FilterParam.Color -> ColorControl(host, param, enabled)
+            is FilterParam.Point -> PointControl(host, param, enabled)
             is FilterParam.Curve -> {
                 ParamLabel(param.label)
                 CurveEditor(
-                    points = session.values.curve(param.key),
-                    onChange = { session.update(param.key, it) },
-                    histogram = session.histogram,
+                    points = host.values.curve(param.key),
+                    onChange = { host.update(param.key, it) },
+                    histogram = host.histogram,
                     enabled = enabled,
-                    onReset = { session.resetParam(param.key) },
+                    onReset = { host.resetParam(param.key) },
                 )
             }
             is FilterParam.Gradient -> {
                 ParamLabel(param.label)
                 GradientEditor(
-                    stops = session.values.gradient(param.key),
-                    onChange = { session.update(param.key, it) },
+                    stops = host.values.gradient(param.key),
+                    onChange = { host.update(param.key, it) },
                     defaultStops = param.default,
                     enabled = enabled,
                 )
             }
             is FilterParam.Text -> OutlinedTextField(
-                value = session.values.text(param.key),
-                onValueChange = { session.update(param.key, it) },
+                value = host.values.text(param.key),
+                onValueChange = { host.update(param.key, it) },
                 label = { Text(param.label) },
                 singleLine = !param.multiline,
                 minLines = if (param.multiline) 3 else 1,
@@ -80,7 +111,7 @@ internal fun FilterParamControl(session: FilterSession, param: FilterParam, enab
                 enabled = enabled,
                 modifier = Modifier.fillMaxWidth(),
             )
-            is FilterParam.Seed -> SeedControl(session, param, enabled)
+            is FilterParam.Seed -> SeedControl(host, param, enabled)
         }
     }
 }
@@ -91,16 +122,17 @@ private fun ParamLabel(text: String) {
 }
 
 @Composable
-private fun SliderControl(session: FilterSession, p: FilterParam.Slider, enabled: Boolean) {
-    val v = session.values.float(p.key)
+private fun SliderControl(host: ParamHost, p: FilterParam.Slider, enabled: Boolean) {
+    val v = host.values.float(p.key)
     Row(verticalAlignment = Alignment.CenterVertically) {
-        RepeatIconButton(Icons.Filled.Remove, "Decrease ${p.label}", enabled = enabled) {
-            session.update(p.key, SliderFormat.nudge(p, session.values.float(p.key), -1))
+        RepeatIconButton(Icons.Filled.Remove, "Decrease ${p.label}", enabled = enabled, onRelease = host.onChangeFinished) {
+            host.update(p.key, SliderFormat.nudge(p, host.values.float(p.key), -1))
         }
         LabeledSlider(
             label = p.label,
             value = v,
-            onValueChange = { session.update(p.key, SliderFormat.snap(p, it)) },
+            onValueChange = { host.update(p.key, SliderFormat.snap(p, it)) },
+            onValueChangeFinished = host.onChangeFinished,
             valueRange = p.min..p.max,
             valueText = SliderFormat.format(p, v),
             enabled = enabled,
@@ -108,16 +140,16 @@ private fun SliderControl(session: FilterSession, p: FilterParam.Slider, enabled
             typing = SliderTyping(decimals = SliderFormat.decimals(p), suffix = if (p.pixels) "px" else p.suffix),
             modifier = Modifier.weight(1f),
         )
-        RepeatIconButton(Icons.Filled.Add, "Increase ${p.label}", enabled = enabled) {
-            session.update(p.key, SliderFormat.nudge(p, session.values.float(p.key), 1))
+        RepeatIconButton(Icons.Filled.Add, "Increase ${p.label}", enabled = enabled, onRelease = host.onChangeFinished) {
+            host.update(p.key, SliderFormat.nudge(p, host.values.float(p.key), 1))
         }
     }
 }
 
 @Composable
-private fun ColorControl(session: FilterSession, p: FilterParam.Color, enabled: Boolean) {
+private fun ColorControl(host: ParamHost, p: FilterParam.Color, enabled: Boolean) {
     var picking by remember { mutableStateOf(false) }
-    val color = session.values.color(p.key)
+    val color = host.values.color(p.key)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
             Text(p.label, style = MaterialTheme.typography.bodyMedium)
@@ -128,7 +160,7 @@ private fun ColorControl(session: FilterSession, p: FilterParam.Color, enabled: 
     if (picking) {
         ColorPickerDialog(
             initial = color,
-            onPick = { session.update(p.key, it) },
+            onPick = { host.update(p.key, it); host.onChangeFinished() },
             onDismiss = { picking = false },
             title = p.label,
             showAlpha = true,
@@ -137,31 +169,32 @@ private fun ColorControl(session: FilterSession, p: FilterParam.Color, enabled: 
 }
 
 @Composable
-private fun PointControl(session: FilterSession, p: FilterParam.Point, enabled: Boolean) {
-    val v = session.values.point(p.key)
-    val dragging = session.draggingPoint == p.key
+private fun PointControl(host: ParamHost, p: FilterParam.Point, enabled: Boolean) {
+    val v = host.values.point(p.key)
+    val dragging = host.draggingPoint == p.key
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
             Text(p.label, style = MaterialTheme.typography.bodyMedium, color = if (dragging) BrushworkColors.Accent else BrushworkColors.OnChrome)
             Text(
-                "Drag on the canvas to move ${p.label.lowercase()}  ·  X ${(v[0] * 100).roundToInt()}%  Y ${(v[1] * 100).roundToInt()}%",
+                (if (host.pointsOnCanvas) "Drag on the canvas to move ${p.label.lowercase()}  ·  " else "") +
+                    "X ${(v[0] * 100).roundToInt()}%  Y ${(v[1] * 100).roundToInt()}%",
                 style = MaterialTheme.typography.bodySmall,
                 color = BrushworkColors.OnChromeDim,
             )
         }
-        IconButton(onClick = { session.resetParam(p.key) }, enabled = enabled) {
+        IconButton(onClick = { host.resetParam(p.key) }, enabled = enabled) {
             Icon(Icons.Filled.CenterFocusStrong, contentDescription = "Reset ${p.label}")
         }
     }
 }
 
 @Composable
-private fun SeedControl(session: FilterSession, p: FilterParam.Seed, enabled: Boolean) {
+private fun SeedControl(host: ParamHost, p: FilterParam.Seed, enabled: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Text(p.label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
-        Text("${session.values.seed(p.key)}", style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
+        Text("${host.values.seed(p.key)}", style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
         Spacer(Modifier.width(4.dp))
-        IconButton(onClick = { session.update(p.key, Random.nextInt(1, 1_000_000)) }, enabled = enabled) {
+        IconButton(onClick = { host.update(p.key, Random.nextInt(1, 1_000_000)); host.onChangeFinished() }, enabled = enabled) {
             Icon(Icons.Filled.Shuffle, contentDescription = "New random ${p.label.lowercase()}")
         }
     }

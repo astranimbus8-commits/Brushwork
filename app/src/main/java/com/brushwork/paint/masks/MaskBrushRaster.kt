@@ -279,8 +279,13 @@ class MaskBrushCache(val width: Int, val height: Int) : BrushSource {
     fun holds(c: BrushMask): Boolean =
         bytes != null && c.id == id && c.strokes.size == strokes.size && strokes.indices.all { c.strokes[it] === strokes[it] }
 
+    /** True when the cache holds [c] or its strokes so far ([c] adds strokes: an incremental update). */
+    fun serves(c: BrushMask): Boolean =
+        bytes != null && c.id == id && c.strokes.size >= strokes.size && strokes.indices.all { c.strokes[it] === strokes[it] }
+
+    /** Coverage of [c] on [grid] when the cache serves it (see [serves]); null otherwise (it isn't rebuilt here). */
     override fun coverage(c: BrushMask, grid: SampleGrid): ByteArray? {
-        if (!grid.isPixelAligned) return null
+        if (!serves(c) || !grid.isPixelAligned) return null
         val left = grid.x0.toInt(); val top = grid.y0.toInt()
         if (left < 0 || top < 0 || left + grid.cols > width || top + grid.rows > height) return null
         val all = full(c) ?: return null
