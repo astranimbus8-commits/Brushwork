@@ -2,6 +2,7 @@ package com.brushwork.paint.storage
 
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.GridSettings
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.RulerSettings
@@ -18,7 +19,11 @@ import java.nio.file.StandardCopyOption
 /** Contents of `project.json`: everything about a project except the pixels. */
 @Serializable
 internal data class ProjectFileDto(
-    val formatVersion: Int = ProjectFormat.VERSION,
+    /**
+     * The format this file needs to be read: 1 (v1.0–v1.4 readable) unless the project has an
+     * adjustment layer (2), see [ProjectFormat.writtenVersion].
+     */
+    val formatVersion: Int = ProjectFormat.BASE_VERSION,
     val id: String,
     val name: String,
     val width: Int,
@@ -50,6 +55,12 @@ internal data class LayerEntryDto(
     val textData: String? = null,
     /** Serialized editable shape object for shape layers (see Layer.shapeData). */
     val shapeData: String? = null,
+    /** Vector file of a vector layer (`vector_<id>_r<rev>.vec`, see VectorCodec); null for other layers. */
+    val vectorFile: String? = null,
+    /** Editable mask spec (MaskCodec), pre-encoded so a damaged one only affects its layer. */
+    val maskSpec: String? = null,
+    /** Effect of an adjustment layer (AdjustmentCodec), pre-encoded like [maskSpec]. */
+    val adjustment: String? = null,
 ) {
     val contentFileName: String get() = file ?: "layer_$id.bin"
     val maskFileName: String get() = maskFile ?: "mask_$id.bin"
@@ -64,7 +75,10 @@ internal data class LayerEntryDto(
  * are no longer referenced — so a crash at any point leaves either the old or the new project.
  */
 internal object ProjectFormat {
-    const val VERSION = 1
+    /** Highest format this version reads. */
+    const val VERSION = 2
+    /** The format of projects without adjustment layers (v1.0–v1.4 read it; vector data is extra). */
+    const val BASE_VERSION = 1
     const val PROJECT_FILE = "project.json"
     const val THUMB_FILE = "thumb.png"
     const val TEMP_SUFFIX = ".tmp"
@@ -72,6 +86,7 @@ internal object ProjectFormat {
 
     private val idPattern = Regex("[A-Za-z0-9_-]{1,64}")
     private val pixelFilePattern = Regex("(layer|mask)_[A-Za-z0-9_-]+\\.bin")
+    private val vectorFilePattern = Regex("vector_[A-Za-z0-9_-]+\\.vec")
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -84,11 +99,21 @@ internal object ProjectFormat {
 
     fun layerFile(id: Long, revision: Long) = "layer_${id}_r$revision.bin"
     fun maskFile(id: Long, revision: Long) = "mask_${id}_r$revision.bin"
+    fun vectorFile(id: Long, revision: Long) = "vector_${id}_r$revision.vec"
 
     /** Project ids become folder names: only accept safe ones. */
     fun isValidId(id: String) = idPattern.matches(id)
 
     fun isPixelFile(name: String) = pixelFilePattern.matches(name)
+
+    /** A vector layer's data file name (v1.5); separate from [isPixelFile] so pixel names stay validated as before (V8). */
+    fun isVectorFile(name: String) = vectorFilePattern.matches(name)
+
+    /**
+     * The format version to write for [layers]: 2 when an adjustment layer exists (older versions
+     * then refuse the project instead of showing it wrong), else 1 (I4).
+     */
+    fun writtenVersion(layers: List<Layer>): Int = if (layers.any { it.isAdjustmentLayer }) 2 else BASE_VERSION
 
     fun defaultProps(name: String) = LayerProps(
         name = name, opacity = 1f, blendMode = LayerBlendMode.NORMAL, visible = true,
@@ -105,20 +130,21 @@ internal object ProjectFormat {
         writeAtomically(File(dir, PROJECT_FILE)) { it.write(bytes) }
     }
 
-    /** Every file [dto] needs (pixel files of all layers and masks). */
+    /** Every file [dto] needs (pixel files of all layers and masks, vector files). */
     fun referencedFiles(dto: ProjectFileDto): Set<String> = buildSet {
         for (e in dto.layers) {
             add(e.contentFileName)
             if (e.hasMask) add(e.maskFileName)
+            e.vectorFile?.let { add(it) }
         }
     }
 
-    /** Deletes pixel files [dto] doesn't reference plus leftover temp files. */
+    /** Deletes pixel and vector files [dto] doesn't reference plus leftover temp files. */
     fun deleteUnreferenced(dir: File, dto: ProjectFileDto) {
         val keep = referencedFiles(dto)
         dir.listFiles()?.forEach { f ->
             val n = f.name
-            if (f.isFile && n !in keep && (isPixelFile(n) || n.endsWith(TEMP_SUFFIX))) f.delete()
+            if (f.isFile && n !in keep && (isPixelFile(n) || isVectorFile(n) || n.endsWith(TEMP_SUFFIX))) f.delete()
         }
     }
 

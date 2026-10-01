@@ -45,18 +45,27 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
+import com.brushwork.paint.core.Units
+import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.tools.vector.ShapeGeometry
+import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
+import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.UnitSelector
 import com.brushwork.paint.ui.theme.BrushworkColors
+import kotlin.math.cos
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /** Icon of a shape type. */
 internal fun shapeIcon(type: ShapeType): ImageVector = when (type) {
@@ -259,5 +268,74 @@ internal fun FillColorRow(custom: Int?, mainColor: Int, onPick: (Int?) -> Unit) 
             title = "Fill color",
             showAlpha = true,
         )
+    }
+}
+
+// ====================================================================== shared by the shape and curve options (moved from VectorOptions.kt, v1.5)
+
+private val VECTOR_MAX_LEN = ShapeSettings.MAX_LENGTH.toDouble()
+
+/** Integer field with -/+ buttons, under a slider for quick changes. */
+@Composable
+internal fun IntSliderField(label: String, value: Int, onChange: (Int) -> Unit, range: IntRange) {
+    LabeledSlider(
+        label = label,
+        value = value.toFloat(),
+        onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
+        valueRange = range.first.toFloat()..range.last.toFloat(),
+        valueText = value.toString(),
+    )
+    IntStepper(label, value, onChange, range)
+}
+
+/** Slider for an angle in -180..180° (15° steps with [snap]). */
+@Composable
+internal fun AngleSlider(label: String, deg: Float, snap: Boolean, onChange: (Float) -> Unit) {
+    LabeledSlider(
+        label = label,
+        value = deg,
+        onValueChange = { v -> onChange(if (snap) ShapeGeometry.snapDegrees(v) else v.roundToInt().toFloat()) },
+        valueRange = -180f..180f,
+        valueText = "${Units.formatNumber(deg.toDouble(), 1)}°",
+    )
+}
+
+internal fun direction(deg: Float): Vec2 {
+    val r = deg * Geometry.DEG
+    return Vec2(cos(r), sin(r))
+}
+
+/** Two length fields side by side (no step buttons; the nudge pad covers fine moves). */
+@Composable
+internal fun FieldPair(
+    labelA: String, pxA: Float, onA: (Float) -> Unit,
+    labelB: String, pxB: Float, onB: (Float) -> Unit,
+    unit: LengthUnit, dpi: Double,
+    minPx: Double = -VECTOR_MAX_LEN,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        LengthField(labelA, pxA.toDouble(), { onA(it.toFloat()) }, unit, dpi, Modifier.weight(1f), step = null, minPx = minPx, maxPx = VECTOR_MAX_LEN)
+        Spacer(Modifier.width(8.dp))
+        LengthField(labelB, pxB.toDouble(), { onB(it.toFloat()) }, unit, dpi, Modifier.weight(1f), step = null, minPx = minPx, maxPx = VECTOR_MAX_LEN)
+    }
+}
+
+/** Nudge pad with its step length ("move 3 px left"). */
+@Composable
+internal fun NudgeRow(
+    stepPx: Float,
+    onStep: (Float) -> Unit,
+    unit: LengthUnit,
+    dpi: Double,
+    hint: String,
+    onNudge: (Int, Int) -> Unit,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        NudgePad(onNudge)
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            LengthField("Step", stepPx.toDouble(), { onStep(it.toFloat()) }, unit, dpi, Modifier.fillMaxWidth(), step = null, minPx = 0.01, maxPx = VECTOR_MAX_LEN)
+            Hint(hint)
+        }
     }
 }

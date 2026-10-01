@@ -45,6 +45,7 @@ import androidx.compose.material.icons.outlined.AddPhotoAlternate
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.DriveFileRenameOutline
+import androidx.compose.material.icons.outlined.FileOpen
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Photo
@@ -111,6 +112,7 @@ import com.brushwork.paint.storage.ProjectInfo
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.checkerboard
+import com.brushwork.paint.ui.exchange.rememberGalleryImport
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -212,6 +214,8 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
             message("No app is available to pick pictures")
         }
     }
+    // "New from SVG or PDF" (v1.5, owned by A8).
+    val importVector = rememberGalleryImport(repository, onOpenProject)
 
     fun export(info: ProjectInfo, format: ExportFormat) = storageGate {
         runBusy("Exporting ${format.name}…", "Export failed") {
@@ -254,6 +258,10 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
                             Spacer(Modifier.width(6.dp))
                             Text("Import picture")
                         }
+                        // v1.5: a new artwork from an SVG or PDF file.
+                        IconButton(onClick = importVector) {
+                            Icon(Icons.Outlined.FileOpen, contentDescription = "New from SVG or PDF")
+                        }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
                 )
@@ -278,6 +286,7 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
                     modifier = Modifier.padding(padding),
                     onNewCanvas = { showNewCanvas = true },
                     onImport = importPicture,
+                    onImportVector = importVector,
                 )
                 else -> {
                     val dir = LocalLayoutDirection.current
@@ -475,7 +484,7 @@ private fun ProjectThumbnail(info: ProjectInfo) {
 }
 
 @Composable
-private fun EmptyGallery(modifier: Modifier, onNewCanvas: () -> Unit, onImport: () -> Unit) {
+private fun EmptyGallery(modifier: Modifier, onNewCanvas: () -> Unit, onImport: () -> Unit, onImportVector: () -> Unit) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(
             Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 24.dp),
@@ -507,6 +516,12 @@ private fun EmptyGallery(modifier: Modifier, onNewCanvas: () -> Unit, onImport: 
                 Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Import picture")
+            }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onImportVector) {
+                Icon(Icons.Outlined.FileOpen, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("New from SVG or PDF")
             }
         }
     }

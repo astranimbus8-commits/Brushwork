@@ -308,6 +308,8 @@ private fun LayerList(
                 modifier = itemModifier.padding(vertical = 1.dp),
                 onEditText = { controller.fromPanel { LayerOps.editText(controller, layer) } },
                 onEditShape = { controller.fromPanel { LayerOps.editShape(controller, layer) } },
+                onEditVector = { controller.fromPanel { LayerOps.editObjects(controller, layer) } },
+                onEditAdjustment = { controller.fromPanel { LayerOps.editAdjustment(controller, layer) } },
             )
         }
     }

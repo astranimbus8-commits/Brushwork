@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
@@ -42,6 +43,7 @@ import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.semantics.Role
@@ -55,6 +57,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.ui.common.checkerboard
+import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.roundToInt
 
@@ -62,6 +65,9 @@ import kotlin.math.roundToInt
 internal val LAYER_ROW_HEIGHT = 52.dp
 internal val THUMB_SIZE = 40.dp
 private val CLIP_GUTTER = 16.dp
+
+/** What kind of editable layer a row shows a badge for (v1.5). */
+internal enum class LayerKindBadge { NONE, TEXT, SHAPE, VECTOR, ADJUSTMENT }
 
 /**
  * Immutable snapshot of what a row shows. Layer objects are mutable and not observable (and
@@ -85,11 +91,23 @@ internal data class LayerRowModel(
     val clip: ClipInfo,
     /** Clipped to a hidden base (the compositor then hides the whole group). */
     val baseHidden: Boolean,
-    /** An editable text layer (its text can be edited again with the text tool). */
-    val isText: Boolean = false,
-    /** An editable shape layer (its shape can be edited again with the shape tool). */
-    val isShape: Boolean = false,
+    /** The kind of editable layer (text, shape, vector, adjustment), or NONE. */
+    val kind: LayerKindBadge = LayerKindBadge.NONE,
+    /** The mask is an editable (gradient) mask. */
+    val maskIsSpec: Boolean = false,
 ) {
+    /** An editable text layer (its text can be edited again with the text tool). */
+    val isText: Boolean get() = kind == LayerKindBadge.TEXT
+
+    /** An editable shape layer (its shape can be edited again with the shape tool). */
+    val isShape: Boolean get() = kind == LayerKindBadge.SHAPE
+
+    /** A vector layer (its objects stay editable). */
+    val isVector: Boolean get() = kind == LayerKindBadge.VECTOR
+
+    /** An adjustment layer (its effect applies to the layers below). */
+    val isAdjustment: Boolean get() = kind == LayerKindBadge.ADJUSTMENT
+
     companion object {
         /** Rows for [topFirst] (display order). */
         fun build(doc: Document, topFirst: List<Layer>): List<LayerRowModel> {
@@ -114,8 +132,14 @@ internal data class LayerRowModel(
                     active = l === active,
                     clip = clip,
                     baseHidden = clip.clipped && !docOrder[clip.baseIndex].visible,
-                    isText = l.isTextLayer,
-                    isShape = l.isShapeLayer,
+                    kind = when {
+                        l.isAdjustmentLayer -> LayerKindBadge.ADJUSTMENT
+                        l.isVectorLayer -> LayerKindBadge.VECTOR
+                        l.isTextLayer -> LayerKindBadge.TEXT
+                        l.isShapeLayer -> LayerKindBadge.SHAPE
+                        else -> LayerKindBadge.NONE
+                    },
+                    maskIsSpec = l.mask != null && l.maskSpec != null,
                 )
             }
         }
@@ -137,6 +161,10 @@ internal fun LayerRow(
     onEditText: (() -> Unit)? = null,
     /** Double-tapping a shape layer's row opens its shape in the shape tool. */
     onEditShape: (() -> Unit)? = null,
+    /** Double-tapping a vector layer's row edits its objects (Transform). */
+    onEditVector: (() -> Unit)? = null,
+    /** Double-tapping an adjustment layer's row edits its effect. */
+    onEditAdjustment: (() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(8.dp)
     val background = when {
@@ -155,6 +183,8 @@ internal fun LayerRow(
         val edit = when {
             row.isText -> onEditText
             row.isShape -> onEditShape
+            row.isVector -> onEditVector
+            row.isAdjustment -> onEditAdjustment
             else -> null
         }
         val last = lastTap[0]
@@ -218,6 +248,9 @@ internal fun LayerRow(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (row.isText) { TextLayerBadge(); Spacer(Modifier.width(4.dp)) }
                 if (row.isShape) { ShapeLayerBadge(); Spacer(Modifier.width(4.dp)) }
+                if (row.isVector) { IconBadge(EditorIcons.Vector, "Vector layer"); Spacer(Modifier.width(4.dp)) }
+                if (row.isAdjustment) { IconBadge(Icons.Filled.Tune, "Adjustment layer"); Spacer(Modifier.width(4.dp)) }
+                if (row.maskIsSpec) { IconBadge(EditorIcons.Masks, "Editable mask"); Spacer(Modifier.width(4.dp)) }
                 Text(
                     "${row.blendMode.label} · ${(row.opacity * 100f).roundToInt()}%",
                     style = MaterialTheme.typography.labelSmall,
@@ -357,6 +390,19 @@ internal fun ShapeLayerBadge(tint: Color = BrushworkColors.Accent) {
             drawRect(tint, topLeft = Offset(s / 2f, h * 0.3f), size = androidx.compose.ui.geometry.Size(h * 0.6f, h * 0.6f), style = androidx.compose.ui.graphics.drawscope.Stroke(s))
             drawCircle(tint, radius = h * 0.32f, center = Offset(size.width - h * 0.34f, h * 0.36f), style = androidx.compose.ui.graphics.drawscope.Stroke(s))
         }
+    }
+}
+
+/** Small framed icon badge (vector layers, adjustment layers, editable masks; v1.5). */
+@Composable
+internal fun IconBadge(icon: ImageVector, description: String, tint: Color = BrushworkColors.Accent) {
+    Box(
+        Modifier
+            .border(1.dp, tint, RoundedCornerShape(3.dp))
+            .padding(horizontal = 2.dp, vertical = 1.dp)
+            .semantics { contentDescription = description },
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(10.dp))
     }
 }
 

@@ -41,18 +41,39 @@ internal const val BRUSH_SAMPLE_SPACING = 0.75f
 private const val BRUSH_FLATTEN_TOLERANCE = 0.1f
 
 /**
+ * Per-sample line widths along a path stroke (v1.5 §4.5, filled by A4): [widthsAtSamples] has
+ * one width factor per sample of the stroke's input; the pressures are multiplied by
+ * `w / max(w)` so the brush (with `pressureSize`) follows the thickness.
+ */
+data class WidthProfile(val widthsAtSamples: FloatArray) {
+    override fun equals(other: Any?): Boolean = other is WidthProfile && widthsAtSamples.contentEquals(other.widthsAtSamples)
+    override fun hashCode(): Int = widthsAtSamples.contentHashCode()
+}
+
+/**
  * Input points for painting [path] (its first sub-path) with a brush, into [out]: even samples
  * [BRUSH_SAMPLE_SPACING] px apart (first and last points included, a closed path ends back at
- * its start) with pressure 1, or a taper ramp over [taperFraction] of the length at each end.
+ * its start) with pressure 1, or a taper ramp over [taperFraction] of the length at each end;
+ * [widths] (one per sample) scale the pressures (see [WidthProfile]).
  *
  * Exactly the points of `CurveGeometry.sample(path, BRUSH_SAMPLE_SPACING)` (same float
  * operations in the same order), computed without an object per point: this runs for every
- * live replay of a long path.
+ * live replay of a long path. Main thread only (shared scratch); see [brushStrokeSamples].
  */
-internal fun brushStrokeInput(path: VectorPath, taperFraction: Float = 0f, out: PathStrokeInput = PathStrokeInput()): PathStrokeInput {
+internal fun brushStrokeInput(path: VectorPath, taperFraction: Float = 0f, out: PathStrokeInput = PathStrokeInput(), widths: WidthProfile? = null): PathStrokeInput =
+    strokeSamples(FlatScratch.MAIN, path, taperFraction, widths, out)
+
+/**
+ * The thread-safe twin of [brushStrokeInput] (its own scratch arrays): bit-identical samples,
+ * for background renderers of vector layers (StrokeRaster along a VPath).
+ */
+internal fun brushStrokeSamples(path: VectorPath, taperFraction: Float, widths: WidthProfile?, out: PathStrokeInput): PathStrokeInput =
+    strokeSamples(FlatScratch(), path, taperFraction, widths, out)
+
+private fun strokeSamples(scratch: FlatScratch, path: VectorPath, taperFraction: Float, widths: WidthProfile?, out: PathStrokeInput): PathStrokeInput {
     out.clear()
-    val flat = FlatScratch.flattenFirst(path, BRUSH_FLATTEN_TOLERANCE)
-    FlatScratch.resample(flat, BRUSH_SAMPLE_SPACING, out)
+    val flat = scratch.flattenFirst(path, BRUSH_FLATTEN_TOLERANCE)
+    scratch.resample(flat, BRUSH_SAMPLE_SPACING, out)
     val n = out.size
     if (n < 2) { out.clear(); return out }
     val xs = out.x; val ys = out.y; val ps = out.pressure
@@ -64,14 +85,21 @@ internal fun brushStrokeInput(path: VectorPath, taperFraction: Float = 0f, out: 
         if (i > 0) dist += hypot(xs[i] - xs[i - 1], ys[i] - ys[i - 1])
         ps[i] = if (taperLen > 0f) CurveGeometry.taperPressure(dist, total, taperLen) else 1f
     }
+    val w = widths?.widthsAtSamples
+    if (w != null && w.size >= n) {
+        var wMax = 0f
+        for (i in 0 until n) if (w[i] > wMax) wMax = w[i]
+        if (wMax > 0f && wMax.isFinite()) for (i in 0 until n) ps[i] *= (w[i] / wMax).coerceIn(0f, 1f)
+    }
     return out
 }
 
 /**
  * Array versions of `VectorPath.flatten` (first sub-path) and `VectorPath.resample`, with the
- * same arithmetic so the samples are bit-identical. Main thread only (shared scratch arrays).
+ * same arithmetic so the samples are bit-identical. One instance per thread: [MAIN] is shared on
+ * the main thread, background renderers make their own.
  */
-private object FlatScratch {
+internal class FlatScratch {
     /** The flattened first sub-path: [n] points in [x] / [y]. */
     class Flat {
         var x = FloatArray(512)
@@ -167,6 +195,11 @@ private object FlatScratch {
         } else if (out.x[last].compareTo(ex) != 0 || out.y[last].compareTo(ey) != 0) {
             out.add(ex, ey, 1f)
         }
+    }
+
+    companion object {
+        /** The main thread's instance. */
+        val MAIN = FlatScratch()
     }
 }
 
@@ -709,9 +742,10 @@ internal class SpecOverlay {
 /**
  * Runs [block] and folds every undo action it pushes into ONE step named [label], also when it
  * pushes a single one: a curve / shape painted with the brush is undone as "Curve" / "Shape",
- * not as the painting tool's own "Brush" step.
+ * not as the painting tool's own "Brush" step. Edit listeners hear about the edits once the
+ * step is complete (inside [EditorController.editScope]).
  */
-internal fun EditorController.undoStepNamed(label: String, block: () -> Unit) {
+internal fun EditorController.undoStepNamed(label: String, block: () -> Unit) = editScope {
     val um = undoManager
     val mark = um.undoCount
     try {

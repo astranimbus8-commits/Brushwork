@@ -52,4 +52,46 @@ class AppSettings(context: Context) {
     var leftHanded: Boolean
         get() = prefs.getBoolean("leftHanded", false)
         set(v) = prefs.edit { putBoolean("leftHanded", v) }
+
+    // ------------------------------------------------------------------ v1.5 (keys owned by the lead; areas read and write them)
+
+    /** Clone stamp: the offset set by the first stroke is kept for the next strokes (Photoshop's "Aligned"). */
+    var cloneAligned: Boolean
+        get() = prefs.getBoolean("cloneAligned", true)
+        set(v) = prefs.edit { putBoolean("cloneAligned", v) }
+
+    /** Clone stamp samples all visible layers (false: only the active layer). */
+    var cloneSampleAllLayers: Boolean
+        get() = prefs.getBoolean("cloneSampleAllLayers", false)
+        set(v) = prefs.edit { putBoolean("cloneSampleAllLayers", v) }
+
+    /** Clone stamp shows its source crosshair. */
+    var cloneShowSource: Boolean
+        get() = prefs.getBoolean("cloneShowSource", true)
+        set(v) = prefs.edit { putBoolean("cloneShowSource", v) }
+
+    /** The X / Y coordinate strip is folded to one line. */
+    var coordinateStripFolded: Boolean
+        get() = prefs.getBoolean("coordinateStripFolded", false)
+        set(v) = prefs.edit { putBoolean("coordinateStripFolded", v) }
+
+    /** Masks tool: the red coverage overlay stays on (not only briefly after an edit). */
+    var maskOverlayAlways: Boolean
+        get() = prefs.getBoolean("maskOverlayAlways", false)
+        set(v) = prefs.edit { putBoolean("maskOverlayAlways", v) }
+
+    /** Vector eraser mode: "OBJECT", "PARTIAL" or "INTERSECTION". */
+    var vectorEraserMode: String
+        get() = prefs.getString("vectorEraserMode", "OBJECT") ?: "OBJECT"
+        set(v) = prefs.edit { putString("vectorEraserMode", v) }
+
+    /** A vector-mode hint was shown (areas may use it for one-time hints). */
+    var vectorHintShown: Boolean
+        get() = prefs.getBoolean("vectorHintShown", false)
+        set(v) = prefs.edit { putBoolean("vectorHintShown", v) }
+
+    /** Hidden kill switch: adjustment layers are drawn as pass-through (I5). */
+    var safeCompositing: Boolean
+        get() = prefs.getBoolean("safeCompositing", false)
+        set(v) = prefs.edit { putBoolean("safeCompositing", v) }
 }

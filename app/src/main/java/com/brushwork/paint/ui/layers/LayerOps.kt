@@ -14,10 +14,13 @@ import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.UndoAction
+import com.brushwork.paint.masks.AdjustmentLayerOps
+import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.vector.VectorLayerOps
 
 /**
  * Layer operations as offered by the layers panel. Wraps the controller with the guards it leaves
@@ -61,7 +64,59 @@ object LayerOps {
         }
     }
 
-    fun addLayer(c: EditorController) = guardMemory(c, "Add layer") { c.addLayer() }
+    /** The window's "+": a vector layer in vector mode (v1.5), else a raster layer. */
+    fun addLayer(c: EditorController) = guardMemory(c, "Add layer") { if (c.isVectorMode) c.addVectorLayer() else c.addLayer() }
+
+    // ------------------------------------------------------------------ v1.5: vector & adjustment layers
+
+    fun addVectorLayer(c: EditorController) = guardMemory(c, "New vector layer") { c.addVectorLayer() }
+
+    fun addAdjustmentLayer(c: EditorController) = guardMemory(c, "New adjustment layer") { AdjustmentLayerOps.createDefault(c) }
+
+    /** An empty raster layer or a shape layer can become a vector layer (checks pixels: call on demand). */
+    fun canConvertToVector(c: EditorController, layer: Layer): Boolean =
+        !layer.isVectorLayer && !layer.isAdjustmentLayer && (layer.isShapeLayer || c.isEmptyPlainLayer(layer))
+
+    fun convertToVector(c: EditorController, layer: Layer) {
+        commitPendingWork(c)
+        c.convertToVectorLayer(layer)
+    }
+
+    /** Turns the vector layer [layer] into a raster layer (its pixels stay; one step). */
+    fun rasterizeVector(c: EditorController, layer: Layer) {
+        if (!layer.isVectorLayer || !ensureUnlocked(c, layer)) return
+        commitPendingWork(c)
+        if (VectorLayerOps.rasterize(c, layer)) return
+        c.setLayerData(layer, layer.dataSnapshot().copy(vector = null), "Rasterize vector layer")
+    }
+
+    /** "Edit objects": the vector layer [layer] with the Transform tool. */
+    fun editObjects(c: EditorController, layer: Layer) {
+        if (!layer.isVectorLayer || !c.checkEditable(layer)) return
+        c.selectLayer(layer)
+        c.selectTool(ToolId.TRANSFORM)
+    }
+
+    fun editAdjustment(c: EditorController, layer: Layer) = AdjustmentLayerOps.edit(c, layer)
+
+    fun editAdjustmentMask(c: EditorController, layer: Layer) = AdjustmentLayerOps.editMask(c, layer)
+
+    fun addGradientMask(c: EditorController, layer: Layer) {
+        if (!ensureUnlocked(c, layer)) return
+        commitPendingWork(c)
+        MaskLayerOps.addGradientMask(c, layer)
+    }
+
+    fun toPixelMask(c: EditorController, layer: Layer) {
+        if (!ensureUnlocked(c, layer)) return
+        MaskLayerOps.toPixelMask(c, layer)
+    }
+
+    /** The mask's luminance as a soft selection. */
+    fun maskToSelection(c: EditorController, layer: Layer) {
+        commitPendingWork(c)
+        guardMemory(c, "Mask to selection") { c.selectionFromMask(layer) }
+    }
 
     fun duplicate(c: EditorController, layer: Layer) = guardMemory(c, "Duplicate layer") { c.duplicateLayer(layer) }
 

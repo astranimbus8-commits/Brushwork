@@ -18,6 +18,7 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -1157,8 +1158,16 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val cur = item ?: return false
         val t = controller.viewTransform
         val prep = preparedFor(cur)
-        val tol = t.screenToDocLength(t.dp(BOX_PAD_DP + 8f))
-        if (listOf(focus, a, b).none { prep.contains(cur, it, tol) }) return false
+        // A finger (not just the midpoint) must be on the text box as drawn (v1.5, §4.7).
+        val block = prep.block
+        val accepted = if (block != null) {
+            val pad = t.screenToDocLength(t.dp(BOX_PAD_DP))
+            PinchTargeting.acceptsQuad(a, b, cur.corners(block.width, block.height, pad), t)
+        } else {
+            val r = prep.docBounds(cur)
+            !r.isEmpty && PinchTargeting.acceptsRect(a, b, r, t)
+        }
+        if (!accepted) return false
         mode = Mode.NONE
         gestureStart = null
         pinchStart = cur

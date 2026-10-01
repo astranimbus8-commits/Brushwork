@@ -1,18 +1,30 @@
 package com.brushwork.paint.ui.tools
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.RulerTool
 import com.brushwork.paint.brush.BrushTool
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.frame.FrameDividerTool
+import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.FillTool
 import com.brushwork.paint.tools.select.LassoTool
@@ -24,6 +36,8 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.assist.RulerToolOptions
 import com.brushwork.paint.ui.brush.BrushToolOptions
+import com.brushwork.paint.ui.clone.CloneToolOptions
+import com.brushwork.paint.ui.mask.MaskToolOptions
 import com.brushwork.paint.ui.placement.FrameDividerOptions
 import com.brushwork.paint.ui.placement.TextToolOptions
 import com.brushwork.paint.ui.placement.TransformToolOptions
@@ -32,8 +46,10 @@ import com.brushwork.paint.ui.selection.FillOptions
 import com.brushwork.paint.ui.selection.LassoOptions
 import com.brushwork.paint.ui.selection.MagicWandOptions
 import com.brushwork.paint.ui.selection.MarqueeOptions
+import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.vector.CurveToolOptions
 import com.brushwork.paint.ui.vector.ShapeToolOptions
+import com.brushwork.paint.ui.vector.VectorEraserOptions
 
 /**
  * The per-tool options strip under the top bar. Each module provides `XxxOptions(tool)`;
@@ -49,8 +65,15 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // Vector mode (v1.5): what is drawn stays editable.
+        if (controller.isVectorMode) VectorModeChip()
         when (tool) {
-            is BrushTool -> BrushToolOptions(tool)
+            is BrushTool -> {
+                BrushToolOptions(tool)
+                if (tool.id == ToolId.ERASER && controller.isVectorMode) VectorEraserOptions(controller)
+            }
+            is CloneTool -> CloneToolOptions(tool)
+            is MaskTool -> MaskToolOptions(tool)
             is FillTool -> FillOptions(tool)
             is EyedropperTool -> EyedropperOptions(tool)
             is MagicWandTool -> MagicWandOptions(tool)
@@ -66,4 +89,22 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
             is com.brushwork.paint.tools.remove.RemoveTool -> com.brushwork.paint.ui.remove.RemoveToolOptions(tool)
         }
     }
+}
+
+/** Accent "VECTOR" chip at the start of the options strip while the active layer is a vector layer. */
+@Composable
+private fun VectorModeChip() {
+    Text(
+        "VECTOR",
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Bold,
+        color = Color.White,
+        maxLines = 1,
+        modifier = Modifier
+            .padding(end = 6.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(BrushworkColors.AccentDim)
+            .padding(horizontal = 6.dp, vertical = 3.dp)
+            .semantics { contentDescription = "Vector mode is on" },
+    )
 }

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Contrast
@@ -32,6 +33,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.LayersClear
 import androidx.compose.material.icons.filled.Lock
@@ -39,8 +41,11 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Merge
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Opacity
+import androidx.compose.material.icons.filled.OpenWith
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SubdirectoryArrowRight
 import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.Category
@@ -80,6 +85,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.CoroutineScope
@@ -375,6 +381,8 @@ private fun OverflowMenuButton(
     val close = { open = false; maskPage = false }
     /** Closes the menu, then runs [block] as a panel action. */
     val act = { block: () -> Unit -> close(); controller.fromPanel(block) }
+    // Reads the layer's pixels: only while the menu is open.
+    val canConvert = remember(open, row.contentVersion, row.kind) { open && LayerOps.canConvertToVector(controller, layer) }
     Box {
         BarIcon(Icons.Filled.MoreVert, "More layer actions", enabled = true) { maskPage = false; open = true }
         DropdownMenu(expanded = open, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
@@ -387,6 +395,24 @@ private fun OverflowMenuButton(
                     MenuItem("Edit shape", Icons.Outlined.Category) { act { LayerOps.editShape(controller, layer) } }
                     HorizontalDivider(color = BrushworkColors.ChromeBorder)
                 }
+                if (row.isVector) {
+                    MenuItem("Edit objects", Icons.Filled.OpenWith) { act { LayerOps.editObjects(controller, layer) } }
+                    MenuItem("Rasterize vector layer", Icons.Filled.Image) { act { LayerOps.rasterizeVector(controller, layer) } }
+                    HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                }
+                if (row.isAdjustment) {
+                    MenuItem("Edit adjustment", Icons.Filled.Tune) { act { LayerOps.editAdjustment(controller, layer) } }
+                    MenuItem("Edit mask", EditorIcons.Masks) { act { LayerOps.editAdjustmentMask(controller, layer) } }
+                    MenuItem("Apply to layer below", Icons.Filled.Merge, enabled = docIndex > 0, iconRotation = 180f) { act { LayerOps.mergeDown(controller, layer) } }
+                    MenuItem("Use mask as selection", Icons.Filled.SelectAll, enabled = row.hasMask) { act { LayerOps.maskToSelection(controller, layer) } }
+                    HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                }
+                if (canConvert) {
+                    MenuItem("Convert to vector layer", EditorIcons.Vector) { act { LayerOps.convertToVector(controller, layer) } }
+                }
+                MenuItem("New vector layer", EditorIcons.Vector, enabled = canAddLayer) { act { LayerOps.addVectorLayer(controller) } }
+                MenuItem("New adjustment layer (Tone)", Icons.Filled.Tune, enabled = controller.canAddAdjustmentLayer) { act { LayerOps.addAdjustmentLayer(controller) } }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
                 MenuItem("Import picture", Icons.Filled.AddPhotoAlternate, enabled = canAddLayer) { close(); onImportPicture() }
                 MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); onRename() }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)
@@ -411,6 +437,14 @@ private fun OverflowMenuButton(
                 )
             } else {
                 MenuItem("Back", Icons.AutoMirrored.Filled.ArrowBack) { maskPage = false }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem("Add gradient mask…", EditorIcons.Masks) { act { LayerOps.addGradientMask(controller, layer) } }
+                if (row.maskIsSpec) {
+                    MenuItem("Convert to pixel mask", Icons.Filled.Brush) { act { LayerOps.toPixelMask(controller, layer) } }
+                }
+                if (row.hasMask) {
+                    MenuItem("Load mask as selection", Icons.Filled.SelectAll) { act { LayerOps.maskToSelection(controller, layer) } }
+                }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)
                 if (!row.hasMask) {
                     if (hasSelection) {

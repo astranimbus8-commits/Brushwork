@@ -166,6 +166,32 @@ object ShapeOutlines {
         else -> outline(o)
     }
 
+    /**
+     * The plain items of shape [o]: everything when [brush] is false; with the brush only what
+     * stays plain (the fill, filled arrowheads), since the brush paints the outline. (Moved out
+     * of ShapeTool in v1.5 so vector layers draw shapes exactly like the Shape tool.)
+     */
+    fun paintSpec(o: ShapeObject, brush: Boolean): VectorPaintSpec? {
+        val color = o.strokeColor
+        val w = o.strokeWidth
+        return when (o.type) {
+            ShapeType.LINE -> if (brush) null else VectorPaintSpec.build(
+                null, 0, outline(o), color, w, o.lineCap, join(o),
+            )
+            ShapeType.ARROW -> {
+                val g = arrow(o)
+                VectorPaintSpec.build(null, 0, if (brush) null else g.stroke, color, w, o.lineCap, JoinStyle.ROUND, g.fill)
+            }
+            else -> {
+                val outline = outline(o)
+                VectorPaintSpec.build(
+                    if (o.style.fill) outline else null, o.fillColor,
+                    if (o.style.stroke && !brush) outline else null, color, w, LineCapStyle.ROUND, join(o),
+                )
+            }
+        }
+    }
+
     /** Stroke join of the outline: round for ellipses and lines, the corner style's join otherwise. */
     fun join(o: ShapeObject): JoinStyle = when {
         o.type.isLineLike -> JoinStyle.ROUND

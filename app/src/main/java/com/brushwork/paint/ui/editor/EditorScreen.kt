@@ -31,11 +31,13 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.CropRotate
 import androidx.compose.material.icons.filled.Draw
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.FitScreen
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Image
-import androidx.compose.material.icons.filled.PhotoFilter
+import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.SelectAll
@@ -79,6 +81,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.exchange.PendingImports
+import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.StabilizerMode
 import com.brushwork.paint.storage.ExportFormat
@@ -99,8 +103,12 @@ import com.brushwork.paint.ui.filters.FilterSessionPanel
 import com.brushwork.paint.ui.layers.LayerDeleteUndo
 import com.brushwork.paint.ui.layers.LayersPanel
 import com.brushwork.paint.ui.selection.SelectionPanel
+import com.brushwork.paint.ui.exchange.ExchangeHost
+import com.brushwork.paint.ui.exchange.rememberExchangeUi
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.tools.CoordinateStrip
 import com.brushwork.paint.ui.tools.ToolOptionsBar
+import com.brushwork.paint.ui.vector.VectorObjectBar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -178,6 +186,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // Chrome sizes (px), reported to the canvas so the initial fit centers between them. The
     // bottom one is the slider bar + hotbar (never the floating ✓/✕ buttons, which come and go).
     var topChromePx by remember { mutableIntStateOf(0) }
+    // The X / Y coordinate strip's part of the top chrome (not part of the fit inset).
+    var stripPx by remember { mutableIntStateOf(0) }
     var bottomChromePx by remember { mutableIntStateOf(0) }
     var selectionBarPx by remember { mutableIntStateOf(0) }
     // The hotbar alone (panels sit right above it, over the slider bar) and everything stacked
@@ -235,9 +245,25 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
     }
 
+    // ---------------------------------------------------------------- SVG / PDF exchange (v1.5)
+    val exchange = rememberExchangeUi(controller)
+    // A file the gallery's "New from SVG or PDF" handed over for this artwork is imported once.
+    LaunchedEffect(controller.doc.id) {
+        PendingImports.take(controller.doc.id)?.let(exchange::importUri)
+    }
+
     // ---------------------------------------------------------------- snackbar messages
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    // Problems found while opening (unreadable vector or mask data...), shown once.
+    LaunchedEffect(controller) {
+        val warnings = controller.doc.loadWarnings
+        if (warnings.isNotEmpty()) {
+            val text = warnings.joinToString("\n")
+            warnings.clear()
+            scope.launch { snackbar.showSnackbar(text, withDismissAction = true, duration = SnackbarDuration.Long) }
+        }
+    }
     val message = controller.message
     LaunchedEffect(message) {
         if (message != null) {
@@ -324,6 +350,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // A new copy shows the paste bar again (and the hidden one's pixels aren't kept alive here).
     LaunchedEffect(clipboard) { if (clipboard !== hiddenClipboard) hiddenClipboard = null }
     val hasSelection = controller.selection != null
+    val objectsSelected = controller.vectors.selectedIds.isNotEmpty()
+    val vectorMode = controller.isVectorMode
     // The selection bar steps aside for the user's tool work in progress (its ✓/✕ come first:
     // a paste being placed, curve points...), filters, long operations and the selection menu
     // itself. The transform tool's own untouched lift doesn't count: selecting it to move the
@@ -359,7 +387,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     // With the layers window open, a tap on the canvas only closes it.
                     v.onOutsideTap = if (layersVisible) closeLayers else null
                     v.setMirrored(controller.viewMirrored)
-                    v.setFitInsets(0f, topChromePx.toFloat(), 0f, bottomChromePx.toFloat())
+                    // The X / Y strip is excluded: it comes and goes without refitting the canvas (V11).
+                    val strip = if (session == null) stripPx else 0
+                    v.setFitInsets(0f, (topChromePx - strip).coerceAtLeast(0).toFloat(), 0f, bottomChromePx.toFloat())
                 },
                 onRelease = { v -> if (canvasRef[0] === v) canvasRef[0] = null },
             )
@@ -381,7 +411,12 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     subtitle = "${doc.width} × ${doc.height} px",
                     onBack = onExit,
                     actions = listOf(
-                        BarAction("Filters", Icons.Filled.PhotoFilter, enabled = docActionsEnabled) { openPanel(EditorPanel.FILTERS) },
+                        // Vector mode (v1.5): on while the active layer is a vector layer. Filters
+                        // moved into the tools grid.
+                        BarAction("Vector", EditorIcons.Vector, selected = vectorMode, enabled = docActionsEnabled) {
+                            controller.endCanvasGesture()
+                            controller.toggleVectorMode()
+                        },
                         BarAction("Selection", Icons.Filled.SelectAll, enabled = docActionsEnabled) { openPanel(EditorPanel.SELECTION) },
                         BarAction("Canvas", Icons.Filled.AspectRatio, enabled = docActionsEnabled) { openPanel(EditorPanel.CANVAS) },
                         BarAction("Ruler", Icons.Filled.Straighten, selected = rulerOn) { openPanel(EditorPanel.RULER) },
@@ -398,8 +433,20 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                             controller.paste()
                         },
                         MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled, dividerBefore = true) { launchImport() },
+                        MenuEntry("Import SVG or PDF…", Icons.Filled.FileOpen, enabled = docActionsEnabled) {
+                            controller.endCanvasGesture()
+                            exchange.requestImport()
+                        },
                         MenuEntry("Export PNG", Icons.Filled.SaveAlt, enabled = docActionsEnabled) { requestExport(ExportFormat.PNG) },
                         MenuEntry("Export JPG", Icons.Filled.Image, enabled = docActionsEnabled) { requestExport(ExportFormat.JPEG) },
+                        MenuEntry("Export SVG…", Icons.Filled.Polyline, enabled = docActionsEnabled) {
+                            controller.endCanvasGesture()
+                            exchange.requestExport(VectorFormat.SVG)
+                        },
+                        MenuEntry("Export PDF…", Icons.Filled.PictureAsPdf, enabled = docActionsEnabled) {
+                            controller.endCanvasGesture()
+                            exchange.requestExport(VectorFormat.PDF)
+                        },
                         MenuEntry("Share", Icons.Filled.Share, enabled = docActionsEnabled) { actions.share() },
                         MenuEntry("Flip view", Icons.Filled.Flip, checked = controller.viewMirrored, dividerBefore = true) {
                             controller.viewMirrored = !controller.viewMirrored
@@ -425,6 +472,16 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                 ) {
                     ToolOptionsBar(controller, Modifier.fillMaxWidth())
+                }
+                // X / Y of what the tool is placing (v1.5). Part of the top chrome (overlays stay
+                // below it) but left out of the canvas fit inset, so it never moves the canvas.
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .onSizeChanged { stripPx = it.height }
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
+                ) {
+                    CoordinateStrip(controller)
                 }
             }
         }
@@ -492,7 +549,17 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
 
         // ------------------------------------------------------------ selection actions
-        if (selectionBarVisible) {
+        if (objectsSelected && session == null && busy == null) {
+            // Selected vector objects get their own bar in the selection bar's place (v1.5).
+            VectorObjectBar(
+                controller,
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(top = topDp + 6.dp, start = 8.dp, end = 8.dp)
+                    .onSizeChanged { selectionBarPx = it.height },
+            )
+        } else if (selectionBarVisible) {
             SelectionActionBar(
                 controller = controller,
                 onMore = { openPanel(EditorPanel.SELECTION) },
@@ -577,7 +644,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // Grouped by panel, so the panel's button brings it (and the sheets it opened) back on top.
     CompositionLocalProvider(LocalSheetGroup provides panel) {
         when (panel) {
-            EditorPanel.TOOLS -> ToolPickerSheet(controller, closePanel)
+            EditorPanel.TOOLS -> ToolPickerSheet(controller, closePanel, onOpenFilters = { openPanel(EditorPanel.FILTERS) })
             EditorPanel.BRUSH -> BrushPanel(controller, closePanel)
             EditorPanel.COLOR -> ColorPickerPanel(controller, closePanel)
             EditorPanel.FILTERS -> FilterBrowser(controller, closePanel)
@@ -591,6 +658,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
     }
     editingValue?.let { kind -> BrushValueDialog(controller, kind) { editingValue = null } }
+    ExchangeHost(exchange)
 }
 
 /** Where a floating window is, relative to the editor's root box (both set by onGloballyPositioned). */

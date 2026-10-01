@@ -196,11 +196,22 @@ class EditorSmokeTest {
         click("Close layers", exact = true)
         assertFalse("layers window closed", has("Add layer"))
 
+        // ---- v1.5: the top bar starts with Vector; Filters is a tile of the tools grid
+        assertTrue("Vector action in the top bar", has("Vector", exact = true))
+        assertFalse("no Filters action in the top bar", has("Filters", exact = true))
+        click("Tools (current: Brush)")
+        SmokeUi.assertPanelShown("Tools")
+        click("Filters", exact = true)
+        settle()
+        SmokeUi.assertPanelShown()
+        assertTrue("the Filters tile opens the filter browser", has("Search filters"))
+        Smoke.assertQuiet(c, "panel Filters")
+        closeSheets(activity) { screenKey++ }
+
         // ---- every panel through the chrome
         val panels = listOf(
             "Open brush settings" to "PRESETS",
             "Open color picker" to "Previous",
-            "Filters" to "Filters",
             "Selection" to "Select all",
             "Canvas" to "Canvas",
             "Ruler" to "Ruler",

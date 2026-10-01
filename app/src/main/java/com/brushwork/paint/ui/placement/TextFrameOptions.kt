@@ -66,6 +66,7 @@ fun TextToolOptions(tool: TextTool) {
             selected = tool.isVertical && !onPath,
             enabled = !onPath,
         )
+        WrapChip(tool)
         SnapToObjectsChip(c)
         Spacer(Modifier.width(4.dp))
         Hint(
@@ -125,6 +126,13 @@ fun FrameDividerOptions(tool: FrameDividerTool) {
     if (tool.settingsOpen) FrameSettingsSheet(tool, status)
     if (tool.gridOpen && status == FrameDividerTool.Status.READY) FrameGridDialog(tool)
 }
+
+/**
+ * The "Wrap" chip of the text options (text flowing around a picture, v1.5 §4.1; owned by A7):
+ * opens the wrap sheet. Foundation slot: shows nothing yet.
+ */
+@Composable
+internal fun WrapChip(tool: TextTool) {}
 
 @Composable
 private fun Hint(text: String) {

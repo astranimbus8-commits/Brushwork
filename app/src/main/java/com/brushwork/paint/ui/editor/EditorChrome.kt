@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.BwSheet
@@ -310,46 +311,110 @@ private fun LayersButton(number: Int, open: Boolean, onClick: () -> Unit) {
     }
 }
 
-/** Grid of every tool; the current one is highlighted. */
+/**
+ * The tools grid ([ToolGrid] sections, 4 tiles per row); the current tool is highlighted. In
+ * vector mode, tools that need pixels carry a small "px" badge (they stay tappable). The
+ * Filters tile opens the filter browser ([onOpenFilters]; disabled while a filter is previewed).
+ */
 @Composable
-fun ToolPickerSheet(controller: EditorController, onDismiss: () -> Unit) {
+fun ToolPickerSheet(controller: EditorController, onDismiss: () -> Unit, onOpenFilters: () -> Unit) {
     BwSheet(title = "Tools", onDismiss = onDismiss) {
         val active = controller.activeToolId
-        ToolId.entries.chunked(4).forEach { row ->
-            Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { id ->
-                    ToolTile(id, selected = id == active, modifier = Modifier.weight(1f)) {
-                        controller.endCanvasGesture()
-                        controller.selectTool(id)
-                        onDismiss()
+        val vectorMode = controller.isVectorMode
+        val filtersEnabled = controller.filterSession == null
+        ToolGrid.sections.forEach { section ->
+            SectionLabel(section.title)
+            section.entries.chunked(4).forEach { row ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    row.forEach { entry ->
+                        when (entry) {
+                            is ToolGridEntry.Tool -> {
+                                val id = entry.id
+                                ToolTile(
+                                    EditorIcons.tool(id), id.label, selected = id == active, modifier = Modifier.weight(1f),
+                                    badge = if (vectorMode && id in LayerToolRules.PIXEL_ONLY) "px" else null,
+                                ) {
+                                    controller.endCanvasGesture()
+                                    controller.selectTool(id)
+                                    onDismiss()
+                                }
+                            }
+                            ToolGridEntry.Filters -> ToolTile(
+                                EditorIcons.FiltersTile, "Filters", selected = false, modifier = Modifier.weight(1f), enabled = filtersEnabled,
+                            ) {
+                                controller.endCanvasGesture()
+                                onOpenFilters()
+                            }
+                        }
                     }
+                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
                 }
-                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
 }
 
 @Composable
-private fun ToolTile(id: ToolId, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun SectionLabel(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.labelMedium,
+        color = BrushworkColors.OnChromeDim,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp, start = 2.dp),
+    )
+}
+
+@Composable
+private fun ToolTile(
+    icon: ImageVector,
+    label: String,
+    selected: Boolean,
+    modifier: Modifier,
+    enabled: Boolean = true,
+    badge: String? = null,
+    onClick: () -> Unit,
+) {
     val shape = RoundedCornerShape(12.dp)
-    Column(
-        modifier
-            .clip(shape)
-            .background(if (selected) BrushworkColors.AccentDim else BrushworkColors.ChromeHigh)
-            .clickable(role = Role.Button, onClick = onClick)
-            .padding(vertical = 10.dp, horizontal = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Icon(EditorIcons.tool(id), contentDescription = null, tint = if (selected) Color.White else BrushworkColors.OnChrome)
-        Spacer(Modifier.height(4.dp))
-        Text(
-            id.label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) Color.White else BrushworkColors.OnChrome,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-        )
+    val content = when {
+        selected -> Color.White
+        enabled -> BrushworkColors.OnChrome
+        else -> BrushworkColors.OnChromeDim
+    }
+    Box(modifier) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(if (selected) BrushworkColors.AccentDim else BrushworkColors.ChromeHigh)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+                .padding(vertical = 10.dp, horizontal = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(icon, contentDescription = null, tint = content)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelSmall,
+                color = content,
+                textAlign = TextAlign.Center,
+                maxLines = 2,
+            )
+        }
+        if (badge != null) {
+            Text(
+                badge,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = BrushworkColors.OnChrome,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 4.dp, end = 4.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(BrushworkColors.ChromeBorder)
+                    .padding(horizontal = 3.dp),
+            )
+        }
     }
 }
 

@@ -23,6 +23,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -1052,7 +1053,14 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** Two fingers on (or around) the pending shape scale, rotate and move it. */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         val bx = box ?: return false
-        if (!isOnShape(bx, focus)) return false
+        // A finger (not just the midpoint) must be on the shape's box, or near a line (v1.5, §4.7).
+        val t = controller.viewTransform
+        val accepted = if (lineHandles) {
+            PinchTargeting.acceptsSegment(a, b, bx.start, bx.end, strokeWidth / 2f, t)
+        } else {
+            PinchTargeting.acceptsQuad(a, b, bx.corners(), t)
+        }
+        if (!accepted) return false
         creatingBox = null
         mode = Mode.NONE
         pinchStart = bx
@@ -1248,31 +1256,6 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         return s.strokeWith == ShapeStroke.BRUSH && s.strokes && layer === controller.doc.activeLayer
     }
 
-    /**
-     * The plain items of shape [o]: everything when [brush] is false; with the brush only what
-     * stays plain (the fill, filled arrowheads), since the brush paints the outline.
-     */
-    private fun buildSpec(o: ShapeObject, brush: Boolean): VectorPaintSpec? {
-        val color = o.strokeColor
-        val w = o.strokeWidth
-        return when (o.type) {
-            ShapeType.LINE -> if (brush) null else VectorPaintSpec.build(
-                null, 0, ShapeOutlines.outline(o), color, w, o.lineCap, ShapeOutlines.join(o),
-            )
-            ShapeType.ARROW -> {
-                val g = ShapeOutlines.arrow(o)
-                VectorPaintSpec.build(null, 0, if (brush) null else g.stroke, color, w, o.lineCap, JoinStyle.ROUND, g.fill)
-            }
-            else -> {
-                val outline = ShapeOutlines.outline(o)
-                VectorPaintSpec.build(
-                    if (o.style.fill) outline else null, o.fillColor,
-                    if (o.style.stroke && !brush) outline else null, color, w, LineCapStyle.ROUND, ShapeOutlines.join(o),
-                )
-            }
-        }
-    }
-
     /** Rebuilds the preview of the pending / in-creation shapes and redraws. */
     fun refreshPreview() {
         val editLayer = editingLayer
@@ -1292,7 +1275,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             // Only one shape can be the live brush stroke: while a new one is dragged out, the
             // pending one is shown as a plain outline until it is committed.
             val older = if (creating != null) pending else null
-            overlaySpecs = listOfNotNull(older?.let { buildSpec(it, brush = false) }, buildSpec(brushObj, brush = true))
+            overlaySpecs = listOfNotNull(older?.let { ShapeOutlines.paintSpec(it, brush = false) }, ShapeOutlines.paintSpec(brushObj, brush = true))
             val path = ShapeOutlines.brushOutline(brushObj)
             if (asNew && !liveBrushForNewLayer(layer)) {
                 // The brush would paint the active layer differently from the new layer the
@@ -1308,7 +1291,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
-            val specs = listOfNotNull(pending?.let { buildSpec(it, brush = false) }, creating?.let { buildSpec(it, brush = false) })
+            val specs = listOfNotNull(pending?.let { ShapeOutlines.paintSpec(it, brush = false) }, creating?.let { ShapeOutlines.paintSpec(it, brush = false) })
             if (specs.isNotEmpty()) ensureObserving()
             preview.show(layer, specs, asNewLayer = asNew, overlayOnly = asNew && newLayerPreviewInOverlay(layer))
         }
@@ -1369,13 +1352,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         // The overlay only holds plain shapes here (the brush stroke is inside the override).
         specOverlay.setBand(null, 0f)
         val ov = installEditOverride(layer)
-        val specs = listOfNotNull(buildSpec(o, brush))
+        val specs = listOfNotNull(ShapeOutlines.paintSpec(o, brush))
         // While a finger drags a plain shape that looks the same over the finished image, it is
         // drawn in the overlay: the canvas tiles (the layer's hidden pixels) stay as they are.
         val inOverlay = dragging && !brush && editDrawsInOverlay(layer)
         setEditSpecs(ov, if (inOverlay) emptyList() else specs)
         // A new shape dragged out meanwhile looks as it will once the opened one is closed.
-        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { buildSpec(newObject(it), brush = false) })
+        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { ShapeOutlines.paintSpec(newObject(it), brush = false) })
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         editGuide = if (path != null && !live) path.toAndroidPath(guidePath) else null
         if (path != null && live) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
@@ -1601,7 +1584,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun paintRect(o: ShapeObject): Rect? {
         val r = Rect()
         val tmp = Rect()
-        buildSpec(o, brush = false)?.let { it.boundsRect(tmp); r.union(tmp) }
+        ShapeOutlines.paintSpec(o, brush = false)?.let { it.boundsRect(tmp); r.union(tmp) }
         if (o.paintsWithBrush) {
             ShapeOutlines.brushOutline(o).controlBounds()?.let { b ->
                 val reach = (o.brushPreset?.size ?: o.strokeWidth) / 2f + 2f
@@ -1696,7 +1679,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (!controller.checkEditable(layer)) return
         val o = objectFor(b, points)
         val brush = paintsWithBrush(layer)
-        val spec = buildSpec(o, brush)
+        val spec = ShapeOutlines.paintSpec(o, brush)
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         resetPending()
         // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
@@ -1721,7 +1704,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun commitNewLayer(b: ShapeBox) {
         val o = objectFor(b, points)
         val brush = o.paintsWithBrush
-        val spec = buildSpec(o, brush)
+        val spec = ShapeOutlines.paintSpec(o, brush)
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         val doc = controller.doc
         val area = paintRect(o)
@@ -1808,7 +1791,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (o == loaded) { discard(); return }
         if (!controller.checkEditable(layer)) return
         val brush = o.paintsWithBrush
-        val spec = buildSpec(o, brush)
+        val spec = ShapeOutlines.paintSpec(o, brush)
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         // Everything the old shape covered (its real pixels) plus the new shape.
         val dirty = Rect()
