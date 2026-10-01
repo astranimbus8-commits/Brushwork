@@ -214,6 +214,31 @@ class CurveSnapRobolectricTest {
     }
 
     @Test
+    fun targetsAreBuiltOncePerGestureNotOnEveryMove() {
+        val (c, tool) = setup()
+        // A layer feature source is asked once per layer whenever targets are (re)built.
+        var builds = 0
+        val counted = c.doc.layers[0]
+        c.snapping.addLayerFeatures { l -> if (l === counted) builds++; emptyList() }
+        c.tap(40f, 200f); c.tap(300f, 250f)
+        builds = 0
+        c.pointerDown(ToolPoint(40f, 200f))
+        for (i in 1..120) c.pointerMove(ToolPoint(40f + i * 2f, 200f + i * 0.5f))
+        c.pointerUp(ToolPoint(280f, 260f))
+        assertEquals(Vec2(280f, 260f), pos(tool, 0))
+        assertEquals("one build for the whole drag", 1, builds)
+        // A tangent handle drag of the selected smooth anchor: one build again.
+        c.tap(300f, 250f)
+        assertEquals(1, tool.selected)
+        val end = pos(tool, 1) + tool.handlesOf(1).first
+        builds = 0
+        c.pointerDown(ToolPoint(end.x, end.y))
+        for (i in 1..60) c.pointerMove(ToolPoint(end.x - i * 2f, end.y + i))
+        c.pointerUp(ToolPoint(end.x - 120f, end.y + 60f))
+        assertEquals(1, builds)
+    }
+
+    @Test
     fun aCommittedSnappedCurveIsOneUndoStepAndDrawnThroughTheSnappedPoints() {
         val (c, tool) = setup(polyline = true)
         tool.update { it.copy(plainWidth = 2f) }
