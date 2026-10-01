@@ -1090,6 +1090,12 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     /** Runs a waiting live-brush replay now (the main looper does it otherwise). */
     internal fun flushPreview() = brushPreview.flush()
 
+    /** The random values the brush stroke of the pending path is painted with (tests). */
+    internal val brushSeed: Long get() = brushPreview.sessionSeed
+
+    /** True while the painting tool's unfinished stroke shows the pending path (tests). */
+    internal val brushLive: Boolean get() = brushPreview.isLive
+
     // ------------------------------------------------------------------ the preview of an object that ignores the selection
 
     /** Draws the layer with the items over it, without the selection's or alpha lock's clipping (vector objects). */
