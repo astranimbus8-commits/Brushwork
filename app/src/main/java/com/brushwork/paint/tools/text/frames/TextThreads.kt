@@ -34,6 +34,9 @@ import kotlin.random.Random
  *   a story already damaged when the project was opened is left alone until it is touched.
  * - A DUPLICATED frame layer becomes an unlinked plain fixed-box text of its slice, drawn again
  *   (its own text layout), in the duplicate's step.
+ * - Frames brought in again under the same story id (a Brushwork SVG / PDF imported into the
+ *   artwork it came from: layer imports emit no layer-list events) are taken apart into separate
+ *   stories on the next committed edit, before anything re-flows.
  * - Its own writes carry [TextWrapReflow.REFLOW_LABEL] and are ignored; a re-flow whose frames
  *   come out as stored writes nothing. Delivery therefore converges within 2 of the controller's
  *   4 rounds.
@@ -151,12 +154,53 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      * ones that are no longer whole (see the class notes), folded into the newest step.
      */
     private fun checkStories() {
-        val now = stories()
+        var now = stories()
+        // The same story brought in twice (its frames imported again from a Brushwork SVG or PDF)
+        // is two chains with one story id: each copy becomes a story of its own first.
+        var split = false
+        for ((id, frames) in now) {
+            if (sameSignature(seen[id], signatureOf(frames))) continue
+            if (splitCopies(frames)) split = true
+        }
+        if (split) now = stories()
         for ((id, frames) in now) {
             if (sameSignature(seen[id], signatureOf(frames))) continue
             if (!isWhole(frames)) heal(id)
         }
         seen = signatures(stories())
+    }
+
+    /**
+     * [frames] (one story id) hold the same chain positions more than once — copies of the story
+     * (the same frames imported again) or damaged data: they are taken apart into chains, layer
+     * stack order first (each frame joins the first chain that doesn't have its position yet).
+     * The first chain keeps the story; every other one becomes a story of its own (a new id;
+     * the same slices, so only data changes), folded into the newest step. Locked frames keep
+     * their id. False when there is nothing to take apart.
+     */
+    private fun splitCopies(frames: List<Frame>): Boolean {
+        if (frames.size < 2 || frames.map { it.thread.index }.toSet().size == frames.size) return false
+        val chains = ArrayList<MutableList<Frame>>()
+        for (f in frames.sortedBy { c.doc.indexOf(it.layer) }) {
+            val chain = chains.firstOrNull { ch -> ch.none { it.thread.index == f.thread.index } }
+                ?: ArrayList<Frame>().also { chains += it }
+            chain += f
+        }
+        if (chains.size < 2) return false
+        val writes = ArrayList<FrameWrite>()
+        val ids = HashSet<Long>()
+        for (chain in chains.drop(1)) {
+            var id = newStoryId()
+            while (!ids.add(id)) id = newStoryId()
+            for (f in chain) {
+                if (f.layer.locked) continue
+                writes += FrameWrite(f.layer, f.item, f.item.copy(thread = f.thread.copy(storyId = id)))
+            }
+        }
+        if (writes.isEmpty()) return false
+        var done = false
+        c.amendLastStep { done = writer.write(writes, TextWrapReflow.REFLOW_LABEL) != null }
+        return done
     }
 
     private fun signatureOf(frames: List<Frame>) = frames.map { it.layer to (it.layer.textData ?: "") }

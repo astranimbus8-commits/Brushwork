@@ -116,4 +116,31 @@ class ThreadExportTest {
         assertEquals(frames.map { itemOf(it).text }, c.textThreads.framesOf(id).map { it.item.text })
         assertWhole(c, id)
     }
+
+    @Test
+    fun importingTheStoryIntoItsOwnArtworkAgainMakesASecondStory() {
+        val s = setup(context)
+        val frames = threeFrames(s)
+        val id = itemOf(frames[0]).thread.storyId
+        val out = ByteArrayOutputStream()
+        runBlocking { SvgWriter(scene(s.c, VectorFormat.SVG)).write(out) }
+        val svg = com.brushwork.paint.exchange.svg.SvgParser.parse(out.toByteArray())
+        val c = s.c
+        val target = com.brushwork.paint.exchange.ImportTarget(400, 300, s.doc.dpi, s.doc.colorMode, com.brushwork.paint.exchange.ImportLayers.room(c), c.maxLayers)
+        val prepared = com.brushwork.paint.exchange.PayloadImport.prepare(svg.payload()!!, { key -> svg.imageData(key)?.let { com.brushwork.paint.exchange.image.PngDecoder.decode(it) } }, target)
+        com.brushwork.paint.exchange.PayloadImport.apply(c, prepared, emptyList())
+        assertEquals("six frames share one story id", 6, c.textThreads.allFrames().count { it.thread.storyId == id })
+        // The next committed edit takes the copies apart: two whole stories, nothing re-flowed into the other.
+        val steps = c.undoManager.undoCount
+        c.editWholeLayer(s.background, "Fill") { b -> b.eraseColor(0xFFEEEEEE.toInt()) }
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        val stories = c.textThreads.stories()
+        assertEquals(2, stories.size)
+        assertEquals("the original keeps its story", frames, stories.getValue(id).map { it.layer })
+        for ((sid, chain) in stories) {
+            assertEquals(3, chain.size)
+            assertEquals(frames.map { itemOf(it).text }, chain.map { it.item.text })
+            assertWhole(c, sid)
+        }
+    }
 }
