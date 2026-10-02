@@ -17,6 +17,10 @@ import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.SelectionJobs
+import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VPaint
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -175,21 +179,100 @@ class ObjectLiftSeamRobolectricTest {
         tool.discard()
     }
 
+    /** A vector layer whose cache is the rendering of one filled box (20..60, 20..50). */
+    private fun boxLayer(c: EditorController): Layer {
+        val l = c.activeLayer
+        l.vector = VectorContent.EMPTY
+        val box = VPath(
+            0,
+            subpaths = listOf(VSubpath(listOf(VAnchor(20f, 20f, true), VAnchor(60f, 20f, true), VAnchor(60f, 50f, true), VAnchor(20f, 50f, true)), closed = true)),
+            fill = VPaint.Solid(0xFFCC2200.toInt()),
+        )
+        assertEquals(1, c.vectors.addObjects(l, listOf(box), "Add").size)
+        return l
+    }
+
+    /**
+     * The seam's fallback (lead decision, v1.5 integration): a provider that refuses makes the
+     * Transform tool lift PIXELS, as on a raster layer; committing them turns the layer into a
+     * raster layer, undoably. The real provider never refuses a layer that has objects (see the
+     * tests below), so this only happens through the seam.
+     */
     @Test
-    fun withoutAnObjectProviderVectorLayersTransformPixels() {
+    fun aRefusingProviderFallsBackToPixels() {
         val c = setup()
-        val l = vectorLayer(c)
+        val l = boxLayer(c)
         c.selectTool(ToolId.TRANSFORM)
         val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
-        assertSame(RefusingLiftProvider, c.vectors.liftProvider)
+        tool.discard()
+        tool.objectLiftProvider = { RefusingLiftProvider }
         tool.start()
         assertNotNull(tool.transformState)
         tool.moveBy(10f, 0f)
         tool.commit()
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
         assertNull("a pixel edit turns it into a raster layer", l.vector)
         assertEquals(0xFFCC2200.toInt(), l.bitmap.getPixel(65, 30))
         c.undo()
         assertNotNull(l.vector)
+        assertEquals(0, l.bitmap.getPixel(65, 30))
+    }
+
+    /** The real provider: a vector layer's objects are transformed as objects, never as pixels. */
+    @Test
+    fun vectorLayersTransformTheirObjects() {
+        val c = setup()
+        val l = boxLayer(c)
+        assertTrue(c.vectors.liftProvider !== RefusingLiftProvider)
+        c.selectTool(ToolId.TRANSFORM)
+        shadowOf(Looper.getMainLooper()).idle()
+        val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        tool.start()
+        assertNotNull(tool.transformState)
+        val steps = c.undoManager.undoCount
+        tool.moveBy(10f, 0f)
+        tool.commit()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(TransformTool.TRANSFORM_OBJECTS_LABEL, c.undoManager.undoLabel)
+        val moved = l.vector!!.objects.single() as VPath
+        assertEquals(70f, moved.subpaths[0].anchors.maxOf { it.x }, 1e-3f)
+        assertEquals(0xFFCC2200.toInt(), l.bitmap.getPixel(65, 30))
+        assertEquals(0, l.bitmap.getPixel(25, 30))
+        c.undo()
+        assertEquals(60f, (l.vector!!.objects.single() as VPath).subpaths[0].anchors.maxOf { it.x }, 1e-3f)
+    }
+
+    /**
+     * An empty vector layer has nothing to transform, with or without a pixel selection: nothing
+     * is lifted, no step is recorded and the layer stays a vector layer (transparent pixels are
+     * never lifted and committed, which would rasterize it).
+     */
+    @Test
+    fun anEmptyVectorLayerHasNothingToTransformAndStaysAVectorLayer() {
+        val c = setup()
+        val l = c.activeLayer
+        l.vector = VectorContent.EMPTY
+        c.selectTool(ToolId.TRANSFORM)
+        shadowOf(Looper.getMainLooper()).idle()
+        val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        tool.discard()
+        assertSame("no objects: the pixel path, which finds nothing either", RefusingLiftProvider, c.vectors.liftProvider)
+        c.message = null
+        tool.start()
+        assertNull(tool.transformState)
+        assertEquals("Nothing to transform on this layer", c.message)
+        assertSame(VectorContent.EMPTY, l.vector)
+        assertEquals(0, c.undoManager.undoCount)
+        // With a pixel selection the object provider answers (and finds nothing either).
+        c.setSelection(Selection.all(w, h), recordUndo = false)
+        assertTrue(c.vectors.liftProvider !== RefusingLiftProvider)
+        c.message = null
+        tool.start()
+        assertNull(tool.transformState)
+        assertEquals("Nothing to transform on this layer", c.message)
+        tool.commit()
+        assertSame(VectorContent.EMPTY, l.vector)
+        assertEquals(0, c.undoManager.undoCount)
     }
 
     // ------------------------------------------------------------------ selection funnel

@@ -64,10 +64,12 @@ import com.brushwork.paint.tools.select.SelectionOutline
 import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
+import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -419,6 +421,9 @@ class EditorController(
         if (session != null) { session.cancel(); return }
         // A pending live edit becomes its step first: undo then takes it back.
         flushDeferredSteps()
+        // So do vector edits still rendering and the object edits waiting for them (v1.5): undo
+        // takes back the newest, and nothing lands on top of what it took back.
+        settleVectorWork()
         val tool = currentTool
         if (tool.hasPendingWork) {
             // Tools with steps (points of a curve/polygon) take back only the last one.
@@ -437,6 +442,8 @@ class EditorController(
         if (filterSession != null) return
         // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
         flushDeferredSteps()
+        // So do vector edits still rendering and the object edits waiting for them (v1.5).
+        settleVectorWork()
         val tool = currentTool
         if (tool.hasPendingWork) {
             if (tool.redoStep()) { invalidateOverlay(); return }
@@ -445,6 +452,27 @@ class EditorController(
             invalidateOverlay()
         }
         if (inHistoryDo { undoManager.redo(this) }) { editCount++; doc.touch() }
+    }
+
+    /**
+     * Lands the vector work still on its way (v1.5): a render in flight and the object edits
+     * queued behind it ([PendingRenders]: Object bar actions, lifts), in the order they were asked
+     * for, so what follows (undo, redo, a layer operation, a filter, closing) works on them and
+     * records its step after theirs. Not inside another step (they would join it), nor during
+     * undo / redo or while edit listeners are told.
+     */
+    internal fun settleVectorWork() {
+        if (editDepth != 0 || inHistory || delivering) return
+        PendingRenders.settle(this)
+    }
+
+    /**
+     * [settleVectorWork] when object edits are queued behind a vector render (an Object bar action
+     * pressed a moment ago); otherwise nothing, so an operation that records no step (switching
+     * layers, painting the mask) never waits for a render still running in the background.
+     */
+    private fun settleQueuedVectorWork() {
+        if (PendingRenders.hasWaiting(this)) settleVectorWork()
     }
 
     /** Runs an undo / redo: edits it causes (a tool reacting to a restored selection...) are not reported to edit listeners. */
@@ -707,10 +735,10 @@ class EditorController(
         return true
     }
 
-    /** False (with a message) when [layer] is locked or hidden. */
-    private fun checkUsable(layer: Layer): Boolean {
+    /** False (with a message) when [layer] is locked or hidden (unless [allowHidden]). */
+    private fun checkUsable(layer: Layer, allowHidden: Boolean = false): Boolean {
         if (layer.locked) { toast("Layer \"${layer.name}\" is locked"); return false }
-        if (!layer.visible) { toast("Layer \"${layer.name}\" is hidden"); return false }
+        if (!layer.visible && !allowHidden) { toast("Layer \"${layer.name}\" is hidden"); return false }
         return true
     }
 
@@ -829,6 +857,9 @@ class EditorController(
 
     fun selectLayer(layer: Layer) {
         if (layer === activeLayer) return
+        // An Object bar action waiting for a vector render is made on its layer first (v1.5; it
+        // works on the active layer's objects, so it would be dropped after the switch).
+        settleQueuedVectorWork()
         // Deactivating may commit pending work that inserts a layer, so resolve the index after.
         currentTool.onDeactivate()
         val idx = doc.indexOf(layer)
@@ -852,6 +883,10 @@ class EditorController(
      * after), so pending work is baked in first and the tool re-targets the active layer after.
      */
     private inline fun <T> withToolPaused(block: () -> T): T {
+        // Object edits queued behind a vector render (v1.5) land first, while the tool is still
+        // active: one of them may lift its objects again, which the pause then commits or lets go
+        // (never a lift of the content as it was before this operation, left open across it).
+        settleQueuedVectorWork()
         currentTool.onDeactivate()
         try {
             return block()
@@ -916,10 +951,12 @@ class EditorController(
      * Re-renders the editable text layer [layer] with new text: clears [dirty] (document px; it
      * must cover the old AND the new text, null = the whole layer), lets [draw] paint the new text
      * and stores [textData] — one undo step named [label] that restores both pixels and text.
-     * Returns false if the layer is gone or can't be edited. (A wrapper of [updateLayerData].)
+     * Returns false if the layer is gone or can't be edited. With [allowHidden] a hidden (not
+     * locked) layer is updated too: text wrapped around a picture follows it while hidden, so it
+     * is right when shown again. (A wrapper of [updateLayerData].)
      */
-    fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, draw: (Canvas) -> Unit): Boolean =
-        updateLayerData(layer, layer.dataSnapshot().copy(text = textData), label, dirty, EditTarget.CONTENT, draw, "Not enough memory to update the text")
+    fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, allowHidden: Boolean = false, draw: (Canvas) -> Unit): Boolean =
+        updateLayerData(layer, layer.dataSnapshot().copy(text = textData), label, dirty, EditTarget.CONTENT, draw, "Not enough memory to update the text", allowHidden)
 
     /**
      * Re-renders the editable shape layer [layer]: clears [dirty] (document px; it must cover the
@@ -938,7 +975,9 @@ class EditorController(
      * old AND the new rendering, null = the whole layer) and [draw] paints the new rendering
      * there; the step restores both pixels (tiles of [dirty]) and data. With a null [draw] only
      * the data changes (the pixels must already match). Returns false if the layer is gone,
-     * locked or hidden (adjustment layers are accepted: their data can always change).
+     * locked or hidden (adjustment layers are accepted: their data can always change); with
+     * [allowHidden] a hidden layer is updated too (an edit that follows another layer's, e.g. a
+     * re-flow of wrapped text, not a tool's).
      */
     internal fun updateLayerData(
         layer: Layer,
@@ -946,8 +985,9 @@ class EditorController(
         label: String,
         dirty: Rect?,
         target: EditTarget = EditTarget.CONTENT,
+        allowHidden: Boolean = false,
         draw: ((Canvas) -> Unit)?,
-    ): Boolean = updateLayerData(layer, after, label, dirty, target, draw, "Not enough memory for \"$label\"")
+    ): Boolean = updateLayerData(layer, after, label, dirty, target, draw, "Not enough memory for \"$label\"", allowHidden)
 
     private fun updateLayerData(
         layer: Layer,
@@ -957,8 +997,9 @@ class EditorController(
         target: EditTarget,
         draw: ((Canvas) -> Unit)?,
         oomMessage: String,
+        allowHidden: Boolean = false,
     ): Boolean = editScope {
-        if (doc.indexOf(layer) < 0 || !checkUsable(layer)) return@editScope false
+        if (doc.indexOf(layer) < 0 || !checkUsable(layer, allowHidden)) return@editScope false
         val before = layer.dataSnapshot()
         if (draw == null) {
             storeData(layer, before, after, label, target)
@@ -1226,7 +1267,111 @@ class EditorController(
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
     fun flipLayer(layer: Layer = activeLayer, horizontal: Boolean) {
         if (!checkEditable(layer)) return
-        withToolPaused { flipLayerNow(layer, horizontal) }
+        withToolPaused {
+            // A vector edit still rendering lands first: the flip mirrors its result.
+            vectors.flushPending()
+            val content = layer.vector
+            if (content != null && !LayerDataTransforms.turnsExactly(content, 0, mirror = true)) flipVectorLayerNow(layer, horizontal, content)
+            else flipLayerNow(layer, horizontal)
+        }
+    }
+
+    /**
+     * Flip layer for a vector layer whose brushes don't mirror into themselves (paper grain,
+     * scatter, textured or angled tips; v1.5): its mirrored objects are rendered again instead of
+     * flipping its pixels, as canvas flips do, or a later partial re-render would show seams in
+     * the texture. One step, rendered in the background when it is long (`vectors.update`); a mask
+     * flips with it, in the same step, when the new pixels land.
+     */
+    private fun flipVectorLayerNow(layer: Layer, horizontal: Boolean, content: VectorContent) {
+        val label = flipLabel(horizontal)
+        val mirrored = VectorLayerOps.flipped(content, doc.width, doc.height, horizontal) ?: return flipLayerNow(layer, horizontal)
+        val mask = if (layer.mask != null) flipMaskAction(layer, horizontal, label) else null
+        if (mirrored == content) {
+            // The drawing mirrors into itself: its pixels already are its rendering.
+            if (mask != null) editScope {
+                mask.redo(this)
+                pushUndo(mask)
+                mask.reportLostSpec(this)
+                queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+            }
+            return
+        }
+        if (mask == null) {
+            vectors.update(layer, mirrored, label)
+            return
+        }
+        // The mask bitmap flips right before the new pixels are drawn (the step's edit event sees
+        // both flipped); its spec and its undo action join the step once it is recorded. Whether
+        // the content's step was recorded is told by the layer's content: a new instance (the
+        // newest step is the flip's), or the same one when nothing changed after all (the edit
+        // was re-based onto content that already was the mirrored one): the mask flip is then a
+        // step of its own, never folded into an older step that happens to have the same label.
+        var contentBefore: VectorContent? = null
+        vectors.updateInternal(
+            layer, mirrored, label, null, null,
+            beforeApply = {
+                contentBefore = layer.vector
+                mask.flipBitmap(this)
+            },
+            onDone = { applied ->
+                if (!applied) {
+                    mask.flipBitmap(this)
+                } else {
+                    mask.setSpec(this, after = true)
+                    if (layer.vector !== contentBefore) {
+                        amendLastStep { pushUndo(mask) }
+                    } else {
+                        editScope {
+                            pushUndo(mask)
+                            queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+                        }
+                    }
+                    mask.reportLostSpec(this)
+                }
+            },
+            attempt = 0,
+        )
+    }
+
+    private fun flipLabel(horizontal: Boolean) = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+
+    /** [layer]'s mask bitmap and spec mirrored (an undo action: undo flips back, redo flips again). */
+    private fun flipMaskAction(layer: Layer, horizontal: Boolean, label: String): FlipMaskAction {
+        val m = Matrix().apply { if (horizontal) setScale(-1f, 1f, doc.width / 2f, 0f) else setScale(1f, -1f, 0f, doc.height / 2f) }
+        val specBefore = layer.maskSpec
+        val specAfter = specBefore?.let { MaskSpecs.transformed(it, m) }
+        return FlipMaskAction(label, layer, horizontal, specBefore, specAfter)
+    }
+
+    /** Mirrors a layer's mask (self-inverse bitmap flip) and sets its spec before / after. */
+    private class FlipMaskAction(
+        override val label: String,
+        private val layer: Layer,
+        private val horizontal: Boolean,
+        private val specBefore: MaskSpec?,
+        private val specAfter: MaskSpec?,
+    ) : UndoAction {
+        override val byteSize: Long get() = 256L
+
+        fun flipBitmap(c: EditorController) = c.structural {
+            layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+            layer.markChanged()
+        }
+
+        fun setSpec(c: EditorController, after: Boolean) {
+            layer.maskSpec = if (after) specAfter else specBefore
+            layer.markChanged()
+            c.notifyLayersChanged()
+        }
+
+        /** Says so when the flip made an editable mask a painted one (once the flip is done). */
+        fun reportLostSpec(c: EditorController) {
+            if (specBefore != null && specAfter == null) c.toast("The mask of \"${layer.name}\" is now a painted mask (undo to get the editable mask back)")
+        }
+
+        override fun undo(c: EditorController) { flipBitmap(c); setSpec(c, after = false) }
+        override fun redo(c: EditorController) { flipBitmap(c); setSpec(c, after = true) }
     }
 
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
@@ -1239,7 +1384,7 @@ class EditorController(
             }
         }
         flip(this)
-        val label = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+        val label = flipLabel(horizontal)
         val flipAction = LambdaAction(label, onUndo = flip, onRedo = flip)
         // Vector content and mask specs are mirrored with the pixels when they can be (A1 / A5);
         // what can't be is cleared like any pixel edit (text and shapes are, as in v1.4).
@@ -1305,7 +1450,7 @@ class EditorController(
         withToolPaused {
             val target = editTargetOf(layer)
             // A vector layer removes the objects the selection touches (A1); else pixels as today.
-            if (target == EditTarget.CONTENT && layer.isVectorLayer && VectorLayerOps.clear(this, layer, selection)) return@withToolPaused
+            if (target == EditTarget.CONTENT && layer.isVectorLayer && VectorLayerOps.clear(this, layer, selection, label)) return@withToolPaused
             if (target == EditTarget.CONTENT && layer.alphaLocked) {
                 toast("Transparency is locked on \"${layer.name}\""); return@withToolPaused
             }
@@ -1426,7 +1571,16 @@ class EditorController(
         }
     }
 
-    fun setMaskEnabled(layer: Layer, enabled: Boolean) = setLayerProps(layer, layer.props().copy(maskEnabled = enabled), if (enabled) "Enable mask" else "Disable mask")
+    /**
+     * Switches [layer]'s mask on or off (one step). It changes what the layer shows, so it is
+     * reported as an edit of the mask (v1.5: text wrapped around the layer re-flows in that step).
+     */
+    fun setMaskEnabled(layer: Layer, enabled: Boolean) = editScope {
+        if (layer.maskEnabled == enabled) return@editScope
+        val label = if (enabled) "Enable mask" else "Disable mask"
+        setLayerProps(layer, layer.props().copy(maskEnabled = enabled), label)
+        if (layer.mask != null) queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+    }
 
     /** Switches painting between the layer's pixels and its mask (not an undoable change). */
     fun setEditingMask(layer: Layer, editing: Boolean) {
@@ -1475,7 +1629,14 @@ class EditorController(
         // anything else happens, so the tool stays as it was.
         if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         filterSession?.cancel()
+        // A vector edit still rendering and the object edits waiting for it land first (v1.5),
+        // while the tool is still active (an Object bar action may lift its objects again, which
+        // the tool then commits or lets go): the filter previews and applies to their result, and
+        // none of them lands inside the filter's own step or under its preview later.
+        settleVectorWork()
         currentTool.onDeactivate()
+        // (What the tool's commit rendered in the background lands too.)
+        vectors.flushPending()
         if (!checkEditable()) return
         // A session that closes itself during start() (target not usable) must not stay installed.
         filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }

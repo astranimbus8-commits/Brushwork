@@ -39,8 +39,8 @@ object VectorStrokeCapture {
                 val state = VectorDrawState.of(c)
                 val mode = state.eraseMode.value
                 if (!state.eraserHintShown) {
-                    // Erasing objects surprises who expects pixels to go, and the mode chips sit
-                    // at the end of the options strip (off screen on a phone): say it once.
+                    // Erasing objects surprises who expects pixels to go: say it once, and where
+                    // the other modes are (the first chips of the options strip).
                     state.eraserHintShown = true
                     c.toast(eraserHint(mode))
                 }
@@ -63,7 +63,7 @@ object VectorStrokeCapture {
     /** What the eraser does on a vector layer in [mode], and where the other modes are (shown once per editor). */
     internal fun eraserHint(mode: VectorEraseMode): String =
         "Vector eraser — ${mode.label}: ${mode.description.replaceFirstChar { it.lowercase() }}. " +
-            "Other modes are at the end of the options strip"
+            "Other modes are at the start of the options strip"
 
     /** "Watercolor needs a raster layer" (the brush's name, else its tip). */
     internal fun directTipMessage(info: StrokeInfo): String {

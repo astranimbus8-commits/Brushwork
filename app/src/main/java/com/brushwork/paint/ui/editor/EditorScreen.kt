@@ -657,7 +657,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             EditorPanel.RULER -> RulerPanel(controller, closePanel)
             EditorPanel.GRID -> GridPanel(controller, closePanel)
             EditorPanel.STABILIZER -> StabilizerPanel(controller, closePanel)
-            EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel)
+            EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel, onCanvasChanged = { controller.invalidateDoc(null) })
             null -> {}
         }
     }

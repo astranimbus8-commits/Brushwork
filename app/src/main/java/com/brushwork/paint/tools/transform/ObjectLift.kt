@@ -3,6 +3,7 @@ package com.brushwork.paint.tools.transform
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Rect
+import android.graphics.RectF
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Layer
 
@@ -52,6 +53,22 @@ interface ObjectLiftProvider {
 
     /** Tap outside the quad: select the object under [p] alone and re-lift (true), or false for today's behaviour. */
     fun tapped(p: Vec2): Boolean
+
+    /**
+     * A tap (no drag) at [p] while objects are lifted: [inside] the box as drawn, or outside it.
+     * [moved]: the lifted objects were moved, scaled, turned... since they were lifted, so they
+     * are not where the layer's data has them. True = the provider changed what is to be lifted:
+     * the tool applies the pending transform and lifts again. By default a tap outside goes to
+     * [tapped] and a tap inside does nothing.
+     */
+    fun tap(p: Vec2, inside: Boolean, moved: Boolean): Boolean = !inside && tapped(p)
+
+    /**
+     * The box (document px) the objects of a lift of [layer] will show: of the lift being
+     * prepared, else of what [lift] would take now; null when unknown (the tool then judges by the
+     * layer's pixels). A pinch that starts before the objects are lifted is targeted by it (§4.7).
+     */
+    fun liftBox(layer: Layer): RectF? = null
 }
 
 /**

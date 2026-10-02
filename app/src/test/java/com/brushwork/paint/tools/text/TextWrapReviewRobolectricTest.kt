@@ -125,8 +125,11 @@ class TextWrapReviewRobolectricTest {
         assertFalse(s.tool.hasUserChanges)
         s.tool.discard()
 
-        // Switching the mask off is a property change (no edit event): the text can't follow then.
+        // Switching the mask off while the text is locked: the text can't follow then (locked =
+        // no edits; unlocked it re-flows in that step, see TextWrapMaskSwitchRobolectricTest).
+        text.locked = true
         s.c.setMaskEnabled(s.picture, false)
+        text.locked = false
         assertEquals(stored, itemOf(text))
         // Opened: it wraps around the picture as it is now, and ✓ records that as one step.
         assertTrue(s.tool.editLayer(text))

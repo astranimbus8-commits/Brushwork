@@ -144,7 +144,7 @@ class MarqueeTool(controller: EditorController) : Tool(controller) {
         val raw = shapeRect(downX, downY, fingerX, fingerY, settings)
         val tap = max(abs(fingerX - downX), abs(fingerY - downY)) < t.screenToDocLength(t.dp(8f)) || raw.width() < 1f || raw.height() < 1f
         when {
-            tap -> if (mode == SelectionMode.REPLACE && controller.selection != null) controller.deselect()
+            tap -> if (mode == SelectionMode.REPLACE) deselectOnTap(controller)
             // A real drag whose corners snapped onto one line (e.g. along a layer's edge) encloses
             // nothing: nothing is selected and the current selection stays.
             r.width() < 1f || r.height() < 1f -> {}

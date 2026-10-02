@@ -96,7 +96,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val kind = StrokeKind.of(id, preset)
         val target = controller.editTargetOf(layer)
         val maskTarget = target == EditTarget.MASK
-        if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget) {
+        // On a vector layer's content the eraser removes objects (the stroke hook), not pixels:
+        // alpha lock doesn't apply there (v1.5). A path stroke is never hooked: it erases pixels.
+        val erasesObjects = layer.isVectorLayer && !maskTarget && !isPath
+        if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget && !erasesObjects) {
             controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
             return null
         }

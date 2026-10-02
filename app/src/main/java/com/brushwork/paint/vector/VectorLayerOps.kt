@@ -197,10 +197,10 @@ object VectorLayerOps {
 
     /**
      * Clear on a vector layer: removes the objects [sel] touches, or every object (one step
-     * "Clear"). True also when nothing was touched (a message says so): a vector layer is never
-     * rasterized by Clear.
+     * [label]: "Clear", or "Cut" when the selection was copied first). True also when nothing was
+     * touched (a message says so): a vector layer is never rasterized by Clear.
      */
-    fun clear(c: EditorController, layer: Layer, sel: Selection?): Boolean {
+    fun clear(c: EditorController, layer: Layer, sel: Selection?, label: String = "Clear"): Boolean {
         val content = layer.vector ?: return false
         c.vectors.flushPending()
         val now = layer.vector ?: return false
@@ -209,7 +209,7 @@ object VectorLayerOps {
             c.toast(if (sel == null || content.objects.isEmpty()) "\"${layer.name}\" has no objects to clear" else "The selection touches no objects")
             return true
         }
-        c.vectors.update(layer, now.without(ids), "Clear")
+        c.vectors.update(layer, now.without(ids), label)
         return true
     }
 
