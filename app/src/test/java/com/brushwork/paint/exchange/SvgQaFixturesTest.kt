@@ -120,6 +120,23 @@ class SvgQaFixturesTest {
     }
 
     @Test
+    fun aTextWithAnUnreadableFillIsDrawnInBlackLikeAShape() {
+        // CSS variables (web tools), typos: SVG ignores the value, the fill stays black.
+        val svg = """<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">
+            <rect width="10" height="10" fill="var(--ink)"/>
+            <text x="20" y="50" fill="var(--ink)">Caption</text>
+            <text x="20" y="90" fill="#zzz">Typo</text>
+            <text x="20" y="130" fill="none">Invisible</text>
+            </svg>"""
+        val c = SvgToVector.convert(SvgParser.parse(svg.toByteArray()), 96f)
+        val shape = c.items.filterIsInstance<SvgItem.Shape>().single()
+        assertEquals(VPaint.Solid(0xFF000000.toInt()), shape.path.fill)
+        val labels = c.items.filterIsInstance<SvgItem.Label>().map { it.text }
+        assertEquals(listOf(listOf("Caption"), listOf("Typo")), labels.map { it.lines })
+        assertEquals(listOf(0xFF000000.toInt(), 0xFF000000.toInt()), labels.map { it.color })
+    }
+
+    @Test
     fun figmaFillNoneOnTheRootIsInherited() {
         val c = fixture("figma.svg")
         val items = c.items.filterIsInstance<SvgItem.Shape>()
