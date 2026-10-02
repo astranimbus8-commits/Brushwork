@@ -28,6 +28,7 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextWrapSpec
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.offset
@@ -394,7 +395,12 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         runPreview()
     }
 
+    /** Previews re-flowed since this tool was made (tests: the typing throttle). */
+    internal var previewRuns = 0
+        private set
+
     private fun runPreview() {
+        previewRuns++
         lastPreviewAt = SystemClock.uptimeMillis()
         when {
             story.isOpen -> refreshStoryPreview()
@@ -610,8 +616,10 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         controller.increments.readout = null
         if (m == Mode.NONE) return
         if (!moved) {
+            // The out-port under the finger (clearDrag forgets it).
+            val port = portLayer
             clearDrag()
-            onTap(m, Vec2(p.x, p.y))
+            onTap(m, Vec2(p.x, p.y), port)
             controller.invalidateOverlay()
             return
         }
@@ -647,11 +655,10 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (!story.isOpen) pendingFlow = null
     }
 
-    private fun onTap(m: Mode, at: Vec2) {
+    /** A tap (the finger didn't travel) that went down in mode [m]; [port] is the out-port it went down on. */
+    private fun onTap(m: Mode, at: Vec2, port: Layer?) {
         if (m == Mode.PORT) {
-            val l = portLayer
-            portLayer = null
-            if (l != null) toggleLink(l)
+            if (port != null && doc.indexOf(port) >= 0) toggleLink(port)
             return
         }
         val from = linkFrom
@@ -697,14 +704,15 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         writeFrame(layer, start, item, label)
     }
 
-    /** Writes frame [layer] (it held [start]) as [item], its story re-flowed: one step [label]. */
-    private fun writeFrame(layer: Layer, start: TextItem, item: TextItem, label: String) {
+    /** Writes frame [layer] (it held [start]) as [item], its story re-flowed: one step [label]. False when nothing was written. */
+    private fun writeFrame(layer: Layer, start: TextItem, item: TextItem, label: String): Boolean {
         val frames = threads.framesOf(start.thread.storyId)
-        val s = threads.storyOf(frames) ?: return
-        if (frames.none { it.layer === layer }) return
+        val s = threads.storyOf(frames) ?: return false
+        if (frames.none { it.layer === layer }) return false
         val chain = frames.map { f -> if (f.layer === layer) FlowFrame(layer, item) else FlowFrame(f.layer, f.item) }
-        threads.writeStory(label, s.id, s.text, s.spec, chain)
+        val written = threads.writeStory(label, s.id, s.text, s.spec, chain) != null
         changed()
+        return written
     }
 
     /** The drag preview: the dragged frame, and the frames after it when its slice changes. */
@@ -936,6 +944,52 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         return k >= 0 && k < frames.lastIndex
     }
 
+    // ------------------------------------------------------------------ wrap around a picture (per frame)
+
+    /**
+     * Layers frame [layer] can wrap around, top first: every layer but text layers (frames
+     * included) and adjustment layers. A picture may be above or below the frame.
+     */
+    fun wrapSources(layer: Layer? = selected): List<Layer> =
+        doc.layers.asReversed().filter { it !== layer && !it.isTextLayer && !it.isAdjustmentLayer }
+
+    /** The picture frame [layer] wraps around (null when it doesn't, or that layer was deleted). */
+    fun wrapSourceOf(layer: Layer? = selected): Layer? {
+        val item = layer?.let { threads.frameOf(it) } ?: return null
+        if (!item.wrap.isOn) return null
+        return doc.layerById(item.wrap.sourceLayerId)?.takeIf { !it.isTextLayer && !it.isAdjustmentLayer }
+    }
+
+    /** True when frame [layer] wraps around a picture (also one that was deleted: it keeps the outline). */
+    fun wraps(layer: Layer? = selected): Boolean = layer?.let { threads.frameOf(it) }?.wrapActive == true
+
+    /**
+     * Frame [layer]'s lines wrap around [source]'s picture (null = no wrap), each frame on its own
+     * (§3.6a "Wrap around a picture works per frame"): the frame's lines break around the
+     * picture's outline and the chain re-flows, one step "Wrap frame". The first time, the
+     * distance becomes 0.3 em, as for a text. Later edits of the picture re-flow the story
+     * (TextWrapReflow → [TextThreads.reflowStory]). False (nothing written) when nothing changes
+     * or the frame can't be changed.
+     */
+    fun setFrameWrap(layer: Layer, source: Layer?): Boolean {
+        val item = threads.frameOf(layer) ?: return false
+        if (story.isOpen || !controller.checkEditable(layer)) return false
+        val next = if (source == null) {
+            if (!item.wrap.isOn) return false
+            item.copy(wrap = item.wrap.copy(sourceLayerId = 0L, polygons = emptyList()))
+        } else {
+            if (doc.indexOf(source) < 0 || source === layer || source.isTextLayer || source.isAdjustmentLayer) return false
+            val polys = controller.textWrap.contours.polygons(source, item.wrap.contour) ?: run {
+                controller.toast("Not enough memory to trace \"${source.name}\"")
+                return false
+            }
+            val gap = if (item.wrap == TextWrapSpec()) (WRAP_GAP_EM * item.spec.sizePx).coerceIn(0f, TextWrapSpec.MAX_GAP_PX) else item.wrap.gapPx
+            item.copy(wrap = item.wrap.copy(sourceLayerId = source.id, polygons = polys, gapPx = gap))
+        }
+        if (next == item) return false
+        return writeFrame(layer, item, next, WRAP_LABEL)
+    }
+
     // ------------------------------------------------------------------ the X / Y pill
 
     /** A pill edit of the selected frame's centre: (its item when the edit began, its pending item). */
@@ -1064,6 +1118,10 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         const val MOVE_LABEL = "Move frame"
         const val RESIZE_LABEL = "Resize frame"
         const val UNLINK_LABEL = "Unlink frame"
+        const val WRAP_LABEL = "Wrap frame"
+
+        /** Distance between a frame's text and its picture when wrap is first switched on (em). */
+        private const val WRAP_GAP_EM = 0.3f
 
         /** Messages. */
         const val HORIZONTAL_ONLY = "Only horizontal text boxes can be linked"

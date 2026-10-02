@@ -12,8 +12,13 @@ import com.brushwork.paint.tools.text.WrapText
  * The measured stories of linked text frames (v1.6, §3.6c budgets; area D). Laying out a frame
  * ([TextRenderer.frameLayout]) measures `story.substring(start)`; a re-flow computes every frame's
  * end that way and then draws the frames, which would measure every tail twice. This cache keeps
- * exactly what `frameLayout` itself measured, keyed by (story, start, look), and hands it back to
- * the next layout of the same tail, so flowing and drawing a chain measure each tail once.
+ * exactly what `frameLayout` itself measured and hands it back to the next layout of the same
+ * tail, so flowing and drawing a chain measure each tail once.
+ *
+ * A tail is found by its TEXT (and the look): typing in the first frame of a long story moves the
+ * later frames' starts, but their tails are often the very same characters as before, which are
+ * not measured again. Scaled letters (§3.5) depend on where the tail starts in the whole story
+ * (each letter's place in the ramp): their tails are found by (story, start) instead.
  *
  * Exactness (I1): nothing here derives a measurement; an entry is only ever the [WrapText]
  * `frameLayout` produced for that very tail and look (`frameLayout` checks the text again before
@@ -23,8 +28,12 @@ import com.brushwork.paint.tools.text.WrapText
  */
 class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT_MAX_CHARS) {
 
-    /** What a measurement depends on besides the text: the look without the frame's size, and the imported fonts. */
-    private data class Key(val story: String, val start: Int, val look: TextSpec, val fonts: Int)
+    /**
+     * What a measurement depends on: the tail's text (unscaled letters; [start] is -1), or the
+     * whole story and the tail's start in it (scaled letters); the look without the frame's size;
+     * the imported fonts.
+     */
+    private data class Key(val text: String, val start: Int, val look: TextSpec, val fonts: Int)
 
     private val map = LinkedHashMap<Key, WrapText>(16, 0.75f, true)
     private var chars = 0L
@@ -35,15 +44,21 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
     var misses = 0
         private set
 
-    private fun keyOf(item: TextItem): Key? {
+    /** Characters of the measured tails held now. */
+    val size: Long get() = chars
+
+    private fun keyOf(item: TextItem, tail: String?): Key? {
         val th = item.thread
         if (!th.isOn) return null
-        return Key(th.story, th.start, lookOf(item.spec), FontStore.generation)
+        val look = lookOf(item.spec)
+        val start = th.start.coerceIn(0, th.story.length)
+        return if (look.letterScale.isOn) Key(th.story, start, look, FontStore.generation)
+        else Key(tail ?: th.story.substring(start), -1, look, FontStore.generation)
     }
 
     /** The measured tail of frame [item]'s story from its start, if this cache has it. */
     fun get(item: TextItem): WrapText? {
-        val k = keyOf(item) ?: return null
+        val k = keyOf(item, null) ?: return null
         val w = map[k]
         if (w != null) hits++ else misses++
         return w
@@ -51,8 +66,10 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
 
     /** Keeps [measured], the tail `frameLayout` measured for frame [item]. */
     fun put(item: TextItem, measured: WrapText) {
-        val k = keyOf(item) ?: return
-        if (measured.text.length != item.thread.story.length - item.thread.start) return
+        val th = item.thread
+        val start = th.start.coerceIn(0, th.story.length)
+        if (measured.text.length != th.story.length - start) return
+        val k = keyOf(item, measured.text) ?: return
         val old = map.put(k, measured)
         if (old != null) chars -= old.text.length
         chars += measured.text.length
@@ -97,8 +114,11 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
     }
 
     companion object {
-        /** Characters of measured tails kept (about 10 bytes each). */
-        const val DEFAULT_MAX_CHARS = 1_500_000
+        /**
+         * Characters of measured tails kept (about 11 bytes each: 6 MB at most). A 50,000-character
+         * story in 10 frames has about 275,000 characters of tails.
+         */
+        const val DEFAULT_MAX_CHARS = 600_000
 
         /** The text of the stand-in preparation (never a frame's text in practice; checked anyway). */
         private const val STAND_IN_TEXT = "\u0000￿ frame stand-in ￿\u0000"

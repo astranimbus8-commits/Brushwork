@@ -29,8 +29,9 @@ internal class FrameWrite(val layer: Layer?, val before: TextItem?, val after: T
  * update (I1: pixels and data change together). Hidden frames are written too (they stay right
  * when shown again); locked ones must not be in the list (the controller refuses them).
  *
- * Every write but a creation carries [TextWrapReflow.REFLOW_LABEL], so `TextThreads` ignores its
- * own edits (the step keeps the caller's label).
+ * A heal's writes carry [TextWrapReflow.REFLOW_LABEL], so `TextThreads` ignores its own edits (the
+ * amended step keeps the caller's label); a tool's writes carry the tool's step name (a story
+ * whose frames come out whole makes `TextThreads` write nothing).
  */
 internal class StoryWriter(
     private val c: EditorController,
@@ -41,9 +42,12 @@ internal class StoryWriter(
     /**
      * Writes [writes] in order; returns the layer of each (the created ones included), or null
      * when one could not be written (out of memory, a layer limit reached meanwhile): what was
-     * written before stays part of the caller's step.
+     * written before stays part of the caller's step. Created frames are added with
+     * [createLabel], the others written with [updateLabel] (the tool's own step name when the
+     * write is a user action, so a step of one write keeps that name; [TextWrapReflow.REFLOW_LABEL]
+     * for a heal folded into another step).
      */
-    fun write(writes: List<FrameWrite>, createLabel: String): List<Layer>? {
+    fun write(writes: List<FrameWrite>, createLabel: String, updateLabel: String = TextWrapReflow.REFLOW_LABEL): List<Layer>? {
         val out = ArrayList<Layer>(writes.size)
         for (w in writes) {
             val layer = w.layer
@@ -51,7 +55,7 @@ internal class StoryWriter(
                 out += create(w, createLabel) ?: return null
                 continue
             }
-            if (!update(layer, w.before, w.after)) return null
+            if (!update(layer, w.before, w.after, updateLabel)) return null
             out += layer
         }
         return out
@@ -73,13 +77,16 @@ internal class StoryWriter(
         return layer
     }
 
-    /** Writes [after] into frame layer [layer] that held [before]; true when it is stored (or already was). */
-    fun update(layer: Layer, before: TextItem?, after: TextItem): Boolean {
+    /**
+     * Writes [after] into frame layer [layer] that held [before], as an edit named [label]; true
+     * when it is stored (or already was).
+     */
+    fun update(layer: Layer, before: TextItem?, after: TextItem, label: String = TextWrapReflow.REFLOW_LABEL): Boolean {
         if (before == after) return true
         val json = TextCodec.encode(after)
         val ok = try {
             if (before != null && sameRendering(before, after)) {
-                c.updateLayerData(layer, layer.dataSnapshot().copy(text = json), TextWrapReflow.REFLOW_LABEL, null, EditTarget.CONTENT, allowHidden = true, draw = null)
+                c.updateLayerData(layer, layer.dataSnapshot().copy(text = json), label, null, EditTarget.CONTENT, allowHidden = true, draw = null)
             } else {
                 val prep = measures.prepare(after)
                 val dirty = Rect()
@@ -87,10 +94,10 @@ internal class StoryWriter(
                 textRectOf(after, prep)?.let { dirty.union(it) }
                 if (dirty.isEmpty) {
                     // Nothing drawn before or after (an empty frame stays empty): only the data changes.
-                    c.updateLayerData(layer, layer.dataSnapshot().copy(text = json), TextWrapReflow.REFLOW_LABEL, null, EditTarget.CONTENT, allowHidden = true, draw = null)
+                    c.updateLayerData(layer, layer.dataSnapshot().copy(text = json), label, null, EditTarget.CONTENT, allowHidden = true, draw = null)
                 } else {
                     dirty.inset(-1, -1)
-                    c.updateTextLayer(layer, json, TextWrapReflow.REFLOW_LABEL, dirty, allowHidden = true) { cv -> TextRenderer.drawItem(cv, after, prep, null) }
+                    c.updateTextLayer(layer, json, label, dirty, allowHidden = true) { cv -> TextRenderer.drawItem(cv, after, prep, null) }
                 }
             }
         } catch (e: OutOfMemoryError) {

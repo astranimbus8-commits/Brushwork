@@ -359,8 +359,8 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         }
         var result: List<Layer>? = null
         c.groupUndo(label) {
-            val out = writer.write(writes, label) ?: return@groupUndo
-            if (writer.write(extra, label) == null) return@groupUndo
+            val out = writer.write(writes, label, label) ?: return@groupUndo
+            if (writer.write(extra, label, label) == null) return@groupUndo
             // The chain's layers in order: the existing ones, and the created ones in creation order.
             val created = ArrayDeque<Layer>()
             for (i in writes.indices) if (writes[i].layer == null) created.addLast(out[i])
