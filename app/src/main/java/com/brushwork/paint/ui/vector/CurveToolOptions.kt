@@ -394,7 +394,8 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
         Hint(
             (if (tool.polyline) "Tap to add points, drag any point to move it, long-press a point to select it."
             else "Tap to add points (on the path to insert one), drag any point to move it, long-press a point for corner / smooth / delete. A selected smooth point shows tangent handles you can drag.") +
-                " Undo takes back the last point edit.",
+                " Undo takes back the last point edit." +
+                (if (controller.isVectorMode) " On this vector layer, tap the line of a ${if (tool.polyline) "polyline" else "curve"} to edit its points again." else ""),
             Modifier.padding(top = 8.dp),
         )
     }

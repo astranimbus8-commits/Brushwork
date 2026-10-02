@@ -18,6 +18,7 @@ import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -177,8 +178,9 @@ class CurveReviewRobolectricTest {
         assertEquals(1, c.undoManager.undoCount)
         val line = (layer.vector!!.objects.single() as VPath)
         assertTrue("the line is painted", inkPixels(layer.bitmap) > 300)
-        // Reopen it by tapping inside it, then set every point to 0 %.
-        c.tap(160f, 150f)
+        // Reopen it by tapping its line, then set every point to 0 %.
+        val q = onLine(line)
+        c.tap(q.x, q.y)
         assertTrue(tool.isReopened)
         for (i in 0 until 3) tool.setWidth(i, 0f)
         tool.endNumericEdit()
@@ -197,4 +199,75 @@ class CurveReviewRobolectricTest {
         c.undo()
         assertEquals(line, layer.vector!!.objects.single())
     }
+
+    @Test
+    fun aReopenedBrushPathDownToOnePointNoLongerShowsItsOldPixels() {
+        val c = controller(vector = true)
+        val layer = c.activeLayer
+        val tool = curveTool(c)
+        tool.update { it.copy(stroke = CurveStroke.BRUSH, taper = false) }
+        c.tap(60f, 190f); c.tap(160f, 50f); c.tap(270f, 190f)
+        tool.flushPreview()
+        tool.commit()
+        assertTrue(inkPixels(layer.bitmap) > 300)
+        // Reopen it on its line, then delete points until one is left.
+        val q = onLine(layer.vector!!.objects.single() as VPath)
+        c.tap(q.x, q.y)
+        assertTrue(tool.isReopened)
+        assertTrue("unchanged: its own pixels", inkPixels(c.composite()) > 300)
+        tool.deleteAnchor(2)
+        tool.flushPreview()
+        assertTrue("two points: the new stroke", tool.brushLive)
+        tool.deleteAnchor(1)
+        tool.flushPreview()
+        assertFalse(tool.brushLive)
+        assertEquals("one point draws nothing (as ✓ will leave it)", 0, inkPixels(c.composite()))
+        tool.commit()
+        assertTrue("the object went", layer.vector!!.objects.isEmpty())
+        assertEquals(0, painted(layer.bitmap))
+        assertEquals(2, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun aFilledPathReopensFromItsLineAndATapInsideStartsANewPath() {
+        val c = controller(vector = true)
+        val layer = c.activeLayer
+        c.brush = c.brush.copy(size = 8f)
+        val tool = curveTool(c)
+        tool.update { it.copy(stroke = CurveStroke.PLAIN, fill = true, closed = true, fillColor = green) }
+        c.tap(60f, 190f); c.tap(160f, 50f); c.tap(270f, 190f)
+        tool.commit()
+        val shape = layer.vector!!.objects.single() as VPath
+        assertEquals(1, c.undoManager.undoCount)
+        // A tap inside the fill, away from the line: the first point of a new curve over it.
+        c.tap(160f, 150f)
+        assertFalse(tool.isReopened)
+        assertEquals(1, tool.anchors.size)
+        c.tap(200f, 120f)
+        tool.commit()
+        assertEquals("a second object on top", 2, layer.vector!!.objects.size)
+        assertEquals(shape, layer.vector!!.objects[0])
+        assertEquals(2, c.undoManager.undoCount)
+        // A tap on its line reopens it.
+        val q = onLine(shape)
+        c.tap(q.x, q.y)
+        assertTrue(tool.isReopened)
+        assertEquals(3, tool.anchors.size)
+        tool.discard()
+        assertFalse(tool.isReopened)
+
+        // A fill alone (no line) reopens from anywhere inside it.
+        tool.update { it.copy(stroke = CurveStroke.NONE) }
+        c.tap(20f, 230f); c.tap(40f, 200f); c.tap(60f, 230f)
+        tool.commit()
+        val fillOnly = layer.vector!!.objects.last() as VPath
+        assertEquals(null, fillOnly.stroke)
+        c.tap(40f, 222f)
+        assertTrue(tool.isReopened)
+        tool.discard()
+        assertEquals(3, c.undoManager.undoCount)
+    }
+
+    /** A point on [p]'s line. */
+    private fun onLine(p: VPath) = VectorOps.toVectorPath(p).flatten(0.25f).single().points.let { it[it.size / 4] }
 }

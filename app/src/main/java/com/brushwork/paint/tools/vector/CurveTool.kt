@@ -19,6 +19,7 @@ import com.brushwork.paint.brush.PathStrokeInput
 import com.brushwork.paint.brush.StrokeKind
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.brush.sanitized
+import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
@@ -123,7 +124,8 @@ data class CurveSettings(
  * - On a vector layer (painting its content) ✓ adds the path as a [VPath] object (anchors,
  *   handles, widths, plain or brush stroke with its brush and texture seed, fill): a live brush
  *   stroke keeps its pixels (they are the replay's), anything else is rendered by the layer. With
- *   no path pending, tapping a path object of the layer reopens it ([reopen]): its own look
+ *   no path pending, tapping a path object of the layer (the line of a filled path with a line: a
+ *   tap inside it starts a new path there) reopens it ([reopen]): its own look
  *   (width unlinked, its colors, its brush) is edited, ✓ replaces it ("Edit path"), ✕ leaves it
  *   as it was. A brush that needs pixels (smudge, blur, watercolor) draws a plain line there.
  */
@@ -739,8 +741,36 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         if (opening) return null
         val layer = controller.doc.activeLayer
         if (!vectorTarget(layer) || layer.locked || !layer.visible) return null
-        val hit = controller.vectors.hitTest(layer, p, controller.docLength(PATH_HIT_DP)) as? VPath ?: return null
-        return hit.takeIf { canReopen(it) }
+        val tol = controller.docLength(PATH_HIT_DP)
+        val hit = controller.vectors.hitTest(layer, p, tol) as? VPath ?: return null
+        if (!canReopen(hit)) return null
+        // A filled path with a visible line reopens from its line: a tap inside its fill starts
+        // a new path there (curves are drawn over filled shapes; a fill alone reopens anywhere).
+        val reach = lineReach(hit)
+        if (hit.fill != null && reach > 0f && distanceToLine(hit, p) > reach + tol) return null
+        return hit
+    }
+
+    /** How far [p]'s line paints from its centre line (document px): 0 when it paints nothing. */
+    private fun lineReach(p: VPath): Float {
+        val st = p.stroke ?: return 0f
+        val w = st.width.takeIf { it.isFinite() && it > 0f } ?: return 0f
+        val anchors = p.subpaths.firstOrNull()?.anchors ?: return 0f
+        var m = 0f
+        for (a in anchors) m = max(m, CurveWidths.factor(a.width))
+        return w * m / 2f
+    }
+
+    /** Distance from [q] to [p]'s centre line (document px). */
+    private fun distanceToLine(p: VPath, q: Vec2): Float {
+        var best = Float.POSITIVE_INFINITY
+        for (poly in VectorOps.toVectorPath(p).flatten(0.5f)) {
+            val pts = poly.points
+            if (pts.size == 1) best = min(best, q.distanceTo(pts[0]))
+            for (i in 1 until pts.size) best = min(best, Geometry.distanceToSegment(q, pts[i - 1], pts[i]))
+            if (poly.closed && pts.size > 2) best = min(best, Geometry.distanceToSegment(q, pts.last(), pts[0]))
+        }
+        return best
     }
 
     /** True for a single-subpath path of this tool's kind (curves in the Curve tool, polylines in the Polyline tool). */
