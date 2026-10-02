@@ -289,10 +289,15 @@ always, through `TextExport.outlineParts`), or its pixels when it holds color em
 their font, without outlines). A Brushwork
 payload embedded in both formats restores the layers exactly on re-import. Import (Import SVG or
 PDF…, and "New from SVG or PDF" in the gallery, handed over through `PendingImports`) reads SVG with
-an own XML tokenizer (no DTD) into editable vector layers, and PDF pages through `PdfRenderer` into
+an own XML tokenizer (no DTD; UTF-16 and 8-bit files are transcoded to UTF-8 first by
+`svg/XmlEncoding`) into editable vector layers, and PDF pages through `PdfRenderer` into
 raster layers. An SVG imported into an open artwork is one undo step, after which Transform opens
-with the imported objects lifted as objects (✓ keeps the layer a vector layer).
-`ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress.
+with the imported objects lifted as objects (✓ keeps the layer a vector layer). A file that fits
+the canvas (half a pixel of rounding allowed: sizes in mm / pt at the document DPI) keeps its
+coordinates; a larger one is scaled to 90 % and centred (`VectorImport.placement`).
+`ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress; the export sheet's options are
+`rememberSaveable` and each Save as… picker exports its own format, so an activity recreated
+behind the system picker still writes what was chosen.
 
 ## Snapping (`snap/`)
 One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
@@ -327,7 +332,8 @@ to one 28 dp line; left out of the canvas fit inset so it never moves the canvas
 Clone; a finished drag, arrow run or typed value ends the tool's edit, `endPositionEdit`), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
 (copy / cut / paste / deselect…) while a selection or clipboard exists — or the object bar while
 vector objects are selected — the canvas, the brush size/opacity slider bar (values can be tapped and typed)
-and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent; inside the editor
+and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent (the Tools sheet
+up to 85 %, so the whole grid shows at once on a 392 x 873 dp phone); inside the editor
 they are drawn by a non-modal `SheetHost` (ui/common/SheetHost.kt): touching the canvas minimizes
 the top panel to a pill and the touch reaches the canvas, so the view and objects stay editable.
 The layers panel is a non-modal floating window in the bottom-right corner (a tap outside closes it).
