@@ -47,6 +47,8 @@ object ImportLayers {
                     layer.mask = n.mask
                     layer.restoreData(n.data)
                     val index = at
+                    // As the project loader does: an adjustment layer is never clipped nor a clipping base.
+                    if (layer.isAdjustmentLayer || doc.layers.getOrNull(index - 1)?.isAdjustmentLayer == true) layer.clipping = false
                     c.structural {
                         doc.layers.add(index, layer)
                         doc.activeLayerIndex = index

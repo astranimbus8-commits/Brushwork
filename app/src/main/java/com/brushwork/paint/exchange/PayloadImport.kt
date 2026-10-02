@@ -47,7 +47,7 @@ object PayloadImport {
         val out = ArrayList<NewLayer>()
         var missing = 0
         var rasterized = 0
-        val fits = p.layers.take(target.room)
+        val fits = fitting(p.layers, target.room)
         if (p.layers.size > fits.size) dropped["layers (layer limit)"] = p.layers.size - fits.size
         for (pl in fits) {
             val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
@@ -92,6 +92,22 @@ object PayloadImport {
         val created = ImportLayers.insert(c, prepared.layers, LABEL, replace)
         created.getOrNull(prepared.activeIndex)?.let { c.selectLayer(it) }
         return ImportOutcome(layers = created.size, dropped = prepared.outcome.dropped)
+    }
+
+    /**
+     * The bottom layers of [layers] that fit in [room] free layer slots, by the editor's own
+     * rules: any layer needs one free slot, an adjustment layer two (`canAddAdjustmentLayer`).
+     */
+    internal fun fitting(layers: List<PayloadLayer>, room: Int): List<PayloadLayer> {
+        var left = room
+        val out = ArrayList<PayloadLayer>()
+        for (pl in layers) {
+            val needed = if (pl.kind == PayloadKind.ADJUSTMENT || pl.adjustment != null) 2 else 1
+            if (needed > left) break
+            out += pl
+            left--
+        }
+        return out
     }
 
     private fun transformed(content: VectorContent, place: Affine): VectorContent {

@@ -392,29 +392,34 @@ class ExportSceneBuilder(
             withContext(pixelDispatcher) {
                 val tmp = Document("export", "export", w, h, dpi)
                 tmp.layers += views
-                val out = BitmapUtils.createLayerBitmap(rect.width(), rect.height())
+                val rw = rect.width()
+                val rh = rect.height()
+                // The pixels go straight into the picture's array, band by band: memory is the
+                // picture plus one band, not a whole second copy of it (4000 x 5000: 80 MB less).
+                val px = IntArray(rw * rh)
+                val bandH = minOf(COMPOSITE_BAND, rh)
+                val band = BitmapUtils.createLayerBitmap(rw, bandH)
                 try {
-                    val canvas = Canvas(out)
-                    canvas.translate(-rect.left.toFloat(), -rect.top.toFloat())
+                    val canvas = Canvas(band)
                     val compositor = Compositor(tmp) { null }
-                    val target = CompositeTarget.translate(out, rect.left, rect.top)
                     // In bands, letting the main thread breathe between them (big canvases).
                     var top = rect.top
                     while (top < rect.bottom) {
                         coroutineContext.ensureActive()
-                        val band = Rect(rect.left, top, rect.right, minOf(rect.bottom, top + COMPOSITE_BAND))
+                        val r = Rect(rect.left, top, rect.right, minOf(rect.bottom, top + bandH))
+                        band.eraseColor(0)
                         canvas.save()
-                        canvas.clipRect(band)
-                        compositor.drawDocument(canvas, band, useOverrides = false, target = target)
+                        canvas.translate(-rect.left.toFloat(), -top.toFloat())
+                        canvas.clipRect(r)
+                        compositor.drawDocument(canvas, r, useOverrides = false, target = CompositeTarget.translate(band, rect.left, top))
                         canvas.restore()
-                        top = band.bottom
+                        band.getPixels(px, (top - rect.top) * rw, rw, 0, 0, rw, r.height())
+                        top = r.bottom
                         if (top < rect.bottom) yield()
                     }
-                    val px = IntArray(rect.width() * rect.height())
-                    out.getPixels(px, 0, rect.width(), 0, 0, rect.width(), rect.height())
-                    ArgbImage(rect.width(), rect.height(), px)
+                    ArgbImage(rw, rh, px)
                 } finally {
-                    out.recycle()
+                    band.recycle()
                 }
             }
         }

@@ -13,6 +13,7 @@ import com.brushwork.paint.vector.VStop
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VectorOps
+import java.util.concurrent.CancellationException
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.max
@@ -99,6 +100,13 @@ class SvgContent(
  */
 object SvgToVector {
     const val MAX_POINTS = 2_000_000
+
+    /**
+     * Elements drawn at most, `<use>` copies included: references can multiply a small file
+     * (50 uses of 50 uses of ... 8 deep) far beyond its element count, also with nothing to draw
+     * (no points ever reach [MAX_POINTS]). Over it the content is [SvgContent.truncated].
+     */
+    const val MAX_VISITS = 200_000
     private const val MAX_USE_DEPTH = 8
 
     /** Properties set by presentation attributes. */
@@ -151,13 +159,21 @@ object SvgToVector {
     /**
      * Converts [doc]: its viewport (0, 0, [viewportW], [viewportH]) in document px at [dpi] (see
      * [viewportSize]; 0 = unknown: user units become px) is mapped by [place] onto the document.
+     * [cancelled] is polled now and then; when it answers true a [CancellationException] is thrown.
      */
-    fun convert(doc: SvgDocument, dpi: Float, place: Affine = Affine.IDENTITY, maxPoints: Int = MAX_POINTS): SvgContent {
+    fun convert(
+        doc: SvgDocument,
+        dpi: Float,
+        place: Affine = Affine.IDENTITY,
+        maxPoints: Int = MAX_POINTS,
+        maxVisits: Int = MAX_VISITS,
+        cancelled: () -> Boolean = { false },
+    ): SvgContent {
         val size = viewportSize(doc, dpi)
         val root = doc.root
         val rootMap = size?.let { (w, h) -> SvgUnits.viewBoxTransform(root.attr("viewBox"), root.attr("preserveAspectRatio"), 0f, 0f, w, h) }
             ?: Affine.IDENTITY
-        val c = Converter(doc, maxPoints, size ?: (0f to 0f))
+        val c = Converter(doc, maxPoints, size ?: (0f to 0f), maxVisits, cancelled)
         val rootStyle = c.style(root, null)
         c.walkRoot(root, place * rootMap, rootStyle)
         return SvgContent(c.items, c.groupNames, c.skipped, doc.truncated || c.truncated, c.bounds)
@@ -172,12 +188,19 @@ object SvgToVector {
         }
     }
 
-    private class Converter(val doc: SvgDocument, val maxPoints: Int, val viewport: Pair<Float, Float>) {
+    private class Converter(
+        val doc: SvgDocument,
+        val maxPoints: Int,
+        val viewport: Pair<Float, Float>,
+        val maxVisits: Int,
+        val cancelled: () -> Boolean,
+    ) {
         val items = ArrayList<SvgItem>()
         val groupNames = ArrayList<String>()
         val skipped = LinkedHashMap<String, Int>().apply { putAll(doc.skipped) }
         var truncated = false
         var points = 0
+        private var visits = 0
         var group = 0
         var bounds: Bounds? = null
         private val useStack = ArrayList<String>()
@@ -257,6 +280,11 @@ object SvgToVector {
         /** Draws [e] (and its subtree) with the current transform [ctm] and inherited group opacity [alpha]. */
         fun element(e: SvgElement, ctm: Affine, parentStyle: Style, alpha: Float) {
             if (truncated || e.isText) return
+            if (++visits > maxVisits) {
+                truncated = true
+                return
+            }
+            if (visits and 1023 == 0 && cancelled()) throw CancellationException("Import stopped")
             val st = style(e, parentStyle)
             if (st.get("display") == "none") return
             val t = SvgUnits.transform(e.attr("transform"))

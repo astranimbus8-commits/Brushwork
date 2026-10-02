@@ -94,7 +94,8 @@ internal fun PdfPagePicker(
                     columns = GridCells.Fixed(3),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 380.dp),
+                    // The grid gives way first (landscape, small windows): the buttons stay on screen.
+                    modifier = Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 380.dp),
                 ) {
                     items((0 until count).toList(), key = { it }) { index ->
                         PageCell(rasterizer, index, index in selected) {

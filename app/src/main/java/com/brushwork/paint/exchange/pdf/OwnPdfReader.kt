@@ -85,12 +85,16 @@ sealed class PdfObj {
 class OwnPdfReader(private val src: PdfBytes) : Closeable {
 
     /** Object number -> byte offset of `N G obj`. */
-    val offsets: Map<Int, Long>
+    var offsets: Map<Int, Long>
+        private set
 
     /** The trailer dictionary. */
     val trailer: PdfObj.Dict
 
     private val cache = HashMap<Int, PdfObj>()
+
+    /** The table was rebuilt by scanning the whole file (done at most once). */
+    private var scanned = false
 
     init {
         if (!startsWith(0, "%PDF-")) throw IOException("Not a PDF file")
@@ -100,17 +104,46 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
             val r = readXref()
             table = r.first
             tr = r.second
+        } catch (e: XrefStreamException) {
+            // A cross-reference stream (PDF 1.5+, nearly every other app's files): never a
+            // Brushwork file, and scanning a large foreign file just to find out would be slow.
+            throw IOException("Cross-reference streams are not supported", e)
         } catch (e: Exception) {
             table = emptyMap()
             tr = null
         }
-        if (table.isEmpty() || tr == null || !table.entries.all { (n, o) -> objectAt(o, n) }) {
-            val scanned = scanObjects()
-            table = scanned.first
-            tr = tr ?: scanned.second ?: throw IOException("The PDF has no trailer")
+        if (table.isEmpty() || tr == null || !plausible(table, tr)) {
+            val s = scanObjects()
+            scanned = true
+            table = s.first
+            tr = tr ?: s.second ?: throw IOException("The PDF has no trailer")
         }
         offsets = table
         trailer = tr
+    }
+
+    /** A cross-reference stream where a classic table was expected. */
+    private class XrefStreamException : IOException("Cross-reference streams are not supported")
+
+    /**
+     * True when a sample of the table's entries (about 16, the first and last, and the catalog)
+     * point at their objects: checking every entry of a large file reads it all. A wrong entry
+     * found later makes [obj] rebuild the table once.
+     */
+    private fun plausible(table: Map<Int, Long>, tr: PdfObj.Dict): Boolean {
+        val keys = table.keys.sorted()
+        val step = maxOf(1, keys.size / 16)
+        var i = 0
+        while (i < keys.size) {
+            val n = keys[i]
+            if (!objectAt(table.getValue(n), n)) return false
+            i += step
+        }
+        val last = keys.last()
+        if (!objectAt(table.getValue(last), last)) return false
+        val root = tr["Root"] as? PdfObj.Ref ?: return true
+        val off = table[root.num] ?: return false
+        return objectAt(off, root.num)
     }
 
     override fun close() = src.close()
@@ -176,14 +209,24 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
     /** Indirect object [num] (null when missing). */
     fun obj(num: Int): PdfObj? {
         cache[num]?.let { return it }
+        var o = read(num)
+        if (o == null && !scanned && offsets.containsKey(num)) {
+            // The table (only sampled when opened) is wrong here: rebuilt once from the file.
+            scanned = true
+            offsets = offsets + scanObjects().first
+            o = read(num)
+        }
+        if (o != null) cache[num] = o
+        return o
+    }
+
+    private fun read(num: Int): PdfObj? {
         val off = offsets[num] ?: return null
-        val o = try {
+        return try {
             Parser(off).readIndirect(num)
         } catch (e: IOException) {
             null
-        } ?: return null
-        cache[num] = o
-        return o
+        }
     }
 
     /** [o] with references followed (null for a dangling reference). */
@@ -276,7 +319,10 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
         val seen = HashSet<Long>()
         while (start >= 0 && seen.add(start)) {
             val p = Parser(start)
-            if (p.keyword() != "xref") throw IOException("Cross-reference streams are not supported")
+            if (p.keyword() != "xref") {
+                if (indirectObjectAt(start)) throw XrefStreamException()
+                throw IOException("Damaged cross-reference table")
+            }
             while (true) {
                 val tok = p.peekKeyword()
                 if (tok == "trailer") { p.keyword(); break }
@@ -302,6 +348,14 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
     private fun objectAt(off: Long, num: Int): Boolean = try {
         val p = Parser(off)
         (p.value() as? PdfObj.Num)?.int == num && p.value() is PdfObj.Num && p.keyword() == "obj"
+    } catch (e: Exception) {
+        false
+    }
+
+    /** True when any `N G obj` starts at [off] (a cross-reference stream where `xref` was expected). */
+    private fun indirectObjectAt(off: Long): Boolean = try {
+        val p = Parser(off)
+        p.value() is PdfObj.Num && p.value() is PdfObj.Num && p.keyword() == "obj"
     } catch (e: Exception) {
         false
     }
@@ -473,11 +527,13 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
                 if (c in '0'.code..'9'.code) {
                     val g = regular()
                     skipSpace()
-                    if (g.all { it.isDigit() } && peek() == 'R'.code) {
+                    val num = t.toIntOrNull()
+                    val gen = g.toIntOrNull()
+                    if (num != null && gen != null && peek() == 'R'.code) {
                         val after = byteAt(pos + 1)
                         if (after < 0 || isWhite(after) || isDelim(after)) {
                             pos++
-                            return PdfObj.Ref(t.toInt(), g.toInt())
+                            return PdfObj.Ref(num, gen)
                         }
                     }
                 }

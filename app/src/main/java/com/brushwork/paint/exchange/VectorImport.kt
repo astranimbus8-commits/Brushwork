@@ -74,6 +74,13 @@ object VectorImport {
         val transformLayer: Int,
         val texts: List<SvgText>,
         val outcome: ImportOutcome,
+        /**
+         * The file is over the limits ([SvgToVector.MAX_POINTS] points or [SvgToVector.MAX_VISITS]
+         * drawn elements): nothing was prepared; it can come in as a picture of what fits.
+         */
+        val tooComplex: Boolean = false,
+        /** Made for a new artwork (it fills the canvas: no Transform afterwards). */
+        val newArtwork: Boolean = false,
     )
 
     /**
@@ -93,11 +100,15 @@ object VectorImport {
         return Affine(s, 0f, 0f, s, (docW - w * s) / 2f, (docH - h * s) / 2f)
     }
 
-    /** Converts [svg] for [target]: the placement, the layers' pixels (rendered here). Not on the main thread. */
-    fun prepare(svg: SvgDocument, target: ImportTarget, newArtwork: Boolean, asPicture: Boolean = false): Prepared {
+    /**
+     * Converts [svg] for [target]: the placement, the layers' pixels (rendered here). Not on the
+     * main thread; [cancelled] is polled while converting. A file over the limits gives a
+     * [Prepared.tooComplex] result without layers unless [asPicture] (then what fits is drawn).
+     */
+    fun prepare(svg: SvgDocument, target: ImportTarget, newArtwork: Boolean, asPicture: Boolean = false, cancelled: () -> Boolean = { false }): Prepared {
         val viewport = SvgToVector.viewportSize(svg, target.dpi)
         var place = placement(viewport, target.width, target.height, newArtwork)
-        var content = SvgToVector.convert(svg, target.dpi, place)
+        var content = SvgToVector.convert(svg, target.dpi, place, cancelled = cancelled)
         if (viewport == null) {
             // No size in the file: its drawing decides (kept when it fits, else 90 % and centred).
             val b = content.bounds
@@ -106,8 +117,12 @@ object VectorImport {
                 val h = b.height.coerceAtLeast(1f)
                 val s = if (newArtwork) min(target.width / w, target.height / h) else min(1f, 0.9f * min(target.width / w, target.height / h))
                 place = Affine(s, 0f, 0f, s, (target.width - w * s) / 2f - b.left * s, (target.height - h * s) / 2f - b.top * s)
-                content = SvgToVector.convert(svg, target.dpi, place)
+                content = SvgToVector.convert(svg, target.dpi, place, cancelled = cancelled)
             }
+        }
+        if (content.truncated && !asPicture) {
+            // Not silently half imported: the user decides (as a picture of what fits, or not).
+            return Prepared(emptyList(), -1, emptyList(), ImportOutcome(skipped = content.skipped), tooComplex = true)
         }
         return prepare(content, target, newArtwork, asPicture)
     }
@@ -189,7 +204,7 @@ object VectorImport {
             skipped = content.skipped,
             dropped = dropped,
         )
-        return Prepared(layers, transformLayer, texts, outcome)
+        return Prepared(layers, transformLayer, texts, outcome, newArtwork = newArtwork)
     }
 
     /** A vector layer's cache: the content rendered over the document (exactly what its re-renders give). */
@@ -268,8 +283,10 @@ object VectorImport {
 
     /**
      * Inserts [prepared] (and its texts as text layers) as ONE undo step, removing [replace]
-     * in the same step; then the imported objects are selected and Transform opens on them.
-     * Main thread. Returns the outcome, with the texts that could not be laid out dropped.
+     * in the same step; then the imported objects are selected and Transform opens on them (an
+     * import into an open artwork; a new artwork made for the file is already filled by it, so
+     * only its first imported layer is selected). Main thread. Returns the outcome, with the
+     * texts that could not be laid out dropped.
      */
     fun apply(c: EditorController, prepared: Prepared, replace: List<Layer> = emptyList()): ImportOutcome {
         val layers = ArrayList(prepared.layers)
@@ -290,8 +307,10 @@ object VectorImport {
         val focus = created.getOrNull(prepared.transformLayer)
         if (focus != null) {
             c.selectLayer(focus)
-            focus.vector?.let { v -> c.vectors.setSelection(focus, v.objects.map { it.id }.toSet()) }
-            openTransform(c)
+            if (!prepared.newArtwork) {
+                focus.vector?.let { v -> c.vectors.setSelection(focus, v.objects.map { it.id }.toSet()) }
+                openTransform(c)
+            }
         }
         return ImportOutcome(
             shapes = prepared.outcome.shapes, pictures = prepared.outcome.pictures, texts = texts,

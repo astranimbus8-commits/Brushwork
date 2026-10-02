@@ -97,13 +97,16 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
         if (pdf) {
             SectionHeader("Page")
             val doc = c.doc
-            val canvas = String.format(
-                Locale.ROOT, "Canvas (%.1f × %.1f cm at %d dpi)",
-                doc.width / doc.dpi * 2.54f, doc.height / doc.dpi * 2.54f, doc.dpi.toInt(),
-            )
+            // Short chip labels (all three fit a 360 dp phone), the details under them.
+            val canvas = String.format(Locale.ROOT, "Canvas %.1f × %.1f cm", doc.width / doc.dpi * 2.54f, doc.height / doc.dpi * 2.54f)
             ChoiceChips(
-                PdfPage.entries.map { if (it == PdfPage.CANVAS) canvas else it.label + " (fit, centred)" }, o.page.ordinal,
+                PdfPage.entries.map { if (it == PdfPage.CANVAS) canvas else it.label }, o.page.ordinal,
                 { state.exportOptions = o.copy(page = PdfPage.entries[it]) },
+            )
+            Text(
+                if (o.page == PdfPage.CANVAS) "The canvas size at ${doc.dpi.toInt()} dpi" else "The artwork fitted and centred on the page",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
             )
         }
         Spacer(Modifier.heightIn(min = 8.dp))

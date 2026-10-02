@@ -175,7 +175,7 @@ class ExchangeUiState(internal val controller: EditorController) {
                     svg.hasPayload && newArtwork -> restoreSvgPayload(svg, newArtwork = true)
                     svg.hasPayload -> { dialog = ExchangeDialog.MadeWithBrushwork(file, svg); return true }
                     svg.truncated -> { dialog = ExchangeDialog.TooComplex(file, svg, newArtwork); return true }
-                    else -> importSvg(svg, newArtwork, asPicture = false)
+                    else -> return importSvg(svg, newArtwork, asPicture = false, file = file)
                 }
             }
             ImportKind.PDF -> {
@@ -243,12 +243,24 @@ class ExchangeUiState(internal val controller: EditorController) {
         report(PdfImport.apply(controller, layers, pages.size, replace))
     }
 
-    private suspend fun importSvg(svg: SvgDocument, newArtwork: Boolean, asPicture: Boolean) {
+    /**
+     * Imports [svg] (from [file]); true when the "too complex" question now owns [file] (a file
+     * over the point or element limits, found while converting it).
+     */
+    private suspend fun importSvg(svg: SvgDocument, newArtwork: Boolean, asPicture: Boolean, file: ImportFile? = null): Boolean {
         val replace = if (newArtwork) defaultLayers(includeBackground = false) else emptyList()
         val target = target().let { it.copy(room = it.room + replace.size) }
-        val prepared = withContext(Dispatchers.Default) { VectorImport.prepare(svg, target, newArtwork, asPicture) }
+        val prepared = withContext(Dispatchers.Default) {
+            val job = coroutineContext[Job]
+            VectorImport.prepare(svg, target, newArtwork, asPicture) { job?.isActive == false }
+        }
+        if (prepared.tooComplex) {
+            dialog = ExchangeDialog.TooComplex(file ?: ImportFile(ImportKind.SVG, "", null, null), svg, newArtwork)
+            return true
+        }
         stopIfCancelled(prepared.layers)
         report(VectorImport.apply(controller, prepared, replace))
+        return false
     }
 
     private suspend fun restoreSvgPayload(svg: SvgDocument, newArtwork: Boolean) {

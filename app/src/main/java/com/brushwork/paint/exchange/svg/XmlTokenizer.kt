@@ -31,7 +31,10 @@ class ByteSlice(private val bytes: ByteArray, val offset: Int, val length: Int) 
         return -1
     }
 
-    /** The base64 data after [from] (relative), whitespace and URL escapes of whitespace ignored. */
+    /**
+     * The base64 data after [from] (relative): whitespace ignored, URL escapes decoded (`%2B` is
+     * `+`, `%2F` `/`, `%3D` `=`; escaped whitespace such as `%20` or `%0A` is ignored too).
+     */
     fun decodeBase64(from: Int = 0): ByteArray {
         val clean = ByteArray(length - from)
         var n = 0
@@ -40,9 +43,14 @@ class ByteSlice(private val bytes: ByteArray, val offset: Int, val length: Int) 
         while (i < end) {
             val b = bytes[i]
             if (b == '%'.code.toByte() && i + 2 < end) {
-                // %20, %0A...: escaped whitespace in data URIs.
-                i += 3
-                continue
+                val hi = Character.digit(bytes[i + 1].toInt(), 16)
+                val lo = Character.digit(bytes[i + 2].toInt(), 16)
+                if (hi >= 0 && lo >= 0) {
+                    val v = (hi shl 4 or lo).toByte()
+                    if (!isSpace(v)) clean[n++] = v
+                    i += 3
+                    continue
+                }
             }
             if (!isSpace(b)) clean[n++] = b
             i++
