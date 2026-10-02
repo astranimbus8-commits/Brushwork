@@ -11,9 +11,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.brushwork.paint.EditorController
@@ -24,6 +27,7 @@ import com.brushwork.paint.exchange.ImportLayers
 import com.brushwork.paint.exchange.ImportOutcome
 import com.brushwork.paint.exchange.ImportSource
 import com.brushwork.paint.exchange.ImportTarget
+import com.brushwork.paint.exchange.NewLayer
 import com.brushwork.paint.exchange.PayloadImport
 import com.brushwork.paint.exchange.PendingImport
 import com.brushwork.paint.exchange.PendingImports
@@ -32,12 +36,14 @@ import com.brushwork.paint.exchange.VectorImport
 import com.brushwork.paint.exchange.export.BrushworkPayload
 import com.brushwork.paint.exchange.export.ExportJob
 import com.brushwork.paint.exchange.export.ExportOptions
+import com.brushwork.paint.exchange.export.PdfPage
+import com.brushwork.paint.exchange.export.StrokeExport
+import com.brushwork.paint.exchange.export.TextExportMode
 import com.brushwork.paint.exchange.image.PngDecoder
 import com.brushwork.paint.exchange.pdf.OwnPdfReader
 import com.brushwork.paint.exchange.pdf.PageRasterizer
 import com.brushwork.paint.exchange.pdf.PageRasterizerFactory
 import com.brushwork.paint.exchange.pdf.PdfImport
-import com.brushwork.paint.exchange.pdf.PdfRendererRasterizer
 import com.brushwork.paint.exchange.svg.SvgDocument
 import com.brushwork.paint.exchange.svg.SvgFormatException
 import com.brushwork.paint.exchange.svg.SvgParser
@@ -75,9 +81,16 @@ sealed class ExchangeDialog {
  * arrives through [importUri]; [ExchangeHost] shows the pickers, the export sheet and the import
  * questions. Imports run behind the busy overlay and are one undo step each.
  */
-class ExchangeUiState(internal val controller: EditorController) {
-    /** How PDF pages are rendered (test seam: Robolectric has no PdfRenderer). */
-    internal var rasterizers: PageRasterizerFactory = PdfRendererRasterizer.factory
+class ExchangeUiState(
+    internal val controller: EditorController,
+    /** Where the export sheet's options live ([rememberExchangeUi]: kept when the activity is recreated). */
+    options: MutableState<ExportOptions> = mutableStateOf(ExportOptions(VectorFormat.SVG)),
+) {
+    /**
+     * How PDF pages are rendered (test seam: Robolectric has no PdfRenderer). The gallery's
+     * factory by default, so a test replaces both with one assignment.
+     */
+    internal var rasterizers: PageRasterizerFactory = GalleryImports.rasterizers
 
     /** The system pickers and the context, provided by [ExchangeHost]. */
     internal var openPicker: (() -> Unit)? = null
@@ -89,7 +102,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         internal set
 
     /** The options of the export sheet (kept for the session). */
-    var exportOptions by mutableStateOf(ExportOptions(VectorFormat.SVG))
+    var exportOptions by options
         internal set
 
     /** The import question being asked, if any. */
@@ -136,10 +149,13 @@ class ExchangeUiState(internal val controller: EditorController) {
         }
     }
 
-    /** The picked destination of Save as…. */
-    internal fun exportTo(uri: Uri) {
+    /**
+     * The picked destination of Save as… for a [format] file (the picker that answered decides:
+     * the file it made is named and typed for that format).
+     */
+    internal fun exportTo(uri: Uri, format: VectorFormat = exportOptions.format) {
         val ctx = context ?: controller.appContext
-        ExportJob(controller, exportOptions).saveTo(ctx, uri)
+        ExportJob(controller, exportOptions.copy(format = format)).saveTo(ctx, uri)
     }
 
     /** Share from the sheet. */
@@ -340,11 +356,40 @@ class ExchangeUiState(internal val controller: EditorController) {
         busy("Importing") {
             var handedOver = false
             try {
-                if (d.svg != null) importSvg(d.svg, newArtwork = false, asPicture = true) else handedOver = pdfPages(d.file, null)
+                if (d.svg != null) {
+                    if (!payloadPicture(d.svg)) importSvg(d.svg, newArtwork = false, asPicture = true)
+                } else {
+                    handedOver = pdfPages(d.file, null)
+                }
             } finally {
                 if (!handedOver) withContext(Dispatchers.IO) { d.file.close() }
             }
         }
+    }
+
+    /**
+     * A Brushwork SVG "as a picture": its layers restored and composited exactly as the editor
+     * draws them, into one layer placed with Transform (one undo step). The SVG drawing can't show
+     * everything (layer masks, blend modes). False when its data can't be read or its layers don't
+     * fit in memory: the SVG is drawn instead.
+     */
+    private suspend fun payloadPicture(svg: SvgDocument): Boolean {
+        val payload = withContext(Dispatchers.Default) { readable { svg.payload() } } ?: return false
+        val target = target()
+        val picture = withContext(Dispatchers.Default) {
+            PayloadImport.picture(payload, { key -> svg.imageData(key)?.let { PngDecoder.decode(it) } }, target)
+        } ?: return false
+        if (!coroutineContext.isActive) {
+            picture.recycle()
+            coroutineContext.ensureActive()
+        }
+        val created = ImportLayers.insert(controller, listOf(NewLayer(VectorImport.PICTURE_NAME, picture)), VectorImport.LABEL)
+        created.firstOrNull()?.let { layer ->
+            controller.selectLayer(layer)
+            VectorImport.openTransform(controller)
+        }
+        report(ImportOutcome(pictures = 1, layers = created.size))
+        return true
     }
 
     /** "Import as a picture" for an SVG over the limits. */
@@ -463,16 +508,47 @@ class ExchangeUiState(internal val controller: EditorController) {
     }
 }
 
+/**
+ * The exchange state of the editor on [controller]. The export sheet's options are saved with the
+ * activity: an activity recreated while the system's file picker is in front (a font size or
+ * language change, "Don't keep activities") still exports what was chosen.
+ */
 @Composable
-fun rememberExchangeUi(controller: EditorController): ExchangeUiState = remember(controller) { ExchangeUiState(controller) }
+fun rememberExchangeUi(controller: EditorController): ExchangeUiState {
+    val options = rememberSaveable(stateSaver = ExportOptionsSaver) { mutableStateOf(ExportOptions(VectorFormat.SVG)) }
+    return remember(controller) { ExchangeUiState(controller, options) }
+}
+
+/** [ExportOptions] as one string ("SVG|OUTLINES|EDITABLE|0|0|1|CANVAS"); anything unreadable gives the defaults. */
+internal val ExportOptionsSaver: Saver<ExportOptions, String> = Saver(
+    save = { o ->
+        listOf(o.format.name, o.strokes.name, o.text.name, o.includeHidden.bit(), o.whiteBackground.bit(), o.includePayload.bit(), o.page.name).joinToString("|")
+    },
+    restore = { s ->
+        val p = s.split('|')
+        val d = ExportOptions(VectorFormat.SVG)
+        fun flag(i: Int, default: Boolean) = when (p.getOrNull(i)) { "1" -> true; "0" -> false; else -> default }
+        ExportOptions(
+            format = VectorFormat.entries.firstOrNull { it.name == p.getOrNull(0) } ?: d.format,
+            strokes = StrokeExport.entries.firstOrNull { it.name == p.getOrNull(1) } ?: d.strokes,
+            text = TextExportMode.entries.firstOrNull { it.name == p.getOrNull(2) } ?: d.text,
+            includeHidden = flag(3, d.includeHidden),
+            whiteBackground = flag(4, d.whiteBackground),
+            includePayload = flag(5, d.includePayload),
+            page = PdfPage.entries.firstOrNull { it.name == p.getOrNull(6) } ?: d.page,
+        )
+    },
+)
+
+private fun Boolean.bit() = if (this) "1" else "0"
 
 /** Hosts the exchange pickers, sheets and dialogs of [state] (call once in the editor). */
 @Composable
 fun ExchangeHost(state: ExchangeUiState) {
     val context = LocalContext.current
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) state.importUri(uri) }
-    val createSvg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.SVG.mime)) { uri -> if (uri != null) state.exportTo(uri) }
-    val createPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.PDF.mime)) { uri -> if (uri != null) state.exportTo(uri) }
+    val createSvg = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.SVG.mime)) { uri -> if (uri != null) state.exportTo(uri, VectorFormat.SVG) }
+    val createPdf = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(VectorFormat.PDF.mime)) { uri -> if (uri != null) state.exportTo(uri, VectorFormat.PDF) }
     DisposableEffect(state, context, open, createSvg, createPdf) {
         // The activity's own context: Share starts the chooser from it.
         state.context = context

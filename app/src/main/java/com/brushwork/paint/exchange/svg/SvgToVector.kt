@@ -709,7 +709,8 @@ object SvgToVector {
             val texts = lines.map { it.toString().trim() }.filter { it.isNotEmpty() }
             if (texts.isEmpty()) return
             val s = firstStyle ?: st
-            val fill = SvgColors.paint(s.get("fill") ?: "black")
+            // An unreadable value is ignored (the initial black), as for shapes.
+            val fill = SvgColors.paint(s.get("fill") ?: "black") ?: SvgPaint.Color(0xFF000000.toInt())
             val color = when (fill) {
                 is SvgPaint.Color -> fill.argb
                 SvgPaint.CurrentColor -> currentColor(s)

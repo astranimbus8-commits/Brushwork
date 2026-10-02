@@ -8,6 +8,8 @@ import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.model.Document
 import com.brushwork.paint.exchange.export.BrushworkPayload
 import com.brushwork.paint.exchange.export.PayloadKind
 import com.brushwork.paint.exchange.export.PayloadLayer
@@ -18,7 +20,6 @@ import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
-import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
@@ -41,13 +42,7 @@ object PayloadImport {
         fun load(key: String): ArgbImage?
     }
 
-    class Prepared(
-        val layers: List<NewLayer>,
-        val activeIndex: Int,
-        val outcome: ImportOutcome,
-        /** The payload's layer ids of [layers] (same order): restored texts wrap around the restored pictures. */
-        val payloadIds: List<Long> = emptyList(),
-    )
+    class Prepared(val layers: List<NewLayer>, val activeIndex: Int, val outcome: ImportOutcome)
 
     /** Builds the layers of [p] (bottom first) for [target]. Not on the main thread. */
     fun prepare(p: BrushworkPayload, images: Images, target: ImportTarget): Prepared {
@@ -55,7 +50,6 @@ object PayloadImport {
         val keep = place == Affine.IDENTITY
         val dropped = LinkedHashMap<String, Int>()
         val out = ArrayList<NewLayer>()
-        val ids = ArrayList<Long>()
         var missing = 0
         var rasterized = 0
         var damaged = 0
@@ -96,8 +90,7 @@ object PayloadImport {
                     maskSpec = if (mask != null) spec else null,
                     adjustment = pl.adjustment,
                 )
-                out += NewLayer(pl.props.name, bmp, pl.props, data, mask)
-                ids += pl.id
+                out += NewLayer(pl.props.name, bmp, pl.props, data, mask, sourceId = pl.id)
             } catch (e: Throwable) {
                 bmp?.recycle()
                 out.forEach { it.bitmap.recycle(); it.mask?.recycle() }
@@ -108,7 +101,32 @@ object PayloadImport {
         if (damaged > 0) dropped["damaged objects"] = damaged
         if (rasterized > 0) dropped["text and shape layers (kept as pixels: other canvas size)"] = rasterized
         val outcome = ImportOutcome(layers = out.size, dropped = dropped)
-        return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome, ids)
+        return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
+    }
+
+    /**
+     * The artwork of [p] as ONE picture for [target] (placed like [prepare]): its layers restored
+     * and composited exactly as the editor draws them — masks, blend modes, clipping groups,
+     * adjustment layers and texts included. Null when all its layers don't fit in memory next to
+     * the picture ([ImportTarget.room] layers). Not on the main thread (only its own layers).
+     */
+    fun picture(p: BrushworkPayload, images: Images, target: ImportTarget): Bitmap? {
+        if (p.layers.isEmpty() || fitting(p.layers, target.room - 1).size < p.layers.size) return null
+        val prepared = prepare(p, images, target.copy(room = target.room - 1))
+        try {
+            val doc = Document("picture", "picture", target.width, target.height, p.dpi)
+            doc.colorMode = target.colorMode
+            for (n in prepared.layers) {
+                doc.layers += Layer(doc.newLayerId(), n.name, n.bitmap).also { l ->
+                    n.props?.let { l.copyPropsFrom(it) }
+                    l.mask = n.mask
+                    l.restoreData(n.data)
+                }
+            }
+            return Compositor(doc) { null }.renderFlattened()
+        } finally {
+            prepared.layers.forEach { it.bitmap.recycle(); it.mask?.recycle() }
+        }
     }
 
     /**
@@ -118,30 +136,8 @@ object PayloadImport {
      */
     fun apply(c: EditorController, prepared: Prepared, replace: List<Layer> = emptyList(), colorMode: ColorMode? = null): ImportOutcome {
         val created = ImportLayers.insert(c, prepared.layers, LABEL, replace, colorMode)
-        remapWrapSources(c, prepared.payloadIds, created)
         created.getOrNull(prepared.activeIndex)?.let { c.selectLayer(it) }
         return ImportOutcome(layers = created.size, dropped = prepared.outcome.dropped)
-    }
-
-    /**
-     * The restored layers got new ids: a restored text wrapped around a picture (v1.5 §4.1) is
-     * pointed at that picture's new layer; when the picture was not restored, at an id no layer
-     * of this document has or will get (the text keeps its outline, as with a deleted picture).
-     * Neither changes the text's pixels (the layout uses the stored outline only, I1), so the
-     * layers' data is set in place, as part of the import's own step.
-     */
-    private fun remapWrapSources(c: EditorController, payloadIds: List<Long>, created: List<Layer>) {
-        if (payloadIds.size != created.size) return
-        val byPayloadId = HashMap<Long, Long>()
-        payloadIds.forEachIndexed { i, id -> byPayloadId.putIfAbsent(id, created[i].id) }
-        var gone = 0L
-        for (layer in created) {
-            val data = layer.textData ?: continue
-            val source = TextCodec.wrapSourceId(data)
-            if (source == 0L) continue
-            val mapped = byPayloadId[source] ?: (if (gone == 0L) c.doc.newLayerId().also { gone = it } else gone)
-            layer.textData = TextCodec.withWrapSource(data, mapped)
-        }
     }
 
     /**
