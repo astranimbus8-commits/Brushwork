@@ -158,6 +158,7 @@ class MasksEditorUiQaRobolectricTest {
         section("Filters → exposure → Tone → As adjustment layer") { asAdjustmentLayer() }
         section("clone stamp strip") { cloneStrip() }
         section("Adjust settings that can't be live are refused") { notLiveSettings() }
+        section("Components → Apply a filter through this mask → Gaussian Blur → ✓") { filterThroughMask() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -298,6 +299,45 @@ class MasksEditorUiQaRobolectricTest {
         session.cancel()
         settle()
         Smoke.assertQuiet(c, "not live")
+    }
+
+    private fun filterThroughMask() {
+        val s = editor()
+        val c = s.c
+        val photo = c.activeLayer
+        c.selectTool(ToolId.MASK)
+        val tool = c.tools.getValue(ToolId.MASK) as MaskTool
+        tool.arm(MaskTool.Kind.LINEAR)
+        s.touch.stroke(s.screen(60f, 150f), s.screen(150f, 150f), s.screen(240f, 150f))
+        settle()
+        val adj = c.activeLayer
+        assertTrue(adj.isAdjustmentLayer)
+        val before = IntArray(400 * 300).also { photo.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+        scrollIntoView(horizontalScrollerOf("Components (1)"), "Components (1)", horizontal = true)
+        click("Components (1)", exact = true)
+        assertTrue(scrollIntoView(verticalScrollerOf("Invert mask"), "Apply a filter through this mask…", horizontal = false))
+        click("Apply a filter through this mask…", exact = true)
+        assertEquals("the photo below is the one filtered", photo, c.activeLayer)
+        assertNotNull("the mask is the selection", c.selection)
+        SmokeUi.assertPanelShown("Filters")
+        SmokeUi.field("Search filters").let { it.focus(); settle(2); it.type("gaussian") }
+        settle(4)
+        click("Gaussian Blur", exact = true)
+        val session = c.filterSession ?: throw AssertionError("no Gaussian Blur session")
+        assertTrue("the panel says it works in the selection", has("${photo.name} · selection"))
+        val steps = c.undoManager.undoCount
+        click("Apply filter", exact = true)
+        assertTrue("applied", Smoke.pumpUntil { c.filterSession == null && c.busyMessage == null })
+        settle()
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        val after = IntArray(400 * 300).also { photo.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+        // Untouched where the gradient ends (0 %), blurred where it is full: stripes edge at x = 48.
+        for (x in 260 until 400) assertEquals("x=$x", before[150 * 400 + x], after[150 * 400 + x])
+        assertTrue("blurred at the full end", (44..52).any { before[150 * 400 + it] != after[150 * 400 + it] })
+        assertFalse("the browser closed", SmokeUi.sheetTitles().contains("Filters"))
+        assertFalse(tool.filterBrowserOpen)
+        Smoke.assertQuiet(c, "filter through mask")
+        assertTrue(session.isClosed)
     }
 
     private fun cloneStrip() {
