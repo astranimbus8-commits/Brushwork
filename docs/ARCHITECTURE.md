@@ -250,7 +250,12 @@ layer's content (blend mode, opacity, mask). Every `drawDocument` caller passes 
 into (`CompositeTarget`: display tiles translate, flattened images identity, thumbnails scale).
 Adjustment layers have no pixels: brush and eraser paint their mask, pixel tools are refused, and
 merging one down applies its effect to the layer below. Specs are stored inside `project.json`
-(pre-encoded strings, `MaskCodec` / `AdjustmentCodec`).
+(pre-encoded strings, `MaskCodec` / `AdjustmentCodec`). An effect is live only at settings where
+its filter has a `pixelMapper` (`AdjustmentEffects.isLive`): Levels' "Auto levels" and Black &
+White's smoothing / anti-aliasing look at the whole picture, so the Adjust sheet and "As
+adjustment layer" refuse them with a message instead of drawing a silent pass-through. The layers
+window inverts an editable mask through its spec (it stays editable) and offers no "Apply mask" on
+adjustment layers (there are no pixels to apply it to).
 
 - **Masks tool** (`tools/mask/MaskTool`): + Linear / + Radial / + Brush arm a creating gesture (the
   first one on a pixel layer adds "Tone 1" with the component as one step); handles and pins edit
