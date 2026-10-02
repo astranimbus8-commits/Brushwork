@@ -202,7 +202,13 @@ edge of the 256 px grid (Skia anti-aliases a clipped path differently). `VectorE
 mirrored calligraphy stroke keeps its look; moves and scales keep the same preset instance); canvas
 rotations and flips remap a layer's pixels only when all its brushes turn into themselves
 (`LayerDataTransforms.turnsExactly`), else redraw it from the mapped objects. Under a homography
-(Distort) a stroke's size and tip angle are taken at its bounds' centre.
+(Distort) a stroke's size and tip angle are taken at its bounds' centre. A remapped cache equals a
+fresh rendering of the mapped objects only up to anti-aliasing: Skia's path rasterization is not
+mirror symmetric, so the edge pixels of ellipses and curves can differ (an ellipse's edge pixel
+can go from covered to empty; strokes of round tips stay within a few levels) until their tiles
+are drawn again (`qa/VectorFuzzQaTest` checks those layers edge-tolerantly). Flip layer mirrors the
+layer's bitmap and mask IN PLACE: undo steps that keep a layer's bitmap (canvas operations, merges)
+must find it again with every later edit undone in it (`qa/VectorHistoryQaTest`).
 
 **Edit sessions.** `beginEdit` renders the hole (the other objects in the edited ones' tiles) and
 the floating bitmap (the edited objects), in the background when expensive (a newer request
@@ -220,7 +226,12 @@ Back, Recolor, Transform, Deselect; each one step through `vectors.update`). The
 `VectorLift.provider` lifts the object selection, else the objects the pixel selection touches,
 else all objects; ✓ maps their geometry exactly (`LiftGeometry`: affine or Distort homography;
 strokes scale by √|det|) and passes whole-pixel moves as a `ShiftHint`. Lifts and Object bar
-actions asked for while a render is pending wait for it (`PendingRenders`).
+actions asked for while a render is pending wait for it (`PendingRenders`). A PIXEL selection
+(Magic wand, Object select, Select all) on a vector layer acts on objects everywhere it is used:
+the selection bar's and the Selection sheet's Clear remove the objects it touches, their Fill
+adds a filled even-odd `VPath` of its outline (`VectorLayerOps.clear` / `fill`, reached through
+`clearLayer` / `fillLayer`), Duplicate copies the touched objects as a vector layer; nothing
+there rasterizes the layer.
 
 **Drawing on vector layers (`vector/draw`).** `VectorStrokeCapture` (the brush stroke hook) keeps
 the live stroke's pixels (`keepLayerData`) and appends the `VStroke` as data in one step; the
@@ -300,6 +311,10 @@ PDF…, and "New from SVG or PDF" in the gallery, handed over through `PendingIm
 an own XML tokenizer (no DTD) into editable vector layers, and PDF pages through `PdfRenderer` into
 raster layers. An SVG imported into an open artwork is one undo step, after which Transform opens
 with the imported objects lifted as objects (✓ keeps the layer a vector layer).
+Every export (SVG / PDF through `ExportJob`, PNG / JPG and Share through `EditorActions`) first
+lands the vector work still on its way — the Object bar actions waiting for a render, the tool's
+pending work, the render its commit started (`settleVectorWork`, commit, `vectors.flushPending`) —
+so the file holds what is on the canvas (`qa/VectorExchangeQaTest`).
 `ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress.
 
 ## Snapping (`snap/`)
