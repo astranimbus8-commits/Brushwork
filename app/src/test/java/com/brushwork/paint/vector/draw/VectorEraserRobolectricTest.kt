@@ -272,14 +272,25 @@ class VectorEraserRobolectricTest {
         c.swipe(20f to 20f, 120f to 20f)
         assertEquals(0, raster.bitmap.getPixel(70, 20) ushr 24)
         assertNull(raster.vector)
-        // An alpha-locked vector layer: the eraser is refused (nothing changes).
+        // An alpha-locked raster layer: the eraser is refused (it would remove pixels).
+        raster.alphaLocked = true
+        val rasterPixels = pixels(raster.bitmap)
+        val rasterSteps = c.undoManager.undoCount
+        c.swipe(20f to 60f, 120f to 60f)
+        assertArrayEquals(rasterPixels, pixels(raster.bitmap))
+        assertEquals(rasterSteps, c.undoManager.undoCount)
+        // An alpha-locked vector layer (lead, v1.5 integration): the eraser removes OBJECTS, so
+        // alpha lock (about pixels) doesn't apply; the horizontal line goes as usual.
         c.selectLayer(c.vec)
         lines(c)
-        val before = c.vec.vector
         c.vec.alphaLocked = true
+        c.message = null
         val steps = c.undoManager.undoCount
         c.swipe(150f to 60f, 150f to 140f)
-        assertSame(before, c.vec.vector)
-        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals(2, c.vec.vector!!.objects.size)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(VectorEraserRecorder.ERASE_LABEL, c.undoManager.undoLabel)
+        assertArrayEquals(render(c.vec.vector!!), pixels(c.vec.bitmap))
+        assertFalse("no alpha-lock refusal: ${c.message}", c.message?.contains("Transparency is locked") == true)
     }
 }

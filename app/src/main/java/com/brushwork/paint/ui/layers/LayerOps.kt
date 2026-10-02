@@ -173,6 +173,12 @@ object LayerOps {
     fun clear(c: EditorController, layer: Layer): Boolean {
         if (!c.checkEditable(layer)) return false
         val target = c.editTargetOf(layer)
+        // A vector layer's content: its objects go, as with the selection bar's Clear (v1.5; the
+        // layer stays a vector layer, and alpha lock doesn't apply to objects).
+        if (target == EditTarget.CONTENT && layer.isVectorLayer) {
+            c.clearLayer(layer)
+            return true
+        }
         if (target == EditTarget.CONTENT && layer.alphaLocked) {
             c.toast("Alpha lock is on for \"${layer.name}\": turn it off to clear")
             return false
@@ -199,6 +205,12 @@ object LayerOps {
      */
     fun fill(c: EditorController, layer: Layer, color: Int = c.color): Boolean {
         if (!c.checkEditable(layer)) return false
+        // A vector layer's content gets a filled object, as with the selection bar's Fill (v1.5;
+        // the layer stays a vector layer).
+        if (c.editTargetOf(layer) == EditTarget.CONTENT && layer.isVectorLayer) {
+            c.fillLayer(layer, color)
+            return true
+        }
         commitPendingWork(c)
         val target = c.editTargetOf(layer)
         val sel = c.selection

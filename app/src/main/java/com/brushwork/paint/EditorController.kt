@@ -1305,7 +1305,7 @@ class EditorController(
         withToolPaused {
             val target = editTargetOf(layer)
             // A vector layer removes the objects the selection touches (A1); else pixels as today.
-            if (target == EditTarget.CONTENT && layer.isVectorLayer && VectorLayerOps.clear(this, layer, selection)) return@withToolPaused
+            if (target == EditTarget.CONTENT && layer.isVectorLayer && VectorLayerOps.clear(this, layer, selection, label)) return@withToolPaused
             if (target == EditTarget.CONTENT && layer.alphaLocked) {
                 toast("Transparency is locked on \"${layer.name}\""); return@withToolPaused
             }

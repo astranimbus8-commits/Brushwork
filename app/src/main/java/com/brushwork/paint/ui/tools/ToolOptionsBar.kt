@@ -74,8 +74,10 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
         if (vectorMode) VectorModeChip()
         when (tool) {
             is BrushTool -> {
-                BrushToolOptions(tool)
+                // The vector eraser's modes come first: they decide what a stroke removes, and
+                // the start of the strip is what a phone shows without scrolling.
                 if (tool.id == ToolId.ERASER && vectorMode) VectorEraserOptions(controller)
+                BrushToolOptions(tool)
             }
             is CloneTool -> CloneToolOptions(tool)
             is MaskTool -> MaskToolOptions(tool)
