@@ -559,10 +559,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // again goes one object deeper); the provider decides.
         val s0 = session
         val provider = s0?.objectProvider
-        if (s0 != null && provider != null && !g.dragging && g.hit.kind == HandleKind.MOVE && p.x.isFinite() && p.y.isFinite()) {
+        if (s0 != null && provider != null && !g.dragging && p.x.isFinite() && p.y.isFinite()) {
             val q = Vec2(p.x, p.y)
+            // A tap (no drag) on a handle has no other use: an object under it is picked too, as
+            // inside the box (empty space there changes nothing). The box of every object hugs
+            // the drawing, so objects along its edges sit under the handles (v1.5 QA).
+            val inside = g.hit.kind != HandleKind.MOVE || onQuad(g.start, q, 0f)
             // (Judged on the state before this tap.)
-            val taken = provider.tap(q, inside = onQuad(g.start, q, 0f), moved = !g.start.sameGeometry(s0.initial))
+            val taken = provider.tap(q, inside = inside, moved = !g.start.sameGeometry(s0.initial))
             gesture = null
             clearGuides()
             // On lifted objects a tap selects (or does nothing): the finger's jitter while tapping

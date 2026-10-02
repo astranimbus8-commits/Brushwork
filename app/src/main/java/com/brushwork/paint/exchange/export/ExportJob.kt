@@ -59,6 +59,7 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
         c.runBusy("Exporting ${options.format.name}", onCancel = { holder[0]?.cancel() }) {
             holder[0] = coroutineContext[Job]
             letOverlayShow()
+            landPendingWork()
             val resolver = context.contentResolver
             var done = false
             try {
@@ -86,6 +87,7 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
         c.runBusy("Preparing to share", onCancel = { holder[0]?.cancel() }) {
             holder[0] = coroutineContext[Job]
             letOverlayShow()
+            landPendingWork()
             val dir = File(context.cacheDir, SHARE_DIR)
             val file = File(dir, fileName)
             var done = false
@@ -141,7 +143,7 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
     private fun withNotes(text: String, scene: ExportScene): String =
         if (scene.notes.isEmpty()) text else text + " · " + scene.notes.joinToString(" · ")
 
-    /** False (with a message) while another operation runs or a filter is previewed; commits the tool's pending work. */
+    /** False (with a message) while another operation runs or a filter is previewed; ends a canvas gesture. */
     private fun ready(): Boolean {
         if (c.busyMessage != null) return false
         if (c.filterSession != null) {
@@ -149,12 +151,24 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
             return false
         }
         c.endCanvasGesture()
+        return true
+    }
+
+    /**
+     * Under the busy overlay, before the scene is built: what the canvas shows but the document
+     * doesn't hold yet lands (v1.5 QA) — the Object bar actions waiting for a vector render, the
+     * tool's pending work (a transform: its render runs right here, behind the overlay), and a
+     * vector render still in flight. The file holds what is on the canvas, not the objects as
+     * they were before the last edit.
+     */
+    private fun landPendingWork() {
+        c.settleVectorWork()
         val tool = c.currentTool
         if (tool.hasPendingWork) {
             tool.commit()
             c.invalidateOverlay()
         }
-        return true
+        c.vectors.flushPending()
     }
 
     /** Lets the busy scrim reach the screen before the main-thread part starts (bounded: no frames in the background). */

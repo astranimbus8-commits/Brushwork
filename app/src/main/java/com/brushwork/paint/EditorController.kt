@@ -888,6 +888,11 @@ class EditorController(
         // (never a lift of the content as it was before this operation, left open across it).
         settleQueuedVectorWork()
         currentTool.onDeactivate()
+        // A live edit still on its way (a vector render in the background, also one the tool's
+        // commit just started) records its step now, BEFORE the operation reads or changes the
+        // layers: otherwise a deleted layer drops it (undoing the deletion brings back what was
+        // erased) and a duplicate copies the layer as it was before it (v1.5 QA).
+        if (editDepth == 0) flushDeferredSteps()
         try {
             return block()
         } finally {
@@ -1355,7 +1360,8 @@ class EditorController(
         override val byteSize: Long get() = 256L
 
         fun flipBitmap(c: EditorController) = c.structural {
-            layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+            // In place: earlier steps that keep this mask bitmap must keep finding it (v1.5 QA).
+            layer.mask?.let { BitmapUtils.flipInPlace(it, horizontal) }
             layer.markChanged()
         }
 
@@ -1377,9 +1383,12 @@ class EditorController(
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
-                val old = layer.bitmap
-                layer.bitmap = BitmapUtils.flipped(old, horizontal)
-                layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+                // In place (self-inverse): the layer keeps its bitmaps, so an earlier step that
+                // holds them (a canvas operation, a merge) still sees every later edit undone in
+                // them; a new bitmap per flip left those edits in the held one, and its redo
+                // brought them back (v1.5 QA).
+                BitmapUtils.flipInPlace(layer.bitmap, horizontal)
+                layer.mask?.let { BitmapUtils.flipInPlace(it, horizontal) }
                 layer.markChanged()
             }
         }
@@ -1409,6 +1418,9 @@ class EditorController(
     fun setLayerProps(layer: Layer, props: LayerProps, label: String = "Layer properties") {
         val before = layer.props()
         if (before == props) return
+        // A live edit still on its way (a vector render in the background) lands BEFORE the
+        // layer is hidden or locked: afterwards it would be refused there and lost (v1.5 QA).
+        if (editDepth == 0) flushDeferredSteps()
         structural { layer.copyPropsFrom(props) }
         pushUndo(LayerPropsAction(layer, before, props, label))
     }
@@ -1711,8 +1723,17 @@ class EditorController(
     private var vectorHintShown = false
 
     /**
+     * The vector layer the Vector button last left, and the raster layer it went to: tapped again
+     * from there, the button goes back to that same vector layer (a new transparent canvas's empty
+     * Background must not become a second vector layer).
+     */
+    private var vectorLeftLayer: Layer? = null
+    private var vectorLeftTo: Layer? = null
+
+    /**
      * The Vector button. Off: an empty plain layer is converted in place; else the visible,
      * unlocked vector layer right above is selected; else a new "Vector N" layer is added above.
+     * Tapped again on the layer it just went back to, it returns to the vector layer it left.
      * On: back to the layer it came from (else the nearest raster layer below, then above, else a
      * new layer). Not while a filter is previewed.
      */
@@ -1726,6 +1747,18 @@ class EditorController(
             val back = vectorReturnLayer?.takeIf { doc.indexOf(it) >= 0 && isRasterLayer(it) } ?: nearestRasterLayer(layer)
             vectorReturnLayer = null
             if (back != null) selectLayer(back) else addLayer()
+            vectorLeftLayer = layer
+            vectorLeftTo = activeLayer.takeIf { it !== layer }
+            return
+        }
+        val left = vectorLeftLayer?.takeIf {
+            layer === vectorLeftTo && doc.indexOf(it) >= 0 && it.isVectorLayer && it.visible && !it.locked
+        }
+        vectorLeftLayer = null
+        vectorLeftTo = null
+        if (left != null) {
+            selectLayer(left)
+            vectorReturnLayer = layer
             return
         }
         val idx = doc.indexOf(layer)

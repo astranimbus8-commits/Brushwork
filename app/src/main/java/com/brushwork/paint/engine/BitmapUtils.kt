@@ -81,6 +81,20 @@ object BitmapUtils {
         return out
     }
 
+    /**
+     * Mirrors [bmp] (ARGB_8888) in place, exactly. Undo steps that keep a layer's bitmap (canvas
+     * operations, merges) must still find it as the layer's bitmap afterwards, with every later
+     * edit undone in it: a flip that put a new bitmap into the layer cut them off (v1.5 QA).
+     */
+    fun flipInPlace(bmp: Bitmap, horizontal: Boolean) {
+        val tmp = flipped(bmp, horizontal)
+        try {
+            blitExact(bmp, tmp, 0, 0)
+        } finally {
+            tmp.recycle()
+        }
+    }
+
     // ------------------------------------------------------------------ ALPHA_8 helpers
 
     /**
