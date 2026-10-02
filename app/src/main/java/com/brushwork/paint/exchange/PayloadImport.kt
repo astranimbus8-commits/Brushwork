@@ -18,6 +18,9 @@ import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
 
@@ -47,21 +50,26 @@ object PayloadImport {
         val out = ArrayList<NewLayer>()
         var missing = 0
         var rasterized = 0
+        var damaged = 0
         val fits = fitting(p.layers, target.room)
         if (p.layers.size > fits.size) dropped["layers (layer limit)"] = p.layers.size - fits.size
         for (pl in fits) {
-            val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
+            var bmp: Bitmap? = null
             try {
                 var vector: VectorContent? = null
                 if (pl.kind == PayloadKind.VECTOR && pl.vector != null) {
-                    vector = if (keep) pl.vector else transformed(pl.vector, place)
-                    val pixels = VectorImport.renderVector(vector, target)
-                    Canvas(bmp).drawBitmap(pixels, 0f, 0f, null)
-                    pixels.recycle()
-                } else if (pl.imageRef != null && pl.imageRect != null) {
-                    val img = images.load(pl.imageRef)
-                    if (img == null) missing++ else draw(bmp, img, pl.imageRect, place, keep)
-                    if (target.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, Rect(0, 0, bmp.width, bmp.height), target.colorMode)
+                    val sound = sound(pl.vector)
+                    damaged += pl.vector.objects.size - sound.objects.size
+                    vector = if (keep) sound else transformed(sound, place)
+                    // The cache is the rendering itself (no second full-size copy).
+                    bmp = VectorImport.renderVector(vector, target)
+                } else {
+                    bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
+                    if (pl.imageRef != null && pl.imageRect != null) {
+                        val img = images.load(pl.imageRef)
+                        if (img == null) missing++ else draw(bmp, img, pl.imageRect, place, keep)
+                        if (target.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, Rect(0, 0, bmp.width, bmp.height), target.colorMode)
+                    }
                 }
                 val mask = if (pl.hasMask) mask(pl, images, target, place, keep) { missing++ } else null
                 val dataKept = keep || (pl.textData == null && pl.shapeData == null)
@@ -76,12 +84,13 @@ object PayloadImport {
                 )
                 out += NewLayer(pl.props.name, bmp, pl.props, data, mask)
             } catch (e: Throwable) {
-                bmp.recycle()
+                bmp?.recycle()
                 out.forEach { it.bitmap.recycle(); it.mask?.recycle() }
                 throw e
             }
         }
         if (missing > 0) dropped["missing pictures"] = missing
+        if (damaged > 0) dropped["damaged objects"] = damaged
         if (rasterized > 0) dropped["text and shape layers (kept as pixels: other canvas size)"] = rasterized
         val outcome = ImportOutcome(layers = out.size, dropped = dropped)
         return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
@@ -113,6 +122,37 @@ object PayloadImport {
         }
         return out
     }
+
+    /**
+     * [content] without objects a damaged or hand-made file could hold that no drawing makes:
+     * coordinates that are not finite or lie absurdly far away (the payload's JSON allows NaN).
+     */
+    internal fun sound(content: VectorContent): VectorContent {
+        val ok = content.objects.filter { o ->
+            val finite = when (o) {
+                is VStroke -> o.points.x.all { it.isFinite() } && o.points.y.all { it.isFinite() } && o.points.p.all { it.isFinite() } && o.sizeScale.isFinite()
+                is VPath -> o.subpaths.all { s ->
+                    s.anchors.all { a ->
+                        a.x.isFinite() && a.y.isFinite() && a.width.isFinite() &&
+                            (a.inX ?: 0f).isFinite() && (a.inY ?: 0f).isFinite() && (a.outX ?: 0f).isFinite() && (a.outY ?: 0f).isFinite()
+                    }
+                }
+                is VShape -> true
+            }
+            if (!finite) return@filter false
+            val b = try {
+                VectorOps.bounds(o)
+            } catch (e: RuntimeException) {
+                return@filter false
+            }
+            b.left.isFinite() && b.top.isFinite() && b.right.isFinite() && b.bottom.isFinite() &&
+                b.left >= -MAX_COORD && b.top >= -MAX_COORD && b.right <= MAX_COORD && b.bottom <= MAX_COORD
+        }
+        return if (ok.size == content.objects.size) content else content.copy(objects = ok)
+    }
+
+    /** Farthest coordinate a restored object may reach (document px), as SVG import clamps numbers. */
+    private const val MAX_COORD = 1e6f
 
     private fun transformed(content: VectorContent, place: Affine): VectorContent {
         val m = place.toMatrix3()

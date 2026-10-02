@@ -2,7 +2,10 @@ package com.brushwork.paint.exchange
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.ui.exchange.ImportSummary
+import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.exchange.ExchangeFixtures.controller
 import com.brushwork.paint.exchange.ExchangeFixtures.pixels
@@ -135,6 +138,25 @@ class ExchangeImportRulesRobolectricTest {
         assertEquals(listOf("Layer 1", "Layer 2"), c.doc.layers.map { it.name })
         c.redo()
         assertEquals(ColorMode.GRAYSCALE, c.doc.colorMode)
+    }
+
+    @Test
+    fun damagedObjectsOfAPayloadAreLeftOutAndCounted() {
+        val c = controller(Smoke.document(200, 150, layers = 1))
+        val good = ExchangeFixtures.box(20f, 20f, 80f, 60f)
+        val nan = ExchangeFixtures.stroke(10f, 10f, 100f, 100f).let { s ->
+            s.copy(points = PackedPoints(s.points.x.copyOf().also { it[3] = Float.NaN }, s.points.y, s.points.p))
+        }
+        val far = ExchangeFixtures.box(1e9f, 0f, 2e9f, 10f)
+        val content = VectorContent.EMPTY.plus(listOf(good, nan, far)).first
+        val payload = BrushworkPayload(width = 200, height = 150, layers = listOf(PayloadLayer(1, props("Vector"), PayloadKind.VECTOR, vector = content)))
+        val prepared = PayloadImport.prepare(payload, { null }, target(c))
+        assertEquals(2, prepared.outcome.dropped["damaged objects"])
+        val o = PayloadImport.apply(c, prepared)
+        val layer = c.doc.layers.single { it.isVectorLayer }
+        assertEquals(1, layer.vector!!.objects.size)
+        assertArrayEquals(pixels(ExchangeFixtures.render(layer.vector!!, 200, 150)), pixels(layer.bitmap))
+        assertTrue(ImportSummary.format(o).contains("2 damaged objects"))
     }
 
     @Test

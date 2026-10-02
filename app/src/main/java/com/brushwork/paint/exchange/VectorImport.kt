@@ -293,9 +293,13 @@ object VectorImport {
         val dropped = LinkedHashMap(prepared.outcome.dropped)
         var texts = 0
         for (t in prepared.texts) {
+            // One text that can't be laid out (odd font data, no memory left) is left out; the
+            // rest of the file still comes in.
             val nl = try {
                 textLayer(c, t)
             } catch (e: OutOfMemoryError) {
+                null
+            } catch (e: RuntimeException) {
                 null
             }
             if (nl == null) { dropped["texts (not readable)"] = (dropped["texts (not readable)"] ?: 0) + 1; continue }
