@@ -165,6 +165,12 @@ object LetterRamp {
         return out.toIntArray()
     }
 
+    /** Whether characters [s] until [e] of [text] hold a line break (a paragraph ends there). */
+    private fun hasLineBreak(text: String, s: Int, e: Int): Boolean {
+        for (i in s until e) if (text[i] == '\n') return true
+        return false
+    }
+
     /** Whitespace (and invisible format characters) only: no letter of its own. */
     private fun isBlank(text: String, s: Int, e: Int): Boolean {
         var i = s
@@ -196,7 +202,8 @@ object LetterRamp {
             var letters = 0
             while (c1 < clusters) {
                 if (!blank[c1]) letters++
-                val breaks = perParagraph && text.indexOf('\n', bounds[c1]).let { it >= 0 && it < bounds[c1 + 1] }
+                // Only this cluster's characters are looked at (linear in the text, also for a long story).
+                val breaks = perParagraph && blank[c1] && hasLineBreak(text, bounds[c1], bounds[c1 + 1])
                 c1++
                 if (breaks) break
             }

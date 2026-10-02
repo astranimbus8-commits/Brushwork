@@ -141,5 +141,12 @@ class LetterScaleMathTest {
         assertEquals(1f, r.factors[0], 0f)
         assertEquals(26f / 42f, r.factors[story.trimEnd().length - 1], 1e-4f)
         assertTrue("50k characters in $ms ms", ms < com.brushwork.paint.testing.PerfBudget.ms(400.0))
+        // Each paragraph: finding where a paragraph ends looks only at each cluster's own
+        // characters (one long paragraph without a line break was quadratic before).
+        val t1 = System.nanoTime()
+        val p = LetterRamp.compute(story, elton.copy(scope = LetterScaleScope.EACH_PARAGRAPH))
+        val ms1 = (System.nanoTime() - t1) / 1e6
+        assertArrayEquals("one paragraph: the same ramp as the whole text", r.factors, p.factors, 0f)
+        assertTrue("50k characters, each paragraph, in $ms1 ms", ms1 < com.brushwork.paint.testing.PerfBudget.ms(400.0))
     }
 }
