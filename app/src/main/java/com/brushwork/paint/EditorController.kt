@@ -37,6 +37,7 @@ import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
@@ -53,6 +54,7 @@ import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.StabilizerSettings
+import com.brushwork.paint.snap.Increments
 import com.brushwork.paint.snap.SnapService
 import com.brushwork.paint.snap.SnapSession
 import com.brushwork.paint.tools.LayerToolRules
@@ -62,6 +64,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.SelectionOutline
 import com.brushwork.paint.tools.text.TextWrapReflow
+import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.vector.LayerDataTransforms
@@ -105,6 +108,26 @@ fun interface EditListener {
  */
 fun interface DeferredStep {
     fun flush()
+}
+
+/** What happened to a layer in a [LayerListEvent] (v1.6). */
+enum class LayerListKind { ADDED, DUPLICATED, REMOVED, MERGED }
+
+/**
+ * A layer entered or left the stack as part of the step named [label] (v1.6, §4.3): [layer] was
+ * added, duplicated (the copy), removed, or merged down (the upper layer, now gone); [source]: the
+ * original of a duplicate, the layer merged into; null otherwise. Emitted by `addLayer` /
+ * `addLayerWith` (`addVectorLayer`, `addAdjustmentLayer`, `paste`, `importImageAsLayer`...),
+ * `addLayerWithContent`, `duplicateLayer`, `deleteLayer` and merge down. Delivered to the
+ * [LayerListListener]s in the same rounds as [EditEvent]s, when the outermost
+ * [EditorController.editScope] ends: the operation's step is complete, so a listener that edits
+ * folds into it with [EditorController.amendLastStep] (I2). Never for undo / redo.
+ */
+data class LayerListEvent(val kind: LayerListKind, val layer: Layer, val source: Layer?, val label: String)
+
+/** Reacts to layers entering or leaving the stack (v1.6; e.g. linked text frames heal). Main thread. */
+fun interface LayerListListener {
+    fun onLayerList(e: LayerListEvent)
 }
 
 /**
@@ -282,7 +305,8 @@ class EditorController(
     /** Depth of nested [editScope]s; events are delivered when the outermost one ends. */
     @PublishedApi internal var editDepth = 0
 
-    private val queuedEdits = ArrayList<EditEvent>()
+    /** Queued [EditEvent]s and [LayerListEvent]s (v1.6), in the order they happened. */
+    private val queuedEdits = ArrayList<Any>()
 
     /** True while undo / redo run: their edits are not reported (listeners never react to history). */
     private var inHistory = false
@@ -297,6 +321,24 @@ class EditorController(
 
     fun removeEditListener(l: EditListener) {
         editListeners.removeAll { it === l }
+    }
+
+    private val layerListListeners = ArrayList<LayerListListener>()
+
+    /** Listens to layers entering or leaving the stack (v1.6, see [LayerListEvent]). */
+    fun addLayerListListener(l: LayerListListener) {
+        if (layerListListeners.none { it === l }) layerListListeners += l
+    }
+
+    fun removeLayerListListener(l: LayerListListener) {
+        layerListListeners.removeAll { it === l }
+    }
+
+    /** Queues [e] for the layer-list listeners (dropped during undo / redo); delivered with the edit events. */
+    @PublishedApi internal fun queueLayerList(e: LayerListEvent) {
+        if (inHistory || layerListListeners.isEmpty()) return
+        queuedEdits += e
+        if (editDepth == 0) deliverEdits()
     }
 
     /**
@@ -367,7 +409,10 @@ class EditorController(
             while (queuedEdits.isNotEmpty() && rounds++ < MAX_EDIT_ROUNDS) {
                 val batch = queuedEdits.toList()
                 queuedEdits.clear()
-                for (e in batch) for (l in editListeners.toList()) l.onEdited(e)
+                for (e in batch) when (e) {
+                    is EditEvent -> for (l in editListeners.toList()) l.onEdited(e)
+                    is LayerListEvent -> for (l in layerListListeners.toList()) l.onLayerList(e)
+                }
             }
             queuedEdits.clear()
         } finally {
@@ -913,16 +958,21 @@ class EditorController(
     private fun addLayerWith(name: String?, index: Int?, label: String, init: (Layer) -> Unit): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         val bmp = try { BitmapUtils.createLayerBitmap(doc.width, doc.height) } catch (e: OutOfMemoryError) { toast("Not enough memory for another layer"); return null }
+        // v1.6 (V4): the step's edit scope sits INSIDE withToolPaused, so the tool's pending work
+        // commits first (its own steps and events), and a layer-list listener amends this step.
         return withToolPaused {
-            val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.layers.size + 1}"), bmp)
-            init(layer)
-            val at = (index ?: (doc.activeLayerIndex + 1)).coerceIn(0, doc.layers.size)
-            structural {
-                doc.layers.add(at, layer)
-                doc.activeLayerIndex = at
+            editScope {
+                val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.layers.size + 1}"), bmp)
+                init(layer)
+                val at = (index ?: (doc.activeLayerIndex + 1)).coerceIn(0, doc.layers.size)
+                structural {
+                    doc.layers.add(at, layer)
+                    doc.activeLayerIndex = at
+                }
+                pushUndo(AddLayerAction(layer, at, label))
+                queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, label))
+                layer
             }
-            pushUndo(AddLayerAction(layer, at, label))
-            layer
         }
     }
 
@@ -941,14 +991,17 @@ class EditorController(
             toast("Not enough memory for another layer"); return null
         }
         return withToolPaused {
-            val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData; it.shapeData = shapeData }
-            val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
-            structural {
-                doc.layers.add(at, layer)
-                doc.activeLayerIndex = at
+            editScope {
+                val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData; it.shapeData = shapeData }
+                val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
+                structural {
+                    doc.layers.add(at, layer)
+                    doc.activeLayerIndex = at
+                }
+                pushUndo(AddLayerAction(layer, at, label))
+                queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, label))
+                layer
             }
-            pushUndo(AddLayerAction(layer, at, label))
-            layer
         }
     }
 
@@ -1069,16 +1122,21 @@ class EditorController(
         if (doc.indexOf(layer) < 0) return
         // Layers are deleted without a confirmation, so pending tool work (a shape, text or
         // transform) is committed first rather than silently thrown away; undo restores both.
-        withToolPaused {
-            // Resolve the index after committing: committing text can insert a layer.
-            val idx = doc.indexOf(layer)
-            if (idx < 0 || doc.layers.size <= 1) return@withToolPaused
-            structural {
-                doc.layers.removeAt(idx)
-                doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
-            }
-            pushUndo(RemoveLayerAction(layer, idx))
+        withToolPaused { editScope { deleteLayerNow(layer) } }
+    }
+
+    /** [deleteLayer] once the tool is paused, inside the step's edit scope (v1.6: emits REMOVED). */
+    private fun deleteLayerNow(layer: Layer) {
+        // Resolve the index after committing: committing text can insert a layer.
+        val idx = doc.indexOf(layer)
+        if (idx < 0 || doc.layers.size <= 1) return
+        structural {
+            doc.layers.removeAt(idx)
+            doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
         }
+        val action = RemoveLayerAction(layer, idx)
+        pushUndo(action)
+        queueLayerList(LayerListEvent(LayerListKind.REMOVED, layer, null, action.label))
     }
 
     /**
@@ -1087,36 +1145,44 @@ class EditorController(
      */
     fun duplicateLayer(layer: Layer = activeLayer): Layer? {
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
-        return withToolPaused {
-            // Copy after committing pending work so the duplicate includes it.
-            val sel = selection
-            // A vector layer with a selection: the objects it touches, as a vector layer.
-            if (sel != null && layer.isVectorLayer) {
-                VectorLayerOps.duplicateTouched(this, layer, sel)?.let { return@withToolPaused it }
+        return withToolPaused { editScope { duplicateLayerNow(layer) } }
+    }
+
+    /** [duplicateLayer] once the tool is paused, inside the step's edit scope (v1.6: emits DUPLICATED). */
+    private fun duplicateLayerNow(layer: Layer): Layer? {
+        // Copy after committing pending work so the duplicate includes it.
+        val sel = selection
+        // A vector layer with a selection: the objects it touches, as a vector layer.
+        if (sel != null && layer.isVectorLayer) {
+            VectorLayerOps.duplicateTouched(this, layer, sel)?.let {
+                queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, it, layer, "Duplicate selection"))
+                return it
             }
-            val copy = try {
-                val pixels = BitmapUtils.copy(layer.bitmap)
-                if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
-                Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
-                    it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
-                    // A partial copy is no longer the text / shape / vector object: only whole
-                    // copies keep the content data (the mask is copied whole, so its spec stays).
-                    val data = layer.dataSnapshot()
-                    it.restoreData(if (sel == null) data else data.rasterizedContent())
-                }
-            } catch (e: OutOfMemoryError) {
-                toast("Not enough memory to duplicate this layer"); return@withToolPaused null
-            }
-            copy.copyPropsFrom(layer.props().copy(name = copy.name))
-            val at = doc.indexOf(layer) + 1
-            if (at <= 0) return@withToolPaused null
-            structural {
-                doc.layers.add(at, copy)
-                doc.activeLayerIndex = at
-            }
-            pushUndo(AddLayerAction(copy, at, if (sel != null) "Duplicate selection" else "Duplicate layer"))
-            copy
         }
+        val copy = try {
+            val pixels = BitmapUtils.copy(layer.bitmap)
+            if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
+            Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
+                it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
+                // A partial copy is no longer the text / shape / vector object: only whole
+                // copies keep the content data (the mask is copied whole, so its spec stays).
+                val data = layer.dataSnapshot()
+                it.restoreData(if (sel == null) data else data.rasterizedContent())
+            }
+        } catch (e: OutOfMemoryError) {
+            toast("Not enough memory to duplicate this layer"); return null
+        }
+        copy.copyPropsFrom(layer.props().copy(name = copy.name))
+        val at = doc.indexOf(layer) + 1
+        if (at <= 0) return null
+        structural {
+            doc.layers.add(at, copy)
+            doc.activeLayerIndex = at
+        }
+        val label = if (sel != null) "Duplicate selection" else "Duplicate layer"
+        pushUndo(AddLayerAction(copy, at, label))
+        queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, copy, layer, label))
+        return copy
     }
 
     // ------------------------------------------------------------------ clipboard
@@ -1229,7 +1295,10 @@ class EditorController(
 
     private fun mergeDownInto(layer: Layer, idx: Int, lower: Layer) {
         // Two vector layers can keep their objects (A1); otherwise the result is pixels.
-        if (layer.isVectorLayer && lower.isVectorLayer && VectorLayerOps.mergeVector(this, layer, lower)) return
+        if (layer.isVectorLayer && lower.isVectorLayer && VectorLayerOps.mergeVector(this, layer, lower)) {
+            queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
+            return
+        }
         // Flatten lower (+ its mask, opacity) and upper (with blend, opacity, mask, clipping) via a
         // temporary two-layer document so the result matches what's on screen. When both clip to
         // the same base further down, the upper one is simply drawn over the lower one here (the
@@ -1267,6 +1336,8 @@ class EditorController(
         pushUndo(CompositeAction("Merge down", listOf(replace, remove)))
         // A committed edit of the lower layer (text wrapped around it re-flows).
         queueEdit(EditEvent(lower, EditTarget.CONTENT, null, "Merge down"))
+        // v1.6: the upper layer left the stack (a linked text frame heals).
+        queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
     }
 
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
@@ -1692,6 +1763,8 @@ class EditorController(
         runCatching { currentTool.onDeactivate() }
         filterSession?.cancel()
         if (toolsLazy.isInitialized()) tools.values.forEach { runCatching { it.onDispose() } }
+        // v1.6: a live adjustment session frees its proxy tiles and caches.
+        runCatching { liveAdjust.release() }
         vectors.dispose()
         snapping.clear()
         tiles.release()
@@ -1900,6 +1973,30 @@ class EditorController(
     /** Re-flows wrapped text when its picture layer is edited (an edit listener, owned by A7). */
     val textWrap: TextWrapReflow = TextWrapReflow(this).also { addEditListener(it) }
 
+    // ------------------------------------------------------------------ v1.6 services (§4.3)
+
+    /**
+     * The app-wide increment steps (v1.6 §3.4, `snap/Increments.kt`): Compose state, persisted in
+     * [settings]. Off by default (I8: then every helper is the identity). One per controller, so
+     * no state leaks between editors or tests. Exposed to `ui/common` through `LocalIncrements`.
+     */
+    val increments: Increments = Increments(settings)
+
+    /**
+     * Live adjustment previews (v1.6 §3.1, `engine/live/LiveAdjust.kt`; area A): adjustment
+     * sliders, mask handle drags and adjustment-layer opacity drags call `liveAdjust.touch` and
+     * `end`; the canvas view asks it to draw the frame first. Under Robolectric its policy is
+     * EXACT (I8): no session starts and `touch` only invalidates.
+     */
+    val liveAdjust: LiveAdjust = LiveAdjust(this)
+
+    /**
+     * Keeps linked text stories whole (v1.6 §3.6, `tools/text/frames/TextThreads.kt`; area D): an
+     * edit listener AND a layer-list listener, registered here so it works before the Text frames
+     * tool exists.
+     */
+    val textThreads: TextThreads = TextThreads(this).also { addEditListener(it); addLayerListListener(it) }
+
     companion object {
         /** Tools whose brush the side sliders show. CLONE and MASK never become [lastPaintTool]. */
         val PAINT_TOOLS = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR, ToolId.CLONE, ToolId.MASK)
@@ -1912,7 +2009,10 @@ class EditorController(
 
         const val PASTE_LABEL = "Paste"
 
-        /** Tools that use the drawing color: a long press there picks a color (see pointerLongPress). */
-        val HOLD_PICK_TOOLS = setOf(ToolId.BRUSH, ToolId.FILL, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.TEXT)
+        /**
+         * Tools that use the drawing color: a long press there picks a color (see pointerLongPress).
+         * v1.6: Path too; not Text frames (its drags must never turn into picks).
+         */
+        val HOLD_PICK_TOOLS = setOf(ToolId.BRUSH, ToolId.FILL, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.TEXT, ToolId.PATH)
     }
 }

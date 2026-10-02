@@ -134,6 +134,98 @@ enum class TextBoxPreset(val label: String) {
     }
 }
 
+/** v1.6 letter scaling: which end of the text has the smallest letters. */
+@Serializable
+enum class LetterScaleDirection(val label: String) {
+    /** Letters shrink towards the end (the user's example). */
+    START_TO_END("Beginning → end"),
+    /** Letters grow towards the end. */
+    END_TO_START("End → beginning"),
+}
+
+/** v1.6 letter scaling: the line the scaled letters keep (horizontal text). */
+@Serializable
+enum class LetterScaleAlign(val label: String) {
+    /** Letters stay centred on one horizontal line (the user's example, measured: V1). */
+    CENTER("Center"),
+    /** Letters sit on the base line. */
+    BASELINE("Baseline"),
+    /** Letters hang from one top line. */
+    TOP("Top"),
+}
+
+/** v1.6 letter scaling: how the size steps from letter to letter. */
+@Serializable
+enum class LetterScaleCurve(val label: String) {
+    /** Each letter is the same amount smaller (linear; the user's example: V2). */
+    EVEN("Even steps"),
+    /** Each letter is the same fraction of the previous one (geometric). */
+    RATIO("Same ratio"),
+}
+
+/** v1.6 letter scaling: what one ramp runs over. */
+@Serializable
+enum class LetterScaleScope(val label: String) {
+    WHOLE_TEXT("Whole text"),
+    EACH_PARAGRAPH("Each paragraph"),
+}
+
+/**
+ * Progressive letter scaling (v1.6, §3.5): the letters of the text (non-whitespace grapheme
+ * clusters, in scope) go from the full font size down to [smallestPercent] % of it, in
+ * [direction], stepping by [curve], aligned on [align]. The font size is the size of the LARGEST
+ * letter. Whitespace takes the factor of the letter before it and uses up no step. 100 % = off
+ * ([isOn] false): the text renders exactly as before (v1.5 path).
+ */
+@Serializable
+data class LetterScaleSpec(
+    /** 100 = off; [MIN_PERCENT]..100. */
+    val smallestPercent: Float = 100f,
+    val direction: LetterScaleDirection = LetterScaleDirection.START_TO_END,
+    /** V1: the user's example is centred. */
+    val align: LetterScaleAlign = LetterScaleAlign.CENTER,
+    /** V2: the example steps evenly. */
+    val curve: LetterScaleCurve = LetterScaleCurve.EVEN,
+    val scope: LetterScaleScope = LetterScaleScope.WHOLE_TEXT,
+) {
+    /** True when the letters are scaled at all. */
+    val isOn: Boolean get() = smallestPercent < 99.95f
+
+    /**
+     * Size factor (1 = the font size) of letter [index] of [count] letters in scope (§3.5):
+     * `t = index / (count − 1)` (0 for a single letter), `u = t` (beginning → end) or `1 − t`,
+     * `r = smallestPercent / 100`; even steps `1 − (1 − r)·u`, same ratio `r^u`. 1 when off.
+     * [index] is clamped to the letters; non-positive [count] gives 1.
+     */
+    fun factor(index: Int, count: Int): Float {
+        if (!isOn || count <= 0) return 1f
+        val pct = if (smallestPercent.isFinite()) smallestPercent.coerceIn(MIN_PERCENT, 100f) else 100f
+        val r = pct / 100.0
+        val k = index.coerceIn(0, count - 1)
+        val t = if (count <= 1) 0.0 else k.toDouble() / (count - 1)
+        val u = if (direction == LetterScaleDirection.START_TO_END) t else 1.0 - t
+        val f = when (curve) {
+            LetterScaleCurve.EVEN -> 1.0 - (1.0 - r) * u
+            LetterScaleCurve.RATIO -> Math.pow(r, u)
+        }
+        return f.toFloat()
+    }
+
+    /** [smallestPercent] finite and in [MIN_PERCENT]..100 (garbage = off); this instance when it already is. */
+    fun sanitized(): LetterScaleSpec {
+        val p = if (smallestPercent.isFinite()) smallestPercent.coerceIn(MIN_PERCENT, 100f) else 100f
+        return if (p == smallestPercent) this else copy(smallestPercent = p)
+    }
+
+    companion object {
+        /** Turning scaling on starts here (close to the example: 26 / 42 = 62 %). */
+        const val DEFAULT_ON_PERCENT = 60f
+
+        /** The smallest letter is at least this percentage of the font size. */
+        const val MIN_PERCENT = 5f
+    }
+}
+
 /**
  * Appearance of a text object. Sizes are DOCUMENT pixels; [letterSpacing] is in em (fraction of
  * the font size) and [lineSpacing] a multiplier of the font's line height (vertical text: of the
@@ -170,6 +262,8 @@ data class TextSpec(
     val fontId: String? = null,
     /** Display name of [fontId], kept so a missing font can still be named. */
     val fontName: String? = null,
+    /** v1.6: letters scaled progressively from the beginning to the end (off by default, see [LetterScaleSpec]). */
+    val letterScale: LetterScaleSpec = LetterScaleSpec(),
 ) {
     /** True when the text uses an imported font (which may be missing). */
     val usesImportedFont: Boolean get() = fontId != null
@@ -210,6 +304,7 @@ data class TextSpec(
             ),
             fontId = id,
             fontName = if (id == null) null else fontName?.let { FontIds.cleanName(it) },
+            letterScale = letterScale.sanitized(),
         )
     }
 
@@ -312,11 +407,72 @@ data class TextWrapSpec(
 }
 
 /**
+ * A frame of a linked text story (v1.6, §3.6, InDesign-style threading). [storyId] names the
+ * story (a random positive 63-bit id; 0 = not threaded). Every frame keeps a copy of the WHOLE
+ * [story] (with the same [rev]); this frame shows `story[start, end)` and the next frame starts
+ * at [end]. The last frame records [overset] when the story continues beyond it. [rev] is bumped
+ * by every re-flow: if copies of a story disagree (damaged data), the highest [rev] wins, and on a
+ * tie the lowest [index]. Letter offsets for scaled letters are computed from the story, never
+ * stored (invariant I9: `TextItem.text == story.substring(start, end)`).
+ */
+@Serializable
+data class TextThreadSpec(
+    /** 0 = not threaded. */
+    val storyId: Long = 0,
+    /** Position in the chain (0 = first). */
+    val index: Int = 0,
+    /** The WHOLE story; every frame keeps a copy. */
+    val story: String = "",
+    /** This frame's slice is story[start, end). */
+    val start: Int = 0,
+    val end: Int = 0,
+    /** Last frame: the story continues beyond it. */
+    val overset: Boolean = false,
+    /** Bumped by every re-flow; highest wins, tie → lowest index. */
+    val rev: Long = 0,
+) {
+    /** True for a frame of a story. */
+    val isOn: Boolean get() = storyId != 0L
+
+    /**
+     * Usable data: not threaded ([storyId] ≤ 0) gives the default spec (no stray story copy);
+     * otherwise the story is cut to [MAX_STORY] characters (never between a surrogate pair),
+     * `0 ≤ start ≤ end ≤ story.length`, `index ≥ 0`, `rev ≥ 0`. This instance when it already is.
+     */
+    fun sanitized(): TextThreadSpec {
+        if (storyId <= 0L) return if (this == NONE) this else NONE
+        var s = story
+        if (s.length > MAX_STORY) {
+            var cut = MAX_STORY
+            if (Character.isHighSurrogate(s[cut - 1])) cut--
+            s = s.substring(0, cut)
+        }
+        val a = start.coerceIn(0, s.length)
+        val b = end.coerceIn(a, s.length)
+        val i = index.coerceAtLeast(0)
+        val r = rev.coerceAtLeast(0L)
+        return if (s === story && a == start && b == end && i == index && r == rev) this
+        else copy(story = s, start = a, end = b, index = i, rev = r)
+    }
+
+    companion object {
+        /** Longest story (characters); longer stored stories are cut. */
+        const val MAX_STORY = 50_000
+
+        private val NONE = TextThreadSpec()
+    }
+}
+
+/**
  * A placed text object: the block of laid-out text is centered on ([cx], [cy]) in document
  * pixels and rotated by [rotationDeg] (clockwise on screen) around that center. When [path] is
  * active the text follows that shape instead (its geometry is in document pixels); [cx]/[cy]/
  * [rotationDeg] then move along with it, so switching back to straight text puts it nearby.
  * [wrap] makes horizontal straight text flow around a picture (see [TextWrapSpec]).
+ *
+ * v1.6: [thread] makes this text a frame of a linked story (see [TextThreadSpec]): its [text]
+ * is its own slice of the story, so every renderer, hit test, export and v1.5 see an ordinary
+ * text; its box is `spec.box.width × spec.box.minHeight` (both > 0), horizontal and straight.
  */
 @Serializable
 data class TextItem(
@@ -327,7 +483,12 @@ data class TextItem(
     val rotationDeg: Float = 0f,
     val path: TextPathSpec = TextPathSpec(),
     val wrap: TextWrapSpec = TextWrapSpec(),
+    /** v1.6: the linked-frames story this text is a frame of (off by default). */
+    val thread: TextThreadSpec = TextThreadSpec(),
 ) {
+    /** True for a frame of a linked story (v1.6). */
+    val threaded: Boolean get() = thread.isOn
+
     /** Whether the text can wrap around a picture: horizontal straight text. */
     val canWrap: Boolean get() = !spec.vertical && !path.isActive
 
@@ -389,8 +550,28 @@ data class TextItem(
         localToDoc(-pad, h + pad, w, h),
     )
 
-    /** Non-finite numbers replaced so the item can always be drawn and stored. */
+    /**
+     * Non-finite numbers replaced so the item can always be drawn and stored.
+     *
+     * v1.6, a frame of a linked story ([thread] on, I9): [text] becomes `story[start, end)`, the
+     * text is horizontal and straight (not vertical, path type NONE: the path's own settings are
+     * kept); a frame without a fixed box (`box.width > 0` and `box.minHeight > 0`) is no frame
+     * (its thread is cleared and it keeps its text).
+     */
     fun sanitized(): TextItem {
+        val base = sanitizedNumbers()
+        var th = base.thread.sanitized()
+        if (th.isOn && (base.spec.box.width <= 0f || base.spec.box.minHeight <= 0f)) th = TextThreadSpec()
+        if (!th.isOn) return if (th === base.thread) base else base.copy(thread = th)
+        return base.copy(
+            text = th.story.substring(th.start, th.end),
+            spec = if (base.spec.vertical) base.spec.copy(vertical = false) else base.spec,
+            path = if (base.path.isActive) base.path.copy(type = TextPathType.NONE) else base.path,
+            thread = th,
+        )
+    }
+
+    private fun sanitizedNumbers(): TextItem {
         fun f(v: Float, default: Float) = if (v.isFinite()) v else default
         val d = TextPathSpec()
         val p = path

@@ -26,6 +26,7 @@ import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -61,6 +62,12 @@ enum class CurveStroke(val label: String) {
     PLAIN("Plain line"),
     NONE("No stroke"),
 }
+
+/**
+ * The three tools [CurveTool] implements (v1.6): Bézier curves, polylines (all corners sharp)
+ * and Path (a NURBS / B-spline through control points, like a Blender path).
+ */
+enum class CurveKind { CURVE, POLYLINE, PATH }
 
 /** Persisted options of the curve / polyline tools. Lengths are document pixels. */
 @Serializable
@@ -128,9 +135,29 @@ data class CurveSettings(
  *   tap inside it starts a new path there) reopens it ([reopen]): its own look
  *   (width unlinked, its colors, its brush) is edited, ✓ replaces it ("Edit path"), ✕ leaves it
  *   as it was. A brush that needs pixels (smudge, blur, watercolor) draws a plain line there.
+ *
+ * v1.6 (§3.2, foundation lines): one class, three [CurveKind]s — the Curve, Polyline and Path
+ * tools. Until the Path mode lands, [CurveKind.PATH] behaves exactly as [CurveKind.CURVE] (it
+ * shares its settings key "vec.curve" and its step labels).
  */
-class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(controller) {
-    override val id = if (polyline) ToolId.POLYLINE else ToolId.CURVE
+class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(controller) {
+    /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
+    constructor(controller: EditorController, polyline: Boolean) : this(controller, if (polyline) CurveKind.POLYLINE else CurveKind.CURVE)
+
+    /** True for the Polyline tool (all corners sharp). */
+    val polyline: Boolean get() = kind == CurveKind.POLYLINE
+
+    override val id = when (kind) {
+        CurveKind.CURVE -> ToolId.CURVE
+        CurveKind.POLYLINE -> ToolId.POLYLINE
+        CurveKind.PATH -> ToolId.PATH
+    }
+
+    /**
+     * v1.6: in PATH mode, the X / Y pill's target (the selected control point); null = the Curve
+     * adapter (`CurvePointPosition`: the selected anchor). Implemented by area B.
+     */
+    val splinePointPosition: ObjectPosition? get() = null
 
     /** Current options (Compose state); change them with [update]. */
     var settings by mutableStateOf(loadSettings())

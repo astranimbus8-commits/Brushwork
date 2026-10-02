@@ -30,6 +30,13 @@ enum class ToolId(val label: String) {
     CLONE("Clone stamp"),
     /** Editable linear / radial / brush masks and adjustment layers (v1.5). */
     MASK("Masks"),
+    /**
+     * A NURBS / B-spline curve, like a Blender path (v1.6): control points, order, endpoint,
+     * cyclic, weights. A third kind of `CurveTool` (`CurveKind.PATH`).
+     */
+    PATH("Path"),
+    /** Linked text frames (v1.6): text that doesn't fit one frame flows on into the next (InDesign threading). */
+    TEXT_FRAMES("Text frames"),
 }
 
 /**

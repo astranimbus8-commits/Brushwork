@@ -34,6 +34,7 @@ import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.select.MagicWandTool
 import com.brushwork.paint.tools.select.MarqueeTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
@@ -49,6 +50,7 @@ import com.brushwork.paint.ui.selection.FillOptions
 import com.brushwork.paint.ui.selection.LassoOptions
 import com.brushwork.paint.ui.selection.MagicWandOptions
 import com.brushwork.paint.ui.selection.MarqueeOptions
+import com.brushwork.paint.ui.textframes.TextFrameToolOptions
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.vector.CurveToolOptions
 import com.brushwork.paint.ui.vector.ShapeToolOptions
@@ -94,6 +96,9 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
             is RulerTool -> RulerToolOptions(tool)
             is com.brushwork.paint.tools.select.ObjectSelectTool -> com.brushwork.paint.ui.selection.ObjectSelectOptions(tool)
             is com.brushwork.paint.tools.remove.RemoveTool -> com.brushwork.paint.ui.remove.RemoveToolOptions(tool)
+            // v1.6 (pre-registered by the foundation; area D fills it). The Path tool is a
+            // CurveTool: its options branch on CurveTool.kind inside CurveToolOptions (area B).
+            is TextFrameTool -> TextFrameToolOptions(tool)
         }
     }
 }

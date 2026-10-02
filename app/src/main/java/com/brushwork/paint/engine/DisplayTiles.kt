@@ -3,9 +3,16 @@ package com.brushwork.paint.engine
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PointF
 import android.graphics.PorterDuff
 import android.graphics.Rect
 import kotlin.math.min
+
+/**
+ * What one [DisplayTiles.updateBudgeted] call did (v1.6): [changed] = at least one tile was
+ * rendered; [hasMore] = dirty visible tiles (not skipped) are still waiting.
+ */
+data class TileUpdate(val changed: Boolean, val hasMore: Boolean)
 
 /**
  * The on-screen composite, split into tiles so that a brush stroke only re-renders (and the GPU
@@ -58,21 +65,88 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
             val col = idx % cols; val row = idx / cols
             val tr = tileRect(col, row)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
-            dirty[idx] = null
-            var bmp = tiles[idx]
-            if (bmp == null || bmp.isRecycled) {
-                bmp = Bitmap.createBitmap(tr.width(), tr.height(), Bitmap.Config.ARGB_8888)
-                bmp.setHasMipMap(true)
-                tiles[idx] = bmp
-            }
-            val c = Canvas(bmp)
-            c.translate(-tr.left.toFloat(), -tr.top.toFloat())
-            c.clipRect(d)
-            c.drawColor(0, PorterDuff.Mode.CLEAR)
-            compositor.drawDocument(c, d, target = CompositeTarget.displayTile(bmp, tr.left, tr.top))
+            render(compositor, idx, d, tr)
             changed = true
         }
         return changed
+    }
+
+    /** Renders the dirty part [d] of tile [idx] (document rect [tr]) and marks it clean. */
+    private fun render(compositor: Compositor, idx: Int, d: Rect, tr: Rect) {
+        dirty[idx] = null
+        var bmp = tiles[idx]
+        if (bmp == null || bmp.isRecycled) {
+            bmp = Bitmap.createBitmap(tr.width(), tr.height(), Bitmap.Config.ARGB_8888)
+            bmp.setHasMipMap(true)
+            tiles[idx] = bmp
+        }
+        val c = Canvas(bmp)
+        c.translate(-tr.left.toFloat(), -tr.top.toFloat())
+        c.clipRect(d)
+        c.drawColor(0, PorterDuff.Mode.CLEAR)
+        compositor.drawDocument(c, d, target = CompositeTarget.displayTile(bmp, tr.left, tr.top))
+    }
+
+    // ------------------------------------------------------------------ v1.6: budgeted refinement (§3.1, §4.3)
+
+    /** Number of tiles ([cols] × [rows]); tile indices are `row * cols + col`. */
+    val tileCount: Int get() = cols * rows
+
+    /** Index of the tile in column [col], row [row]. */
+    fun tileIndexOf(col: Int, row: Int): Int = row * cols + col
+
+    /** True while tile [index] has a part waiting to be rendered. */
+    fun isDirty(index: Int): Boolean = dirty.getOrNull(index) != null
+
+    /** Time source of [updateBudgeted] in nanoseconds (replaceable in tests). */
+    internal var nanoClock: () -> Long = System::nanoTime
+
+    /**
+     * Renders dirty tiles that intersect [visibleDoc] (null = every dirty tile) nearest [center]
+     * (document px; the distance to each tile's centre, ties in index order; null = index order)
+     * first, until [budgetNanos] is spent — always at least one tile, so refinement always
+     * progresses. Tiles for which [skip] (tile index) is true are left dirty and not counted.
+     * [TileUpdate.hasMore]: dirty visible tiles not skipped are left. With [Long.MAX_VALUE] it
+     * renders exactly the tiles [update] renders, with the same pixels.
+     */
+    fun updateBudgeted(
+        compositor: Compositor,
+        visibleDoc: Rect?,
+        budgetNanos: Long,
+        skip: ((Int) -> Boolean)? = null,
+        center: PointF? = null,
+    ): TileUpdate {
+        var n = 0
+        val order = IntArray(tiles.size)
+        val tr = Rect()
+        for (idx in tiles.indices) {
+            if (dirty[idx] == null) continue
+            tileRect(idx % cols, idx / cols, tr)
+            if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
+            if (skip != null && skip(idx)) continue
+            order[n++] = idx
+        }
+        if (n == 0) return TileUpdate(changed = false, hasMore = false)
+        val sorted: List<Int> = if (center == null) order.take(n) else {
+            val cx = center.x; val cy = center.y
+            fun dist2(idx: Int): Float {
+                val r = tileRect(idx % cols, idx / cols)
+                val dx = r.exactCenterX() - cx
+                val dy = r.exactCenterY() - cy
+                return dx * dx + dy * dy
+            }
+            order.take(n).sortedWith(compareBy<Int>({ dist2(it) }, { it }))
+        }
+        val start = nanoClock()
+        var done = 0
+        for (idx in sorted) {
+            val d = dirty[idx] ?: continue
+            render(compositor, idx, d, tileRect(idx % cols, idx / cols))
+            done++
+            if (budgetNanos != Long.MAX_VALUE && nanoClock() - start >= budgetNanos) break
+        }
+        val more = sorted.drop(done).any { dirty[it] != null }
+        return TileUpdate(changed = done > 0, hasMore = more)
     }
 
     /**

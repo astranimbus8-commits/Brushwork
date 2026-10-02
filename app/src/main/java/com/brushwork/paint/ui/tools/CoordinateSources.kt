@@ -29,7 +29,8 @@ fun coordinateSourceOf(tool: Tool): CoordinateSource? = when (tool) {
     is TransformTool -> CoordinateSource(TransformPosition(tool)) { tool.unit }
     is ShapeTool -> CoordinateSource(ShapePosition(tool)) { tool.settings.unit }
     is TextTool -> CoordinateSource(TextPosition(tool)) { tool.positionUnit }
-    is CurveTool -> CoordinateSource(CurvePointPosition(tool)) { tool.settings.unit }
+    // v1.6: in PATH mode the selected control point (area B), else the selected anchor.
+    is CurveTool -> CoordinateSource(tool.splinePointPosition ?: CurvePointPosition(tool)) { tool.settings.unit }
     is PositionedTool -> CoordinateSource(OwnPosition(tool)) { LengthUnit.PX }
     else -> null
 }

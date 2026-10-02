@@ -3,7 +3,9 @@ package com.brushwork.paint
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import com.brushwork.paint.model.IncrementSettings
 import com.brushwork.paint.model.StabilizerSettings
+import com.brushwork.paint.model.TransparencyDisplay
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.json.Json
 
@@ -94,4 +96,44 @@ class AppSettings(context: Context) {
     var safeCompositing: Boolean
         get() = prefs.getBoolean("safeCompositing", false)
         set(v) = prefs.edit { putBoolean("safeCompositing", v) }
+
+    // ------------------------------------------------------------------ v1.6 (keys owned by the lead; areas read and write them)
+
+    /**
+     * The app-wide increment steps (JSON under "increments"; not per document). Off by default
+     * (I8). Read through `EditorController.increments` (Compose state) in the editor; stored
+     * sanitized.
+     */
+    var increments: IncrementSettings
+        get() = getObject("increments", IncrementSettings.serializer())?.sanitized() ?: IncrementSettings()
+        set(v) = putObject("increments", IncrementSettings.serializer(), v.sanitized())
+
+    /**
+     * Live adjustment previews (v1.6 §3.1): an adjustment slider, mask handle or adjustment-layer
+     * opacity drag draws from a fast proxy and refines to exact when the finger stops. Off: the
+     * v1.5 path. "Safe compositing" stays the kill switch.
+     */
+    var fastAdjustPreview: Boolean
+        get() = prefs.getBoolean("fastAdjustPreview", true)
+        set(v) = prefs.edit { putBoolean("fastAdjustPreview", v) }
+
+    /** How the canvas shows transparency (a view preference; exports are unaffected). */
+    var transparencyDisplay: TransparencyDisplay
+        get() = prefs.getString("transparencyDisplay", null)?.let { n -> TransparencyDisplay.entries.firstOrNull { it.name == n } }
+            ?: TransparencyDisplay.LIGHT_CHECKER
+        set(v) = prefs.edit { putString("transparencyDisplay", v.name) }
+
+    /**
+     * Curve settings › "Handle size" (v1.6 §3.3): scales the drawn radii of curve handles,
+     * anchors and Path control points AND their grab radii. [MIN_CURVE_HANDLE_SCALE]..
+     * [MAX_CURVE_HANDLE_SCALE], default 1.
+     */
+    var curveHandleScale: Float
+        get() = prefs.getFloat("curveHandleScale", 1f).let { if (it.isFinite()) it.coerceIn(MIN_CURVE_HANDLE_SCALE, MAX_CURVE_HANDLE_SCALE) else 1f }
+        set(v) = prefs.edit { putFloat("curveHandleScale", if (v.isFinite()) v.coerceIn(MIN_CURVE_HANDLE_SCALE, MAX_CURVE_HANDLE_SCALE) else 1f) }
+
+    companion object {
+        const val MIN_CURVE_HANDLE_SCALE = 0.75f
+        const val MAX_CURVE_HANDLE_SCALE = 2f
+    }
 }

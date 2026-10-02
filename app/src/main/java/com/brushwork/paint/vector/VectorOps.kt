@@ -629,7 +629,10 @@ object VectorOps {
         val stroke = p.stroke?.let { st ->
             st.copy(width = st.width * s, brush = st.brush?.let { turnedBrush(scaledBrush(it, s), j) })
         }
-        return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke)
+        // v1.6 (I9): an affine map maps the spline's control points too (NURBS are affine-invariant);
+        // a homography bends the curve away from any spline, so the path becomes a plain Bézier path.
+        val spline = if (m[6] == 0f && m[7] == 0f) p.spline?.mapped(m) else null
+        return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke, spline = spline)
     }
 
     private fun scaledBrush(b: BrushPreset, s: Float): BrushPreset =

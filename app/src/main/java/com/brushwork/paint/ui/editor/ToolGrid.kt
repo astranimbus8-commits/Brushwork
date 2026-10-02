@@ -23,7 +23,11 @@ object ToolGrid {
         ToolGridSection("Color", tools(ToolId.FILL, ToolId.EYEDROPPER)),
         ToolGridSection("Select", tools(ToolId.LASSO, ToolId.MARQUEE, ToolId.MAGIC_WAND, ToolId.OBJECT_SELECT)),
         ToolGridSection("Edit", tools(ToolId.TRANSFORM, ToolId.REMOVE, ToolId.MASK) + ToolGridEntry.Filters),
-        ToolGridSection("Create", tools(ToolId.TEXT, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.FRAME_DIVIDER, ToolId.RULER)),
+        // v1.6: Text frames beside Text, Path after the other curve tools (still two rows of four).
+        ToolGridSection(
+            "Create",
+            tools(ToolId.TEXT, ToolId.TEXT_FRAMES, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH, ToolId.FRAME_DIVIDER, ToolId.RULER),
+        ),
     )
 
     /** Every tool in grid order. */

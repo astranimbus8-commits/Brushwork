@@ -103,6 +103,12 @@ object EditorIcons {
     /** The Filters tile of the tools grid (v1.5; it used to be a top-bar action). */
     val FiltersTile: ImageVector get() = Icons.Filled.PhotoFilter
 
+    /** The Path tool (v1.6). Placeholder until area E draws "a smooth arc over a dashed control polygon". */
+    val Path: ImageVector get() = Icons.Filled.Timeline
+
+    /** The Text frames tool (v1.6). Placeholder until area E draws the final glyph. */
+    val TextFrames: ImageVector get() = Icons.AutoMirrored.Filled.ViewQuilt
+
     fun tool(id: ToolId): ImageVector = when (id) {
         ToolId.BRUSH -> Icons.Filled.Brush
         ToolId.ERASER -> Eraser
@@ -124,5 +130,7 @@ object EditorIcons {
         ToolId.REMOVE -> Icons.Filled.AutoFixNormal
         ToolId.CLONE -> CloneStamp
         ToolId.MASK -> Masks
+        ToolId.PATH -> Path
+        ToolId.TEXT_FRAMES -> TextFrames
     }
 }

@@ -86,7 +86,7 @@ internal object HistoryLabels {
         if (tool is LassoTool && tool.kind == LassoKind.CURVE) "last point" else stepName(tool.id)
 
     fun stepName(id: ToolId): String = when (id) {
-        ToolId.CURVE, ToolId.POLYLINE -> "last point"
+        ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH -> "last point"
         ToolId.LASSO -> "last corner"
         // A shape with its own points steps back one point / shape edit.
         ToolId.SHAPE -> "last shape edit"

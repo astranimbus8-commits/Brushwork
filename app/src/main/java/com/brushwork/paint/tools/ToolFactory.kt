@@ -12,7 +12,9 @@ import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.select.MagicWandTool
 import com.brushwork.paint.tools.select.MarqueeTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
 
@@ -28,8 +30,10 @@ object ToolFactory {
             ToolId.TRANSFORM -> TransformTool(c)
             ToolId.TEXT -> TextTool(c)
             ToolId.SHAPE -> ShapeTool(c)
-            ToolId.CURVE -> CurveTool(c, polyline = false)
-            ToolId.POLYLINE -> CurveTool(c, polyline = true)
+            ToolId.CURVE -> CurveTool(c, CurveKind.CURVE)
+            ToolId.POLYLINE -> CurveTool(c, CurveKind.POLYLINE)
+            ToolId.PATH -> CurveTool(c, CurveKind.PATH)
+            ToolId.TEXT_FRAMES -> TextFrameTool(c)
             ToolId.FRAME_DIVIDER -> FrameDividerTool(c)
             ToolId.RULER -> RulerTool(c)
             ToolId.OBJECT_SELECT -> com.brushwork.paint.tools.select.ObjectSelectTool(c)

@@ -66,7 +66,10 @@ data class VectorContent(
             b += 96L
             when (o) {
                 is VStroke -> b += o.points.size * 12L
-                is VPath -> for (s in o.subpaths) b += s.anchors.size * 48L
+                is VPath -> {
+                    for (s in o.subpaths) b += s.anchors.size * 48L
+                    o.spline?.let { b += it.points.size * 32L }
+                }
                 is VShape -> b += (o.shape.points?.size ?: 0) * 40L
             }
         }
@@ -111,7 +114,17 @@ data class VStroke(
     override fun withId(id: Long): VObject = copy(id = id)
 }
 
-/** Curves, polylines, imported SVG paths, traced fills. Handles are OFFSETS from the anchor (as CurveAnchor); null = automatic. */
+/**
+ * Curves, polylines, imported SVG paths, traced fills. Handles are OFFSETS from the anchor (as CurveAnchor); null = automatic.
+ *
+ * v1.6: [spline] keeps the control points of a Path-tool curve (a NURBS / B-spline, like a
+ * Blender path). Everything that reads a path (renderer, hit tests, eraser, snapping, export,
+ * v1.5) keeps reading [subpaths], which then hold EXACTLY ONE subpath: the spline's Bézier form
+ * (`SplineBezier.toSubpath(spline)` within 0.01 px, invariant I9). An edit that changes
+ * [subpaths] any other way clears [spline] in the same step; the Path tool re-opens a spline
+ * only after checking I9 (else the path is a plain Bézier path). Affine transforms map it
+ * (`VectorOps.mapPath`), homographies and subdivision drop it.
+ */
 @Serializable
 @SerialName("path")
 data class VPath(
@@ -123,6 +136,8 @@ data class VPath(
     val fillRule: VFillRule = VFillRule.NONZERO,
     val fill: VPaint? = null,
     val stroke: VStrokeStyle? = null,
+    /** v1.6: the Path tool's control points (see the class docs); null = a plain Bézier path. */
+    val spline: VSpline? = null,
 ) : VObject() {
     /** Only single-subpath paths can be reopened in the Curve tool. */
     val isCurveEditable: Boolean get() = subpaths.size == 1
@@ -146,6 +161,81 @@ data class VAnchor(
     /** 0..3 thickness factor (§4.5). */
     val width: Float = 1f,
 )
+
+/**
+ * One control point of a [VSpline] (v1.6): document px; [weight] pulls the curve towards the
+ * point (rational B-spline weight, 0.1..10, 1 = plain B-spline); [width] is the thickness factor
+ * 0..3 (like [VAnchor.width], blended along the curve).
+ */
+@Serializable
+data class VSplinePoint(val x: Float, val y: Float, val weight: Float = 1f, val width: Float = 1f)
+
+/**
+ * The control points of a Path-tool curve (v1.6, §3.2): a NURBS / B-spline of [order] (2..6;
+ * the effective order is `min(order, points.size)`, see [effectiveOrder]). An open curve with
+ * [endpoint] uses clamped knots, so it touches its first and last points; [cyclic] closes it
+ * smoothly (periodic knots; [endpoint] is ignored). The geometry (evaluation, Bézier conversion)
+ * lives in `tools/vector/spline`; [VPath.subpaths] holds its Bézier form (I9).
+ */
+@Serializable
+data class VSpline(
+    val points: List<VSplinePoint>,
+    /** 2..6; effective order = min(order, points.size). */
+    val order: Int = 4,
+    /** The open curve touches its first and last points (clamped knots). */
+    val endpoint: Boolean = true,
+    /** Periodic: the curve closes smoothly; [endpoint] is ignored. */
+    val cyclic: Boolean = false,
+) {
+    /** The order actually used: [order] limited by the number of points (at least 1). */
+    val effectiveOrder: Int get() = minOf(order, points.size).coerceAtLeast(1)
+
+    /**
+     * Image under the affine 3x3 row-major matrix [m] (`m[6] == m[7] == 0`; a non-unit `m[8]`
+     * divides as a homogeneous coordinate). Weights and widths are unchanged: NURBS are
+     * affine-invariant, so the mapped spline's curve is the mapped curve.
+     */
+    fun mapped(m: FloatArray): VSpline {
+        val w = if (m.size >= 9 && m[8] != 0f) m[8] else 1f
+        return copy(points = points.map { p ->
+            val x = m[0] * p.x + m[1] * p.y + m[2]
+            val y = m[3] * p.x + m[4] * p.y + m[5]
+            if (w == 1f) p.copy(x = x, y = y) else p.copy(x = x / w, y = y / w)
+        })
+    }
+
+    /**
+     * Usable numbers only (damaged or crafted data): order in [MIN_ORDER]..[MAX_ORDER], points
+     * with a non-finite coordinate dropped, weights in [MIN_WEIGHT]..[MAX_WEIGHT] (non-finite = 1),
+     * widths in 0..[MAX_WIDTH] (non-finite = 1), at most [MAX_POINTS] points. This instance when
+     * nothing changes.
+     */
+    fun sanitized(): VSpline {
+        val o = order.coerceIn(MIN_ORDER, MAX_ORDER)
+        var changed = o != order || points.size > MAX_POINTS
+        val out = ArrayList<VSplinePoint>(minOf(points.size, MAX_POINTS))
+        for (p in points) {
+            if (out.size >= MAX_POINTS) break
+            if (!p.x.isFinite() || !p.y.isFinite() || kotlin.math.abs(p.x) > MAX_COORD || kotlin.math.abs(p.y) > MAX_COORD) { changed = true; continue }
+            val wt = if (p.weight.isFinite()) p.weight.coerceIn(MIN_WEIGHT, MAX_WEIGHT) else 1f
+            val wd = if (p.width.isFinite()) p.width.coerceIn(0f, MAX_WIDTH) else 1f
+            if (wt != p.weight || wd != p.width) { changed = true; out += p.copy(weight = wt, width = wd) } else out += p
+        }
+        return if (!changed) this else VSpline(out, o, endpoint, cyclic)
+    }
+
+    companion object {
+        const val MIN_ORDER = 2
+        const val MAX_ORDER = 6
+        const val DEFAULT_ORDER = 4
+        const val MIN_WEIGHT = 0.1f
+        const val MAX_WEIGHT = 10f
+        const val MAX_WIDTH = 3f
+        const val MAX_POINTS = 2000
+        /** Coordinates far beyond any canvas are damaged data. */
+        const val MAX_COORD = 1_000_000f
+    }
+}
 
 /** How a path is filled or stroked. Colors are ARGB (non-premultiplied). */
 @Serializable

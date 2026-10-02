@@ -107,7 +107,26 @@ object VectorCodec {
      * same instance when it already is. Ids (or a `nextId`) so large that new ids would overflow
      * come from a damaged file: the objects are then numbered 1..n again (order kept).
      */
-    internal fun sanitized(c: VectorContent): VectorContent {
+    internal fun sanitized(c: VectorContent): VectorContent = sanitizedIds(sanitizedSplines(c))
+
+    /**
+     * v1.6: Path-tool control points ([VPath.spline]) reduced to usable numbers
+     * ([VSpline.sanitized]); the same instance when every spline already is (a spline that
+     * changes no longer matches its Bézier form, so the Path tool's I9 check then treats the
+     * path as a plain Bézier path).
+     */
+    private fun sanitizedSplines(c: VectorContent): VectorContent {
+        if (c.objects.none { it is VPath && it.spline != null }) return c
+        var changed = false
+        val objects = c.objects.map { o ->
+            val s = (o as? VPath)?.spline ?: return@map o
+            val t = s.sanitized()
+            if (t === s) o else { changed = true; o.copy(spline = t) }
+        }
+        return if (changed) c.copy(objects = objects) else c
+    }
+
+    private fun sanitizedIds(c: VectorContent): VectorContent {
         val seen = HashSet<Long>(c.objects.size * 2)
         var maxId = 0L
         var dup = false

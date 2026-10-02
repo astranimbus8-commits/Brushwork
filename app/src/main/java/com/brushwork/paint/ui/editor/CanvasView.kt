@@ -20,10 +20,11 @@ import android.view.View
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.EyedropperTool
-import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisColors
 import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -82,8 +83,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     // ------------------------------------------------------------------ drawing resources
 
-    private val backdropColor = BrushworkColors.CanvasBackdrop.toArgb()
-    private val checkerPaint = Paint().apply { shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2)) }
+    // v1.6: the ibisPaint surround; the transparency squares of the layer window pick the checker.
+    private val backdropColor = IbisColors.Surround.toArgb()
+    private var checkerMode: TransparencyDisplay = controller.settings.transparencyDisplay
+    private val checkerPaint = Paint().apply { shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), checkerMode) }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeJoin = Paint.Join.ROUND
@@ -236,7 +239,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         ignoredMask = 0L
         density = d
         classifier = createClassifier()
-        checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2))
+        checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), checkerMode)
         if (viewport.hasSize) applyTransform()
     }
 
@@ -282,19 +285,30 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             shadowPaint.alpha = SHADOW_ALPHAS[i]
             canvas.drawPath(docPath, shadowPaint)
         }
-        canvas.drawPath(docPath, checkerPaint)
+        // v1.6: transparency as the layer window's squares say (a view preference only, I5).
+        val mode = controller.settings.transparencyDisplay
+        if (mode != checkerMode) {
+            checkerMode = mode
+            checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), mode)
+        }
+        if (mode != TransparencyDisplay.NONE) canvas.drawPath(docPath, checkerPaint)
 
-        // Composite tiles under the view matrix.
+        // Composite tiles under the view matrix (v1.6: a live adjustment session draws the frame
+        // itself, from its proxy tiles, while it runs).
         val tiles = controller.tiles
         val t = controller.viewTransform
         visibleF.set(0f, 0f, width.toFloat(), height.toFloat())
         t.inverse.mapRect(visibleF)
         visibleF.roundOut(visible)
-        tiles.update(controller.compositor, visible)
-        val save = canvas.save()
-        canvas.concat(t.matrix)
-        tiles.draw(canvas, visible, smooth = viewport.scale < SMOOTH_ZOOM_LIMIT)
-        canvas.restoreToCount(save)
+        val smooth = viewport.scale < SMOOTH_ZOOM_LIMIT
+        if (!controller.liveAdjust.drawFrame(canvas, t.matrix, visible, smooth)) {
+            tiles.update(controller.compositor, visible)
+            val save = canvas.save()
+            canvas.concat(t.matrix)
+            tiles.draw(canvas, visible, smooth)
+            canvas.restoreToCount(save)
+        }
+        if (controller.liveAdjust.wantsFrame) postInvalidateOnAnimation()
 
         val hasSelection = controller.selection != null
         controller.drawOverlays(canvas, if (hasSelection) antsPhase() else 0f)
@@ -854,11 +868,17 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         longPressSlopPx = TouchGestureClassifier.LONG_PRESS_SLOP_DP * density,
     )
 
-    private fun createCheckerShader(cell: Int): Shader {
+    /** The pattern behind transparent pixels for [mode] (NONE is never drawn: the surround shows). */
+    private fun createCheckerShader(cell: Int, mode: TransparencyDisplay): Shader {
+        val (a, b) = when (mode) {
+            TransparencyDisplay.WHITE -> IbisColors.CheckerLight to IbisColors.CheckerLight
+            TransparencyDisplay.DARK_CHECKER -> IbisColors.CheckerDark to IbisColors.CheckerDark2
+            TransparencyDisplay.LIGHT_CHECKER, TransparencyDisplay.NONE -> IbisColors.CheckerLight to IbisColors.CheckerLight2
+        }
         val bmp = Bitmap.createBitmap(cell * 2, cell * 2, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        c.drawColor(0xFFFFFFFF.toInt())
-        val p = Paint().apply { color = 0xFFCCCCCC.toInt() }
+        c.drawColor(a.toArgb())
+        val p = Paint().apply { color = b.toArgb() }
         c.drawRect(cell.toFloat(), 0f, cell * 2f, cell.toFloat(), p)
         c.drawRect(0f, cell.toFloat(), cell.toFloat(), cell * 2f, p)
         return BitmapShader(bmp, Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)

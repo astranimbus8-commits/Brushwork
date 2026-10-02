@@ -37,13 +37,41 @@ interface LayerRenderOverride {
 }
 
 /**
+ * v1.6: an override that replaces how SEVERAL layers draw (linked text frames being moved or
+ * resized: every affected frame previews its pending item). Install it as
+ * `controller.renderOverride` like any override; the compositor asks it for every layer in
+ * [layers] (and for [layer], which must be one of them) through [drawContentFor] /
+ * [drawMaskFor], never through the single-layer [drawContent] / [drawMask].
+ */
+interface MultiLayerRenderOverride : LayerRenderOverride {
+    /** Every layer it draws (includes [layer]). */
+    val layers: Set<Layer>
+
+    /** Draws [target]'s color content (see [LayerRenderOverride.drawContent]); false = default drawing. */
+    fun drawContentFor(target: Layer, canvas: Canvas): Boolean
+
+    /** Draws [target]'s mask (see [LayerRenderOverride.drawMask]); false = default drawing. */
+    fun drawMaskFor(target: Layer, canvas: Canvas, maskPaint: Paint): Boolean = false
+}
+
+/**
  * The bitmap a [Compositor.drawDocument] canvas draws into, and how document px map onto it
  * (v1.5): live adjustment layers read the composite below them from it. Every caller owns such a
  * backing bitmap: a display tile (translate), a flattened image (identity), a thumbnail (scale),
  * an eyedropper or fill patch (translate). [display]: the bitmap is a display tile of the canvas
  * (the "Safe compositing" switch only changes what the canvas shows, never exports or merges).
+ *
+ * v1.6 [directWrite]: the canvas draws straight into [bitmap], clipped by a RECT, with no pending
+ * saveLayer (true for all 7 current callers, V12), so the adjustment stage may write its result
+ * into [bitmap] directly (the fused NORMAL path, §3.1 C1); false forces the v1.5 Skia path.
  */
-class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix, val display: Boolean = false) {
+class CompositeTarget(
+    val bitmap: Bitmap,
+    val docToTarget: Matrix,
+    val display: Boolean = false,
+    /** v1.6: see the class docs; false forces the v1.5 Skia path. */
+    val directWrite: Boolean = true,
+) {
     companion object {
         /** A bitmap whose pixel (0, 0) is document pixel ([left], [top]) at 1:1. */
         fun translate(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
@@ -79,31 +107,81 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * region (the canvas should already be clipped to it; it's used for saveLayer bounds).
      * [target] is the bitmap [canvas] draws into (adjustment layers read the composite below
      * them from it); null draws adjustment layers as pass-through.
+     *
+     * v1.6 [layerRange]: only these layers (indices into `doc.layers`, bottom = 0), e.g. the
+     * composite below an adjustment layer, then that layer and everything above it, onto the same
+     * target (a live session's below-cache, §3.1). A range must not split a clipping group: its
+     * first index is 0 or an adjustment layer's index, its last + 1 is the layer count or an
+     * adjustment layer's index (empty ranges at such a boundary are fine). `[0, k)` then `[k, n)`
+     * onto the same target equals the full draw. Anything else throws [IllegalArgumentException].
      */
-    fun drawDocument(canvas: Canvas, clip: Rect?, useOverrides: Boolean = true, target: CompositeTarget?) {
+    fun drawDocument(canvas: Canvas, clip: Rect?, useOverrides: Boolean = true, target: CompositeTarget?, layerRange: IntRange? = null) {
+        val layers = doc.layers
+        val from: Int
+        val until: Int
+        if (layerRange == null) {
+            from = 0
+            until = layers.size
+        } else {
+            from = layerRange.first
+            until = layerRange.last + 1
+            require(isGroupBoundary(from) && isGroupBoundary(until) && from <= until) {
+                "Layer range $layerRange splits a clipping group or is out of 0..${layers.size}"
+            }
+        }
         val bounds = RectF(clip ?: doc.bounds)
         val override = if (useOverrides) overrideProvider() else null
-        val layers = doc.layers
-        var i = 0
-        while (i < layers.size) {
+        var i = from
+        while (i < until) {
             val base = layers[i]
             if (base.isAdjustmentLayer) {
                 // Its own group: never a clipping base (layers marked clipping above it draw unclipped).
                 if (base.visible && base.opacity > 0f) {
                     adjustmentScratch.colorMode = doc.colorMode
-                    AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                    AdjustmentStage.draw(canvas, base, bounds, overrideFor(base, override), target, adjustmentScratch)
                 }
                 i++
                 continue
             }
             var j = i + 1
-            while (j < layers.size && layers[j].clipping && !layers[j].isAdjustmentLayer) j++
+            while (j < until && layers[j].clipping && !layers[j].isAdjustmentLayer) j++
             if (base.visible && base.opacity > 0f) {
                 val clips = if (j > i + 1) layers.subList(i + 1, j).filter { it.visible && it.opacity > 0f } else emptyList()
                 drawGroup(canvas, base, clips, bounds, override)
             }
             i = j
         }
+    }
+
+    /** True when a [drawDocument] layer range may start or end at index [k] (see there). */
+    private fun isGroupBoundary(k: Int): Boolean {
+        val n = doc.layers.size
+        return k == 0 || k == n || (k in 1 until n && doc.layers[k].isAdjustmentLayer)
+    }
+
+    /** Reused view of a [MultiLayerRenderOverride] as the override of one of its layers (main thread). */
+    private val multiView = MultiLayerView()
+
+    private class MultiLayerView : LayerRenderOverride {
+        var multi: MultiLayerRenderOverride? = null
+        var target: Layer? = null
+        override val layer: Layer get() = target!!
+        override fun drawContent(canvas: Canvas): Boolean = multi!!.drawContentFor(target!!, canvas)
+        override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean = multi!!.drawMaskFor(target!!, canvas, maskPaint)
+    }
+
+    /**
+     * The override that applies to [layer] (v1.6): [override] itself when it is a single-layer
+     * override of [layer] (exactly the v1.5 rule: I5 goldens), a view of a
+     * [MultiLayerRenderOverride] drawing [layer] when [layer] is one of its layers, else null.
+     */
+    private fun overrideFor(layer: Layer, override: LayerRenderOverride?): LayerRenderOverride? {
+        if (override == null) return null
+        if (override is MultiLayerRenderOverride) {
+            if (layer !== override.layer && layer !in override.layers) return null
+            return multiView.also { it.multi = override; it.target = layer }
+        }
+        return if (override.layer === layer) override else null
     }
 
     private fun drawGroup(canvas: Canvas, base: Layer, clips: List<Layer>, bounds: RectF, override: LayerRenderOverride?) {
@@ -128,7 +206,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
 
     /** Draws one layer (content + mask) with [paint] (null = plain source-over). */
     private fun drawLayer(canvas: Canvas, layer: Layer, paint: Paint?, bounds: RectF, override: LayerRenderOverride?) {
-        val ov = if (override != null && override.layer === layer) override else null
+        val ov = overrideFor(layer, override)
         val mask = if (layer.maskEnabled) layer.mask else null
         if (ov == null && mask == null) {
             canvas.drawBitmap(layer.bitmap, 0f, 0f, paint ?: plainPaint)

@@ -38,7 +38,8 @@ object ObjectMapping {
     fun subdivided(p: VPath, pieces: Int = HOMOGRAPHY_PIECES): VPath {
         if (p.polyline || pieces <= 1) return p
         val subs = p.subpaths.map { s -> subdivide(s, p.tension, pieces) }
-        return p.copy(subpaths = subs)
+        // v1.6 (I9): the split pieces are no longer the spline's Bézier form.
+        return p.copy(subpaths = subs, spline = null)
     }
 
     private class A(val x: Float, val y: Float, val w: Float) {
