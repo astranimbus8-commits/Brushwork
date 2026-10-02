@@ -295,7 +295,7 @@ fun LayersPanel(
             fromFraction = { (it * 100f).roundToInt() / 100f },
             rangeText = "0 – 100 %",
             suffix = "%",
-            onApply = { v -> controller.fromPanel { controller.setLayerProps(layer, layer.props().copy(opacity = v), OPACITY_STEP) } },
+            onApply = { v -> controller.fromPanel { setLayerOpacity(controller, layer, v) } },
             onDismiss = { opacityId = null },
         )
     }

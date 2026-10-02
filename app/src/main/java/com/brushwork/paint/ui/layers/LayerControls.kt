@@ -606,8 +606,7 @@ internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Flo
     val shown = dragValue ?: opacity
     val pct = (shown.coerceIn(0f, 1f) * 100f).roundToInt()
     fun step(up: Boolean) = controller.fromPanel {
-        val next = LayerListMath.stepOpacity(layer.opacity, up, increments.step(IncrementKind.PERCENT))
-        controller.setLayerProps(layer, layer.props().copy(opacity = next), OPACITY_STEP)
+        setLayerOpacity(controller, layer, LayerListMath.stepOpacity(layer.opacity, up, increments.step(IncrementKind.PERCENT)))
     }
     Row(modifier.fillMaxWidth().background(IbisColors.OpacityRow).padding(horizontal = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(
@@ -638,7 +637,7 @@ internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Flo
                 dragValue = null
                 if (readout[0]) { increments.readout = null; readout[0] = false }
             },
-            onSet = { v -> controller.fromPanel { controller.setLayerProps(layer, layer.props().copy(opacity = v), OPACITY_STEP) } },
+            onSet = { v -> controller.fromPanel { setLayerOpacity(controller, layer, v) } },
             modifier = Modifier.weight(1f),
         )
         RoundStepButton(Icons.Filled.Add, LayerLabels.MORE_OPACITY) { step(up = true) }
@@ -647,6 +646,21 @@ internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Flo
 
 /** Undo label of every layer opacity change (v1.5). */
 internal const val OPACITY_STEP = "Opacity"
+
+/**
+ * One "Opacity" step setting [layer]'s opacity to [value] (−/+, a typed value, the slider's
+ * accessibility action). An adjustment layer's change also goes through `liveAdjust` (touch, then
+ * end at once): the canvas shows it from the proxy and refines tile by tile within the frame
+ * budget instead of re-rendering everything synchronously (design §3.1 C2).
+ */
+internal fun setLayerOpacity(controller: EditorController, layer: Layer, value: Float) {
+    val before = layer.opacity
+    controller.setLayerProps(layer, layer.props().copy(opacity = value.coerceIn(0f, 1f)), OPACITY_STEP)
+    if (layer.isAdjustmentLayer && layer.opacity != before) {
+        controller.liveAdjust.touch(layer, null)
+        controller.liveAdjust.end(layer)
+    }
+}
 
 /** − / +: a 22 dp black disc with a white glyph in a 40 dp target. */
 @Composable

@@ -304,6 +304,10 @@ class LayerWindowActionsRobolectricTest {
         assertEquals("Opacity", c.undoManager.undoLabel)
         undo()
         assertEquals(1f, adjustment.opacity, 1e-4f)
+        // −/+ on it: one step each (shown through liveAdjust too).
+        oneStep("− on an adjustment layer", "Opacity") { click(LayerLabels.LESS_OPACITY) }
+        assertEquals(0.99f, adjustment.opacity, 1e-4f)
+        undo()
         undo() // the adjustment layer
         c.selectLayer(layer)
         SmokeUi.settle()
