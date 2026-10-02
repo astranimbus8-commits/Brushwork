@@ -159,6 +159,12 @@ object SelectionEdits {
         val layer = controller.activeLayer
         if (!controller.checkEditable(layer)) return false
         val target = controller.editTargetOf(layer)
+        // A vector layer gets a filled object, as with the layer menu's Fill (v1.5 §4.9): painting
+        // pixels would turn it into a raster layer.
+        if (target == EditTarget.CONTENT && layer.isVectorLayer) {
+            controller.fillLayer(layer, color or 0xFF000000.toInt())
+            return true
+        }
         val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return false
         val rec = controller.beginEdit(layer, target)
         rec.touch(sel.bounds)
@@ -179,6 +185,12 @@ object SelectionEdits {
         val layer = controller.activeLayer
         if (!controller.checkEditable(layer)) return false
         val target = controller.editTargetOf(layer)
+        // A vector layer loses the objects the selection touches, as with the selection bar's
+        // Clear (v1.5 §4.9; objects ignore alpha lock): erasing pixels would rasterize it.
+        if (target == EditTarget.CONTENT && layer.isVectorLayer) {
+            controller.clearLayer(layer, label = "Clear selection")
+            return true
+        }
         if (target == EditTarget.CONTENT && layer.alphaLocked) {
             controller.toast("Can't clear: transparency is locked on \"${layer.name}\"")
             return false
