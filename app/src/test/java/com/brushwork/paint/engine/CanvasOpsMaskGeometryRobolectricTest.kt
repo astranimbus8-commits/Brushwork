@@ -103,6 +103,41 @@ class CanvasOpsMaskGeometryRobolectricTest {
         assertMoved("flip", 2, w, h, run { s -> CanvasOps.flip(s, horizontal = true) }) { x, y -> w - 1 - x to y }
     }
 
+    /**
+     * A large editable mask is drawn in bands with progress between them, so the busy overlay
+     * moves and Stop is honoured during it (before: one report before and one after the whole
+     * render), and the banded mask is still exactly the spec's rendering.
+     */
+    @Test
+    fun aTallMaskReportsProgressInBandsAndStops() {
+        val tw = 400
+        val th = 1600
+        val doc = Document("t", "t", tw, th)
+        doc.layers += Layer(doc.newLayerId(), "Photo", BitmapUtils.createLayerBitmap(tw, th)).also {
+            it.mask = MaskSpecs.newMask(spec, tw, th)
+            it.maskSpec = spec
+        }
+        // One layer and its mask: the mask is drawn in the second half of the progress.
+        val inMask = ArrayList<Float>()
+        val result = CanvasOps.resizeCanvas(CanvasSnapshot.of(doc), tw, th, 10, 10) { f -> if (f > 0.5f && f < 1f) inMask += f }
+        assertTrue("progress inside the mask's render: $inMask", inMask.distinct().size >= 2)
+        val layer = result.layers.single()
+        val mapped = layer.data!!.maskSpec!!
+        val want = MaskSpecs.newMask(mapped, tw, th)
+        val got = layer.mask!!
+        val a = IntArray(tw * th).also { want.getPixels(it, 0, tw, 0, 0, tw, th) }
+        val b = IntArray(tw * th).also { got.getPixels(it, 0, tw, 0, 0, tw, th) }
+        assertTrue("banded = MaskSpecs.newMask", a.contentEquals(b))
+        CanvasResult.recycleCreated(result.layers, CanvasSnapshot.of(doc))
+        // Stop during the mask: the operation is abandoned there.
+        var reports = 0
+        val stopped = runCatching {
+            CanvasOps.resizeCanvas(CanvasSnapshot.of(doc), tw, th, 10, 10) { f -> if (f > 0.5f && f < 1f && ++reports == 1) throw CanvasOpCancelledException() }
+        }
+        assertTrue(stopped.exceptionOrNull() is CanvasOpCancelledException)
+        assertTrue("no report after Stop", reports == 1)
+    }
+
     @Test
     fun aResizedMaskIsTheOldOneScaledWithinResampling() {
         val (old, new) = run { s -> CanvasOps.resizeImage(s, 2 * w, 2 * h, Resample.BILINEAR) }

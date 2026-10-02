@@ -674,17 +674,33 @@ object CanvasOps {
      * A layer's new mask when its data [d] (already mapped) keeps an editable mask spec: the
      * spec rendered at the new [w] x [h] (I1: the mask stays exactly its spec's rendering, which
      * resampled pixels — or a new canvas margin filled white — would not be). Null without a
-     * spec: the mask's pixels are mapped like the layer's.
+     * spec: the mask's pixels are mapped like the layer's. Rendered in bands of rows (the bytes
+     * of [MaskSpecs.newMask]: a spec renders the same whatever the region), reporting progress
+     * between them, so Stop is honoured during a long (brush-heavy, large) mask too.
      */
     private fun specMask(d: LayerData?, w: Int, h: Int, sub: (Float) -> Unit): Bitmap? {
         val spec = d?.maskSpec ?: return null
         sub(0f)
-        val m = MaskSpecs.newMask(spec, w, h)
+        val m = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         try {
-            sub(1f)
+            val band = max(1, min(h, MASK_BAND_PIXELS / max(1, w)))
+            val buf = IntArray(w * band)
+            val region = Rect()
+            var y = 0
+            while (y < h) {
+                val rows = min(band, h - y)
+                region.set(0, y, w, y + rows)
+                MaskSpecs.render(spec, w, h, region, buf, w)
+                m.setPixels(buf, 0, w, 0, y, w, rows)
+                y += rows
+                sub(y.toFloat() / h)
+            }
         } catch (t: Throwable) { m.recycle(); throw t }
         return m
     }
+
+    /** Pixels of an editable mask rendered between two progress reports (as MaskSpecs' own bands). */
+    private const val MASK_BAND_PIXELS = 1 shl 18
 
     /**
      * A vector layer's new pixels: its (already mapped) objects rendered at the new size, held to
