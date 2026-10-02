@@ -35,7 +35,52 @@ background dispatcher on *copies* of pixels and comes back to the main thread to
   draws adjustment layers as pass-through (kill switch).
 - **I6 One owner per file.** After the v1.5 foundation, frozen files (controller, models, storage,
   brush engine, editor UI…) change only on `main`; areas add behaviour through their own files and
-  controller extension functions (`.wt/_tools/ownership-check.ps1` checks a branch).
+  controller extension functions (`.wt/_tools/ownership-check.ps1` checks a branch; v1.6:
+  `.wt/_tools/ownership-check-v16.ps1 -Area A..G`).
+
+## Invariants (v1.6)
+- **I7 Previews are views.** Live adjustment proxy tiles, below-caches and frame-drag previews
+  never reach a bitmap that is saved, exported, merged, thumbnailed or sampled (eyedropper, bucket,
+  clone, content-aware fill). Once a live session ends and its refinement drains, every display
+  tile equals a no-session `drawDocument` of that tile bit for bit.
+- **I8 Defaults keep v1.5 behaviour and tests deterministic.** `IncrementSettings.enabled = false`:
+  with increments off every gesture and control is bit-identical to v1.5. Under Robolectric
+  (`"robolectric" == Build.FINGERPRINT`) `LiveAdjust.policy = EXACT`: no session starts and `touch`
+  only invalidates; tests opt in with `LIVE` and drive frames through an injected clock and
+  `refineStep()`.
+- **I9 Data and derived data change together.** A `VPath` with `spline != null` has
+  `subpaths == listOf(SplineBezier.toSubpath(spline))` within 0.01 px (the Path tool re-opens a
+  spline only after checking it); a threaded `TextItem` has `text == thread.story.substring(start,
+  end)`; every frame of a story carries the same `story`, `storyId`, `rev` and `spec` (except the box
+  width and height). Every edit keeps these or clears the extra data (`spline = null`, thread
+  cleared) in the same step.
+- **I10 Labels are an API.** The labels of design §3.7.11 stay on their controls and are unique
+  among visible clickables; renaming one is a foundation change that lists the tests to update.
+
+## v1.6 foundation contracts (frozen APIs the areas build on)
+- **Tools:** `ToolId.PATH` (a third `CurveKind` of `CurveTool`) and `ToolId.TEXT_FRAMES`
+  (`tools/text/frames/TextFrameTool`), appended after `MASK`. `ui/editor/ToolMenu` lists the
+  ibisPaint tool menu's cells.
+- **Layer-list events:** `addLayer` / `addLayerWith`, `addLayerWithContent`, `duplicateLayer`,
+  `deleteLayer` and merge down queue a `LayerListEvent` (ADDED, DUPLICATED, REMOVED, MERGED) inside
+  the step's `editScope`, which sits INSIDE `withToolPaused` (the tool's pending work commits first,
+  as its own step). They are delivered with the `EditEvent`s when the outermost scope ends, so a
+  `LayerListListener` folds its edits into the step with `amendLastStep`; never for undo / redo.
+- **Services on the controller:** `increments` (`snap/Increments`, Compose state persisted in
+  `AppSettings.increments`; `ui/common/LocalIncrements` in the editor), `liveAdjust`
+  (`engine/live/LiveAdjust`: `touch` / `end` / `drawFrame` / `wantsFrame`), `textThreads`
+  (`tools/text/frames/TextThreads`, an edit and layer-list listener).
+- **Compositor:** `MultiLayerRenderOverride` (one override drawing several layers),
+  `CompositeTarget.directWrite`, `drawDocument(layerRange)` (ranges split only at adjustment
+  layers), `DisplayTiles.updateBudgeted` (visible tiles nearest a centre first, within a time
+  budget).
+- **Text:** `TextSpec.letterScale`, `TextItem.thread` (`TextCodec.VERSION = 4`);
+  `WrapLayout.layoutFrame` (the band loop with a height stop) and `TextRenderer.frameLayout` /
+  `frameEnd`: a frame of a linked story is laid out from the story at its start in its fixed box,
+  so rendering a frame and computing where the next one starts are one function. The text editor
+  dialog edits a `TextEditorHost` (the Text tool, or a story).
+- **Theme:** `ui/theme/IbisColors` and `IbisDims` (the ibisPaint look, measured); the layer
+  window fills the size its host gives it.
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
@@ -350,8 +395,9 @@ dropped for its layer only and listed in `Document.loadWarnings` (shown once by 
 
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
-sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, nudge pad, chips,
-swatches) — use them everywhere.
+nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
+sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
+parameters) — use them everywhere.
 
 Editor layout (`ui/editor`): top bar (Vector first, then panels, and the overflow menu), tool
 options strip (`ToolOptionsBar`, starting with a VECTOR chip in vector mode) with the X / Y strip
