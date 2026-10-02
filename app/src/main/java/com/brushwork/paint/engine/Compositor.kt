@@ -73,6 +73,12 @@ class CompositeTarget(
     val display: Boolean = false,
     /** v1.6: see the class docs; false forces the v1.5 Skia path. */
     val directWrite: Boolean = true,
+    /**
+     * v1.6 (§3.1 C2, additive): keeps the resampled factors of an adjustment layer's own mask on
+     * this target between draws (a live session's proxy tile, whose owner clears it when the mask
+     * may have changed); null (every other caller) resamples each time.
+     */
+    val maskCache: MaskFactorCache? = null,
 ) {
     companion object {
         /** A bitmap whose pixel (0, 0) is document pixel ([left], [top]) at 1:1. */

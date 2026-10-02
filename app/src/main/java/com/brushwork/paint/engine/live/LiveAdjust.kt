@@ -362,7 +362,10 @@ class LiveAdjust(private val c: EditorController) {
         val ov = c.renderOverride
         val t0 = clock()
         var belowNanos = 0L
+        // A frame that makes proxies draws them whole (once): it says nothing about the pace.
+        var fresh = false
         for (i in needed) {
+            if (p.get(i) == null) fresh = true
             val proxy = p.obtain(i, withBelow)
             if (withBelow && (proxy.belowStale || !proxy.key.matches(c.doc, split, safe, ov))) {
                 val b0 = clock()
@@ -374,9 +377,10 @@ class LiveAdjust(private val c: EditorController) {
             proxy.dirty = null
             drawProxy(proxy, p, d, split, n, withBelow)
         }
-        // Adaptive LOD (§3.1 C2): a slow live frame halves the scale for the rest of the session.
+        // Adaptive LOD (§3.1 C2): a slow live frame halves the scale for the rest of the session
+        // (not counting the below-cache builds, nor a frame that made proxies).
         val frameNanos = clock() - t0 - belowNanos
-        if (!s.refining && frameNanos > slowFrameNanos && scale > MIN_SCALE) {
+        if (!s.refining && !fresh && frameNanos > slowFrameNanos && scale > MIN_SCALE) {
             s.scaleCap = scale / 2f
             s.needsFrame = true
         }

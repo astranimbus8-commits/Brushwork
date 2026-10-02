@@ -251,6 +251,86 @@ class AdjustmentScratch {
 }
 
 /**
+ * v1.6 (§3.1 C2): the mask factors of an adjustment layer's own mask over one whole
+ * [CompositeTarget] whose matrix is not a whole-pixel translation (a live session's proxy tile:
+ * [CompositeTarget.maskCache]), kept between draws. While the layer, its mask bitmap, the
+ * layer's content version and the target's matrix and size stay the same, the fused path reads
+ * these factors instead of resampling the full-resolution mask on every frame (a slider drag
+ * never changes the mask); the factors are exactly what resampling gives. Never used while a
+ * render override concerns the layer (a mask being painted or previewed changes without a
+ * content version). The owner [clear]s it when the mask's pixels may have changed in another
+ * way (a change it did not make). Main thread.
+ */
+class MaskFactorCache {
+    private var layer: Layer? = null
+    private var mask: Bitmap? = null
+    private var version = 0L
+    private val matrix = FloatArray(9)
+    private val probe = FloatArray(9)
+    private var width = 0
+    private var height = 0
+    private var bytes: ByteArray? = null
+
+    /** Bytes held (a byte per target pixel once used). */
+    val byteCount: Long get() = bytes?.size?.toLong() ?: 0L
+
+    /** Forgets the factors (the next draw samples the mask again); the buffer is kept. */
+    fun clear() {
+        layer = null
+        mask = null
+    }
+
+    /** Frees everything. */
+    fun release() {
+        clear()
+        bytes = null
+    }
+
+    /**
+     * The factors (0..255, row-major over the whole target bitmap) of [layer]'s [mask] on
+     * [target]: cached, or sampled now over the whole target as the fused path samples a chunk.
+     */
+    internal fun factors(layer: Layer, mask: Bitmap, target: CompositeTarget, scratch: AdjustmentScratch, sample: (Matrix, Int, Int, IntArray) -> Unit): ByteArray {
+        val bmp = target.bitmap
+        target.docToTarget.getValues(probe)
+        val cur = bytes
+        if (cur != null && this.layer === layer && this.mask === mask && version == layer.contentVersion &&
+            width == bmp.width && height == bmp.height && probe.contentEquals(matrix)
+        ) return cur
+        val w = bmp.width; val h = bmp.height
+        val out = cur?.takeIf { it.size >= w * h } ?: ByteArray(w * h).also { bytes = it }
+        val cw0 = min(AdjustmentStage.CHUNK, w); val ch0 = min(AdjustmentStage.CHUNK, h)
+        val px = scratch.factorPixels(cw0 * ch0)
+        val m = scratch.chunkMatrix
+        var y = 0
+        while (y < h) {
+            val ch = min(AdjustmentStage.CHUNK, h - y)
+            var x = 0
+            while (x < w) {
+                val cw = min(AdjustmentStage.CHUNK, w - x)
+                m.set(target.docToTarget)
+                m.postTranslate(-x.toFloat(), -y.toFloat())
+                sample(m, cw, ch, px)
+                for (r in 0 until ch) {
+                    val o = (y + r) * w + x
+                    val s = r * cw
+                    for (c in 0 until cw) out[o + c] = AdjustmentStage.luminance(px[s + c]).toByte()
+                }
+                x += cw
+            }
+            y += ch
+        }
+        this.layer = layer
+        this.mask = mask
+        version = layer.contentVersion
+        width = w
+        height = h
+        System.arraycopy(probe, 0, matrix, 0, 9)
+        return out
+    }
+}
+
+/**
  * Implemented by a [LayerRenderOverride] that draws an adjustment layer's mask differently while
  * it is edited (the Masks tool's previews and live brush strokes): where the mask it draws can be
  * non-black, so the effect is only computed there. On an adjustment layer that has no mask yet,
@@ -357,7 +437,7 @@ object AdjustmentStage {
             val clip = RectF(bounds)
             target.docToTarget.mapRect(clip)
             if (!t.intersect(Math.round(clip.left), Math.round(clip.top), Math.round(clip.right), Math.round(clip.bottom)) || t.isEmpty) return
-            drawFused(mapper, mode, if (masked) mask else null, ov, masked, target, t, alpha, scratch)
+            drawFused(layer, mapper, mode, if (masked) mask else null, ov, masked, target, t, alpha, scratch)
             return
         }
         val blendPaint = BlendModes.paint(layer.blendMode, o).apply { isFilterBitmap = false }
@@ -420,9 +500,11 @@ object AdjustmentStage {
      * The fused NORMAL path (§3.1 C1): target pixels [t] (already clipped to the canvas clip and
      * the bitmap) become `lerp(below, F(below), m·alpha)` with the composite's alpha kept, written
      * straight into `target.bitmap`. [mask] is the layer's enabled mask (null: none, or the
-     * override supplies it); [masked] says whether a mask applies at all.
+     * override supplies it); [masked] says whether a mask applies at all. A target with a
+     * [CompositeTarget.maskCache] (a live proxy) keeps the sampled factors of [layer]'s own mask.
      */
     private fun drawFused(
+        layer: Layer,
         mapper: PixelMapper,
         mode: ColorMode,
         mask: Bitmap?,
@@ -460,11 +542,25 @@ object AdjustmentStage {
                 if (factors != null) {
                     m.set(target.docToTarget)
                     m.postTranslate(-x.toFloat(), -y.toFloat())
+                    val cache = target.maskCache
                     if (ov != null && drawOverrideMask(ov, m, cw, ch, factors, scratch)) {
                         kind = FACTORS_ALPHA
+                    } else if (mask != null && tx != NOT_INTEGER && ty != NOT_INTEGER) {
+                        readMask(mask, x - tx, y - ty, cw, ch, factors)
+                        kind = FACTORS_LUMINANCE
+                    } else if (mask != null && cache != null && ov == null) {
+                        // A live proxy: the factors sampled once for the whole target, reused while
+                        // the mask stays the same (§3.1 C2).
+                        val bytes = cache.factors(layer, mask, target, scratch) { mm, w, h, out -> sampleMask(mask, mm, w, h, out, scratch) }
+                        val bw = bmp.width
+                        for (r in 0 until ch) {
+                            val o = (y + r) * bw + x
+                            val s = r * cw
+                            for (cc in 0 until cw) factors[s + cc] = bytes[o + cc].toInt() and 0xFF
+                        }
+                        kind = FACTORS_RAW
                     } else if (mask != null) {
-                        if (tx != NOT_INTEGER && ty != NOT_INTEGER) readMask(mask, x - tx, y - ty, cw, ch, factors)
-                        else sampleMask(mask, m, cw, ch, factors, scratch)
+                        sampleMask(mask, m, cw, ch, factors, scratch)
                         kind = FACTORS_LUMINANCE
                     }
                 }
@@ -480,6 +576,8 @@ object AdjustmentStage {
     private const val FACTORS_NONE = 0
     private const val FACTORS_ALPHA = 1
     private const val FACTORS_LUMINANCE = 2
+    /** The factors are m itself (0..255; a [MaskFactorCache]). */
+    private const val FACTORS_RAW = 3
     private const val X = 0
     private const val Y = 1
     private const val NOT_INTEGER = Int.MIN_VALUE
@@ -551,6 +649,7 @@ object AdjustmentStage {
             val m = when (kind) {
                 FACTORS_ALPHA -> factors!![i] ushr 24
                 FACTORS_LUMINANCE -> luminance(factors!![i])
+                FACTORS_RAW -> factors!![i]
                 else -> 255
             }
             out[i] = blend(below[i], out[i], (m * alpha + 127) / 255)

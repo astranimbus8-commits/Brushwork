@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.MaskFactorCache
 import com.brushwork.paint.engine.MultiLayerRenderOverride
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
@@ -136,7 +137,10 @@ internal class ProxyTiles(val docWidth: Int, val docHeight: Int, val tileSize: I
         }
         val bitmap: Bitmap = Bitmap.createBitmap(pw, ph, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
-        val target = CompositeTarget(bitmap, matrix, display = true)
+
+        /** The adjustment layer's mask at this proxy's scale (kept while it doesn't change; a slider drag). */
+        val maskCache = MaskFactorCache()
+        val target = CompositeTarget(bitmap, matrix, display = true, maskCache = maskCache)
 
         /** The below-cache (null until drawn, or when nothing lies below). */
         var below: Bitmap? = null
@@ -159,6 +163,7 @@ internal class ProxyTiles(val docWidth: Int, val docHeight: Int, val tileSize: I
             below?.recycle()
             below = null
             key.clear()
+            maskCache.release()
         }
     }
 
@@ -167,13 +172,13 @@ internal class ProxyTiles(val docWidth: Int, val docHeight: Int, val tileSize: I
 
     fun get(index: Int): Proxy? = proxies.getOrNull(index)
 
-    /** Bytes proxy [index] needs (frame plus below-cache when [withBelow]). */
+    /** Bytes proxy [index] needs (frame plus below-cache when [withBelow], plus a byte per pixel of mask factors). */
     fun bytesFor(index: Int, withBelow: Boolean): Long {
         val c = index % cols; val r = index / cols
         val w = minOf(docWidth, (c + 1) * span) - c * span
         val h = minOf(docHeight, (r + 1) * span) - r * span
         val px = ((w + inv - 1) / inv).toLong() * ((h + inv - 1) / inv)
-        return px * 4L * (if (withBelow) 2 else 1)
+        return px * 4L * (if (withBelow) 2 else 1) + px
     }
 
     /** Proxy [index], allocated (fully dirty) when missing. */
@@ -210,7 +215,10 @@ internal class ProxyTiles(val docWidth: Int, val docHeight: Int, val tileSize: I
             val part = Rect(r)
             if (!part.intersect(p.docRect)) continue
             if (foreign) {
+                // A change the session didn't make: what is below, and the mask itself (pixels
+                // painted without a content version), can't be trusted any more.
                 p.belowStale = true
+                p.maskCache.clear()
             }
             val d = p.dirty
             if (d == null) p.dirty = part else d.union(part)
