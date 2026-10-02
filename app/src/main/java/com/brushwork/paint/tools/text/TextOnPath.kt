@@ -30,13 +30,17 @@ object TextOnPath {
      *
      * [stroke] is used as given (set its style to STROKE and its width). Neither paint is changed
      * (their text alignment is set to LEFT while drawing and restored).
+     *
+     * v1.6: [letters] scales the letters progressively (per-cluster size and advance; Center and
+     * Top move the smaller letters along the path's normal). The caller checks the script can be
+     * drawn per cluster (`LetterRamp.supports`); null = plain letters.
      */
-    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): RectF =
-        TextOnPathEngine.draw(canvas, text, fill, stroke, spec)
+    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF =
+        TextOnPathEngine.draw(canvas, text, fill, stroke, spec, letters)
 
     /** Bounds [draw] would cover (for hit testing and invalidation). */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): RectF =
-        TextOnPathEngine.bounds(text, fill, stroke, spec)
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF =
+        TextOnPathEngine.bounds(text, fill, stroke, spec, letters)
 
     /**
      * The guide path (thin line shown while editing): the shape itself, plus the control arms of

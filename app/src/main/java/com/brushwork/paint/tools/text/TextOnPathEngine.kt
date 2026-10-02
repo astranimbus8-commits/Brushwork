@@ -34,10 +34,17 @@ internal class PathCluster(
     val blank: Boolean,
     /** Drawn unbent even when letters bend: color emoji have no outline to bend. */
     val rigid: Boolean,
-    /** Ink bounds when drawn alone at x = 0 on baseline 0. */
+    /** Ink bounds when drawn alone at x = 0 on baseline 0 ([dy] and [scale] included). */
     val ink: RectF,
+    /** v1.6 letter scaling: the cluster's size factor (1 = the paint's size). */
+    val scale: Float = 1f,
+    /** v1.6 letter scaling: its baseline shift in layout y (negative = away from the path, up): Center / Top alignment. */
+    val dy: Float = 0f,
 ) {
     val advance: Float get() = x1 - x0
+
+    /** True when this cluster is drawn at another size or place than plain text would (v1.6). */
+    val scaled: Boolean get() = scale != 1f || dy != 0f
 }
 
 /**
@@ -50,6 +57,8 @@ internal class PathTextLayout(
     val capHeight: Float,
     val clusters: List<PathCluster>,
     private val paint: Paint,
+    /** v1.6: the letters have their own sizes (each cluster is outlined and drawn on its own). */
+    val lettersScaled: Boolean = false,
 ) {
     /**
      * Flattened glyph outlines (closed polygons, x, y pairs, baseline 0) and for each contour the
@@ -63,7 +72,22 @@ internal class PathTextLayout(
     fun outline(): Outline {
         outline?.let { return it }
         val path = Path()
-        if (clusters.none { it.rigid }) {
+        if (lettersScaled) {
+            // v1.6 scaled letters: every cluster at its own size and baseline shift.
+            val piece = Path()
+            val base = paint.textSize
+            try {
+                for (c in clusters) {
+                    if (c.rigid || c.blank) continue
+                    paint.textSize = base * c.scale
+                    piece.rewind()
+                    paint.getTextPath(line, c.start, c.end, c.x0, c.dy, piece)
+                    path.addPath(piece)
+                }
+            } finally {
+                paint.textSize = base
+            }
+        } else if (clusters.none { it.rigid }) {
             paint.getTextPath(line, 0, line.length, 0f, 0f, path)
         } else {
             // Consecutive non-rigid clusters of one bidi run are outlined together (shaped as one
@@ -117,7 +141,18 @@ internal class PathTextLayout(
 
     /** Draws cluster [c] with [paint] so that its baseline center lands on the canvas origin. */
     fun drawCluster(canvas: Canvas, c: PathCluster, paint: Paint) {
-        canvas.drawTextRun(line, c.start, c.end, c.contextStart, c.contextEnd, -c.advance / 2f, 0f, c.rtl, paint)
+        if (!lettersScaled) {
+            canvas.drawTextRun(line, c.start, c.end, c.contextStart, c.contextEnd, -c.advance / 2f, 0f, c.rtl, paint)
+            return
+        }
+        // v1.6 scaled letter: at its size, its baseline shifted (the paint is given back as it was).
+        val base = paint.textSize
+        paint.textSize = base * c.scale
+        try {
+            canvas.drawTextRun(line, c.start, c.end, c.start, c.end, -c.advance / 2f, c.dy, c.rtl, paint)
+        } finally {
+            paint.textSize = base
+        }
     }
 }
 
@@ -165,7 +200,8 @@ internal object TextOnPathEngine {
         }
     }
 
-    private data class LayoutKey(val text: String, val paint: PaintKey)
+    /** v1.6: [letters] = the letter scaling the layout has (null = none). */
+    private data class LayoutKey(val text: String, val paint: PaintKey, val letters: LetterScaleSpec?)
 
     /** [layout] is compared by identity (a new layout is a new text or font). */
     private data class ResultKey(val layout: PathTextLayout, val spec: TextPathSpec)
@@ -196,23 +232,27 @@ internal object TextOnPathEngine {
     /** Line breaks, paragraph breaks and tabs (U+2028 and U+2029 are the Unicode line / paragraph separators). */
     private fun isBreak(c: Char): Boolean = c == '\n' || c == '\r' || c == '\t' || c.code == 0x2028 || c.code == 0x2029
 
-    /** The layout of [text] with [paint] (cached), null when there is nothing to draw. */
+    /**
+     * The layout of [text] with [paint] (cached), null when there is nothing to draw. [letters]
+     * (v1.6): the letters are scaled (the caller has checked the script can be; null = plain).
+     */
     @Synchronized
-    fun layout(text: String, paint: Paint): PathTextLayout? {
-        val key = LayoutKey(text, PaintKey.of(paint))
+    fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null): PathTextLayout? {
+        val scale = letters?.takeIf { it.isOn }
+        val key = LayoutKey(text, PaintKey.of(paint), scale)
         layouts[key]?.let { return it.layout }
         val line = oneLine(text)
-        val l = if (line.isBlank()) null else buildLayout(line, paint)
+        val l = if (line.isBlank()) null else buildLayout(line, paint, scale)
         layouts[key] = LayoutEntry(l)
         return l
     }
     /** Layout and placement of [text] along [spec] (cached for the last two inputs); null when nothing is drawn. */
     @Synchronized
-    fun result(text: String, paint: Paint, requested: TextPathSpec): Pair<PathTextLayout, PathTextResult>? {
+    fun result(text: String, paint: Paint, requested: TextPathSpec, letters: LetterScaleSpec? = null): Pair<PathTextLayout, PathTextResult>? {
         if (!requested.isActive) return null
         // Numbers out of any sensible range (a corrupt file, a runaway pinch) are fixed first.
         val spec = TextPathGeometry.sanitized(requested)
-        val layout = layout(text, paint) ?: return null
+        val layout = layout(text, paint, letters) ?: return null
         val key = ResultKey(layout, spec)
         results[key]?.let { return layout to it }
         val guide = guideFor(spec) ?: return null
@@ -318,8 +358,8 @@ internal object TextOnPathEngine {
     // ------------------------------------------------------------------ drawing
 
     /** Draws [text] along [spec]; returns the drawn bounds (empty when nothing was drawn). */
-    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): RectF {
-        val (layout, res) = result(text, fill, spec) ?: return RectF()
+    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF {
+        val (layout, res) = result(text, fill, spec, letters) ?: return RectF()
         val fillAlign = fill.textAlign
         val strokeAlign = stroke?.textAlign
         fill.textAlign = Paint.Align.LEFT
@@ -378,8 +418,8 @@ internal object TextOnPathEngine {
      * [stroke], the area the outline stroke covers (second; null without one). Color emoji have
      * no outline. Null when nothing is drawn.
      */
-    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): Pair<Path, Path?>? {
-        val (layout, res) = result(text, fill, spec) ?: return null
+    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): Pair<Path, Path?>? {
+        val (layout, res) = result(text, fill, spec, letters) ?: return null
         val glyphs = Path()
         val outlined = Path()
         val tmp = Path()
@@ -390,7 +430,15 @@ internal object TextOnPathEngine {
         for (pl in res.placements) {
             val c = pl.cluster
             tmp.rewind()
-            p.getTextPath(layout.line, c.start, c.end, -c.advance / 2f, 0f, tmp)
+            if (layout.lettersScaled) {
+                // v1.6: at the cluster's own size and baseline shift, as drawCluster draws it.
+                val base = p.textSize
+                p.textSize = base * c.scale
+                p.getTextPath(layout.line, c.start, c.end, -c.advance / 2f, c.dy, tmp)
+                p.textSize = base
+            } else {
+                p.getTextPath(layout.line, c.start, c.end, -c.advance / 2f, 0f, tmp)
+            }
             if (tmp.isEmpty) continue
             m.setRotate(pl.angleDeg)
             m.postTranslate(pl.x, pl.y)
@@ -407,8 +455,8 @@ internal object TextOnPathEngine {
     }
 
     /** Bounds of what [draw] paints. */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec): RectF {
-        val (_, res) = result(text, fill, spec) ?: return RectF()
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF {
+        val (_, res) = result(text, fill, spec, letters) ?: return RectF()
         return bounds(res, spec, fill, stroke)
     }
 
@@ -442,7 +490,7 @@ internal object TextOnPathEngine {
 
     private class Run(val start: Int, val limit: Int, val rtl: Boolean)
 
-    private fun buildLayout(line: String, source: Paint): PathTextLayout {
+    private fun buildLayout(line: String, source: Paint, letters: LetterScaleSpec? = null): PathTextLayout {
         val p = Paint(source).apply {
             textAlign = Paint.Align.LEFT
             style = Paint.Style.FILL
@@ -476,6 +524,8 @@ internal object TextOnPathEngine {
             Bidi.reorderVisually(levels, 0, order, 0, count)
             order.map { o -> val i = o as Int; Run(bidi.getRunStart(i), bidi.getRunLimit(i), bidi.getRunLevel(i) % 2 == 1) }
         }
+        // v1.6 scaled letters (left-to-right text only: the caller checked the script).
+        if (letters != null && runs.size == 1 && !runs[0].rtl) return buildScaled(line, p, letters, cuts, capHeight)
 
         val clusters = ArrayList<PathCluster>()
         val tmp = Path()
@@ -501,6 +551,50 @@ internal object TextOnPathEngine {
             x += runWidth
         }
         return PathTextLayout(line, x, capHeight, clusters, p)
+    }
+
+    /**
+     * The layout of [line] with scaled letters (v1.6 §3.5, "Text on a path"): cluster k takes its
+     * advance times `f(k)` ([LetterRamp]), is drawn at `size · f(k)` and, for Center / Top, moved
+     * off the path along its normal (layout y, negative = up: `−capH·(1 − f)/2` / `−capH·(1 − f)`),
+     * so the bent outline and the rotated letters both follow it. [capHeight] is at full size.
+     */
+    private fun buildScaled(line: String, p: Paint, letters: LetterScaleSpec, cuts: List<Int>, capHeight: Float): PathTextLayout {
+        val len = line.length
+        val ramp = LetterRamp.of(line, letters)
+        val bounds = ArrayList<Int>(cuts.size + 2)
+        bounds += 0
+        for (c in cuts) if (c in 1 until len) bounds += c
+        bounds += len
+        val adv = FloatArray(bounds.size) { i -> p.getRunAdvance(line, 0, len, 0, len, false, bounds[i]) }
+        val base = p.textSize
+        val rect = Rect()
+        val tmp = Path()
+        val clusters = ArrayList<PathCluster>(bounds.size)
+        var x = 0f
+        try {
+            for (i in 0 until bounds.size - 1) {
+                val cs = bounds[i]
+                val ce = bounds[i + 1]
+                val f = ramp.factors[cs]
+                val w = (adv[i + 1] - adv[i]) * f
+                val dy = when (letters.align) {
+                    LetterScaleAlign.CENTER -> -capHeight * (1f - f) / 2f
+                    LetterScaleAlign.TOP -> -capHeight * (1f - f)
+                    LetterScaleAlign.BASELINE -> 0f
+                }
+                val blank = (cs until ce).all { Character.isWhitespace(line[it]) || Character.isSpaceChar(line[it]) }
+                p.textSize = base * f
+                p.getTextBounds(line, cs, ce, rect)
+                val rigid = !blank && (isEmojiCluster(line, cs, ce) || (hasNonLatin(line, cs, ce) && hasNoOutline(p, line, cs, ce, tmp)))
+                val ink = RectF(rect).apply { offset(0f, dy) }
+                clusters += PathCluster(cs, ce, cs, ce, false, x, x + w, blank, rigid, ink, f, dy)
+                x += w
+            }
+        } finally {
+            p.textSize = base
+        }
+        return PathTextLayout(line, x, capHeight, clusters, p, lettersScaled = true)
     }
 
     private fun hasNonLatin(s: String, start: Int, end: Int): Boolean = (start until end).any { s[it].code >= 0x2000 }

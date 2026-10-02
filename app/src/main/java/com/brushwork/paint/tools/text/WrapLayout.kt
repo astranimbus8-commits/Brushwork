@@ -95,6 +95,12 @@ class WrapText internal constructor(
     internal val paragraphs: IntArray,
     /** Per paragraph: positions where a line may end (absolute, increasing, the paragraph end last). */
     internal val breaks: Array<IntArray>,
+    /**
+     * v1.6 letter scaling: what the advances were scaled for besides [text] (the scale spec, the
+     * whole story and where [text] starts in it), null when unscaled. A measurement is reused only
+     * for the same key: a frame's letters are smaller or larger depending on the letters before it.
+     */
+    internal val scaleKey: Any? = null,
 ) {
     val paragraphCount: Int get() = paragraphs.size / 2
 
@@ -110,7 +116,10 @@ object WrapLayout {
     const val MAX_BANDS = 4000
 
     /** Measures [text] once (advances per paragraph, break opportunities). */
-    fun measure(text: String, measurer: WrapMeasurer): WrapText {
+    fun measure(text: String, measurer: WrapMeasurer): WrapText = measure(text, measurer, null)
+
+    /** [measure] of advances scaled for [scaleKey] (v1.6 letter scaling; see [WrapText.scaleKey]). */
+    internal fun measure(text: String, measurer: WrapMeasurer, scaleKey: Any?): WrapText {
         val n = text.length
         val prefix = DoubleArray(n + 1)
         val paras = ArrayList<Int>()
@@ -138,7 +147,23 @@ object WrapLayout {
             if (pe >= n) break
             ps = pe + 1
         }
-        return WrapText(text, prefix, paras.toIntArray(), breaks.toTypedArray())
+        return WrapText(text, prefix, paras.toIntArray(), breaks.toTypedArray(), scaleKey)
+    }
+
+    /**
+     * Widest paragraph of [t] (its trailing spaces left out, as lines end): the width a text
+     * without a fixed box needs to keep every paragraph on one line (v1.6 scaled letters, whose
+     * advances StaticLayout doesn't know).
+     */
+    fun widestParagraph(t: WrapText): Float {
+        var w = 0f
+        for (p in 0 until t.paragraphCount) {
+            val ps = t.paragraphs[2 * p]
+            var pe = t.paragraphs[2 * p + 1]
+            while (pe > ps && isLineEndSpace(t.text[pe - 1])) pe--
+            w = maxOf(w, t.width(ps, pe))
+        }
+        return w
     }
 
     /** Positions in (ps, pe] where a line may end (pe last); empty for an empty paragraph. */

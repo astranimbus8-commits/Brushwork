@@ -26,6 +26,8 @@ data class VerticalGlyph(
     /** Vertical extent of the cell. */
     val advance: Float,
     val column: Int,
+    /** v1.6 letter scaling: the cell's size factor (1 = the font size), drawn centred on the column. */
+    val scale: Float = 1f,
 )
 
 /** Result of [VerticalTextLayout.layout]; the block spans (0, 0) - ([width], [height]). */
@@ -156,12 +158,15 @@ object VerticalTextLayout {
         return out
     }
 
-    /** One laid-out column: clusters [from] until [to] of a line. */
-    private class Column(val cs: List<Cluster>, val adv: FloatArray, val from: Int, val to: Int, val length: Float)
+    /**
+     * One laid-out column: clusters [from] until [to] of a line; [gap] is the space before each
+     * cell (the letter spacing, scaled with the cell's letter in v1.6), [scale] each cell's factor.
+     */
+    private class Column(val cs: List<Cluster>, val adv: FloatArray, val gap: FloatArray, val scale: FloatArray?, val from: Int, val to: Int, val length: Float)
 
-    private fun lengthOf(adv: FloatArray, from: Int, to: Int, spacing: Float): Float {
+    private fun lengthOf(adv: FloatArray, gap: FloatArray, from: Int, to: Int): Float {
         var len = 0f
-        for (i in from until to) len += adv[i] + (if (i > from) spacing else 0f)
+        for (i in from until to) len += adv[i] + (if (i > from) gap[i] else 0f)
         return max(0f, len)
     }
 
@@ -170,9 +175,9 @@ object VerticalTextLayout {
      * space of a column when the next cell starts a word (word wrap), else between any two cells;
      * spaces at a wrap point are dropped. Every column holds at least one cell.
      */
-    private fun columnsOf(cs: List<Cluster>, adv: FloatArray, spacing: Float, wrap: Float): List<Column> {
+    private fun columnsOf(cs: List<Cluster>, adv: FloatArray, gap: FloatArray, scale: FloatArray?, wrap: Float): List<Column> {
         val n = cs.size
-        if (wrap <= 0f || n == 0) return listOf(Column(cs, adv, 0, n, lengthOf(adv, 0, n, spacing)))
+        if (wrap <= 0f || n == 0) return listOf(Column(cs, adv, gap, scale, 0, n, lengthOf(adv, gap, 0, n)))
         val out = ArrayList<Column>()
         var start = 0
         while (start < n) {
@@ -182,7 +187,7 @@ object VerticalTextLayout {
             var i = start
             var lastSpace = -1
             while (i < n) {
-                val add = adv[i] + (if (i > start) spacing else 0f)
+                val add = adv[i] + (if (i > start) gap[i] else 0f)
                 if (i > start && len + add > wrap + 1e-3f) break
                 len += add
                 if (isSpace(cs[i].text)) lastSpace = i
@@ -193,7 +198,7 @@ object VerticalTextLayout {
             // Trailing spaces of a wrapped column are invisible: don't let them shift the alignment.
             var visibleEnd = end
             if (end < n) while (visibleEnd > start + 1 && isSpace(cs[visibleEnd - 1].text)) visibleEnd--
-            out += Column(cs, adv, start, visibleEnd, lengthOf(adv, start, visibleEnd, spacing))
+            out += Column(cs, adv, gap, scale, start, visibleEnd, lengthOf(adv, gap, start, visibleEnd))
             start = end
         }
         return out
@@ -206,6 +211,10 @@ object VerticalTextLayout {
      * orientation, [wrapLength] (> 0) the height at which columns wrap, [leftToRight] makes
      * columns run left to right. Alignment is within the block height (the fixed wrap height, or
      * the tallest column).
+     *
+     * v1.6 letter scaling: [factors] (per character of [text], see `LetterRamp`) scale each cell
+     * along the column, its letter spacing with it; the cell stays centred on the column axis
+     * (the column pitch keeps the full size). Null = unscaled (the v1.5 layout exactly).
      */
     fun layout(
         text: String,
@@ -217,16 +226,28 @@ object VerticalTextLayout {
         style: VerticalStyle = VerticalStyle.MIXED,
         wrapLength: Float = 0f,
         leftToRight: Boolean = false,
+        factors: FloatArray? = null,
     ): VerticalLayoutResult {
         val lines = text.split('\n')
         val pitch = em * lineSpacing
         val spacing = letterSpacingEm * em
         val wrap = if (wrapLength.isFinite() && wrapLength > 0f) wrapLength else 0f
         val columns = ArrayList<Column>()
+        var lineStart = 0
         for (line in lines) {
             val cs = clusters(line.trimEnd('\r'), style)
-            val adv = FloatArray(cs.size) { i -> if (cs[i].kind == VerticalGlyphKind.ROTATED) max(0f, rotatedAdvance(cs[i].text)) else em }
-            columns += columnsOf(cs, adv, spacing, wrap)
+            // A cell (a tate-chu-yoko pair included) takes the factor of its first character.
+            val scale = factors?.let { f ->
+                var at = lineStart
+                FloatArray(cs.size) { i -> f.getOrElse(at) { 1f }.also { at += cs[i].text.length } }
+            }
+            val adv = FloatArray(cs.size) { i ->
+                val base = if (cs[i].kind == VerticalGlyphKind.ROTATED) max(0f, rotatedAdvance(cs[i].text)) else em
+                if (scale == null) base else base * scale[i]
+            }
+            val gap = FloatArray(cs.size) { i -> if (scale == null) spacing else spacing * scale[i] }
+            columns += columnsOf(cs, adv, gap, scale, wrap)
+            lineStart += line.length + 1
         }
         val n = columns.size
         val width = em + (n - 1) * pitch
@@ -241,8 +262,8 @@ object VerticalTextLayout {
                 TextAlign.END -> height - c.length
             }
             for (i in c.from until c.to) {
-                if (i > c.from) y += spacing
-                glyphs += VerticalGlyph(c.cs[i].text, c.cs[i].kind, cx, y + c.adv[i] / 2f, c.adv[i], col)
+                if (i > c.from) y += c.gap[i]
+                glyphs += VerticalGlyph(c.cs[i].text, c.cs[i].kind, cx, y + c.adv[i] / 2f, c.adv[i], col, c.scale?.get(i) ?: 1f)
                 y += c.adv[i]
             }
         }
