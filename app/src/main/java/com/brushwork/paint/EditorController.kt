@@ -423,7 +423,7 @@ class EditorController(
         flushDeferredSteps()
         // So do vector edits still rendering and the object edits waiting for them (v1.5): undo
         // takes back the newest, and nothing lands on top of what it took back.
-        PendingRenders.settle(this)
+        settleVectorWork()
         val tool = currentTool
         if (tool.hasPendingWork) {
             // Tools with steps (points of a curve/polygon) take back only the last one.
@@ -443,7 +443,7 @@ class EditorController(
         // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
         flushDeferredSteps()
         // So do vector edits still rendering and the object edits waiting for them (v1.5).
-        PendingRenders.settle(this)
+        settleVectorWork()
         val tool = currentTool
         if (tool.hasPendingWork) {
             if (tool.redoStep()) { invalidateOverlay(); return }
@@ -452,6 +452,18 @@ class EditorController(
             invalidateOverlay()
         }
         if (inHistoryDo { undoManager.redo(this) }) { editCount++; doc.touch() }
+    }
+
+    /**
+     * Lands the vector work still on its way (v1.5): a render in flight and the object edits
+     * queued behind it ([PendingRenders]: Object bar actions, lifts), in the order they were asked
+     * for, so what follows (undo, redo, a layer operation, a filter, closing) works on them and
+     * records its step after theirs. Not inside another step (they would join it), nor during
+     * undo / redo or while edit listeners are told.
+     */
+    internal fun settleVectorWork() {
+        if (editDepth != 0 || inHistory || delivering) return
+        PendingRenders.settle(this)
     }
 
     /** Runs an undo / redo: edits it causes (a tool reacting to a restored selection...) are not reported to edit listeners. */
@@ -859,6 +871,10 @@ class EditorController(
      * after), so pending work is baked in first and the tool re-targets the active layer after.
      */
     private inline fun <T> withToolPaused(block: () -> T): T {
+        // Object edits queued behind a vector render (v1.5) land first, while the tool is still
+        // active: one of them may lift its objects again, which the pause then commits or lets go
+        // (never a lift of the content as it was before this operation, left open across it).
+        settleVectorWork()
         currentTool.onDeactivate()
         try {
             return block()
@@ -1264,6 +1280,7 @@ class EditorController(
             if (mask != null) editScope {
                 mask.redo(this)
                 pushUndo(mask)
+                mask.reportLostSpec(this)
                 queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
             }
             return
@@ -1273,16 +1290,32 @@ class EditorController(
             return
         }
         // The mask bitmap flips right before the new pixels are drawn (the step's edit event sees
-        // both flipped); its spec and its undo action join the step once it is recorded.
+        // both flipped); its spec and its undo action join the step once it is recorded. Whether
+        // the content's step was recorded is told by the layer's content: a new instance (the
+        // newest step is the flip's), or the same one when nothing changed after all (the edit
+        // was re-based onto content that already was the mirrored one): the mask flip is then a
+        // step of its own, never folded into an older step that happens to have the same label.
+        var contentBefore: VectorContent? = null
         vectors.updateInternal(
             layer, mirrored, label, null, null,
-            beforeApply = { mask.flipBitmap(this) },
+            beforeApply = {
+                contentBefore = layer.vector
+                mask.flipBitmap(this)
+            },
             onDone = { applied ->
                 if (!applied) {
                     mask.flipBitmap(this)
                 } else {
                     mask.setSpec(this, after = true)
-                    if (undoManager.undoLabel == label) amendLastStep { pushUndo(mask) } else pushUndo(mask)
+                    if (layer.vector !== contentBefore) {
+                        amendLastStep { pushUndo(mask) }
+                    } else {
+                        editScope {
+                            pushUndo(mask)
+                            queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+                        }
+                    }
+                    mask.reportLostSpec(this)
                 }
             },
             attempt = 0,
@@ -1296,7 +1329,6 @@ class EditorController(
         val m = Matrix().apply { if (horizontal) setScale(-1f, 1f, doc.width / 2f, 0f) else setScale(1f, -1f, 0f, doc.height / 2f) }
         val specBefore = layer.maskSpec
         val specAfter = specBefore?.let { MaskSpecs.transformed(it, m) }
-        if (specBefore != null && specAfter == null) toast("The mask of \"${layer.name}\" is now a painted mask (undo to get the editable mask back)")
         return FlipMaskAction(label, layer, horizontal, specBefore, specAfter)
     }
 
@@ -1319,6 +1351,11 @@ class EditorController(
             layer.maskSpec = if (after) specAfter else specBefore
             layer.markChanged()
             c.notifyLayersChanged()
+        }
+
+        /** Says so when the flip made an editable mask a painted one (once the flip is done). */
+        fun reportLostSpec(c: EditorController) {
+            if (specBefore != null && specAfter == null) c.toast("The mask of \"${layer.name}\" is now a painted mask (undo to get the editable mask back)")
         }
 
         override fun undo(c: EditorController) { flipBitmap(c); setSpec(c, after = false) }
@@ -1580,9 +1617,13 @@ class EditorController(
         // anything else happens, so the tool stays as it was.
         if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         filterSession?.cancel()
+        // A vector edit still rendering and the object edits waiting for it land first (v1.5),
+        // while the tool is still active (an Object bar action may lift its objects again, which
+        // the tool then commits or lets go): the filter previews and applies to their result, and
+        // none of them lands inside the filter's own step or under its preview later.
+        settleVectorWork()
         currentTool.onDeactivate()
-        // A vector edit still rendering lands first (v1.5): the filter previews and applies to
-        // its result, and the render can't land inside the filter's own step later.
+        // (What the tool's commit rendered in the background lands too.)
         vectors.flushPending()
         if (!checkEditable()) return
         // A session that closes itself during start() (target not usable) must not stay installed.

@@ -11,6 +11,7 @@ import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.vector.lift.VectorLift
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.ObjectTestKit
 import com.brushwork.paint.vector.select.PendingRenders
@@ -174,6 +175,108 @@ class VectorHistoryInFlightRobolectricTest {
         c.undo()
         assertEquals(listOf(1L, 2L), ids(c))
         assertArrayEquals(erasedPixels, kit.pixels(layer.bitmap))
+    }
+
+    /**
+     * The Transform tool holds object 1 flipped and moved; Duplicate (Object bar) commits that
+     * transform, whose render goes to the background, and waits for it. Returns the tool.
+     */
+    private fun duplicateWaitingBehindATransform(c: EditorController): TransformTool {
+        c.vectors.addObjects(c.vec, listOf(kit.box(40f, 40f, 140f, 120f), kit.ellipse(260f, 200f), kit.box(400f, 250f, 480f, 330f)), "Add")
+        c.vectors.setSelection(c.vec, setOf(1L))
+        val tool = kit.transform(c)
+        assertEquals(setOf(1L), VectorLift.activeLift(c)?.ids)
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        tool.flip(horizontal = true)
+        tool.moveBy(30f, 10f)
+        assertTrue(ObjectActions.duplicate(c))
+        assertTrue("the duplicate waits for the move's render", PendingRenders.busy(c))
+        assertEquals(3, ids(c).size)
+        return tool
+    }
+
+    /**
+     * Review fix: a filter opened right after an Object bar action that waits for a render opens on
+     * the action's result, and the lift the action starts again (Duplicate keeps transforming the
+     * copies) is not left open under the filter (it would hold the content as it was before it).
+     */
+    @Test
+    fun aFilterOpensAfterTheObjectBarActionWaitingForARenderWithNoLiftLeftOpen() {
+        val c = kit.controller()
+        val tool = duplicateWaitingBehindATransform(c)
+        c.startFilter(InvertFilter())
+        assertNotNull(c.filterSession)
+        assertEquals("the duplicate was made before the filter opened", 4, ids(c).size)
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        assertNull("no lift open under the filter", tool.transformState)
+        assertNull(VectorLift.activeLift(c))
+        assertFalse(c.vectors.isRendering)
+        assertCacheFresh(c)
+        // Nothing lands later either.
+        settle(c)
+        assertEquals(4, ids(c).size)
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        assertNull(tool.transformState)
+        c.filterSession?.cancel()
+    }
+
+    /**
+     * Review fix: an Object bar action waiting for a render that is not the Object bar's own (the
+     * eraser, the bucket...) is made before a filter opens, not later under its preview (where it
+     * would change the layer the filter is previewing and applying to).
+     */
+    @Test
+    fun aFilterOpensAfterAnObjectBarActionWaitingForAnotherRender() {
+        val c = drawing()
+        val layer = c.vec
+        c.vectors.setSelection(layer, setOf(1L))
+        c.vectors.update(layer, layer.vector!!.without(setOf(3L)), "Erase")
+        assertTrue(c.vectors.isRendering)
+        assertTrue(ObjectActions.duplicate(c))
+        assertTrue(PendingRenders.busy(c))
+        c.startFilter(InvertFilter())
+        assertNotNull(c.filterSession)
+        assertEquals("erase, then duplicate, before the filter", 3, ids(c).size)
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        assertCacheFresh(c)
+        settle(c)
+        assertEquals("nothing changes under the filter later", 3, ids(c).size)
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        c.filterSession?.cancel()
+    }
+
+    /**
+     * Review fix: a layer operation (here Flip layer) right after an Object bar action that waits
+     * for a render: the action lands first, in order (move, duplicate, flip: one step each), and
+     * the lift it starts again is let go before the operation, never left open over the content
+     * as it was before it; the Transform tool lifts the result afterwards.
+     */
+    @Test
+    fun aLayerOperationAfterAnObjectBarActionWaitingForARenderLeavesNoStaleLiftOpen() {
+        val c = kit.controller()
+        val tool = duplicateWaitingBehindATransform(c)
+        val steps = c.undoManager.undoCount
+        c.flipLayer(c.vec, horizontal = true)
+        assertEquals(4, ids(c).size)
+        assertEquals("transform, duplicate, flip", steps + 3, c.undoManager.undoCount)
+        assertEquals("Flip layer horizontally", c.undoManager.undoLabel)
+        assertNull("no lift of the content before the flip is left open", tool.transformState)
+        assertNull(VectorLift.activeLift(c))
+        // The tool lifts the (flipped) copy again: where it is now.
+        assertTrue(kit.idleUntil { tool.transformState != null && !c.vectors.isRendering })
+        val copy = c.vectors.selectedIds.single()
+        val lift = VectorLift.activeLift(c)!!
+        assertEquals(setOf(copy), lift.ids)
+        val b = VectorOps.bounds(c.vec.vector!!.byId(copy)!!)
+        assertEquals(b.centerX(), lift.sourceRect.exactCenterX(), 1.5f)
+        tool.discard()
+        // Undo takes them back one by one, newest first.
+        c.undo()
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        c.undo()
+        assertEquals(TransformTool.TRANSFORM_OBJECTS_LABEL, c.undoManager.undoLabel)
+        assertEquals(3, ids(c).size)
+        assertCacheFresh(c)
     }
 
     private fun pumpUntil(done: () -> Boolean) {

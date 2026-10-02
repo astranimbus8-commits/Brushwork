@@ -96,9 +96,12 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         app.appScope.launch {
             try {
                 controller?.let { c ->
+                    // A vector edit still rendering in the background and the Object bar actions
+                    // waiting for it (v1.5) land now, so they are saved (dispose() would drop
+                    // them); before the tool lets go, as an action may lift its objects again.
+                    runCatching { c.settleVectorWork() }
                     runCatching { c.currentTool.onDeactivate() }
-                    // A vector edit still rendering in the background (v1.5) lands now, so it is
-                    // saved: dispose() would drop it.
+                    // (What the tool's commit rendered lands too.)
                     runCatching { c.vectors.flushPending() }
                 }
                 save()

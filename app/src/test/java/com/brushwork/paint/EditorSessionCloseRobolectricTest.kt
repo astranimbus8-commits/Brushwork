@@ -10,6 +10,8 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorLayers
+import com.brushwork.paint.vector.select.ObjectActions
+import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -79,6 +81,43 @@ class EditorSessionCloseRobolectricTest {
             assertNotNull("saved as a vector layer", v)
             assertEquals("the edit that was rendering is saved", 2, v!!.objects.size)
             assertTrue("and its pixels", saved.layers[saved.activeLayerIndex].bitmap.getPixel(200, 150) ushr 24 > 0)
+        } finally {
+            runBlocking { app.repository.delete(id) }
+        }
+    }
+
+    /**
+     * Review fix: an Object bar action pressed while a vector edit still renders waits for it; when
+     * Back is pressed then, the action is made before the save (not dropped with the editor, nor
+     * made while the layers are being written).
+     */
+    @Test
+    fun anObjectBarActionWaitingForARenderWhenTheEditorClosesIsSaved() {
+        val app = RuntimeEnvironment.getApplication() as BrushworkApp
+        val id = runBlocking { app.repository.create(NewCanvasSpec("Close test 2", 400, 300, 72f)) }
+        try {
+            val session = EditorSession(app, id)
+            pumpUntil("the editor to open") { session.state is EditorSession.State.Ready }
+            val c = (session.state as EditorSession.State.Ready).controller
+            val layer = c.activeLayer
+            assertTrue(c.convertToVectorLayer(layer))
+            val boxes = c.vectors.addObjects(layer, listOf(box(20f, 20f, 120f, 100f), box(250f, 150f, 350f, 250f)), "Add")
+            assertEquals(2, boxes.size)
+            c.vectors.setSelection(layer, setOf(boxes[0]))
+            c.vectors.policy = VectorLayers.Policy.ASYNC
+            c.vectors.update(layer, layer.vector!!.plus(listOf(scribble())).first, "Add")
+            assertTrue(c.vectors.isRendering)
+            // Delete (Object bar) waits for the render; Back right away.
+            assertTrue(ObjectActions.delete(c))
+            assertTrue(PendingRenders.busy(c))
+            var closed = false
+            session.close { closed = true }
+            pumpUntil("the editor to close") { closed }
+            val saved = runBlocking { app.repository.load(id) }
+            val v = saved.layers[saved.activeLayerIndex].vector
+            assertNotNull(v)
+            assertEquals("the render landed and the box was deleted", listOf(boxes[1]), v!!.objects.filterIsInstance<VPath>().map { it.id })
+            assertEquals(1, v.objects.filterIsInstance<VStroke>().size)
         } finally {
             runBlocking { app.repository.delete(id) }
         }

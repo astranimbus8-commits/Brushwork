@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -89,6 +90,43 @@ class FlipVectorLayerRobolectricTest {
             c.undo()
             assertArrayEquals("undo: the mask is back", mask, kit.pixels(layer.mask!!))
         }
+    }
+
+    /**
+     * Review fix: the mask's flip joins the content's step only when that step was recorded. A
+     * flip whose content lands as no change (re-based onto content that already is the mirrored
+     * one) records the mask flip as a step of its own, never folded into an older step that has
+     * the same label (the previous flip).
+     */
+    @Test
+    fun aMaskFlipWhoseContentLandsUnchangedIsAStepOfItsOwn() {
+        val c = kit.controller()
+        val layer = c.vec
+        c.vectors.addObjects(layer, listOf(grainStroke(40f, 60f, 300f, 200f)), "Add")
+        c.addMask(layer, fromSelection = false)
+        c.setEditingMask(layer, false)
+        Canvas(layer.mask!!).drawRect(0f, 0f, 100f, kit.h.toFloat(), Paint().apply { color = 0xFF000000.toInt() })
+        val label = "Flip layer horizontally"
+        c.flipLayer(layer, horizontal = true)
+        assertEquals(label, c.undoManager.undoLabel)
+        val steps = c.undoManager.undoCount
+        val mask = kit.pixels(layer.mask!!)
+        val target = VectorLayerOps.flipped(layer.vector!!, kit.w, kit.h, horizontal = true)!!
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        c.flipLayer(layer, horizontal = true)
+        assertTrue("the second flip renders in the background", c.vectors.isRendering)
+        // Meanwhile the layer came to hold the mirrored content already: nothing to change there.
+        layer.vector = target
+        c.vectors.flushPending()
+        assertSame(target, layer.vector)
+        assertEquals("the mask flip is a step of its own", steps + 1, c.undoManager.undoCount)
+        assertEquals(label, c.undoManager.undoLabel)
+        assertArrayEquals(mirrored(mask), kit.pixels(layer.mask!!))
+        c.undo()
+        assertArrayEquals("undo takes back the mask flip alone", mask, kit.pixels(layer.mask!!))
+        assertSame(target, layer.vector)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals("the first flip is still there", label, c.undoManager.undoLabel)
     }
 
     @Test
