@@ -187,6 +187,80 @@ class Qa3WrapFlowsRobolectricTest {
         assertNotEquals(item3.wrap.sourceLayerId, added.id)
     }
 
+    // ------------------------------------------------------------------ turning wrap on
+
+    /** Document x-extent of the pending text's box. */
+    private fun boxXs(tool: TextTool): ClosedFloatingPointRange<Float> {
+        val item = tool.item!!
+        val block = tool.blockFor(item)
+        val xs = item.corners(block.width, block.height).map { it.x }
+        return xs.min()..xs.max()
+    }
+
+    /**
+     * A long line typed without a fixed width runs past both canvas edges; turning wrap on gives
+     * it the canvas width. The text must stay on the canvas (it used to keep the line's left
+     * edge, far off the canvas, so the whole text vanished to the left).
+     */
+    @Test
+    fun turningWrapOnForALongLineKeepsTheTextOnTheCanvas() {
+        val s = setup(context, scope = scope)
+        disc(s.picture, 200f, 125f, 30f)
+        s.tool.startTextAt(200f, 120f)
+        s.tool.setText("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore")
+        s.tool.updateSpec { it.copy(sizePx = 16f, color = WrapFixtures.BLACK) }
+        s.tool.confirmEditor()
+        assertTrue("a line wider than the canvas", boxXs(s.tool).let { it.start < 0f && it.endInclusive > 400f })
+        // The white background covers the whole canvas: never the default picture, even though
+        // the line runs past the canvas (it covers only the part of the box on the canvas).
+        assertEquals(s.picture, s.tool.defaultWrapSource())
+        s.tool.openWrapSheet()
+        assertEquals(s.picture.id, s.tool.item!!.wrap.sourceLayerId)
+        assertTrue(s.tool.item!!.wrapActive)
+        assertEquals("the canvas width", 400f, s.tool.item!!.spec.box.width, 0.5f)
+        val xs = boxXs(s.tool)
+        assertTrue("the box is on the canvas: $xs", xs.start >= -1f && xs.endInclusive <= 401f)
+        val pending = s.tool.item!!
+        assertTrue(s.tool.commitItem())
+        val text = s.c.activeLayer
+        val ink = WrapFixtures.inked(text.bitmap, 64)
+        assertTrue("ink on the canvas: ${ink.size} ${text.name} $pending", ink.size > 300)
+    }
+
+    /**
+     * The Wrap chip on a line running past the canvas, with no picture under it: the full-canvas
+     * background must not be picked as its picture (it covered "less than 90 %" of the box only
+     * because the box sticks out of the canvas, and wrapping around it hid the whole text).
+     */
+    @Test
+    fun aLineRunningPastTheCanvasNeverWrapsAroundTheBackground() {
+        val s = setup(context, scope = scope)
+        disc(s.picture, 200f, 220f, 30f)
+        s.tool.startTextAt(200f, 120f)
+        s.tool.setText("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore")
+        s.tool.updateSpec { it.copy(sizePx = 16f, color = WrapFixtures.BLACK) }
+        s.tool.confirmEditor()
+        assertEquals("no picture under the text", null, s.tool.defaultWrapSource())
+        s.tool.openWrapSheet()
+        assertTrue(s.tool.wrapSheetOpen)
+        assertFalse("wrap stays off until a picture is chosen", s.tool.item!!.wrap.isOn)
+    }
+
+    /** A short text near the right edge grows to 8 em: it grows into the canvas, not past its edge. */
+    @Test
+    fun turningWrapOnNearTheRightEdgeGrowsIntoTheCanvas() {
+        val s = setup(context, scope = scope)
+        disc(s.picture, 200f, 200f, 30f)
+        s.tool.startTextAt(370f, 60f)
+        s.tool.setText("Hi there")
+        s.tool.updateSpec { it.copy(sizePx = 16f, color = WrapFixtures.BLACK) }
+        s.tool.confirmEditor()
+        s.tool.setWrapSource(s.picture)
+        assertEquals("8 em", 128f, s.tool.item!!.spec.box.width, 0.5f)
+        val xs = boxXs(s.tool)
+        assertTrue("the box stays on the canvas: $xs", xs.endInclusive <= 401f && xs.start >= -1f)
+    }
+
     // ------------------------------------------------------------------ Transform
 
     @Test
