@@ -19,6 +19,13 @@ interface ObjectPosition {
     /** Moves the object so its position is ([x], [y]) (document px; null = that axis unchanged). */
     fun setPosition(x: Float?, y: Float?)
 
+    /**
+     * A slider drag (or an arrow press, a typed value) starts: everything until [endPositionEdit]
+     * is one edit, however slowly the finger moves (a tool that coalesces edits by time must not
+     * split it, nor fold it into the edit before).
+     */
+    fun beginPositionEdit() {}
+
     /** A slider drag or a typed value is complete (one undo step per edit, per the tool's model). */
     fun endPositionEdit() {}
 }

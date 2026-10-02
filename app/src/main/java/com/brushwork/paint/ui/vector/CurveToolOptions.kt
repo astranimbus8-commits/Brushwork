@@ -200,6 +200,8 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     fun setPercent(p: Float) = tool.setWidth(index, p / 100f)
     // The value when the first tap of a (possible) double tap on the slider went down.
     val beforeTaps = remember(index) { floatArrayOf(Float.NaN) }
+    // A slider drag is in progress (begun on its first change, ended when it finishes).
+    val sliding = remember(index) { booleanArrayOf(false) }
     val latestFirstDown by rememberUpdatedState { beforeTaps[0] = current() }
     val latestReset by rememberUpdatedState {
         tool.thicknessRing = false
@@ -248,9 +250,12 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             value = percent.coerceIn(0f, MAX_THICKNESS_PERCENT),
             onValueChange = { v ->
                 tool.thicknessRing = true
+                // The whole drag is one step, however long the finger rests on the way.
+                if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
                 setPercent((v / THICKNESS_STEP).roundToInt() * THICKNESS_STEP)
             },
             onValueChangeFinished = {
+                sliding[0] = false
                 tool.thicknessRing = false
                 tool.endNumericEdit()
             },
@@ -427,6 +432,7 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val start = anchors.lastOrNull()?.pos ?: Vec2(controller.doc.width / 2f, controller.doc.height / 2f)
     var addX by rememberSaveable { mutableFloatStateOf(start.x) }
     var addY by rememberSaveable { mutableFloatStateOf(start.y) }
+    val thicknessSliding = remember { booleanArrayOf(false) }
 
     BwSheet(
         title = "Numbers",
@@ -448,11 +454,15 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
             LabeledSlider(
                 label = "Thickness",
                 value = a.width * 100f,
-                onValueChange = { v -> tool.setWidth(sel, v / 100f) },
+                onValueChange = { v ->
+                    // One step per drag, however long the finger rests on the way.
+                    if (!thicknessSliding[0]) { thicknessSliding[0] = true; tool.beginNumericEdit() }
+                    tool.setWidth(sel, v / 100f)
+                },
                 valueRange = 0f..300f,
                 steps = 59,
                 valueText = "${(a.width * 100f).roundToInt()} %",
-                onValueChangeFinished = { tool.endNumericEdit() },
+                onValueChangeFinished = { thicknessSliding[0] = false; tool.endNumericEdit() },
                 typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),
             )
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {

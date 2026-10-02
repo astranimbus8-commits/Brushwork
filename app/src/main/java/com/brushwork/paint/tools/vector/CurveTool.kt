@@ -173,6 +173,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     private val redo = ArrayDeque<List<CurveAnchor>>()
     private var historyKey: Any? = null
     private var historyKeyTime = 0L
+    /** A slider drag is in progress ([beginNumericEdit]): its edits share one step whatever the pace. */
+    private var numericHeld = false
     private data class NumericKey(val kind: String, val index: Int)
 
     /** Time source for coalescing numeric edits (replaceable in tests). */
@@ -310,7 +312,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
      */
     private fun pushHistory(key: Any? = null) {
         val now = if (key != null) clock() else 0L
-        val coalesce = key != null && key == historyKey && history.isNotEmpty() && now - historyKeyTime <= COALESCE_MS
+        val coalesce = key != null && key == historyKey && history.isNotEmpty() && (numericHeld || now - historyKeyTime <= COALESCE_MS)
         historyKey = key
         historyKeyTime = now
         clearRedo()
@@ -327,11 +329,22 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     }
 
     /**
+     * A slider drag (X / Y strip, thickness) starts: its edits are one undo step however long the
+     * finger rests on the way, and a new step even right after another edit ([endNumericEdit]
+     * ends it).
+     */
+    fun beginNumericEdit() {
+        historyKey = null
+        numericHeld = true
+    }
+
+    /**
      * A slider drag, a held arrow or a typed value is complete: the next numeric edit (of any
      * point) is a new undo step even when it follows at once.
      */
     fun endNumericEdit() {
         historyKey = null
+        numericHeld = false
     }
 
     /**
