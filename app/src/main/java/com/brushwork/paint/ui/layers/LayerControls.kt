@@ -454,16 +454,20 @@ private fun OverflowMenuButton(
                         act { LayerOps.addMask(controller, layer, fromSelection = false) }
                     }
                 } else {
-                    val editing = row.editingMask
-                    MenuItem(if (editing) "Edit layer content" else "Edit mask", Icons.Filled.Edit) {
-                        act { LayerOps.editTarget(controller, layer, mask = !editing) }
+                    // (An adjustment layer has no content to switch to, and no pixels to apply
+                    // its mask to: brushes always paint its mask.)
+                    if (!row.isAdjustment) {
+                        val editing = row.editingMask
+                        MenuItem(if (editing) "Edit layer content" else "Edit mask", Icons.Filled.Edit) {
+                            act { LayerOps.editTarget(controller, layer, mask = !editing) }
+                        }
                     }
                     val enabled = row.maskEnabled
                     MenuItem(if (enabled) "Disable mask" else "Enable mask", if (enabled) Icons.Filled.VisibilityOff else Icons.Filled.Visibility) {
                         act { LayerOps.setMaskEnabled(controller, layer, !enabled) }
                     }
                     MenuItem("Invert mask", Icons.Filled.InvertColors) { act { LayerOps.invertMask(controller, layer) } }
-                    MenuItem("Apply mask", Icons.Filled.Check) { act { LayerOps.applyMask(controller, layer) } }
+                    if (!row.isAdjustment) MenuItem("Apply mask", Icons.Filled.Check) { act { LayerOps.applyMask(controller, layer) } }
                     MenuItem("Delete mask", Icons.Filled.Delete) { act { LayerOps.deleteMask(controller, layer) } }
                 }
             }
