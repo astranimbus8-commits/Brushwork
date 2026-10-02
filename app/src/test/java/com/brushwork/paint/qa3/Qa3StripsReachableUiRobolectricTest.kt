@@ -28,6 +28,7 @@ import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSubpath
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -144,6 +145,7 @@ class Qa3StripsReachableUiRobolectricTest {
         for ((i, label) in labels.withIndex()) {
             val bar = strip(activity)
             val node = controlsOf(bar.node).getOrNull(i) ?: throw AssertionError("$what: control $i ($label) went away")
+            assertEquals("$what: the same control", label, node.label())
             val b = unclipped(node)
             val delta = when {
                 b.right > bar.bounds.right -> b.right - bar.bounds.right
@@ -156,7 +158,14 @@ class Qa3StripsReachableUiRobolectricTest {
             }
             val bar2 = strip(activity)
             val n2 = controlsOf(bar2.node).getOrNull(i) ?: throw AssertionError("$what: control $i ($label) went away")
+            assertEquals("$what: the same control after scrolling", label, n2.label())
             val b2 = unclipped(n2)
+            val shown = n2.boundsInWindow
+            // (Compared by size: right after a scroll the two can disagree on the position.)
+            assertTrue(
+                "$what: \"$label\" is shown whole (no part clipped): $b2 vs shown $shown",
+                kotlin.math.abs(shown.width - b2.width) <= 4f * density && kotlin.math.abs(shown.height - b2.height) <= 4f * density,
+            )
             assertTrue("$what: \"$label\" can be scrolled wholly onto the screen: $b2 (shown ${n2.boundsInWindow}) in 0..$width (strip ${bar2.bounds})", wholly(n2, width))
             assertTrue("$what: \"$label\" is not cut off by the strip: $b2 in ${bar2.bounds}", b2.top >= bar2.bounds.top - 0.5f && b2.bottom <= bar2.bounds.bottom + 0.5f)
         }
