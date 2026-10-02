@@ -147,6 +147,7 @@ class GalleryExchangeQaUiRobolectricTest {
             answerPicker(activity, Uri.fromFile(file))
             assertTrue("the page picker", Smoke.pumpUntil { settle(1); has("New artwork from PDF pages", exact = true) })
             click("Select all", exact = true)
+            click("Transparent background", exact = true)
             click("Import 2", exact = true)
             assertTrue("the editor opened", Smoke.pumpUntil(30_000) {
                 settle(1)
@@ -160,6 +161,9 @@ class GalleryExchangeQaUiRobolectricTest {
             assertEquals(300f, c.doc.dpi)
             assertEquals(listOf("Background", "Page 1", "Page 2"), c.doc.layers.map { it.name })
             assertEquals(0xFF0000FF.toInt(), c.doc.layers[2].bitmap.getPixel(450, 300))
+            // "Transparent background": the pages' empty paper stays see-through.
+            assertEquals("transparent paper", 0, c.doc.layers[1].bitmap.getPixel(40, 40) ushr 24)
+            assertEquals(0, c.doc.layers[2].bitmap.getPixel(860, 560) ushr 24)
             backToGallery()
         } finally {
             GalleryImports.rasterizers = saved

@@ -468,6 +468,9 @@ class ExchangeQaEditorUiRobolectricTest {
             assertTrue(has("Imported 2 pages"))
             assertTrue("the renderer was closed", fake.closed)
             assertEquals(0xFF0000FF.toInt(), c.doc.layers[3].bitmap.getPixel(240, 180))
+            // Without "Transparent background" the paper is white (inside the page only).
+            assertEquals("white paper", 0xFFFFFFFF.toInt(), c.doc.layers[3].bitmap.getPixel(240, 40))
+            assertEquals("no paper beside the page", 0, c.doc.layers[3].bitmap.getPixel(20, 180) ushr 24)
             c.undo()
             assertEquals(2, c.doc.layers.size)
             Smoke.assertQuiet(c, "PDF pages")
