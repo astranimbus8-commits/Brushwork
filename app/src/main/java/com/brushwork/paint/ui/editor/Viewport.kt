@@ -146,6 +146,12 @@ class Viewport {
             screenToDoc(viewWidth / 2f, viewHeight / 2f, p)
             viewWidth = width; viewHeight = height
             anchor(p[0], p[1], width / 2f, height / 2f)
+            // v1.6: the canvas is full bleed under constant chrome bands, so a rotation or a
+            // window resize no longer changes its fit insets (which used to refit it). While the
+            // user hasn't adjusted the view since the last fit, the new size asks for a new fit
+            // (the canvas view refits right after resizing). The keyboard never resizes the
+            // view (edge-to-edge window), so typing doesn't refit.
+            if (!userAdjusted) fittedDocVersion = Int.MIN_VALUE
         } else {
             viewWidth = width; viewHeight = height
         }

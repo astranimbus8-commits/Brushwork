@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -21,7 +22,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.South
 import androidx.compose.material.icons.filled.North
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -29,12 +29,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -105,18 +110,19 @@ internal fun BottomBar(
             Slot(slot, "Tools (current: ${active.label})", open = toolMenuOpen, onClick = onToolMenu) {
                 Icon(EditorIcons.tool(active), null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
             }
-            // 3: the brush size disc.
-            Slot(slot, "Open brush settings", onClick = onBrushPanel) {
+            // 3: the brush size disc (its number is drawn, not a label: the slot is "Open brush
+            // settings" and the size row's value already reads the size).
+            val sizeText = SliderMath.formatSizeFixed(preset?.size ?: 0f)
+            Slot(slot, "Open brush settings", state = "$sizeText px", onClick = onBrushPanel) {
                 Box(
                     Modifier
                         .size(IbisDims.BrushDisc)
                         .clip(CircleShape)
                         .background(Color.Black)
-                        .border(IbisDims.BrushDiscRing, Color.White, CircleShape)
-                        .clearAndSetSemantics {},
+                        .border(IbisDims.BrushDiscRing, Color.White, CircleShape),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(SliderMath.formatSizeFixed(preset?.size ?: 0f), fontSize = IbisDims.BrushDiscText, color = Color.White, maxLines = 1)
+                    DrawnText(sizeText, TextStyle(fontSize = IbisDims.BrushDiscText, color = Color.White), Modifier.fillMaxSize())
                 }
             }
             // 4: the colour square.
@@ -154,14 +160,20 @@ internal fun BottomBar(
     }
 }
 
-/** One 56 × 50 slot: the whole slot is the target; [open] draws ibisPaint's open-state box behind the glyph. */
+/**
+ * One 56 × 50 slot: the whole slot is the target; [open] draws ibisPaint's open-state box behind
+ * the glyph; [state] is read after the label by a screen reader.
+ */
 @Composable
-private fun Slot(width: Dp, label: String, open: Boolean = false, onClick: () -> Unit, glyph: @Composable () -> Unit) {
+private fun Slot(width: Dp, label: String, open: Boolean = false, state: String? = null, onClick: () -> Unit, glyph: @Composable () -> Unit) {
     Box(
         Modifier
             .width(width)
             .height(IbisDims.BottomBarHeight)
-            .semantics { contentDescription = label }
+            .semantics {
+                contentDescription = label
+                if (state != null) stateDescription = state
+            }
             .clickable(onClickLabel = label, role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -188,11 +200,32 @@ private fun LayersGlyph(number: Int) {
                 .offset(x = 1.dp, y = (-1).dp)
                 .size(18.dp)
                 .background(Color.White, RoundedCornerShape(2.dp))
-                .border(1.dp, IbisColors.BottomBar, RoundedCornerShape(2.dp))
-                .clearAndSetSemantics {},
-            contentAlignment = Alignment.Center,
+                .border(1.dp, IbisColors.BottomBar, RoundedCornerShape(2.dp)),
         ) {
-            Text(number.toString(), fontSize = if (number < 100) 11.sp else 8.sp, fontWeight = FontWeight.Bold, color = IbisColors.ListText, maxLines = 1)
+            // Drawn, not a label: the slot already says "active layer N" (and a bare number
+            // would clash with the layer window's row numbers).
+            DrawnText(
+                number.toString(),
+                TextStyle(fontSize = if (number < 100) 11.sp else 8.sp, fontWeight = FontWeight.Bold, color = IbisColors.ListText),
+                Modifier.fillMaxSize(),
+            )
         }
     }
+}
+
+/**
+ * [text] drawn centred in the space [modifier] gives, with no semantics: a glyph's decoration
+ * (the size in the brush disc, the layer number on the layers glyph), never a second label.
+ */
+@Composable
+private fun DrawnText(text: String, style: TextStyle, modifier: Modifier) {
+    val measurer = rememberTextMeasurer()
+    Spacer(
+        modifier.drawWithCache {
+            val layout = measurer.measure(text, style, maxLines = 1, softWrap = false)
+            onDrawBehind {
+                drawText(layout, topLeft = Offset((size.width - layout.size.width) / 2f, (size.height - layout.size.height) / 2f))
+            }
+        },
+    )
 }

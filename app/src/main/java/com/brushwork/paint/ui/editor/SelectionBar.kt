@@ -90,7 +90,8 @@ internal fun SelectionActionBar(
             }
             if (hasSelection) {
                 BarItem(Icons.Outlined.Deselect, "Deselect", "Clear the selection") { controller.endCanvasGesture(); controller.deselect() }
-                BarItem(Icons.Outlined.DeleteSweep, "Delete", "Delete the selected pixels") {
+                // "Clear" (its step's name): the Transform strip beside it has its own "Delete" (I10).
+                BarItem(Icons.Outlined.DeleteSweep, "Clear", "Delete the selected pixels") {
                     controller.endCanvasGesture(); controller.clearLayer()
                 }
                 // Two short lines keep it as narrow as the others: eight items just fit a 392 dp phone.

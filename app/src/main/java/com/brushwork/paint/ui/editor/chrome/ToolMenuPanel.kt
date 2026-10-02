@@ -21,7 +21,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,15 +54,12 @@ internal const val TOOL_MENU_TITLE = "Tools"
  * 150 dp wide of two columns of 75 × 52 dp cells in [ToolMenu] order, scrolling past [maxHeight].
  * The current tool's cell is lighter with an accent glyph; in vector mode the tools that need
  * pixels carry a "px" badge (they stay usable). A tap on a cell acts; the caller closes the menu.
- * Filters is disabled while a filter is previewed ([filtersEnabled]), Canvas while the document
- * can't change ([canvasEnabled]).
+ * The menu is not shown while a filter is previewed, so every cell is always enabled.
  */
 @Composable
 internal fun ToolMenuPanel(
     controller: EditorController,
     maxHeight: Dp,
-    filtersEnabled: Boolean,
-    canvasEnabled: Boolean,
     onPickTool: (ToolId) -> Unit,
     onFilters: () -> Unit,
     onCanvas: () -> Unit,
@@ -97,8 +93,8 @@ internal fun ToolMenuPanel(
                             badge = if (vectorMode && entry.id in LayerToolRules.PIXEL_ONLY) "px" else null,
                             onClick = { onPickTool(entry.id) },
                         )
-                        ToolMenuEntry.Filters -> ToolCell(EditorIcons.FiltersTile, "Filters", enabled = filtersEnabled, onClick = onFilters)
-                        ToolMenuEntry.Canvas -> ToolCell(Icons.Filled.AspectRatio, "Canvas", enabled = canvasEnabled, onClick = onCanvas)
+                        ToolMenuEntry.Filters -> ToolCell(EditorIcons.FiltersTile, "Filters", onClick = onFilters)
+                        ToolMenuEntry.Canvas -> ToolCell(Icons.Filled.AspectRatio, "Canvas", onClick = onCanvas)
                         ToolMenuEntry.Settings -> ToolCell(Icons.Filled.Settings, "Settings", onClick = onSettings)
                     }
                 }
@@ -113,7 +109,6 @@ private fun ToolCell(
     icon: ImageVector,
     label: String,
     selected: Boolean = false,
-    enabled: Boolean = true,
     badge: String? = null,
     onClick: () -> Unit,
 ) {
@@ -122,10 +117,10 @@ private fun ToolCell(
             .size(IbisDims.ToolCellWidth, IbisDims.ToolCellHeight)
             .background(if (selected) Color.White.copy(alpha = 0.15f) else Color.Transparent)
             .semantics { this.selected = selected }
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+            .clickable(role = Role.Button, onClick = onClick),
     ) {
         Column(
-            Modifier.align(Alignment.Center).padding(horizontal = 2.dp).alpha(if (enabled) 1f else 0.45f),
+            Modifier.align(Alignment.Center).padding(horizontal = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(icon, contentDescription = null, tint = if (selected) IbisColors.Accent else Color.White, modifier = Modifier.size(IbisDims.ToolCellGlyph))

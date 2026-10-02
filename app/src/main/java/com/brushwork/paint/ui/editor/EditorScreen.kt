@@ -657,8 +657,6 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             ToolMenuPanel(
                 controller = controller,
                 maxHeight = ChromeLayout.toolMenuMaxHeight(screenH, statusDp, navDp).dp,
-                filtersEnabled = session == null,
-                canvasEnabled = docActionsEnabled,
                 onPickTool = { id ->
                     controller.endCanvasGesture()
                     controller.selectTool(id)
@@ -731,49 +729,49 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 layersVisible && layerWindow.short -> PendingWorkBar(
                     controller, tool,
                     Modifier
-                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomStart)
                         .windowInsetsPadding(horizontalSafe)
-                        .padding(start = 10.dp, bottom = (ChromeLayout.fitInsetBottom(navDp) + 12f).dp),
+                        .padding(start = 10.dp, bottom = (ChromeLayout.fitInsetBottom(navDp) + 12f).dp)
+                        .testTag(ChromeTags.PENDING_BAR),
                     vertical = true,
                 )
                 // Above the layer window's top-right corner.
                 layersVisible -> PendingWorkBar(
                     controller, tool,
                     Modifier
-                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomEnd)
                         .padding(
                             end = (screenW - insetLeftDp - layerWindow.x - layerWindow.width).coerceAtLeast(0f).dp,
                             bottom = (screenH - layerWindow.top + IbisDims.PendingBarGap.value).dp,
-                        ),
+                        )
+                        .testTag(ChromeTags.PENDING_BAR),
                 )
                 // Right-aligned beside the tool menu.
                 toolMenuVisible -> PendingWorkBar(
                     controller, tool,
                     Modifier
-                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomEnd)
                         .windowInsetsPadding(horizontalSafe)
-                        .padding(end = IbisDims.PendingBarGap, bottom = pendingBottom.dp),
+                        .padding(end = IbisDims.PendingBarGap, bottom = pendingBottom.dp)
+                        .testTag(ChromeTags.PENDING_BAR),
                 )
                 else -> PendingWorkBar(
                     controller, tool,
                     Modifier
-                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomCenter)
-                        .padding(bottom = pendingBottom.dp),
+                        .padding(bottom = pendingBottom.dp)
+                        .testTag(ChromeTags.PENDING_BAR),
                 )
             }
         }
         // A minimized panel waits above the ✓ / ✕ (or above the slider rows), not while the
-        // layer window is open.
+        // layer window or the tool menu is open (it would sit on their lower part).
         val pillBottom = when {
             session != null -> sessionPanelDp + 10f
             pendingWork -> pendingBottom + PendingButtonSize.value + IbisDims.PendingBarGap.value
             else -> pendingBottom
         }
-        if (!layersVisible) {
+        if (!layersVisible && !toolMenuVisible) {
             SheetPill(
                 sheetHost,
                 Modifier

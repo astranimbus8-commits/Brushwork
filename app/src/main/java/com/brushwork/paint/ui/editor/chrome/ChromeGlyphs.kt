@@ -114,6 +114,23 @@ internal object ChromeGlyphs {
         }
     }
 
+    /** The tool menu's Filters cell: ibisPaint's "FX" in a ring. */
+    val FxDisc: ImageVector by lazy {
+        glyph("FxDisc") {
+            stroke(1.6f) {
+                circle(12f, 12f, 9.6f)
+            }
+            stroke(1.7f) {
+                // F
+                moveTo(7.6f, 16.2f); lineTo(7.6f, 7.8f); lineTo(11f, 7.8f)
+                moveTo(7.6f, 11.8f); lineTo(10.4f, 11.8f)
+                // X
+                moveTo(12.6f, 7.8f); lineTo(16.8f, 16.2f)
+                moveTo(16.8f, 7.8f); lineTo(12.6f, 16.2f)
+            }
+        }
+    }
+
     /** Path tool (v1.6): a smooth arc over a dashed control polygon with its control points. */
     val PathTool: ImageVector by lazy {
         glyph("PathTool") {

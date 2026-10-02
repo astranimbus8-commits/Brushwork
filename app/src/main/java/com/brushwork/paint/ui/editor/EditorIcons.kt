@@ -14,7 +14,6 @@ import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.OpenWith
-import androidx.compose.material.icons.filled.PhotoFilter
 import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.TextFields
@@ -101,8 +100,8 @@ object EditorIcons {
     /** Masks tool (v1.5): a gradient square. */
     val Masks: ImageVector get() = Icons.Filled.Gradient
 
-    /** The Filters tile of the tools grid (v1.5; it used to be a top-bar action). */
-    val FiltersTile: ImageVector get() = Icons.Filled.PhotoFilter
+    /** The Filters cell of the tool menu (v1.6: ibisPaint's "FX" disc; v1.5 a tile of the tools grid). */
+    val FiltersTile: ImageVector get() = ChromeGlyphs.FxDisc
 
     /** The Path tool (v1.6): a smooth arc over a dashed control polygon (Blender's path). */
     val Path: ImageVector get() = ChromeGlyphs.PathTool
