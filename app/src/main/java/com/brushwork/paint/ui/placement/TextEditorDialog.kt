@@ -219,6 +219,10 @@ fun TextEditorDialog(host: TextEditorHost) {
             )
         }
 
+        // v1.6 §3.5: letters scaled one by one (also on the options strip's "Letters" chip).
+        SectionHeader("Letter scaling")
+        TextLetterScaleSection(tool)
+
         SectionHeader("Outline")
         val maxOutline = max(1f, spec.sizePx * 0.3f)
         LabeledSlider(
