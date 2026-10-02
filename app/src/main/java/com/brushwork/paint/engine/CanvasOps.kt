@@ -469,6 +469,10 @@ object CanvasOps {
     fun run(c: EditorController, label: String, compute: (CanvasSnapshot, (Float) -> Unit) -> CanvasResult): Boolean {
         if (c.busyMessage != null) return false
         c.filterSession?.cancel()
+        // Object bar actions waiting for a vector render land first too (v1.5 QA), while the tool is
+        // still active: made later, under the busy overlay, they changed the drawing and the
+        // operation was refused ("The drawing changed while …").
+        c.settleVectorWork()
         c.currentTool.onDeactivate()
         // A vector edit still rendering lands first (the snapshot must hold its result).
         c.vectors.flushPending()
@@ -522,6 +526,7 @@ object CanvasOps {
     /** Applies a metadata-only change (no new bitmaps) immediately on the main thread. */
     private fun applyNow(c: EditorController, label: String, compute: (CanvasSnapshot) -> CanvasResult): Boolean {
         if (c.busyMessage != null) return false
+        c.settleVectorWork()
         c.vectors.flushPending()
         val snap = CanvasSnapshot.of(c.doc)
         return try {

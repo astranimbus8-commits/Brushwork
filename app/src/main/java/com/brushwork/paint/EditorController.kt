@@ -888,6 +888,11 @@ class EditorController(
         // (never a lift of the content as it was before this operation, left open across it).
         settleQueuedVectorWork()
         currentTool.onDeactivate()
+        // A live edit still on its way (a vector render in the background, also one the tool's
+        // commit just started) records its step now, BEFORE the operation reads or changes the
+        // layers: otherwise a deleted layer drops it (undoing the deletion brings back what was
+        // erased) and a duplicate copies the layer as it was before it (v1.5 QA).
+        if (editDepth == 0) flushDeferredSteps()
         try {
             return block()
         } finally {
