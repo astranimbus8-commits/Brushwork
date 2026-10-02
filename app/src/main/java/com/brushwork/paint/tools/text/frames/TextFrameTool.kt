@@ -60,6 +60,11 @@ import kotlin.math.roundToInt
  * - **Unlink here:** the frames after the selected one become empty standalone frames and their
  *   text comes back as overset of the selected one ("Unlink frame"). **Delete frame** deletes
  *   its layer: the remaining frames re-flow in the same step ([TextThreads]).
+ * - **Wrap around picture** (per frame): the selected frame's lines go around a picture's outline
+ *   ("Wrap frame"); edits of the picture re-flow the story inside their own step.
+ * - **Increments** (Length): a move travels in whole steps from where the finger went down, a
+ *   dragged edge and a drawn frame land on whole steps from the fixed edge / start corner; object
+ *   snapping (and the grid through it) wins over the step. Typed pill values are exact.
  *
  * Every frame is a document-sized text layer whose `textData` is an ordinary [TextItem] holding
  * its slice of the story plus the story itself (`TextItem.thread`). Frames are horizontal,

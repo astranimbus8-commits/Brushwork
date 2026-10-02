@@ -45,8 +45,8 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * The Text frames tool's options strip (v1.6, §3.6; area D), one Row like every tool's options:
  *
  * - nothing selected: a hint (drag to draw a frame);
- * - a frame selected: "Edit story", "Link…", "Unlink here", "Delete frame" and, while its story
- *   doesn't fit its frames, "+ N characters" in red;
+ * - a frame selected: "Edit story", "Link…", "Unlink here", "Delete frame", "Wrap around
+ *   picture" and, while its story doesn't fit its frames, "+ N characters" in red;
  * - linking (an out-port loaded): the link hint ([LinkModeHint]) with "Cancel link";
  * - always: "Threads" (thread lines on / off) and Snap to objects.
  *
