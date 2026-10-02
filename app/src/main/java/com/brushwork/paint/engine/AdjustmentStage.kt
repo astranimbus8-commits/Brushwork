@@ -187,7 +187,9 @@ class AdjustmentScratch {
 /**
  * Implemented by a [LayerRenderOverride] that draws an adjustment layer's mask differently while
  * it is edited (the Masks tool's previews and live brush strokes): where the mask it draws can be
- * non-black, so the effect is only computed there.
+ * non-black, so the effect is only computed there. On an adjustment layer that has no mask yet,
+ * such an override's [LayerRenderOverride.drawMask] supplies the mask being made (the preview of
+ * its first part), so the effect shows only where the mask will let it through.
  */
 interface MaskCoverageHint {
     /** Document area outside which the drawn mask is black; null = nowhere. */
@@ -243,12 +245,15 @@ object AdjustmentStage {
         if (bmp.isRecycled || bmp.config != Bitmap.Config.ARGB_8888) return
         val ov = if (override != null && override.layer === layer) override else null
         val mask = if (layer.maskEnabled) layer.mask else null
+        // The mask the effect goes through: the layer's (enabled) mask, or the preview of the
+        // mask a layer without one is getting (see MaskCoverageHint).
+        val masked = mask != null || (layer.mask == null && ov is MaskCoverageHint)
         val region = RectF(bounds)
-        if (mask != null) {
+        if (masked) {
             // Where the mask lets the effect through: the layer's own mask, or what an override
             // drawing it (a mask being edited) says; an override that doesn't say: everywhere.
             val cov: Rect? = when {
-                ov == null -> scratch.maskCoverage(layer, mask) ?: return
+                ov == null -> scratch.maskCoverage(layer, mask!!) ?: return
                 ov is MaskCoverageHint -> ov.maskCoverage() ?: return
                 else -> null
             }
@@ -296,20 +301,20 @@ object AdjustmentStage {
                     scratch.dstOutPaint.alpha = alpha
                     val s1 = canvas.saveLayer(bounds, scratch.dstOutPaint)
                     canvas.drawPaint(scratch.whitePaint)
-                    drawMask(canvas, layer, mask, ov, scratch)
+                    if (masked) drawMask(canvas, mask, ov, scratch)
                     canvas.restoreToCount(s1)
                     // … + F(below) · m·o.
                     scratch.plusPaint.alpha = alpha
                     val s2 = canvas.saveLayer(bounds, scratch.plusPaint)
                     drawScratch(canvas, s, src, dst, inverse, scratch.plainPaint)
-                    drawMask(canvas, layer, mask, ov, scratch)
+                    if (masked) drawMask(canvas, mask, ov, scratch)
                     canvas.restoreToCount(s2)
-                } else if (mask == null) {
+                } else if (!masked) {
                     drawScratch(canvas, s, src, dst, inverse, blendPaint)
                 } else {
                     val sl = canvas.saveLayer(bounds, blendPaint)
                     drawScratch(canvas, s, src, dst, inverse, scratch.plainPaint)
-                    drawMask(canvas, layer, mask, ov, scratch)
+                    drawMask(canvas, mask, ov, scratch)
                     canvas.restoreToCount(sl)
                 }
                 canvas.restoreToCount(save)
@@ -342,10 +347,10 @@ object AdjustmentStage {
         canvas.restoreToCount(save)
     }
 
-    /** The layer's mask (or the override's preview of it) as DST_IN, in document px. */
-    private fun drawMask(canvas: Canvas, layer: Layer, mask: Bitmap?, ov: LayerRenderOverride?, scratch: AdjustmentScratch) {
-        if (mask == null) return
-        if (ov == null || !ov.drawMask(canvas, scratch.maskPaint)) canvas.drawBitmap(mask, 0f, 0f, scratch.maskPaint)
+    /** The layer's [mask] (or the override's preview of it, or of the mask it is getting) as DST_IN, in document px. */
+    private fun drawMask(canvas: Canvas, mask: Bitmap?, ov: LayerRenderOverride?, scratch: AdjustmentScratch) {
+        if (ov != null && ov.drawMask(canvas, scratch.maskPaint)) return
+        if (mask != null) canvas.drawBitmap(mask, 0f, 0f, scratch.maskPaint)
     }
 
     private fun floorInt(v: Float): Int = if (v.isNaN()) 0 else floor(v.toDouble()).coerceIn(-1e9, 1e9).toInt()

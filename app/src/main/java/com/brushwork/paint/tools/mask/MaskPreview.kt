@@ -112,30 +112,35 @@ internal class MaskPreview(private val c: EditorController) {
 
     /**
      * Shows [spec]; [moved] names a brush component moved by an affine map since [begin] (its
-     * preview coverage is resampled instead of rasterized again).
+     * preview coverage is resampled instead of rasterized again). [region]: the document area
+     * where [spec] can render differently from what is shown, when the caller knows it (a brush
+     * stroke growing: its new dabs; empty = nowhere); null = computed from the two specs.
      */
-    fun update(spec: MaskSpec, moved: Pair<Long, MaskGeometry.Affine>? = null) {
+    fun update(spec: MaskSpec, moved: Pair<Long, MaskGeometry.Affine>? = null, region: Rect? = null) {
         val prev = shown ?: return
         val g = grid ?: return
         brushes?.moved = moved
         val w = c.doc.width; val h = c.doc.height
-        val region = MaskSpecs.changedRegion(prev, spec, w, h)
+        val changed = if (region != null) region.takeUnless { it.isEmpty } else MaskSpecs.changedRegion(prev, spec, w, h)
         shown = spec
-        if (region != null) {
+        if (changed != null) {
             val s = scale
-            val c0 = max(0, floor(region.left * s).toInt() - 1); val r0 = max(0, floor(region.top * s).toInt() - 1)
-            val c1 = min(g.cols, ceil(region.right * s).toInt() + 1); val r1 = min(g.rows, ceil(region.bottom * s).toInt() + 1)
+            val c0 = max(0, floor(changed.left * s).toInt() - 1); val r0 = max(0, floor(changed.top * s).toInt() - 1)
+            val c1 = min(g.cols, ceil(changed.right * s).toInt() + 1); val r1 = min(g.rows, ceil(changed.bottom * s).toInt() + 1)
             if (c1 > c0 && r1 > r0) renderRegion(spec, c0, r0, c1 - c0, r1 - r0)
         }
         // The upscaled preview reaches a little beyond the samples that changed.
-        val shownRegion = region?.let { padded(it) }
+        val shownRegion = changed?.let { padded(it) }
         val l = layer
-        if (l != null && l.mask != null && override == null) {
+        if (l != null && (l.mask != null || l.isAdjustmentLayer) && override == null) {
             val ov = Override(l)
             override = ov
             c.renderOverride = ov
-            // The preview replaces the full-resolution mask everywhere it is not black.
-            val dirty = union(MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }, shownRegion)
+            // The preview replaces the full-resolution mask everywhere it is not black. An
+            // adjustment layer without a mask showed its effect everywhere: the preview of the
+            // mask it is about to get limits it at once (AdjustmentStage asks the override).
+            val before = if (l.mask == null) Rect(0, 0, w, h) else MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }
+            val dirty = union(before, shownRegion)
             touched = union(touched, dirty ?: Rect())
             c.invalidateDoc(dirty ?: Rect())
         } else if (shownRegion != null && override != null) {

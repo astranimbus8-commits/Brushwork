@@ -41,6 +41,8 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.masks.AdjustmentEffects
@@ -75,6 +77,10 @@ internal fun AdjustmentSheet(tool: MaskTool) {
     }
     // Closed (✕, Back, another tool, another layer): the step is recorded.
     DisposableEffect(edit) { onDispose { edit.flush() } }
+    // The app leaves the screen (home, app switch, screen off): the step is recorded now, so the
+    // autosave that follows sees an edit and saves it (a pending change bumps no edit count, and
+    // the process may be killed in the background).
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { edit.flush() }
 
     BwSheet(title = "Adjust: ${layer.name}", onDismiss = { edit.flush(); tool.adjustOpen = false }) {
         AdjustmentBody(c, layer, edit::preview)

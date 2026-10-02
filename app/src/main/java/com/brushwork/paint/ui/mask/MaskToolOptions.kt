@@ -88,7 +88,8 @@ fun MaskToolOptions(tool: MaskTool) {
     if (tool.armed == MaskTool.Kind.BRUSH || info.brushSelected) {
         BarDivider()
         StripChip("Brush", selected = !tool.brushErase) { tool.brushErase = false }
-        StripChip("Erase", selected = tool.brushErase, icon = Icons.Filled.AutoFixOff) { tool.brushErase = true }
+        // Erasing takes paint away from a brush part: one has to be selected (its B pin).
+        StripChip("Erase", selected = tool.brushErase && info.brushSelected, enabled = info.brushSelected, icon = Icons.Filled.AutoFixOff) { tool.brushErase = true }
         if (info.brushSelected) TextButton(onClick = { tool.select(null) }) { Text("Done") }
     }
     BarDivider()
@@ -105,6 +106,9 @@ fun MaskToolOptions(tool: MaskTool) {
     AdjustChip(tool, enabled = info.activeIsAdjustment)
     TextButton(onClick = { tool.componentsOpen = true }) { Text("Components (${info.count})") }
 
+    // Another kind of layer became active: the Adjust sheet closes (it recorded its step) and
+    // doesn't pop up again by itself the next time an adjustment layer is selected.
+    LaunchedEffect(info.activeIsAdjustment) { if (!info.activeIsAdjustment) tool.adjustOpen = false }
     if (tool.adjustOpen && info.activeIsAdjustment) AdjustmentSheet(tool)
     if (tool.componentsOpen) MaskComponentsSheet(tool)
     if (tool.filterBrowserOpen) FilterBrowser(c) { tool.filterBrowserOpen = false }

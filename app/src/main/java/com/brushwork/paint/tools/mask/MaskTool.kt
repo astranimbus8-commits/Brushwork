@@ -140,7 +140,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     private var overlayUntil = 0L
     private var hintShown = false
 
-    private val preview = MaskPreview(controller)
+    /** The reduced-resolution preview of live edits (internal: tests compare it with full renders). */
+    internal val preview = MaskPreview(controller)
     private val tint = MaskTint()
     private var cache: MaskBrushCache? = null
 
@@ -199,7 +200,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         armed = if (armed == kind) null else kind
         // An armed kind adds a NEW component (a selected brush component keeps painting without it).
         if (armed != null) selectedId = null
-        if (armed != Kind.BRUSH) brushErase = false
+        // A new brush part starts by painting: there is nothing to erase from yet.
+        brushErase = false
         controller.invalidateOverlay()
     }
 
@@ -398,6 +400,9 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
     override fun onDown(p: ToolPoint) {
         if (gesture != null) onCancel()
+        // A move typed or slid in the X / Y strip that wasn't ended is recorded before the finger
+        // does anything else (its preview would otherwise be replaced and lost).
+        endStripEdit()
         val pos = Vec2(p.x, p.y)
         val t = controller.viewTransform
         val layer = editLayer
@@ -463,7 +468,16 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val base = spec ?: MaskSpec()
         when (kind) {
             Kind.LINEAR, Kind.RADIAL -> gesture = Create(kind, pos, layer, base, MaskGeometry.nextId(base))
-            Kind.BRUSH -> startPaint(layer, base, pos, pressure)
+            Kind.BRUSH -> {
+                // Erasing takes coverage away from a brush part: a NEW part has none, so an erase
+                // stroke there would only add an invisible part (and a step, or even a new
+                // adjustment layer). Say what to do instead.
+                if (brushErase && selected !is BrushMask) {
+                    controller.toast(ERASE_HINT)
+                    return
+                }
+                startPaint(layer, base, pos, pressure)
+            }
         }
     }
 
@@ -658,7 +672,9 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
             if (baseComp != null && cache?.serves(baseComp) != true) ensureCache()?.full(baseComp)
             installPaintOverride(layer)
         } else {
-            preview.begin(layer?.takeIf { it.mask != null }, base, cache)
+            // An adjustment layer without a mask previews its future mask too (the effect shows
+            // only where the stroke paints, as it will after the stroke).
+            preview.begin(layer?.takeIf { it.mask != null || it.isAdjustmentLayer }, base, cache)
         }
         gesture = g
         paintTo(g, pos, pressure)
@@ -672,15 +688,30 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val stroke = strokeOf(g)
         val comp = g.newComp.copy(strokes = (g.baseComp?.strokes ?: emptyList()) + stroke)
         g.spec = if (g.baseComp == null) g.base.copy(components = g.base.components + comp, nextId = g.compId + 1) else MaskGeometry.replaced(g.base, g.compId, comp)
+        val dabs = MaskBrushRaster.dabsOf(stroke)
         if (!g.live) {
+            // Only the samples under the new dabs change from one frame to the next (each stroke
+            // is accumulated dab by dab, in order): the preview re-renders just there. The first
+            // frame adds the part itself, which can change the whole mask (Intersect, inverted).
+            val first = g.renderedDabs == 0
+            val region = newDabsRegion(g, dabs)
             liveSpec = g.spec
-            preview.update(g.spec)
+            preview.update(g.spec, region = if (first) null else region ?: Rect())
             flashOverlay()
             return
         }
-        val dabs = MaskBrushRaster.dabsOf(stroke)
-        if (dabs.count == 0) return
-        // New dabs (the previous last one may have been an end dab that moved), plus that one.
+        val region = newDabsRegion(g, dabs) ?: return
+        renderLive(g, stroke, dabs, region)
+        liveSpec = g.spec
+    }
+
+    /**
+     * The document area (clamped to the document; null = none) that the dabs added to [dabs]
+     * since the last frame can change — plus the previous last dab, which may have been an end
+     * dab that moved on — and remembers what was rendered.
+     */
+    private fun newDabsRegion(g: Paint, dabs: MaskBrushRaster.Dabs): Rect? {
+        if (dabs.count == 0) return null
         val from = max(0, g.renderedDabs - 1)
         var l = Float.POSITIVE_INFINITY; var tp = Float.POSITIVE_INFINITY; var r = Float.NEGATIVE_INFINITY; var b = Float.NEGATIVE_INFINITY
         for (k in from until dabs.count) {
@@ -693,9 +724,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         g.lastDab = RectF(dabs.x[last] - rad, dabs.y[last] - rad, dabs.x[last] + rad, dabs.y[last] + rad)
         g.renderedDabs = dabs.count
         val region = Rect(floor(box.left).toInt(), floor(box.top).toInt(), ceil(box.right).toInt(), ceil(box.bottom).toInt())
-        if (!region.intersect(0, 0, controller.doc.width, controller.doc.height)) return
-        renderLive(g, stroke, dabs, region)
-        liveSpec = g.spec
+        return region.takeIf { it.intersect(0, 0, controller.doc.width, controller.doc.height) }
     }
 
     private fun strokeOf(g: Paint): MaskStroke =
@@ -805,7 +834,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         val c = selected ?: return false
         val layer = editLayer ?: return false
-        val s = spec ?: return false
+        if (spec == null) return false
         if (layer.locked || !layer.visible) return false
         val t = controller.viewTransform
         val accepted = if (c is LinearMask) {
@@ -817,8 +846,12 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         }
         if (!accepted) return false
         gesture?.let { onCancel() }
-        pinch = Pinch(layer, s, c, focus)
-        preview.begin(layer, s, cache)
+        // A pending X / Y strip move is recorded first; the pinch starts from the spec as it is now.
+        endStripEdit()
+        val now = spec ?: return false
+        val comp = now.components.firstOrNull { it.id == c.id } ?: return false
+        pinch = Pinch(layer, now, comp, focus)
+        preview.begin(layer, now, cache)
         return true
     }
 
@@ -892,6 +925,11 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
     override val objectPosition: ObjectPosition?
         get() = if (selected != null && editLayer != null) positionImpl else null
+
+    /** Records a strip move that is still being previewed (nothing when there is none). */
+    private fun endStripEdit() {
+        if (stripBase != null) positionImpl.endPositionEdit()
+    }
 
     // ------------------------------------------------------------------ Adjust sheet
 
@@ -1004,7 +1042,10 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
     private val ring = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE }
 
-    private companion object {
+    internal companion object {
         const val OVERLAY_MS = 1200L
+
+        /** Shown for an erase stroke with no brush part to erase from. */
+        const val ERASE_HINT = "Erase works on a brush part: tap its B pin first, or paint with Subtract"
     }
 }
