@@ -199,8 +199,9 @@ rotations and flips remap a layer's pixels only when all its brushes turn into t
 **Edit sessions.** `beginEdit` renders the hole (the other objects in the edited ones' tiles) and
 the floating bitmap (the edited objects), in the background when expensive (a newer request
 answers an older one with null; a long preparation shows the busy overlay, whose Stop gives up).
-Lifting every object copies the cache and renders only the objects that reach past the canvas,
-past its edges, so their off-canvas parts show in the Transform preview. A session's commit on
+Lifting every object copies the cache and renders, for the objects that reach past the canvas,
+only the bands of the floating rect outside it, so their off-canvas parts show in the Transform
+preview at the cost of those parts alone. A session's commit on
 a large edit stays installed (hole + preview) until the background result lands.
 
 **Selecting and lifting objects (`vector/select`, `vector/lift`, `ui/vector/VectorObjectBar`).**
@@ -284,7 +285,8 @@ Export (overflow menu: Export SVG… / Export PDF…) builds one `ExportScene` f
 writes it with pure-Kotlin writers (SVG, and a PDF writer with layers as optional content groups);
 vector objects become paths, raster layers cropped images, text real `<text>` in SVG where it can
 (its box as shapes under it) and otherwise the outlines of every painted part in its own color (PDF
-always, through `TextExport.outlineParts`). A Brushwork
+always, through `TextExport.outlineParts`), or its pixels when it holds color emoji (pictures in
+their font, without outlines). A Brushwork
 payload embedded in both formats restores the layers exactly on re-import. Import (Import SVG or
 PDF…, and "New from SVG or PDF" in the gallery, handed over through `PendingImports`) reads SVG with
 an own XML tokenizer (no DTD) into editable vector layers, and PDF pages through `PdfRenderer` into

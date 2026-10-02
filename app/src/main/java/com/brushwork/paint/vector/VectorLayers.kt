@@ -327,9 +327,9 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * longer exist are left out of the session's [VectorEditSession.ids].
      *
      * Lifting every object uses a cropped copy of the cache as the floating bitmap and an empty
-     * hole; only the objects reaching past the canvas are rendered, past its edges, so their
-     * off-canvas parts show in the preview. Otherwise the hole (the other objects within the edited ones'
-     * grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
+     * hole; the objects reaching past the canvas are rendered only in the bands past its edges,
+     * so their off-canvas parts show in the preview. Otherwise the hole (the other objects within
+     * the edited ones' grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
      * the main thread when cheap ([onReady] runs before this returns), else in the background
      * ([onReady] runs later on the main thread; a newer request answers an older one with null;
      * a long preparation shows the busy overlay "Rendering vectors…", whose Stop answers null).
