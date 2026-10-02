@@ -7,10 +7,12 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import com.brushwork.paint.AppSettings
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
@@ -20,11 +22,13 @@ import com.brushwork.paint.brush.StrokeKind
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.brush.sanitized
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.Tool
@@ -34,9 +38,17 @@ import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
 import com.brushwork.paint.tools.select.snapPointToObjects
 import com.brushwork.paint.tools.transform.SnapGuide
+import com.brushwork.paint.tools.vector.spline.NurbsGeometry
+import com.brushwork.paint.tools.vector.spline.PathOverlay
+import com.brushwork.paint.tools.vector.spline.SplineBezier
+import com.brushwork.paint.tools.vector.spline.SplineEditing
+import com.brushwork.paint.tools.vector.spline.SplinePresets
+import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VSpline
+import com.brushwork.paint.vector.VSplinePoint
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
@@ -48,10 +60,12 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /** How a committed curve is stroked. */
 @Serializable
@@ -91,6 +105,13 @@ data class CurveSettings(
      * false uses [plainWidth]. Stored settings without the field take this default.
      */
     val useBrushSize: Boolean = true,
+    /**
+     * Path tool (v1.6): the order a new path starts with (2..6, [VSpline.DEFAULT_ORDER]); the
+     * pending path keeps its own in its spline. Its Cyclic default is [closed].
+     */
+    val pathOrder: Int = VSpline.DEFAULT_ORDER,
+    /** Path tool (v1.6): a new open path touches its first and last points (clamped knots). */
+    val pathEndpoint: Boolean = true,
 ) {
     /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
     fun sanitized(fallback: CurveSettings = DEFAULT) = copy(
@@ -98,6 +119,7 @@ data class CurveSettings(
         plainWidth = plainWidth.finiteOr(fallback.plainWidth).coerceIn(ShapeSettings.MIN_STROKE, ShapeSettings.MAX_STROKE),
         taperPercent = taperPercent.finiteOr(fallback.taperPercent).coerceIn(1f, 50f),
         nudgeStepPx = nudgeStepPx.finiteOr(fallback.nudgeStepPx).coerceIn(0.01f, ShapeSettings.MAX_LENGTH),
+        pathOrder = pathOrder.coerceIn(VSpline.MIN_ORDER, VSpline.MAX_ORDER),
     )
 
     companion object {
@@ -136,9 +158,25 @@ data class CurveSettings(
  *   (width unlinked, its colors, its brush) is edited, ✓ replaces it ("Edit path"), ✕ leaves it
  *   as it was. A brush that needs pixels (smudge, blur, watercolor) draws a plain line there.
  *
- * v1.6 (§3.2, foundation lines): one class, three [CurveKind]s — the Curve, Polyline and Path
- * tools. Until the Path mode lands, [CurveKind.PATH] behaves exactly as [CurveKind.CURVE] (it
- * shares its settings key "vec.curve" and its step labels).
+ * v1.6 (§3.2, §3.3, §3.4): one class, three [CurveKind]s — the Curve, Polyline and Path tools.
+ * - **Path** ([CurveKind.PATH], like a Blender path): the pending path is a [VSpline] (control
+ *   points, order, endpoint, cyclic, per-point weight and thickness; [spline]); its [anchors]
+ *   are always DERIVED through [SplineBezier.toSubpath], so the preview, brush stroke, fill,
+ *   raster and vector commits are the Curve pipeline's. Tap empty canvas to add a control point
+ *   (after the selected one, which then moves on to the new point; else at the end), tap near
+ *   the dashed control polygon to insert one there, drag a point to move it, tap a point to
+ *   select it ([selectedPoint]). On a vector layer ✓ adds a [VPath] with its spline ("Path");
+ *   a tap on a spline path that passes the I9 check ([SplineBezier.matches]) reopens it ("Edit
+ *   path"). Curve / Polyline tapping such a path switch to Path, Path tapping a plain path
+ *   switches to the tool that edits it. [toBezier] hands the pending path to the Curve tool
+ *   (one in-tool step there: its undo hands it back). Path has its own settings ("vec.path").
+ * - **Handles** (Curve): the selected point's handles (or all points') scale by a factor
+ *   relative to the change's start ([scaleHandles]; slider, ‹ ›, typed value or a pinch on
+ *   the point, one in-tool step each). "Handle size" ([handleSize], app-wide) scales the drawn
+ *   points and handles and their grab radii.
+ * - **Increments** (§3.4): point drags move by multiples of the Length step from where the
+ *   point was (after object and grid snapping, per axis); handle scaling uses the Scale step.
+ *   With increments off every gesture is exactly v1.5.
  */
 class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(controller) {
     /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
@@ -153,26 +191,45 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         CurveKind.PATH -> ToolId.PATH
     }
 
+    /** True for the Path tool (a NURBS / B-spline through control points). */
+    val isPath: Boolean get() = kind == CurveKind.PATH
+
     /**
      * v1.6: in PATH mode, the X / Y pill's target (the selected control point); null = the Curve
-     * adapter (`CurvePointPosition`: the selected anchor). Implemented by area B. The X / Y strip
-     * reads it ONCE per selected tool (`coordinateSourceOf` is remembered per tool), so in PATH
-     * mode it must be one stable, non-null instance whose `position` is null while no control
-     * point is selected.
+     * adapter (`CurvePointPosition`: the selected anchor). The X / Y strip reads it ONCE per
+     * selected tool (`coordinateSourceOf` is remembered per tool), so in PATH mode it is one
+     * stable, non-null instance whose `position` is null while no control point is selected.
      */
-    val splinePointPosition: ObjectPosition? get() = null
+    val splinePointPosition: ObjectPosition? = if (kind == CurveKind.PATH) SplinePointPosition() else null
 
     /** Current options (Compose state); change them with [update]. */
     var settings by mutableStateOf(loadSettings())
         private set
 
-    /** Anchors of the pending path (Compose state). */
+    /**
+     * Anchors of the pending path (Compose state). In PATH mode they are derived from [spline]
+     * (its Bézier form) and never edited directly.
+     */
     var anchors by mutableStateOf<List<CurveAnchor>>(emptyList())
         private set
 
-    /** Index of the selected anchor or -1. */
+    /** Index of the selected anchor or -1 (always -1 in PATH mode: see [selectedPoint]). */
     var selected by mutableIntStateOf(-1)
         private set
+
+    /** PATH: the control points, order, endpoint and cyclic of the pending path (Compose state); null when none. */
+    var spline by mutableStateOf<VSpline?>(null)
+        private set
+
+    /** PATH: index of the selected control point or -1 (Compose state). */
+    var selectedPoint by mutableIntStateOf(-1)
+        private set
+
+    /** The selected point the strip and the Numbers sheet edit: the control point (Path) or the anchor. */
+    val selectedIndex: Int get() = if (isPath) selectedPoint else selected
+
+    /** Number of points the user edits: control points (Path) or anchors. */
+    val pointCount: Int get() = if (isPath) spline?.points?.size ?: 0 else anchors.size
 
     /** True when [undoStep] can go back. */
     override var canUndoStep by mutableStateOf(false)
@@ -205,8 +262,21 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     var thicknessRing by mutableStateOf(false)
 
-    private val history = ArrayDeque<List<CurveAnchor>>()
-    private val redo = ArrayDeque<List<CurveAnchor>>()
+    /**
+     * One in-tool undo state: the anchors (Curve, Polyline) or the spline (Path: its anchors are
+     * derived again on restore). [back] marks the Curve tool's first step after [toBezier]: its
+     * undo hands the path back to the Path tool as it was. [toBezier] marks the Path tool's redo
+     * of that hand-back (redo converts again).
+     */
+    private class EditState(
+        val anchors: List<CurveAnchor>,
+        val spline: VSpline?,
+        val back: Handoff? = null,
+        val toBezier: Boolean = false,
+    )
+
+    private val history = ArrayDeque<EditState>()
+    private val redo = ArrayDeque<EditState>()
     private var historyKey: Any? = null
     private var historyKeyTime = 0L
     /** A slider drag is in progress ([beginNumericEdit]): its edits share one step whatever the pace. */
@@ -234,14 +304,20 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private var moved = false
     /** The current touch long-pressed an anchor and selected it (lifting keeps it selected). */
     private var longPressed = false
-    private var gestureStart: List<CurveAnchor> = emptyList()
+    private var gestureStart = EditState(emptyList(), null)
     private var gestureSelected = -1
+    private var gestureSelectedPoint = -1
     private var gestureHistorySize = 0
-    private var gestureRedo: List<List<CurveAnchor>> = emptyList()
+    private var gestureRedo: List<EditState> = emptyList()
     /** The path object a tap (no pending path) would reopen. */
     private var reopenCandidate: VPath? = null
+    /** Which tool reopens [reopenCandidate]: this one, or the kind it switches to (Curve ↔ Path). */
+    private var reopenKind = kind
+    /** Where the dragged point was when the drag began (increments step from there, §3.4). */
+    private var dragStartPos = Vec2.ZERO
 
     private val painter = OverlayPainter()
+    private val pointPainter = PathOverlay()
     private val docPath = Path()
     private val pts = FloatArray(2)
 
@@ -258,10 +334,22 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** Guides shown right now (document px); empty when nothing is aligned. */
     internal val activeGuides: List<SnapGuide> get() = snap.guides
 
-    private val tension: Float get() = if (polyline) 1f else settings.tension
+    /** Tension of the derived curve: straight for Polyline, 0 for Path (its anchors carry explicit handles). */
+    private val tension: Float get() = if (polyline) 1f else if (isPath) 0f else settings.tension
+
+    /**
+     * Whether the pending path is drawn closed: the Closed setting (Curve, Polyline) or a cyclic
+     * spline of at least 3 points (Path).
+     */
+    private val isClosed: Boolean
+        get() = if (isPath) spline?.let { NurbsGeometry.isClosed(it) } == true else settings.closed
+
+    /** True when the fill can show: 3 anchors, or (Path) 3 control points. */
+    private val canFill: Boolean
+        get() = if (isPath) (spline?.points?.size ?: 0) >= 3 && anchors.size >= 2 else anchors.size >= 3
 
     /** The current path (straight segments for the polyline tool). */
-    fun path(): VectorPath = CurveGeometry.toPath(anchors, settings.closed, tension, polyline)
+    fun path(): VectorPath = CurveGeometry.toPath(anchors, isClosed, tension, polyline)
 
     init {
         // Strokes of paths that become vector objects are neither clipped by the selection nor
@@ -285,7 +373,21 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         changed()
     }
 
-    private val prefsKey: String get() = if (polyline) "vec.polyline" else "vec.curve"
+    /** Each tool keeps its own options (v1.6: Path's quick starts set fill and stroke without touching Curve's). */
+    private val prefsKey: String
+        get() = when (kind) {
+            CurveKind.CURVE -> "vec.curve"
+            CurveKind.POLYLINE -> "vec.polyline"
+            CurveKind.PATH -> "vec.path"
+        }
+
+    /** The undo label of ✓ (a new path): the tool's name. */
+    private val stepLabel: String
+        get() = when (kind) {
+            CurveKind.CURVE -> "Curve"
+            CurveKind.POLYLINE -> "Polyline"
+            CurveKind.PATH -> PATH_LABEL
+        }
 
     private fun loadSettings(): CurveSettings =
         runCatching { controller.settings.getObject(prefsKey, CurveSettings.serializer()) }.getOrNull()?.sanitized() ?: CurveSettings()
@@ -353,9 +455,20 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         historyKeyTime = now
         clearRedo()
         if (coalesce) return
-        history.addLast(anchors)
-        while (history.size > MAX_HISTORY) history.removeFirst()
+        history.addLast(currentState())
+        trimHistory()
         canUndoStep = true
+    }
+
+    /** The pending path as an in-tool undo state. */
+    private fun currentState(): EditState = if (isPath) EditState(emptyList(), spline) else EditState(anchors, null)
+
+    /** Keeps at most [MAX_HISTORY] states (never dropping the way back to the Path tool: it is the first one). */
+    private fun trimHistory() {
+        while (history.size > MAX_HISTORY) {
+            val first = history.first()
+            if (first.back != null && history.size > 1) history.removeAt(1) else history.removeFirst()
+        }
     }
 
     private fun clearRedo() {
@@ -389,7 +502,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     override fun undoStep(): Boolean {
         val prev = history.removeLastOrNull() ?: return false
-        redo.addLast(anchors)
+        prev.back?.let { back ->
+            // The first step after To Bézier: the path goes back to the Path tool as it was.
+            history.addLast(prev)
+            return handBack(back)
+        }
+        redo.addLast(currentState())
         redoCount = redo.size
         historyKey = null
         restore(prev)
@@ -401,20 +519,33 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     override fun redoStep(): Boolean {
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size
-        history.addLast(anchors)
-        while (history.size > MAX_HISTORY) history.removeFirst()
+        if (next.toBezier) return toBezier()
+        history.addLast(currentState())
+        trimHistory()
         canUndoStep = true
         historyKey = null
         restore(next)
         return true
     }
 
-    private fun restore(list: List<CurveAnchor>) {
-        anchors = list
-        if (selected !in list.indices) selected = -1
-        if (list.isEmpty()) targetLayer = null
+    private fun restore(state: EditState) {
+        if (isPath) {
+            setSplineState(state.spline)
+            if (selectedPoint !in 0 until pointCount) selectedPoint = -1
+        } else {
+            anchors = state.anchors
+            if (selected !in anchors.indices) selected = -1
+        }
+        if (anchors.isEmpty()) targetLayer = null
         else if (targetLayer == null) targetLayer = controller.doc.activeLayer
         changed()
+    }
+
+    /** PATH: the pending spline becomes [s] (null or no points = none) and the anchors its Bézier form. */
+    private fun setSplineState(s: VSpline?) {
+        val v = s?.takeIf { it.points.isNotEmpty() }
+        spline = v
+        anchors = if (v == null) emptyList() else SplineBezier.toSubpath(v).anchors.map { it.toCurveAnchor() }
     }
 
     /**
@@ -425,6 +556,19 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (!p.x.isFinite() || !p.y.isFinite()) return false
         if (anchors.isEmpty() && !controller.checkEditable()) return false
         val lim = ShapeSettings.MAX_LENGTH
+        if (isPath) {
+            // A control point at the end (or after the selected one), selected.
+            val s = spline
+            if (s != null && s.points.size >= VSpline.MAX_POINTS) return false
+            pushHistory()
+            if (targetLayer == null) targetLayer = controller.doc.activeLayer
+            val at = if (s != null && selectedPoint in s.points.indices) selectedPoint + 1 else s?.points?.size ?: 0
+            val width = s?.points?.getOrNull(at - 1)?.width ?: 1f
+            setSplineState(SplineEditing.inserted(s ?: newSpline(), at, VSplinePoint(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), width = width)))
+            selectedPoint = at
+            changed()
+            return true
+        }
         pushHistory()
         if (targetLayer == null) targetLayer = controller.doc.activeLayer
         anchors = anchors + CurveAnchor(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), sharp = polyline)
@@ -433,8 +577,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         return true
     }
 
+    /** Selects point [index] (a control point in PATH mode, else an anchor); -1 or out of range deselects. */
     fun select(index: Int) {
-        selected = if (index in anchors.indices) index else -1
+        if (isPath) selectedPoint = if (index in 0 until pointCount) index else -1
+        else selected = if (index in anchors.indices) index else -1
         controller.invalidateOverlay()
     }
 
@@ -442,6 +588,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /** Makes anchor [index] a corner (sharp) or smooth. */
     fun setSharp(index: Int, sharp: Boolean) {
+        if (isPath) return
         val a = anchors.getOrNull(index) ?: return
         if (a.sharp == sharp && !a.hasCustomTangent) return
         pushHistory()
@@ -450,17 +597,27 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /** Drops the dragged tangent of anchor [index] and goes back to the automatic one. */
     fun resetTangent(index: Int) {
+        if (isPath) return
         val a = anchors.getOrNull(index) ?: return
         if (!a.hasCustomTangent) return
         pushHistory()
         replace(index, a.withAutoTangent())
     }
 
+    /** Deletes point [index] (a control point in PATH mode); with no points left a reopened path object goes. */
     fun deleteAnchor(index: Int) {
-        if (index !in anchors.indices) return
-        pushHistory()
-        anchors = anchors.toMutableList().also { it.removeAt(index) }
-        selected = -1
+        if (isPath) {
+            val s = spline ?: return
+            if (index !in s.points.indices) return
+            pushHistory()
+            setSplineState(SplineEditing.removed(s, index))
+            selectedPoint = -1
+        } else {
+            if (index !in anchors.indices) return
+            pushHistory()
+            anchors = anchors.toMutableList().also { it.removeAt(index) }
+            selected = -1
+        }
         if (anchors.isEmpty()) {
             // Every point of a reopened path deleted: the path object goes (one undo step).
             if (reopened != null) { commitReopened(); return }
@@ -469,36 +626,181 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         changed()
     }
 
-    /** Moves anchor [index] to [p] (numeric entry; edits of the same anchor share one undo step). */
+    /** Moves point [index] to [p] (numeric entry; edits of the same point share one undo step). */
     fun moveAnchor(index: Int, p: Vec2) {
-        val a = anchors.getOrNull(index) ?: return
         if (!p.x.isFinite() || !p.y.isFinite()) return
         val lim = ShapeSettings.MAX_LENGTH
         val q = Vec2(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim))
+        if (isPath) {
+            val s = spline ?: return
+            val old = s.points.getOrNull(index) ?: return
+            if (q.x == old.x && q.y == old.y) return
+            pushHistory(NumericKey("move", index))
+            setSplineState(SplineEditing.moved(s, index, q))
+            changed()
+            return
+        }
+        val a = anchors.getOrNull(index) ?: return
         if (q == a.pos) return
         pushHistory(NumericKey("move", index))
         replace(index, a.moved(q))
     }
 
+    /** Thickness factor of point [index] (a control point in PATH mode), 1 when there is none. */
+    fun widthOf(index: Int): Float =
+        if (isPath) spline?.points?.getOrNull(index)?.width ?: 1f else anchors.getOrNull(index)?.width ?: 1f
+
     /**
-     * Sets the thickness factor of anchor [index] (0..3 = 0–300 %, §4.5). A slider drag (or a run
-     * of changes of the same point) is one undo step; [endNumericEdit] ends it.
+     * Sets the thickness factor of point [index] (0..3 = 0–300 %, §4.5; a control point in PATH
+     * mode). A slider drag (or a run of changes of the same point) is one undo step;
+     * [endNumericEdit] ends it.
      */
     fun setWidth(index: Int, factor: Float) {
-        val a = anchors.getOrNull(index) ?: return
         if (!factor.isFinite()) return
         val w = factor.coerceIn(0f, CurveWidths.MAX_FACTOR)
+        if (isPath) {
+            val s = spline ?: return
+            val old = s.points.getOrNull(index) ?: return
+            if (w == old.width) return
+            pushHistory(NumericKey("thickness", index))
+            setSplineState(SplineEditing.withWidth(s, index, w))
+            changed()
+            return
+        }
+        val a = anchors.getOrNull(index) ?: return
         if (w == a.width) return
         pushHistory(NumericKey("thickness", index))
         replace(index, a.copy(width = w))
     }
 
-    /** Puts every anchor back to 100 % thickness (one undo step). */
+    /** True when every point is at 100 % thickness (Compose state). */
+    val uniformWidth: Boolean get() = if (isPath) SplineEditing.isUniformWidth(spline) else CurveGeometry.isUniformWidth(anchors)
+
+    /** Puts every point back to 100 % thickness (one undo step). */
     fun resetAllWidths() {
-        if (CurveGeometry.isUniformWidth(anchors)) return
+        if (uniformWidth) return
         pushHistory()
-        anchors = anchors.map { if (it.width == 1f) it else it.copy(width = 1f) }
+        if (isPath) spline?.let { setSplineState(SplineEditing.uniformWidth(it)) }
+        else anchors = anchors.map { if (it.width == 1f) it else it.copy(width = 1f) }
         changed()
+    }
+
+    // ------------------------------------------------------------------ Path (v1.6, §3.2)
+
+    /** A spline with the order, endpoint and cyclic a new path starts with (no points yet). */
+    private fun newSpline() = VSpline(emptyList(), settings.pathOrder, settings.pathEndpoint, settings.closed)
+
+    /** PATH: the order shown in the strip: the pending path's, else the next path's (Compose state). */
+    val pathOrder: Int get() = spline?.order ?: settings.pathOrder
+
+    /** PATH: Endpoint of the pending path, else of the next one (Compose state). */
+    val pathEndpoint: Boolean get() = spline?.endpoint ?: settings.pathEndpoint
+
+    /** PATH: Cyclic of the pending path, else of the next one (Compose state). */
+    val pathCyclic: Boolean get() = spline?.cyclic ?: settings.closed
+
+    /**
+     * PATH: sets the order (2..6; the effective order is `min(order, points)`): of the pending
+     * path as one in-tool step, and of the next path.
+     */
+    fun setOrder(order: Int) {
+        val v = order.coerceIn(VSpline.MIN_ORDER, VSpline.MAX_ORDER)
+        val s = spline
+        if (s != null && s.order != v) {
+            pushHistory()
+            setSplineState(s.copy(order = v))
+        }
+        if (settings.pathOrder != v) update { it.copy(pathOrder = v) } else changed()
+    }
+
+    /** PATH: Endpoint on / off (an open curve touches its first and last points); see [setOrder]. */
+    fun setEndpoint(on: Boolean) {
+        val s = spline
+        if (s != null && s.endpoint != on) {
+            pushHistory()
+            setSplineState(s.copy(endpoint = on))
+        }
+        if (settings.pathEndpoint != on) update { it.copy(pathEndpoint = on) } else changed()
+    }
+
+    /** PATH: Cyclic on / off (closes smoothly with 3 points or more); see [setOrder]. */
+    fun setCyclic(on: Boolean) {
+        val s = spline
+        if (s != null && s.cyclic != on) {
+            pushHistory()
+            setSplineState(s.copy(cyclic = on))
+        }
+        if (settings.closed != on) update { it.copy(closed = on) } else changed()
+    }
+
+    /** PATH: the weight of control point [index] (1 when there is none). */
+    fun weightOf(index: Int): Float = spline?.points?.getOrNull(index)?.weight ?: 1f
+
+    /**
+     * PATH: sets the weight of control point [index] (0.1..10; higher pulls the curve towards
+     * it). A slider drag or a run of changes of the same point is one undo step ([endNumericEdit]).
+     */
+    fun setWeight(index: Int, weight: Float) {
+        val s = spline ?: return
+        if (!weight.isFinite()) return
+        val old = s.points.getOrNull(index) ?: return
+        val w = weight.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT)
+        if (w == old.weight) return
+        pushHistory(NumericKey("weight", index))
+        setSplineState(SplineEditing.withWeight(s, index, w))
+        changed()
+    }
+
+    /** The Path tool's quick starts (§3.2a "Shapes ▾"). */
+    enum class PathShape(val label: String) { CIRCLE("Circle"), CAPSULE("Capsule") }
+
+    /**
+     * PATH, while no point exists: starts [shape] fitted to [SplinePresets.VIEW_FRACTION] of
+     * [area] (the visible part of the canvas, document px): a Circle is 8 points, a Capsule 12
+     * (3 : 1, fill on, stroke off), both cyclic at order 4. One in-tool step.
+     */
+    fun startShape(shape: PathShape, area: RectF): Boolean {
+        if (!isPath || pointCount > 0 || opening) return false
+        if (area.isEmpty || !area.width().isFinite() || !area.height().isFinite()) return false
+        if (!controller.checkEditable()) return false
+        val points = when (shape) {
+            PathShape.CIRCLE -> SplinePresets.circleIn(area).let { (c, r) -> SplinePresets.circle(c, r) }
+            PathShape.CAPSULE -> SplinePresets.capsuleIn(area).let { (c, h) -> SplinePresets.capsule(c, h) }
+        }.map { SplineEditing.clean(it) }
+        pushHistory()
+        targetLayer = controller.doc.activeLayer
+        setSplineState(VSpline(points, order = 4, endpoint = settings.pathEndpoint, cyclic = true))
+        selectedPoint = -1
+        update {
+            val base = it.copy(closed = true, pathOrder = 4)
+            if (shape == PathShape.CAPSULE) base.copy(fill = true, stroke = CurveStroke.NONE) else base
+        }
+        changed()
+        return true
+    }
+
+    /**
+     * The area quick starts fit into: the part of the canvas visible in a view of [viewWidth] ×
+     * [viewHeight] screen px, or the whole canvas when that is unknown or misses it.
+     */
+    fun shapeArea(viewWidth: Int, viewHeight: Int): RectF {
+        val doc = RectF(0f, 0f, controller.doc.width.toFloat(), controller.doc.height.toFloat())
+        if (viewWidth <= 0 || viewHeight <= 0) return doc
+        val v = controller.viewTransform.visibleDocRect(viewWidth, viewHeight)
+        return if (v.intersect(doc) && v.width() > 1f && v.height() > 1f) v else doc
+    }
+
+    /** The X / Y pill's target in PATH mode: the selected control point (hidden while none is). */
+    private inner class SplinePointPosition : ObjectPosition {
+        override val position: Vec2? get() = spline?.points?.getOrNull(selectedPoint)?.let { Vec2(it.x, it.y) }
+        override val label: String get() = "Point ${selectedPoint + 1}"
+        override fun setPosition(x: Float?, y: Float?) {
+            val i = selectedPoint
+            val p = spline?.points?.getOrNull(i) ?: return
+            moveAnchor(i, Vec2(x?.takeIf { it.isFinite() } ?: p.x, y?.takeIf { it.isFinite() } ?: p.y))
+        }
+        override fun beginPositionEdit() = beginNumericEdit()
+        override fun endPositionEdit() = endNumericEdit()
     }
 
     /**
@@ -509,6 +811,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (anchors.isEmpty()) return
         val step = settings.nudgeStepPx
         val d = Vec2(dx * step, dy * step)
+        if (isPath) {
+            val s = spline ?: return
+            val i = selectedPoint
+            pushHistory(NumericKey("nudge", i))
+            val p = s.points.getOrNull(i)
+            setSplineState(if (p != null) SplineEditing.moved(s, i, Vec2(p.x, p.y) + d) else SplineEditing.translated(s, d))
+            changed()
+            return
+        }
         pushHistory(NumericKey("nudge", selected))
         anchors = if (selected in anchors.indices) {
             anchors.mapIndexed { i, a -> if (i == selected) a.moved(a.pos + d) else a }
@@ -524,17 +835,189 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     /** Bezier handles (in, out) of anchor [i] as offsets, as currently drawn. */
-    fun handlesOf(i: Int): Pair<Vec2, Vec2> = CurveGeometry.handles(anchors, i, settings.closed, tension)
+    fun handlesOf(i: Int): Pair<Vec2, Vec2> = CurveGeometry.handles(anchors, i, isClosed, tension)
 
     /**
-     * Diameter (document px) the line has at anchor [index]: the plain line's width or the brush
-     * size, times the anchor's thickness.
+     * Diameter (document px) the line has at point [index] (a control point in PATH mode): the
+     * plain line's width or the brush size, times the point's thickness.
      */
     fun diameterAt(index: Int): Float {
-        val a = anchors.getOrNull(index) ?: return 0f
+        if (index !in 0 until pointCount) return 0f
         val base = if (strokeMode(targetLayer ?: controller.doc.activeLayer) == CurveStroke.BRUSH) baseBrush()?.size ?: lineWidth else lineWidth
-        return base * CurveWidths.factor(a.width)
+        return base * CurveWidths.factor(widthOf(index))
     }
+
+    // ------------------------------------------------------------------ handle scaling (v1.6, §3.3)
+
+    /**
+     * The Handles group's value: the factor of the change in progress, relative to the handle
+     * lengths when it began; 1 (100 %) at rest (Compose state).
+     */
+    var handleScale by mutableFloatStateOf(1f)
+        private set
+
+    /** Which handles a change scales: both, the incoming or the outgoing one (Compose state). */
+    var handleSide by mutableStateOf(HandleSide.BOTH)
+
+    /** Every point's handles scale (each relative to its own lengths), not only the selected point's (Compose state). */
+    var handleAllPoints by mutableStateOf(false)
+
+    /** True when the Handles group applies: the Curve tool with a path of at least two points. */
+    val canScaleHandles: Boolean get() = kind == CurveKind.CURVE && anchors.size >= 2
+
+    /** The anchors when the change began, or null at rest. */
+    private var handleBase: List<CurveAnchor>? = null
+    private var handleTargets = IntArray(0)
+    private var handleHistorySize = 0
+    private var handleRedo: List<EditState> = emptyList()
+    /** A two-finger pinch is scaling the handles ([onTwoFingerStart]). */
+    private var pinchingHandles = false
+
+    /** The points a change of the handles scales: the selected one, or all when "All points" is on or none is selected. */
+    private fun handleTargetsNow(): IntArray {
+        val sel = selected
+        return if (!handleAllPoints && sel in anchors.indices) intArrayOf(sel) else IntArray(anchors.size) { it }
+    }
+
+    /**
+     * A change of the handles starts (a slider drag, a held arrow, a typed value, a pinch): the
+     * value is relative to the lengths now, and everything until [endHandleScale] is one in-tool
+     * step.
+     */
+    fun beginHandleScale() {
+        if (!canScaleHandles) return
+        beginNumericEdit()
+        handleBase = anchors
+        handleTargets = handleTargetsNow()
+        handleHistorySize = history.size
+        handleRedo = redo.toList()
+        handleScale = 1f
+    }
+
+    /**
+     * Scales the handles of the change in progress (begun now if none is) to [k] times their
+     * lengths when it began ([CurveGeometry.scaledHandles]: automatic tangents are made explicit
+     * first, directions never change; the factor is held to 0.01..100).
+     */
+    fun scaleHandles(k: Float) {
+        if (!k.isFinite()) return
+        if (handleBase == null) beginHandleScale()
+        val base = handleBase ?: return
+        val f = CurveGeometry.clampHandleScale(k)
+        pushHistory(NumericKey("handles", -1))
+        handleScale = f
+        anchors = CurveGeometry.scaledHandles(base, handleTargets, f, handleSide, isClosed, tension)
+        changed()
+    }
+
+    /** The change of the handles is complete: the value goes back to 100 % (the next change starts from the lengths then). */
+    fun endHandleScale() {
+        handleBase = null
+        handleScale = 1f
+        controller.increments.readout = null
+        endNumericEdit()
+    }
+
+    /** A typed handle scale (percent of the lengths now; exact, never stepped): one in-tool step. */
+    fun applyHandleScale(percent: Float) {
+        if (!percent.isFinite() || !canScaleHandles) return
+        beginHandleScale()
+        scaleHandles(percent / 100f)
+        endHandleScale()
+    }
+
+    /**
+     * ‹ › of the Handles group: the value × 0.9 / × 1.1, or ∓ / ± one Scale increment (110 %,
+     * 120 % …) while increments are on. Repeats while held; [endHandleScale] when released.
+     */
+    fun stepHandleScale(up: Boolean) {
+        if (!canScaleHandles) return
+        if (handleBase == null) beginHandleScale()
+        val stepPercent = controller.increments.step(IncrementKind.SCALE)
+        val next = if (stepPercent != null) {
+            controller.increments.factor(handleScale + (if (up) stepPercent else -stepPercent) / 100f)
+        } else {
+            handleScale * if (up) HANDLE_STEP_UP else HANDLE_STEP_DOWN
+        }
+        scaleHandles(next)
+        showScaleReadout()
+    }
+
+    /**
+     * A slider position as a handle scale: [factor] snapped to the Scale increment while
+     * increments are on (relative to the change's start), else as it is.
+     */
+    fun steppedHandleScale(factor: Float): Float = controller.increments.factor(factor)
+
+    private fun showScaleReadout() {
+        if (controller.increments.enabled) controller.increments.readout = "${(handleScale * 100f).roundToInt()} %"
+    }
+
+    /** Puts the handles back as they were when the change began and drops its step (a cancelled pinch). */
+    private fun revertHandleScale() {
+        val base = handleBase ?: return
+        while (history.size > handleHistorySize) history.removeLast()
+        redo.clear(); redo.addAll(handleRedo)
+        redoCount = redo.size
+        canUndoStep = history.isNotEmpty()
+        anchors = base
+        changed()
+    }
+
+    /**
+     * A pinch scales the selected point's handles when one finger starts within
+     * [IbisDims.HandlePinchDistance] (on screen) of that point or the ends of its handles; the
+     * rotation is ignored. Any other pinch moves the view.
+     */
+    override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        if (!canScaleHandles) return false
+        val i = selected
+        val anchor = anchors.getOrNull(i) ?: return false
+        val t = controller.viewTransform
+        val reach = t.dp(IbisDims.HandlePinchDistance.value) * handleSize.coerceAtLeast(1f)
+        val targets = ArrayList<Vec2>(3)
+        targets += anchor.pos
+        if (!anchor.sharp) {
+            val (hIn, hOut) = handlesOf(i)
+            if (hIn.length > 1e-3f) targets += anchor.pos + hIn
+            if (hOut.length > 1e-3f) targets += anchor.pos + hOut
+        }
+        val near = listOf(a, b).any { f ->
+            f.x.isFinite() && f.y.isFinite() && targets.any { q -> t.docToScreen(f).distanceTo(t.docToScreen(q)) <= reach }
+        }
+        if (!near) return false
+        beginHandleScale()
+        pinchingHandles = true
+        return true
+    }
+
+    override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        if (!pinchingHandles || !scale.isFinite() || scale <= 0f) return
+        scaleHandles(controller.increments.factor(scale))
+        showScaleReadout()
+    }
+
+    override fun onTwoFingerEnd(cancelled: Boolean) {
+        if (!pinchingHandles) return
+        pinchingHandles = false
+        if (cancelled) revertHandleScale()
+        endHandleScale()
+    }
+
+    // ------------------------------------------------------------------ handle size on screen (v1.6, §3.3)
+
+    /** "Handle size" (app-wide, 75–200 %): the drawn size and grab radius of points and handles. */
+    val handleSize: Float get() = controller.settings.curveHandleScale
+
+    /** Sets "Handle size" ([AppSettings.MIN_CURVE_HANDLE_SCALE]..[AppSettings.MAX_CURVE_HANDLE_SCALE]). */
+    fun setHandleSize(v: Float) {
+        if (!v.isFinite()) return
+        controller.settings.curveHandleScale = v.coerceIn(AppSettings.MIN_CURVE_HANDLE_SCALE, AppSettings.MAX_CURVE_HANDLE_SCALE)
+        controller.invalidateOverlay()
+    }
+
+    /** Grab radius of points and handles (document px): [HANDLE_TOUCH_DP] at the user's handle size. */
+    private fun grabRadius(): Float = controller.docLength(HANDLE_TOUCH_DP * handleSize)
 
     // ------------------------------------------------------------------ input
 
@@ -543,15 +1026,18 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         downPoint = pt
         moved = false
         longPressed = false
-        gestureStart = anchors
+        gestureStart = currentState()
         gestureSelected = selected
+        gestureSelectedPoint = selectedPoint
         gestureHistorySize = history.size
         gestureRedo = redo.toList()
         reopenCandidate = null
+        reopenKind = kind
         snap.end()
         snapMoving = null
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
-        val tol = controller.docLength(HANDLE_TOUCH_DP)
+        if (isPath) { pathDown(pt); return }
+        val tol = grabRadius()
         val sel = selected
         if (!polyline && sel in anchors.indices && !anchors[sel].sharp) {
             val (hIn, hOut) = handlesOf(sel)
@@ -572,18 +1058,74 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             // Every existing point can be grabbed and moved at any time (it snaps once it moves).
             drag = Drag.ANCHOR
             dragIndex = idx
+            dragStartPos = anchors[idx].pos
             beginSnap(except = idx)
             return
         }
-        if (anchors.isEmpty()) {
-            // A tap on a path object of the vector layer reopens it (a drag starts a new path).
-            reopenablePathAt(pt)?.let { path ->
-                reopenCandidate = path
-                drag = Drag.REOPEN
-                return
-            }
+        if (anchors.isEmpty() && armReopen(pt)) return
+        newAnchorAt(pt, controller.docLength(HANDLE_TOUCH_DP))
+    }
+
+    /**
+     * With no path pending, a tap on a path object of the vector layer reopens it (a drag starts
+     * a new path): in this tool, or in the one that edits it (Curve / Polyline ↔ Path). True when
+     * the touch is armed for that.
+     */
+    private fun armReopen(pt: Vec2): Boolean {
+        val (path, k) = reopenablePathAt(pt) ?: return false
+        reopenCandidate = path
+        reopenKind = k
+        drag = Drag.REOPEN
+        return true
+    }
+
+    /** PATH: the touch went down at [pt] (see the class docs for the gestures). */
+    private fun pathDown(pt: Vec2) {
+        val s = spline
+        val idx = if (s != null) SplineEditing.nearestPoint(s.points, pt, grabRadius()) else -1
+        if (s != null && idx >= 0) {
+            drag = Drag.ANCHOR
+            dragIndex = idx
+            dragStartPos = SplineEditing.pos(s.points[idx])
+            beginSnap(except = idx)
+            return
         }
-        newAnchorAt(pt, tol)
+        if (anchors.isEmpty() && armReopen(pt)) return
+        newPointAt(pt)
+    }
+
+    /**
+     * PATH: a new control point under the finger at [pt]: inserted on the control polygon when
+     * the finger is within [IbisDims.PathInsertDistance] of it, else after the selected point
+     * (which then moves on to the new one, as Blender extrudes from the selected end) or at the
+     * end. It snaps right away and follows the finger until it lifts.
+     */
+    private fun newPointAt(pt: Vec2) {
+        val s0 = spline
+        if (s0 != null && s0.points.size >= VSpline.MAX_POINTS) { drag = Drag.IGNORE; return }
+        beginSnap(except = -1)
+        pushHistory()
+        val s = s0 ?: newSpline()
+        val hit = if (s.points.size >= 2) SplineEditing.polygonHit(s, pt) else null
+        val keepSelecting = selectedPoint in s.points.indices
+        val at: Int
+        val point: VSplinePoint
+        if (hit != null && hit.distance <= controller.docLength(IbisDims.PathInsertDistance.value)) {
+            at = hit.segment + 1
+            val q = snapAnchor(hit.point)
+            point = SplineEditing.pointOnPolygon(s, hit, q)
+        } else {
+            at = if (keepSelecting) selectedPoint + 1 else s.points.size
+            val q = snapAnchor(pt)
+            point = VSplinePoint(q.x, q.y, width = s.points.getOrNull(at - 1)?.width ?: s.points.lastOrNull()?.width ?: 1f)
+        }
+        if (targetLayer == null) targetLayer = controller.doc.activeLayer
+        setSplineState(SplineEditing.inserted(s, at, point))
+        selectedPoint = if (keepSelecting) at else -1
+        dragIndex = at
+        dragStartPos = Vec2(point.x, point.y)
+        drag = Drag.NEW_ANCHOR
+        changed(brushDelayMs = NEW_POINT_BRUSH_DELAY_MS)
     }
 
     /** Adds a new anchor under the finger at [pt]: inserted when on the path, appended otherwise. */
@@ -592,7 +1134,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         // (to objects, the other anchors and, with grid snapping, the grid).
         beginSnap(except = -1)
         pushHistory()
-        val hit = if (anchors.size >= 2) CurveGeometry.nearest(anchors, pt, settings.closed, tension, polyline) else null
+        val hit = if (anchors.size >= 2) CurveGeometry.nearest(anchors, pt, isClosed, tension, polyline) else null
         val list = anchors.toMutableList()
         if (hit != null && hit.distance <= tol * 0.6f) {
             dragIndex = hit.segment + 1
@@ -604,6 +1146,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             list.add(CurveAnchor(q.x, q.y, sharp = polyline, width = anchors.lastOrNull()?.width ?: 1f))
             dragIndex = list.lastIndex
         }
+        dragStartPos = list[dragIndex].pos
         if (targetLayer == null) targetLayer = controller.doc.activeLayer
         anchors = list
         selected = -1
@@ -630,7 +1173,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                 // Not a tap: a new path starts where the finger went down, as anywhere else.
                 reopenCandidate = null
-                newAnchorAt(downPoint, controller.docLength(HANDLE_TOUCH_DP))
+                if (isPath) newPointAt(downPoint) else newAnchorAt(downPoint, controller.docLength(HANDLE_TOUCH_DP))
                 onMove(p)
             }
             Drag.ANCHOR, Drag.NEW_ANCHOR -> {
@@ -639,10 +1182,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 moved = true
                 // The preview follows the finger as cheaply as possible until it lifts.
                 setDragging(true)
+                if (isPath) {
+                    val s = spline ?: return
+                    if (dragIndex !in s.points.indices) return
+                    setSplineState(SplineEditing.moved(s, dragIndex, dragTarget(pt)))
+                    changed()
+                    return
+                }
                 val a = anchors.getOrNull(dragIndex) ?: return
                 // What the finger alone gives is snapped (never the last snapped place), so moving
                 // farther than the snap distance lets go of a guide.
-                replace(dragIndex, a.moved(snapAnchor(pt)))
+                replace(dragIndex, a.moved(dragTarget(pt)))
             }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> {
                 val a = anchors.getOrNull(dragIndex) ?: return
@@ -677,7 +1227,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         when (drag) {
             Drag.ANCHOR -> when {
                 moved -> onMove(p)
-                !longPressed -> select(if (selected == dragIndex) -1 else dragIndex)
+                !longPressed -> select(if (selectedIndex == dragIndex) -1 else dragIndex)
             }
             Drag.NEW_ANCHOR -> {
                 onMove(p)
@@ -687,14 +1237,18 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> if (moved) onMove(p)
             Drag.REOPEN -> {
                 val path = reopenCandidate
+                val k = reopenKind
                 reopenCandidate = null
                 drag = Drag.NONE
-                if (path != null) reopen(path)
+                if (path != null) {
+                    if (k == kind) reopen(path) else switchAndReopen(k, path)
+                }
             }
             Drag.NONE, Drag.IGNORE -> {}
         }
         drag = Drag.NONE
         endSnap()
+        controller.increments.readout = null
         // The drag is over: a plain line / fill goes back into the layer, a brush stroke is drawn
         // exactly once the path rests a moment.
         setDragging(false)
@@ -705,8 +1259,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         setDragging(false)
         reopenCandidate = null
         if (drag != Drag.NONE && drag != Drag.IGNORE && drag != Drag.REOPEN) {
-            anchors = gestureStart
+            if (isPath) setSplineState(gestureStart.spline) else anchors = gestureStart.anchors
             selected = gestureSelected
+            selectedPoint = gestureSelectedPoint
             while (history.size > gestureHistorySize) history.removeLast()
             redo.clear(); redo.addAll(gestureRedo)
             redoCount = redo.size
@@ -716,7 +1271,43 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         }
         drag = Drag.NONE
         endSnap()
+        controller.increments.readout = null
         changed()
+    }
+
+    /**
+     * Where a dragged point goes for the finger at [pt]: snapped to objects, then the grid (the
+     * v1.5 [snapAnchor]); while increments are on, an axis that neither snapped moves by a
+     * multiple of the Length step from where the point was when the drag began (§3.4: object
+     * guide, then grid, then the increment), and the readout shows the move.
+     */
+    private fun dragTarget(pt: Vec2): Vec2 {
+        val snapped = snapAnchor(pt)
+        val step = controller.increments.step(IncrementKind.LENGTH) ?: return snapped
+        val d = pt - downPoint
+        val x = if (snapped.x != pt.x) snapped.x else dragStartPos.x + IncrementMath.snapDelta(d.x, step)
+        val y = if (snapped.y != pt.y) snapped.y else dragStartPos.y + IncrementMath.snapDelta(d.y, step)
+        val q = Vec2(x, y)
+        snapMoving = q
+        controller.increments.readout = "${signed(x - dragStartPos.x)}, ${signed(y - dragStartPos.y)} px"
+        return q
+    }
+
+    private fun signed(v: Float): String {
+        val r = v.roundToInt()
+        return if (r > 0) "+$r" else if (r < 0) "−${abs(r)}" else "0"
+    }
+
+    /** Switches to the tool of [k] (Curve / Polyline ↔ Path) and reopens [path] there. */
+    private fun switchAndReopen(k: CurveKind, path: VPath) {
+        val id = when (k) {
+            CurveKind.CURVE -> ToolId.CURVE
+            CurveKind.POLYLINE -> ToolId.POLYLINE
+            CurveKind.PATH -> ToolId.PATH
+        }
+        val other = controller.tools[id] as? CurveTool ?: return
+        controller.selectTool(id)
+        if (controller.currentTool === other) other.reopen(path)
     }
 
     /**
@@ -752,7 +1343,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     private fun beginSnap(except: Int) {
         val others = ArrayList<Vec2>(anchors.size)
-        anchors.forEachIndexed { i, a -> if (i != except) others += a.pos }
+        if (isPath) spline?.points?.forEachIndexed { i, p -> if (i != except) others += Vec2(p.x, p.y) }
+        else anchors.forEachIndexed { i, a -> if (i != except) others += a.pos }
         snap.begin(includeSelection = true) { pointLines(others, POINT_LABEL) }
     }
 
@@ -785,19 +1377,38 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun vectorTarget(layer: Layer): Boolean =
         layer.isVectorLayer && controller.editTargetOf(layer) == EditTarget.CONTENT
 
-    /** A path object of the active vector layer under [p] that this tool can reopen. */
-    private fun reopenablePathAt(p: Vec2): VPath? {
+    /**
+     * A path object of the active vector layer under [p] that a tap reopens, and the kind of tool
+     * that edits it ([editorKindOf]): this one, or Path for a Curve / Polyline tapping a spline
+     * path, or Curve / Polyline for Path tapping a plain path. (Curve and Polyline still leave
+     * each other's paths alone, as in v1.5.)
+     */
+    private fun reopenablePathAt(p: Vec2): Pair<VPath, CurveKind>? {
         if (opening) return null
         val layer = controller.doc.activeLayer
         if (!vectorTarget(layer) || layer.locked || !layer.visible) return null
         val tol = controller.docLength(PATH_HIT_DP)
         val hit = controller.vectors.hitTest(layer, p, tol) as? VPath ?: return null
-        if (!canReopen(hit)) return null
+        if (!hit.isCurveEditable || hit.subpaths[0].anchors.size < 2) return null
+        val k = editorKindOf(hit)
+        val switches = k != kind && (isPath || k == CurveKind.PATH)
+        if (k != kind && !switches) return null
         // A filled path with a visible line reopens from its line: a tap inside its fill starts
         // a new path there (curves are drawn over filled shapes; a fill alone reopens anywhere).
         val reach = lineReach(hit)
         if (hit.fill != null && reach > 0f && distanceToLine(hit, p) > reach + tol) return null
-        return hit
+        return hit to k
+    }
+
+    /**
+     * The tool that edits [p]: Path when it keeps a spline that passes the I9 check
+     * ([SplineBezier.matches]; else the spline is stale and the path is a plain Bézier path),
+     * otherwise Polyline or Curve by its corners.
+     */
+    private fun editorKindOf(p: VPath): CurveKind = when {
+        p.spline != null && SplineBezier.matches(p) -> CurveKind.PATH
+        p.polyline -> CurveKind.POLYLINE
+        else -> CurveKind.CURVE
     }
 
     /** How far [p]'s line paints from its centre line (document px): 0 when it paints nothing. */
@@ -822,9 +1433,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         return best
     }
 
-    /** True for a single-subpath path of this tool's kind (curves in the Curve tool, polylines in the Polyline tool). */
+    /**
+     * True for a single-subpath path this tool edits: curves in the Curve tool, polylines in the
+     * Polyline tool, splines that pass the I9 check in the Path tool ([editorKindOf]).
+     */
     private fun canReopen(p: VPath): Boolean =
-        p.isCurveEditable && p.polyline == polyline && p.subpaths[0].anchors.size >= 2
+        p.isCurveEditable && p.subpaths[0].anchors.size >= 2 && editorKindOf(p) == kind
 
     /** A path object being edited again (see [reopen]). */
     private class Reopened(
@@ -894,8 +1508,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         controller.color = strokeColor
         if (st?.kind == VStrokeKind.BRUSH) brushPreview.useSeed(st.seed)
         targetLayer = layer
-        anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
+        val sp = path.spline
+        if (isPath && sp != null) {
+            // The control points come back; the strip shows the path's order, endpoint and cyclic.
+            val clean = sp.sanitized()
+            setSplineState(clean)
+            settings = settings.copy(closed = clean.cyclic, pathOrder = clean.order, pathEndpoint = clean.endpoint)
+        } else {
+            anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
+        }
         selected = -1
+        selectedPoint = -1
         clearHistory()
         session.drawPreview = { canvas -> drawSessionPreview(canvas) }
         changed()
@@ -1051,7 +1674,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun buildSpecs(path: VectorPath, mode: CurveStroke, gradientFill: Boolean = false): List<VectorPaintSpec> {
         if (anchors.size < 2) return emptyList()
         val s = settings
-        val fill = if (s.fill && anchors.size >= 3 && !gradientFill) path else null
+        val fill = if (s.fill && canFill && !gradientFill) path else null
         val st = reopened?.original?.stroke
         val cap = st?.cap ?: LineCapStyle.ROUND
         val join = st?.join ?: JoinStyle.ROUND
@@ -1071,7 +1694,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /** The plain line's outline with the anchors' thickness factors (§4.5). */
     private fun varyingOutline(width: Float): VectorPath {
-        val closed = settings.closed && anchors.size > 2
+        val closed = isClosed && anchors.size > 2
         val line = CurveWidths.line(anchors, closed, tension, polyline, width) ?: return VectorPath.EMPTY
         return VariableWidthOutline.build(line.xs, line.ys, line.ws, line.n, closed, CurveWidths.LINE_TOLERANCE)
     }
@@ -1104,7 +1727,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (g.widths == null) return own
         val base = own ?: controller.presetFor(brushToolId()) ?: return null
         brushStrokeInput(path, g.taperFraction, sampleScratch)
-        val wMax = profileMax(WidthProfile(CurveWidths.atSamples(anchors, settings.closed && anchors.size > 2, tension, polyline, sampleScratch.size)))
+        val wMax = profileMax(WidthProfile(CurveWidths.atSamples(anchors, isClosed && anchors.size > 2, tension, polyline, sampleScratch.size)))
         if (!(wMax > 0f)) return own
         return base.copy(size = base.size * wMax, pressureSize = true, minSizeRatio = 0f, pressureOpacity = false)
     }
@@ -1140,7 +1763,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             val size = (brushOverride ?: controller.presetFor(brushToolId()))?.size ?: 0f
             if (specs.isNotEmpty()) specOverlay.setBand(docPath, size)
             val a = anchors
-            val closed = settings.closed && a.size > 2
+            val closed = isClosed && a.size > 2
             brushPreview.request(g, brushDelayMs) { brushPoints(path, g, a, closed, it) }
         } else {
             brushPreview.cancel()
@@ -1162,8 +1785,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         hideUnclipped()
         overlaySpecs = emptyList()
         val vp = buildVPath()
-        pristine = vp != null && vp == r.original
-        val gradient = r.original.fill?.takeIf { it !is VPaint.Solid && settings.fill && settings.fillColor == null && anchors.size >= 3 }
+        // (Path: the same spline and look are unchanged even when the stored Bézier form was
+        // cut differently, e.g. an approximated spline mapped by a transform.)
+        pristine = vp != null && (vp == r.original || (isPath && vp.spline != null && vp.copy(subpaths = r.original.subpaths) == r.original))
+        val gradient = r.original.fill?.takeIf { it !is VPaint.Solid && settings.fill && settings.fillColor == null && canFill }
         val specs = if (path != null) buildSpecs(path, mode, gradientFill = gradient != null) else emptyList()
         sessionGradient = if (gradient != null && vp != null) vp.copy(stroke = null) else null
         val regions = ArrayList<Rect>()
@@ -1179,7 +1804,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             val g = brushGeometry(path, settings)
             brushOverride = brushFor(path, g)
             val a = anchors
-            val closed = settings.closed && a.size > 2
+            val closed = isClosed && a.size > 2
             brushPreview.request(g, brushDelayMs) { brushPoints(path, g, a, closed, it) }
         } else {
             brushPreview.cancel()
@@ -1249,7 +1874,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val s = settings
         val r = reopened
         val layer = targetLayer ?: controller.doc.activeLayer
-        val closed = s.closed && anchors.size > 2
+        val closed = isClosed && anchors.size > 2
         val color = controller.color
         val orig = r?.original
         val origStroke = orig?.stroke
@@ -1277,13 +1902,28 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             }
             CurveStroke.NONE -> null
         }
-        val fill = if (s.fill && anchors.size >= 3) {
+        val fill = if (s.fill && canFill) {
             val g = orig?.fill?.takeIf { it !is VPaint.Solid && s.fillColor == null }
             g ?: VPaint.Solid(s.fillColor ?: color)
         } else {
             null
         }
         if (fill == null && (stroke == null || lineDrawsNothing())) return null
+        if (isPath) {
+            // I9: the spline (sanitize-stable, as the codec reads it back) and EXACTLY its Bézier form.
+            val sp = spline?.sanitized() ?: return null
+            return VPath(
+                id = orig?.id ?: 0L,
+                opacity = orig?.opacity ?: 1f,
+                subpaths = listOf(SplineBezier.toSubpath(sp)),
+                tension = 0f,
+                polyline = false,
+                fillRule = orig?.fillRule ?: VFillRule.NONZERO,
+                fill = fill,
+                stroke = stroke,
+                spline = sp,
+            )
+        }
         return VPath(
             id = orig?.id ?: 0L,
             opacity = orig?.opacity ?: 1f,
@@ -1312,13 +1952,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val brush = mode == CurveStroke.BRUSH && layer === controller.doc.activeLayer
         val g = brushGeometry(path, s)
         val a = anchors
-        val closed = s.closed && a.size > 2
+        val closed = isClosed && a.size > 2
         brushOverride = if (brush) brushFor(path, g) else null
         resetPath()
         // Fill and brush stroke are ONE undo step, named after the tool (a plain line / fill
         // alone keeps its own name).
         val step: (String, () -> Unit) -> Unit = if (brush) controller::undoStepNamed else controller::groupUndo
-        step(if (polyline) "Polyline" else "Curve") {
+        step(stepLabel) {
             if (specs.isNotEmpty()) {
                 // The fill goes under the stroke, so the stroke is painted after it (smudge /
                 // blur previews edit the pixels: they are restored first).
@@ -1326,7 +1966,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 val label = when {
                     mode != CurveStroke.PLAIN -> "Fill path"
                     polyline -> "Polyline"
-                    else -> "Curve"
+                    else -> stepLabel
                 }
                 VectorCommit.commit(controller, layer, specs, label)
             }
@@ -1345,11 +1985,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     private fun commitObject(layer: Layer) {
         val vp = buildVPath() ?: run { discard(); return }
-        val label = if (polyline) "Polyline" else "Curve"
+        val label = stepLabel
         val path = path()
         val g = brushGeometry(path, settings)
         val a = anchors
-        val closed = settings.closed && a.size > 2
+        val closed = isClosed && a.size > 2
         // (The painting tool paints the active layer: a path on another layer is drawn by its
         // layer, as is a brush line at 0 % everywhere, which paints nothing.)
         if (vp.stroke?.kind != VStrokeKind.BRUSH || strokeMode(layer) != CurveStroke.BRUSH || layer !== controller.doc.activeLayer) {
@@ -1419,9 +2059,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             brushPreview.cancel()
             r.session.inner = null
             r.session.drawPreview = null
-            val replacement = vp?.copy(id = r.original.id)
+            // (Untouched: the object as it was, so nothing is recorded.)
+            val replacement = if (pristine && vp != null) r.original else vp?.copy(id = r.original.id)
             endReopen(cancelSession = false)
             r.session.commit(listOfNotNull(replacement), EDIT_PATH_LABEL)
+            // A Path-tool path edited here (after To Bézier) is a plain Bézier path from now on.
+            if (r.original.spline != null && replacement != null && replacement.spline == null) controller.toast(EDITED_AS_BEZIER)
         } finally {
             inCommit = false
         }
@@ -1440,6 +2083,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun resetPath() {
         anchors = emptyList()
         selected = -1
+        spline = null
+        selectedPoint = -1
+        handleBase = null
+        handleScale = 1f
+        pinchingHandles = false
         clearHistory()
         drag = Drag.NONE
         endSnap()
@@ -1528,6 +2176,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             specOverlay.draw(canvas, t, controller, layer, overlaySpecs, keepBandFree = brushPreview.isLive, ignoreSelection = vectorTarget(layer))
         }
         if (list.size >= 2) painter.path(canvas, t, docPath)
+        val scale = handleSize
+        if (isPath) {
+            drawPathPoints(canvas, t, scale)
+            snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
+            return
+        }
         val sel = selected
         if (!polyline && sel in list.indices && !list[sel].sharp) {
             val (hIn, hOut) = handlesOf(sel)
@@ -1536,24 +2190,162 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 if (h.length < 1e-3f) continue
                 val q = map(t, list[sel].pos + h).let { it[0] to it[1] }
                 painter.line(canvas, t, a.first, a.second, q.first, q.second)
-                painter.handle(canvas, t, q.first, q.second, small = true, active = true)
+                pointPainter.handle(canvas, t, q.first, q.second, scale, small = true, active = true)
             }
         }
         // The real diameter at the selected point while its thickness is changed.
-        if (thicknessRing && sel in list.indices) {
-            val d = diameterAt(sel)
-            if (d > 0f && d.isFinite()) {
-                ringPath.rewind()
-                ringPath.addCircle(list[sel].x, list[sel].y, d / 2f, Path.Direction.CW)
-                painter.path(canvas, t, ringPath, dashed = true)
-            }
-        }
+        if (thicknessRing && sel in list.indices) drawThicknessRing(canvas, t, list[sel].pos, diameterAt(sel))
         for (i in list.indices) {
             val q = map(t, list[i].pos)
-            painter.handle(canvas, t, q[0], q[1], square = list[i].sharp || polyline, active = i == sel)
+            pointPainter.handle(canvas, t, q[0], q[1], scale, square = list[i].sharp || polyline, active = i == sel)
         }
         // Smart guides of the dragged point (on top, labels away from the finger).
         snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
+    }
+
+    /** PATH: the dashed control polygon, the thickness ring and the control points (the selected one orange). */
+    private fun drawPathPoints(canvas: Canvas, t: ViewTransform, scale: Float) {
+        val s = spline ?: return
+        pointPainter.controlPolygon(canvas, t, s)
+        val sel = selectedPoint
+        if (thicknessRing && sel in s.points.indices) drawThicknessRing(canvas, t, SplineEditing.pos(s.points[sel]), diameterAt(sel))
+        for (i in s.points.indices) {
+            val q = map(t, SplineEditing.pos(s.points[i]))
+            pointPainter.controlPoint(canvas, t, q[0], q[1], selected = i == sel, scale = scale)
+        }
+    }
+
+    /** A dashed ring of diameter [d] (document px) around [at]. */
+    private fun drawThicknessRing(canvas: Canvas, t: ViewTransform, at: Vec2, d: Float) {
+        if (!(d > 0f) || !d.isFinite()) return
+        ringPath.rewind()
+        ringPath.addCircle(at.x, at.y, d / 2f, Path.Direction.CW)
+        painter.path(canvas, t, ringPath, dashed = true)
+    }
+
+    // ------------------------------------------------------------------ To Bézier (v1.6, §3.2a)
+
+    /**
+     * Pending work handed from one curve tool to another: the Path tool's spline to the Curve
+     * tool as Bézier anchors ([toBezier]), and back again when that step is undone.
+     */
+    private class Handoff(
+        val anchors: List<CurveAnchor>,
+        val spline: VSpline?,
+        val targetLayer: Layer?,
+        /** The look the pending path shows (stroke, fill, widths, closed...). */
+        val look: CurveSettings,
+        val reopened: Reopened?,
+        /** The random values of its brush stroke (the texture stays the same). */
+        val seed: Long,
+        /** The giving tool's in-tool history (a hand-back restores it). */
+        val history: List<EditState>,
+    )
+
+    /**
+     * PATH: turns the pending path into a Curve-tool path (smooth anchors with both handles set,
+     * so every handle can be grabbed, V7) and switches to the Curve tool, which then holds it as
+     * pending work; a reopened path stays open there and ✓ stores it as a plain Bézier path
+     * (the spline is dropped). In the Curve tool this is one in-tool step: undoing it hands the
+     * path back to the Path tool exactly as it was. False when there is nothing to convert.
+     */
+    fun toBezier(): Boolean {
+        if (!isPath || anchors.size < 2 || drag != Drag.NONE || opening) return false
+        val curve = controller.tools[ToolId.CURVE] as? CurveTool ?: return false
+        if (curve === this || curve.hasPendingWork) return false
+        val mine = detachPending()
+        controller.selectTool(ToolId.CURVE)
+        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history)
+        curve.adopt(
+            Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList()),
+            history = listOf(EditState(emptyList(), null, back = back)),
+        )
+        return true
+    }
+
+    /** Curve: the first step after [toBezier] is undone: the path goes back to the Path tool as it was. */
+    private fun handBack(back: Handoff): Boolean {
+        val path = controller.tools[ToolId.PATH] as? CurveTool ?: return false
+        if (path === this || path.hasPendingWork) return false
+        val mine = detachPending()
+        controller.selectTool(ToolId.PATH)
+        path.adopt(
+            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList()),
+            history = back.history,
+        )
+        // Redo converts it again.
+        path.redo.addLast(EditState(emptyList(), null, toBezier = true))
+        path.redoCount = path.redo.size
+        return true
+    }
+
+    /**
+     * Forgets the pending path WITHOUT committing it or closing a reopened path's edit session
+     * (another curve tool takes both over): the previews go, the user's own settings come back,
+     * the main color stays the path's. Returns what is handed over.
+     */
+    private fun detachPending(): Handoff {
+        // The live stroke goes first (its callback still sees the reopened session).
+        brushPreview.cancel()
+        val r = reopened
+        val h = Handoff(
+            anchors, spline, targetLayer ?: controller.doc.activeLayer, settings.copy(closed = if (isPath) pathCyclic else isClosed), r,
+            brushPreview.sessionSeed, history.toList(),
+        )
+        if (r != null) {
+            reopened = null
+            reopenedState = false
+            pristine = true
+            r.session.drawPreview = null
+            r.session.inner = null
+            invalidateRegions(sessionRegions)
+            sessionRegions = emptyList()
+            sessionSpecs = emptyList()
+            sessionGradient = null
+            settings = r.userSettings.sanitized()
+        }
+        resetPath()
+        brushPreview.end()
+        brushOverride = null
+        controller.invalidateOverlay()
+        return h
+    }
+
+    /**
+     * Takes over the pending path [h] (this tool is current and has nothing pending), with the
+     * in-tool [history]: a reopened path's edit session draws through this tool from now on.
+     */
+    private fun adopt(h: Handoff, history: List<EditState>) {
+        val r = h.reopened
+        if (r != null) {
+            reopened = Reopened(r.layer, r.session, r.original, settings, r.userColor, r.openedColor, r.width)
+            reopenedState = true
+            pristine = false
+            // The strip shows the path's look (the unit and nudge step stay the user's).
+            settings = h.look.copy(unit = settings.unit, nudgeStepPx = settings.nudgeStepPx).sanitized(settings)
+            r.session.drawPreview = { canvas -> drawSessionPreview(canvas) }
+        } else {
+            // A new path keeps its look: these become this tool's settings.
+            val l = h.look
+            update {
+                it.copy(
+                    closed = l.closed, stroke = l.stroke, plainWidth = l.plainWidth, useBrushSize = l.useBrushSize,
+                    fill = l.fill, fillColor = l.fillColor, taper = l.taper, taperPercent = l.taperPercent,
+                )
+            }
+        }
+        targetLayer = h.targetLayer
+        if (isPath) setSplineState(h.spline) else anchors = h.anchors
+        selected = -1
+        selectedPoint = -1
+        this.history.clear()
+        this.history.addAll(history)
+        redo.clear()
+        redoCount = 0
+        historyKey = null
+        canUndoStep = this.history.isNotEmpty()
+        brushPreview.useSeed(h.seed)
+        changed()
     }
 
     companion object {
@@ -1571,6 +2363,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         internal const val NEW_POINT_BRUSH_DELAY_MS = 150L
         /** Undo label of ✓ on a reopened path object. */
         const val EDIT_PATH_LABEL = "Edit path"
+        /** Undo label of ✓ of a new Path-tool path. */
+        const val PATH_LABEL = "Path"
+        /** Shown when ✓ of the Curve tool stores a former Path-tool path without its spline. */
+        const val EDITED_AS_BEZIER = "Path edited as a Bézier curve"
+        /** ‹ › of the Handles group without increments: × 1.1 / × 0.9 per step. */
+        const val HANDLE_STEP_UP = 1.1f
+        const val HANDLE_STEP_DOWN = 0.9f
         private const val OPAQUE = 0xFF000000.toInt()
     }
 }
