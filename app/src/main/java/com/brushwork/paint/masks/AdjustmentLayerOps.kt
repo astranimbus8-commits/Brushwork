@@ -51,6 +51,11 @@ object AdjustmentLayerOps {
             c.toast("${filter.name} can't be an adjustment layer")
             return null
         }
+        // (A layer with settings that aren't pointwise would silently show nothing.)
+        if (!AdjustmentEffects.isLive(filter, values)) {
+            c.toast(AdjustmentEffects.notLiveMessage(filter))
+            return null
+        }
         if (!c.canAddAdjustmentLayer) {
             c.toast("Layer limit reached (${c.maxLayers}) for this canvas size")
             return null

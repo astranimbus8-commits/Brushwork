@@ -57,8 +57,9 @@ class CloneAnchorTest {
         a.set(Vec2(30f, 30f))
         assertNull(a.fixed)
         assertEquals(CloneOffset(10, 10), a.offsetFor(Vec2(40f, 40f), aligned = true))
-        a.strokeCompleted(CloneOffset(10, 10), aligned = true, end = Vec2(40f, 40f))
-        // Switching Aligned starts over from the (travelled) source point.
+        a.strokeCompleted(CloneOffset(10, 10), aligned = true, end = Vec2(70f, 40f))
+        assertEquals("the source travelled with the stroke", Vec2(60f, 30f), a.source)
+        // Switching Aligned starts over from the point the user set, not the travelled one.
         a.resetAlignment()
         assertEquals(Vec2(30f, 30f), a.source)
         assertEquals(CloneOffset(70, 0), a.offsetFor(Vec2(100f, 30f), aligned = true))

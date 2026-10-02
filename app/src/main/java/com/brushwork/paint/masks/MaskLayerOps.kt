@@ -47,6 +47,9 @@ object MaskLayerOps {
             (idx - 1 downTo 0).map { c.doc.layers[it] }.firstOrNull { it.visible && !it.isAdjustmentLayer }
         } else layer
         if (target == null) { c.toast("There is no layer below to apply a filter to"); return false }
+        // Said now, not after the filter was picked (the filter would be refused then, leaving
+        // the selection and another active layer behind).
+        if (target.locked) { c.toast("Layer \"${target.name}\" is locked: unlock it to apply a filter through the mask"); return false }
         c.selectionFromMask(layer)
         if (c.selection == null) return false
         c.selectLayer(target)

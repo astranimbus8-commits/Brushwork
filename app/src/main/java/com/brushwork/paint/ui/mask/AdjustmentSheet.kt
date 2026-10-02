@@ -105,6 +105,8 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
         )
     } else {
         if (showsHistogram(filter.id)) BelowHistogram(c, layer)
+        // Settings refused because they can't be live (said once per setting while the sheet is up).
+        val refused = remember(layer, filter) { mutableSetOf<String>() }
         val paramHost = remember(layer, filter) {
             ParamHost(
                 valuesOf = {
@@ -114,7 +116,14 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
                 },
                 update = { key, value ->
                     val cur = layer.adjustment?.takeIf { it.filterId == filter.id }?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
-                    preview(AdjustmentEffects.spec(filter, cur.copy().set(key, value)), layer.opacity, layer.name)
+                    val next = cur.copy().set(key, value)
+                    // A setting that looks at neighbours or the whole picture (Levels' Auto, Black &
+                    // White's smoothing) would turn the live effect off without a word: refused.
+                    if (!AdjustmentEffects.isLive(filter, next)) {
+                        if (refused.add(key)) c.toast(AdjustmentEffects.notLiveMessage(filter, filter.params.firstOrNull { it.key == key }?.label))
+                        return@ParamHost
+                    }
+                    preview(AdjustmentEffects.spec(filter, next), layer.opacity, layer.name)
                 },
                 resetParam = { key ->
                     val p = filter.params.firstOrNull { it.key == key } ?: return@ParamHost

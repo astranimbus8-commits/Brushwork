@@ -70,6 +70,26 @@ object AdjustmentEffects {
         }
     }
 
+    /**
+     * True when [filter] at [values] can be applied live by an adjustment layer: pointwise at
+     * these settings. Some settings of adjustment-capable filters look at neighbours or at the
+     * whole picture (Levels' "Auto levels", Black & White's smoothing and anti-aliasing): an
+     * adjustment layer with them would show nothing, so they are refused where they are set.
+     */
+    fun isLive(filter: Filter, values: FilterValues): Boolean {
+        if (filter.generatesContent) return false
+        return try {
+            filter.pixelMapper(values) != null
+        } catch (e: RuntimeException) {
+            false
+        }
+    }
+
+    /** Why [filter]'s current settings can't be an adjustment layer's live effect. */
+    fun notLiveMessage(filter: Filter, setting: String? = null): String =
+        if (setting != null) "\"$setting\" can't be live in an adjustment layer (it looks at the whole picture): use Filters → ${filter.name} for it"
+        else "${filter.name} can't be live in an adjustment layer with these settings (they look at the whole picture)"
+
     /** "Tone", or "Unknown effect" for an effect this version doesn't have. */
     fun displayName(spec: AdjustmentSpec): String = filterOf(spec)?.name ?: "Unknown effect"
 }

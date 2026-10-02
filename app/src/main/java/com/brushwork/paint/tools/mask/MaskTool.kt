@@ -118,6 +118,9 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     var adjustPulse by mutableIntStateOf(0)
         private set
 
+    /** The last [adjustPulse] the strip has shown (it pulses and scrolls to the chip once per new layer). */
+    internal var adjustPulseShown = 0
+
     /** Layer whose painted mask would be replaced by an editable one (the question is shown). */
     var replacePrompt by mutableStateOf<Layer?>(null)
         private set
@@ -222,6 +225,15 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         }
         revision++
         controller.invalidateOverlay()
+    }
+
+    /**
+     * "Replace with an editable mask" (the Components sheet): asks the question for the edited
+     * layer's painted mask — an adjustment layer's too (choosing a target never asks for those).
+     */
+    fun requestReplace() {
+        val l = editLayer ?: return
+        if (needsReplace) replacePrompt = l
     }
 
     /** "Replace the painted mask with an editable one?" answered. */

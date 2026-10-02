@@ -51,30 +51,46 @@ class CloneAnchor {
         private set
 
     /**
+     * Where the user put the source (long-press, Set source, the ⊕, the X / Y strip). Aligned
+     * strokes carry [source] along with them; switching Aligned starts over from here, as
+     * Photoshop's non-aligned strokes "use the sampled pixels from the initial sampling point".
+     */
+    var origin: Vec2? = null
+        private set
+
+    /**
      * A new source: the next stroke fixes the offset again. A point that is not finite is ignored
      * (a typed or computed NaN must never reach the offset math); coordinates are kept within
      * ±[MAX_COORD] so offsets and source rectangles stay far from integer overflow.
      */
     fun set(p: Vec2) {
         if (!p.x.isFinite() || !p.y.isFinite()) return
-        source = Vec2(p.x.coerceIn(-MAX_COORD, MAX_COORD), p.y.coerceIn(-MAX_COORD, MAX_COORD))
+        val v = Vec2(p.x.coerceIn(-MAX_COORD, MAX_COORD), p.y.coerceIn(-MAX_COORD, MAX_COORD))
+        source = v
+        origin = v
         fixed = null
     }
 
     fun clear() {
         source = null
+        origin = null
         fixed = null
     }
 
     /** Puts back a state saved before a gesture that was cancelled. */
-    fun restore(source: Vec2?, fixed: CloneOffset?) {
+    fun restore(source: Vec2?, fixed: CloneOffset?, origin: Vec2? = source) {
         this.source = source
         this.fixed = fixed
+        this.origin = origin
     }
 
-    /** Aligned was switched: the next stroke starts at the source point and fixes the offset again. */
+    /**
+     * Aligned was switched: the next stroke starts at the point the user set (not where Aligned
+     * strokes carried the source) and fixes the offset again.
+     */
     fun resetAlignment() {
         fixed = null
+        origin?.let { source = it }
     }
 
     /** The offset of a stroke starting at [start] (null without a source). */

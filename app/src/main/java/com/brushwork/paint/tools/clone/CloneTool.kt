@@ -82,6 +82,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
     private var grab = Vec2(0f, 0f)
     private var sourceBefore: Vec2? = null
     private var fixedBefore: CloneOffset? = null
+    private var originBefore: Vec2? = null
     /**
      * Where a long-press placed the source, while the finger has not moved away from it (more
      * than [HOLD_SLOP_DP]): the source stays exactly at the held point, whatever the jitter of a
@@ -197,6 +198,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
     private fun beginPlacing(g: Gesture, at: Vec2) {
         sourceBefore = anchor.source
         fixedBefore = anchor.fixed
+        originBefore = anchor.origin
         gesture = g
         if (g == Gesture.PLACE) anchor.set(at)
         controller.invalidateOverlay()
@@ -300,6 +302,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         }
         sourceBefore = anchor.source
         fixedBefore = anchor.fixed
+        originBefore = anchor.origin
         armed = false
         gesture = Gesture.PLACE
         val at = Vec2(p.x, p.y)
@@ -315,7 +318,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
                 source.endStroke()
             }
             Gesture.PLACE, Gesture.DRAG -> {
-                anchor.restore(sourceBefore, fixedBefore)
+                anchor.restore(sourceBefore, fixedBefore, originBefore)
                 controller.invalidateOverlay()
             }
             Gesture.NONE, Gesture.WAITING -> {}
@@ -329,6 +332,7 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         finger = null
         sourceBefore = null
         fixedBefore = null
+        originBefore = null
         heldAt = null
         controller.invalidateOverlay()
     }

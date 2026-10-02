@@ -15,6 +15,7 @@ import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.masks.AdjustmentLayerOps
+import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
@@ -309,6 +310,9 @@ object LayerOps {
     }
 
     fun applyMask(c: EditorController, layer: Layer) {
+        // An adjustment layer has no pixels to bake its mask into: "applying" it would only drop
+        // the mask, and the effect would suddenly cover everything (v1.5).
+        if (layer.isAdjustmentLayer) { c.toast(ADJUSTMENT_APPLY_MASK_MESSAGE); return }
         if (layer.mask == null || !c.checkEditable(layer)) return
         commitPendingWork(c)
         guardMemory(c, "Apply mask") { c.applyMask(layer) }
@@ -317,6 +321,12 @@ object LayerOps {
     fun invertMask(c: EditorController, layer: Layer) {
         if (layer.mask == null || !c.checkEditable(layer)) return
         commitPendingWork(c)
+        // An editable mask stays editable: its spec is inverted (v1.5), not its pixels.
+        val spec = layer.maskSpec
+        if (spec != null) {
+            guardMemory(c, "Invert mask") { MaskEdits.apply(c, layer, spec.copy(invert = !spec.invert), "Invert mask") }
+            return
+        }
         guardMemory(c, "Invert mask") { c.invertMask(layer) }
     }
 
@@ -366,4 +376,7 @@ object LayerOps {
 
     private const val MASK_HIDDEN = 0xFF000000.toInt()
     private const val MASK_VISIBLE = -1
+
+    /** "Apply mask" asked for on an adjustment layer (v1.5). */
+    const val ADJUSTMENT_APPLY_MASK_MESSAGE = "An adjustment layer has no pixels to apply its mask to — use Apply to layer below, or Delete mask"
 }
