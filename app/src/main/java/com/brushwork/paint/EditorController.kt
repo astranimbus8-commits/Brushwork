@@ -64,10 +64,10 @@ import com.brushwork.paint.tools.select.SelectionOutline
 import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
-import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.CoroutineScope
