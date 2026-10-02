@@ -1,5 +1,8 @@
 package com.brushwork.paint.ui.layers
 
+import com.brushwork.paint.tools.text.TextThreadSpec
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 /**
@@ -78,6 +81,43 @@ object LayerListMath {
     /** Screens this short (dp) get the side-by-side layers window. */
     fun isShortScreen(screenH: Int): Boolean = screenH < 480
 
+    /**
+     * The layer opacity after the window's − / + ([up]) from [fraction] (0..1). Without a step
+     * (increments off, v1.5) it moves by 1 % from the rounded percentage; with [stepPercent] it goes
+     * to the next multiple of the step in that direction (37 % with 5 %: 40 / 35), 0 and 100 %
+     * reachable. The result is rounded to 0.01 %.
+     */
+    fun stepOpacity(fraction: Float, up: Boolean, stepPercent: Float?): Float {
+        val f = if (fraction.isFinite()) fraction.coerceIn(0f, 1f) else 1f
+        if (stepPercent == null || !stepPercent.isFinite() || stepPercent <= 0f) {
+            val pct = (f * 100f).roundToInt()
+            return ((pct + if (up) 1 else -1).coerceIn(0, 100)) / 100f
+        }
+        val k = f * 100.0 / stepPercent
+        val next = if (up) floor(k + STEP_EPS) + 1.0 else ceil(k - STEP_EPS) - 1.0
+        val pct = (next * stepPercent).coerceIn(0.0, 100.0)
+        return ((pct * 100.0).roundToInt() / 10_000.0).toFloat()
+    }
+
+    private const val STEP_EPS = 1e-4
+
+    /**
+     * Frame badges of the rows of linked text frames: [threads] holds each row's thread (null =
+     * not a frame). Frame k of m counts the frames of the same story among [threads]; the red +
+     * shows on the frame whose thread says the story continues past it (overset).
+     */
+    fun frameBadges(threads: List<TextThreadSpec?>): List<FrameBadge?> {
+        val counts = HashMap<Long, Int>()
+        for (t in threads) if (t != null && t.isOn) counts[t.storyId] = (counts[t.storyId] ?: 0) + 1
+        return threads.map { t ->
+            if (t == null || !t.isOn) null
+            else {
+                val count = counts[t.storyId] ?: 1
+                FrameBadge(index = t.index.coerceIn(0, count - 1), count = count, overset = t.overset)
+            }
+        }
+    }
+
     private const val PHONE_MAX_WIDTH = 300
     private const val TABLET_MAX_WIDTH = 360
     private const val TABLET_WIDTH = 600
@@ -122,6 +162,18 @@ object LayerListMath {
 
 /** A width x height in dp. */
 data class WindowDp(val width: Int, val height: Int)
+
+/**
+ * The badge of a linked text frame's row (v1.6 §3.7.7): ⛓ "k/m", frame [index] (0-based) of
+ * [count], with a red + when the story is [overset] (it continues past this, the last frame).
+ */
+data class FrameBadge(val index: Int, val count: Int, val overset: Boolean) {
+    /** "k/m". */
+    val text: String get() = "${index + 1}/$count"
+
+    /** Spoken description: "Text frame k of m" (", more text than fits" when overset). */
+    val description: String get() = "Text frame ${index + 1} of $count" + if (overset) ", more text than fits" else ""
+}
 
 /**
  * How one row participates in a clipping group.
