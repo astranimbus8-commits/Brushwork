@@ -171,7 +171,51 @@ object CurveGeometry {
 
     /** True when every anchor is at 100 % thickness (the path is drawn exactly as before v1.5). */
     fun isUniformWidth(anchors: List<CurveAnchor>): Boolean = anchors.all { it.width == 1f }
+
+    // ------------------------------------------------------------------ handle scaling (v1.6, §3.3)
+
+    /** Smallest and largest handle scale factor of one change. */
+    const val MIN_HANDLE_SCALE = 0.01f
+    const val MAX_HANDLE_SCALE = 100f
+
+    /** [k] as a usable handle scale factor: clamped to [MIN_HANDLE_SCALE]..[MAX_HANDLE_SCALE], non-finite = 1. */
+    fun clampHandleScale(k: Float): Float = if (k.isFinite()) k.coerceIn(MIN_HANDLE_SCALE, MAX_HANDLE_SCALE) else 1f
+
+    /**
+     * [anchors] with the handles of the anchors at [indices] scaled by [k] (see
+     * [clampHandleScale]) along their own directions. Each anchor's handles as drawn
+     * ([handles]: automatic Catmull-Rom tangents and chord handles included) are first made
+     * explicit, so at k = 1 the geometry is unchanged; then [HandleSide.BOTH] scales both by the
+     * same factor (a smooth anchor stays smooth and collinear, a sharp one keeps its angle) and
+     * [HandleSide.IN] / [HandleSide.OUT] only one side (the length ratio changes, never a
+     * direction). Other anchors are returned as they are (their automatic tangents depend on
+     * positions only, which don't change). Pure, O(points).
+     */
+    fun scaledHandles(
+        anchors: List<CurveAnchor>,
+        indices: IntArray,
+        k: Float,
+        side: HandleSide,
+        closed: Boolean,
+        tension: Float,
+    ): List<CurveAnchor> {
+        if (anchors.isEmpty() || indices.isEmpty()) return anchors
+        val f = clampHandleScale(k)
+        val out = anchors.toMutableList()
+        for (i in indices) {
+            if (i !in anchors.indices) continue
+            val (hIn, hOut) = handles(anchors, i, closed, tension)
+            val newIn = if (side != HandleSide.OUT) hIn * f else hIn
+            val newOut = if (side != HandleSide.IN) hOut * f else hOut
+            if (!newIn.x.isFinite() || !newIn.y.isFinite() || !newOut.x.isFinite() || !newOut.y.isFinite()) continue
+            out[i] = anchors[i].copy(handleIn = newIn, handleOut = newOut)
+        }
+        return out
+    }
 }
+
+/** Which handles of an anchor a handle scale changes (v1.6, §3.3). */
+enum class HandleSide(val label: String) { BOTH("Both"), IN("In"), OUT("Out") }
 
 /**
  * A flattened line with its full width at every point (document px): [n] points in [xs] / [ys],
