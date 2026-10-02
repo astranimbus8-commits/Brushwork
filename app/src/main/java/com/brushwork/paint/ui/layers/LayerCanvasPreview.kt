@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -52,6 +53,9 @@ internal fun LayerCanvasPreview(controller: EditorController, display: Transpare
         var image by remember { mutableStateOf<ImageBitmap?>(null) }
         val lastRender = remember { longArrayOf(Long.MIN_VALUE / 2) }
         LaunchedEffect(px, editCount, layersVersion, docVersion) {
+            // The first picture waits for the window's first frame: opening it never waits for
+            // the composite (design §6.3, "Layer window open ≤ 150 ms").
+            if (image == null) withFrameNanos { }
             // A newer change cancels this wait; the next one waits only what is left, so a
             // drawing that keeps changing still refreshes every interval.
             val wait = lastRender[0] + CANVAS_PREVIEW_INTERVAL_MS - SystemClock.uptimeMillis()
