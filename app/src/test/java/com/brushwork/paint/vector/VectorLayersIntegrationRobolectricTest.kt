@@ -218,29 +218,36 @@ class VectorLayersIntegrationRobolectricTest {
 
     @Test
     fun liftingEveryObjectReachingPastTheCanvasPreviewsTheOffCanvasParts() {
-        val c = setup(VectorLayers.Policy.SYNC)
-        // A stroke and a box that run off the right edge.
-        c.vectors.addObjects(c.l1, listOf(stroke(380f, 100f, 760f, 140f), box(450f, 220f, 720f, 330f)), "Add")
-        val content = c.l1.vector!!
-        var session: VectorEditSession? = null
-        c.vectors.beginEdit(c.l1, content.objects.map { it.id }.toSet()) { session = it }
-        val s = session!!
-        val floating = s.floating!!
-        val fr = s.floatingRect
-        assertTrue("the lifted box reaches past the canvas: $fr", fr.right > w)
-        fun alphaAt(x: Int, y: Int): Int {
-            val fx = ((x - fr.left) * s.floatingScale).toInt()
-            val fy = ((y - fr.top) * s.floatingScale).toInt()
-            return floating.getPixel(fx, fy) ushr 24
+        for (policy in listOf(VectorLayers.Policy.SYNC, VectorLayers.Policy.ASYNC)) {
+            val c = setup(VectorLayers.Policy.SYNC)
+            // A stroke and a box that run off the right edge, and a stroke inside the canvas.
+            c.vectors.addObjects(c.l1, listOf(stroke(380f, 100f, 760f, 140f), box(450f, 220f, 720f, 330f), stroke(60f, 300f, 300f, 360f, 3L)), "Add")
+            c.vectors.policy = policy
+            val content = c.l1.vector!!
+            var session: VectorEditSession? = null
+            c.vectors.beginEdit(c.l1, content.objects.map { it.id }.toSet()) { session = it }
+            if (policy == VectorLayers.Policy.ASYNC) {
+                assertTrue("$policy: the part past the canvas renders in the background", c.vectors.isRendering)
+                runUntil({ session != null })
+            }
+            val s = session!!
+            val floating = s.floating!!
+            val fr = s.floatingRect
+            assertTrue("the lifted box reaches past the canvas: $fr", fr.right > w)
+            fun alphaAt(x: Int, y: Int): Int {
+                val fx = ((x - fr.left) * s.floatingScale).toInt()
+                val fy = ((y - fr.top) * s.floatingScale).toInt()
+                return floating.getPixel(fx, fy) ushr 24
+            }
+            assertTrue("$policy: the stroke past the edge shows", alphaAt(700, 134) > 0 || alphaAt(700, 128) > 0 || alphaAt(700, 140) > 0)
+            assertTrue("$policy: the box past the edge shows", alphaAt(680, 280) == 0xFF)
+            // On the canvas it is the cache itself.
+            val cache = px(c.l1.bitmap)
+            for (y in maxOf(fr.top, 0) until minOf(fr.bottom, h)) for (x in maxOf(fr.left, 0) until w) {
+                assertEquals("$policy at $x,$y", cache[y * w + x], floating.getPixel(((x - fr.left) * s.floatingScale).toInt(), ((y - fr.top) * s.floatingScale).toInt()))
+            }
+            s.cancel()
         }
-        assertTrue("the stroke past the edge shows", alphaAt(700, 134) > 0 || alphaAt(700, 128) > 0 || alphaAt(700, 140) > 0)
-        assertTrue("the box past the edge shows", alphaAt(680, 280) == 0xFF)
-        // On the canvas it is the cache's own drawing (away from the edge, where dabs are cut).
-        val cache = px(c.l1.bitmap)
-        for (y in fr.top until minOf(fr.bottom, h) step 3) for (x in maxOf(fr.left, 0) until w - 24 step 3) {
-            assertEquals("at $x,$y", cache[y * w + x], floating.getPixel(((x - fr.left) * s.floatingScale).toInt(), ((y - fr.top) * s.floatingScale).toInt()))
-        }
-        s.cancel()
         // All on the canvas: still the cache's copy (nothing rendered).
         val c2 = setup(VectorLayers.Policy.SYNC)
         seeded(c2)

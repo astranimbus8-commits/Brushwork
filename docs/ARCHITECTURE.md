@@ -198,8 +198,8 @@ rotations and flips remap a layer's pixels only when all its brushes turn into t
 **Edit sessions.** `beginEdit` renders the hole (the other objects in the edited ones' tiles) and
 the floating bitmap (the edited objects), in the background when expensive (a newer request
 answers an older one with null; a long preparation shows the busy overlay, whose Stop gives up).
-Lifting every object copies the cache when the objects lie on the canvas, and renders them when
-they reach past it, so their off-canvas parts show in the Transform preview. A session's commit on
+Lifting every object copies the cache and renders only the objects that reach past the canvas,
+past its edges, so their off-canvas parts show in the Transform preview. A session's commit on
 a large edit stays installed (hole + preview) until the background result lands.
 
 **Selecting and lifting objects (`vector/select`, `vector/lift`, `ui/vector/VectorObjectBar`).**
