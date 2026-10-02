@@ -71,10 +71,16 @@ object PayloadImport {
                         if (target.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, Rect(0, 0, bmp.width, bmp.height), target.colorMode)
                     }
                 }
-                val mask = if (pl.hasMask) mask(pl, images, target, place, keep) { missing++ } else null
+                val spec = pl.maskSpec?.let { s -> if (keep) s else MaskSpecs.transformed(s, matrixOf(place)) }
+                val mask = when {
+                    !pl.hasMask -> null
+                    // Placed on another canvas, an editable mask is drawn from its placed spec, so
+                    // it stays exactly the spec's rendering (I1) — margins included.
+                    !keep && spec != null -> MaskSpecs.newMask(spec, target.width, target.height)
+                    else -> mask(pl, images, target, place, keep) { missing++ }
+                }
                 val dataKept = keep || (pl.textData == null && pl.shapeData == null)
                 if (!dataKept) rasterized++
-                val spec = pl.maskSpec?.let { s -> if (keep) s else MaskSpecs.transformed(s, matrixOf(place)) }
                 val data = LayerData(
                     text = if (keep) pl.textData else null,
                     shape = if (keep) pl.shapeData else null,
