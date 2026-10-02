@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.editor
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
@@ -85,7 +86,19 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     // v1.6: the ibisPaint surround; the transparency squares of the layer window pick the checker.
     private val backdropColor = IbisColors.Surround.toArgb()
+
+    /**
+     * How transparency shows (the layer window's squares, `AppSettings.transparencyDisplay`),
+     * cached: read when the view is attached and whenever the setting changes (a preferences
+     * listener), never per frame (§3.1 review: a SharedPreferences read on every onDraw).
+     */
     private var checkerMode: TransparencyDisplay = controller.settings.transparencyDisplay
+
+    /** Held here: SharedPreferences keeps its listeners only weakly. */
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        // A null key: the preferences were cleared (API 30+).
+        if (key == null || key == TRANSPARENCY_KEY) refreshCheckerMode()
+    }
     private val checkerPaint = Paint().apply { shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), checkerMode) }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -246,6 +259,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         controller.onInvalidate = invalidator
+        controller.settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        refreshCheckerMode()
         if (viewport.hasSize) applyTransform()
     }
 
@@ -258,7 +273,17 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         endToolGesture(cancelled = true)
         mode = Mode.NONE
         if (controller.onInvalidate === invalidator) controller.onInvalidate = null
+        controller.settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onDetachedFromWindow()
+    }
+
+    /** Takes over a changed transparency display (shader rebuilt, frame redrawn). */
+    private fun refreshCheckerMode() {
+        val m = controller.settings.transparencyDisplay
+        if (m == checkerMode) return
+        checkerMode = m
+        checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), m)
+        invalidate()
     }
 
     // ------------------------------------------------------------------ rendering
@@ -286,12 +311,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             canvas.drawPath(docPath, shadowPaint)
         }
         // v1.6: transparency as the layer window's squares say (a view preference only, I5).
-        val mode = controller.settings.transparencyDisplay
-        if (mode != checkerMode) {
-            checkerMode = mode
-            checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), mode)
-        }
-        if (mode != TransparencyDisplay.NONE) canvas.drawPath(docPath, checkerPaint)
+        if (checkerMode != TransparencyDisplay.NONE) canvas.drawPath(docPath, checkerPaint)
 
         // Composite tiles under the view matrix (v1.6: a live adjustment session draws the frame
         // itself, from its proxy tiles, while it runs).
@@ -894,6 +914,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         const val WHEEL_ZOOM_STEP = 1.15f
         const val REFIT_INSET_DELTA_DP = 24f
         const val CHECKER_CELL_DP = 8f
+        /** The `AppSettings.transparencyDisplay` preferences key. */
+        const val TRANSPARENCY_KEY = "transparencyDisplay"
         val SHADOW_WIDTHS_DP = floatArrayOf(22f, 14f, 8f, 3f)
         val SHADOW_ALPHAS = intArrayOf(8, 14, 24, 40)
     }

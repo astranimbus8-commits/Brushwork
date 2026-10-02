@@ -34,10 +34,18 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         return out
     }
 
+    /**
+     * v1.6: told about every invalidated area (document px, within the document) as it is marked,
+     * before anything is rendered: a live adjustment session (`engine/live`) refreshes its proxy
+     * tiles there. Main thread.
+     */
+    internal var invalidationHook: ((Rect) -> Unit)? = null
+
     /** Marks [rect] (document coords; null = everything) for re-rendering. */
     fun invalidate(rect: Rect?) {
         val r = if (rect == null) Rect(0, 0, docWidth, docHeight) else Rect(rect)
         if (!r.intersect(0, 0, docWidth, docHeight)) return
+        invalidationHook?.invoke(r)
         val c0 = r.left / tileSize; val c1 = (r.right - 1) / tileSize
         val r0 = r.top / tileSize; val r1 = (r.bottom - 1) / tileSize
         for (row in r0..r1) for (col in c0..c1) {
@@ -149,19 +157,32 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         return TileUpdate(changed = done > 0, hasMore = more)
     }
 
+    /** The part of tile [index] waiting to be rendered (document px; a copy), or null when it is clean. */
+    fun dirtyRect(index: Int): Rect? = dirty.getOrNull(index)?.let { Rect(it) }
+
     /**
      * Draws the tiles into a canvas whose matrix already maps document -> screen.
-     * [visibleDoc] (document coords) is used to skip off-screen tiles; null draws all.
+     * [visibleDoc] (document coords) is used to skip off-screen tiles; null draws all. v1.6:
+     * tiles for which [skip] (tile index) is true are not drawn (a live session draws them).
      */
-    fun draw(canvas: Canvas, visibleDoc: Rect?, smooth: Boolean = true) {
+    fun draw(canvas: Canvas, visibleDoc: Rect?, smooth: Boolean = true, skip: ((Int) -> Boolean)? = null) {
         drawPaint.isFilterBitmap = smooth
         for (idx in tiles.indices) {
             val bmp = tiles[idx] ?: continue
             val col = idx % cols; val row = idx / cols
             val tr = tileRect(col, row, tmpRect)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
+            if (skip != null && skip(idx)) continue
             canvas.drawBitmap(bmp, tr.left.toFloat(), tr.top.toFloat(), drawPaint)
         }
+    }
+
+    /** Draws tile [index] alone as [draw] does (nothing when it was never rendered). */
+    fun drawTile(canvas: Canvas, index: Int, smooth: Boolean = true) {
+        val bmp = tiles.getOrNull(index) ?: return
+        drawPaint.isFilterBitmap = smooth
+        val tr = tileRect(index % cols, index / cols, tmpRect)
+        canvas.drawBitmap(bmp, tr.left.toFloat(), tr.top.toFloat(), drawPaint)
     }
 
     fun release() {
