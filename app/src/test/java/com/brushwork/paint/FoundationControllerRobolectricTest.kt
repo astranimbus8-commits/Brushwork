@@ -221,7 +221,7 @@ class FoundationControllerRobolectricTest {
         // Flip: what can't be mirrored (foundation stubs) is cleared; undo restores it.
         c.flipLayer(lower, horizontal = true)
         assertNotNull("A1: the objects are mirrored", lower.vector)
-        assertNull(lower.maskSpec)
+        assertEquals("the mask spec is mirrored with its mask (A5)", MaskSpec(startFull = true), lower.maskSpec)
         assertNotNull("the mask pixels flip along", lower.mask)
         c.undo()
         assertEquals(before, lower.dataSnapshot())
@@ -316,7 +316,7 @@ class FoundationControllerRobolectricTest {
         val snap = CanvasSnapshot.of(c.doc)
         CanvasOps.commit(c, "Flip canvas", snap, CanvasOps.flip(snap, horizontal = true))
         assertNotNull("A1: vector content is mapped along", l.vector)
-        assertNull("a non-identity map drops the spec when it can't be mapped (A5)", l.maskSpec)
+        assertEquals("the mask spec is mapped with the pixels (A5)", before.maskSpec, l.maskSpec)
         c.undo()
         assertEquals(before, l.dataSnapshot())
         // A color mode change keeps geometry: the mask spec stays.

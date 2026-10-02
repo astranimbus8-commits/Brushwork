@@ -40,13 +40,18 @@ interface LayerRenderOverride {
  * The bitmap a [Compositor.drawDocument] canvas draws into, and how document px map onto it
  * (v1.5): live adjustment layers read the composite below them from it. Every caller owns such a
  * backing bitmap: a display tile (translate), a flattened image (identity), a thumbnail (scale),
- * an eyedropper or fill patch (translate).
+ * an eyedropper or fill patch (translate). [display]: the bitmap is a display tile of the canvas
+ * (the "Safe compositing" switch only changes what the canvas shows, never exports or merges).
  */
-class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix) {
+class CompositeTarget(val bitmap: Bitmap, val docToTarget: Matrix, val display: Boolean = false) {
     companion object {
         /** A bitmap whose pixel (0, 0) is document pixel ([left], [top]) at 1:1. */
         fun translate(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
             CompositeTarget(bitmap, Matrix().apply { setTranslate(-left.toFloat(), -top.toFloat()) })
+
+        /** A display tile of the canvas whose pixel (0, 0) is document pixel ([left], [top]). */
+        fun displayTile(bitmap: Bitmap, left: Int, top: Int): CompositeTarget =
+            CompositeTarget(bitmap, Matrix().apply { setTranslate(-left.toFloat(), -top.toFloat()) }, display = true)
 
         /** A document-sized bitmap at 1:1. */
         fun identity(bitmap: Bitmap): CompositeTarget = CompositeTarget(bitmap, Matrix())
@@ -84,7 +89,10 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
             val base = layers[i]
             if (base.isAdjustmentLayer) {
                 // Its own group: never a clipping base (layers marked clipping above it draw unclipped).
-                if (base.visible && base.opacity > 0f) AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                if (base.visible && base.opacity > 0f) {
+                    adjustmentScratch.colorMode = doc.colorMode
+                    AdjustmentStage.draw(canvas, base, bounds, override, target, adjustmentScratch)
+                }
                 i++
                 continue
             }
@@ -132,14 +140,27 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         canvas.restoreToCount(save)
     }
 
-    /** Full-resolution flattened image (no tool previews). Caller owns the bitmap. */
+    /**
+     * Full-resolution flattened image (no tool previews), on [background] when given. Caller owns
+     * the bitmap.
+     *
+     * With a visible adjustment layer the [background] is put BEHIND the composite (a matte, as
+     * the canvas shows transparency): an effect never changes it, so a JPG export of an Invert or
+     * Tone adjustment over transparent areas stays [background] there, as on the canvas. Without
+     * one the drawing is exactly v1.4's (I5).
+     */
     fun renderFlattened(background: Int? = null): Bitmap {
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
         val c = Canvas(out)
-        if (background != null) c.drawColor(background)
+        val matte = background != null && hasLiveAdjustment()
+        if (background != null && !matte) c.drawColor(background)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget.identity(out))
+        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
         return out
     }
+
+    /** True when a visible adjustment layer can change the composite (see [renderFlattened]). */
+    private fun hasLiveAdjustment(): Boolean = doc.layers.any { it.isAdjustmentLayer && it.visible && it.opacity > 0f }
 
     /** Flattened image scaled to fit in [maxSize] x [maxSize]. */
     fun renderThumbnail(maxSize: Int, background: Int? = null): Bitmap {
@@ -157,11 +178,15 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val w2 = max(1, (doc.width * s2).roundToInt()); val h2 = max(1, (doc.height * s2).roundToInt())
         val mid = BitmapUtils.createLayerBitmap(w2, h2)
         val c = Canvas(mid)
-        if (background != null) c.drawColor(background)
+        val matte = background != null && hasLiveAdjustment()
+        if (background != null && !matte) c.drawColor(background)
         val sx = w2.toFloat() / doc.width
         val sy = h2.toFloat() / doc.height
+        c.save()
         c.scale(sx, sy)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget(mid, Matrix().apply { setScale(sx, sy) }))
+        c.restore()
+        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
         val out = Bitmap.createScaledBitmap(mid, w, h, true)
         if (out !== mid) mid.recycle()
         return out

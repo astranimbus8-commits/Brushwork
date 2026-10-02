@@ -36,6 +36,8 @@ import androidx.compose.material.icons.filled.Draw
 import androidx.compose.material.icons.filled.FilterFrames
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Search
@@ -60,6 +62,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,6 +90,7 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterRecents
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
+import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SheetBackground
@@ -122,6 +126,7 @@ fun FilterBrowser(controller: EditorController, onDismiss: () -> Unit) {
     }
 
     BwSheet(title = "Filters", onDismiss = onDismiss) {
+        LayerKindBanner(controller, onDismiss)
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
@@ -160,6 +165,45 @@ fun FilterBrowser(controller: EditorController, onDismiss: () -> Unit) {
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * v1.5: what applying a filter means for the active layer. An adjustment layer has no pixels
+ * (its effect is edited in the Masks tool: [Open]); a vector layer is rasterized by applying.
+ */
+@Composable
+private fun LayerKindBanner(controller: EditorController, onDismiss: () -> Unit) {
+    // The layer and what kind it is (a layer can turn into a vector or raster layer).
+    val kind by remember(controller) {
+        derivedStateOf {
+            controller.layersVersion
+            val l = controller.activeLayer
+            Triple(l, l.isAdjustmentLayer, l.isVectorLayer)
+        }
+    }
+    val (active, adjustment, vector) = kind
+    if (!adjustment && !vector) return
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(BrushworkColors.ChromeHigh)
+            .padding(start = 12.dp, end = 4.dp)
+            .heightIn(min = 48.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(if (adjustment) Icons.Filled.Tune else Icons.Filled.Info, contentDescription = null, tint = BrushworkColors.Accent, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(10.dp))
+        Text(
+            if (adjustment) "Adjustment layers have no pixels — edit the effect in Masks" else "Applying rasterizes this vector layer",
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.weight(1f).padding(vertical = 8.dp),
+        )
+        if (adjustment) {
+            TextButton(onClick = { AdjustmentLayerOps.edit(controller, active); onDismiss() }) { Text("Open") }
         }
     }
 }
@@ -230,6 +274,7 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
+                if (session.filter.isAdjustmentCapable) AsAdjustmentLayerRow(session, enabled = !busy)
                 if (!session.filter.livePreview) PreviewOnDemand(session)
                 val params = session.filter.params
                 if (params.isEmpty()) {
@@ -267,6 +312,7 @@ private fun PanelHeader(session: FilterSession) {
                 append(session.layer.name)
                 if (session.target == EditTarget.MASK) append(" · mask")
                 if (controller.selection != null) append(" · selection")
+                if (session.target == EditTarget.CONTENT && session.layer.isVectorLayer) append(" · applying rasterizes it")
             }
             Text(where, style = MaterialTheme.typography.labelSmall, color = BrushworkColors.OnChromeDim, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
@@ -343,6 +389,44 @@ private fun ApplyProgress(session: FilterSession) {
             }
         }
         TextButton(onClick = { session.cancelApply() }) { Text("Stop") }
+    }
+}
+
+/**
+ * v1.5 "As adjustment layer": the filter with the current values becomes a new adjustment layer
+ * above the layer (live and editable in the Masks tool) instead of changing its pixels; an active
+ * selection becomes the adjustment's mask.
+ */
+@Composable
+private fun AsAdjustmentLayerRow(session: FilterSession, enabled: Boolean) {
+    val controller = session.controller
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(bottom = 4.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled, onClickLabel = "Add as adjustment layer", role = Role.Button) {
+                val filter = session.filter
+                val values = session.values.copy()
+                session.cancel()
+                AdjustmentLayerOps.fromFilter(controller, filter, values)
+            }
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Filled.Layers, contentDescription = null, tint = if (enabled) BrushworkColors.Accent else BrushworkColors.OnChromeDim, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text("As adjustment layer", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                if (controller.selection != null) "Stays editable · the selection becomes its mask" else "Stays editable · changes every layer below",
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

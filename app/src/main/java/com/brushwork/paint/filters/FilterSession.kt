@@ -203,6 +203,12 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
     /** Builds the preview source and renders the first preview. Called by EditorController.startFilter(). */
     fun start() {
         if (isClosed) return
+        // Adjustment layers have no pixels: their effect is edited with the Masks tool (v1.5).
+        if (layer.isAdjustmentLayer) {
+            controller.toast(EditorController.ADJUSTMENT_FILTER_MESSAGE)
+            close()
+            return
+        }
         values = sessionDefaults()
         try {
             buildPreviewSource()
