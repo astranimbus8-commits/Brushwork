@@ -275,7 +275,8 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                if (session.filter.isAdjustmentCapable) AsAdjustmentLayerRow(session, enabledByPanel = !busy)
+                // (Not while a mask is filtered: an adjustment layer changes the picture, not the mask.)
+                if (session.filter.isAdjustmentCapable && session.target == EditTarget.CONTENT) AsAdjustmentLayerRow(session, enabledByPanel = !busy)
                 if (!session.filter.livePreview) PreviewOnDemand(session)
                 val params = session.filter.params
                 if (params.isEmpty()) {

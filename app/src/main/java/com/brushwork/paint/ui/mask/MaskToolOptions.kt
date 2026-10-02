@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoFixOff
@@ -41,6 +43,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -240,8 +243,15 @@ private fun TargetChip(tool: MaskTool, info: StripInfo) {
 private fun AdjustChip(tool: MaskTool, enabled: Boolean) {
     val pulse = remember { Animatable(0f) }
     val count = tool.adjustPulse
+    val bring = remember { BringIntoViewRequester() }
     LaunchedEffect(count) {
-        if (count == 0) return@LaunchedEffect
+        // Once per new adjustment layer (not again when the strip is shown again later).
+        if (count == 0 || count == tool.adjustPulseShown) return@LaunchedEffect
+        tool.adjustPulseShown = count
+        // The strip scrolls to the chip: it sits near the end, off a 360–392 dp screen while
+        // "+ Linear" was being tapped, and the pulse is the invitation to move the sliders.
+        withFrameNanos { }
+        bring.bringIntoView()
         repeat(3) {
             pulse.animateTo(1f, tween(260))
             pulse.animateTo(0f, tween(260))
@@ -249,6 +259,7 @@ private fun AdjustChip(tool: MaskTool, enabled: Boolean) {
     }
     Box(
         Modifier
+            .bringIntoViewRequester(bring)
             .clip(RoundedCornerShape(10.dp))
             .background(BrushworkColors.Accent.copy(alpha = 0.45f * pulse.value)),
     ) {

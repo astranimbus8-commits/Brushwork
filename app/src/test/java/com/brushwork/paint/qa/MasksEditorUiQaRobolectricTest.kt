@@ -159,6 +159,7 @@ class MasksEditorUiQaRobolectricTest {
         section("clone stamp strip") { cloneStrip() }
         section("Adjust settings that can't be live are refused") { notLiveSettings() }
         section("Components → Apply a filter through this mask → Gaussian Blur → ✓") { filterThroughMask() }
+        section("Components: replace an adjustment layer's painted mask with an editable one") { replacePaintedAdjustmentMask() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -193,6 +194,11 @@ class MasksEditorUiQaRobolectricTest {
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertNotNull(adj.maskSpec)
         assertTrue(has("Components (1)", exact = true))
+        // Lightroom's flow: make a mask, then move the sliders. The pulsing Adjust… chip must be
+        // on screen without hunting for it (the strip was scrolled to "+ Linear").
+        assertEquals("a new adjustment layer makes the Adjust chip pulse", 1, tool.adjustPulse)
+        val adjustChip = SmokeUi.find("Adjust…", exact = true)!!.bounds
+        assertTrue("the pulsing Adjust… chip is on screen at 360 dp: $adjustChip (width ${s.width})", adjustChip.width > 0f && adjustChip.left >= 0f && adjustChip.right <= s.width + 1f)
 
         // Adjust…: Tone's sliders; Exposure changes live, Amount is reachable; one step on close.
         assertTrue(scrollIntoView(horizontalScrollerOf("Adjust…"), "Adjust…", horizontal = true))
@@ -298,6 +304,18 @@ class MasksEditorUiQaRobolectricTest {
         assertFalse("not offered with Auto levels", SmokeUi.isEnabled("Add as adjustment layer", exact = false))
         session.cancel()
         settle()
+        // Filtering a layer's MASK: an adjustment layer (which changes the picture, not the mask)
+        // is not what is being made, so it isn't offered.
+        val photo = c.activeLayer
+        c.addMask(photo, fromSelection = false)
+        assertTrue(photo.editingMask)
+        c.startFilter(com.brushwork.paint.filters.FilterRegistry.byId("adjust.tone")!!)
+        settle()
+        assertNotNull(c.filterSession)
+        assertTrue(has("${photo.name} · mask"))
+        assertFalse("no \"As adjustment layer\" while filtering a mask", has("As adjustment layer", exact = true))
+        c.filterSession!!.cancel()
+        settle()
         Smoke.assertQuiet(c, "not live")
     }
 
@@ -340,6 +358,41 @@ class MasksEditorUiQaRobolectricTest {
         assertTrue(session.isClosed)
     }
 
+    /**
+     * "As adjustment layer" with a selection gives a painted mask. The Components sheet offers
+     * "Replace with an editable mask": it must ask, and after "Replace" parts can be added.
+     */
+    private fun replacePaintedAdjustmentMask() {
+        val s = editor()
+        val c = s.c
+        val tone = com.brushwork.paint.filters.FilterRegistry.byId("adjust.tone")!!
+        c.setSelection(com.brushwork.paint.model.Selection.fromFloats(FloatArray(400 * 300) { i -> if (i % 400 < 200) 1f else 0f }, 400, 300))
+        val adj = com.brushwork.paint.masks.AdjustmentLayerOps.fromFilter(c, tone, tone.defaultValues().set("exposure", 1f))!!
+        assertNotNull(adj.mask)
+        assertNull("a painted mask", adj.maskSpec)
+        c.selectTool(ToolId.MASK)
+        val tool = c.tools.getValue(ToolId.MASK) as MaskTool
+        settle()
+        assertTrue(tool.needsReplace)
+        scrollIntoView(horizontalScrollerOf("Components (0)"), "Components (0)", horizontal = true)
+        click("Components (0)", exact = true)
+        SmokeUi.assertPanelShown("Mask of ${adj.name}")
+        click("Replace with an editable mask", exact = true)
+        assertTrue("the question is asked", has("Replace the painted mask?", exact = true))
+        SmokeUi.clickIn("Replace the painted mask?", "Replace")
+        assertFalse("now editable", tool.needsReplace)
+        assertTrue("the sheet offers parts now", has("No parts yet", exact = false))
+        click("Close", exact = true)
+        // A radial drag makes it an editable mask: the painted half is gone.
+        scrollIntoView(horizontalScrollerOf("+ Radial"), "+ Radial", horizontal = true)
+        click("+ Radial", exact = true)
+        s.touch.stroke(s.screen(300f, 150f), s.screen(320f, 150f), s.screen(340f, 150f))
+        settle()
+        assertNotNull(adj.maskSpec)
+        assertEquals("the painted left half is gone", 0xFF000000.toInt(), adj.mask!!.getPixel(50, 150))
+        Smoke.assertQuiet(c, "replace painted adjustment mask")
+    }
+
     private fun cloneStrip() {
         val s = editor()
         val c = s.c
@@ -363,6 +416,13 @@ class MasksEditorUiQaRobolectricTest {
         scrollIntoView(strip, "Aligned", horizontal = true)
         click("Aligned", exact = true)
         assertFalse(tool.aligned)
+        // The X / Y strip shows and moves the source (tool state: no undo step).
+        val steps = c.undoManager.undoCount
+        assertTrue("the strip names the source", has(CloneTool.POSITION_LABEL, exact = true))
+        RobolectricUi.byDescription("X plus 1 pixel").tap()
+        settle()
+        assertEquals(src.x + 1f, tool.anchor.source!!.x, 0.01f)
+        assertEquals(steps, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "clone strip")
     }
 }

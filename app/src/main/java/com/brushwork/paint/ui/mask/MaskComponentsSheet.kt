@@ -82,7 +82,7 @@ internal fun MaskComponentsSheet(tool: MaskTool) {
         }
         if (tool.needsReplace) {
             Note("\"${l.name}\" has a painted mask. Replace it with an editable one to add linear, radial and brush parts (undo brings it back).")
-            TextButton(onClick = { tool.chooseTarget(MaskTool.Target.ThisLayer) }) { Text("Replace with an editable mask") }
+            TextButton(onClick = { tool.requestReplace() }) { Text("Replace with an editable mask") }
             MaskActions(tool)
             return@BwSheet
         }
