@@ -11,6 +11,7 @@ import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
+import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.GridSettings
@@ -201,11 +202,13 @@ object CanvasOps {
         // Grayscale stays gray (equal channels are filtered identically); 1-bit needs a threshold.
         val constrain = snap.colorMode == ColorMode.MONOCHROME && resample != Resample.NEAREST
         val geometry = CanvasGeometry.scale(newWidth.toDouble() / snap.width, newHeight.toDouble() / snap.height)
-        // Vector layers are re-rendered from their (scaled) objects: crisp at any size (v1.5).
+        // Vector layers are re-rendered from their (scaled) objects: crisp at any size, and
+        // editable masks from their scaled specs (v1.5).
         val layers = mapLayers(
             snap, progress,
             data = { l -> mappedData(l, geometry, newWidth, newHeight) },
             content = { _, d, sub -> d?.vector?.let { v -> renderVector(v, newWidth, newHeight, snap.colorMode, sub) } },
+            maskOf = { _, d, sub -> specMask(d, newWidth, newHeight, sub) },
         ) { src, isMask, sub ->
             if (constrain && !isMask) {
                 val out = resampleBitmap(src, newWidth, newHeight, resample) { f -> sub(f * 0.8f) }
@@ -255,6 +258,9 @@ object CanvasOps {
                     renderVector(v, newWidth, newHeight, snap.colorMode, sub)
                 } else null
             },
+            // An editable mask is drawn from its moved spec (the new margin is what the spec
+            // renders there, not white).
+            maskOf = { _, d, sub -> specMask(d, newWidth, newHeight, sub) },
         ) { src, isMask, _ ->
             val background = when {
                 isMask -> MASK_WHITE
@@ -313,6 +319,7 @@ object CanvasOps {
                     renderVector(v, w, h, snap.colorMode, sub)
                 } else null
             },
+            maskOf = { _, d, sub -> specMask(d, w, h, sub) },
         ) { src, _, _ -> transformed(src, w, h, geometry) }
         return CanvasResult(w, h, snap.dpi, snap.colorMode, layers, geometry)
     }
@@ -331,6 +338,7 @@ object CanvasOps {
                     renderVector(v, snap.width, snap.height, snap.colorMode, sub)
                 } else null
             },
+            maskOf = { _, d, sub -> specMask(d, snap.width, snap.height, sub) },
         ) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
         return CanvasResult(snap.width, snap.height, snap.dpi, snap.colorMode, layers, geometry)
     }
@@ -610,6 +618,8 @@ object CanvasOps {
         transformMasks: Boolean = true,
         data: ((CanvasSnapshot.LayerSnapshot) -> LayerData)? = null,
         content: ((CanvasSnapshot.LayerSnapshot, LayerData?, (Float) -> Unit) -> Bitmap?)? = null,
+        /** A layer's new mask drawn from its mapped data instead of `op` (null = use `op`). */
+        maskOf: ((CanvasSnapshot.LayerSnapshot, LayerData?, (Float) -> Unit) -> Bitmap?)? = null,
         op: (Bitmap, Boolean, (Float) -> Unit) -> Bitmap,
     ): List<CanvasResult.LayerResult> {
         val out = ArrayList<CanvasResult.LayerResult>(snap.layers.size)
@@ -630,7 +640,8 @@ object CanvasOps {
                 pendingBitmap = bmp.takeIf { it !== l.bitmap }
                 progress(++done / total)
                 val mask = if (transformMasks && l.mask != null) {
-                    op(l.mask, true, subProgress()).also { progress(++done / total) }
+                    val msub = subProgress()
+                    (maskOf?.invoke(l, d, msub) ?: op(l.mask, true, msub)).also { progress(++done / total) }
                 } else {
                     l.mask
                 }
@@ -658,6 +669,22 @@ object CanvasOps {
     /** [l]'s editable data after the geometry change [g] (see LayerDataTransforms). */
     private fun mappedData(l: CanvasSnapshot.LayerSnapshot, g: CanvasGeometry, newW: Int, newH: Int): LayerData =
         if (l.data.isEmpty) l.data else LayerDataTransforms.transformed(l.data, matrixOf(g), newW, newH)
+
+    /**
+     * A layer's new mask when its data [d] (already mapped) keeps an editable mask spec: the
+     * spec rendered at the new [w] x [h] (I1: the mask stays exactly its spec's rendering, which
+     * resampled pixels — or a new canvas margin filled white — would not be). Null without a
+     * spec: the mask's pixels are mapped like the layer's.
+     */
+    private fun specMask(d: LayerData?, w: Int, h: Int, sub: (Float) -> Unit): Bitmap? {
+        val spec = d?.maskSpec ?: return null
+        sub(0f)
+        val m = MaskSpecs.newMask(spec, w, h)
+        try {
+            sub(1f)
+        } catch (t: Throwable) { m.recycle(); throw t }
+        return m
+    }
 
     /**
      * A vector layer's new pixels: its (already mapped) objects rendered at the new size, held to
