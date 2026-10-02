@@ -41,7 +41,9 @@ interface LayerRenderOverride {
  * resized: every affected frame previews its pending item). Install it as
  * `controller.renderOverride` like any override; the compositor asks it for every layer in
  * [layers] (and for [layer], which must be one of them) through [drawContentFor] /
- * [drawMaskFor], never through the single-layer [drawContent] / [drawMask].
+ * [drawMaskFor], never through the single-layer [drawContent] / [drawMask]. A
+ * [MaskCoverageHint] is not consulted through it (the compositor sees a per-layer view): a masked
+ * adjustment layer in [layers] is mapped over its whole region, its mask still applying.
  */
 interface MultiLayerRenderOverride : LayerRenderOverride {
     /** Every layer it draws (includes [layer]). */

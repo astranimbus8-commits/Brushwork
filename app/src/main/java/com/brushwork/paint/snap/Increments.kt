@@ -61,7 +61,10 @@ class Increments(private val settings: AppSettings) {
         return IncrementMath.snap(v, s)
     }
 
-    /** A scale factor relative to the gesture start (1 = unchanged) on the Scale step's multiples. */
+    /**
+     * A scale factor relative to the gesture start (1 = unchanged) on the Scale step's multiples,
+     * at least one step and always positive (a mirrored scale: pass `|k|`, keep the sign).
+     */
     fun factor(k: Float): Float {
         val s = step(IncrementKind.SCALE) ?: return k
         return IncrementMath.snapFactor(k, s)

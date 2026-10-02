@@ -31,7 +31,8 @@ object IncrementMath {
     /**
      * A scale factor relative to the gesture start: `1 + round((k − 1) / s)·s` with `s =
      * stepPercent / 100` (10 % gives 0.9, 1.0, 1.1, 1.2 …), never below one step (`s`), so a
-     * pinch can't collapse an object to nothing.
+     * pinch can't collapse an object to nothing. The result is always positive: a caller with a
+     * mirrored scale (negative [k]) snaps `|k|` and puts the sign back.
      */
     fun snapFactor(k: Float, stepPercent: Float): Float {
         if (!valid(stepPercent) || !k.isFinite()) return k

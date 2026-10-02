@@ -6,8 +6,14 @@ import android.graphics.Paint
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VPaint
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VSubpath
+import com.brushwork.paint.vector.VectorContent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,11 +45,16 @@ class LayerListEventTest {
     private val w = 100
     private val h = 80
 
-    private fun setup(): EditorController {
+    /** Three layers ("Layer 1" at the bottom), the middle one active; [vectors]: layers 2 and 3 are vector layers. */
+    private fun setup(vectors: Boolean = false): EditorController {
         val settings = AppSettings(app)
         settings.prefs.edit().clear().commit()
         val doc = Document("t", "t", w, h)
-        repeat(3) { i -> doc.layers += Layer(doc.newLayerId(), "Layer ${i + 1}", BitmapUtils.createLayerBitmap(w, h)) }
+        repeat(3) { i ->
+            doc.layers += Layer(doc.newLayerId(), "Layer ${i + 1}", BitmapUtils.createLayerBitmap(w, h)).also {
+                if (vectors && i > 0) it.vector = VectorContent.EMPTY
+            }
+        }
         doc.activeLayerIndex = 1
         return EditorController(app, doc, scope, settings).also { it.viewTransform.set(Matrix()) }
     }
@@ -177,6 +188,69 @@ class LayerListEventTest {
         c.undo()
         assertEquals("undoing the deletion undoes its amendment only", "Amended 1", keep.name)
         assertTrue(c.doc.indexOf(victim) >= 0)
+    }
+
+    /** A filled square as a vector path (document px). */
+    private fun box(l: Float, t: Float, r: Float, b: Float) = VPath(
+        0, subpaths = listOf(VSubpath(listOf(VAnchor(l, t, true), VAnchor(r, t, true), VAnchor(r, b, true), VAnchor(l, b, true)), closed = true)),
+        fill = VPaint.Solid(0xFFE04020.toInt()),
+    )
+
+    @Test
+    fun vectorDuplicateAndVectorMergeDeliverOnceAfterTheirStep() {
+        // The vector layer paths (VectorLayerOps.duplicateTouched / mergeVector) emit from their own
+        // code: one event each, after the step, and an amendment joins that step.
+        val c = setup(vectors = true)
+        val keep = c.doc.layers[0]
+        val lower = c.doc.layers[1]
+        val upper = c.doc.layers[2]
+        c.vectors.addObjects(lower, listOf(box(5f, 5f, 30f, 30f)), "Add")
+        c.vectors.addObjects(upper, listOf(box(10f, 10f, 40f, 40f), box(60f, 40f, 90f, 70f)), "Add")
+        val r = Recorder(c, keep)
+        c.addLayerListListener(r)
+
+        val sel = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ALPHA_8).also { m ->
+            Canvas(m).drawRect(55f, 35f, 95f, 75f, Paint().apply { color = 0xFF000000.toInt() })
+        }
+        c.setSelection(Selection.wrap(sel), recordUndo = false)
+        val n0 = c.undoManager.undoCount
+        val copy = c.duplicateLayer(upper)
+        assertNotNull(copy)
+        assertTrue("the vector path: a vector layer of the touched object", copy!!.isVectorLayer)
+        assertEquals(1, copy.vector!!.objects.size)
+        val dup = r.seen.single()
+        assertEquals(LayerListKind.DUPLICATED, dup.e.kind)
+        assertSame(copy, dup.e.layer)
+        assertSame(upper, dup.e.source)
+        assertEquals("Duplicate selection", dup.e.label)
+        assertEquals(n0 + 1, dup.undoCount)
+        assertEquals("Duplicate selection", dup.undoLabel)
+        assertEquals("the amendment joined the step", n0 + 1, c.undoManager.undoCount)
+        assertEquals("Amended 1", keep.name)
+        c.undo()
+        assertEquals(-1, c.doc.indexOf(copy))
+        assertEquals("Layer 1", keep.name)
+        r.seen.clear()
+
+        c.setSelection(null, recordUndo = false)
+        val n1 = c.undoManager.undoCount
+        c.mergeDown(upper)
+        assertEquals(-1, c.doc.indexOf(upper))
+        assertEquals("the vector merge kept the objects", 3, lower.vector!!.objects.size)
+        val merged = r.seen.single()
+        assertEquals(LayerListKind.MERGED, merged.e.kind)
+        assertSame(upper, merged.e.layer)
+        assertSame(lower, merged.e.source)
+        assertEquals("Merge down", merged.e.label)
+        assertEquals("delivered after the merge's own step", n1 + 1, merged.undoCount)
+        assertEquals("Merge down", merged.undoLabel)
+        assertEquals(n1 + 1, c.undoManager.undoCount)
+        assertEquals("Amended 1", keep.name)
+        r.seen.clear()
+        c.undo()
+        assertTrue(c.doc.indexOf(upper) >= 0)
+        assertEquals("one undo restores the merge and its amendment", "Layer 1", keep.name)
+        assertTrue("undo delivers nothing", r.seen.isEmpty())
     }
 
     @Test

@@ -96,6 +96,56 @@ class MultiLayerOverrideTest {
         assertTrue(!plain.contentEquals(swapped))
     }
 
+    /** Answers only for masks: [masks] per layer (null = default drawing); never asked through its own drawContent / drawMask. */
+    private class MaskMulti(override val layer: Layer, override val layers: Set<Layer>, private val masks: Map<Layer, Bitmap>) : MultiLayerRenderOverride {
+        val askedMask = ArrayList<Layer>()
+        override fun drawContent(canvas: Canvas): Boolean = throw AssertionError("a multi-layer override is asked per layer")
+        override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean = throw AssertionError("a multi-layer override is asked per layer")
+        override fun drawContentFor(target: Layer, canvas: Canvas): Boolean = false
+        override fun drawMaskFor(target: Layer, canvas: Canvas, maskPaint: Paint): Boolean {
+            askedMask += target
+            val m = masks[target] ?: return false
+            canvas.drawBitmap(m, 0f, 0f, maskPaint)
+            return true
+        }
+    }
+
+    /** A luminance mask: white (effect / layer shows) inside [l, t, r, b], black elsewhere. */
+    private fun mask(l: Float, t: Float, r: Float, b: Float): Bitmap = BitmapUtils.createMaskBitmap(w, h, 0xFF000000.toInt()).also {
+        Canvas(it).drawRect(l, t, r, b, Paint().apply { color = 0xFFFFFFFF.toInt() })
+    }
+
+    /** A picture, then an Invert adjustment layer with [adjMask] above it. */
+    private fun adjustmentDoc(adjMask: Bitmap): Document {
+        val d = Document("a", "a", w, h)
+        d.layers += Layer(d.newLayerId(), "picture", bmp(0xFF2050A0.toInt(), 10f))
+        d.layers += Layer(d.newLayerId(), "invert", BitmapUtils.createLayerBitmap(w, h)).also { l ->
+            l.adjustment = com.brushwork.paint.masks.AdjustmentSpec(filterId = "adjust.invert")
+            l.mask = adjMask
+        }
+        return d
+    }
+
+    @Test
+    fun anAdjustmentLayerInTheSetGetsItsMaskFromDrawMaskFor() {
+        // AdjustmentStage resolves the override per layer too (MultiLayerView -> drawMaskFor).
+        val left = mask(0f, 0f, w / 2f, h.toFloat())
+        val top = mask(0f, 0f, w.toFloat(), h / 2f)
+        val d = adjustmentDoc(left)
+        val adj = d.layers[1]
+        val plain = render(d, null)
+        // Falling back (no mask of its own): exactly the layer's own mask applies.
+        val fallback = MaskMulti(adj, setOf(adj), emptyMap())
+        assertNear(plain, render(d, fallback))
+        assertTrue("asked for the adjustment layer's mask", adj in fallback.askedMask)
+        // Supplying a mask: as if the layer had that mask.
+        val swapped = MaskMulti(adj, setOf(adj), mapOf(adj to top))
+        val drawn = render(d, swapped)
+        assertNear(render(adjustmentDoc(top), null), drawn)
+        assertTrue(!plain.contentEquals(drawn))
+        assertEquals(setOf(adj), swapped.askedMask.toSet())
+    }
+
     @Test
     fun aMultiLayerOverrideDrawsEveryLayerOfItsSet() {
         val d = doc(base())
