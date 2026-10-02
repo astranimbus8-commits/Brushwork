@@ -285,6 +285,8 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(vertical = 8.dp),
                     )
                 }
+                // Tone: the luminance histogram of the layer (in the selection) above its sliders.
+                if (showsHistogram(session.filter.id)) LuminanceHistogram(session.histogram)
                 params.forEach { p -> FilterParamControl(session, p, enabled = !busy) }
             }
         }

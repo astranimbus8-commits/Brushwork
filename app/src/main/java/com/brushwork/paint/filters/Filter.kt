@@ -48,7 +48,14 @@ abstract class Filter(
 
 /**
  * A pointwise color mapping (v1.5): maps the NON-premultiplied ARGB pixels [from] until [until]
- * of [px] in place, preserving alpha. Must be thread-safe (rows are mapped in parallel).
+ * of [px] in place. Must be thread-safe (rows are mapped in parallel).
+ *
+ * Alpha is preserved, with one deliberate exception: a mapper may LOWER alpha where its filter's
+ * [Filter.apply] does (it must equal apply(), per pixel). Today only Gradation Map does, with
+ * semi-transparent gradient stops (stop alpha scales the pixel's alpha). On an adjustment layer a
+ * lowered alpha means the mapped color is drawn that much weaker, so a transparent stop shows the
+ * image below (Photoshop's gradient map; `AdjustmentStage`). No mapper ever raises alpha, so
+ * fully transparent pixels stay fully transparent.
  */
 fun interface PixelMapper {
     fun map(px: IntArray, from: Int, until: Int)

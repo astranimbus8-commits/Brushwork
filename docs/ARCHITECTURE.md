@@ -93,6 +93,11 @@ filter is unit-tested on the JVM (`AllFiltersTest` runs all of them). Parameters
 `FilterParam` and the UI is generated from them. `FilterSession` (Android glue) previews on a
 downscaled copy, applies at full resolution in the background, respects the selection and records
 undo. `FilterMath` has shared helpers (blur, distance transform, noise, LUTs, parallel loops).
+Pointwise filters (v1.5) also expose `pixelMapper`, which `apply()` itself uses (contract-tested
+per pixel; thread-safe, rows are mapped in parallel). A mapper keeps alpha, with one deliberate
+exception: Gradation Map's semi-transparent stops lower it, exactly as its `apply()` does. Tone
+(`adjust.tone`, first in Color Adjustment) works on luminance in linear light and keeps hue; its
+panel shows the luminance histogram above the sliders and Exposure reads "+0.50 EV".
 
 ## Text layers (`tools/text/`)
 A text layer is a normal raster layer whose `Layer.textData` holds the serialized text object
@@ -102,6 +107,17 @@ editing (tap its text, or "Edit text" in the layers window) and re-renders the s
 (`textData` cleared, undoably). Text on a path (`TextPathSpec`, `TextOnPath`, `TextPathGeometry`)
 lays one line of text along a line, circle, rectangle or cubic curve, either bending the glyph
 outlines along the path or rotating each letter rigidly.
+
+Horizontal text can wrap around a picture (v1.5, `TextItem.wrap` / `TextWrapSpec`). The picture
+layer's outline (alpha × mask, traced by `WrapContourBuilder`, cached in `WrapContours`) is stored
+in the text item in document px, so rendering, export and reload never read the picture, and the
+wrapped layout depends only on the item. `WrapLayout` breaks the lines around it (StaticLayout's
+rules otherwise). `TextWrapReflow` (`controller.textWrap`, an `EditListener`) re-traces the outline
+after any committed edit of the picture and redraws the wrapped text layers — hidden ones included,
+locked ones not — inside that edit's undo step (`amendLastStep`); undo and redo never re-flow.
+Opening a wrapped text refreshes a stale outline. `TextExport` gives exporters the laid-out lines
+(`lines`), the letters' outlines (`outlines`) and every painted part with its color
+(`outlineParts`: box fill, border, outline stroke, letters).
 
 ## Shape layers (`tools/vector/Shape*`)
 With "Editable (own layer)" on (the default), each new shape goes into its own layer whose
@@ -147,6 +163,80 @@ fresh rendering of the data (and of the live strokes), whatever the dirty region
 becomes a `VPath` otherwise). Each vector layer is saved in its own `vector_<id>_r<rev>.vec`
 (Deflate of JSON, `VectorCodec`), written only when the layer changed.
 
+**Service internals (`VectorLayers`).** Dirty regions are sets of whole 256 px tiles (`geom/TileSet`:
+the tiles each changed object can paint, a stroke's tiles along its points; a z-order change
+repaints only the objects that moved, `geom/ContentDiff`). `geom/ObjectIndex` is a 128 px grid of
+paint bounds, cached per content instance and reusing the bounds of objects an edit shares; hit
+tests, `touching`, renders, cost estimates and the object selection's id lookups go through it.
+A re-render is estimated (`VectorLayerRenderer.estimateUnits` × the measured ns per unit): up to
+25 ms it runs on the main thread, beyond that on one background worker (its own tip and render
+caches) from the immutable content, in patches of at most 1024² px. The patch lands on a later
+main-thread turn (never inside the `update` call, so an edit the caller computes next from the old
+content is re-based onto it), with the data as one step, only if the layer is unchanged (content instance, content
+version, bitmap); otherwise the edit is re-based onto the current content (`ContentDiff.merge3`)
+and rendered again. While a render is pending the service registers a `DeferredStep`, so any
+other edit, undo or redo first completes it (`flushPending`, also called by `CanvasOps`); edits
+inside another step (`editScope` depth > 0) render synchronously. `update` reports through
+`onDone` exactly once — applied, refused, re-run after a stale patch, or abandoned when the editor
+closes (`dispose` also answers a preparing edit session with null, and refuses every later
+request). `isRendering` (Compose state) is true while a render or an edit preparation runs; the
+busy overlay "Rendering vectors…" shows at once for an estimate over 400 ms, else after 400 ms.
+Under Robolectric the policy defaults to synchronous renders (tests opt into `Policy.ASYNC`).
+
+**Pure moves (`VectorLayers.ShiftHint`).** A whole-pixel translation of objects that no other
+object's paint bounds reach, with no paper grain (unless by multiples of 256 px) and with every
+pixel that lands on the canvas coming from it, shifts the cache pixels (≈ 10 ms) instead of
+re-rendering. The result is the old cache shifted exactly; it differs from a re-render only at
+anti-aliased path edges, by up to a few tens of levels where the move makes a path cross a tile
+edge of the 256 px grid (Skia anti-aliases a clipped path differently). `VectorEditSession.commit` detects such moves itself when every replacement is
+`VectorOps.transformed(original, integer translation)`; the Transform lift passes the hint to
+`update`. Transforms turn brush tips with the objects (`VectorOps.turnedBrush`: a rotated or
+mirrored calligraphy stroke keeps its look; moves and scales keep the same preset instance); canvas
+rotations and flips remap a layer's pixels only when all its brushes turn into themselves
+(`LayerDataTransforms.turnsExactly`), else redraw it from the mapped objects. Under a homography
+(Distort) a stroke's size and tip angle are taken at its bounds' centre.
+
+**Edit sessions.** `beginEdit` renders the hole (the other objects in the edited ones' tiles) and
+the floating bitmap (the edited objects), in the background when expensive (a newer request
+answers an older one with null; a long preparation shows the busy overlay, whose Stop gives up).
+Lifting every object copies the cache and renders, for the objects that reach past the canvas,
+only the bands of the floating rect outside it, so their off-canvas parts show in the Transform
+preview at the cost of those parts alone. A session's commit on
+a large edit stays installed (hole + preview) until the background result lands.
+
+**Selecting and lifting objects (`vector/select`, `vector/lift`, `ui/vector/VectorObjectBar`).**
+Lasso and Select shape on a vector layer select the objects the area touches (New / Add /
+Subtract / Intersect; no pixel selection, no undo step; large searches in the background).
+Selected objects get dashed boxes and the Object bar (Delete, Duplicate, Forward, Backward, Front,
+Back, Recolor, Transform, Deselect; each one step through `vectors.update`). The Transform tool's
+`VectorLift.provider` lifts the object selection, else the objects the pixel selection touches,
+else all objects; ✓ maps their geometry exactly (`LiftGeometry`: affine or Distort homography;
+strokes scale by √|det|) and passes whole-pixel moves as a `ShiftHint`. Lifts and Object bar
+actions asked for while a render is pending wait for it (`PendingRenders`).
+
+**Drawing on vector layers (`vector/draw`).** `VectorStrokeCapture` (the brush stroke hook) keeps
+the live stroke's pixels (`keepLayerData`) and appends the `VStroke` as data in one step; the
+selection doesn't clip vector strokes, and pixel-moving tips and alpha-locked layers are refused.
+The vector eraser has three modes — Object, Partial (cuts strokes and open single-subpath paths at
+the eraser) and To intersection (removes the touched piece between crossings with other objects'
+centerlines) — with the geometry in pure Kotlin (`EraseMath`, `EraseTargets`, `EraseSession`), a
+dimmed DST_OUT preview while the finger moves, one step "Erase", and a per-layer update queue
+(`VectorDrawState`, which never holds its editor). The bucket (`VectorFill`) fills or recolors the
+object tapped, or traces an enclosed area into an even-odd `VPath` placed under the line art. The
+Shape tool makes `VShape` objects on vector layers and reopens one on a tap (✓ "Edit shape" in
+place); a brush outline is previewed as the painting tool's live stroke, started unclipped by the
+selection and alpha lock (`BrushStrokePreview.unclipped`), and kept as the object's exact replay
+with the preview's seed.
+
+**Curves on vector layers (`tools/vector/Curve*`).** On a vector layer ✓ of the Curve or Polyline
+tool adds one `VPath` (anchors, handles kept on sharp anchors, per-point thickness 0–300 %, plain or
+brush stroke with its preset and seed, fill); a live brush stroke keeps its pixels, started
+unclipped. With no path pending, tapping a path's line (or inside a fill-only path) reopens it; ✓
+is one step "Edit path", ✕ restores it exactly. Thickness blends with smoothstep along the arc
+length (`CurveWidths`): plain lines are filled `VariableWidthOutline`s of `CurveWidths.line`, brushes
+get `CurveWidths.atSamples` as pressure on a brush sized to the thickest sample — the renderer uses
+the same functions, so a re-render equals the live stroke the tool kept.
+
 ## Adjustment layers & editable masks (`masks/`, v1.5)
 `Layer.maskSpec` (`masks/MaskModel.kt`) is a parametric mask — linear, radial and brush components
 combined by Add / Subtract / Intersect, invert, density — rendered into the existing `Layer.mask`
@@ -162,14 +252,47 @@ Adjustment layers have no pixels: brush and eraser paint their mask, pixel tools
 merging one down applies its effect to the layer below. Specs are stored inside `project.json`
 (pre-encoded strings, `MaskCodec` / `AdjustmentCodec`).
 
+- **Masks tool** (`tools/mask/MaskTool`): + Linear / + Radial / + Brush arm a creating gesture (the
+  first one on a pixel layer adds "Tone 1" with the component as one step); handles and pins edit
+  components, a handle drag previews at ½ resolution (`MaskPreview`) and records one data-only
+  `MaskSpecAction` on release, which re-renders the mask on undo (it records mask tiles instead
+  when the re-render is estimated over 150 ms or a painted mask is replaced). The Adjust sheet's
+  changes are live and become one "Edit adjustment" step through a `DeferredStep`.
+- **Brush components** use one canonical arithmetic (per-stroke float accumulation, rounded to a
+  byte at the end of each stroke) in every path — region, full, the 1 B/px `MaskBrushCache` and the
+  preview — so they give identical bytes.
+- **NORMAL adjustments** over an opaque composite are one SRC_OVER pass, i.e.
+  `lerp(below, F(below), mask·opacity)`; where the composite is not opaque two passes (DST_OUT by
+  mask·opacity, then PLUS of the masked effect) keep its alpha, so an adjustment never makes
+  transparent areas more opaque. A mapper that lowers alpha (Gradation Map's semi-transparent
+  stops) draws its colors that much weaker in every mode: a transparent stop shows the image below.
+  Effects are held to the document's color mode.
+- **Matte**: `renderFlattened` / `renderThumbnail` with a background put it behind the composite
+  as a matte when a live adjustment exists (otherwise the v1.4 path runs unchanged).
+- **Visible first**: `DisplayTiles.update(visibleDoc)` renders the dirty tiles on screen; off-screen
+  tiles stay dirty until they are scrolled into view.
+- **`MaskCoverageHint`**: a render override drawing an adjustment layer's mask while it is edited
+  tells the stage where that mask can be non-black (and, on an adjustment layer without a mask,
+  supplies the mask being made), so the effect is only computed there.
+- The stage keeps its per-call state in the compositor's own `AdjustmentScratch`: a nested
+  compositor (the clone stamp's All-layers snapshot, filled while the canvas draws) has its own.
+- Canvas operations (resize, canvas size / crop, rotate, flip) and Brushwork files placed on a
+  canvas of another size map a mask spec with the layer and draw the mask again from it, so the
+  mask stays exactly the spec's rendering.
+
 ## SVG/PDF exchange (`exchange/`, v1.5)
 Export (overflow menu: Export SVG… / Export PDF…) builds one `ExportScene` from the document and
 writes it with pure-Kotlin writers (SVG, and a PDF writer with layers as optional content groups);
-vector objects become paths, raster layers cropped images, text real text where it can. A Brushwork
+vector objects become paths, raster layers cropped images, text real `<text>` in SVG where it can
+(its box as shapes under it) and otherwise the outlines of every painted part in its own color (PDF
+always, through `TextExport.outlineParts`), or its pixels when it holds color emoji (pictures in
+their font, without outlines). A Brushwork
 payload embedded in both formats restores the layers exactly on re-import. Import (Import SVG or
 PDF…, and "New from SVG or PDF" in the gallery, handed over through `PendingImports`) reads SVG with
 an own XML tokenizer (no DTD) into editable vector layers, and PDF pages through `PdfRenderer` into
-raster layers. `ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress.
+raster layers. An SVG imported into an open artwork is one undo step, after which Transform opens
+with the imported objects lifted as objects (✓ keeps the layer a vector layer).
+`ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress.
 
 ## Snapping (`snap/`)
 One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
@@ -198,8 +321,10 @@ swatches) — use them everywhere.
 
 Editor layout (`ui/editor`): top bar (Vector first, then panels, and the overflow menu), tool
 options strip (`ToolOptionsBar`, starting with a VECTOR chip in vector mode) with the X / Y strip
-under it (`ui/tools/CoordinateStrip`, left out of the canvas fit inset so it never moves the
-canvas), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
+under it (`ui/tools/CoordinateStrip`: two 40 dp rows of ‹ value › and an absolute slider, folding
+to one 28 dp line; left out of the canvas fit inset so it never moves the canvas; adapters in
+`CoordinateSources` for Transform, Shape, Text, the Curve point and any `PositionedTool` — Masks,
+Clone; a finished drag, arrow run or typed value ends the tool's edit, `endPositionEdit`), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
 (copy / cut / paste / deselect…) while a selection or clipboard exists — or the object bar while
 vector objects are selected — the canvas, the brush size/opacity slider bar (values can be tapped and typed)
 and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent; inside the editor

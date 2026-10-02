@@ -43,8 +43,21 @@ object SliderFormat {
         return when { range >= 100f -> 0; range >= 10f -> 1; else -> 2 }
     }
 
-    /** "12 px", "50%", "0.35", "45°". */
+    /** True for exposure-like values shown signed with fixed decimals ("+0.50 EV", §4.8a). */
+    fun isSigned(p: FilterParam.Slider): Boolean = p.suffix == "EV"
+
+    /** "12 px", "50%", "0.35", "45°"; exposure "+0.50 EV", "0.00 EV", "-1.25 EV". */
     fun format(p: FilterParam.Slider, v: Float): String {
+        if (isSigned(p)) {
+            val s = String.format(java.util.Locale.US, "%.${decimals(p)}f", v)
+            // A value that rounds to zero is shown unsigned ("0.00", never "-0.00" or "+0.00").
+            val text = when {
+                s.none { it in '1'..'9' } -> s.trimStart('-')
+                v > 0f -> "+$s"
+                else -> s
+            }
+            return "$text ${p.suffix}"
+        }
         val number = if (p.step >= 1f) v.roundToInt().toString() else Units.formatNumber(v.toDouble(), decimals(p))
         val suffix = when {
             p.pixels -> "px"

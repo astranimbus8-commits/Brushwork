@@ -39,6 +39,7 @@ import com.brushwork.paint.vector.render.VectorLayerRenderer
 import com.brushwork.paint.vector.select.VectorObjectSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -123,7 +124,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * ids are returned at once.
      */
     fun addObjects(layer: Layer, objects: List<VObject>, label: String): List<Long> {
-        if (objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
+        if (disposed || objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
         flushPending()
         val current = layer.vector ?: return emptyList()
         if (!usable(layer)) return emptyList()
@@ -157,7 +158,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * rendering of objects): returns no ids otherwise.
      */
     fun appendData(layer: Layer, objects: List<VObject>, label: String): List<Long> {
-        if (objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
+        if (disposed || objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
         flushPending()
         val before = layer.dataSnapshot()
         val current = before.vector ?: return emptyList()
@@ -216,7 +217,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
     ) {
         fun done(ok: Boolean) { beforeApply?.invoke(); onDone(ok) }
         val callerBase = layer.vector
-        if (callerBase == null || c.doc.indexOf(layer) < 0) { done(false); return }
+        if (disposed || callerBase == null || c.doc.indexOf(layer) < 0) { done(false); return }
         var target = after
         val p = pending
         if (p != null) {
@@ -326,8 +327,9 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * longer exist are left out of the session's [VectorEditSession.ids].
      *
      * Lifting every object uses a cropped copy of the cache as the floating bitmap and an empty
-     * hole (nothing is rendered). Otherwise the hole (the other objects within the edited ones'
-     * grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
+     * hole; the objects reaching past the canvas are rendered only in the bands past its edges,
+     * so their off-canvas parts show in the preview. Otherwise the hole (the other objects within
+     * the edited ones' grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
      * the main thread when cheap ([onReady] runs before this returns), else in the background
      * ([onReady] runs later on the main thread; a newer request answers an older one with null;
      * a long preparation shows the busy overlay "Rendering vectors…", whose Stop answers null).
@@ -338,6 +340,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * Transform tool lifts again right after a commit, and on activation).
      */
     fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) {
+        if (disposed) { onReady(null); return }
         preparing?.let { old -> cancelPreparing(old) }
         val p = pending
         if (p != null && !flushing) {
@@ -384,6 +387,21 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val holeRect: Rect,
         val fScale: Float,
         val hScale: Float,
+        /**
+         * Every object lifted ([all]): those whose paint reaches past the canvas. The floating
+         * bitmap is a copy of the cache (exactly every object's rendering on the canvas), and
+         * these are rendered past its edges, so their off-canvas parts show in the Transform
+         * preview too.
+         */
+        val overflow: VectorContent,
+        /**
+         * The parts of the floating rect past the canvas (disjoint, document px; empty unless
+         * [overflow] has objects): only these are rendered, so a stroke that merely reaches past
+         * an edge costs its dabs there, not its whole replay.
+         */
+        val overflowBands: List<Rect>,
+        /** Where the floating render of some objects cuts brush dabs: the document, or (reaching past it) nowhere but the floating rect. */
+        val floatingCut: Rect?,
     )
 
     private fun beginEditAttempt(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit, attempt: Int) {
@@ -392,10 +410,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val present = ids.filterTo(LinkedHashSet()) { content.byId(it) != null }
         if (present.isEmpty() || !usable(layer)) { onReady(null); return }
         val plan = planEdit(content, present)
-        val units = if (plan.all) 0.0 else editUnits(plan)
-        if (plan.all || !goAsyncUnits(units)) {
+        val units = editUnits(plan)
+        if ((plan.all && plan.overflowBands.isEmpty()) || !goAsyncUnits(units)) {
             val parts = try {
-                renderEdit(layer.bitmap, plan, tips, renderCache) { true }
+                renderEdit(layer.bitmap, plan, tips, renderCache, null) { true }
             } catch (e: OutOfMemoryError) {
                 c.toast("Not enough memory to edit these objects")
                 onReady(null)
@@ -404,6 +422,17 @@ class VectorLayers internal constructor(private val c: EditorController) {
             install(layer, plan, parts.first, parts.second, onReady)
             return
         }
+        // Every object lifted: the cache part of the floating bitmap is copied here, on the main
+        // thread (the worker never reads the layer's pixels).
+        val base = if (plan.all) {
+            try {
+                floatingFromCache(layer.bitmap, plan)
+            } catch (e: OutOfMemoryError) {
+                c.toast("Not enough memory to edit these objects")
+                onReady(null)
+                return
+            }
+        } else null
         // In the background, from the immutable content; installed only if nothing changed.
         val prep = PreparingEdit(onReady)
         preparing = prep
@@ -412,15 +441,19 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val bitmap = layer.bitmap
         val job = c.scope.async(worker.dispatcher) {
             val ctx = coroutineContext
-            val r = renderEdit(null, plan, worker.tips, worker.cache) { ctx.isActive }
+            val r = renderEdit(null, plan, worker.tips, worker.cache, base) { ctx.isActive }
             if (!ctx.isActive) {
                 recycle(r.first, r.second)
                 throw CancellationException("Edit preparation cancelled")
             }
             r
         }
+        // (Cancelled before it ran, or failed: the copied cache part is not needed any more.)
+        if (base != null) job.invokeOnCompletion { cause -> if (cause != null) recycle(base) }
         prep.render = job
-        prep.job = c.scope.launch {
+        // (Dispatched, like a pending render's landing: a background preparation never answers
+        // inside this call, even when the worker is already done.)
+        prep.job = c.scope.launch(Dispatchers.Main) {
             val parts = try { job.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (prep.done) { parts?.let { recycle(it.first, it.second) }; return@launch }
             prep.markDone()
@@ -479,39 +512,77 @@ class VectorLayers internal constructor(private val c: EditorController) {
             fScale *= s
             hScale = s
         }
-        return EditPlan(present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale)
+        val docRect = Rect(0, 0, docW, docH)
+        val overflow = if (!all) emptyList() else content.objects.filterIndexed { i, _ ->
+            val b = index.bounds(i)
+            !b.isEmpty && !(b.left >= 0f && b.top >= 0f && b.right <= docW && b.bottom <= docH)
+        }
+        return EditPlan(
+            present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale,
+            overflow = VectorContent(objects = overflow),
+            overflowBands = if (overflow.isEmpty()) emptyList() else outside(floatingRect, docRect),
+            // On the canvas, dabs are cut at the document exactly as in the cache; past it they
+            // are drawn whole, so a stroke reaching off the canvas shows there while it is moved.
+            floatingCut = if (docRect.contains(floatingRect)) docRect else null,
+        )
     }
 
+    /** Cost units of preparing [plan] (every object lifted: only what is drawn past the canvas). */
     private fun editUnits(plan: EditPlan): Double {
+        if (plan.all) return VectorLayerRenderer.estimateUnits(plan.overflow, plan.overflowBands)
         var u = VectorLayerRenderer.estimateUnits(VectorContent(objects = plan.edited), plan.floatingRect)
-        if (!plan.all && !plan.holeRect.isEmpty) u += VectorLayerRenderer.estimateUnits(plan.others, plan.holeRect)
+        if (!plan.holeRect.isEmpty) u += VectorLayerRenderer.estimateUnits(plan.others, plan.holeRect)
         return u
     }
 
+    /** A new floating bitmap for [plan] and a canvas drawing into it in document px. */
+    private fun newFloating(plan: EditPlan): Pair<Bitmap, Canvas> {
+        val fr = plan.floatingRect
+        val b = BitmapUtils.createLayerBitmap(max(1, ceil(fr.width() * plan.fScale).toInt()), max(1, ceil(fr.height() * plan.fScale).toInt()))
+        return b to documentCanvas(b, plan)
+    }
+
+    private fun documentCanvas(b: Bitmap, plan: EditPlan): Canvas = Canvas(b).also { cv ->
+        cv.scale(plan.fScale, plan.fScale)
+        cv.translate(-plan.floatingRect.left.toFloat(), -plan.floatingRect.top.toFloat())
+    }
+
+    /** The floating bitmap of an every-object lift with the cache copied in (main thread). */
+    private fun floatingFromCache(cache: Bitmap, plan: EditPlan): Bitmap? {
+        if (plan.floatingRect.isEmpty) return null
+        val (b, cv) = newFloating(plan)
+        // Every object is lifted: on the canvas, the cache is exactly their rendering.
+        cv.drawBitmap(cache, 0f, 0f, if (plan.fScale == 1f) null else Paint(Paint.FILTER_BITMAP_FLAG))
+        return b
+    }
+
     /**
-     * Renders an edit session's floating and hole bitmaps ([cache]: the layer's bitmap, read on
-     * the main thread only when every object is lifted). [active] false stops (returns what is
-     * done, freed by the caller).
+     * Renders an edit session's floating and hole bitmaps. An every-object lift copies [cache]
+     * (the layer's bitmap, read on the main thread only), or takes [prefilled] (that copy, made on
+     * the main thread for a background preparation), and draws the [EditPlan.overflow] objects
+     * past the canvas. [active] false stops (returns what is done, freed by the caller).
      */
-    private fun renderEdit(cache: Bitmap?, plan: EditPlan, tips: TipCache, rc: RenderCache, active: () -> Boolean): Pair<Bitmap?, Bitmap?> {
-        var floating: Bitmap? = null
+    private fun renderEdit(cache: Bitmap?, plan: EditPlan, tips: TipCache, rc: RenderCache, prefilled: Bitmap?, active: () -> Boolean): Pair<Bitmap?, Bitmap?> {
+        var floating: Bitmap? = prefilled
         var hole: Bitmap? = null
         val doc = docBounds()
         try {
             val fr = plan.floatingRect
             if (!fr.isEmpty) {
-                val bw = max(1, ceil(fr.width() * plan.fScale).toInt())
-                val bh = max(1, ceil(fr.height() * plan.fScale).toInt())
-                floating = BitmapUtils.createLayerBitmap(bw, bh).also { b ->
-                    val cv = Canvas(b)
-                    cv.scale(plan.fScale, plan.fScale)
-                    cv.translate(-fr.left.toFloat(), -fr.top.toFloat())
-                    if (plan.all && cache != null) {
-                        // Every object is lifted: the cache is exactly their rendering.
-                        cv.drawBitmap(cache, 0f, 0f, if (plan.fScale == 1f) null else Paint(Paint.FILTER_BITMAP_FLAG))
-                    } else {
-                        VectorLayerRenderer.renderWith(cv, VectorContent(objects = plan.edited), fr, emptySet(), tips, doc, rc) { _, _ -> active() }
+                if (plan.all) {
+                    val b = floating ?: floatingFromCache(requireNotNull(cache) { "an every-object lift copies the cache" }, plan)?.also { floating = it }
+                    if (b != null && plan.overflowBands.isNotEmpty()) {
+                        // Only past the canvas (the bands exclude it): dabs are cut at each band.
+                        val cv = documentCanvas(b, plan)
+                        for (band in plan.overflowBands) {
+                            if (!active()) break
+                            VectorLayerRenderer.renderWith(cv, plan.overflow, band, emptySet(), tips, null, rc) { _, _ -> active() }
+                        }
                     }
+                } else {
+                    val (b, cv) = newFloating(plan)
+                    floating = b
+                    VectorLayerRenderer.renderWith(cv, VectorContent(objects = plan.edited), fr, emptySet(), tips, plan.floatingCut, rc) { _, _ -> active() }
                 }
             }
             val hr = plan.holeRect
@@ -606,17 +677,24 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /** Object selection feedback (A2). */
     fun drawOverlay(canvas: Canvas, t: ViewTransform) = VectorObjectSelection.drawOverlay(c, canvas, t)
 
-    /** The editor closes: drop every cache and background job (a pending render is abandoned). */
+    /**
+     * The editor closes: drop every cache and background job. A pending render is abandoned and
+     * its caller told so (`onDone(false)`, exactly once), as is a preparing edit session
+     * (`onReady(null)`); every request after this is refused the same way.
+     */
     fun dispose() {
+        disposed = true
         selLayer = null
         selIds = emptySet()
+        val prep = preparing?.takeIf { !it.done }
         preparing?.let { it.markDone(); it.job?.cancel(); it.render?.cancel() }
         preparing = null
-        pending?.let { p ->
-            p.finished = true
-            p.job?.cancel()
-            p.copies?.forEach { if (!it.isRecycled) it.recycle() }
-            p.completion.complete(Unit)
+        val p = pending?.takeIf { !it.finished }
+        pending?.let { pd ->
+            pd.finished = true
+            pd.job?.cancel()
+            pd.copies?.forEach { if (!it.isRecycled) it.recycle() }
+            pd.completion.complete(Unit)
         }
         pending = null
         c.removeDeferredStep(deferredStep)
@@ -627,18 +705,30 @@ class VectorLayers internal constructor(private val c: EditorController) {
         ObjectIndex.clearCache()
         StrokeHits.clear()
         VectorLayerRenderer.clearCaches()
+        // Whoever waits hears it once, after the service is quiet (a callback that starts more
+        // work is refused). A failing callback must not stop the editor from closing.
+        if (prep != null) runCatching { prep.onReady(null) }
+        if (p != null) runCatching { p.beforeApply?.invoke(); p.onDone(false) }
     }
+
+    /** True once [dispose] ran: every request is refused (onDone(false), no ids, no session). */
+    private var disposed = false
 
     // ------------------------------------------------------------------ background renders
 
     /** The background worker: one render at a time, with its own tips and prepared objects. */
-    private class Worker {
-        val dispatcher = Dispatchers.Default.limitedParallelism(1)
+    private class Worker(val dispatcher: CoroutineDispatcher) {
         val tips = TipCache(8L shl 20)
         val cache = RenderCache()
     }
 
-    private val worker by lazy { Worker() }
+    /**
+     * Test seam: the background worker's dispatcher (null = one thread of Dispatchers.Default).
+     * Read once, when the first background job starts.
+     */
+    internal var workerDispatcher: CoroutineDispatcher? = null
+
+    private val worker by lazy { Worker(workerDispatcher ?: Dispatchers.Default.limitedParallelism(1)) }
 
     /** An edit whose pixels are rendering in the background (at most one at a time). */
     private inner class Pending(
@@ -786,7 +876,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
             copies ?: out
         }
-        c.scope.launch {
+        // Dispatched (Main, not immediate): a render that is already done when this starts still
+        // lands on a later main-thread turn, never inside this `update` call. So an async edit
+        // is always pending when `update` returns, whatever the worker's timing: an edit the
+        // caller computes next from the old content is re-based onto it (see [updateInternal]).
+        c.scope.launch(Dispatchers.Main) {
             val result = try { p.job?.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (!p.finished) finish(p, result) else if (result != null && result !== p.copies) result.forEach { if (!it.isRecycled) it.recycle() }
         }
@@ -1032,6 +1126,23 @@ class VectorLayers internal constructor(private val c: EditorController) {
     }
 
     internal companion object {
+        /**
+         * The parts of [r] outside [doc], as at most four disjoint rects: the bands above and
+         * below the document (full width of [r]), then those left and right of it (between them).
+         */
+        fun outside(r: Rect, doc: Rect): List<Rect> {
+            if (r.isEmpty) return emptyList()
+            val out = ArrayList<Rect>(4)
+            fun add(l: Int, t: Int, rt: Int, b: Int) { if (l < rt && t < b) out += Rect(l, t, rt, b) }
+            val top = max(r.top, min(r.bottom, doc.top))
+            val bottom = min(r.bottom, max(r.top, doc.bottom))
+            add(r.left, r.top, r.right, top)
+            add(r.left, bottom, r.right, r.bottom)
+            add(r.left, top, min(r.right, doc.left), bottom)
+            add(max(r.left, doc.right), top, r.right, bottom)
+            return out
+        }
+
         /** Largest side of a floating preview bitmap (px). */
         const val MAX_FLOATING = 2048f
 

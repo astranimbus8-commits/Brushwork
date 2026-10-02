@@ -1,17 +1,13 @@
 package com.brushwork.paint.ui.mask
 
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -34,11 +30,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -54,7 +45,9 @@ import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.filters.FilterParamControl
+import com.brushwork.paint.ui.filters.LuminanceHistogram
 import com.brushwork.paint.ui.filters.ParamHost
+import com.brushwork.paint.ui.filters.showsHistogram
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -111,7 +104,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
             modifier = Modifier.padding(vertical = 8.dp),
         )
     } else {
-        if (filter.id == AdjustmentEffects.DEFAULT_ID) BelowHistogram(c, layer)
+        if (showsHistogram(filter.id)) BelowHistogram(c, layer)
         val paramHost = remember(layer, filter) {
             ParamHost(
                 valuesOf = {
@@ -195,27 +188,6 @@ private fun renamed(c: EditorController, layer: Layer, old: Filter?, new: Filter
 private fun BelowHistogram(c: EditorController, layer: Layer) {
     var hist by remember(layer) { mutableStateOf<IntArray?>(null) }
     LaunchedEffect(layer) { hist = AdjustmentHistogram.below(c, layer) }
-    val h = hist ?: return
-    val max = h.maxOrNull()?.takeIf { it > 0 } ?: return
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp)
-            .height(56.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF141518))
-            .semantics { contentDescription = "Luminance histogram" },
-    ) {
-        Canvas(Modifier.fillMaxWidth().height(56.dp)) {
-            val w = size.width / h.size
-            val color = Color(0xFF9AA0A6).copy(alpha = 0.8f)
-            for (i in h.indices) {
-                val v = kotlin.math.sqrt(h[i].toFloat() / max)
-                if (v <= 0f) continue
-                val x = i * w
-                drawLine(color, Offset(x + w / 2f, size.height), Offset(x + w / 2f, size.height * (1f - v)), strokeWidth = w.coerceAtLeast(1f))
-            }
-        }
-    }
+    LuminanceHistogram(hist)
 }
 

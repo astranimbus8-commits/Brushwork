@@ -263,8 +263,12 @@ class VectorLiftRobolectricTest {
         val old = kit.pixels(layer.bitmap)
         val tool = kit.transform(c)
         assertEquals(setOf(1L, 2L, 3L), lifted(c))
+        val shifts = c.vectors.shiftCount
         tool.moveBy(256f, 0f)
         tool.commit()
+        // (v1.5 integration) The lift passes its exact whole-pixel move as a ShiftHint, and A1's
+        // fast path takes it: the cache is shifted, not re-rendered.
+        assertEquals("the move shifted the cache", shifts + 1, c.vectors.shiftCount)
         val after = layer.vector!!
         // The data moved by exactly 256 px (the shape is still a shape).
         val s0 = before.byId(1) as VStroke
@@ -275,37 +279,55 @@ class VectorLiftRobolectricTest {
         assertEquals(anchorsOf(before.byId(2) as VPath).map { it + Vec2(256f, 0f) }, anchorsOf(after.byId(2) as VPath))
         val e1 = after.byId(3) as VShape
         assertEquals((before.byId(3) as VShape).shape.cx + 256f, e1.shape.cx, 0f)
-        // The pixels: the old ones moved right by 256, exactly — either shifted as they were (the
-        // VectorLayers fast path, ShiftHint) or rendered afresh on the same 256 px tile grid
-        // (float rounding of the farther coordinates may move an anti-aliased edge by one coverage step).
+        // The pixels (VectorLayers.update's ShiftHint contract): exactly the old ones moved right
+        // by 256 — which is a fresh render of the moved data except at anti-aliased edges where
+        // the renderer's 256 px tile grid cuts a path (float rounding of the farther coordinates).
         val now = kit.pixels(layer.bitmap)
-        val shifted = IntArray(old.size)
-        for (y in 0 until kit.h) for (x in 0 until kit.w - 256) shifted[y * kit.w + x + 256] = old[y * kit.w + x]
         for (y in 0 until kit.h) for (x in 0 until kit.w - 256) assertEquals("nothing left behind at $x,$y", 0, old[y * kit.w + x + 256])
-        assertTrue("shifted or freshly rendered", now.contentEquals(shifted) || now.contentEquals(kit.render(after)))
-        var differing = 0
-        var painted = 0
-        for (i in now.indices) {
-            if (shifted[i] != 0) painted++
-            if (now[i] == shifted[i]) continue
-            differing++
-            for (sh in 0..24 step 8) {
-                val d = kotlin.math.abs(((now[i] ushr sh) and 0xFF) - ((shifted[i] ushr sh) and 0xFF))
-                assertTrue("channel off by $d at ${i % kit.w},${i / kit.w}", d <= 32)
-            }
-        }
-        assertTrue("$differing of $painted pixels differ", differing * 50 <= painted)
-        // Any whole-pixel move maps the data exactly.
+        assertArrayEquals("the old cache shifted exactly", shiftedBy(old, 256, 0), now)
+        assertCloseToARender(now, after)
+        // Any whole-pixel move maps the data exactly, and shifts the cache exactly too.
         tool.start()
         tool.moveBy(-37f, 5f)
         tool.commit()
+        assertEquals("the second move shifted the cache", shifts + 2, c.vectors.shiftCount)
         val again = layer.vector!!
         val s2 = again.byId(1) as VStroke
         for (i in 0 until s0.points.size) {
             assertEquals(s1.points.x[i] - 37f, s2.points.x[i], 0f)
             assertEquals(s1.points.y[i] + 5f, s2.points.y[i], 0f)
         }
-        assertArrayEquals(kit.render(again), kit.pixels(layer.bitmap))
+        val moved = kit.pixels(layer.bitmap)
+        assertArrayEquals("the cache shifted exactly", shiftedBy(now, -37, 5), moved)
+        assertCloseToARender(moved, again)
+    }
+
+    /** [px] (the kit's document) moved by whole ([dx], [dy]) px, transparent where nothing lands. */
+    private fun shiftedBy(px: IntArray, dx: Int, dy: Int): IntArray {
+        val out = IntArray(px.size)
+        for (y in 0 until kit.h) for (x in 0 until kit.w) {
+            val sx = x - dx
+            val sy = y - dy
+            if (sx in 0 until kit.w && sy in 0 until kit.h) out[y * kit.w + x] = px[sy * kit.w + sx]
+        }
+        return out
+    }
+
+    /** [px] equals a fresh render of [content] but at a few anti-aliased edge pixels (the shift path's contract). */
+    private fun assertCloseToARender(px: IntArray, content: com.brushwork.paint.vector.VectorContent) {
+        val fresh = kit.render(content)
+        var differing = 0
+        var painted = 0
+        for (i in px.indices) {
+            if (fresh[i] != 0) painted++
+            if (px[i] == fresh[i]) continue
+            differing++
+            for (sh in 0..24 step 8) {
+                val d = kotlin.math.abs(((px[i] ushr sh) and 0xFF) - ((fresh[i] ushr sh) and 0xFF))
+                assertTrue("channel off by $d at ${i % kit.w},${i / kit.w}", d <= 32)
+            }
+        }
+        assertTrue("$differing of $painted pixels differ", differing * 50 <= painted)
     }
 
     @Test

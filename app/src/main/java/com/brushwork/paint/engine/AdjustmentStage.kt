@@ -34,6 +34,9 @@ class AdjustmentScratch {
     /** Scratch pixel buffer (reused between calls). */
     var pixels: IntArray = IntArray(0)
 
+    /** The unmapped chunk, kept while a non-opaque composite is mapped (see [AdjustmentStage]). */
+    private var source: IntArray = IntArray(0)
+
     internal val maskPaint = BitmapUtils.newMaskApplyPaint()
     internal val plainPaint = Paint()
     internal val whitePaint = Paint().apply { color = -1 }
@@ -135,11 +138,19 @@ class AdjustmentScratch {
         return pixels
     }
 
+    /** A copy of the first [n] ints of [px] (the chunk before it is mapped), in a reused buffer. */
+    internal fun sourceCopy(px: IntArray, n: Int): IntArray {
+        if (source.size < n) source = IntArray(n)
+        System.arraycopy(px, 0, source, 0, n)
+        return source
+    }
+
     /** Frees the buffers. */
     fun release() {
         bitmap?.recycle()
         bitmap = null
         pixels = IntArray(0)
+        source = IntArray(0)
         boundsMasks.fill(null)
         boundsValues.fill(null)
         effectSpecs.fill(null)
@@ -208,7 +219,9 @@ interface MaskCoverageHint {
  * where the composite below is opaque the mapped pixels are drawn over it like any layer; where
  * it is not, two passes (DST_OUT by mask·opacity, then PLUS of the masked effect) keep its alpha,
  * so an adjustment never makes transparent areas more opaque. Other blend modes blend the mapped
- * composite onto it like a layer of that mode.
+ * composite onto it like a layer of that mode. A mapper that lowers alpha (Gradation Map with
+ * semi-transparent stops, see [PixelMapper]) draws its colors that much weaker in every mode, so
+ * a transparent stop shows the image below unchanged ([revealed] for the two passes).
  *
  * An unknown effect, an effect without a mapper or one that is exactly the identity draws
  * nothing (pass-through), as does every adjustment layer on the canvas while [safeCompositing]
@@ -286,8 +299,10 @@ object AdjustmentStage {
                 val n = cw * ch
                 var opaque = true
                 for (i in 0 until n) if (px[i] ushr 24 != 0xFF) { opaque = false; break }
-                if (n < PARALLEL_MIN) mapRange(mapper, mode, px, 0, n)
-                else Parallel.forRange(ch, 8) { r0, r1 -> mapRange(mapper, mode, px, r0 * cw, r1 * cw) }
+                // The two-pass composite needs the mapped pixels at the composite's own alpha.
+                val below = if (normal && !opaque) scratch.sourceCopy(px, n) else null
+                if (n < PARALLEL_MIN) mapRange(mapper, mode, px, below, 0, n)
+                else Parallel.forRange(ch, 8) { r0, r1 -> mapRange(mapper, mode, px, below, r0 * cw, r1 * cw) }
                 s.setPixels(px, 0, cw, 0, 0, cw, ch)
                 src.set(0, 0, cw, ch)
                 dst.set(x, y, x + cw, y + ch)
@@ -326,17 +341,42 @@ object AdjustmentStage {
 
     /**
      * Maps [px] from [from] until [until] with [mapper]; in a grayscale or 1-bit document the
-     * colors are then constrained to it (alpha kept: the composite's coverage never changes).
+     * colors are then constrained to it (the mapped alpha kept). With [below] (the unmapped
+     * pixels, for the two-pass composite over a non-opaque composite) see [revealed].
      */
-    private fun mapRange(mapper: PixelMapper, mode: ColorMode, px: IntArray, from: Int, until: Int) {
+    private fun mapRange(mapper: PixelMapper, mode: ColorMode, px: IntArray, below: IntArray?, from: Int, until: Int) {
         mapper.map(px, from, until)
-        if (mode == ColorMode.RGB) return
-        for (i in from until until) {
-            val c = px[i]
-            val a = c and 0xFF000000.toInt()
-            if (a == 0) continue
-            px[i] = a or (ColorModeOps.constrainPixel(c or 0xFF000000.toInt(), mode) and 0xFFFFFF)
+        if (mode != ColorMode.RGB) {
+            for (i in from until until) {
+                val c = px[i]
+                val a = c and 0xFF000000.toInt()
+                if (a == 0) continue
+                px[i] = a or (ColorModeOps.constrainPixel(c or 0xFF000000.toInt(), mode) and 0xFFFFFF)
+            }
         }
+        if (below != null) for (i in from until until) if (px[i] ushr 24 != below[i] ushr 24) px[i] = revealed(below[i], px[i])
+    }
+
+    /**
+     * A mapped pixel [mapped] whose alpha differs from the composite's pixel [below] (a mapper
+     * that lowers alpha on purpose: Gradation Map with semi-transparent stops, see [PixelMapper]),
+     * as the same result at the composite's own alpha: the mapped color mixed with the original by
+     * mappedAlpha / alpha, so a transparent stop shows the image below. This is exactly what the
+     * one-pass SRC_OVER draws over an opaque composite; the two passes (which keep the alpha)
+     * need it spelled out, or a lowered alpha would fade the image instead. A raised alpha is
+     * held to the composite's (an adjustment never adds coverage). Non-premultiplied ARGB.
+     */
+    internal fun revealed(below: Int, mapped: Int): Int {
+        val sa = below ushr 24
+        val ma = mapped ushr 24
+        if (sa == 0) return below
+        if (ma >= sa) return (sa shl 24) or (mapped and 0xFFFFFF)
+        val keep = sa - ma
+        val half = sa / 2
+        val r = ((below shr 16 and 0xFF) * keep + (mapped shr 16 and 0xFF) * ma + half) / sa
+        val g = ((below shr 8 and 0xFF) * keep + (mapped shr 8 and 0xFF) * ma + half) / sa
+        val b = ((below and 0xFF) * keep + (mapped and 0xFF) * ma + half) / sa
+        return (sa shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     /** Draws the mapped chunk 1:1 onto the target pixels it was read from. */
