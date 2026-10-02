@@ -1,5 +1,6 @@
 package com.brushwork.paint.tools.transform
 
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Vec2
 import kotlin.math.abs
 
@@ -74,6 +75,20 @@ object TransformHandles {
         return start.rotatedAbout(pivot, delta).snappedToPixels()
     }
 
+    /**
+     * Rotation handle with an Angle increment (v1.6 §3.4): turns around [pivot] by the angle the
+     * finger swept, the ABSOLUTE angle landing on the multiples of [stepDeg] (it replaces the
+     * 45° detents of [rotate]). A step that is NaN or ≤ 0 is [rotate] without detents.
+     */
+    fun rotateStepped(start: TransformState, pivot: Vec2, from: Vec2, to: Vec2, stepDeg: Float): TransformState {
+        val v0 = from - pivot
+        val v1 = to - pivot
+        if (v0.lengthSq < 1e-6f || v1.lengthSq < 1e-6f) return start
+        val delta = Math.toDegrees((v1.angle - v0.angle).toDouble()).toFloat()
+        val target = IncrementMath.snapAngle(start.rotationDeg + delta, stepDeg)
+        return start.rotatedAbout(pivot, TransformState.normalizeDeg(target - start.rotationDeg)).snappedToPixels()
+    }
+
     /** Distort: moves one corner freely. Null if the quad would stop being convex. */
     fun distortCorner(start: TransformState, index: Int, from: Vec2, to: Vec2): TransformState? {
         val pts = start.corners().toMutableList()
@@ -100,6 +115,37 @@ object TransformHandles {
     fun pinch(start: TransformState, focus: Vec2, translation: Vec2, scale: Float, rotationDeg: Float): TransformState {
         val k = start.clampUniform(if (scale.isFinite() && scale > 0f) scale else 1f)
         val delta = pinchRotation(start.rotationDeg, if (rotationDeg.isFinite()) rotationDeg else 0f)
+        val tx = if (translation.x.isFinite()) translation.x else 0f
+        val ty = if (translation.y.isFinite()) translation.y else 0f
+        return start.scaledAbout(focus, k, k).rotatedAbout(focus, delta).translated(tx, ty)
+    }
+
+    /**
+     * [pinch] with the v1.6 increments (§3.4): the scale lands on the multiples of [scaleStep]
+     * percent of the ORIGINAL size (100, 110, 120 …; null: free) and the absolute angle on the
+     * multiples of [angleStep] degrees (null: [pinchRotation]'s 45° detents). Small turns (within
+     * [PINCH_SNAP_DEG]) still keep the angle, since fingers always turn a little while they pinch
+     * to scale. The translation is not stepped (it follows the fingers' midpoint).
+     */
+    fun pinchStepped(
+        start: TransformState,
+        focus: Vec2,
+        translation: Vec2,
+        scale: Float,
+        rotationDeg: Float,
+        scaleStep: Float?,
+        angleStep: Float?,
+    ): TransformState {
+        val raw = if (scale.isFinite() && scale > 0f) scale else 1f
+        val k = start.clampUniform(if (scaleStep != null) TransformIncrements.uniformFactor(start.scalePercent, raw, scaleStep) else raw)
+        val turn = if (rotationDeg.isFinite()) rotationDeg else 0f
+        val delta = if (angleStep == null) {
+            pinchRotation(start.rotationDeg, turn)
+        } else {
+            val d = TransformState.normalizeDeg(turn)
+            if (abs(d) <= PINCH_SNAP_DEG) 0f
+            else TransformState.normalizeDeg(IncrementMath.snapAngle(start.rotationDeg + d, angleStep) - start.rotationDeg)
+        }
         val tx = if (translation.x.isFinite()) translation.x else 0f
         val ty = if (translation.y.isFinite()) translation.y else 0f
         return start.scaledAbout(focus, k, k).rotatedAbout(focus, delta).translated(tx, ty)

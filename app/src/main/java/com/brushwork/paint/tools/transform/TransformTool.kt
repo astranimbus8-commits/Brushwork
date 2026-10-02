@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
@@ -30,6 +31,7 @@ import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.PinchTargeting
@@ -69,6 +71,15 @@ import kotlin.math.min
  * reference point ([anchor]) is what typed sizes, scales and rotations keep in place;
  * [scaleFromCenter] makes the handles scale around the center. [deleteContent] deletes what is
  * being transformed.
+ *
+ * Increments (v1.6 §3.4, `controller.increments`; off by default, and then every gesture is the
+ * v1.5 one): once a drag is past its slop, a move goes by multiples of the Length step from where
+ * it started, corner and side handles scale to multiples of the Scale step in percent of the
+ * ORIGINAL size (100, 110, 120 … %), the rotation handle turns to multiples of the Angle step
+ * (replacing the 45° detents) and a pinch does both (its small turns still keep the angle; its
+ * translation is free). Per axis a guide that engages (an object, the canvas, or the grid) wins
+ * over the step. While a gesture is stepped `increments.readout` says where it is ("+30 px, 0
+ * px", "120 %", "45°"). Typed values are never stepped.
  */
 class TransformTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.TRANSFORM
@@ -392,6 +403,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     override fun onDeactivate() {
         cancelJobs()
+        showReadout(null)
         if (hasPendingWork) commit()
         // Nothing to snap until the next transform (what is known stays cached).
         controller.snapping.cancel()
@@ -491,6 +503,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         var targetsVersion = -1
         /** The last move snapped the box to a guide (release keeps that exact place). */
         var snapped = false
+        /** Which document axes a guide decided in the last move (v1.6: the other axes take the increment). */
+        var snappedX = false
+        var snappedY = false
         /**
          * The finger has travelled more than [SNAP_SLOP_DP] from where it went down (latched):
          * only then does the box snap, so a tap or a resting finger's jitter never jumps it
@@ -532,24 +547,131 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val hadGuides = guides.isNotEmpty()
         guides = emptyList()
         g.snapped = false
+        g.snappedX = false
+        g.snappedY = false
+        stepReadout = null
+        // v1.6 increments (§3.4): per axis a guide that engages wins (the grid is one of the
+        // targets), else the step; with increments off every branch is the v1.5 one (I8).
+        val inc = controller.increments
         val next = when (g.hit.kind) {
-            HandleKind.MOVE -> snapMove(g, TransformHandles.move(g.start, g.from, to), snap)
-            HandleKind.ROTATE -> TransformHandles.rotate(g.start, g.pivot, g.from, to)
+            HandleKind.MOVE -> {
+                val step = if (g.dragging) inc.step(IncrementKind.LENGTH) else null
+                if (step == null) snapMove(g, TransformHandles.move(g.start, g.from, to), snap) else moveStepped(g, to, snap, step)
+            }
+            HandleKind.ROTATE -> {
+                val step = if (g.dragging) inc.step(IncrementKind.ANGLE) else null
+                if (step == null) TransformHandles.rotate(g.start, g.pivot, g.from, to)
+                else TransformHandles.rotateStepped(g.start, g.pivot, g.from, to, step).also { stepReadout = IncrementReadout.angle(it.rotationDeg) }
+            }
             HandleKind.CORNER ->
                 if (distort) distortCornerSnapped(g, to, snap)
-                else snapResize(g, TransformHandles.corner(g.start, g.hit.index, g.from, to, keepAspect, scaleFromCenter), snap)
+                else resized(g, TransformHandles.corner(g.start, g.hit.index, g.from, to, keepAspect, scaleFromCenter), snap)
             HandleKind.EDGE ->
                 if (distort) distortEdgeSnapped(g, to, snap)
-                else snapResize(g, TransformHandles.edge(g.start, g.hit.index, g.from, to, scaleFromCenter), snap)
+                else resized(g, TransformHandles.edge(g.start, g.hit.index, g.from, to, scaleFromCenter), snap)
         }
         if (next == null) {
             // An invalid (non-convex) distort keeps the last valid shape, which is not on the guides.
             guides = emptyList()
             g.snapped = false
+            stepReadout = null
         }
+        showReadout(stepReadout)
         if (hadGuides || guides.isNotEmpty()) controller.invalidateOverlay()
         next ?: return
         if (next != transformState) applyState(next)
+    }
+
+    // ------------------------------------------------------------------ increments (v1.6 §3.4)
+
+    /** What the gesture being quantized shows ([Increments.readout]); null when nothing is stepped. */
+    private var stepReadout: String? = null
+
+    /** Puts [text] in the increments readout (the InfoChip slot); null clears it. */
+    private fun showReadout(text: String?) {
+        val inc = controller.increments
+        if (inc.readout != text) inc.readout = text
+    }
+
+    /**
+     * A drag inside the box with a Length step: each axis of the move from the gesture start lands
+     * on a multiple of [step], unless a guide (an object, the canvas, the grid) engages on that
+     * axis, which then decides it exactly as without increments.
+     */
+    private fun moveStepped(g: Gesture, to: Vec2, snap: SnapContext?, step: Float): TransformState {
+        val d = to - g.from
+        val sx = IncrementMath.snapDelta(d.x, step)
+        val sy = IncrementMath.snapDelta(d.y, step)
+        val raw = TransformHandles.move(g.start, g.from, to)
+        val r = snap?.let { SnapGuides.snapMove(raw.bounds(), it.targets, it.threshold) }
+        val gx = r?.snappedX == true
+        val gy = r?.snappedY == true
+        if (r == null || (!gx && !gy)) {
+            val st = g.start.translated(sx, sy)
+            if (snap != null) guides = SnapGuides.guidesFor(st.bounds(), snap.targets)
+            stepReadout = IncrementReadout.move(sx, sy)
+            return st
+        }
+        val st = g.start.translated(
+            if (gx) raw.cx - g.start.cx + r.dx else sx,
+            if (gy) raw.cy - g.start.cy + r.dy else sy,
+        ).pixelSettled()
+        g.snapped = true
+        g.snappedX = gx
+        g.snappedY = gy
+        guides = SnapGuides.guidesFor(st.bounds(), snap.targets, GUIDE_EPS)
+        stepReadout = IncrementReadout.move(st.cx - g.start.cx, st.cy - g.start.cy)
+        return st
+    }
+
+    /**
+     * A corner / side drag in free mode ([raw]: what the finger alone gives), snapped to guides
+     * ([snapResize]) and, with a Scale step, the axes no guide decided on the multiples of the
+     * step in percent of the ORIGINAL size (100, 110, 120 … %; a corner keeping the aspect ratio
+     * steps the overall scale, the Numbers sheet's "Scale"). Mirrored axes keep their sign.
+     */
+    private fun resized(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
+        val snapped = snapResize(g, raw, snap)
+        if (!g.dragging) return snapped
+        val step = controller.increments.step(IncrementKind.SCALE) ?: return snapped
+        val start = g.start
+        val kind = g.hit.kind
+        val uniform = kind == HandleKind.CORNER && keepAspect
+        // The box's own axes the gesture scales (side 0 / 2: top / bottom, the height).
+        val movesX = kind == HandleKind.CORNER || g.hit.index % 2 == 1
+        val movesY = kind == HandleKind.CORNER || g.hit.index % 2 == 0
+        var guideX = false
+        var guideY = false
+        if (g.snapped) {
+            if (uniform || !raw.isAxisAligned || !start.isAxisAligned) {
+                // One factor drives the change: the guide decided all of it.
+                guideX = true
+                guideY = true
+            } else {
+                val quarter = abs(TransformState.roundHalfUp(start.rotationDeg / 90f).toInt()) % 2 == 1
+                guideX = if (quarter) g.snappedY else g.snappedX
+                guideY = if (quarter) g.snappedX else g.snappedY
+            }
+        }
+        if ((!movesX || guideX) && (!movesY || guideY)) return snapped
+        val base = if (g.snapped) snapped else raw
+        val fx0 = base.sx / start.sx
+        val fy0 = base.sy / start.sy
+        val fx: Float
+        val fy: Float
+        if (uniform) {
+            val k = start.clampUniform(TransformIncrements.uniformFactor(start.scalePercent, fx0, step))
+            fx = k
+            fy = k
+        } else {
+            fx = if (movesX && !guideX) start.clampX(TransformIncrements.axisFactor(start.sx, fx0, step)) else fx0
+            fy = if (movesY && !guideY) start.clampY(TransformIncrements.axisFactor(start.sy, fy0, step)) else fy0
+        }
+        if (!fx.isFinite() || !fy.isFinite()) return snapped
+        val fixed = TransformHandles.fixedPoint(start, kind, g.hit.index, scaleFromCenter)
+        val st = start.scaledAbout(fixed, fx, fy)
+        stepReadout = if (uniform) IncrementReadout.percent(st.scalePercent) else IncrementReadout.scale(abs(st.sx) * 100f, abs(st.sy) * 100f)
+        return st
     }
 
     override fun onUp(p: ToolPoint) {
@@ -582,6 +704,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         onMove(p)
         gesture = null
         clearGuides()
+        showReadout(null)
         transformState?.let { st ->
             // A guide the box snapped to keeps it exactly there, and so does a mere tap (a scaled
             // box aligned to a guide earlier must not be nudged off it); a drag settles on whole
@@ -596,6 +719,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val g = gesture ?: return
         gesture = null
         clearGuides()
+        showReadout(null)
         if (session != null && transformState != g.start) applyState(g.start)
         controller.invalidateOverlay()
     }
@@ -640,6 +764,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         val st = raw.translated(r.dx, r.dy).pixelSettled()
         g.snapped = true
+        g.snappedX = r.snappedX
+        g.snappedY = r.snappedY
         // Half-pixel lines (odd centers) settle half a pixel away: still show them as aligned.
         guides = SnapGuides.guidesFor(st.bounds(), snap.targets, GUIDE_EPS)
         return st
@@ -679,6 +805,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         } ?: return raw
         if (snapped.width < TransformState.MIN_SIZE || snapped.height < TransformState.MIN_SIZE) return raw
         g.snapped = true
+        g.snappedX = uniform || hx != null
+        g.snappedY = uniform || hy != null
         // Guides only for the dragged sides.
         val hs = TransformHandles.handlePoint(snapped, kind, g.hit.index)
         val xEdges = if (movesX) listOf(if (hs.x < fixed.x) SnapEdge.START else SnapEdge.END) else emptyList()
@@ -740,12 +868,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         val snapped = best ?: return raw
         g.snapped = true
+        g.snappedX = true
+        g.snappedY = true
         guides = SnapGuides.guidesFor(snapped.bounds(), snap.targets, GUIDE_EPS, xEdges, yEdges)
         return snapped
     }
 
     /** A distort corner drag: the corner snaps to guides on both axes. */
     private fun distortCornerSnapped(g: Gesture, to: Vec2, snap: SnapContext?): TransformState? {
+        val step = if (g.dragging) controller.increments.step(IncrementKind.LENGTH) else null
+        if (step != null) return distortCornerStepped(g, to, snap, step)
         var target = to
         if (snap != null) {
             val q = g.start.corner(g.hit.index) + (to - g.from)
@@ -762,7 +894,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
      * snap like a thin box being moved.
      */
     private fun distortEdgeSnapped(g: Gesture, to: Vec2, snap: SnapContext?): TransformState? {
+        val step = if (g.dragging) controller.increments.step(IncrementKind.LENGTH) else null
         var target = to
+        var gx = false
+        var gy = false
         if (snap != null) {
             val d = to - g.from
             val a = g.start.corner(g.hit.index) + d
@@ -773,9 +908,38 @@ class TransformTool(controller: EditorController) : Tool(controller) {
                 target = to + Vec2(r.dx, r.dy)
                 guides = r.guides
                 g.snapped = true
+                gx = r.snappedX
+                gy = r.snappedY
             }
         }
+        if (step != null) {
+            // v1.6: the axes no guide decided move by multiples of the Length step.
+            val d = to - g.from
+            val dx = if (gx) target.x - g.from.x else IncrementMath.snapDelta(d.x, step)
+            val dy = if (gy) target.y - g.from.y else IncrementMath.snapDelta(d.y, step)
+            target = g.from + Vec2(dx, dy)
+            stepReadout = IncrementReadout.move(dx, dy)
+        }
         return TransformHandles.distortEdge(g.start, g.hit.index, g.from, target)
+    }
+
+    /**
+     * A distort corner drag with a Length step: the corner snaps to guides on each axis as
+     * without increments; an axis no guide decided moves by a multiple of [step] from where it was.
+     */
+    private fun distortCornerStepped(g: Gesture, to: Vec2, snap: SnapContext?, step: Float): TransformState? {
+        val d = to - g.from
+        val q = g.start.corner(g.hit.index) + d
+        val hx = snap?.let { SnapGuides.snapValue(q.x, SnapAxis.X, it.targets, it.threshold) }
+        val hy = snap?.let { SnapGuides.snapValue(q.y, SnapAxis.Y, it.targets, it.threshold) }
+        val dx = if (hx != null) d.x + (hx.pos - q.x) else IncrementMath.snapDelta(d.x, step)
+        val dy = if (hy != null) d.y + (hy.pos - q.y) else IncrementMath.snapDelta(d.y, step)
+        if (snap != null && (hx != null || hy != null)) {
+            guides = SnapGuides.snapPoint(q, snap.targets, snap.threshold).second
+            g.snapped = true
+        }
+        stepReadout = IncrementReadout.move(dx, dy)
+        return TransformHandles.distortCorner(g.start, g.hit.index, g.from, g.from + Vec2(dx, dy))
     }
 
     /** Shows [list] for a moment (after a nudge). */
@@ -869,13 +1033,24 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun applyPinch(p: Pinch) {
         val start = p.start ?: return
         if (liveSession() == null) { pinch = null; return }
-        val next = TransformHandles.pinch(start, p.focus, p.translation, p.scale, p.rotationDeg)
+        // v1.6 increments: the scale on the Scale step (percent of the original), the angle on the Angle step.
+        val inc = controller.increments
+        val scaleStep = inc.step(IncrementKind.SCALE)
+        val angleStep = inc.step(IncrementKind.ANGLE)
+        val next = if (scaleStep == null && angleStep == null) {
+            TransformHandles.pinch(start, p.focus, p.translation, p.scale, p.rotationDeg)
+        } else {
+            TransformHandles.pinchStepped(start, p.focus, p.translation, p.scale, p.rotationDeg, scaleStep, angleStep).also { st ->
+                showReadout(listOfNotNull(scaleStep?.let { IncrementReadout.percent(st.scalePercent) }, angleStep?.let { IncrementReadout.angle(st.rotationDeg) }).joinToString(" · "))
+            }
+        }
         if (next != transformState) applyState(next)
     }
 
     /** Ends the pinch: [cancelled] goes back to where it started, else it settles on whole pixels. */
     private fun finishPinch(p: Pinch, cancelled: Boolean) {
         if (pinch === p) pinch = null
+        showReadout(null)
         val start = p.start ?: return
         if (liveSession() == null) return
         val st = transformState ?: return
