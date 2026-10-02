@@ -9,6 +9,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.tools.text.TextCodec
 
 /**
  * A layer prepared for an import (pixels rendered and data set off the main thread, not yet in
@@ -21,6 +22,11 @@ class NewLayer(
     val props: LayerProps? = null,
     val data: LayerData = LayerData.NONE,
     val mask: Bitmap? = null,
+    /**
+     * The layer's id in the file it comes from (a Brushwork payload; 0 = none). Links between
+     * imported layers (a text wrapped around a picture) are moved to the new layers' ids.
+     */
+    val sourceId: Long = 0L,
 )
 
 /** Inserting imported layers into the open document as one undo step (v1.5 §4.11, I2). */
@@ -55,12 +61,16 @@ object ImportLayers {
                     doc.colorMode = colorMode
                     c.onDocumentGeometryChanged()
                 }
+                // The new layers' ids first: links between the file's layers point at them.
+                val ids = layers.map { doc.newLayerId() }
+                val links = HashMap<Long, Long>()
+                layers.forEachIndexed { i, n -> if (n.sourceId != 0L) links[n.sourceId] = ids[i] }
                 var at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
-                for (n in layers) {
-                    val layer = Layer(doc.newLayerId(), uniqueName(c, n.name), n.bitmap)
+                for ((k, n) in layers.withIndex()) {
+                    val layer = Layer(ids[k], uniqueName(c, n.name), n.bitmap)
                     n.props?.let { layer.copyPropsFrom(it.copy(name = layer.name)) }
                     layer.mask = n.mask
-                    layer.restoreData(n.data)
+                    layer.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
                     val index = at
                     // As the project loader does: an adjustment layer is never clipped nor a clipping base.
                     if (layer.isAdjustmentLayer || doc.layers.getOrNull(index - 1)?.isAdjustmentLayer == true) layer.clipping = false
@@ -86,6 +96,24 @@ object ImportLayers {
             tool.onActivate()
         }
         return created
+    }
+
+    /**
+     * [data] of a layer from a Brushwork file with its links moved to this document: a text
+     * wrapped around a picture of the file wraps around that picture's new layer ([links]: file id
+     * -> new id). A picture that didn't come in (layer limit) gets an id no layer has
+     * ([unusedId]), as if it had been deleted: the text keeps its outline and layout, and never
+     * follows a layer of this document that happens to have the file's id. The pixels don't
+     * change (the layout doesn't depend on the id).
+     */
+    internal fun relinked(data: LayerData, links: Map<Long, Long>, unusedId: () -> Long): LayerData {
+        val text = data.text ?: return data
+        val item = TextCodec.decode(text) ?: return data
+        val from = item.wrap.sourceLayerId
+        if (from == 0L) return data
+        val to = links[from] ?: unusedId()
+        if (to == from) return data
+        return data.copy(text = TextCodec.encode(item.copy(wrap = item.wrap.copy(sourceLayerId = to))))
     }
 
     /** The document's color mode changed by an import (part of the import's step). */

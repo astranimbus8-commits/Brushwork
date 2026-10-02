@@ -37,7 +37,6 @@ import com.brushwork.paint.exchange.pdf.OwnPdfReader
 import com.brushwork.paint.exchange.pdf.PageRasterizer
 import com.brushwork.paint.exchange.pdf.PageRasterizerFactory
 import com.brushwork.paint.exchange.pdf.PdfImport
-import com.brushwork.paint.exchange.pdf.PdfRendererRasterizer
 import com.brushwork.paint.exchange.svg.SvgDocument
 import com.brushwork.paint.exchange.svg.SvgFormatException
 import com.brushwork.paint.exchange.svg.SvgParser
@@ -76,8 +75,11 @@ sealed class ExchangeDialog {
  * questions. Imports run behind the busy overlay and are one undo step each.
  */
 class ExchangeUiState(internal val controller: EditorController) {
-    /** How PDF pages are rendered (test seam: Robolectric has no PdfRenderer). */
-    internal var rasterizers: PageRasterizerFactory = PdfRendererRasterizer.factory
+    /**
+     * How PDF pages are rendered (test seam: Robolectric has no PdfRenderer). The gallery's
+     * factory by default, so a test replaces both with one assignment.
+     */
+    internal var rasterizers: PageRasterizerFactory = GalleryImports.rasterizers
 
     /** The system pickers and the context, provided by [ExchangeHost]. */
     internal var openPicker: (() -> Unit)? = null

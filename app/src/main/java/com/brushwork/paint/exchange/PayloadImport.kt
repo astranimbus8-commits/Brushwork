@@ -88,7 +88,7 @@ object PayloadImport {
                     maskSpec = if (mask != null) spec else null,
                     adjustment = pl.adjustment,
                 )
-                out += NewLayer(pl.props.name, bmp, pl.props, data, mask)
+                out += NewLayer(pl.props.name, bmp, pl.props, data, mask, sourceId = pl.id)
             } catch (e: Throwable) {
                 bmp?.recycle()
                 out.forEach { it.bitmap.recycle(); it.mask?.recycle() }
