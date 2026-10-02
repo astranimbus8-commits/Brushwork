@@ -58,11 +58,12 @@ object LayerDataTransforms {
     /**
      * True when turning a vector layer's cache by [quarterTurns] (clockwise) quarter turns, or
      * mirroring it ([mirror]), gives the rendering of its mapped objects (I1), so the pixels can
-     * be remapped exactly. A replayed brush keeps its tip angle, its scatter offsets along the
-     * document's axes and its paper grain anchored to the document, and textured tips turn each
-     * dab at random: a layer with any of those (or with a tip shape the map does not carry into
-     * itself) is drawn again from its objects instead, or a later partial re-render would show
-     * seams at tile edges (a calligraphy stroke changing its thick and thin parts mid-stroke).
+     * be remapped exactly. A replayed brush keeps its scatter offsets along the document's axes
+     * and its paper grain anchored to the document, and textured tips turn each dab at random; a
+     * tip the map does not carry into itself is turned along with the objects
+     * (`VectorOps.turnedBrush`) but stamped anew, which differs slightly from turned pixels. A
+     * layer with any of those is drawn again from its mapped objects instead, or a later partial
+     * re-render would show seams at tile edges.
      */
     fun turnsExactly(content: VectorContent, quarterTurns: Int, mirror: Boolean): Boolean =
         content.objects.all { o -> brushesOf(o).all { tipTurnsExactly(it, quarterTurns, mirror) } }

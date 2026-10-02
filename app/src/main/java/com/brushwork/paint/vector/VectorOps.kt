@@ -53,7 +53,9 @@ import kotlin.math.sqrt
  * - [transformed] is exact for affine maps (gradients included); a homography first splits every
  *   curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles.
  *   A shape stays a shape under similarities, and under reflections when it is symmetric (or has
- *   custom points, which are mirrored); otherwise it becomes a path.
+ *   custom points, which are mirrored); otherwise it becomes a path. A brush's tip turns (and
+ *   mirrors) with the object ([turnedBrush]): a rotated calligraphy stroke keeps its thick and
+ *   thin parts where the rotated pixels have them.
  */
 object VectorOps {
     /** Flattening tolerance of hit tests and footprints (document px). */
@@ -183,8 +185,10 @@ object VectorOps {
             is VStroke -> {
                 // Projective maps keep straight lines straight: mapping the points is exact.
                 val b = o.points.bounds()
-                val s = scaleAt(m, b.centerX(), b.centerY())
-                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s)
+                val cx = if (b.centerX().isFinite()) b.centerX() else 0f
+                val cy = if (b.centerY().isFinite()) b.centerY() else 0f
+                val s = scaleAt(m, cx, cy)
+                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s, preset = turnedBrush(o.preset, jacobian(m, cx, cy)))
             }
             is VPath -> mapPath(if (projective) ObjectMapping.subdivided(o) else o, m)
             is VShape -> similarityShape(o, m) ?: ObjectMapping.mirroredShape(o, m)
@@ -541,14 +545,36 @@ object VectorOps {
                 a.copy(x = q.x, y = q.y, inX = hin?.x, inY = hin?.y, outX = hout?.x, outY = hout?.y)
             })
         }
+        val j = jacobian(m, cx, cy)
         val stroke = p.stroke?.let { st ->
-            st.copy(width = st.width * s, brush = st.brush?.let { scaledBrush(it, s) })
+            st.copy(width = st.width * s, brush = st.brush?.let { turnedBrush(scaledBrush(it, s), j) })
         }
         return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke)
     }
 
     private fun scaledBrush(b: BrushPreset, s: Float): BrushPreset =
         if (s == 1f) b else b.copy(size = b.size * s, taperStart = b.taperStart * s, taperEnd = b.taperEnd * s)
+
+    /**
+     * [b] with its tip turned the way the linear map [j] (a Jacobian: a, b, c, d) turns
+     * directions: the tip's long axis (at `angle`, y down, as the dab stamper rotates it) goes
+     * to J·(cos, sin). Exact for similarities, a mirror included (an elliptic or square tip is
+     * symmetric about its own axes); the nearest tip direction under other maps (textured tips
+     * can't mirror their texture). The same instance when J neither turns nor mirrors (moves
+     * and scales leave the brush bit-identical).
+     */
+    internal fun turnedBrush(b: BrushPreset, j: FloatArray): BrushPreset {
+        if (j[1] == 0f && j[2] == 0f && j[0] > 0f && j[3] > 0f) return b
+        val a = Math.toRadians(b.angle.toDouble())
+        val ux = kotlin.math.cos(a)
+        val uy = kotlin.math.sin(a)
+        val vx = j[0] * ux + j[1] * uy
+        val vy = j[2] * ux + j[3] * uy
+        if (!(vx.isFinite() && vy.isFinite()) || (vx == 0.0 && vy == 0.0)) return b
+        var deg = (Math.toDegrees(atan2(vy, vx)).toFloat() % 360f + 360f) % 360f
+        if (deg >= 360f) deg = 0f
+        return if (deg == b.angle) b else b.copy(angle = deg)
+    }
 
     /** [paint] under [m] (gradients: exact for the affine part at (cx, cy)). */
     private fun mapPaint(paint: VPaint, m: FloatArray, cx: Float, cy: Float): VPaint = when (paint) {
@@ -605,7 +631,7 @@ object VectorOps {
         val shape = o.copy(
             cx = center.x, cy = center.y, w = o.w * scale, h = o.h * scale, rotation = rot,
             strokeWidth = o.strokeWidth * scale, cornerRadius = o.cornerRadius * scale,
-            brushPreset = o.brushPreset?.let { scaledBrush(it, scale) },
+            brushPreset = o.brushPreset?.let { turnedBrush(scaledBrush(it, scale), floatArrayOf(a, b, c, d)) },
         )
         return s.copy(shape = shape)
     }

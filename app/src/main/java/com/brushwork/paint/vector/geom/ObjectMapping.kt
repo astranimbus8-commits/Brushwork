@@ -140,7 +140,10 @@ object ObjectMapping {
         val base = o.copy(
             cx = center.x, cy = center.y, w = o.w * scale, h = o.h * scale,
             strokeWidth = o.strokeWidth * scale, cornerRadius = o.cornerRadius * scale,
-            brushPreset = o.brushPreset?.let { bp -> if (scale == 1f) bp else bp.copy(size = bp.size * scale, taperStart = bp.taperStart * scale, taperEnd = bp.taperEnd * scale) },
+            // (A brush outline's tip mirrors with the shape.)
+            brushPreset = o.brushPreset?.let { bp ->
+                VectorOps.turnedBrush(if (scale == 1f) bp else bp.copy(size = bp.size * scale, taperStart = bp.taperStart * scale, taperEnd = bp.taperEnd * scale), floatArrayOf(a, b, c, d))
+            },
         )
         val candidates = ArrayList<com.brushwork.paint.tools.vector.ShapeObject>(3)
         if (o.points != null) {
