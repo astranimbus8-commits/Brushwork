@@ -37,5 +37,20 @@ class ToolGridTest {
         assertEquals(ToolId.CLONE.ordinal + 1, ToolId.MASK.ordinal)
         assertEquals("Clone stamp", ToolId.CLONE.label)
         assertEquals("Masks", ToolId.MASK.label)
+        // v1.6: Path and Text frames follow Masks.
+        assertEquals(ToolId.MASK.ordinal + 1, ToolId.PATH.ordinal)
+        assertEquals(ToolId.PATH.ordinal + 1, ToolId.TEXT_FRAMES.ordinal)
+        assertEquals(ToolId.TEXT_FRAMES, ToolId.entries.last())
+        assertEquals("Path", ToolId.PATH.label)
+        assertEquals("Text frames", ToolId.TEXT_FRAMES.label)
+    }
+
+    @Test
+    fun createSectionHoldsTheV16Tools() {
+        val create = ToolGrid.sections.single { it.title == "Create" }.entries
+        assertTrue(ToolGridEntry.Tool(ToolId.PATH) in create)
+        assertTrue(ToolGridEntry.Tool(ToolId.TEXT_FRAMES) in create)
+        // Still two rows of four tiles.
+        assertEquals(8, create.size)
     }
 }

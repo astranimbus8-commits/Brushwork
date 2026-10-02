@@ -195,10 +195,11 @@ data class LetterScaleSpec(
      * Size factor (1 = the font size) of letter [index] of [count] letters in scope (§3.5):
      * `t = index / (count − 1)` (0 for a single letter), `u = t` (beginning → end) or `1 − t`,
      * `r = smallestPercent / 100`; even steps `1 − (1 − r)·u`, same ratio `r^u`. 1 when off.
-     * [index] is clamped to the letters; non-positive [count] gives 1.
+     * [index] is clamped to the letters. A single letter (or none) is the largest letter, so its
+     * factor is 1 in both directions (the font size is the size of the largest letter).
      */
     fun factor(index: Int, count: Int): Float {
-        if (!isOn || count <= 0) return 1f
+        if (!isOn || count <= 1) return 1f
         val pct = if (smallestPercent.isFinite()) smallestPercent.coerceIn(MIN_PERCENT, 100f) else 100f
         val r = pct / 100.0
         val k = index.coerceIn(0, count - 1)
