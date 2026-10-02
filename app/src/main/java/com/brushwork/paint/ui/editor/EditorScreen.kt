@@ -77,6 +77,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.LocalConfiguration
+import com.brushwork.paint.ui.layers.LayerListMath
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
@@ -98,6 +101,8 @@ import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
 import com.brushwork.paint.ui.common.SheetPill
 import com.brushwork.paint.ui.common.rememberSheetHostState
+import com.brushwork.paint.ui.common.IncrementsSheet
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.filters.FilterBrowser
 import com.brushwork.paint.ui.filters.FilterSessionPanel
 import com.brushwork.paint.ui.layers.LayerDeleteUndo
@@ -106,7 +111,7 @@ import com.brushwork.paint.ui.selection.SelectionPanel
 import com.brushwork.paint.ui.exchange.ExchangeHost
 import com.brushwork.paint.ui.exchange.rememberExchangeUi
 import com.brushwork.paint.ui.theme.BrushworkColors
-import com.brushwork.paint.ui.tools.CoordinateStrip
+import com.brushwork.paint.ui.tools.CoordinatePill
 import com.brushwork.paint.ui.tools.ToolOptionsBar
 import com.brushwork.paint.ui.vector.VectorObjectBar
 import kotlinx.coroutines.delay
@@ -117,7 +122,12 @@ import kotlin.math.roundToInt
  * Sheets and dialogs the editor chrome can show (one at a time; tool sheets and the layers
  * window are separate).
  */
-enum class EditorPanel { TOOLS, BRUSH, COLOR, FILTERS, SELECTION, CANVAS, RULER, GRID, STABILIZER, SETTINGS }
+enum class EditorPanel {
+    TOOLS, BRUSH, COLOR, FILTERS, SELECTION, CANVAS, RULER, GRID, STABILIZER, SETTINGS,
+
+    /** v1.6: More › Increments… (the increment steps and switch; IncrementsSheet, area G). */
+    INCREMENTS,
+}
 
 /** Panels that edit the document, the selection, the active layer or the tool: closed while a filter is previewed. */
 private val PANELS_BLOCKED_BY_FILTER = setOf(
@@ -141,7 +151,8 @@ private val PANELS_BLOCKED_BY_FILTER = setOf(
 @Composable
 fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: () -> Unit) {
     val sheetHost = rememberSheetHostState()
-    CompositionLocalProvider(LocalSheetHost provides sheetHost) {
+    // v1.6: the shared number controls reach the increments service through LocalIncrements.
+    CompositionLocalProvider(LocalSheetHost provides sheetHost, LocalIncrements provides controller.increments) {
         EditorScreenContent(controller, sheetHost, onExit, onSaveNow)
     }
 }
@@ -485,7 +496,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         .onSizeChanged { stripPx = it.height }
                         .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                 ) {
-                    CoordinateStrip(controller)
+                    // v1.6: the X / Y pill (area G; the foundation stub shows the v1.5 strip).
+                    CoordinatePill(controller)
                 }
             }
         }
@@ -585,12 +597,20 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .padding(top = topDp + selectionBarDp + 8.dp, bottom = bottomDp + 8.dp, end = 8.dp),
             ) {
+                // v1.6 sizing contract: the host sizes the layer window, LayersPanel fills it (area E
+                // sets the ibisPaint 382 × 520; until then the v1.5 size, shrunk to the room here).
+                val config = LocalConfiguration.current
+                val window = LayerListMath.windowSize(config.screenWidthDp, config.screenHeightDp)
                 LayersPanel(
                     controller = controller,
                     onDismiss = { layersOpen = false },
                     onImportPicture = { launchImport() },
-                    modifier = Modifier.align(Alignment.BottomEnd).onGloballyPositioned { layersBounds.window = it },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .size(window.width.dp, window.height.dp)
+                        .onGloballyPositioned { layersBounds.window = it },
                     onLayerDeleted = onLayerDeleted,
+                    onOpenPanel = openPanel,
                 )
             }
             if (pendingWork) {
@@ -658,6 +678,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             EditorPanel.GRID -> GridPanel(controller, closePanel)
             EditorPanel.STABILIZER -> StabilizerPanel(controller, closePanel)
             EditorPanel.SETTINGS -> EditorSettingsDialog(prefs, closePanel, onCanvasChanged = { controller.invalidateDoc(null) })
+            EditorPanel.INCREMENTS -> IncrementsSheet(controller, closePanel)
             null -> {}
         }
     }

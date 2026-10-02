@@ -83,6 +83,12 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
     private fun reflow(layer: Layer, item: TextItem, source: Layer) {
         val polys = contours.polygons(source, item.wrap.contour) ?: return
         if (polys == item.wrap.polygons) return
+        // v1.6 seam: a frame of a linked story re-flows its whole story (its frames' slices
+        // depend on each other), in this step; never re-rendered alone.
+        if (item.thread.isOn) {
+            c.textThreads.reflowStory(item.thread.storyId)
+            return
+        }
         val next = item.copy(wrap = item.wrap.copy(polygons = polys))
         val prep = TextRenderer.prepare(next)
         // Everything the old text covered (its real pixels) and the new text.

@@ -76,6 +76,14 @@ data class WrapLine(val start: Int, val end: Int, val x: Float, val baseline: Fl
 class WrapResult(val lines: List<WrapLine>, val height: Float, val bands: Int, val skippedBands: Int)
 
 /**
+ * A text laid out in a frame of limited height (v1.6, [WrapLayout.layoutFrame]): the [lines] that
+ * fit, [end] = the start index (into the laid-out text) of the first line that does not fit, or
+ * the text's length when everything fits, and the [height] of what was laid out (as
+ * [WrapResult.height]).
+ */
+class FrameResult(val lines: List<WrapLine>, val end: Int, val height: Float)
+
+/**
  * A text measured for [WrapLayout]: character advances and line break opportunities, computed
  * once and reused by every layout pass (only the picture's position changes between passes).
  */
@@ -179,6 +187,49 @@ object WrapLayout {
         minRun: Float,
         maxBands: Int = MAX_BANDS,
     ): WrapResult {
+        val r = bandLoop(t, width, metrics, blocked, sides, align, minRun, maxBands, Double.POSITIVE_INFINITY)
+        return WrapResult(r.lines, r.height, r.bands, r.skipped)
+    }
+
+    /**
+     * v1.6 linked text frames (§4.4): [layout] in a frame [height] tall (the text area; +∞ = no
+     * limit). The band loop is [layout]'s, with a height stop: a band whose glyph cell would end
+     * below [height] is not laid out (a band with several runs fits or stops as a whole), and
+     * [FrameResult.end] is the start index of the first line that doesn't fit (the text's length
+     * when everything fits; 0 when not even the first line does). From 0 with an infinite height
+     * this equals [layout] exactly (same loop). Chaining frames — the next one laid out from
+     * `text.substring(end)` — covers the text contiguously.
+     */
+    fun layoutFrame(
+        t: WrapText,
+        width: Float,
+        height: Float,
+        metrics: WrapMetrics,
+        blocked: (Float, Float) -> List<ClosedFloatingPointRange<Float>>,
+        sides: WrapSides,
+        align: TextAlign,
+        minRun: Float,
+    ): FrameResult {
+        val limit = if (height.isNaN()) 0.0 else height.toDouble()
+        val r = bandLoop(t, width, metrics, blocked, sides, align, minRun, MAX_BANDS, limit)
+        return FrameResult(r.lines, r.end, r.height)
+    }
+
+    /** What [bandLoop] laid out ([end]: see [FrameResult.end]). */
+    private class Bands(val lines: List<WrapLine>, val height: Float, val bands: Int, val skipped: Int, val end: Int)
+
+    /** The band loop of [layout] and [layoutFrame]: bands whose cell ends below [maxHeight] (+ slack) stop it. */
+    private fun bandLoop(
+        t: WrapText,
+        width: Float,
+        metrics: WrapMetrics,
+        blocked: (Float, Float) -> List<ClosedFloatingPointRange<Float>>,
+        sides: WrapSides,
+        align: TextAlign,
+        minRun: Float,
+        maxBands: Int,
+        maxHeight: Double,
+    ): Bands {
         val text = t.text
         val n = text.length
         val full = if (width.isFinite() && width > 0f) width else 0f
@@ -189,11 +240,14 @@ object WrapLayout {
         var lastTop = 0.0
         var bands = 0
         var skipped = 0
+        var end = n
+        val stop = maxHeight + EPS
         val fullRun = listOf(Run(0f, full))
-        for (p in 0 until t.paragraphCount) {
+        paragraphs@ for (p in 0 until t.paragraphCount) {
             val ps = t.paragraphs[2 * p]
             val pe = t.paragraphs[2 * p + 1]
             if (ps == pe) {
+                if (top + cell > stop) { end = ps; break@paragraphs }
                 // An empty line takes a band, wherever the picture is (it draws nothing).
                 lines += WrapLine(ps, ps, aligned(fullRun[0], 0f, align), (top + metrics.ascent).toFloat(), 0f)
                 lastTop = top
@@ -204,6 +258,7 @@ object WrapLayout {
             val brk = t.breaks[p]
             var pos = ps
             while (pos < pe) {
+                if (top + cell > stop) { end = pos; break@paragraphs }
                 val runs = if (bands >= maxBands) fullRun else runsOf(blocked(top.toFloat(), (top + cell).toFloat()), full, sides, minRun)
                 val baseline = (top + metrics.ascent).toFloat()
                 var placed = false
@@ -225,7 +280,7 @@ object WrapLayout {
         }
         // The spacing is added between lines: none below the last one.
         val height = if (bands == 0) 0f else (lastTop + cell).toFloat()
-        return WrapResult(lines, height, bands, skipped)
+        return Bands(lines, height, bands, skipped, end)
     }
 
     /** A free stretch of a band, [x0]..[x1]. */

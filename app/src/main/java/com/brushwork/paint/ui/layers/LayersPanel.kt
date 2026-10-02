@@ -46,7 +46,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.paneTitle
@@ -61,6 +60,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.SheetBackground
+import com.brushwork.paint.ui.editor.EditorPanel
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.editor.endCanvasGesture
@@ -77,11 +77,16 @@ import kotlin.math.roundToInt
  *
  * [onDismiss] closes it (its ✕ button). [onImportPicture] asks the host to pick an image to add
  * as a layer; the window calls [onDismiss] right before it, so the placement is visible once the
- * picture arrives. [modifier] positions the window; its size comes from the screen size
- * ([LayerListMath.windowSize]), shrunk to the space the host gives it.
+ * picture arrives. [modifier] positions AND sizes the window.
  *
  * Delete removes the active layer at once, without asking (undo brings it back);
  * [onLayerDeleted] then gets the removed layer, e.g. to offer Undo in a snackbar.
+ *
+ * v1.6 sizing contract (§4.6, frozen): the window FILLS the size its [modifier] gives — the host
+ * (area E) sizes it (ibisPaint: `min(382, w − 10)` × `min(520, …)`; the v1.5
+ * [LayerListMath.windowSize] on short screens); there is no internal window sizing.
+ * [onOpenPanel] asks the host to open one of its panels (the Selection Layer row opens
+ * [EditorPanel.SELECTION], the canvas flips the Canvas panel...; area F).
  */
 @Composable
 fun LayersPanel(
@@ -90,6 +95,7 @@ fun LayersPanel(
     onImportPicture: () -> Unit,
     modifier: Modifier = Modifier,
     onLayerDeleted: (Layer) -> Unit = {},
+    onOpenPanel: (EditorPanel) -> Unit = {},
 ) {
     val doc = controller.doc
     // Layer objects are not observable: these counters change on every layer edit, undo or redo.
@@ -119,13 +125,9 @@ fun LayersPanel(
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
     var opacityId by rememberSaveable { mutableStateOf<Long?>(null) }
 
-    val config = LocalConfiguration.current
-    val size = LayerListMath.windowSize(config.screenWidthDp, config.screenHeightDp)
-
     Surface(
         modifier = modifier
-            .width(size.width.dp)
-            .height(size.height.dp)
+            .fillMaxSize()
             .semantics { paneTitle = "Layers" },
         shape = RoundedCornerShape(16.dp),
         color = SheetBackground,

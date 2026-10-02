@@ -137,8 +137,13 @@ class PreparedText internal constructor(
     internal val fontGeneration: Int = FontStore.generation,
     /** Text wrapped around a picture: the placement and wrap it was laid out for (else null). */
     internal val wrapKey: WrapKey? = null,
-    /** Text wrapped around a picture: its measured characters (reused while only the placement changes). */
+    /**
+     * Text wrapped around a picture: its measured characters (reused while only the placement
+     * changes). A frame of a linked story (v1.6): the measured story from the frame's start.
+     */
     internal val wrapText: WrapText? = null,
+    /** v1.6: the linked-story frame this was laid out for (the default spec = not threaded). */
+    val thread: TextThreadSpec = TextThreadSpec(),
 ) {
     val onPath: Boolean get() = block == null
 
@@ -150,12 +155,15 @@ class PreparedText internal constructor(
 
     /**
      * Whether this can draw [item]: position and rotation of straight text don't matter, unless
-     * the text wraps around a picture (then its lines depend on where the picture is).
+     * the text wraps around a picture (then its lines depend on where the picture is). v1.6: a
+     * frame of a linked story also needs the same [TextItem.thread] (identity first, then
+     * equality: the story copy can be long).
      */
     fun matches(item: TextItem): Boolean {
         if (item.text != text || item.spec != spec || !fontsCurrent) return false
         if (block == null) return item.path == path
         if (item.path.isActive) return false
+        if (item.thread !== thread && item.thread != thread) return false
         return if (item.wrapActive) wrapKey == WrapKey.of(item) else wrapKey == null
     }
 
@@ -180,6 +188,27 @@ class PreparedText internal constructor(
         val l = item.docToLocal(p, b.width, b.height)
         return l.x >= -tolerance && l.y >= -tolerance && l.x <= b.width + tolerance && l.y <= b.height + tolerance
     }
+}
+
+/**
+ * One frame of a linked story laid out (v1.6, [TextRenderer.frameLayout]): [lines] in the text
+ * area's coordinates, their indices relative to [start] (indices into the frame's
+ * [TextItem.text]); [start] and [end] are absolute story indices (the next frame starts at
+ * [end]); [height] is the height of the laid-out lines; [width] × [contentHeight] is the text
+ * area (the frame's fixed box, without padding and border).
+ */
+class TextFrameLayout internal constructor(
+    val lines: List<WrapLine>,
+    val start: Int,
+    val end: Int,
+    val height: Float,
+    val width: Float,
+    val contentHeight: Float,
+    /** The story measured from [start] (reusable for the same story and look). */
+    internal val measured: WrapText,
+) {
+    /** Characters of the story this frame shows. */
+    val length: Int get() = end - start
 }
 
 /** What the lines of a wrapped text depend on besides its words and look: where it is and its picture. */
@@ -262,17 +291,28 @@ object TextRenderer {
                 val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
                 PreparedText(item.text, item.spec, item.path, null, paints, b)
             }
+            item.thread.isOn -> {
+                // v1.6: a frame of a linked story is laid out from the story at its start (the
+                // measured story is reused while the look is the same: a frame drag re-breaks
+                // nothing it doesn't need to).
+                val same = reuse?.takeIf { sameLook && it.thread.isOn && it.wrapText != null }
+                val (block, measured) = layoutThreaded(item, same?.wrapText)
+                PreparedText(
+                    item.text, item.spec, item.path, block, null, null,
+                    wrapKey = if (item.wrapActive) WrapKey.of(item) else null, wrapText = measured, thread = item.thread,
+                )
+            }
             item.wrapActive -> {
                 // Same words and look (the text or its picture moved): the measured characters are
                 // reused, so a drag re-breaks lines without measuring again. The layout itself
                 // never depends on an earlier one: the same item always gives the same lines (I1:
                 // the committed pixels equal a fresh rendering of the stored item).
-                val same = reuse?.takeIf { sameLook && it.text == item.text && it.wrapText != null }
+                val same = reuse?.takeIf { sameLook && it.text == item.text && it.wrapText != null && !it.thread.isOn }
                 val (block, measured) = layoutWrapped(item, same?.wrapText)
                 PreparedText(item.text, item.spec, item.path, block, null, null, wrapKey = WrapKey.of(item), wrapText = measured)
             }
             else -> {
-                val block = reuse?.block?.takeIf { sameLook && reuse.text == item.text && reuse.wrapKey == null } ?: layout(item.text, item.spec)
+                val block = reuse?.block?.takeIf { sameLook && reuse.text == item.text && reuse.wrapKey == null && !reuse.thread.isOn } ?: layout(item.text, item.spec)
                 PreparedText(item.text, item.spec, item.path, block, null, null)
             }
         }
@@ -443,6 +483,87 @@ object TextRenderer {
         val inset = spec.box.inset
         val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - blockHeight / 2f, item.wrap.gapPx)
         return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx).height
+    }
+
+    // ------------------------------------------------------------------ v1.6: frames of a linked story (§3.6, §4.4)
+
+    /**
+     * Lays out frame [item] of a linked story (v1.6, foundation): `story.substring(thread.start)`
+     * with [WrapLayout.layoutFrame] in the frame's text area — `box.width` (whole pixels, as
+     * StaticLayout) × `box.minHeight` — honouring the item's wrap outline ([TextItem.wrapActive];
+     * the block height is fixed, so no fixed-point passes). Rendering a frame ([prepare] →
+     * [layoutThreaded]) and computing its end ([frameEnd]) are this one call, so a frame's pixels
+     * equal its slice of the chain by construction (I1).
+     *
+     * Any straight horizontal item works: an unthreaded one is a story of its own text starting
+     * at 0, in its fixed box (no `minHeight`, or no fixed width: unlimited height, and then the
+     * wrap outline is ignored). [measured] (the story measured from the start) is reused when it
+     * is that text. Area C adds letter scaling inside this path (the measurer's advances), so the
+     * flow and the rendering keep agreeing.
+     */
+    fun frameLayout(item: TextItem, measured: WrapText? = null): TextFrameLayout {
+        val spec = item.spec
+        val th = item.thread
+        val story = if (th.isOn) th.story else item.text
+        val start = if (th.isOn) th.start.coerceIn(0, story.length) else 0
+        val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
+        val fmi = paint.fontMetricsInt
+        val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
+        val wrap = spec.box.width
+        val rest = story.length - start
+        val wt = measured?.takeIf { it.text.length == rest && story.regionMatches(start, it.text, 0, rest) }
+            ?: WrapLayout.measure(story.substring(start)) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
+        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val height = if (wrap > 0f && spec.box.minHeight > 0f) spec.box.minHeight else Float.POSITIVE_INFINITY
+        val inset = spec.box.inset
+        val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
+        val blocked = if (!item.wrapActive || obstacle.isEmpty || !height.isFinite()) NOTHING_BLOCKED
+        else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - (height + 2f * inset) / 2f, item.wrap.gapPx)
+        val res = WrapLayout.layoutFrame(wt, width, height, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx)
+        return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt)
+    }
+
+    /**
+     * Where frame [item]'s slice of its story ends (v1.6): the absolute story index the next frame
+     * starts at (see [frameLayout]; `thread.start` when not even one line fits). For an
+     * unthreaded item, the end of what fits its fixed box in its own text.
+     */
+    fun frameEnd(item: TextItem): Int = frameLayout(item).end
+
+    /**
+     * The block of frame [item] (v1.6): [frameLayout]'s lines in the frame's fixed box, drawn
+     * from the item's own text (`story[start, end)`, I9; lines past it are left out, so a frame
+     * never shows its neighbour's characters). Its `wrapLines` index into [TextItem.text].
+     */
+    internal fun layoutThreaded(item: TextItem, measured: WrapText? = null, measureInk: Boolean = true): Pair<TextBlock, WrapText> {
+        val spec = item.spec
+        val fl = frameLayout(item, measured)
+        val text = item.text
+        val n = text.length
+        val lines = fl.lines.mapNotNull { l ->
+            when {
+                l.end <= n -> l
+                l.start >= n -> null
+                else -> l.copy(end = n)
+            }
+        }
+        val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
+        val contentH = fl.contentHeight
+        if (text.isEmpty()) return block(spec, fl.width, max(1f, contentH), 0, paint, wrapLines = emptyList(), glyphs = null) to fl.measured
+        val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, fl.width, contentH) else 0f
+        val outline: (Path, TextPaint) -> Unit = { out, p ->
+            val tmp = Path()
+            for (l in lines) {
+                if (l.end <= l.start) continue
+                tmp.rewind()
+                p.getTextPath(text, l.start, l.end, l.x, l.baseline, tmp)
+                out.addPath(tmp)
+            }
+        }
+        val block = block(spec, fl.width, max(1f, contentH), lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p ->
+            for (l in lines) if (l.end > l.start) c.drawText(text, l.start, l.end, l.x, l.baseline, p)
+        }
+        return block to fl.measured
     }
 
     /** Like [horizontalOverflow] for wrapped [lines]. */

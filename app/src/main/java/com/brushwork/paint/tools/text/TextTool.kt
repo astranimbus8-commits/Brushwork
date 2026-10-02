@@ -66,11 +66,17 @@ import kotlin.math.max
  * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
  * isn't snapped.
  */
-class TextTool(controller: EditorController) : Tool(controller) {
+class TextTool(controller: EditorController) : Tool(controller), TextEditorHost {
     override val id = ToolId.TEXT
 
+    // v1.6 TextEditorHost capability flags: the Text tool offers everything.
+    override val supportsPath: Boolean get() = true
+    override val supportsVertical: Boolean get() = true
+    override val supportsWrap: Boolean get() = true
+    override val boxSizeEditable: Boolean get() = true
+
     /** The app's imported fonts (also makes text rendering resolve them). */
-    val fontStore: FontStore = FontStore.get(controller.appContext)
+    override val fontStore: FontStore = FontStore.get(controller.appContext)
 
     private var itemState by mutableStateOf<TextItem?>(null)
 
@@ -78,7 +84,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * The text object being placed or edited, null when there is none. While a text layer is
      * edited, every change also redraws that layer's in-place preview (see [LayerPreview]).
      */
-    var item: TextItem?
+    override var item: TextItem?
         get() = itemState
         private set(value) {
             itemState = value
@@ -94,25 +100,25 @@ class TextTool(controller: EditorController) : Tool(controller) {
         private set
 
     /** True while the editor shows a text that was just created (cancel removes it). */
-    var editingNew by mutableStateOf(false)
+    override var editingNew by mutableStateOf(false)
         private set
 
     /** The numeric position/size sheet is showing. */
-    var numbersOpen by mutableStateOf(false)
+    override var numbersOpen by mutableStateOf(false)
 
     /** Units used by the size and position fields. */
-    var sizeUnit by mutableStateOf(LengthUnit.PT)
-    var positionUnit by mutableStateOf(LengthUnit.PX)
+    override var sizeUnit by mutableStateOf(LengthUnit.PT)
+    override var positionUnit by mutableStateOf(LengthUnit.PX)
 
     /** The text layer being edited again (null while placing a new text). */
     var editingLayer by mutableStateOf<Layer?>(null)
         private set
 
     /** Placeholder text options of the editor (kept while the editor is closed and reopened). */
-    var placeholderKind by mutableStateOf(PlaceholderKind.LOREM)
-    var placeholderAmount by mutableStateOf(PlaceholderAmount.PARAGRAPH)
+    override var placeholderKind by mutableStateOf(PlaceholderKind.LOREM)
+    override var placeholderAmount by mutableStateOf(PlaceholderAmount.PARAGRAPH)
     /** Replace the text (true) or add to it. */
-    var placeholderReplace by mutableStateOf(true)
+    override var placeholderReplace by mutableStateOf(true)
 
     /** The "Wrap around a picture" sheet is showing (v1.5). */
     var wrapSheetOpen by mutableStateOf(false)
@@ -148,10 +154,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
     private var previewRect: Rect? = null
 
     /** Largest font size allowed (twice the canvas' longer side). */
-    val maxSizePx: Float get() = 2f * max(doc.width, doc.height)
+    override val maxSizePx: Float get() = 2f * max(doc.width, doc.height)
 
     /** Largest box width / height (a few canvases; more is never useful). */
-    val maxBoxPx: Float get() = 4f * max(doc.width, doc.height)
+    override val maxBoxPx: Float get() = 4f * max(doc.width, doc.height)
 
     /** Default font size for new text: 5 % of the canvas height. */
     val defaultSizePx: Float get() = (doc.height * 0.05f).coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)
@@ -203,6 +209,9 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * message) when the layer can't be edited.
      */
     fun editLayer(layer: Layer, openEditor: Boolean = false): Boolean {
+        // v1.6 seam: a frame of a linked story is edited by the Text frames tool (it switches
+        // tools and selects the frame; false for anything else).
+        if (controller.textThreads.openForEditing(layer, openEditor)) return true
         if (editingLayer === layer && item != null) {
             if (openEditor) openEditor()
             return true
@@ -344,7 +353,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * Closes the editor keeping the changes; an empty new text is removed. An edited text layer
      * whose text was emptied is deleted right away as one undo step (see [deleteEmptiedLayer]).
      */
-    fun confirmEditor() {
+    override fun confirmEditor() {
         val cur = item
         if (cur != null && cur.text.isBlank() && editingLayer != null) {
             // Refused (the layer was locked or hidden meanwhile; a message says so): the editor
@@ -370,7 +379,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Closes the editor reverting its changes (a new text is removed). */
-    fun cancelEditor() {
+    override fun cancelEditor() {
         editorOpen = false
         item = if (editingNew) null else editorBackup ?: item
         editorBackup = null
@@ -402,20 +411,20 @@ class TextTool(controller: EditorController) : Tool(controller) {
         return true
     }
 
-    fun setText(text: String) = update { it.copy(text = text) }
+    override fun setText(text: String) = update { it.copy(text = text) }
 
-    fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
+    override fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
 
     // ------------------------------------------------------------------ fonts
 
     /** Uses the built-in family [font]. */
-    fun setBuiltInFont(font: TextFont) = updateSpec { it.copy(font = font, fontId = null, fontName = null) }
+    override fun setBuiltInFont(font: TextFont) = updateSpec { it.copy(font = font, fontId = null, fontName = null) }
 
     /**
      * Uses the imported font [font]; the built-in family stays as its fallback (drawn when the
      * font file is missing, e.g. in a project opened on another device).
      */
-    fun setImportedFont(font: ImportedFont) = updateSpec { it.copy(fontId = font.id, fontName = font.name) }
+    override fun setImportedFont(font: ImportedFont) = updateSpec { it.copy(fontId = font.id, fontName = font.name) }
 
     /** True when the current text asks for an imported font that isn't available. */
     val fontMissing: Boolean get() = item?.spec?.let { TextRenderer.isFontMissing(it) } ?: false
@@ -424,7 +433,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * An imported font was deleted or imported: the current text is laid out again (with its
      * fallback font or the font that is back).
      */
-    fun onFontsChanged() {
+    override fun onFontsChanged() {
         val cur = item ?: return
         if (cur.spec.fontId == null) return
         prepared = null
@@ -449,7 +458,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Inputs of [PlaceholderFit.edit] for the current text (to compute it off the main thread). */
-    fun placeholderRequest(): PlaceholderFit.Request? {
+    override fun placeholderRequest(): PlaceholderFit.Request? {
         val cur = item ?: return null
         return PlaceholderFit.Request(cur, placeholderKind, placeholderAmount, placeholderReplace, doc.width, doc.height, maxBoxPx)
     }
@@ -458,7 +467,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * Applies a placeholder [edit] computed for [basedOn]; ignored (false) when the text or its
      * look changed meanwhile. A null edit means the box has no room: a message says so.
      */
-    fun applyPlaceholder(basedOn: TextItem, edit: PlaceholderFit.Edit?): Boolean {
+    override fun applyPlaceholder(basedOn: TextItem, edit: PlaceholderFit.Edit?): Boolean {
         val cur = item ?: return false
         if (cur.text != basedOn.text || cur.spec != basedOn.spec) return false
         if (edit == null) {
@@ -475,7 +484,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * [TextItem.cx]/[TextItem.cy]); ([TextItem.cx], [TextItem.cy]) while nothing is measured.
      * Shown as the position, and the pivot for turning.
      */
-    fun anchorOf(t: TextItem): Vec2 {
+    override fun anchorOf(t: TextItem): Vec2 {
         if (!t.path.isActive) return Vec2(t.cx, t.cy)
         val b = preparedFor(t).docBounds(t)
         return if (b.isEmpty || !b.centerX().isFinite() || !b.centerY().isFinite()) Vec2(t.cx, t.cy) else Vec2(b.centerX(), b.centerY())
@@ -484,14 +493,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
     /** Moves the text object (and its path) so its center ([anchorOf]) is at ([x], [y]). */
     fun setCenter(x: Float, y: Float) = update { val a = anchorOf(it); translated(it, x - a.x, y - a.y) }
 
-    fun setCenterX(x: Float) = update { translated(it, x - anchorOf(it).x, 0f) }
+    override fun setCenterX(x: Float) = update { translated(it, x - anchorOf(it).x, 0f) }
 
-    fun setCenterY(y: Float) = update { translated(it, 0f, y - anchorOf(it).y) }
+    override fun setCenterY(y: Float) = update { translated(it, 0f, y - anchorOf(it).y) }
 
-    fun nudge(dx: Float, dy: Float) = update { translated(it, dx, dy) }
+    override fun nudge(dx: Float, dy: Float) = update { translated(it, dx, dy) }
 
     /** Turns the text object (and its path, around the text's center [anchorOf]) to [deg]. */
-    fun setRotation(deg: Float) = update {
+    override fun setRotation(deg: Float) = update {
         if (!deg.isFinite()) return@update it
         val r = TextItem.normalizeDegrees(deg)
         if (!it.path.isActive) return@update it.copy(rotationDeg = r)
@@ -503,7 +512,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         it.copy(rotationDeg = r, cx = c2.x, cy = c2.y, path = TextOnPath.transformed(it.path, Vec2.ZERO, 1f, turn, pivot))
     }
 
-    fun setSizePx(px: Float) {
+    override fun setSizePx(px: Float) {
         if (!px.isFinite()) return
         updateSpec { it.copy(sizePx = px.coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)) }
     }
@@ -522,7 +531,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * Turns the fixed box size on (lines wrap at the current natural width; columns at the
      * current natural height) or off (the box fits the text).
      */
-    fun setFixedBox(on: Boolean) {
+    override fun setFixedBox(on: Boolean) {
         // Lines can only flow around a picture inside a box of fixed width (a box fitting the
         // text would be one long line).
         if (!on && item?.wrapActive == true) {
@@ -542,7 +551,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Sets the fixed box length (width of horizontal text, height of vertical text) in px. */
-    fun setBoxLength(px: Float) = updateSpec { s ->
+    override fun setBoxLength(px: Float) = updateSpec { s ->
         if (!px.isFinite()) return@updateSpec s
         val v = px.coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         if (s.vertical) s.copy(box = s.box.copy(height = v)) else s.copy(box = s.box.copy(width = v))
@@ -553,7 +562,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * vertical text), starting at the current size, so the box is an area to fill; off = the box
      * fits the text again.
      */
-    fun setFixedDepth(on: Boolean) = updateSpec { s ->
+    override fun setFixedDepth(on: Boolean) = updateSpec { s ->
         if (s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
         val v = if (!on) 0f else {
             val block = TextRenderer.layout(item?.text ?: "", s, measureInk = false)
@@ -563,21 +572,21 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Sets the fixed other side of the box (see [setFixedDepth]) in px. */
-    fun setBoxDepth(px: Float) = updateSpec { s ->
+    override fun setBoxDepth(px: Float) = updateSpec { s ->
         if (!px.isFinite() || s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
         val v = px.coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         s.copy(box = if (s.vertical) s.box.copy(minWidth = v) else s.box.copy(minHeight = v))
     }
 
-    fun updateBox(transform: (TextBoxSpec) -> TextBoxSpec) = updateSpec { it.copy(box = transform(it.box)) }
+    override fun updateBox(transform: (TextBoxSpec) -> TextBoxSpec) = updateSpec { it.copy(box = transform(it.box)) }
 
-    fun applyBoxPreset(preset: TextBoxPreset) = updateSpec { it.copy(box = preset.applyTo(it.box, it.sizePx)) }
+    override fun applyBoxPreset(preset: TextBoxPreset) = updateSpec { it.copy(box = preset.applyTo(it.box, it.sizePx)) }
 
     /**
      * Sets the text path. Switching to another shape places a sensible default of that shape
      * around the text ([TextOnPath.defaultFor]); straight keeps the shape for later.
      */
-    fun setPath(spec: TextPathSpec) = update { cur ->
+    override fun setPath(spec: TextPathSpec) = update { cur ->
         if (spec.type == cur.path.type) return@update cur.copy(path = spec)
         // Where the text is now (along its current path, or straight): the new shape goes there.
         val at = anchorOf(cur)

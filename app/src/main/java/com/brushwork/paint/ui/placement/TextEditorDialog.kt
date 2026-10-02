@@ -44,7 +44,7 @@ import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextBoxPreset
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
-import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.TextEditorHost
 import com.brushwork.paint.tools.text.VerticalStyle
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.fonts.FontField
@@ -80,7 +80,8 @@ private enum class ColorTarget { FILL, OUTLINE, BOX_FILL, BORDER }
  * and swipes don't close it, so typed text is never lost by accident.
  */
 @Composable
-fun TextEditorDialog(tool: TextTool) {
+fun TextEditorDialog(host: TextEditorHost) {
+    val tool = host
     val item = tool.item ?: return
     val spec = item.spec
     val doc = tool.controller.doc
@@ -124,12 +125,15 @@ fun TextEditorDialog(tool: TextTool) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             ToolIconButton(Icons.Filled.FormatBold, "Bold", onClick = { style { it.copy(bold = !it.bold) } }, selected = spec.bold)
             ToolIconButton(Icons.Filled.FormatItalic, "Italic", onClick = { style { it.copy(italic = !it.italic) } }, selected = spec.italic)
-            ToolIconButton(
-                Icons.Filled.TextRotateVertical, "Vertical text",
-                onClick = { style { it.copy(vertical = !it.vertical) } },
-                selected = spec.vertical && !onPath,
-                enabled = !onPath,
-            )
+            // v1.6: hosts without vertical text (a linked story) hide the button.
+            if (tool.supportsVertical) {
+                ToolIconButton(
+                    Icons.Filled.TextRotateVertical, "Vertical text",
+                    onClick = { style { it.copy(vertical = !it.vertical) } },
+                    selected = spec.vertical && !onPath,
+                    enabled = !onPath,
+                )
+            }
             Text(
                 when {
                     onPath -> "Follows a shape"
@@ -164,11 +168,14 @@ fun TextEditorDialog(tool: TextTool) {
         }
 
         // High up in the sheet: bending text along a shape is one of the main things to find here.
-        SectionHeader("Shape / path")
-        Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
-        TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
+        // v1.6: hosts without text on a path (a linked story) hide the section.
+        if (tool.supportsPath) {
+            SectionHeader("Shape / path")
+            Note("Make the text follow a line, a circle, a square or a curve. Drag the dots on the canvas to shape it.")
+            TextPathControls(item.path, doc.dpi) { tool.setPath(it) }
+        }
 
-        if (spec.vertical && !onPath) {
+        if (tool.supportsVertical && spec.vertical && !onPath) {
             SectionHeader("Vertical text")
             ChoiceChips(VerticalStyle.entries.map { it.label }, spec.verticalStyle.ordinal, { i -> style { it.copy(verticalStyle = VerticalStyle.entries[i]) } })
             Note(
@@ -287,7 +294,7 @@ fun TextEditorDialog(tool: TextTool) {
  * padding, background, border and corner rounding. Not used while the text follows a shape.
  */
 @Composable
-private fun TextBoxSection(tool: TextTool, onPath: Boolean, onPickFill: () -> Unit, onPickBorder: () -> Unit) {
+private fun TextBoxSection(tool: TextEditorHost, onPath: Boolean, onPickFill: () -> Unit, onPickBorder: () -> Unit) {
     val item = tool.item ?: return
     val spec = item.spec
     val box = spec.box
@@ -304,13 +311,16 @@ private fun TextBoxSection(tool: TextTool, onPath: Boolean, onPickFill: () -> Un
         { i -> tool.applyBoxPreset(TextBoxPreset.entries[i]) },
     )
     val fixed = if (spec.vertical) box.height else box.width
-    ToggleRow(
-        if (spec.vertical) "Fixed height (columns wrap)" else "Fixed width (lines wrap)",
-        fixed > 0f,
-        { on -> tool.setFixedBox(on) },
-        description = "Or drag the handle on the ${if (spec.vertical) "bottom" else "right"} edge of the text",
-    )
-    if (fixed > 0f) {
+    // v1.6: hosts whose box size is set elsewhere (a frame of a linked story) hide the box size.
+    if (tool.boxSizeEditable) {
+        ToggleRow(
+            if (spec.vertical) "Fixed height (columns wrap)" else "Fixed width (lines wrap)",
+            fixed > 0f,
+            { on -> tool.setFixedBox(on) },
+            description = "Or drag the handle on the ${if (spec.vertical) "bottom" else "right"} edge of the text",
+        )
+    }
+    if (tool.boxSizeEditable && fixed > 0f) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             LengthField(
                 label = if (spec.vertical) "Box height" else "Box width",
@@ -399,7 +409,7 @@ private fun TextBoxSection(tool: TextTool, onPath: Boolean, onPickFill: () -> Un
  * fills the box. Computed off the main thread (a fill measures the text many times).
  */
 @Composable
-private fun PlaceholderSection(tool: TextTool, onPath: Boolean) {
+private fun PlaceholderSection(tool: TextEditorHost, onPath: Boolean) {
     val item = tool.item ?: return
     val spec = item.spec
     val dpi = tool.controller.doc.dpi.toDouble()
@@ -473,7 +483,8 @@ private fun Note(text: String) {
 
 /** Numeric position / rotation / size of the text, plus a nudge pad. */
 @Composable
-fun TextNumbersSheet(tool: TextTool) {
+fun TextNumbersSheet(host: TextEditorHost) {
+    val tool = host
     val item = tool.item ?: return
     val doc = tool.controller.doc
     val dpi = doc.dpi.toDouble()
