@@ -388,7 +388,10 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             "Fill the path", s.fill, { v -> set { it.copy(fill = v) } },
             description = if (s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed",
         )
-        if (s.fill) FillColorRow(s.fillColor, controller.color) { col -> set { it.copy(fillColor = col) } }
+        if (s.fill) {
+            // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
+            FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) "Gradient (kept)" else null) { col -> set { it.copy(fillColor = col) } }
+        }
 
         SectionHeader("Thickness")
         Hint("Select a point to set its thickness (0–300 %). The line blends smoothly from point to point.")

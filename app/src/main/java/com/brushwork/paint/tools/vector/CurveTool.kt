@@ -164,6 +164,12 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     val isReopened: Boolean get() = reopenedState
 
     /**
+     * The reopened path has a gradient fill (an imported SVG): without a fill color of its own it
+     * keeps that gradient (see the fill of [commit]), not the main color.
+     */
+    val reopenedGradientFill: Boolean get() = reopenedState && reopened?.original?.fill.let { it != null && it !is VPaint.Solid }
+
+    /**
      * Shows a ring of the real line diameter at the selected anchor (set while its thickness
      * slider is dragged).
      */
