@@ -264,7 +264,7 @@ object AdjustmentStage {
         val mapped = RectF(region)
         target.docToTarget.mapRect(mapped)
         val t = Rect(floorInt(mapped.left), floorInt(mapped.top), ceilInt(mapped.right), ceilInt(mapped.bottom))
-        if (!t.intersect(0, 0, bmp.width, bmp.height)) return
+        if (!t.intersect(0, 0, bmp.width, bmp.height) || t.isEmpty) return
         val o = layer.opacity.coerceIn(0f, 1f)
         val alpha = (o * 255f + 0.5f).toInt()
         if (alpha <= 0) return

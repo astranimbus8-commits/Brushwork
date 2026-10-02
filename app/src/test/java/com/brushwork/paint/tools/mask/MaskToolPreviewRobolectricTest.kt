@@ -231,6 +231,27 @@ class MaskToolPreviewRobolectricTest {
         assertEquals(100f, (adj.maskSpec!!.components.single() as RadialMask).cx, 1e-3f)
     }
 
+    @Test
+    fun anEditOfATurnedOffMaskSaysSoOnce() {
+        setup()
+        tool.arm(MaskTool.Kind.RADIAL)
+        c.pointerDown(ToolPoint(100f, 75f)); c.pointerMove(ToolPoint(115f, 75f)); c.pointerMove(ToolPoint(140f, 75f)); c.pointerUp(ToolPoint(140f, 75f))
+        val adj = c.activeLayer
+        c.message = null
+        c.setLayerProps(adj, adj.props().copy(maskEnabled = false))
+        // Move the radial by its pin: recorded, and the turned-off mask is pointed out.
+        val steps = c.undoManager.undoCount
+        c.pointerDown(ToolPoint(100f, 75f)); c.pointerMove(ToolPoint(110f, 75f)); c.pointerMove(ToolPoint(120f, 80f)); c.pointerUp(ToolPoint(120f, 80f))
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals("Move mask", c.undoManager.undoLabel)
+        assertTrue("${c.message}", c.message?.contains("turned off") == true)
+        // Once.
+        c.message = null
+        c.pointerDown(ToolPoint(120f, 80f)); c.pointerMove(ToolPoint(130f, 80f)); c.pointerMove(ToolPoint(140f, 85f)); c.pointerUp(ToolPoint(140f, 85f))
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        assertNull(c.message)
+    }
+
     private companion object {
         const val PHOTO = 0xFF3366AA.toInt()
         const val INVERTED = 0xFFCC9955.toInt()

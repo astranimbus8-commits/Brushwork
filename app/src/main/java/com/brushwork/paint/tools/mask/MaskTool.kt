@@ -304,9 +304,23 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val region = MaskSpecs.changedRegion(base, s, controller.doc.width, controller.doc.height)
         val ok = MaskEdits.apply(controller, layer, s, label, region, brushSource())
         if (ok && replaceConfirmedFor === layer) replaceConfirmedFor = null
+        if (ok) hintIfMaskOff(layer)
         revision++
         flashOverlay()
         return ok
+    }
+
+    /** The layer whose turned-off mask was pointed out (once per layer while the tool is active). */
+    private var maskOffHinted: Layer? = null
+
+    /**
+     * An edit of a mask that is turned off (the layers window's mask switch) shows nothing on the
+     * canvas: say so once.
+     */
+    private fun hintIfMaskOff(layer: Layer) {
+        if (layer.mask == null || layer.maskEnabled || maskOffHinted === layer) return
+        maskOffHinted = layer
+        controller.toast("The mask of \"${layer.name}\" is turned off: turn it on in the layers window to see it")
     }
 
     /** Throws a live edit away. */
@@ -647,6 +661,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
             if (MaskEdits.apply(controller, layer, newSpec, label, null, brushSource())) {
                 selectedId = compId
                 if (replaceConfirmedFor === layer) replaceConfirmedFor = null
+                hintIfMaskOff(layer)
             }
         }
         revision++
@@ -775,6 +790,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val rec = g.rec ?: return
         removePaintOverride()
         MaskEdits.commitStroke(controller, rec, layer, g.spec, label)
+        hintIfMaskOff(layer)
         // The overlay's copy already shows the stroke (patched while painting).
         layer.mask?.let { tint.adopt(layer, it, g.versionAtStart) }
         liveSpec = null
@@ -981,6 +997,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         liveBuffer = IntArray(0)
         selectedId = null
         armed = null
+        maskOffHinted = null
     }
 
     override fun onDispose() {
