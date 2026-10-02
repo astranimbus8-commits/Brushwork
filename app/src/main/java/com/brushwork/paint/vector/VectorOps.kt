@@ -28,6 +28,9 @@ import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
+import com.brushwork.paint.vector.geom.ObjectIndex
+import com.brushwork.paint.vector.geom.ObjectMapping
+import com.brushwork.paint.vector.geom.StrokeHits
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -39,12 +42,20 @@ import kotlin.math.sqrt
 
 /**
  * Geometry of vector objects (v1.5 §5.4; API frozen, owned by A1). A2, A3, A4 and A8 depend on
- * these bodies; A1 makes them precise and fast.
+ * these bodies.
  *
- * F2 reference: bounds are conservative (a stroke's largest dab everywhere), hit tests use the
- * flattened outline (strokes: their input polyline with the largest dab radius), [touching]
- * rasterizes each candidate's footprint against the selection, and [transformed] maps geometry
- * exactly for affine maps (homographies: anchors and handle points are mapped, see A1).
+ * - [bounds] are conservative (a stroke's largest dab everywhere: what it can paint).
+ * - [hit] is exact for strokes: the replayed dabs ([StrokeHits]: same sampler, pressure, tapers
+ *   and scatter as the pixels) as a chain of capsules, so a tap beside a tapered tip misses and
+ *   one on a pressure swell hits; paths and shapes use their flattened outline and fill.
+ * - [touching] prefilters by the content's spatial index ([ObjectIndex]) and rasterizes each
+ *   candidate's footprint (strokes: their dab chain) against the selection.
+ * - [transformed] is exact for affine maps (gradients included); a homography first splits every
+ *   curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles.
+ *   A shape stays a shape under similarities, and under reflections when it is symmetric (or has
+ *   custom points, which are mirrored); otherwise it becomes a path. A brush's tip turns (and
+ *   mirrors) with the object ([turnedBrush]): a rotated calligraphy stroke keeps its thick and
+ *   thin parts where the rotated pixels have them.
  */
 object VectorOps {
     /** Flattening tolerance of hit tests and footprints (document px). */
@@ -73,8 +84,9 @@ object VectorOps {
     }
 
     /**
-     * Ids of the objects of [content] that [sel] touches: the object's footprint (what it paints,
-     * a stroke at its largest width) has a pixel where the selection is not empty.
+     * Ids of the objects of [content] that [sel] touches: the object's footprint (what it paints;
+     * a stroke: its replayed dab chain) has a pixel where the selection is not empty. Only the
+     * objects the spatial index finds near the selection are tested.
      *
      * The footprint is rasterized against the selection in [TOUCH_TILE] squares of one reused
      * buffer (memory stays bounded however large the objects), stopping at the first touched
@@ -84,12 +96,25 @@ object VectorOps {
         if (sel.isEmpty || content.objects.isEmpty()) return emptySet()
         val out = LinkedHashSet<Long>()
         var probe: FootprintProbe? = null
+        val index = ObjectIndex.of(content)
+        val sb = sel.bounds
         try {
-            for (o in content.objects) {
-                val b = bounds(o)
+            for (i in index.query(sb.left - 1f, sb.top - 1f, sb.right + 1f, sb.bottom + 1f)) {
+                val o = content.objects[i]
+                val b = index.bounds(i)
                 if (b.isEmpty) continue
                 val r = Rect(floor(b.left).toInt() - 1, floor(b.top).toInt() - 1, ceil(b.right).toInt() + 1, ceil(b.bottom).toInt() + 1)
                 if (!r.intersect(sel.bounds)) continue
+                // A stroke: only the part of its dab chain near the selection is tested, and a
+                // dab centred on a selected pixel touches it at once (a lasso around many
+                // strokes stays quick).
+                val near = if (o is VStroke) StrokeNear.of(StrokeHits.dabs(o), sb) else null
+                if (near != null) {
+                    if (near.count == 0) continue
+                    if (near.centreSelected(sel)) { out += o.id; continue }
+                    r.set(near.area)
+                    if (!r.intersect(sb)) continue
+                }
                 val p = probe ?: try {
                     FootprintProbe(sel).also { probe = it }
                 } catch (e: OutOfMemoryError) {
@@ -97,12 +122,82 @@ object VectorOps {
                     out += o.id
                     continue
                 }
-                if (p.touches(footprint(o), r)) out += o.id
+                if (p.touches(near?.footprint() ?: footprint(o), r)) out += o.id
             }
         } finally {
             probe?.release()
         }
         return out
+    }
+
+    /**
+     * The dabs of a stroke's chain ([d]: x, y, radius triples) that reach [area] (a dab, or the
+     * capsule joining it to its neighbour), for [touching]. Not thread-safe.
+     */
+    private class StrokeNear private constructor(private val d: FloatArray, private val keep: BooleanArray, val count: Int, val area: Rect) {
+        /** True when a kept dab's centre lies on a selected pixel (that dab paints it). */
+        fun centreSelected(sel: Selection): Boolean {
+            val m = sel.mask
+            val n = d.size / 3
+            var lx = Float.NaN
+            var ly = Float.NaN
+            for (i in 0 until n) {
+                if (!keep[i]) continue
+                val x = d[3 * i]; val y = d[3 * i + 1]
+                // Neighbouring dabs overlap: sample about one per radius along the chain.
+                val step = max(1f, d[3 * i + 2])
+                if (!lx.isNaN() && abs(x - lx) < step && abs(y - ly) < step) continue
+                lx = x; ly = y
+                if (!(x.isFinite() && y.isFinite())) continue
+                val px = floor(x).toInt(); val py = floor(y).toInt()
+                if (px < 0 || py < 0 || px >= m.width || py >= m.height) continue
+                if ((m.getPixel(px, py) ushr 24) != 0) return true
+            }
+            return false
+        }
+
+        /** The kept dabs and the capsules between kept neighbours, as [footprint] draws a stroke. */
+        fun footprint(): (Canvas, Paint) -> Unit = { c, paint ->
+            val n = d.size / 3
+            paint.style = Paint.Style.FILL
+            for (i in 0 until n) if (keep[i]) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeCap = Paint.Cap.ROUND
+            for (i in 1 until n) {
+                if (!keep[i] || !keep[i - 1]) continue
+                paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
+                c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+            }
+        }
+
+        companion object {
+            fun of(d: FloatArray, area: Rect): StrokeNear {
+                val n = d.size / 3
+                val keep = BooleanArray(n)
+                val l = area.left - 1f; val t = area.top - 1f; val r = area.right + 1f; val b = area.bottom + 1f
+                val box = Rect()
+                var count = 0
+                fun take(i: Int) {
+                    if (keep[i]) return
+                    keep[i] = true
+                    count++
+                    val e = max(0.5f, d[3 * i + 2]) + 1f
+                    val x = d[3 * i]; val y = d[3 * i + 1]
+                    if (x.isFinite() && y.isFinite()) box.union(floor(x - e).toInt(), floor(y - e).toInt(), ceil(x + e).toInt(), ceil(y + e).toInt())
+                }
+                for (i in 0 until n) {
+                    val x = d[3 * i]; val y = d[3 * i + 1]; val e = max(0.5f, d[3 * i + 2])
+                    if (x + e >= l && x - e <= r && y + e >= t && y - e <= b) take(i)
+                    if (i > 0) {
+                        // The capsule from the previous dab (its width is the smaller radius).
+                        val px = d[3 * i - 3]; val py = d[3 * i - 2]
+                        val ce = max(0.5f, min(d[3 * i - 1], d[3 * i + 2]))
+                        if (max(x, px) + ce >= l && min(x, px) - ce <= r && max(y, py) + ce >= t && min(y, py) - ce <= b) { take(i - 1); take(i) }
+                    }
+                }
+                return StrokeNear(d, keep, count, box)
+            }
+        }
     }
 
     /** Side of the squares footprints are tested in by [touching] (one reused ALPHA_8 buffer). */
@@ -157,22 +252,27 @@ object VectorOps {
 
     /**
      * [o] mapped by [m] (3x3 row-major; may be a homography). Strokes map their points and scale
-     * `sizeScale` by sqrt|det|; a VShape becomes a VPath unless [m] is a similarity.
-     *
-     * F2 reference: exact for affine maps (gradients included); a homography maps the points,
-     * anchors and handle points (A1 subdivides first). A reflection is not a similarity here: a
-     * mirrored shape becomes a path.
+     * `sizeScale` by sqrt|det| (at the bounds centre); a VShape stays a VShape under similarities
+     * (and under reflections when it mirrors into itself, see [ObjectMapping.mirroredShape]),
+     * otherwise it becomes a VPath. Exact for affine maps (gradients included); a homography
+     * first splits every curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps
+     * anchors and handles. A non-finite matrix returns [o].
      */
     fun transformed(o: VObject, m: FloatArray): VObject {
         if (m.size < 9 || m.any { !it.isFinite() }) return o
+        val projective = m[6] != 0f || m[7] != 0f
         return when (o) {
             is VStroke -> {
+                // Projective maps keep straight lines straight: mapping the points is exact.
                 val b = o.points.bounds()
-                val s = scaleAt(m, b.centerX(), b.centerY())
-                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s)
+                val cx = if (b.centerX().isFinite()) b.centerX() else 0f
+                val cy = if (b.centerY().isFinite()) b.centerY() else 0f
+                val s = scaleAt(m, cx, cy)
+                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s, preset = turnedBrush(o.preset, jacobian(m, cx, cy)))
             }
-            is VPath -> mapPath(o, m)
-            is VShape -> similarityShape(o, m) ?: mapPath(toPaths(o).let { mergePaths(o, it) }, m)
+            is VPath -> mapPath(if (projective) ObjectMapping.subdivided(o) else o, m)
+            is VShape -> similarityShape(o, m) ?: ObjectMapping.mirroredShape(o, m)
+                ?: mergePaths(o, toPaths(o)).let { p -> mapPath(if (projective) ObjectMapping.subdivided(p) else p, m) }
         }
     }
 
@@ -359,23 +459,10 @@ object VectorOps {
 
     // ------------------------------------------------------------------ hit tests
 
-    /** The visible radius of a stroke's largest dab (no rendering margins). */
-    private fun strokeRadius(o: VStroke): Float {
-        val s = if (o.sizeScale.isFinite() && o.sizeScale > 0f) o.sizeScale else 1f
-        val d = max(1f, o.preset.size * s)
-        return d / 2f + o.preset.scatter.coerceAtLeast(0f) * d
-    }
-
+    /** Exact: within [tol] of the replayed dab chain (see [StrokeHits]). */
     private fun strokeHit(o: VStroke, p: Vec2, tol: Float): Boolean {
-        val pts = o.points
-        val n = pts.size
-        if (n == 0) return false
-        val lim = strokeRadius(o) + tol
-        if (n == 1) return p.distanceTo(Vec2(pts.x[0], pts.y[0])) <= lim
-        for (i in 1 until n) {
-            if (Geometry.distanceToSegment(p, Vec2(pts.x[i - 1], pts.y[i - 1]), Vec2(pts.x[i], pts.y[i])) <= lim) return true
-        }
-        return false
+        if (o.points.size == 0) return false
+        return StrokeHits.hits(o, p.x, p.y, tol)
     }
 
     private fun pathHit(o: VPath, p: Vec2, tol: Float): Boolean {
@@ -434,20 +521,22 @@ object VectorOps {
      */
     private fun footprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
         is VStroke -> {
-            val pts = o.points
-            val r = strokeRadius(o)
-            if (pts.size == 1) {
-                val x = pts.x[0]
-                val y = pts.y[0]
-                val dot: (Canvas, Paint) -> Unit = { c, paint -> paint.style = Paint.Style.FILL; c.drawCircle(x, y, r, paint) }
-                dot
-            } else {
-                val path = Path()
-                path.moveTo(pts.x[0], pts.y[0])
-                for (i in 1 until pts.size) path.lineTo(pts.x[i], pts.y[i])
-                val line: (Canvas, Paint) -> Unit = { c, paint -> strokePaint(paint, 2f * r, Paint.Cap.ROUND, Paint.Join.ROUND); c.drawPath(path, paint) }
-                line
+            // The replayed dabs as a chain of capsules (thin tapered ends, wide pressure swells).
+            val d = StrokeHits.dabs(o)
+            val n = d.size / 3
+            val chain: (Canvas, Paint) -> Unit = { c, paint ->
+                paint.style = Paint.Style.FILL
+                for (i in 0 until n) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
+                if (n > 1) {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeCap = Paint.Cap.ROUND
+                    for (i in 1 until n) {
+                        paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
+                        c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+                    }
+                }
             }
+            chain
         }
         is VPath -> {
             val path = toVectorPath(o).toAndroidPath()
@@ -536,14 +625,36 @@ object VectorOps {
                 a.copy(x = q.x, y = q.y, inX = hin?.x, inY = hin?.y, outX = hout?.x, outY = hout?.y)
             })
         }
+        val j = jacobian(m, cx, cy)
         val stroke = p.stroke?.let { st ->
-            st.copy(width = st.width * s, brush = st.brush?.let { scaledBrush(it, s) })
+            st.copy(width = st.width * s, brush = st.brush?.let { turnedBrush(scaledBrush(it, s), j) })
         }
         return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke)
     }
 
     private fun scaledBrush(b: BrushPreset, s: Float): BrushPreset =
         if (s == 1f) b else b.copy(size = b.size * s, taperStart = b.taperStart * s, taperEnd = b.taperEnd * s)
+
+    /**
+     * [b] with its tip turned the way the linear map [j] (a Jacobian: a, b, c, d) turns
+     * directions: the tip's long axis (at `angle`, y down, as the dab stamper rotates it) goes
+     * to J·(cos, sin). Exact for similarities, a mirror included (an elliptic or square tip is
+     * symmetric about its own axes); the nearest tip direction under other maps (textured tips
+     * can't mirror their texture). The same instance when J neither turns nor mirrors (moves
+     * and scales leave the brush bit-identical).
+     */
+    internal fun turnedBrush(b: BrushPreset, j: FloatArray): BrushPreset {
+        if (j[1] == 0f && j[2] == 0f && j[0] > 0f && j[3] > 0f) return b
+        val a = Math.toRadians(b.angle.toDouble())
+        val ux = kotlin.math.cos(a)
+        val uy = kotlin.math.sin(a)
+        val vx = j[0] * ux + j[1] * uy
+        val vy = j[2] * ux + j[3] * uy
+        if (!(vx.isFinite() && vy.isFinite()) || (vx == 0.0 && vy == 0.0)) return b
+        var deg = (Math.toDegrees(atan2(vy, vx)).toFloat() % 360f + 360f) % 360f
+        if (deg >= 360f) deg = 0f
+        return if (deg == b.angle) b else b.copy(angle = deg)
+    }
 
     /** [paint] under [m] (gradients: exact for the affine part at (cx, cy)). */
     private fun mapPaint(paint: VPaint, m: FloatArray, cx: Float, cy: Float): VPaint = when (paint) {
@@ -600,7 +711,7 @@ object VectorOps {
         val shape = o.copy(
             cx = center.x, cy = center.y, w = o.w * scale, h = o.h * scale, rotation = rot,
             strokeWidth = o.strokeWidth * scale, cornerRadius = o.cornerRadius * scale,
-            brushPreset = o.brushPreset?.let { scaledBrush(it, scale) },
+            brushPreset = o.brushPreset?.let { turnedBrush(scaledBrush(it, scale), floatArrayOf(a, b, c, d)) },
         )
         return s.copy(shape = shape)
     }

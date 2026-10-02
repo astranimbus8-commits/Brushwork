@@ -361,16 +361,23 @@ class VectorOpsRobolectricTest {
         for (m in listOf(stretch, mirror)) {
             val mv = values(m)
             val det = abs(mv[0] * mv[4] - mv[1] * mv[3])
-            // Filled outlines draw exactly like the shape drawn through the matrix.
+            // Filled outlines draw exactly like the shape drawn through the matrix. (A1: under a
+            // mirror, shapes that mirror into themselves stay shapes; see VectorA1GeometryTest.)
             for ((name, s) in allShapes(ShapeStyle.FILL).filter { !it.second.shape.type.isLineLike }) {
                 val t = VectorOps.transformed(s, mv)
-                assertTrue("$name becomes a path", t is VPath)
+                if (m === stretch) assertTrue("$name becomes a path", t is VPath)
                 val score = iou(draw(s, m), draw(t))
                 assertTrue("$name: IoU $score", score >= 0.98)
             }
             // Outlines keep their style, the width scaled by √|det|.
             for ((name, s) in allShapes()) {
-                val t = VectorOps.transformed(s, mv) as VPath
+                val any = VectorOps.transformed(s, mv)
+                if (any is VShape) {
+                    assertTrue("$name stays a shape only under the mirror", m === mirror)
+                    assertEquals(name, 6f * sqrt(det), any.shape.strokeWidth, 1e-3f)
+                    continue
+                }
+                val t = any as VPath
                 assertNotNull(name, t.stroke)
                 val st = t.stroke!!
                 assertEquals(name, 6f * sqrt(det), st.width, 1e-3f)
@@ -379,10 +386,12 @@ class VectorOpsRobolectricTest {
                 if (s.shape.type == ShapeType.ARROW) assertEquals("$name heads", VPaint.Solid(s.shape.strokeColor), t.fill)
             }
             // A brush outline stays a brush outline with the brush scaled.
-            val b = VectorOps.transformed(shape(ShapeType.ELLIPSE, strokeWith = ShapeStroke.BRUSH), mv) as VPath
-            assertEquals(VStrokeKind.BRUSH, b.stroke!!.kind)
-            assertEquals(10f * sqrt(det), b.stroke!!.brush!!.size, 1e-3f)
-            assertEquals(9L, b.stroke!!.seed)
+            if (m === stretch) {
+                val b = VectorOps.transformed(shape(ShapeType.ELLIPSE, strokeWith = ShapeStroke.BRUSH), mv) as VPath
+                assertEquals(VStrokeKind.BRUSH, b.stroke!!.kind)
+                assertEquals(10f * sqrt(det), b.stroke!!.brush!!.size, 1e-3f)
+                assertEquals(9L, b.stroke!!.seed)
+            }
         }
         // A homography maps the anchors themselves.
         val persp = floatArrayOf(1f, 0.1f, 5f, 0f, 1f, 0f, 0.0008f, 0f, 1f)

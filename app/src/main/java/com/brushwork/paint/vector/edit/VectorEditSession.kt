@@ -9,18 +9,28 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
+import com.brushwork.paint.vector.VectorOps
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Preview of objects being edited (reopened path or shape, transform lift; v1.5 §5.4; API
  * frozen, owned by A1): draws the layer's cache with a hole where the edited objects were plus
  * [drawPreview]; adopts a painting tool's live override as [inner] (a brush-stroked path being
- * re-edited). The layer itself is untouched until [commit]. Created by `VectorLayers.beginEdit`,
- * which installs it as the controller's render override.
+ * re-edited). The layer itself is untouched until [commit] (crash-safe; autosave stays
+ * consistent). Created by `VectorLayers.beginEdit`, which installs it as the controller's render
+ * override.
  *
- * The hole: inside [holeRect] (the edited objects' paint bounds within the document) the other
- * objects are shown re-rendered ([hole], drawn scaled by 1 / [holeScale]; null = nothing there),
- * outside it the cache as it is. F2 reference: [hole] and [floating] are rendered synchronously
- * by `beginEdit`.
+ * The hole: inside [holeRect] (the edited objects' paint bounds within the document, grown to the
+ * renderer's tile grid) the other objects are shown re-rendered ([hole], drawn scaled by
+ * 1 / [holeScale]; null = nothing there), outside it the cache as it is.
+ *
+ * [commit] keeps the preview up while the new content renders in the background (a large edit):
+ * the session stays installed, showing [drawBase] + [drawPreview], until the result is applied.
+ * Set [drawPreview] to what the edited objects become before committing, and leave the session
+ * installed (a later [cancel] is a no-op once committed).
  */
 class VectorEditSession internal constructor(
     private val c: EditorController,
@@ -52,7 +62,12 @@ class VectorEditSession internal constructor(
     var inner: LayerRenderOverride? = null
 
     private val filtered = Paint(Paint.FILTER_BITMAP_FLAG)
+
+    /** Committed or cancelled (no more edits through this session). */
     private var ended = false
+
+    /** Uninstalled and its hole freed. */
+    private var released = false
 
     /** True until [commit] or [cancel]. */
     val isOpen: Boolean get() = !ended
@@ -131,13 +146,18 @@ class VectorEditSession internal constructor(
      * was applied. A replacement whose id is one of [ids] takes that object's place (same z
      * position, same id); edited objects without one are removed; replacements with any other id
      * are new objects placed right above the topmost edited one, with new ids. The session ends
-     * (it is uninstalled, see [cancel]) first.
+     * at once; it is uninstalled (see [cancel]) right before the layer's pixels change — so a
+     * large edit rendering in the background keeps this preview on screen until it lands. A
+     * pure whole-pixel move (each replacement is `VectorOps.transformed` of its object by an
+     * integer translation) goes through `VectorLayers.update`'s shift fast path.
      */
     fun commit(replacements: List<VObject>, label: String, onDone: (Boolean) -> Unit = {}) {
         if (ended) { onDone(false); return }
-        cancel()
+        ended = true
+        // An edit of this layer still rendering lands first (the replacements apply to its result).
+        c.vectors.flushPending()
         val content = layer.vector
-        if (content == null || c.doc.indexOf(layer) < 0) { onDone(false); return }
+        if (content == null || c.doc.indexOf(layer) < 0) { release(); onDone(false); return }
         val present = ids.filterTo(HashSet()) { content.byId(it) != null }
         val after = if (present.isEmpty()) {
             // The edited objects are gone meanwhile: the replacements become new top objects.
@@ -158,18 +178,56 @@ class VectorEditSession internal constructor(
             }
             content.copy(objects = out, nextId = next)
         }
-        if (after == content) { onDone(true); return }
-        c.vectors.update(layer, after, label, onDone = onDone)
+        if (after == content) { release(); onDone(true); return }
+        c.vectors.updateInternal(layer, after, label, null, pureMove(content, present, replacements), { release() }, onDone, 0)
+    }
+
+    /**
+     * The edit as a [VectorLayers.ShiftHint] when it only moves the edited objects by whole
+     * pixels (every replacement is exactly its object under that translation, as
+     * `VectorOps.transformed` maps it, and nothing is added or removed): the update can then move
+     * the cache pixels instead of rendering (a lifted drawing dragged with Transform). Null
+     * otherwise.
+     */
+    private fun pureMove(content: VectorContent, present: Set<Long>, replacements: List<VObject>): VectorLayers.ShiftHint? {
+        if (replacements.size != present.size || present.isEmpty()) return null
+        val byId = HashMap<Long, VObject>(replacements.size * 2)
+        for (r in replacements) if (r.id !in present || byId.put(r.id, r) != null) return null
+        val first = content.byId(present.first()) ?: return null
+        val moved = byId[first.id] ?: return null
+        val ob = VectorOps.bounds(first)
+        val nb = VectorOps.bounds(moved)
+        if (ob.isEmpty || nb.isEmpty) return null
+        val fx = nb.left - ob.left
+        val fy = nb.top - ob.top
+        if (!fx.isFinite() || !fy.isFinite() || abs(fx) > 1e7f || abs(fy) > 1e7f) return null
+        val dx = fx.roundToInt()
+        val dy = fy.roundToInt()
+        if (dx == 0 && dy == 0) return null
+        val m = floatArrayOf(1f, 0f, dx.toFloat(), 0f, 1f, dy.toFloat(), 0f, 0f, 1f)
+        for (id in present) {
+            val o = content.byId(id) ?: return null
+            if (byId[id] != VectorOps.transformed(o, m)) return null
+        }
+        return VectorLayers.ShiftHint(present, dx, dy)
     }
 
     /**
      * Ends the preview without changes: the session is uninstalled (when it is the controller's
      * override, [inner] is installed again, so a live stroke it showed keeps showing) and its
-     * hole bitmap is freed; [floating] is left to its holder. Safe to call more than once.
+     * hole bitmap is freed; [floating] is left to its holder. Safe to call more than once, and a
+     * no-op after [commit] (the commit uninstalls the session when its result lands).
      */
     fun cancel() {
         if (ended) return
         ended = true
+        release()
+    }
+
+    /** Uninstalls the session and frees its hole (once). */
+    private fun release() {
+        if (released) return
+        released = true
         if (c.renderOverride === this) c.renderOverride = inner?.takeIf { it !== this }
         inner = null
         drawPreview = null
