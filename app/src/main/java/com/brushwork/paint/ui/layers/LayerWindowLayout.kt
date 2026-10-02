@@ -15,8 +15,9 @@ import com.brushwork.paint.ui.theme.IbisDims
  *   scroll when it no longer fits;
  * - a narrower one (the list would be under [MIN_FULL_LIST]) drops the preview and stacks the six
  *   left buttons in one 50 dp column ([compact]), so the list keeps room for its rows;
- * - a short, wide one (landscape phones: height under [SIDE_BY_SIDE_HEIGHT]) puts the list beside
- *   a scrolling column of controls ([sideBySide], the v1.5 fallback).
+ * - a short, wide one puts the list beside a scrolling column of controls ([sideBySide], the v1.5
+ *   fallback): on a short screen (under 480 dp tall, a phone in landscape; design §3.7.7) or in a
+ *   window under [SIDE_BY_SIDE_HEIGHT], when it is at least [SIDE_BY_SIDE_MIN_WIDTH] wide.
  */
 data class LayerWindowMetrics(
     val width: Float,
@@ -86,8 +87,12 @@ data class LayerWindowMetrics(
         const val COMPACT_PAD = 4f
         const val COMPACT_LEFT = 50f
 
-        /** The metrics of a window of [width] × [height] dp. */
-        fun of(width: Float, height: Float): LayerWindowMetrics {
+        /**
+         * The metrics of a window of [width] × [height] dp; [shortScreen]: the screen itself is
+         * short (under 480 dp tall, [LayerListMath.isShortScreen]), which asks for the side-by-side
+         * layout whenever the window is wide enough for it.
+         */
+        fun of(width: Float, height: Float, shortScreen: Boolean = false): LayerWindowMetrics {
             val w = if (width.isFinite()) width.coerceAtLeast(0f) else 0f
             val h = if (height.isFinite()) height.coerceAtLeast(0f) else 0f
             val header = IbisDims.LayerHeader.value
@@ -96,7 +101,7 @@ data class LayerWindowMetrics(
             val pad = IbisDims.LayerBottomPad.value
             val strip = IbisDims.LayerStrip.value
             val transparency = IbisDims.TransparencyRow.value
-            if (h < SIDE_BY_SIDE_HEIGHT && w >= SIDE_BY_SIDE_MIN_WIDTH) {
+            if ((shortScreen || h < SIDE_BY_SIDE_HEIGHT) && w >= SIDE_BY_SIDE_MIN_WIDTH) {
                 val list = (w - CONTROLS_WIDTH - 3 * COMPACT_PAD).coerceAtLeast(0f)
                 return LayerWindowMetrics(
                     width = w, height = h, sideBySide = true, compact = true,
@@ -234,4 +239,5 @@ object LayerWindowTags {
     const val CONTROLS = "layers.controls"
     const val SELECTION_ROW = "layers.selectionRow"
     fun row(id: Long) = "layers.row.$id"
+    fun thumb(id: Long) = "layers.thumb.$id"
 }

@@ -1,0 +1,145 @@
+package com.brushwork.paint.ui.layers
+
+import com.brushwork.paint.ui.theme.IbisDims
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * The ibisPaint layer window's part sizes (design §3.7.7) for the sizes a host can give it (the
+ * window fills its modifier, v1.6 sizing contract). Pure JVM; the Robolectric layout test checks
+ * that the composables really take these sizes.
+ */
+class LayerWindowMetricsTest {
+
+    private fun assertDp(what: String, expected: Float, actual: Float) = assertEquals(what, expected, actual, 0.001f)
+
+    @Test
+    fun ibisPaintSizeGivesEveryMeasuredPart() {
+        val m = LayerWindowMetrics.of(382f, 520f)
+        assertFalse(m.sideBySide)
+        assertFalse(m.compact)
+        assertDp("header", 46f, m.header)
+        assertDp("main block", 360f, m.main)
+        assertDp("blend row", 56f, m.blendRow)
+        assertDp("opacity row", 48f, m.opacityRow)
+        assertDp("bottom pad", 10f, m.bottomPad)
+        assertDp("the rows add up to the window", 520f, m.header + m.main + m.blendRow + m.opacityRow + m.bottomPad)
+        assertDp("left pad", 8f, m.padStart)
+        assertDp("gap after the left column", 6f, m.gap1)
+        assertDp("gap before the strip", 2f, m.gap2)
+        assertDp("right pad", 6f, m.padEnd)
+        assertDp("left column", 100f, m.leftColumn)
+        assertEquals(2, m.leftColumns)
+        assertDp("preview", 240f, m.preview)
+        assertDp("buttons pane", 120f, m.buttonsPane)
+        assertDp("list", 220f, m.list)
+        assertDp("strip", 40f, m.strip)
+        assertDp("the columns add up to the window", 382f, m.padStart + m.leftColumn + m.gap1 + m.list + m.gap2 + m.strip + m.padEnd)
+        assertDp("row", 80f, m.row)
+        assertDp("thumbnail", 62f, m.thumb)
+        assertDp("transparency squares row", 40f, m.transparencyRow)
+        assertTrue("80 dp rows stack number, eye line and name", m.tallRows)
+        assertFalse("the 9 icons fit the 360 dp strip exactly", m.stripScrolls)
+        assertFalse("3 rows of 40 dp buttons fit the 120 dp pane", m.buttonsScroll)
+        assertEquals(9 * 40f, IbisDims.LayerStripIcons * IbisDims.LayerStripPitch.value, 0f)
+    }
+
+    @Test
+    fun aTallerWindowGivesTheRoomToThePreviewAndTheList() {
+        val m = LayerWindowMetrics.of(382f, 640f)
+        assertDp("main block", 480f, m.main)
+        assertDp("preview", 360f, m.preview)
+        assertDp("buttons pane keeps its size", 120f, m.buttonsPane)
+        assertDp("list width unchanged", 220f, m.list)
+        assertFalse(m.stripScrolls)
+    }
+
+    @Test
+    fun aShorterWindowShrinksThePreviewThenHidesItAndScrollsTheStrip() {
+        val short = LayerWindowMetrics.of(382f, 420f)
+        assertDp("main block", 260f, short.main)
+        assertDp("preview shrinks", 140f, short.preview)
+        assertTrue("9 × 40 dp no longer fit: the strip scrolls", short.stripScrolls)
+        assertFalse(short.sideBySide)
+
+        val shorter = LayerWindowMetrics.of(382f, 320f)
+        assertDp("main block", 160f, shorter.main)
+        assertDp("a 40 dp preview is not worth showing", 0f, shorter.preview)
+        assertDp("the buttons keep their pane", 120f, shorter.buttonsPane)
+
+        // Never below the minimum main block (the window then clips at the bottom).
+        val tiny = LayerWindowMetrics.of(350f, 250f)
+        assertFalse("too narrow for side by side", tiny.sideBySide)
+        assertDp("minimum main block", LayerWindowMetrics.MIN_MAIN, tiny.main)
+        assertDp("no preview", 0f, tiny.preview)
+        assertTrue("the buttons pane never exceeds the block", tiny.buttonsPane <= tiny.main)
+        assertFalse(tiny.buttonsScroll)
+    }
+
+    @Test
+    fun aNarrowWindowStacksTheLeftButtonsAndKeepsTheListWide() {
+        // The v1.5 host size on the user's phone (300 dp wide) until area E sizes the window.
+        val m = LayerWindowMetrics.of(300f, 436f)
+        assertTrue(m.compact)
+        assertFalse(m.sideBySide)
+        assertEquals(1, m.leftColumns)
+        assertDp("no preview", 0f, m.preview)
+        assertDp("one 50 dp column of buttons", 50f, m.leftColumn)
+        assertTrue("the list keeps room for its rows: ${m.list}", m.list >= 190f)
+        assertDp("the columns add up to the window", 300f, m.padStart + m.leftColumn + m.gap1 + m.list + m.gap2 + m.strip + m.padEnd)
+        assertDp("rows stay 80 dp", 80f, m.row)
+        assertDp("the full thumbnail still fits", 62f, m.thumb)
+
+        // Narrower still: the small thumbnail.
+        val narrow = LayerWindowMetrics.of(250f, 436f)
+        assertTrue(narrow.compact)
+        assertDp(LayerWindowMetrics.SMALL_THUMB.toString(), LayerWindowMetrics.SMALL_THUMB, narrow.thumb)
+    }
+
+    @Test
+    fun shortScreensAndShortWideWindowsPutTheListBesideTheControls() {
+        // A phone in landscape: the v1.5 side-by-side fallback (design §3.7.7: height < 480 dp).
+        val landscape = LayerWindowMetrics.of(520f, 330f, shortScreen = true)
+        assertTrue(landscape.sideBySide)
+        assertDp("header", 46f, landscape.header)
+        assertDp("everything under the header", 284f, landscape.main)
+        assertDp("controls column", LayerWindowMetrics.CONTROLS_WIDTH, landscape.controls)
+        assertDp("the list takes the rest", 520f - LayerWindowMetrics.CONTROLS_WIDTH - 3 * LayerWindowMetrics.COMPACT_PAD, landscape.list)
+        assertFalse(landscape.stripScrolls)
+        assertFalse(landscape.buttonsScroll)
+
+        // The same window on a tall screen keeps the ibisPaint layout...
+        assertFalse(LayerWindowMetrics.of(520f, 330f).sideBySide)
+        // ...unless the window itself is very short.
+        assertTrue(LayerWindowMetrics.of(520f, 260f).sideBySide)
+        // Too narrow for side by side: the stacked layout even on a short screen.
+        assertFalse(LayerWindowMetrics.of(340f, 330f, shortScreen = true).sideBySide)
+    }
+
+    @Test
+    fun degenerateSizesNeverCrash() {
+        for ((w, h) in listOf(0f to 0f, -5f to 10f, Float.NaN to 520f, 382f to Float.POSITIVE_INFINITY, 2000f to 2000f)) {
+            val m = LayerWindowMetrics.of(w, h)
+            assertTrue("$w × $h: finite list", m.list.isFinite() && m.list >= 0f)
+            assertTrue("$w × $h: finite main", m.main.isFinite() && m.main >= LayerWindowMetrics.MIN_MAIN || m.sideBySide)
+        }
+    }
+
+    @Test
+    fun everyTouchTargetStaysAtLeast40Dp() {
+        for (w in listOf(250f, 300f, 340f, 382f, 500f)) for (h in listOf(300f, 436f, 520f, 700f)) for (short in listOf(false, true)) {
+            val m = LayerWindowMetrics.of(w, h, short)
+            assertTrue("$w × $h: rows ${m.row}", m.row >= 40f)
+            assertTrue("$w × $h: transparency row", m.transparencyRow >= 40f)
+            if (!m.sideBySide) {
+                assertTrue("$w × $h: strip ${m.strip}", m.strip >= 40f)
+                assertTrue("$w × $h: left cells ${m.leftColumn / m.leftColumns}", m.leftColumn / m.leftColumns >= 40f)
+            } else {
+                // 15 actions, 5 per row, across the controls column.
+                assertTrue("$w × $h: grid cells", m.controls / 5f >= 40f)
+            }
+        }
+    }
+}

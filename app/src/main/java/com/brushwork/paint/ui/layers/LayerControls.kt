@@ -67,7 +67,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -540,21 +539,29 @@ private fun BlendToggle(
     }
 }
 
-/** The white rounded "Normal ˄" dropdown listing every [LayerBlendMode]. */
+/** The white rounded "Normal ˄" dropdown (36 dp tall in a 40 dp target) listing every [LayerBlendMode]. */
 @Composable
 private fun BlendModeDropdown(mode: LayerBlendMode, onSelect: (LayerBlendMode) -> Unit, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        Surface(
-            onClick = { open = true },
-            shape = RoundedCornerShape(6.dp),
-            color = Color.White,
-            contentColor = IbisColors.ListText,
-            modifier = Modifier.fillMaxWidth().height(IbisDims.LayerEyeTouch),
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(IbisDims.LayerEyeTouch)
+                .clickable(role = Role.Button) { open = true },
+            contentAlignment = Alignment.Center,
         ) {
-            Row(Modifier.padding(start = 10.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(mode.label, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = LayerLabels.BLEND)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(IbisDims.BlendDropdownHeight)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(Color.White)
+                    .padding(start = 10.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(mode.label, color = IbisColors.ListText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Icon(Icons.Filled.KeyboardArrowUp, contentDescription = LayerLabels.BLEND, tint = IbisColors.ListText)
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BrushworkColors.ChromeHigh) {

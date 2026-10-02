@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -253,6 +254,7 @@ internal fun LayerRow(
                 size = thumbSize,
                 selected = row.active && !row.editingMask,
                 overlayText = row.effectName,
+                modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
             ) { KindBadge(row) }
         }
         if (row.hasMask) {
@@ -391,10 +393,11 @@ private fun RowThumbnail(
     size: Dp,
     selected: Boolean,
     overlayText: String?,
+    modifier: Modifier = Modifier,
     badge: @Composable BoxScope.() -> Unit,
 ) {
     Box(
-        Modifier
+        modifier
             .size(size)
             .background(THUMB_BACK)
             .border(if (selected) IbisDims.LayerThumbBorder else 1.dp, if (selected) IbisColors.ThumbSelectedBorder else THUMB_EDGE),

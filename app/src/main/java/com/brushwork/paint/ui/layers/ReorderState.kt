@@ -6,7 +6,6 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
-import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
@@ -24,6 +23,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
@@ -261,55 +261,61 @@ fun Modifier.reorderContainer(
             var started = false
             var travel = 0f
             var commit = false
-            while (true) {
-                val event = awaitPointerEvent()
-                val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                if (change.changedToUpIgnoreConsumed()) {
-                    commit = started
-                    if (started) change.consume()
-                    break
-                }
-                if (!started && change.isConsumed) break // the list took it (a fast fling)
-                val dy = change.positionChange().y
-                change.consume()
-                if (started) {
-                    state.drag(dy)
-                } else {
-                    travel += dy
-                    if (abs(travel) > viewConfiguration.touchSlop) {
-                        started = state.startAt(item.index)
-                        if (!started) break
-                        state.drag(travel)
+            try {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    val change = event.changes.firstOrNull { it.id == down.id } ?: break
+                    if (change.changedToUpIgnoreConsumed()) {
+                        commit = started
+                        if (started) change.consume()
+                        break
+                    }
+                    if (!started && change.isConsumed) break // the list took it (a fast fling)
+                    val dy = change.positionChange().y
+                    change.consume()
+                    if (started) {
+                        state.drag(dy)
+                    } else {
+                        travel += dy
+                        if (abs(travel) > viewConfiguration.touchSlop) {
+                            started = state.startAt(item.index)
+                            if (!started) break
+                            state.drag(travel)
+                        }
                     }
                 }
+            } finally {
+                // Also when the gesture is cancelled (the window closed under the finger).
+                if (started) state.end(commit = commit)
             }
-            if (started) state.end(commit = commit)
             return@awaitEachGesture
         }
         val longPress = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
         val pressed = state.itemAt(longPress.position.y) ?: return@awaitEachGesture
         onLongPressStart(pressed.index)
-        if (state.start(longPress.position)) {
-            val completed = drag(longPress.id) { change ->
-                state.drag(change.positionChange().y)
-                change.consume()
-            }
-            if (state.moved) {
-                state.end(commit = completed)
-            } else {
-                state.end(commit = false)
-                if (completed) onLongPress(pressed.index)
-            }
-        } else {
-            // Not draggable (a single layer, the Selection Layer row): a menu on release.
-            var lifted = false
+        // From the long press on, the gesture is the list's: every change is consumed in the
+        // Initial pass, before the rows see it, so the row under the finger doesn't also take the
+        // release as a tap, and the list doesn't scroll while a row is dragged.
+        val dragging = state.start(longPress.position)
+        var lifted = false
+        try {
             while (true) {
-                val event = awaitPointerEvent()
+                val event = awaitPointerEvent(PointerEventPass.Initial)
                 val change = event.changes.firstOrNull { it.id == longPress.id } ?: break
-                if (change.changedToUpIgnoreConsumed()) { lifted = !change.isConsumed; break }
-                if (change.isConsumed) break
+                if (change.changedToUpIgnoreConsumed()) {
+                    lifted = true
+                    change.consume()
+                    break
+                }
+                val dy = change.positionChange().y
+                change.consume()
+                if (dragging) state.drag(dy)
             }
-            if (lifted) onLongPress(pressed.index)
+        } finally {
+            if (dragging) state.end(commit = lifted && state.moved)
         }
+        // Released in place (or on a row that can't move: a single layer, the Selection Layer
+        // row): that item's menu.
+        if (lifted && !(dragging && state.moved)) onLongPress(pressed.index)
     }
 }

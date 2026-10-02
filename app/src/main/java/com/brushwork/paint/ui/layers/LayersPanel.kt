@@ -46,6 +46,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.testTag
@@ -170,6 +171,7 @@ fun LayersPanel(
         onOpenPanel = onOpenPanel,
     )
     val docAspect = doc.width.toFloat() / doc.height.coerceAtLeast(1)
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
 
     Surface(
         modifier = modifier
@@ -180,7 +182,7 @@ fun LayersPanel(
         contentColor = Color.White,
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
-            val m = LayerWindowMetrics.of(maxWidth.value, maxHeight.value)
+            val m = LayerWindowMetrics.of(maxWidth.value, maxHeight.value, shortScreen = LayerListMath.isShortScreen(screenHeightDp))
             val list: @Composable (Modifier) -> Unit = { mod ->
                 LayerList(
                     controller = controller,
