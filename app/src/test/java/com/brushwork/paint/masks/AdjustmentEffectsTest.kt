@@ -112,19 +112,28 @@ class AdjustmentEffectsTest {
         for (i in 3 until n step 5) px[i] = px[i] or 0xFF000000.toInt()
     }
 
-    /** §4.8 contract for every adjustment-capable filter at default and random values. */
+    /**
+     * §4.8 contract for every adjustment-capable filter at default and random values. Alpha is
+     * kept, except that Gradation Map lowers it where its stops are semi-transparent, exactly as
+     * its apply() does (the stated exception of PixelMapper; the stage shows the image below
+     * there, see AdjustmentStageIntegrationRobolectricTest); no mapper raises it.
+     */
     @Test
     fun pixelMappersArePointwiseKeepAlphaAndEqualApply() {
         for (f in AdjustmentEffects.filters) {
             val valueSets = listOf(f.defaultValues()) + List(3) { f.defaultValues().also { v -> for (p in f.params) if (p !is FilterParam.Point) v.set(p.key, randomValue(p)) } }
-            for (values in valueSets) {
+            for ((k, values) in valueSets.withIndex()) {
                 val mapper = f.pixelMapper(values) ?: continue
                 val w = 64; val h = 32
                 val src = randomPixels(w * h)
                 val whole = src.copyOf()
                 mapper.map(whole, 0, whole.size)
-                // Alpha is untouched.
-                for (i in src.indices) assertEquals("${f.id} alpha at $i", src[i] ushr 24, whole[i] ushr 24)
+                // Alpha is untouched, or (Gradation Map's semi-transparent stops) only lowered.
+                val lowers = f.id == ALPHA_LOWERING && k > 0
+                for (i in src.indices) {
+                    if (lowers) assertTrue("${f.id} alpha raised at $i", whole[i] ushr 24 <= src[i] ushr 24)
+                    else assertEquals("${f.id} alpha at $i", src[i] ushr 24, whole[i] ushr 24)
+                }
                 // Pieces in any order give the same result, and nothing outside the range changes.
                 val pieces = src.copyOf()
                 mapper.map(pieces, 100, 700)
@@ -142,6 +151,27 @@ class AdjustmentEffectsTest {
                 }
             }
         }
+    }
+
+    /** The one mapper allowed to lower alpha (see PixelMapper's KDoc). */
+    private val ALPHA_LOWERING = "adjust.gradation_map"
+
+    /** Gradation Map's semi-transparent stops lower alpha (= apply()); its default, opaque stops don't. */
+    @Test
+    fun onlyGradationMapLowersAlphaAndOnlyWithSemiTransparentStops() {
+        val f = FilterRegistry.byId(ALPHA_LOWERING)!!
+        assertTrue(f.isAdjustmentCapable)
+        val src = intArrayOf(0xFF000000.toInt(), 0xFF808080.toInt(), 0xFFFFFFFF.toInt(), 0x80808080.toInt())
+        val defaults = src.copyOf().also { f.pixelMapper(f.defaultValues())!!.map(it, 0, it.size) }
+        for (i in src.indices) assertEquals(src[i] ushr 24, defaults[i] ushr 24)
+        val clear = f.defaultValues().set(
+            "gradient",
+            listOf(GradientStop(0f, 0x00FF0000), GradientStop(1f, 0x00FF0000)),
+        )
+        val out = src.copyOf().also { f.pixelMapper(clear)!!.map(it, 0, it.size) }
+        for (i in src.indices) assertEquals("fully transparent stops give alpha 0 at $i", 0, out[i] ushr 24)
+        val applied = f.apply(PixelBuffer(4, 1).also { System.arraycopy(src, 0, it.pixels, 0, 4) }, clear, FilterContext())
+        assertArrayEquals(applied.pixels, out)
     }
 
     @Test

@@ -106,8 +106,62 @@ class ExportSceneRobolectricTest {
         val outl = layerNamed(scene(document(), ExportOptions(VectorFormat.SVG, text = TextExportMode.OUTLINES), fake), "Text").items.single() as SceneItem.Shape
         assertEquals(VPaint.Solid(0xFF883300.toInt()), outl.fill)
         assertTrue(layerNamed(scene(document(), ExportOptions(VectorFormat.PDF), fake), "Text").items.single() is SceneItem.Shape)
-        // Without A7's layout (today's TextExport): the layer's pixels.
-        assertTrue(layerNamed(scene(document(), ExportOptions(VectorFormat.SVG)), "Text").items.single() is SceneItem.Image)
+    }
+
+    /**
+     * v1.5 integration: with A7's real [com.brushwork.paint.tools.text.TextExport] (the default
+     * source) a text layer is never its pixels: real `<text>` in an SVG, outlines of every part
+     * with its own color otherwise (§4.10b). (A8's own test above predates A7 and expected pixels.)
+     */
+    @Test
+    fun theRealTextExportGivesTextOrColoredOutlines() {
+        val doc = document()
+        val layer = doc.layers.first { it.name == "Text" }
+        val item = com.brushwork.paint.tools.text.TextCodec.decode(layer.textData)!!
+        val svg = layerNamed(scene(doc, ExportOptions(VectorFormat.SVG)), "Text").items.single() as SceneItem.Text
+        assertEquals("Hello", svg.lines.joinToString("") { it.text })
+        assertEquals(0xFF883300.toInt(), svg.style.color)
+        assertEquals(com.brushwork.paint.tools.text.TextExport.lines(item)!![0].paintSpec.matrix, svg.matrix)
+        for (opts in listOf(ExportOptions(VectorFormat.PDF), ExportOptions(VectorFormat.SVG, text = TextExportMode.OUTLINES))) {
+            val shape = layerNamed(scene(document(), opts), "Text").items.single() as SceneItem.Shape
+            assertEquals(VPaint.Solid(0xFF883300.toInt()), shape.fill)
+            assertTrue(shape.stroke == null)
+            // The letters where the layer's pixels are.
+            val b = shape.path.controlBounds()!!
+            val px = com.brushwork.paint.tools.transform.ContentBounds.of(layer.bitmap)!!
+            assertTrue("outline $b vs pixels $px", kotlin.math.abs(b.left - px.left) <= 2f && kotlin.math.abs(b.right - px.right) <= 2f)
+            assertTrue("outline $b vs pixels $px", kotlin.math.abs(b.top - px.top) <= 2f && kotlin.math.abs(b.bottom - px.bottom) <= 2f)
+        }
+    }
+
+    /** A boxed, outlined text: its box under real text in an SVG; every part in its color as outlines (PDF). */
+    @Test
+    fun aBoxedTextKeepsItsBoxAndOutlineColors() {
+        val doc = document()
+        val layer = doc.layers.first { it.name == "Text" }
+        val spec = com.brushwork.paint.tools.text.TextSpec(
+            sizePx = 40f, color = 0xFF883300.toInt(), strokeWidthPx = 2f, strokeColor = 0xFF0000FF.toInt(),
+            box = com.brushwork.paint.tools.text.TextBoxSpec(padding = 8f, fill = true, fillColor = 0xFFFFFF00.toInt(), borderWidth = 3f, borderColor = 0xFF00FF00.toInt(), roundness = 0.5f),
+        )
+        val item = TextItem("Hello", spec, cx = 150f, cy = 100f)
+        layer.bitmap.eraseColor(0)
+        com.brushwork.paint.tools.text.TextRenderer.drawItem(android.graphics.Canvas(layer.bitmap), item, com.brushwork.paint.tools.text.TextRenderer.prepare(item), null)
+        layer.textData = com.brushwork.paint.tools.text.TextCodec.encode(item)
+        val svg = layerNamed(scene(doc, ExportOptions(VectorFormat.SVG)), "Text").items
+        assertEquals(listOf(SceneItem.Shape::class, SceneItem.Shape::class, SceneItem.Text::class), svg.map { it::class })
+        assertEquals(VPaint.Solid(0xFFFFFF00.toInt()), (svg[0] as SceneItem.Shape).fill)
+        assertEquals(VPaint.Solid(0xFF00FF00.toInt()), (svg[1] as SceneItem.Shape).fill)
+        val text = svg[2] as SceneItem.Text
+        assertEquals(4f, text.style.strokeWidth, 1e-6f)
+        assertEquals(0xFF0000FF.toInt(), text.style.strokeColor)
+        // PDF: box fill, border, outline stroke, letters, each filled with its color.
+        val pdf = layerNamed(scene(doc, ExportOptions(VectorFormat.PDF)), "Text").items.map { it as SceneItem.Shape }
+        assertEquals(listOf(0xFFFFFF00.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt(), 0xFF883300.toInt()), pdf.map { (it.fill as VPaint.Solid).color })
+        // The box covers the layer's pixels (the border is drawn inside its edge).
+        val box = pdf[0].path.controlBounds()!!
+        val px = com.brushwork.paint.tools.transform.ContentBounds.of(layer.bitmap)!!
+        assertTrue("box $box vs pixels $px", kotlin.math.abs(box.left - px.left) <= 1.5f && kotlin.math.abs(box.right - px.right) <= 1.5f)
+        assertTrue("box $box vs pixels $px", kotlin.math.abs(box.top - px.top) <= 1.5f && kotlin.math.abs(box.bottom - px.bottom) <= 1.5f)
     }
 
     @Test

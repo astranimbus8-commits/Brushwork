@@ -24,7 +24,9 @@ import com.brushwork.paint.tools.text.TextExport
 import com.brushwork.paint.tools.text.TextFont
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextLineRun
+import com.brushwork.paint.tools.text.TextOutlinePart
 import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.tools.vector.JoinStyle
@@ -55,14 +57,25 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 
-/** Text layout for export (A7's [TextExport]; a seam so the writers can be tested before it lands). */
+/** Text layout for export (A7's [TextExport]; a seam so the writers can be tested on their own). */
 interface TextSource {
+    /** The laid-out lines of horizontal straight text ([TextExport.lines]); the letters only. */
     fun lines(item: TextItem): List<TextLineRun>?
+
+    /** The letters' outlines in document px ([TextExport.outlines]), filled with the text color. */
     fun outlines(doc: Document, layer: Layer): Path?
+
+    /**
+     * Every part the text paints, with its color, in painting order: box fill, box border, text
+     * outline (stroke), letters ([TextExport.outlineParts]); null = not known (then the box is
+     * rebuilt from the layout and the outline stroke drawn as a line along the letters).
+     */
+    fun parts(item: TextItem): List<TextOutlinePart>? = null
 
     object Default : TextSource {
         override fun lines(item: TextItem): List<TextLineRun>? = TextExport.lines(item)
         override fun outlines(doc: Document, layer: Layer): Path? = TextExport.outlines(doc, layer)
+        override fun parts(item: TextItem): List<TextOutlinePart>? = TextExport.outlineParts(item)
     }
 }
 
@@ -74,8 +87,9 @@ interface TextSource {
  * - a clipping group becomes one picture (with the base's opacity and blend mode);
  * - raster layers are pictures cropped to their content; vector layers become paths (brush
  *   strokes of solid brushes as outlines, other strokes as pictures, consecutive ones in one
- *   picture, z-order kept); text layers real text (SVG) or outlines when A7's layout allows,
- *   else their pixels; layer masks luminance masks;
+ *   picture, z-order kept); text layers real text (SVG) or outlines of every painted part
+ *   (A7's [TextExport]; PDF always), their pixels only when the letters have no outlines; layer
+ *   masks luminance masks;
  * - the payload lists every layer (hidden ones too) with its data and where its pixels are.
  *
  * Runs on the main thread (one layer at a time, yielding between layers: it only takes
@@ -240,28 +254,32 @@ class ExportSceneBuilder(
         return Content.Picture(image)
     }
 
-    /** A text layer as real text (SVG, when allowed) or outlines; null = its pixels. */
+    /**
+     * A text layer (§4.10b) as real text — SVG with "Editable", horizontal straight text in a
+     * built-in font: its box (background, border) as shapes under one `<text>` — or else as filled
+     * outlines, every part the text paints with its own color (box, outline stroke, letters; PDF
+     * always); null = its pixels (letters without outlines, e.g. color emoji only).
+     */
     private fun textItems(layer: Layer, item: TextItem): List<SceneItem>? {
         val spec = item.spec
         val straight = !item.path.isActive
+        val parts = text.parts(item)
+        if (parts != null) {
+            if (options.format == VectorFormat.SVG && options.text == TextExportMode.EDITABLE && straight && !spec.vertical && spec.fontId == null) {
+                val runs = text.lines(item)
+                if (!runs.isNullOrEmpty()) {
+                    val box = partItems(parts.filter { it.kind == TextOutlinePart.Kind.BOX_FILL || it.kind == TextOutlinePart.Kind.BOX_BORDER })
+                    return box + realText(spec, runs)
+                }
+            }
+            if (item.text.isNotBlank() && parts.none { it.kind == TextOutlinePart.Kind.TEXT }) return null
+            return partItems(parts).ifEmpty { null }
+        }
         val frame = if (straight && spec.box.hasFrame) frameItems(item) else emptyList()
         if (straight && spec.box.hasFrame && frame == null) return null
         if (options.format == VectorFormat.SVG && options.text == TextExportMode.EDITABLE && straight && !spec.vertical && spec.fontId == null) {
             val runs = text.lines(item)
-            if (!runs.isNullOrEmpty()) {
-                val style = SceneTextStyle(
-                    family = familyOf(spec.font),
-                    sizePx = spec.sizePx,
-                    bold = spec.bold,
-                    italic = spec.italic,
-                    color = spec.color,
-                    strokeWidth = if (spec.strokeWidthPx > 0f) spec.strokeWidthPx * 2f else 0f,
-                    strokeColor = spec.strokeColor,
-                    letterSpacing = spec.letterSpacing * spec.sizePx,
-                )
-                val matrix = runs[0].paintSpec.matrix
-                return frame.orEmpty() + SceneItem.Text(runs.map { SceneTextLine(it.text, it.x, it.baseline) }, style, matrix)
-            }
+            if (!runs.isNullOrEmpty()) return frame.orEmpty() + realText(spec, runs)
         }
         val outline = text.outlines(doc, layer) ?: return null
         val path = vectorPathOf(outline)
@@ -274,6 +292,27 @@ class ExportSceneBuilder(
         }
         items += SceneItem.Shape(path, evenOdd, VPaint.Solid(spec.color))
         return items
+    }
+
+    /** One `<text>` of [runs] (the letters; their outline stroke is drawn behind the fill). */
+    private fun realText(spec: TextSpec, runs: List<TextLineRun>): SceneItem.Text {
+        val style = SceneTextStyle(
+            family = familyOf(spec.font),
+            sizePx = spec.sizePx,
+            bold = spec.bold,
+            italic = spec.italic,
+            color = spec.color,
+            strokeWidth = if (spec.strokeWidthPx > 0f) spec.strokeWidthPx * 2f else 0f,
+            strokeColor = spec.strokeColor,
+            letterSpacing = spec.letterSpacing * spec.sizePx,
+        )
+        return SceneItem.Text(runs.map { SceneTextLine(it.text, it.x, it.baseline) }, style, runs[0].paintSpec.matrix)
+    }
+
+    /** Filled outlines (document px, each with its own color), in order; empty outlines left out. */
+    private fun partItems(parts: List<TextOutlinePart>): List<SceneItem> = parts.mapNotNull { part ->
+        val path = vectorPathOf(part.path)
+        if (path.isEmpty) null else SceneItem.Shape(path, part.path.fillType == Path.FillType.EVEN_ODD, VPaint.Solid(part.color))
     }
 
     /** The background and border of a straight text's box (as TextBlock draws them), null when it can't be laid out. */
