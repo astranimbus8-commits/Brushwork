@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -197,6 +198,17 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     val percent = width * 100f
     fun current(): Float = (tool.anchors.getOrNull(index)?.width ?: 1f) * 100f
     fun setPercent(p: Float) = tool.setWidth(index, p / 100f)
+    // The value when the first tap of a (possible) double tap on the slider went down.
+    val beforeTaps = remember(index) { floatArrayOf(Float.NaN) }
+    val latestFirstDown by rememberUpdatedState { beforeTaps[0] = current() }
+    val latestReset by rememberUpdatedState {
+        tool.thicknessRing = false
+        // The first tap moved the value to the finger (its own in-tool step): the reset
+        // replaces that step, so one undo goes back to the value before the double tap.
+        if (current() != beforeTaps[0]) tool.undoStep()
+        setPercent(100f)
+        tool.endNumericEdit()
+    }
     // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
     // chip in front, or on a narrow phone, its slider would start off the screen).
     val bring = remember { BringIntoViewRequester() }
@@ -247,11 +259,9 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
                 .width(128.dp)
-                .onDoubleTap {
-                    tool.thicknessRing = false
-                    setPercent(100f)
-                    tool.endNumericEdit()
-                }
+                // (The gesture handler outlives recompositions: it calls the newest callbacks,
+                // which act on the point selected now.)
+                .onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() }
                 .semantics { contentDescription = "Point thickness slider" },
         )
     }
@@ -278,9 +288,10 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
 
 /**
  * Calls [action] on a double tap, watching the touches before the element (a slider) handles
- * them, so the element still gets every touch.
+ * them, so the element still gets every touch. [onFirstDown] is called when a touch goes down
+ * that is not the second tap of a double tap, before the element sees it.
  */
-private fun Modifier.onDoubleTap(action: () -> Unit): Modifier = pointerInput(Unit) {
+private fun Modifier.onDoubleTap(onFirstDown: () -> Unit = {}, action: () -> Unit): Modifier = pointerInput(Unit) {
     val timeout = viewConfiguration.doubleTapTimeoutMillis
     val slop = viewConfiguration.touchSlop
     var lastUp = Long.MIN_VALUE / 2
@@ -295,6 +306,7 @@ private fun Modifier.onDoubleTap(action: () -> Unit): Modifier = pointerInput(Un
                 ch.pressed && !ch.previousPressed -> {
                     downPos = ch.position
                     moved = false
+                    if (ch.uptimeMillis - lastUp > timeout) onFirstDown()
                 }
                 ch.pressed -> if ((ch.position - downPos).getDistance() > slop) moved = true
                 !ch.pressed && ch.previousPressed -> {
