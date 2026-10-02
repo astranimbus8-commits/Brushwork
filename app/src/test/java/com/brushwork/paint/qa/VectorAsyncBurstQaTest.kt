@@ -63,8 +63,6 @@ class VectorAsyncBurstQaTest {
         private val ex = Executors.newSingleThreadExecutor { Thread(it, "gated-vector-worker").apply { isDaemon = true } }
         private val lock = Object()
         @Volatile private var opened = false
-        @Volatile var done = 0
-            private set
 
         override fun dispatch(context: CoroutineContext, block: Runnable) {
             ex.execute {
@@ -72,18 +70,11 @@ class VectorAsyncBurstQaTest {
                     val until = System.currentTimeMillis() + 3000
                     while (!opened && System.currentTimeMillis() < until) lock.wait(20)
                 }
-                try { block.run() } finally { done++ }
+                block.run()
             }
         }
 
         fun open() = synchronized(lock) { opened = true; lock.notifyAll() }
-
-        /** Opens the gate and waits (real time) until [n] jobs ran. */
-        fun openAndWait(n: Int) {
-            open()
-            val until = System.currentTimeMillis() + 5000
-            while (done < n && System.currentTimeMillis() < until) Thread.sleep(5)
-        }
     }
 
     @After

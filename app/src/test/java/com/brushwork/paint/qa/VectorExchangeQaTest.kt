@@ -157,8 +157,16 @@ class VectorExchangeQaTest {
         t.setRotation(12.0); t.endNumericEdit()
         c.vectors.policy = VectorLayers.Policy.ASYNC
         val f = file("qa-pending.svg")
-        // The export commits the transform (its render goes to the background) and writes.
-        exportTo(f, VectorFormat.SVG)
+        // The export commits the transform and writes. Not by waiting for a background render
+        // before the overlay shows (the screen would freeze without it): Export returns at once,
+        // the overlay is up, the transform lands behind it.
+        val t0 = System.nanoTime()
+        ExportJob(c, ExportOptions(VectorFormat.SVG)).saveTo(r.activity, Uri.fromFile(f))
+        val ms = (System.nanoTime() - t0) / 1e6
+        assertTrue("Export returns at once: $ms ms", ms < 1500.0)
+        assertEquals("Exporting SVG", c.busyMessage)
+        assertTrue("exported", Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering && f.length() > 0 })
+        Smoke.pump(40)
         assertEquals(TransformTool.TRANSFORM_OBJECTS_LABEL, c.undoManager.undoLabel)
         val shown = vec.vector!!
         assertEquals("the file holds what is on the canvas (the transformed objects)", shown, payloadVector(f, VectorFormat.SVG, vec.name))
@@ -177,7 +185,11 @@ class VectorExchangeQaTest {
         c.vectors.policy = VectorLayers.Policy.ASYNC
         val png = File(File(r.activity.cacheDir, "exports"), "${c.doc.name}.png").also { it.delete() }
         // Overflow menu > Share: commits the transform and flattens the artwork.
+        val t0 = System.nanoTime()
         com.brushwork.paint.ui.editor.EditorActions(c, r.activity).share()
+        val ms = (System.nanoTime() - t0) / 1e6
+        assertTrue("Share returns at once (the overlay first): $ms ms", ms < 1500.0)
+        assertEquals("Preparing to share", c.busyMessage)
         assertTrue("shared", Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering && png.length() > 0 })
         Smoke.pump(40)
         val shared = android.graphics.BitmapFactory.decodeFile(png.path)!!

@@ -52,9 +52,9 @@ internal class EditorActions(private val controller: EditorController, private v
     /** Flattens the artwork and saves it to the device gallery. */
     fun exportToGallery(format: ExportFormat) {
         if (!readyForDocumentAction()) return
-        commitPendingWork()
         controller.runBusy("Exporting ${format.extension.uppercase()}") {
             letOverlayShow()
+            commitPendingWork()
             // JPEG has no alpha: flatten over white like other painting apps.
             val flat = controller.compositor.renderFlattened(if (format == ExportFormat.JPEG) 0xFFFFFFFF.toInt() else null)
             val uri = try {
@@ -69,9 +69,9 @@ internal class EditorActions(private val controller: EditorController, private v
     /** Flattens the artwork to a PNG in the share cache and opens the system share sheet. */
     fun share() {
         if (!readyForDocumentAction()) return
-        commitPendingWork()
         controller.runBusy("Preparing to share") {
             letOverlayShow()
+            commitPendingWork()
             val flat = controller.compositor.renderFlattened()
             val uri = try {
                 app.repository.exportForShare(flat, controller.doc.name, ExportFormat.PNG)
@@ -117,9 +117,10 @@ internal class EditorActions(private val controller: EditorController, private v
     }
 
     /**
-     * Bakes uncommitted tool work (placed text, transform...) so exports include it, and lands the
-     * vector edits still rendering in the background (also what this commit starts; v1.5 QA): the
-     * flattened picture is what is on the canvas.
+     * Under the busy overlay: bakes uncommitted tool work (placed text, transform...) so exports
+     * include it, and lands the vector edits still rendering in the background and the Object bar
+     * actions waiting for them (v1.5 QA): the flattened picture is what is on the canvas. A render
+     * the commit needs runs right here, behind the overlay, not before it shows.
      */
     private fun commitPendingWork() {
         controller.settleVectorWork()
