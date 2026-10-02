@@ -226,7 +226,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val placementLabel: String = IMPORT_LABEL,
         /** Lifted vector objects (v1.5): [floating] is their preview, the lift commits the geometry. */
         val objectLift: ObjectLift? = null,
-        /** Where [objectLift] came from (taps outside the box go to it). */
+        /** Where [objectLift] came from (taps on the objects, inside or outside the box, go to it). */
         val objectProvider: ObjectLiftProvider? = null,
     ) {
         /** Source pixels -> document ([floating] may be smaller than the source: see [ObjectLift.floatingScale]). */
