@@ -237,16 +237,18 @@ private fun PathToolOptions(tool: CurveTool) {
     }
     val anyThickness by remember(tool) { derivedStateOf { !tool.uniformWidth } }
     val count by remember(tool) { derivedStateOf { tool.pointCount } }
+    // (Derived: dragging control points doesn't recompose the strip.)
+    val flags by remember(tool) { derivedStateOf { PathFlags(tool.pathOrder, tool.pathEndpoint, tool.pathCyclic) } }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
 
     ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
     ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
-    OrderStepper(tool)
-    val cyclic = tool.pathCyclic
+    val f = flags
+    OrderStepper(tool, f.order)
     // (Endpoint only matters for an open curve: greyed while Cyclic is on.)
-    OptionChip("Endpoint", tool.pathEndpoint, { tool.setEndpoint(!tool.pathEndpoint) }, enabled = !cyclic)
-    OptionChip("Cyclic", cyclic, { tool.setCyclic(!cyclic) }, icon = Icons.Filled.Loop)
+    OptionChip("Endpoint", f.endpoint, { tool.setEndpoint(!f.endpoint) }, enabled = !f.cyclic)
+    OptionChip("Cyclic", f.cyclic, { tool.setCyclic(!f.cyclic) }, icon = Icons.Filled.Loop)
     val a = selInfo
     if (a != null) {
         WeightControl(tool, a.index, a.weight)
@@ -263,10 +265,12 @@ private fun PathToolOptions(tool: CurveTool) {
     if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
 }
 
+/** The Path strip's order, Endpoint and Cyclic (pending path's, else the next path's). */
+private data class PathFlags(val order: Int, val endpoint: Boolean, val cyclic: Boolean)
+
 /** "Order 4" with ‹ ›: 2–6 (2 is the straight control polygon; the effective order is limited by the points). */
 @Composable
-private fun OrderStepper(tool: CurveTool) {
-    val order = tool.pathOrder
+private fun OrderStepper(tool: CurveTool, order: Int) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
         ToolIconButton(
             Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Lower order",
@@ -854,6 +858,7 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
     var addX by rememberSaveable { mutableFloatStateOf(start.x) }
     var addY by rememberSaveable { mutableFloatStateOf(start.y) }
     val thicknessSliding = remember { booleanArrayOf(false) }
+    val weightSliding = remember { booleanArrayOf(false) }
 
     BwSheet(
         title = "Numbers",
@@ -876,14 +881,18 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
                 NumberField(
                     label = "Weight",
                     value = tool.weightOf(sel).toDouble(),
-                    onValueChange = { v -> tool.setWeight(sel, v.toFloat()) },
+                    onValueChange = { v ->
+                        // One step per drag, however long the finger rests on the way.
+                        if (!weightSliding[0]) { weightSliding[0] = true; tool.beginNumericEdit() }
+                        tool.setWeight(sel, v.toFloat())
+                    },
                     modifier = Modifier.fillMaxWidth(),
                     decimals = 2,
                     min = VSpline.MIN_WEIGHT.toDouble(),
                     max = VSpline.MAX_WEIGHT.toDouble(),
                     step = 0.1,
                     logSlider = true,
-                    onValueChangeFinished = { tool.endNumericEdit() },
+                    onValueChangeFinished = { weightSliding[0] = false; tool.endNumericEdit() },
                     incrementKey = PATH_WEIGHT_KEY,
                 )
             }
