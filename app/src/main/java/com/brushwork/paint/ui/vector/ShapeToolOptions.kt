@@ -256,9 +256,15 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 description = "Squares, circles and regular polygons / stars",
             )
         }
+        // v1.6: while increments are on, the Angle step replaces this 15° option.
+        val angleStep = LocalIncrements.current?.step(IncrementKind.ANGLE)
         ToggleRow(
             "Snap angle", s.snapAngle, { v -> set { it.copy(snapAngle = v) } },
-            description = if (s.type.isLineLike) "Lines snap to 15° steps" else "Rotation snaps to 15° steps",
+            description = when {
+                angleStep != null -> "Increments are on: angles step by ${Units.formatNumber(angleStep.toDouble(), 2)}° instead"
+                s.type.isLineLike -> "Lines snap to 15° steps"
+                else -> "Rotation snaps to 15° steps"
+            },
         )
         ShapeEditingSettings(tool)
     }

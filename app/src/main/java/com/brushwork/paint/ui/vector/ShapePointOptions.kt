@@ -80,6 +80,8 @@ private data class PointsInfo(
     val selected: Int,
     val smooth: Boolean,
     val explicitHandles: Boolean,
+    /** Some point has tangent handles (smooth, or explicit ones): the Handles group has something to scale. */
+    val anyHandles: Boolean,
 )
 
 @Composable
@@ -97,6 +99,7 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
                 selected = if (p != null) sel else -1,
                 smooth = p?.smooth == true,
                 explicitHandles = p != null && (p.handleIn != null || p.handleOut != null),
+                anyHandles = pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
             )
         }
     }
@@ -105,8 +108,9 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
 
 /**
  * Strip chips for the pending shape's points: "Points" (edit them), the in-tool undo / redo of
- * point edits, the selected point's actions (sharp / smooth, automatic tangent, delete) and
- * "Reset shape" (back to the regular outline). Nothing without a pending shape.
+ * point edits, the selected point's actions (sharp / smooth, automatic tangent, delete), the
+ * Handles group while some point has tangent handles (v1.6) and "Reset shape" (back to the
+ * regular outline). Nothing without a pending shape.
  */
 @Composable
 internal fun ShapePointsStrip(tool: ShapeTool) {
@@ -125,7 +129,7 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
             ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count > tool.minPoints) { tool.deletePoint(sel) }
             ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.selectPoint(-1) }, size = 44.dp)
         }
-        ShapeHandlesGroup(tool, sel)
+        if (info.anyHandles) ShapeHandlesGroup(tool, sel)
     }
     if (info.custom) ActionChip("Reset shape", Icons.Filled.RestartAlt) { tool.resetShape() }
 }
