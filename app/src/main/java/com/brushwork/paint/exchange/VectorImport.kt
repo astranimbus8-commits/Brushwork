@@ -67,6 +67,9 @@ object VectorImport {
     const val MAX_TEXTS = 8
     const val LABEL = "Import SVG"
 
+    /** How far (px) a file may reach past the canvas and still count as fitting (rounding of its size). */
+    private const val FIT_SLACK = 0.5f
+
     /** The layer an SVG imported as a picture becomes. */
     const val PICTURE_NAME = "Imported SVG (picture)"
 
@@ -98,7 +101,9 @@ object VectorImport {
             val s = min(docW / w, docH / h)
             return Affine(s, 0f, 0f, s, (docW - w * s) / 2f, (docH - h * s) / 2f)
         }
-        if (w <= docW && h <= docH) return Affine.IDENTITY
+        // A file of the canvas' own size fits: its size in mm or pt, read back at the document's
+        // DPI, is off by rounding (210 mm at 300 dpi is 2480.3 px on a 2480 px A4 canvas).
+        if (w <= docW + FIT_SLACK && h <= docH + FIT_SLACK) return Affine.IDENTITY
         val s = 0.9f * min(docW / w, docH / h)
         return Affine(s, 0f, 0f, s, (docW - w * s) / 2f, (docH - h * s) / 2f)
     }
@@ -115,7 +120,7 @@ object VectorImport {
         if (viewport == null) {
             // No size in the file: its drawing decides (kept when it fits, else 90 % and centred).
             val b = content.bounds
-            if (b != null && (b.right > target.width || b.bottom > target.height || b.left < 0f || b.top < 0f)) {
+            if (b != null && (b.right > target.width + FIT_SLACK || b.bottom > target.height + FIT_SLACK || b.left < -FIT_SLACK || b.top < -FIT_SLACK)) {
                 val w = b.width.coerceAtLeast(1f)
                 val h = b.height.coerceAtLeast(1f)
                 val s = if (newArtwork) min(target.width / w, target.height / h) else min(1f, 0.9f * min(target.width / w, target.height / h))
