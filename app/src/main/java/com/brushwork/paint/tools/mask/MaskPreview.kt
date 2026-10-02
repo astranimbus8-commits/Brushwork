@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.MaskCoverageHint
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.masks.BrushMask
 import com.brushwork.paint.masks.BrushSource
@@ -56,11 +57,25 @@ internal class MaskPreview(private val c: EditorController) {
 
     val isActive: Boolean get() = shown != null
 
-    private inner class Override(override val layer: Layer) : LayerRenderOverride {
+    private inner class Override(override val layer: Layer) : LayerRenderOverride, MaskCoverageHint {
         private var key: Paint? = null
         private var filtered: Paint? = null
 
         override fun drawContent(canvas: Canvas): Boolean = false
+
+        /** Where the preview can be non-black: the shown spec's coverage, plus the reach of the upscaling. */
+        override fun maskCoverage(): Rect? {
+            val s = shown ?: return null
+            if (s !== coverageOf) {
+                coverageOf = s
+                coverage = MaskSpecs.coverageBounds(s, c.doc.width, c.doc.height)?.let { padded(it) }?.takeUnless { it.isEmpty }
+            }
+            return coverage?.let { Rect(it) }
+        }
+
+        // The coverage of the spec last asked about (every display tile asks on every frame).
+        private var coverageOf: MaskSpec? = null
+        private var coverage: Rect? = null
 
         override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean {
             val bmp = bitmap ?: return false
@@ -112,20 +127,31 @@ internal class MaskPreview(private val c: EditorController) {
             val c1 = min(g.cols, ceil(region.right * s).toInt() + 1); val r1 = min(g.rows, ceil(region.bottom * s).toInt() + 1)
             if (c1 > c0 && r1 > r0) renderRegion(spec, c0, r0, c1 - c0, r1 - r0)
         }
+        // The upscaled preview reaches a little beyond the samples that changed.
+        val shownRegion = region?.let { padded(it) }
         val l = layer
         if (l != null && l.mask != null && override == null) {
             val ov = Override(l)
             override = ov
             c.renderOverride = ov
             // The preview replaces the full-resolution mask everywhere it is not black.
-            val dirty = union(MaskSpecs.coverageBounds(prev, w, h), region)
+            val dirty = union(MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }, shownRegion)
             touched = union(touched, dirty ?: Rect())
             c.invalidateDoc(dirty ?: Rect())
-        } else if (region != null && override != null) {
-            touched = union(touched, region)
-            c.invalidateDoc(region)
+        } else if (shownRegion != null && override != null) {
+            touched = union(touched, shownRegion)
+            c.invalidateDoc(shownRegion)
         }
         c.invalidateOverlay()
+    }
+
+    /** [r] grown by how far the upscaled preview reaches, within the document. */
+    private fun padded(r: Rect): Rect {
+        val pad = ceil(2f / scale).toInt() + 2
+        return Rect(r).apply {
+            inset(-pad, -pad)
+            if (!intersect(0, 0, c.doc.width, c.doc.height)) setEmpty()
+        }
     }
 
     /** Stops the preview (the override goes; the area it showed is redrawn). */

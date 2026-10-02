@@ -13,6 +13,7 @@ import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.filters.PixelMapper
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -75,7 +76,7 @@ class AdjustmentScratch {
      * bounds of the non-black pixels of a painted mask (cached per content version).
      */
     internal fun maskCoverage(layer: Layer, mask: Bitmap): Rect? {
-        layer.maskSpec?.let { return MaskSpecs.coverageBounds(it, mask.width, mask.height) }
+        layer.maskSpec?.let { return specCoverage(it, mask.width, mask.height) }
         for (i in 0 until BOUNDS_CACHE) {
             if (boundsMasks[i]?.get() === mask) {
                 if (boundsVersions[i] == layer.contentVersion) return boundsValues[i]?.let { Rect(it) }
@@ -90,6 +91,28 @@ class AdjustmentScratch {
         boundsVersions[boundsNext] = layer.contentVersion
         boundsValues[boundsNext] = r
         boundsNext = (boundsNext + 1) % BOUNDS_CACHE
+        return r?.let { Rect(it) }
+    }
+
+    // Coverage bounds of the last specs seen (by identity: specs are immutable). Every display
+    // tile asks for them on every frame of a slider drag. Weak: old specs (brush points can be
+    // large) must not be kept alive by the cache.
+    private val specKeys = arrayOfNulls<java.lang.ref.WeakReference<MaskSpec>>(SPEC_CACHE)
+    private val specSizes = LongArray(SPEC_CACHE)
+    private val specValues = arrayOfNulls<Rect>(SPEC_CACHE)
+    private var specNext = 0
+
+    /** [MaskSpecs.coverageBounds] of [spec] in a [w] x [h] document (null = nowhere), cached. */
+    internal fun specCoverage(spec: MaskSpec, w: Int, h: Int): Rect? {
+        val size = (w.toLong() shl 32) or (h.toLong() and 0xFFFFFFFFL)
+        for (i in 0 until SPEC_CACHE) {
+            if (specKeys[i]?.get() === spec && specSizes[i] == size) return specValues[i]?.let { Rect(it) }
+        }
+        val r = MaskSpecs.coverageBounds(spec, w, h)
+        specKeys[specNext] = java.lang.ref.WeakReference(spec)
+        specSizes[specNext] = size
+        specValues[specNext] = r
+        specNext = (specNext + 1) % SPEC_CACHE
         return r?.let { Rect(it) }
     }
 
@@ -121,11 +144,14 @@ class AdjustmentScratch {
         boundsValues.fill(null)
         effectSpecs.fill(null)
         effectMappers.fill(null)
+        specKeys.fill(null)
+        specValues.fill(null)
     }
 
     private companion object {
         const val EFFECT_CACHE = 8
         const val BOUNDS_CACHE = 8
+        const val SPEC_CACHE = 8
 
         /** Bounds of the pixels of [mask] whose color isn't black, or null when all are black. */
         fun nonBlackBounds(mask: Bitmap): Rect? {
@@ -156,6 +182,16 @@ class AdjustmentScratch {
             return if (right < left) null else Rect(left, top, right + 1, bottom + 1)
         }
     }
+}
+
+/**
+ * Implemented by a [LayerRenderOverride] that draws an adjustment layer's mask differently while
+ * it is edited (the Masks tool's previews and live brush strokes): where the mask it draws can be
+ * non-black, so the effect is only computed there.
+ */
+interface MaskCoverageHint {
+    /** Document area outside which the drawn mask is black; null = nowhere. */
+    fun maskCoverage(): Rect?
 }
 
 /**
@@ -208,9 +244,15 @@ object AdjustmentStage {
         val ov = if (override != null && override.layer === layer) override else null
         val mask = if (layer.maskEnabled) layer.mask else null
         val region = RectF(bounds)
-        if (mask != null && ov == null) {
-            val cov = scratch.maskCoverage(layer, mask) ?: return
-            if (!region.intersect(cov.left.toFloat(), cov.top.toFloat(), cov.right.toFloat(), cov.bottom.toFloat())) return
+        if (mask != null) {
+            // Where the mask lets the effect through: the layer's own mask, or what an override
+            // drawing it (a mask being edited) says; an override that doesn't say: everywhere.
+            val cov: Rect? = when {
+                ov == null -> scratch.maskCoverage(layer, mask) ?: return
+                ov is MaskCoverageHint -> ov.maskCoverage() ?: return
+                else -> null
+            }
+            if (cov != null && !region.intersect(cov.left.toFloat(), cov.top.toFloat(), cov.right.toFloat(), cov.bottom.toFloat())) return
         }
         if (!target.docToTarget.invert(scratch.inverse)) return
         val inverse = scratch.inverse

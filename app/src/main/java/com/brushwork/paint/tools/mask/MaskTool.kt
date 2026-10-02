@@ -14,6 +14,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.MaskCoverageHint
 import com.brushwork.paint.engine.PixelEditRecorder
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.filters.FilterRegistry
@@ -756,9 +757,23 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     }
 
     private fun installPaintOverride(layer: Layer) {
-        val ov = object : LayerRenderOverride {
+        val ov = object : LayerRenderOverride, MaskCoverageHint {
             override val layer: Layer = layer
             override fun drawContent(canvas: Canvas): Boolean = false
+
+            // The mask shows the stroke so far: it can be non-black only within the coverage of
+            // the spec with it (strokes only grow, so earlier frames' pixels are inside too).
+            private var coverageOf: MaskSpec? = null
+            private var coverage: Rect? = null
+
+            override fun maskCoverage(): Rect? {
+                val s = (gesture as? Paint)?.spec ?: displaySpec ?: return Rect(0, 0, controller.doc.width, controller.doc.height)
+                if (s !== coverageOf) {
+                    coverageOf = s
+                    coverage = MaskSpecs.coverageBounds(s, controller.doc.width, controller.doc.height)
+                }
+                return coverage?.let { Rect(it) }
+            }
         }
         paintOverride = ov
         controller.renderOverride = ov

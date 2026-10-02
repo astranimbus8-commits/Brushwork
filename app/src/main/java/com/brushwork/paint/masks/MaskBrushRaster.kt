@@ -100,15 +100,21 @@ object MaskBrushRaster {
         val passes = max(1f, (radius + inner) / spacing)
         val strength = if (flow >= 1f) 1f else (1.0 - (1.0 - flow).pow(1.0 / passes)).toFloat()
         val pts = s.points
-        val xs = ArrayList<Float>()
-        val ys = ArrayList<Float>()
+        // Unboxed growing arrays (long strokes have thousands of dabs).
+        var xs = FloatArray(max(16, pts.size * 2))
+        var ys = FloatArray(xs.size)
+        var n = 0
+        fun add(x: Float, y: Float) {
+            if (n == xs.size) { xs = xs.copyOf(n * 2); ys = ys.copyOf(n * 2) }
+            xs[n] = x; ys[n] = y; n++
+        }
         var px = Float.NaN; var py = Float.NaN
         var carry = 0f
         for (i in 0 until pts.size) {
             val x = pts.x[i]; val y = pts.y[i]
             if (!x.isFinite() || !y.isFinite()) continue
             if (px.isNaN()) {
-                xs += x; ys += y
+                add(x, y)
                 px = x; py = y
                 continue
             }
@@ -119,23 +125,37 @@ object MaskBrushRaster {
             var d = spacing - carry
             while (d <= len) {
                 val t = d / len
-                xs += px + dx * t; ys += py + dy * t
+                add(px + dx * t, py + dy * t)
                 d += spacing
             }
             carry = len - (d - spacing)
             px = x; py = y
         }
         // The end point gets a dab of its own unless the last one is close to it.
-        if (!px.isNaN() && xs.isNotEmpty() && carry > spacing * 0.25f) { xs += px; ys += py }
-        val n = xs.size
-        return Dabs(FloatArray(n) { xs[it] }, FloatArray(n) { ys[it] }, n, radius, inner, strength, s.erase)
+        if (!px.isNaN() && n > 0 && carry > spacing * 0.25f) add(px, py)
+        return Dabs(xs.copyOf(n), ys.copyOf(n), n, radius, inner, strength, s.erase)
     }
 
-    /** Document bounds (left, top, right, bottom) a stroke can change, or null when it is empty. */
+    /**
+     * Document bounds (left, top, right, bottom) a stroke can change, or null when it is empty:
+     * its points' box grown by the brush radius (every dab lies on the polyline). Cheap: no dabs
+     * are made (the compositor and the previews ask for it often).
+     */
     fun bounds(s: MaskStroke): FloatArray? {
-        val d = dabsOf(s)
-        if (d.isEmpty) return null
-        return floatArrayOf(d.left, d.top, d.right, d.bottom)
+        val flow = if (s.flow.isFinite()) s.flow.coerceIn(0f, 1f) else 1f
+        if (flow <= 0f) return null
+        val size = if (s.size.isFinite()) s.size.coerceIn(1f, 5000f) else 1f
+        val r = size / 2f
+        val p = s.points
+        var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
+        var rr = Float.NEGATIVE_INFINITY; var b = Float.NEGATIVE_INFINITY
+        for (i in 0 until p.size) {
+            val x = p.x[i]; val y = p.y[i]
+            if (!x.isFinite() || !y.isFinite()) continue
+            l = min(l, x); rr = max(rr, x); t = min(t, y); b = max(b, y)
+        }
+        if (l > rr) return null
+        return floatArrayOf(l - r, t - r, rr + r, b + r)
     }
 
     /**
