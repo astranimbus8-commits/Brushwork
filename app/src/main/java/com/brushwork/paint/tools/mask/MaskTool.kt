@@ -994,6 +994,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         cache?.clear()
         cache = null
         tint.release()
+        // The preview bitmap (up to ~1.2 MP) is made again the next time something is dragged.
+        preview.release()
         liveBuffer = IntArray(0)
         selectedId = null
         armed = null
