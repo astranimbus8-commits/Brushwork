@@ -135,10 +135,21 @@ internal class ChromeScreen(val activity: ComponentActivity, val c: EditorContro
  */
 internal object Clickables {
     /**
-     * A clickable on screen: [bounds] are what shows (clipped by a scrolling list), [width] ×
-     * [height] its own layout size in dp (the target a finger gets once it is scrolled into view).
+     * A clickable on screen: [labels] with its descendants' texts and descriptions, [own] its
+     * name alone — its own text, description and click label plus its descendants' descriptions
+     * (an icon button's name sits on its icon), not the texts it shows (a layer row's "100%" over
+     * "Normal"); [bounds] are what shows (clipped by a scrolling list), [width] × [height] its own
+     * layout size in dp (the target a finger gets once it is scrolled into view).
      */
-    class Item(val node: SemanticsNode, val labels: Set<String>, val bounds: Rect, val window: android.view.View, val width: Float, val height: Float)
+    class Item(
+        val node: SemanticsNode,
+        val labels: Set<String>,
+        val bounds: Rect,
+        val window: android.view.View,
+        val width: Float,
+        val height: Float,
+        val own: Set<String> = labels,
+    )
 
     private fun SemanticsNode.ownLabels(): List<String> =
         config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
@@ -161,13 +172,39 @@ internal object Clickables {
         return out.filter { it.isNotBlank() }.toSet()
     }
 
+    /** Own labels plus the descriptions (not the texts) of descendants that aren't clickables. */
+    private fun SemanticsNode.nameLabels(): Set<String> {
+        val out = linkedSetOf<String>()
+        out += ownLabels()
+        fun walk(n: SemanticsNode) {
+            for (child in n.children) {
+                if (child.isClickable()) continue
+                out += child.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+                walk(child)
+            }
+        }
+        walk(this)
+        return out.filter { it.isNotBlank() }.toSet()
+    }
+
     fun onScreen(screen: ChromeScreen, inside: Rect? = null, outside: List<Rect> = emptyList()): List<Item> =
         screen.placed()
             .filter { it.node.isClickable() }
-            .map { Item(it.node, it.node.mergedLabels(), screen.dp(it.bounds), it.window, it.node.size.width / screen.density, it.node.size.height / screen.density) }
+            .map {
+                Item(
+                    it.node, it.node.mergedLabels(), screen.dp(it.bounds), it.window,
+                    it.node.size.width / screen.density, it.node.size.height / screen.density,
+                    own = it.node.nameLabels(),
+                )
+            }
             .filter { it.bounds.width > 0f && it.bounds.height > 0f }
             .filter { inside == null || inside.contains(it.bounds.center) }
             .filter { outside.none { o -> o.contains(it.bounds.center) } }
+
+    /** [items] known by their names ([Item.own]) inside [region] (list rows that show the same values), by all their labels elsewhere. */
+    fun ownLabelsInside(items: List<Item>, region: Rect): List<Item> = items.map { item ->
+        if (region.contains(item.bounds.center)) Item(item.node, item.own, item.bounds, item.window, item.width, item.height, item.own) else item
+    }
 
     /** Labels shared by two or more different clickables, with their bounds. */
     fun duplicates(items: List<Item>): Map<String, List<Rect>> {

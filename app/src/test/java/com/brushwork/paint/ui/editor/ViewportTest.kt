@@ -370,8 +370,11 @@ class ViewportTest {
         v.fittedDocVersion = 7
         v.resize(1080, 1920)
         assertEquals("the same size changes nothing", 7, v.fittedDocVersion)
+        v.resize(1080, 1200)
+        assertEquals("a height-only change (keyboard, split screen) keeps the framing", 7, v.fittedDocVersion)
+        v.resize(1080, 1920)
         v.resize(1920, 1080)
-        assertEquals("an untouched view asks for a new fit", Int.MIN_VALUE, v.fittedDocVersion)
+        assertEquals("a rotation of an untouched view asks for a new fit", Int.MIN_VALUE, v.fittedDocVersion)
         v.fit(3000, 4000)
         v.fittedDocVersion = 8
         v.userAdjusted = true

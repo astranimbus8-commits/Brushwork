@@ -96,8 +96,9 @@ internal object UniqueLabels {
             val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
             if (layers.any { "Filters for this layer" in it.labels }) {
                 // Area F's ibis window (its rows say "Hide layer N", "Reorder layer N"…): every
-                // label on screen is unique.
-                assertUnique("layer window open", layers)
+                // label on screen is unique. Inside the window a control is known by its own
+                // labels: every row shows "100%" over "Normal" (values, not names).
+                assertUnique("layer window open", Clickables.ownLabelsInside(layers, window))
             } else {
                 // The v1.5 window (before area F merges) repeats its row labels ("Hide layer" on
                 // every row): the chrome around it is unique, and so are the window's I10 labels.
