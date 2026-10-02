@@ -140,7 +140,9 @@ compositor, thumbnails, export, snapping and the eyedropper only see pixels.
 **Vector mode is derived**: it is on exactly while the active layer is a vector layer
 (`controller.isVectorMode`). The top bar's Vector button (`toggleVectorMode`) converts an empty
 plain layer in place, or selects the vector layer right above, or adds "Vector N"; tapping it again
-goes back to the layer it came from. Tools work on vector layers through seams in the existing
+goes back to the layer it came from, and tapped once more from there it returns to the vector layer
+it left (before any of those rules: a new transparent canvas's empty Background is not turned into a
+second vector layer). Tools work on vector layers through seams in the existing
 tools, never through other tool instances: the BrushTool `strokeHook` (`brush/StrokeHooks.kt`:
 record the stroke as an object, replace it — the vector eraser — or refuse it), the Transform tool's
 `ObjectLift` seam (lift objects instead of pixels), the selection funnel (`SelectionJobs.applyAsync
@@ -182,6 +184,12 @@ closes (`dispose` also answers a preparing edit session with null, and refuses e
 request). `isRendering` (Compose state) is true while a render or an edit preparation runs; the
 busy overlay "Rendering vectors…" shows at once for an estimate over 400 ms, else after 400 ms.
 Under Robolectric the policy defaults to synchronous renders (tests opt into `Policy.ASYNC`).
+An operation that changes or reads a layer BEFORE it pushes its own step must land that work
+first, or the render is refused there (gone, hidden, locked) or read stale: layer operations
+(`withToolPaused`: delete, duplicate, move, merge, flip, clear, fill...) and layer property changes
+(`setLayerProps`: hide, lock, rename...) flush the `DeferredStep`s first, and canvas operations
+(`CanvasOps.run` / `applyNow`) also run the Object bar actions waiting behind a render
+(`settleVectorWork`) before they snapshot the document (`qa/VectorAsyncQaTest`).
 
 **Pure moves (`VectorLayers.ShiftHint`).** A whole-pixel translation of objects that no other
 object's paint bounds reach, with no paper grain (unless by multiples of 256 px) and with every
