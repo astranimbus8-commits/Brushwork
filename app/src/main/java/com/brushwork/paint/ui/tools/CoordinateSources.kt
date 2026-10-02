@@ -39,6 +39,7 @@ internal class OwnPosition(private val tool: PositionedTool) : ObjectPosition {
     override val position: Vec2? get() = tool.objectPosition?.position
     override val label: String get() = tool.objectPosition?.label.orEmpty()
     override fun setPosition(x: Float?, y: Float?) { tool.objectPosition?.setPosition(x, y) }
+    override fun beginPositionEdit() { tool.objectPosition?.beginPositionEdit() }
     override fun endPositionEdit() { tool.objectPosition?.endPositionEdit() }
 }
 
@@ -54,7 +55,10 @@ internal class TransformPosition(private val tool: TransformTool) : ObjectPositi
     override fun endPositionEdit() = tool.endNumericEdit()
 }
 
-/** The Shape tool's pending shape: its box centre (moves are part of the pending shape). */
+/**
+ * The Shape tool's pending shape: its box centre (moves are part of the pending shape; a shape
+ * with its own points keeps in-tool steps: one per drag, arrow press or typed value).
+ */
 internal class ShapePosition(private val tool: ShapeTool) : ObjectPosition {
     override val position: Vec2? get() = tool.box?.center
     override val label: String get() = "Center"
@@ -65,6 +69,8 @@ internal class ShapePosition(private val tool: ShapeTool) : ObjectPosition {
         if (nx == b.cx && ny == b.cy) return
         tool.place(b.copy(cx = nx, cy = ny))
     }
+    override fun beginPositionEdit() = tool.beginNumericEdit()
+    override fun endPositionEdit() = tool.endNumericEdit()
 }
 
 /** The Text tool's pending text: its centre (moves are part of the pending text). */
@@ -90,5 +96,6 @@ internal class CurvePointPosition(private val tool: CurveTool) : ObjectPosition 
         val a = tool.anchors.getOrNull(i) ?: return
         tool.moveAnchor(i, Vec2(x?.takeIf { it.isFinite() } ?: a.x, y?.takeIf { it.isFinite() } ?: a.y))
     }
+    override fun beginPositionEdit() = tool.beginNumericEdit()
     override fun endPositionEdit() = tool.endNumericEdit()
 }

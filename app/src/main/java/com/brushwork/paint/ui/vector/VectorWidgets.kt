@@ -247,7 +247,7 @@ internal fun StyleGlyph(style: ShapeStyle, fillColor: Int, modifier: Modifier = 
  * main drawing color. [custom] is null when the fill follows the main color.
  */
 @Composable
-internal fun FillColorRow(custom: Int?, mainColor: Int, onPick: (Int?) -> Unit) {
+internal fun FillColorRow(custom: Int?, mainColor: Int, keptLabel: String? = null, onPick: (Int?) -> Unit) {
     var picking by rememberSaveable { mutableStateOf(false) }
     val shown = custom ?: mainColor
     Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -255,7 +255,17 @@ internal fun FillColorRow(custom: Int?, mainColor: Int, onPick: (Int?) -> Unit) 
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Text("Fill color", style = MaterialTheme.typography.bodyMedium)
-            Text(if (custom == null) "Same as the main color" else "Custom color", style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim)
+            // [keptLabel]: without a color of its own the object keeps a fill it already has (a
+            // gradient of an imported path), not the main color.
+            Text(
+                when {
+                    custom != null -> "Custom color"
+                    keptLabel != null -> keptLabel
+                    else -> "Same as the main color"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+            )
         }
         if (custom != null) TextButton(onClick = { onPick(null) }) { Text("Use main") }
         TextButton(onClick = { picking = true }) { Text("Pick") }

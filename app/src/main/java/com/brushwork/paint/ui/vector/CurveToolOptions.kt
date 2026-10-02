@@ -49,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
@@ -197,6 +198,19 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     val percent = width * 100f
     fun current(): Float = (tool.anchors.getOrNull(index)?.width ?: 1f) * 100f
     fun setPercent(p: Float) = tool.setWidth(index, p / 100f)
+    // The value when the first tap of a (possible) double tap on the slider went down.
+    val beforeTaps = remember(index) { floatArrayOf(Float.NaN) }
+    // A slider drag is in progress (begun on its first change, ended when it finishes).
+    val sliding = remember(index) { booleanArrayOf(false) }
+    val latestFirstDown by rememberUpdatedState { beforeTaps[0] = current() }
+    val latestReset by rememberUpdatedState {
+        tool.thicknessRing = false
+        // The first tap moved the value to the finger (its own in-tool step): the reset
+        // replaces that step, so one undo goes back to the value before the double tap.
+        if (current() != beforeTaps[0]) tool.undoStep()
+        setPercent(100f)
+        tool.endNumericEdit()
+    }
     // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
     // chip in front, or on a narrow phone, its slider would start off the screen).
     val bring = remember { BringIntoViewRequester() }
@@ -236,9 +250,12 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             value = percent.coerceIn(0f, MAX_THICKNESS_PERCENT),
             onValueChange = { v ->
                 tool.thicknessRing = true
+                // The whole drag is one step, however long the finger rests on the way.
+                if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
                 setPercent((v / THICKNESS_STEP).roundToInt() * THICKNESS_STEP)
             },
             onValueChangeFinished = {
+                sliding[0] = false
                 tool.thicknessRing = false
                 tool.endNumericEdit()
             },
@@ -247,11 +264,9 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
                 .width(128.dp)
-                .onDoubleTap {
-                    tool.thicknessRing = false
-                    setPercent(100f)
-                    tool.endNumericEdit()
-                }
+                // (The gesture handler outlives recompositions: it calls the newest callbacks,
+                // which act on the point selected now.)
+                .onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() }
                 .semantics { contentDescription = "Point thickness slider" },
         )
     }
@@ -278,9 +293,10 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
 
 /**
  * Calls [action] on a double tap, watching the touches before the element (a slider) handles
- * them, so the element still gets every touch.
+ * them, so the element still gets every touch. [onFirstDown] is called when a touch goes down
+ * that is not the second tap of a double tap, before the element sees it.
  */
-private fun Modifier.onDoubleTap(action: () -> Unit): Modifier = pointerInput(Unit) {
+private fun Modifier.onDoubleTap(onFirstDown: () -> Unit = {}, action: () -> Unit): Modifier = pointerInput(Unit) {
     val timeout = viewConfiguration.doubleTapTimeoutMillis
     val slop = viewConfiguration.touchSlop
     var lastUp = Long.MIN_VALUE / 2
@@ -295,6 +311,7 @@ private fun Modifier.onDoubleTap(action: () -> Unit): Modifier = pointerInput(Un
                 ch.pressed && !ch.previousPressed -> {
                     downPos = ch.position
                     moved = false
+                    if (ch.uptimeMillis - lastUp > timeout) onFirstDown()
                 }
                 ch.pressed -> if ((ch.position - downPos).getDistance() > slop) moved = true
                 !ch.pressed && ch.previousPressed -> {
@@ -371,7 +388,10 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             "Fill the path", s.fill, { v -> set { it.copy(fill = v) } },
             description = if (s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed",
         )
-        if (s.fill) FillColorRow(s.fillColor, controller.color) { col -> set { it.copy(fillColor = col) } }
+        if (s.fill) {
+            // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
+            FillColorRow(s.fillColor, controller.color, keptLabel = if (tool.reopenedGradientFill) "Gradient (kept)" else null) { col -> set { it.copy(fillColor = col) } }
+        }
 
         SectionHeader("Thickness")
         Hint("Select a point to set its thickness (0–300 %). The line blends smoothly from point to point.")
@@ -415,6 +435,7 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val start = anchors.lastOrNull()?.pos ?: Vec2(controller.doc.width / 2f, controller.doc.height / 2f)
     var addX by rememberSaveable { mutableFloatStateOf(start.x) }
     var addY by rememberSaveable { mutableFloatStateOf(start.y) }
+    val thicknessSliding = remember { booleanArrayOf(false) }
 
     BwSheet(
         title = "Numbers",
@@ -436,11 +457,15 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
             LabeledSlider(
                 label = "Thickness",
                 value = a.width * 100f,
-                onValueChange = { v -> tool.setWidth(sel, v / 100f) },
+                onValueChange = { v ->
+                    // One step per drag, however long the finger rests on the way.
+                    if (!thicknessSliding[0]) { thicknessSliding[0] = true; tool.beginNumericEdit() }
+                    tool.setWidth(sel, v / 100f)
+                },
                 valueRange = 0f..300f,
                 steps = 59,
                 valueText = "${(a.width * 100f).roundToInt()} %",
-                onValueChangeFinished = { tool.endNumericEdit() },
+                onValueChangeFinished = { thicknessSliding[0] = false; tool.endNumericEdit() },
                 typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),
             )
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {

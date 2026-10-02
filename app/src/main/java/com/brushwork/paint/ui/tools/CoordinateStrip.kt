@@ -128,6 +128,7 @@ fun CoordinateStrip(controller: EditorController) {
             AxisRow(
                 axis = "X", value = p.x, extent = doc.width.toFloat(), unit = unit, dpi = dpi, snap = snap,
                 current = { target.position?.x },
+                onBegin = { target.beginPositionEdit() },
                 onSet = { v -> target.setPosition(v, null) },
                 onEnd = { target.endPositionEdit() },
             ) {
@@ -143,6 +144,7 @@ fun CoordinateStrip(controller: EditorController) {
             AxisRow(
                 axis = "Y", value = p.y, extent = doc.height.toFloat(), unit = unit, dpi = dpi, snap = snap,
                 current = { target.position?.y },
+                onBegin = { target.beginPositionEdit() },
                 onSet = { v -> target.setPosition(null, v) },
                 onEnd = { target.endPositionEdit() },
             ) {
@@ -211,16 +213,22 @@ private fun AxisRow(
     dpi: Double,
     snap: Boolean,
     current: () -> Float?,
+    onBegin: () -> Unit,
     onSet: (Float) -> Unit,
     onEnd: () -> Unit,
     trailing: @Composable () -> Unit,
 ) {
     var typing by remember { mutableStateOf(false) }
+    // An arrow held down (its first press begins the edit, the release ends it: one step).
+    val arrowHeld = remember { booleanArrayOf(false) }
+    fun arrow(delta: Float) {
+        if (!arrowHeld[0]) { arrowHeld[0] = true; onBegin() }
+        current()?.let { onSet(it + delta) }
+    }
+    val arrowReleased = { arrowHeld[0] = false; onEnd() }
     Row(Modifier.fillMaxWidth().height(ROW_HEIGHT), verticalAlignment = Alignment.CenterVertically) {
         Text(axis, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = BrushworkColors.OnChrome, modifier = Modifier.width(16.dp))
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "$axis minus 1 pixel", onRelease = onEnd) {
-            current()?.let { onSet(it - 1f) }
-        }
+        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "$axis minus 1 pixel", onRelease = arrowReleased) { arrow(-1f) }
         Box(
             Modifier
                 .heightIn(min = 40.dp)
@@ -240,10 +248,8 @@ private fun AxisRow(
                     .padding(horizontal = 6.dp, vertical = 3.dp),
             )
         }
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "$axis plus 1 pixel", onRelease = onEnd) {
-            current()?.let { onSet(it + 1f) }
-        }
-        AxisTrack(axis, value, extent, snap, onSet, onEnd, Modifier.weight(1f).fillMaxHeight())
+        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "$axis plus 1 pixel", onRelease = arrowReleased) { arrow(1f) }
+        AxisTrack(axis, value, extent, snap, onBegin, onSet, onEnd, Modifier.weight(1f).fillMaxHeight())
         trailing()
     }
     if (typing) {
@@ -261,6 +267,7 @@ private fun AxisRow(
             rangeText = "Canvas: 0 – ${Units.format(extent.toDouble(), unit, dpi)}",
             suffix = unit.short,
             onApply = { v ->
+                onBegin()
                 onSet(unit.toPx(v.toDouble(), dpi).toFloat())
                 onEnd()
             },
@@ -331,8 +338,9 @@ internal class AxisDrag(
  * finger is far from it. Accessibility services (and tests) can set its value directly.
  */
 @Composable
-private fun AxisTrack(axis: String, value: Float, extent: Float, snap: Boolean, onSet: (Float) -> Unit, onEnd: () -> Unit, modifier: Modifier) {
+private fun AxisTrack(axis: String, value: Float, extent: Float, snap: Boolean, onBegin: () -> Unit, onSet: (Float) -> Unit, onEnd: () -> Unit, modifier: Modifier) {
     val haptics = LocalHapticFeedback.current
+    val latestBegin by rememberUpdatedState(onBegin)
     val latestSet by rememberUpdatedState(onSet)
     val latestEnd by rememberUpdatedState(onEnd)
     val latestValue by rememberUpdatedState(value)
@@ -348,6 +356,7 @@ private fun AxisTrack(axis: String, value: Float, extent: Float, snap: Boolean, 
                 contentDescription = "$axis slider"
                 progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(range.start, range.endInclusive), range)
                 setProgress { v ->
+                    latestBegin()
                     latestSet(v)
                     latestEnd()
                     true
@@ -363,6 +372,8 @@ private fun AxisTrack(axis: String, value: Float, extent: Float, snap: Boolean, 
                     val drag = AxisDrag(r, size.width - 2 * pad, FINE_DISTANCE_DP.dp.toPx(), detents, DETENT_DP.dp.toPx())
                     var last = drag.down(down.position.x - pad)
                     var lastDetent = drag.detent
+                    // The whole drag is one edit, however long the finger rests on the way.
+                    latestBegin()
                     latestSet(last)
                     down.consume()
                     try {

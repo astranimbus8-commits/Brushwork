@@ -629,6 +629,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
     fun defaultWrapSource(t: TextItem? = item): Layer? {
         val text = t ?: return null
         val box = boxBounds(text) ?: return null
+        // Only the part of the box on the canvas counts: a line typed past the canvas edges
+        // would otherwise find a full-canvas background covering "less than 90 %" of it (and
+        // wrapping around a background leaves no room for any text).
+        if (!box.intersect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())) return null
         val area = box.width() * box.height()
         for (l in wrapSources()) {
             if (!l.visible) continue
@@ -698,7 +702,28 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val width = max(natural, WRAP_MIN_WIDTH_EM * spec.sizePx).coerceAtMost(doc.width.toFloat()).coerceIn(spec.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         val dx = (width - natural) / 2f
         val shift = Vec2(dx, 0f).rotated(Math.toRadians(t.rotationDeg.toDouble()).toFloat())
-        return t.copy(spec = spec.copy(box = spec.box.copy(width = width)), cx = t.cx + shift.x, cy = t.cy + shift.y)
+        return onCanvasHorizontally(t.copy(spec = spec.copy(box = spec.box.copy(width = width)), cx = t.cx + shift.x, cy = t.cy + shift.y))
+    }
+
+    /**
+     * [t] moved sideways so its box lies on the canvas (centred on it when it is wider). A line
+     * typed without a fixed width can run far past the canvas edges: keeping its left edge when
+     * wrap fixes the width would leave the whole text off the canvas.
+     */
+    private fun onCanvasHorizontally(t: TextItem): TextItem {
+        val block = blockFor(t)
+        val xs = t.corners(block.width, block.height).map { it.x }
+        if (xs.any { !it.isFinite() }) return t
+        val l = xs.min()
+        val r = xs.max()
+        val w = doc.width.toFloat()
+        val dx = when {
+            r - l >= w -> w / 2f - (l + r) / 2f
+            l < 0f -> -l
+            r > w -> w - r
+            else -> 0f
+        }
+        return if (dx == 0f) t else translated(t, dx, 0f)
     }
 
     /** Follows the picture's opaque pixels ([WrapContour.SHAPE]) or its content bounds ([WrapContour.BOX]). */

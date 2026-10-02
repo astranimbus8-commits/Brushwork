@@ -335,6 +335,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private val redo = ArrayDeque<PendingState>()
     private var historyKey: Any? = null
     private var historyKeyTime = 0L
+    /** A slider drag is in progress ([beginNumericEdit]): its edits share one step whatever the pace. */
+    private var numericHeld = false
     private data class NumericKey(val kind: String, val index: Int)
 
     /** Time source for coalescing numeric edits (replaceable in tests). */
@@ -588,6 +590,21 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         refreshPreview()
     }
 
+    /**
+     * A slider drag of the placement (the X / Y strip) starts: its moves are one in-tool undo
+     * step however long the finger rests, and a new step even right after another edit.
+     */
+    fun beginNumericEdit() {
+        historyKey = null
+        numericHeld = true
+    }
+
+    /** The drag, arrow run or typed value of [beginNumericEdit] is complete: the next one is a new step. */
+    fun endNumericEdit() {
+        historyKey = null
+        numericHeld = false
+    }
+
     private fun clean(b: ShapeBox): ShapeBox {
         val lim = ShapeSettings.MAX_LENGTH
         val custom = points != null
@@ -740,7 +757,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun pushHistory(key: Any? = null) {
         val b = box ?: return
         val now = if (key != null) clock() else 0L
-        val coalesce = key != null && key == historyKey && history.isNotEmpty() && now - historyKeyTime <= COALESCE_MS
+        val coalesce = key != null && key == historyKey && history.isNotEmpty() && (numericHeld || now - historyKeyTime <= COALESCE_MS)
         historyKey = key
         historyKeyTime = now
         clearRedo()

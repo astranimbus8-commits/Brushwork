@@ -353,7 +353,9 @@ options strip (`ToolOptionsBar`, starting with a VECTOR chip in vector mode) wit
 under it (`ui/tools/CoordinateStrip`: two 40 dp rows of ‹ value › and an absolute slider, folding
 to one 28 dp line; left out of the canvas fit inset so it never moves the canvas; adapters in
 `CoordinateSources` for Transform, Shape, Text, the Curve point and any `PositionedTool` — Masks,
-Clone; a finished drag, arrow run or typed value ends the tool's edit, `endPositionEdit`), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
+Clone; a drag, arrow run or typed value is one edit from `beginPositionEdit` to `endPositionEdit`,
+however long the finger rests on the way — the Curve and Shape tools hold their in-tool step open
+in between, `beginNumericEdit` / `endNumericEdit`, as the point thickness sliders do), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
 (copy / cut / paste / deselect…) while a selection or clipboard exists — or the object bar while
 vector objects are selected — the canvas, the brush size/opacity slider bar (values can be tapped and typed)
 and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent; inside the editor
