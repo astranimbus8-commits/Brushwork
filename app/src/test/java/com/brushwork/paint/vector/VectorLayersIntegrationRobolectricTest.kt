@@ -204,11 +204,18 @@ class VectorLayersIntegrationRobolectricTest {
         assertEquals(all, first)
         assertSame("the same index serves every read", ObjectIndex.of(content), ObjectIndex.of(content))
         assertSame("all present: the selection itself, no copy", first, c.vectors.selectedIds)
-        // 100 reads of 5000 selected ids: hash lookups (O(k)), not a scan per id (O(k·n), ~10^9 steps).
+        // Reads of 5000 selected ids are hash lookups (O(k)), not a scan of the content per id
+        // (O(k·n), what VectorContent.byId would cost): measured against that scan under the same
+        // load, so a busy machine slows both alike.
+        repeat(2) { c.vectors.selectedIds.size; all.count { content.byId(it) != null } }
+        val reads = 10
         val t0 = System.nanoTime()
-        repeat(100) { assertEquals(n, c.vectors.selectedIds.size) }
-        val ms = (System.nanoTime() - t0) / 1e6
-        assertTrue("100 reads took $ms ms", ms < 1500)
+        repeat(reads) { assertEquals(n, c.vectors.selectedIds.size) }
+        val indexed = System.nanoTime() - t0
+        val t1 = System.nanoTime()
+        repeat(reads) { assertEquals(n, all.count { content.byId(it) != null }) }
+        val scanned = System.nanoTime() - t1
+        assertTrue("indexed ${indexed / 1e6} ms vs scanned ${scanned / 1e6} ms", indexed * 5 < scanned)
         // Vanished ids drop out.
         c.l1.restoreData(c.l1.dataSnapshot().copy(vector = content.without(setOf(7L, 8L))))
         assertEquals(n - 2, c.vectors.selectedIds.size)

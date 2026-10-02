@@ -186,8 +186,8 @@ Under Robolectric the policy defaults to synchronous renders (tests opt into `Po
 object's paint bounds reach, with no paper grain (unless by multiples of 256 px) and with every
 pixel that lands on the canvas coming from it, shifts the cache pixels (≈ 10 ms) instead of
 re-rendering. The result is the old cache shifted exactly; it differs from a re-render only at
-anti-aliased path edges where the 256 px tile grid now cuts the path differently (a few levels,
-rarely tens). `VectorEditSession.commit` detects such moves itself when every replacement is
+anti-aliased path edges, by up to a few tens of levels where the move makes a path cross a tile
+edge of the 256 px grid (Skia anti-aliases a clipped path differently). `VectorEditSession.commit` detects such moves itself when every replacement is
 `VectorOps.transformed(original, integer translation)`; the Transform lift passes the hint to
 `update`. Transforms turn brush tips with the objects (`VectorOps.turnedBrush`: a rotated or
 mirrored calligraphy stroke keeps its look; moves and scales keep the same preset instance); canvas
