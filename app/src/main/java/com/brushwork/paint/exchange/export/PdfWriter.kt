@@ -12,11 +12,14 @@ import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VStop
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.zip.Deflater
+import java.util.zip.DeflaterOutputStream
 import kotlin.coroutines.coroutineContext
 import kotlin.math.max
 import kotlin.math.min
@@ -186,33 +189,75 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
         if (layer.items.isEmpty()) return null
         val res = Resources()
         val c = StringBuilder()
-        for (item in layer.items) {
-            coroutineContext.ensureActive()
-            when (item) {
-                is SceneItem.Image -> {
-                    val num = writeImage(item.image, cancelled) ?: continue
-                    val im = item.image
-                    c.append("q ").append(im.width).append(" 0 0 ").append(-im.height).append(' ').append(im.left).append(' ')
-                        .append(im.top + im.height).append(" cm ").append(res.xobject(num)).append(" Do Q\n")
+        // Thousands of outlined strokes make tens of MB of operators: they are compressed as
+        // they come instead of being held as text (and again as bytes) until the end.
+        val packed = PackedContent()
+        try {
+            for (item in layer.items) {
+                coroutineContext.ensureActive()
+                when (item) {
+                    is SceneItem.Image -> {
+                        val num = writeImage(item.image, cancelled) ?: continue
+                        val im = item.image
+                        c.append("q ").append(im.width).append(" 0 0 ").append(-im.height).append(' ').append(im.left).append(' ')
+                            .append(im.top + im.height).append(" cm ").append(res.xobject(num)).append(" Do Q\n")
+                    }
+                    is SceneItem.Shape -> shape(item, res, c)
+                    // Text is always written as outlines in PDF (the scene builder converts it).
+                    is SceneItem.Text -> {}
                 }
-                is SceneItem.Shape -> shape(item, res, c)
-                // Text is always written as outlines in PDF (the scene builder converts it).
-                is SceneItem.Text -> {}
+                if (c.length >= PackedContent.SPILL_CHARS) packed.add(c)
             }
+            packed.add(c)
+            if (packed.isEmpty) return null
+            return formOf(packed.finish(), res, gray = false)
+        } finally {
+            packed.release()
         }
-        if (c.isEmpty()) return null
-        return form(c, res, gray = false)
     }
 
     /** A transparency-group form of [content] over the whole document. */
-    private fun form(content: CharSequence, res: Resources, gray: Boolean): Int = file.stream(PdfDict().apply {
+    private fun form(content: CharSequence, res: Resources, gray: Boolean): Int =
+        formOf(Pdf.flate(content.toString().toByteArray(Charsets.ISO_8859_1)), res, gray)
+
+    /** A transparency-group form of the zlib-compressed content [deflated]. */
+    private fun formOf(deflated: ByteArray, res: Resources, gray: Boolean): Int = file.stream(PdfDict().apply {
         this["Type"] = "/XObject"
         this["Subtype"] = "/Form"
         this["BBox"] = "[0 0 ${scene.width} ${scene.height}]"
         this["Group"] = if (gray) "<</S /Transparency /CS /DeviceGray>>" else "<</S /Transparency /CS /DeviceRGB /I true /K false>>"
         this["Resources"] = res.dict()
         this["Filter"] = "/FlateDecode"
-    }, Pdf.flate(content.toString().toByteArray(Charsets.ISO_8859_1)))
+    }, deflated)
+
+    /** A content stream compressed while it is written (text moved in with [add]). */
+    private class PackedContent {
+        private val bytes = ByteArrayOutputStream()
+        private val deflater = Deflater(6)
+        private val out = DeflaterOutputStream(bytes, deflater, 64 * 1024)
+        private var written = 0L
+
+        val isEmpty: Boolean get() = written == 0L
+
+        /** Moves [text] (operators, Latin-1) into the stream and clears it. */
+        fun add(text: StringBuilder) {
+            if (text.isEmpty()) return
+            out.write(text.toString().toByteArray(Charsets.ISO_8859_1))
+            written += text.length
+            text.setLength(0)
+        }
+
+        fun finish(): ByteArray {
+            out.finish()
+            return bytes.toByteArray()
+        }
+
+        fun release() = deflater.end()
+
+        companion object {
+            const val SPILL_CHARS = 256 * 1024
+        }
+    }
 
     /** A luminosity group for [m]: its fill gray over the document, then its picture. */
     private suspend fun writeMaskForm(m: SceneMask, cancelled: () -> Boolean): Int {

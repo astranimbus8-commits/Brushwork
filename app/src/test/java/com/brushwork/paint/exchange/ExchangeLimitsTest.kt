@@ -1,10 +1,19 @@
 package com.brushwork.paint.exchange
 
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.exchange.export.BrushworkPayload
+import com.brushwork.paint.exchange.export.ExportScene
 import com.brushwork.paint.exchange.export.Payload
 import com.brushwork.paint.exchange.export.Pdf
 import com.brushwork.paint.exchange.export.PdfDict
 import com.brushwork.paint.exchange.export.PdfFile
+import com.brushwork.paint.exchange.export.PdfWriter
+import com.brushwork.paint.exchange.export.SceneItem
+import com.brushwork.paint.exchange.export.SceneLayer
+import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.tools.vector.VectorPath
+import com.brushwork.paint.vector.VPaint
+import kotlinx.coroutines.runBlocking
 import com.brushwork.paint.exchange.pdf.ArrayPdfBytes
 import com.brushwork.paint.exchange.pdf.OwnPdfReader
 import com.brushwork.paint.exchange.pdf.PdfBytes
@@ -181,6 +190,27 @@ class ExchangeLimitsTest {
             n++
         }
         return sb.toString()
+    }
+
+    @Test
+    fun aLayerOfThousandsOfShapesIsCompressedAsItIsWrittenAndReadsBackWhole() {
+        val n = 3000
+        val shapes = List(n) { i ->
+            val pts = List(24) { k -> Vec2(10f + (i % 50) * 3f + k * 0.37f, 10f + (i / 50) * 2.5f + (k % 5) * 1.13f) }
+            SceneItem.Shape(VectorPath.polygon(pts), fill = VPaint.Solid(0xFF000000.toInt() or i))
+        }
+        val scene = ExportScene(200, 200, 72f, "Many", null, listOf(SceneLayer("layer-1", "Many", 1f, LayerBlendMode.NORMAL, false, null, shapes)))
+        val out = ByteArrayOutputStream()
+        runBlocking { PdfWriter(scene).write(out) }
+        val r = OwnPdfReader(ArrayPdfBytes(out.toByteArray()))
+        val forms = r.offsets.keys.mapNotNull { r.obj(it) as? PdfObj.Stream }.filter { (it.dict["Subtype"] as? PdfObj.Name)?.name == "Form" }
+        val content = String(r.streamData(forms.single()), Charsets.ISO_8859_1)
+        // Far more than one spill of text, all of it there and in order.
+        assertTrue(content.length > 3 * 256 * 1024)
+        assertEquals(n, Regex("\nf\n").findAll(content).count())
+        val first = content.indexOf(PdfWriter.rgb(0xFF000000.toInt()) + " rg")
+        val last = content.indexOf(PdfWriter.rgb(0xFF000000.toInt() or (n - 1)) + " rg")
+        assertTrue("$first < $last", first in 0 until last)
     }
 
     @Test
