@@ -125,6 +125,29 @@ class VectorAsyncQaTest {
     }
 
     @Test
+    fun hidingOrLockingTheLayerRightAfterAnEraseKeepsTheErase() {
+        for (lock in listOf(false, true)) {
+            if (this::r.isInitialized) r.close()
+            setup()
+            eraseS2Pending()
+            // The eye (or the lock) in the layer row, tapped at once.
+            if (lock) c.toggleLock(vec) else c.toggleVisibility(vec)
+            assertTrue(Smoke.pumpUntil(10_000) { !c.vectors.isRendering })
+            assertEquals(if (lock) "Lock layer" else "Visibility", c.undoManager.undoLabel)
+            if (lock) c.toggleLock(vec) else c.toggleVisibility(vec)
+            Smoke.pump(40)
+            assertNull("lock=$lock: the erase is kept", strokeAt(175f))
+            r.assertCacheFresh("lock=$lock", vec)
+            // Undo: the property, the property, then the erase.
+            c.undo(); c.undo()
+            assertEquals("Erase", c.undoManager.undoLabel)
+            c.undo()
+            assertNotNull(strokeAt(175f))
+            r.assertCacheFresh("lock=$lock erase undone", vec)
+        }
+    }
+
+    @Test
     fun duplicatingTheLayerRightAfterAnEraseCopiesTheErase() {
         setup()
         eraseS2Pending()

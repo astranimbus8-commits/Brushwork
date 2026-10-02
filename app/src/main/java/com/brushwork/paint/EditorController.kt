@@ -1414,6 +1414,9 @@ class EditorController(
     fun setLayerProps(layer: Layer, props: LayerProps, label: String = "Layer properties") {
         val before = layer.props()
         if (before == props) return
+        // A live edit still on its way (a vector render in the background) lands BEFORE the
+        // layer is hidden or locked: afterwards it would be refused there and lost (v1.5 QA).
+        if (editDepth == 0) flushDeferredSteps()
         structural { layer.copyPropsFrom(props) }
         pushUndo(LayerPropsAction(layer, before, props, label))
     }
