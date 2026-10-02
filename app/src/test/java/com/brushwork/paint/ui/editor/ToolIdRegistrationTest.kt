@@ -58,7 +58,8 @@ class ToolIdRegistrationTest {
         assertEquals(CurveKind.CURVE, (c.tools.getValue(ToolId.CURVE) as CurveTool).kind)
         assertTrue((c.tools.getValue(ToolId.POLYLINE) as CurveTool).polyline)
         assertTrue(c.tools.getValue(ToolId.TEXT_FRAMES) is TextFrameTool)
-        assertNull(path.splinePointPosition)
+        // v1.6 area B: Path's X / Y target is its own stable control-point position (nothing selected yet).
+        assertNull(requireNotNull(path.splinePointPosition).position)
 
         for (id in newIds) {
             assertNotNull(EditorIcons.tool(id))
@@ -71,8 +72,9 @@ class ToolIdRegistrationTest {
         assertTrue(ToolId.PATH in EditorController.HOLD_PICK_TOOLS)
         assertFalse("Text frames drags never turn into picks", ToolId.TEXT_FRAMES in EditorController.HOLD_PICK_TOOLS)
 
-        // Coordinate sources: Path uses the Curve adapter until area B lands; Text frames has none yet.
-        assertTrue(coordinateSourceOf(path)!!.target is CurvePointPosition)
+        // Coordinate sources: Path uses its control-point position (area B), Curve the Curve adapter; Text frames has none yet.
+        assertTrue(coordinateSourceOf(path)!!.target === path.splinePointPosition)
+        assertTrue(coordinateSourceOf(c.tools.getValue(ToolId.CURVE))!!.target is CurvePointPosition)
         assertNull(coordinateSourceOf(c.tools.getValue(ToolId.TEXT_FRAMES))!!.target.position)
 
         // Options strips compose for both tools; selecting and touching them is safe.
