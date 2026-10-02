@@ -399,30 +399,21 @@ nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number 
 sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
 parameters) — use them everywhere.
 
-Editor layout (`ui/editor`, v1.6: ibisPaint's main screen, geometry in `chrome/ChromeLayout` from
-`ui/theme/IbisDims`): the canvas full bleed on the light surround; the top row of 8 circles
-(`chrome/TopRow`: Undo, Redo, Vector, Selection, Stabilizer, Grid, Ruler, More options; below
-336 dp Ruler, Grid, Stabilizer fold into the More menu, which also carries the document's name
-and size and the v1.5 overflow entries plus Canvas… and Increments…); the tool options strip
-(`ToolOptionsBar`, starting with a VECTOR chip in vector mode) in a floating rounded panel
-(`chrome/OptionsStrip`, hidden for tools without options); the X / Y pill under it
-(`ui/tools/CoordinatePill`, area G; adapters in `CoordinateSources` for Transform, Shape, Text, the
-Curve / Path point and any `PositionedTool`; a drag or typed value is one edit from
-`beginPositionEdit` to `endPositionEdit`; left out of the canvas fit inset so it never moves the
-canvas); the floating selection bar (copy / cut / paste / deselect…) or the object bar while
-vector objects are selected; the brush size and opacity slider rows (`SliderBar`: value, −, a
-relative track, +; values are tapped and typed, −/+ and drags step by the Size / Percent
-increments when they are on); the bottom bar (`chrome/BottomBar`: eraser switch, the tool menu,
-the size disc, the colour square, hide interface, the layer window, back). The tool menu
-(`chrome/ToolMenuPanel` over `ToolMenu`: two columns in ibisPaint's order, Filters, Canvas and
-Settings among the tools) and the layer window (`ui/layers/LayersPanel`, area F; the editor sizes
-it: 382 × 520 dp at x 5 with its bottom on the bottom bar, w − 10 on narrower phones, the v1.5
-side window on short screens) are non-modal: a tap outside closes them. Panels (`BwSheet`) are
-half-height and translucent, full width with their bottom on the bottom bar; inside the editor
+Editor layout (`ui/editor`): top bar (Vector first, then panels, and the overflow menu), tool
+options strip (`ToolOptionsBar`, starting with a VECTOR chip in vector mode) with the X / Y strip
+under it (`ui/tools/CoordinateStrip`: two 40 dp rows of ‹ value › and an absolute slider, folding
+to one 28 dp line; left out of the canvas fit inset so it never moves the canvas; adapters in
+`CoordinateSources` for Transform, Shape, Text, the Curve point and any `PositionedTool` — Masks,
+Clone; a drag, arrow run or typed value is one edit from `beginPositionEdit` to `endPositionEdit`,
+however long the finger rests on the way — the Curve and Shape tools hold their in-tool step open
+in between, `beginNumericEdit` / `endNumericEdit`, as the point thickness sliders do), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
+(copy / cut / paste / deselect…) while a selection or clipboard exists — or the object bar while
+vector objects are selected — the canvas, the brush size/opacity slider bar (values can be tapped and typed)
+and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent (the Tools sheet
+up to 85 %, so the whole grid shows at once on a 392 x 873 dp phone); inside the editor
 they are drawn by a non-modal `SheetHost` (ui/common/SheetHost.kt): touching the canvas minimizes
 the top panel to a pill and the touch reaches the canvas, so the view and objects stay editable.
-✓ / ✕ float above the slider rows (beside the tool menu, above the layer window). "Hide
-interface" hides the top row, strip, pill, bars and slider rows without refitting the canvas.
+The layers panel is a non-modal floating window in the bottom-right corner (a tap outside closes it).
 
 Other packages: `fonts/` (imported fonts: zip/ttf/otf import, name-table parsing, favorites),
 `inpaint/` (content-aware fill: multi-scale PatchMatch completion, used by the selection bar and
