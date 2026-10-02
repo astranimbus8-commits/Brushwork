@@ -111,6 +111,8 @@ class ExchangeQaRoundTripRobolectricTest {
         // The gallery's new artwork for the file: Background + empty Layer 1, replaced by the file.
         val doc = Smoke.document(480, 360, layers = 2, whiteBottom = true)
         doc.dpi = 300f
+        doc.layers[0].name = "Background"
+        doc.layers[1].name = "Layer 1"
         val c = Smoke.controller(app, doc)
         val uri = Uri.fromFile(file)
         PendingImports.putRequest(doc.id, PendingImport(uri))

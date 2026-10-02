@@ -67,7 +67,8 @@ object ImportLayers {
                 layers.forEachIndexed { i, n -> if (n.sourceId != 0L) links[n.sourceId] = ids[i] }
                 var at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
                 for ((k, n) in layers.withIndex()) {
-                    val layer = Layer(ids[k], uniqueName(c, n.name), n.bitmap)
+                    // Unique among the layers that stay (a restored "Background" keeps its name).
+                    val layer = Layer(ids[k], uniqueName(c, n.name, replace), n.bitmap)
                     n.props?.let { layer.copyPropsFrom(it.copy(name = layer.name)) }
                     layer.mask = n.mask
                     layer.restoreData(if (n.sourceId != 0L) relinked(n.data, links) { doc.newLayerId() } else n.data)
@@ -131,9 +132,9 @@ object ImportLayers {
         }
     }
 
-    /** [base], or "[base] 2", "[base] 3"... so names stay unique. */
-    fun uniqueName(c: EditorController, base: String): String {
-        val names = c.doc.layers.map { it.name }.toSet()
+    /** [base], or "[base] 2", "[base] 3"... so names stay unique (the layers in [leaving] don't count). */
+    fun uniqueName(c: EditorController, base: String, leaving: List<Layer> = emptyList()): String {
+        val names = c.doc.layers.filter { l -> leaving.none { it === l } }.map { it.name }.toSet()
         val clean = base.trim().ifEmpty { "Imported" }.take(64)
         if (clean !in names) return clean
         var n = 2
