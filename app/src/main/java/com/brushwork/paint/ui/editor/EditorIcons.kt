@@ -29,6 +29,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.editor.chrome.ChromeGlyphs
 
 /** Icons used by the editor chrome. */
 object EditorIcons {
@@ -103,11 +104,11 @@ object EditorIcons {
     /** The Filters tile of the tools grid (v1.5; it used to be a top-bar action). */
     val FiltersTile: ImageVector get() = Icons.Filled.PhotoFilter
 
-    /** The Path tool (v1.6). Placeholder until area E draws "a smooth arc over a dashed control polygon". */
-    val Path: ImageVector get() = Icons.Filled.Timeline
+    /** The Path tool (v1.6): a smooth arc over a dashed control polygon (Blender's path). */
+    val Path: ImageVector get() = ChromeGlyphs.PathTool
 
-    /** The Text frames tool (v1.6). Placeholder until area E draws the final glyph. */
-    val TextFrames: ImageVector get() = Icons.AutoMirrored.Filled.ViewQuilt
+    /** The Text frames tool (v1.6): two text boxes threaded together (InDesign's linked frames). */
+    val TextFrames: ImageVector get() = ChromeGlyphs.TextFramesTool
 
     fun tool(id: ToolId): ImageVector = when (id) {
         ToolId.BRUSH -> Icons.Filled.Brush

@@ -16,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -57,11 +58,13 @@ import com.brushwork.paint.ui.vector.ShapeToolOptions
 import com.brushwork.paint.ui.vector.VectorEraserOptions
 
 /**
- * The per-tool options strip under the top bar. Each module provides `XxxOptions(tool)`;
- * those composables emit one Row (they may also show their own dialogs/popups).
+ * The per-tool options strip (v1.6: inside the floating options panel under the top row). Each
+ * module provides `XxxOptions(tool)`; those composables emit one Row (they may also show their
+ * own dialogs/popups). [onContentWidth] receives the width (px) of what the tool shows, at
+ * layout time (0 = a tool without options): the panel hides itself then.
  */
 @Composable
-fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) {
+fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier, onContentWidth: ((Int) -> Unit)? = null) {
     val tool = controller.tools[controller.activeToolId] ?: return
     // Derived: isVectorMode reads layersVersion, which changes with every committed edit.
     val vectorMode by remember(controller) { derivedStateOf { controller.isVectorMode } }
@@ -69,7 +72,19 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier) 
         modifier = modifier
             .heightIn(min = 44.dp)
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp),
+            .padding(horizontal = 8.dp)
+            .then(
+                if (onContentWidth == null) {
+                    Modifier
+                } else {
+                    Modifier.layout { measurable, constraints ->
+                        // The content's own width (no minimum), reported before it is padded out.
+                        val p = measurable.measure(constraints.copy(minWidth = 0))
+                        onContentWidth(p.width)
+                        layout(maxOf(p.width, constraints.minWidth), p.height) { p.place(0, 0) }
+                    }
+                },
+            ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Vector mode (v1.5): what is drawn stays editable.

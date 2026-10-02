@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisDims
 import kotlin.math.roundToInt
 
 /*
@@ -370,7 +371,8 @@ private fun BoxScope.HostedPanel(entry: SheetEntry, shown: Boolean, screenHeight
     }
 }
 
-private val SheetShape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
+/** v1.6 §3.7.9: ibisPaint's panels, top corners radius 12. */
+private val SheetShape = RoundedCornerShape(topStart = IbisDims.SheetRadius, topEnd = IbisDims.SheetRadius)
 
 /** A downward drag of a few dp minimizes the panel. */
 private fun Modifier.pointerInputMinimize(onMinimize: () -> Unit): Modifier = pointerInput(onMinimize) {
@@ -414,6 +416,10 @@ fun SheetPill(state: SheetHostState, modifier: Modifier = Modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(
                 Modifier
+                    // v1.6 (I10): the pill is announced as "Title, minimized" and acts as "Show
+                    // Title", never as the bare title, which may be the label of a control on
+                    // screen (the Increments sheet's pill beside the X / Y pill's "#" cell).
+                    .semantics { contentDescription = "$title, minimized" }
                     .clickable(onClickLabel = "Show $title", role = Role.Button, onClick = state::restore)
                     .heightIn(min = 44.dp)
                     .padding(start = 12.dp, end = if (top.showClose.value) 4.dp else 16.dp),
@@ -427,7 +433,7 @@ fun SheetPill(state: SheetHostState, modifier: Modifier = Modifier) {
                     fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.widthIn(max = 200.dp),
+                    modifier = Modifier.widthIn(max = 200.dp).clearAndSetSemantics {},
                 )
                 if (stacked > 1) {
                     // More menus wait under this one.
