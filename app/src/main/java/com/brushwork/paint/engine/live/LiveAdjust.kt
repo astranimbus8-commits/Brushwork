@@ -40,11 +40,14 @@ import kotlin.math.min
  *   rendered while the finger moves: the proxy covers their changed part (the rest of the tile
  *   keeps its exact pixels). Every other dirty visible tile renders as usual.
  * - The proxy scale `s` is the largest power of two at most the view zoom, in 1/8..1, halved
- *   (for the rest of the session) after a live frame over 33 ms, or while the proxies needed
- *   would exceed 32 MB. Each proxy tile holds its frame and a below-cache (the composite of the
- *   layers under the adjustment at `s`), rebuilt when [BelowKey] changes or a change that isn't
- *   the session's own was drawn there; a frame restores the below-cache 1:1 and draws the
- *   adjustment (the fused path) and every layer above exactly, only where something changed.
+ *   (for the rest of the session) after a live frame over 33 ms (below-cache builds and frames
+ *   that made proxies don't count), or while the proxies needed would exceed 32 MB. Each proxy
+ *   tile holds its frame, a below-cache (the composite of the layers under the adjustment at
+ *   `s`), rebuilt when [BelowKey] changes or a change that isn't the session's own was drawn
+ *   there, and the adjustment's mask at `s` ([com.brushwork.paint.engine.MaskFactorCache], kept
+ *   while the mask doesn't change: a slider drag); a frame restores the below-cache 1:1 and
+ *   draws the adjustment (the fused path) and every layer above exactly, only where something
+ *   changed.
  * - Refinement (after [end], or 150 ms after the last [touch]): session tiles render within
  *   8 ms per frame nearest the view centre first; a rendered tile covers its proxy. When no
  *   session tile on screen is dirty the session ends (off-screen ones stay dirty and render when
