@@ -22,7 +22,10 @@ import com.brushwork.paint.masks.RadialMask
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.mask.AdjustmentEdit
+import com.brushwork.paint.tools.mask.MaskTool
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,6 +35,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -184,6 +188,41 @@ class LiveAdjustSessionRobolectricTest {
         frame()
         val exactFrame = screenPixels()
         // The proxy frame showed the new effect (close to the exact frame, far from the old one).
+        val toExact = meanDiff(proxyFrame, exactFrame)
+        val toOld = meanDiff(before, exactFrame)
+        assertTrue("proxy frame ≈ exact ($toExact) vs the old frame ($toOld)", toExact < toOld / 4 && toExact < 2.0)
+    }
+
+    @Test
+    fun aMaskHandleDragIsDrawnFromProxiesThroughThePreviewAndConvergesOnRelease() {
+        setup()
+        // A visible effect first (Tone's defaults change nothing).
+        AdjustmentEdit(c, adj).apply { preview(spec(1.2f)); flush() }
+        drain()
+        c.selectTool(ToolId.MASK)
+        val tool = c.tools.getValue(ToolId.MASK) as MaskTool
+        assertSame(adj, tool.editLayer)
+        tool.select(1L)
+        frame()
+        val before = screenPixels()
+        // The radial's right-hand handle (cx + rx, cy), dragged inwards like a finger.
+        val x0 = 480f + 380f; val x1 = 700f
+        c.pointerDown(ToolPoint(x0, 400f))
+        for (i in 1..12) c.pointerMove(ToolPoint(x0 + (x1 - x0) * i / 12, 400f))
+        assertTrue("the drag previews through the Masks tool's override", c.renderOverride != null)
+        assertTrue("a live session follows the handle", c.liveAdjust.isActive)
+        assertTrue("the session draws the frame", frame())
+        assertTrue(c.liveAdjust.proxyBytes > 0)
+        val proxyFrame = screenPixels()
+        c.pointerUp(ToolPoint(x1, 400f))
+        assertEquals("Edit mask", c.undoManager.undoLabel)
+        assertEquals(x1 - 480f, (adj.maskSpec!!.components[0] as RadialMask).rx, 1e-3f)
+        // Release: the full-resolution mask is recorded, the canvas refines to exact.
+        assertConverged("mask handle drag")
+        frame()
+        val exactFrame = screenPixels()
+        // The proxy frame showed the dragged mask (the override's half-resolution preview at the
+        // proxy's scale, in the right place): close to the exact frame, far from the old one.
         val toExact = meanDiff(proxyFrame, exactFrame)
         val toOld = meanDiff(before, exactFrame)
         assertTrue("proxy frame ≈ exact ($toExact) vs the old frame ($toOld)", toExact < toOld / 4 && toExact < 2.0)
