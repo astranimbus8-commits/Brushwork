@@ -196,20 +196,27 @@ class EditorSmokeTest {
         click("Close layers", exact = true)
         assertFalse("layers window closed", has("Add layer"))
 
-        // ---- v1.5: the top bar starts with Vector; Filters is a tile of the tools grid
-        assertTrue("Vector action in the top bar", has("Vector", exact = true))
-        assertFalse("no Filters action in the top bar", has("Filters", exact = true))
+        // ---- v1.6: the ibisPaint top row (Vector before Selection); Filters is a cell of the tool menu
+        assertTrue("Vector circle in the top row", has("Vector", exact = true))
+        assertFalse("no Filters action on the main screen", has("Filters", exact = true))
         val vectorLeft = SmokeUi.find("Vector", exact = true)!!.bounds.left
         val selectionLeft = SmokeUi.find("Selection", exact = true)?.bounds?.left
-        assertNotNull("Selection still fits the 360 dp top bar", selectionLeft)
-        assertTrue("Vector is the first top-bar action", vectorLeft < selectionLeft!!)
+        assertNotNull("Selection still fits the 360 dp top row", selectionLeft)
+        assertTrue("Vector comes before Selection", vectorLeft < selectionLeft!!)
         click("Tools (current: Brush)")
         SmokeUi.assertPanelShown("Tools")
         click("Filters", exact = true)
         settle()
         SmokeUi.assertPanelShown()
-        assertTrue("the Filters tile opens the filter browser", has("Search filters"))
+        assertTrue("the Filters cell opens the filter browser", has("Search filters"))
         Smoke.assertQuiet(c, "panel Filters")
+        closeSheets(activity) { screenKey++ }
+        // Canvas: a cell of the tool menu (ibisPaint's place).
+        click("Tools (current: Brush)")
+        click("Canvas", exact = true)
+        settle()
+        SmokeUi.assertPanelShown("Canvas")
+        Smoke.assertQuiet(c, "panel Canvas")
         closeSheets(activity) { screenKey++ }
 
         // ---- every panel through the chrome
@@ -217,7 +224,6 @@ class EditorSmokeTest {
             "Open brush settings" to "PRESETS",
             "Open color picker" to "Previous",
             "Selection" to "Select all",
-            "Canvas" to "Canvas",
             "Ruler" to "Ruler",
         )
         for ((opener, expected) in panels) {
@@ -229,13 +235,26 @@ class EditorSmokeTest {
             SmokeUi.assertIdle("panel $opener")
             closeSheets(activity) { screenKey++ }
         }
-        for (entry in listOf("Grid", "Stabilizer", "Settings")) {
+        // Grid and Stabilizer are circles of the top row (panels); Canvas… and Settings are in
+        // the More menu (the settings are a dialog: its own window).
+        for (entry in listOf("Grid", "Stabilizer")) {
+            click(entry, exact = true)
+            settle()
+            SmokeUi.assertPanelShown(entry)
+            Smoke.assertQuiet(c, "panel $entry")
+            SmokeUi.assertIdle("panel $entry")
+            closeSheets(activity) { screenKey++ }
+        }
+        for (entry in listOf("Canvas…", "Settings", "Increments…")) {
             click("More options")
             assertWindowsLaidOut(2)
             click(entry, exact = true)
             settle()
-            // Grid and Stabilizer are panels; the settings are a dialog (its own window).
-            if (entry == "Settings") assertWindowsLaidOut(2) else SmokeUi.assertPanelShown(entry)
+            when (entry) {
+                "Settings" -> assertWindowsLaidOut(2)
+                "Canvas…" -> SmokeUi.assertPanelShown("Canvas")
+                else -> SmokeUi.assertPanelShown("Increments")
+            }
             Smoke.assertQuiet(c, "menu $entry")
             SmokeUi.assertIdle("panel $entry")
             closeSheets(activity) { screenKey++ }

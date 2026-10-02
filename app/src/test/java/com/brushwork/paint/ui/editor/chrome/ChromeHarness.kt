@@ -134,7 +134,11 @@ internal class ChromeScreen(val activity: ComponentActivity, val c: EditorContro
  * (what a screen reader announces for them, and what [SmokeUi.click] finds them by).
  */
 internal object Clickables {
-    class Item(val node: SemanticsNode, val labels: Set<String>, val bounds: Rect, val window: android.view.View)
+    /**
+     * A clickable on screen: [bounds] are what shows (clipped by a scrolling list), [width] ×
+     * [height] its own layout size in dp (the target a finger gets once it is scrolled into view).
+     */
+    class Item(val node: SemanticsNode, val labels: Set<String>, val bounds: Rect, val window: android.view.View, val width: Float, val height: Float)
 
     private fun SemanticsNode.ownLabels(): List<String> =
         config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
@@ -160,7 +164,7 @@ internal object Clickables {
     fun onScreen(screen: ChromeScreen, inside: Rect? = null, outside: List<Rect> = emptyList()): List<Item> =
         screen.placed()
             .filter { it.node.isClickable() }
-            .map { Item(it.node, it.node.mergedLabels(), screen.dp(it.bounds), it.window) }
+            .map { Item(it.node, it.node.mergedLabels(), screen.dp(it.bounds), it.window, it.node.size.width / screen.density, it.node.size.height / screen.density) }
             .filter { it.bounds.width > 0f && it.bounds.height > 0f }
             .filter { inside == null || inside.contains(it.bounds.center) }
             .filter { outside.none { o -> o.contains(it.bounds.center) } }

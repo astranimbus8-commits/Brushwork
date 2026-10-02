@@ -19,6 +19,7 @@ import com.brushwork.paint.smoke.SmokeUi.sheetTitles
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -35,7 +36,8 @@ import org.robolectric.shadows.ShadowLog
 /**
  * The editor's non-modal menus and its layers window on the user's phone (392 x 873 dp), in the
  * real [EditorScreen]:
- * - a panel is drawn in the editor's own window right above the hotbar; touching the canvas
+ * - a panel is drawn in the editor's own window on the bottom bar (v1.6: over the slider rows,
+ *   as in ibisPaint); touching the canvas
  *   folds it into a pill and the touch works on the canvas (pinch zoom, strokes; the text being
  *   edited stays and can be dragged and pinched meanwhile); the pill brings it back as it was
  *   (same scroll position);
@@ -87,13 +89,16 @@ class SheetHostEditorRobolectricTest {
             c.activeLayer.bitmap.getPixels(it, 0, c.doc.width, 0, 0, c.doc.width, c.doc.height)
         }
 
-        /** Top of the hotbar (window px): its Undo button. */
-        fun hotbarTop(): Float = (SmokeUi.find("Undo", exact = true) ?: throw AssertionError("no hotbar")).bounds.top
+        /** Top of the bottom bar (window px; v1.6, ibisPaint's bar): its colour slot spans the bar's height. */
+        fun hotbarTop(): Float = (SmokeUi.find("Open color picker", exact = true) ?: throw AssertionError("no bottom bar")).bounds.top
 
-        /** Bottom of the top chrome (window px): the tool options strip is its lowest part. */
+        /**
+         * Bottom of the top chrome (window px): the top row's circles, then the options strip
+         * (4 + 44 dp) and its 8 dp gap — the canvas fit inset (137 dp on the reference phone).
+         */
         fun topChromeBottom(): Float {
-            val back = SmokeUi.find("Back to gallery", exact = true) ?: throw AssertionError("no top bar")
-            return back.bounds.bottom + 48f * density
+            val more = SmokeUi.find("More options", exact = true) ?: throw AssertionError("no top row")
+            return more.bounds.bottom + 56f * density
         }
 
         /** A spot on the canvas between the top chrome and [below] (window px). */
@@ -120,12 +125,12 @@ class SheetHostEditorRobolectricTest {
         }
     }
 
-    private fun editor(layers: Int = 2): Screen {
+    private fun editor(layers: Int = 2, width: Int = 400, height: Int = 300): Screen {
         SmokeUi.markBaseline()
         val ctl = Robolectric.buildActivity(ComponentActivity::class.java).setup()
         activities += ctl
         val activity = ctl.get()
-        val c = Smoke.controller(activity, Smoke.document(400, 300, layers = layers, whiteBottom = true))
+        val c = Smoke.controller(activity, Smoke.document(width, height, layers = layers, whiteBottom = true))
         activity.setContent { BrushworkTheme { EditorScreen(c, onExit = {}, onSaveNow = {}) } }
         settle()
         c.tools
@@ -185,8 +190,8 @@ class SheetHostEditorRobolectricTest {
             e.node.config.contains(SemanticsActions.SetProgress) &&
                 e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.contains("Brush size") } == true
         }.maxByOrNull { it.bounds.bottom }?.bounds ?: throw AssertionError("no slider bar")
-        // (The Undo icon is 24 dp high in a 44 dp button, centered in the 56 dp high hotbar: 16 dp down.)
-        assertTrue("above the hotbar: panel ${panel.bottom} vs hotbar icon $hotbarTop", panel.bottom <= hotbarTop + 1f && hotbarTop - panel.bottom <= 17f * s.density)
+        // v1.6 §3.7.9: the panel's bottom sits on the bottom bar's top (over the slider rows).
+        assertTrue("on the bottom bar: panel ${panel.bottom} vs bar $hotbarTop", panel.bottom <= hotbarTop + 1f && hotbarTop - panel.bottom <= 1f * s.density)
         assertTrue("over the slider bar: panel $panel vs slider $sizeSlider", panel.bottom >= sizeSlider.bottom && panel.top <= sizeSlider.top)
         val screenH = s.activity.resources.configuration.screenHeightDp * s.density
         assertTrue("at most half the screen: ${panel.height / s.density} dp", panel.height <= screenH / 2f + 2f * s.density)
@@ -465,18 +470,25 @@ class SheetHostEditorRobolectricTest {
 
     // ================================================================== layers window
 
+    /** The layer window's bounds (window px), placed by the editor (v1.6: ibisPaint's 382 × 520 dp over the bottom). */
+    private fun layerWindow(): androidx.compose.ui.geometry.Rect = RobolectricUi.elements().last {
+        it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == ChromeTags.LAYER_WINDOW
+    }.bounds
+
     private fun layersTapOutside() {
-        val s = editor()
+        // A portrait artwork: its top part shows above the layer window, which covers the bottom
+        // of the screen as in ibisPaint.
+        val s = editor(width = 300, height = 600)
         val c = s.c
         click("Open layers")
         assertTrue(has("Close layers", exact = true))
-        val window = RobolectricUi.elements().last { it.node.config.getOrNull(SemanticsProperties.PaneTitle) == "Layers" }.bounds
+        val window = layerWindow()
         val before = s.pixels()
         val undo0 = c.undoManager.undoCount
-        // A tap on the canvas left of the window: the window closes, nothing is painted.
-        val docLeft = s.screen(0f, 0f).first
-        assertTrue("canvas left of the window", docLeft + 20f * s.density < window.left)
-        val spot = ((docLeft + window.left) / 2f) to (window.top + 40f * s.density)
+        // A tap on the artwork above the window: the window closes, nothing is painted.
+        val docTop = s.screen(0f, 0f).second
+        assertTrue("artwork above the window: $docTop vs ${window.top}", docTop + 40f * s.density < window.top)
+        val spot = s.screen(150f, 0f).first to (docTop + window.top) / 2f
         s.touch.idle(300)
         s.touch.tap(spot.first, spot.second)
         settle()
@@ -494,26 +506,29 @@ class SheetHostEditorRobolectricTest {
         click("Fit to screen", exact = true)
         assertTrue("still open", has("Close layers", exact = true))
 
-        // A stroke outside draws and keeps it open.
-        val x = (s.screen(0f, 0f).first + window.left) / 2f
-        val docX = c.viewTransform.screenToDoc(x - IntArray(2).also { s.canvas.getLocationInWindow(it) }[0], 0f).x
+        // A stroke outside (across the artwork above the window) draws and keeps it open.
+        val y = (s.screen(0f, 0f).second + window.top) / 2f
+        val docY = c.viewTransform.screenToDoc(0f, y - IntArray(2).also { s.canvas.getLocationInWindow(it) }[1]).y
+        assertTrue("the stroke row is on the artwork: $docY", docY in 5f..595f)
         s.touch.idle(300)
-        s.touch.stroke(s.screen(docX, 40f), s.screen(docX, 260f))
+        s.touch.stroke(s.screen(40f, docY), s.screen(260f, docY))
         settle()
         assertEquals("the stroke was drawn", undo0 + 1, c.undoManager.undoCount)
-        assertEquals(RED, c.activeLayer.bitmap.getPixel(docX.toInt(), 150))
+        assertEquals(RED, c.activeLayer.bitmap.getPixel(150, docY.toInt()))
         assertTrue("still open after the stroke", has("Close layers", exact = true))
 
         // A tap on the window itself keeps it open (its rows and buttons work as usual).
-        val w2 = RobolectricUi.elements().last { it.node.config.getOrNull(SemanticsProperties.PaneTitle) == "Layers" }.bounds
+        val w2 = layerWindow()
         RobolectricUi.tap(s.activity.window.decorView, w2.left + 12f * s.density, w2.top + 20f * s.density)
         assertTrue("a tap on the window keeps it", has("Close layers", exact = true))
 
-        // A tap on the chrome that no button takes (the document title) closes it too.
-        val title = SmokeUi.find("Smoke", exact = true) ?: throw AssertionError("no title")
-        title.tap()
-        assertFalse("a tap on the top bar closed the window", has("Close layers", exact = true))
-        // ...while the hotbar's buttons keep working with it open (a real tap on Undo).
+        // A tap on the chrome that no button takes (the options strip's padding) closes it too.
+        val strip = RobolectricUi.elements().last {
+            it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == ChromeTags.OPTIONS_STRIP
+        }.bounds
+        RobolectricUi.tap(s.activity.window.decorView, strip.left + 3f * s.density, strip.center.y)
+        assertFalse("a tap on the options strip closed the window", has("Close layers", exact = true))
+        // ...while the chrome's buttons keep working with it open (a real tap on Undo).
         click("Open layers")
         SmokeUi.tap("Undo", exact = true)
         assertEquals("undo worked with the window open", undo0, c.undoManager.undoCount)

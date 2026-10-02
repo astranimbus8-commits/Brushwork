@@ -159,6 +159,15 @@ class IbisLayoutMetricsTest {
         // The tools button shows the open state and closes it again.
         click("Tools (current: Brush)")
         assertNull("closed", s.tagged(ChromeTags.TOOL_MENU))
+        // A minimized panel's pill steps aside while the menu is open (it would sit on its cells).
+        click("Open color picker")
+        click("Minimize", exact = true)
+        assertEquals(listOf("Color"), SmokeUi.pillTitles())
+        click("Tools (current: Brush)")
+        assertEquals("no pill over the menu", emptyList<String>(), SmokeUi.pillTitles())
+        click("Tools (current: Brush)")
+        assertEquals("the pill is back", listOf("Color"), SmokeUi.pillTitles())
+        click("Close Color", exact = true)
     }
 
     private fun layerWindow(h: ChromeHarness) {
@@ -229,5 +238,83 @@ class IbisLayoutMetricsTest {
         near("top row back", st, s.tagged(ChromeTags.TOP_ROW)!!.top)
         click("Apply shape edit")
         Smoke.assertQuiet(s.c, "pending and hide")
+    }
+}
+
+/**
+ * The compaction rules of §3.7.2 on a 360 × 760 dp phone: the top row keeps all 8 circles at a
+ * 44 dp pitch (36 dp circles, touch ≥ 44 dp), the 7 bottom slots share the width, the slider rows
+ * keep their left part and end 37 dp from the right edge, the tool menu stays 150 wide (and never
+ * reaches the top row), the layer window is w − 10 wide with its bottom on the bar.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w360dp-h760dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.ibislayoutnarrowsandbox"])
+class IbisLayoutMetricsNarrowTest {
+
+    private fun near(what: String, expected: Float, actual: Float, tol: Float = 1f) =
+        assertEquals("$what: expected $expected dp, got $actual", expected, actual, tol)
+
+    @Test
+    fun aNarrowPhoneCompactsTheBands() {
+        ShadowLog.stream = null
+        SmokeUi.installTestRecomposer()
+        val dog = Smoke.watchdog()
+        val h = ChromeHarness()
+        h.section("360 × 760 dp") {
+            val s = h.editor()
+            val (st, nav) = s.insetsDp()
+            val w = s.widthDp
+            val hh = s.heightDp
+            near("screen width", 360f, w)
+            // Top row: pitch min(48, (360 − 8) / 8) = 44, circles 36.
+            val spec = ChromeLayout.topRow(w)
+            assertEquals(44f, spec.pitch, 0.01f)
+            assertEquals(36f, spec.circle, 0.01f)
+            listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options").forEachIndexed { i, label ->
+                val b = s.clickable(label) ?: throw AssertionError("no \"$label\"")
+                near("$label centre x", 22f + 44f * i, b.center.x)
+                near("$label touch width", 44f, b.width)
+                near("$label touch height", 48f, b.height)
+                near("$label top", st, b.top)
+            }
+            // Bottom bar: 7 slots sharing 360 dp.
+            val slot = 360f / 7f
+            listOf("Switch to eraser", "Tools (current: Brush)", "Open brush settings", "Open color picker", "Hide interface", "Open layers (active layer 2)", "Back to gallery").forEachIndexed { i, label ->
+                val b = s.clickable(label) ?: throw AssertionError("no \"$label\"")
+                near("$label left", slot * i, b.left)
+                near("$label width", slot, b.width)
+                near("$label height", 50f, b.height)
+                near("$label top", hh - nav - 50f, b.top)
+            }
+            // Slider rows: the left part as on the reference phone, the right end 37 dp in.
+            val minus = s.clickable("Smaller brush")!!
+            near("− centre", 73f, minus.center.x)
+            val plus = s.clickable("Bigger brush")!!
+            near("+ right edge", w, plus.right)
+            assertTrue("+ (centre ${w - 17f}) in its box", (w - 17f) in plus.left..plus.right)
+            val value = s.clickable("Type brush size")!!
+            near("value width", 58f, value.width)
+            near("slider rows top", hh - nav - 130f, s.tagged(ChromeTags.SLIDER_ROWS)!!.top)
+            // Tool menu: 150 wide at x 6, 16 above the bar, under the top row.
+            click("Tools (current: Brush)")
+            val menu = s.tagged(ChromeTags.TOOL_MENU) ?: throw AssertionError("no tool menu")
+            near("menu left", 6f, menu.left)
+            near("menu width", 150f, menu.width)
+            near("menu bottom", hh - nav - 50f - 16f, menu.bottom)
+            assertTrue("the menu stays under the top row: $menu", menu.top >= st + 48f - 0.5f)
+            assertTrue("at most 434 tall", menu.height <= 434.5f)
+            click("Tools (current: Brush)")
+            // Layer window: w − 10 wide at x 5, its bottom on the bar.
+            click("Open layers")
+            val lw = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
+            near("window left", 5f, lw.left)
+            near("window width", 350f, lw.width)
+            near("window bottom", hh - nav - 50f, lw.bottom)
+            near("window height", minOf(520f, hh - nav - 50f - st - 48f - 8f), lw.height)
+            click("Close layers", exact = true)
+            Smoke.assertQuiet(s.c, "narrow bands")
+        }
+        dog.interrupt()
+        h.finish()
     }
 }

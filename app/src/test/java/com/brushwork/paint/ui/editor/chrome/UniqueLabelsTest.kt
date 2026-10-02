@@ -17,7 +17,8 @@ import org.robolectric.shadows.ShadowLog
 /**
  * I10 (v1.6 §3.7.11): labels are an API, unique among the visible clickables — on the main
  * screen, with the tool menu open, with the layer window open, with a minimized panel's pill
- * beside the X / Y pill, and with the More menu open — at the user's phone size.
+ * beside the X / Y pill, and with the More menu open — at the user's phone size, and on a 360 dp
+ * phone ([UniqueLabelsNarrowTest]).
  *
  * One pair is shared by design and allowed here: with the tool menu open, the top row's "Ruler"
  * circle (the Ruler panel) and the tool menu's "Ruler" cell (the Ruler tool) — I10 keeps both
@@ -27,14 +28,41 @@ import org.robolectric.shadows.ShadowLog
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.uniquelabelssandbox"])
 class UniqueLabelsTest {
+    @Test
+    fun labelsAreUniqueAmongVisibleClickables() = UniqueLabels.run()
+}
+
+/** The same audit on a 360 × 760 dp phone. */
+@RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w360dp-h760dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.uniquelabelsnarrowsandbox"])
+class UniqueLabelsNarrowTest {
+    @Test
+    fun labelsAreUniqueAmongVisibleClickablesAt360dp() = UniqueLabels.run()
+}
+
+internal object UniqueLabels {
+
+    /**
+     * A value a control shows ("100%", "8.0", "12 px", "45°"), not its name: two controls may
+     * show the same value (the brush's and the layer's opacity at 100 %).
+     */
+    private val VALUE = Regex("""^[-+]?[\d.,\s]+(%|px|°| px| %)?$""")
 
     private fun assertUnique(where: String, items: List<Clickables.Item>, allowed: Set<String> = emptySet()) {
-        val dups = Clickables.duplicates(items).filterKeys { it !in allowed }
+        val dups = Clickables.duplicates(items).filterKeys { it !in allowed && !VALUE.matches(it) }
         assertTrue("$where: labels shared by several clickables: $dups", dups.isEmpty())
     }
 
-    @Test
-    fun labelsAreUniqueAmongVisibleClickables() {
+    /**
+     * The layer window's own labels of the I10 table (§3.7.11): each on one control while the
+     * window is open, whichever version of the window (area F's ibis window or the v1.5 one).
+     */
+    private val WINDOW_LABELS = listOf(
+        "Close layers", "Add layer", "Duplicate layer", "Delete layer", "Merge down", "More layer actions",
+        "Choose blend mode", "Type layer opacity",
+    )
+
+    fun run() {
         ShadowLog.stream = null
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog()
@@ -65,7 +93,20 @@ class UniqueLabelsTest {
 
             click("Open layers")
             val layers = Clickables.onScreen(s)
-            assertUnique("layer window open", layers)
+            val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
+            if (layers.any { "Filters for this layer" in it.labels }) {
+                // Area F's ibis window (its rows say "Hide layer N", "Reorder layer N"…): every
+                // label on screen is unique.
+                assertUnique("layer window open", layers)
+            } else {
+                // The v1.5 window (before area F merges) repeats its row labels ("Hide layer" on
+                // every row): the chrome around it is unique, and so are the window's I10 labels.
+                assertUnique("chrome around the layer window", Clickables.onScreen(s, outside = listOf(window)))
+                assertUnique("the chrome and the window's I10 labels", layers.filter { item -> item.labels.any { it in WINDOW_LABELS } || !window.contains(item.bounds.center) })
+            }
+            for (label in WINDOW_LABELS.filter { l -> layers.any { l in it.labels } }) {
+                assertEquals("\"$label\" on one control", 1, layers.count { label in it.labels })
+            }
             assertEquals("the window ✕", 1, layers.count { "Close layers" in it.labels })
             assertEquals("the layers slot", 1, layers.count { "Close layers (active layer 2)" in it.labels })
             click("Close layers", exact = true)
@@ -96,8 +137,10 @@ class UniqueLabelsTest {
             val popup = Clickables.onScreen(s).filter { it.window !== s.activity.window.decorView }
             assertTrue("the menu is a dropdown: ${popup.size}", popup.size >= 15)
             assertUnique("More menu", popup)
+            // (The menu scrolls on a short phone: the last entries may be below its fold.)
             for (entry in listOf("Canvas…", "Increments…", "Settings", "Export SVG…", "Fit to screen")) {
-                assertEquals("\"$entry\" in the menu", 1, popup.count { entry in it.labels })
+                assertTrue("\"$entry\" in the menu", SmokeUi.has(entry, exact = true))
+                assertTrue("\"$entry\" at most once on screen", popup.count { entry in it.labels } <= 1)
             }
             SmokeUi.windows().last().let { w ->
                 w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))

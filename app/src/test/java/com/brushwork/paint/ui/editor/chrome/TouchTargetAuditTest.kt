@@ -14,11 +14,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 
 /**
- * v1.6 §3.7.11: every clickable of the main screen is at least 40 × 40 dp (fingers on a 392 dp
- * phone): the top row, the options strip, the slider rows, the bottom bar, the ✓ / ✕, the tool
- * menu, the More menu, a minimized panel's pill — at the user's phone size and on a 360 dp phone
+ * v1.6 §3.7.11: every clickable of the main screen's chrome is at least 40 × 40 dp (fingers on a
+ * 392 dp phone): the top row, the slider rows, the bottom bar, the ✓ / ✕, the tool menu, the More
+ * menu, a minimized panel's pill — at the user's phone size and on a 360 dp phone
  * ([TouchTargetAuditNarrowTest]). The layer window's own targets are area F's
- * (LayerWindowIbisLayoutTest); here only its host's.
+ * (LayerWindowIbisLayoutTest); here only its host's. The options strip's content is each tool's
+ * own (see [TouchTargets]).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.touchtargetsandbox"])
@@ -54,13 +55,24 @@ class TouchTargetAuditNarrowTest {
 internal object TouchTargets {
     private const val MIN = 40f
 
+    private lateinit var s: ChromeScreen
+
+    /**
+     * Every clickable's own size (a tool-menu cell half scrolled out is still its full cell),
+     * except the tools' own controls inside the options strip: they belong to each tool's area
+     * (Material chips 32 dp tall, whose touch area Compose extends to its 48 dp minimum touch
+     * target); the strip panel around them has no target of its own.
+     */
     private fun check(where: String, items: List<Clickables.Item>) {
-        val small = items.filter { it.bounds.width < MIN - 0.5f || it.bounds.height < MIN - 0.5f }
-        assertTrue("$where: clickables under $MIN dp: ${small.map { "${it.labels} ${it.bounds.width} × ${it.bounds.height}" }}", small.isEmpty())
+        val strip = s.tagged(ChromeTags.OPTIONS_STRIP)
+        val small = items
+            .filter { strip == null || !strip.contains(it.bounds.center) }
+            .filter { it.width < MIN - 0.5f || it.height < MIN - 0.5f }
+        assertTrue("$where: clickables under $MIN dp: ${small.map { "${it.labels} ${it.width} × ${it.height}" }}", small.isEmpty())
     }
 
     fun audit(h: ChromeHarness) {
-        val s = h.editor()
+        s = h.editor()
         val main = Clickables.onScreen(s)
         assertTrue(main.size >= 20)
         check("main screen", main)
