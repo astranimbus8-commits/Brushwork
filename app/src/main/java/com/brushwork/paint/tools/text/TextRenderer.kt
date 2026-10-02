@@ -40,7 +40,7 @@ class TextBlock internal constructor(
     private val drawGlyphs: ((Canvas, TextPaint) -> Unit)?,
     /** Unwrapped horizontal text: its layout (for [TextExport]). */
     internal val staticLayout: StaticLayout? = null,
-    /** Text wrapped around a picture: its lines, in text area coordinates. */
+    /** Text wrapped around a picture, or a frame of a linked story (v1.6): its lines, in text area coordinates. */
     internal val wrapLines: List<WrapLine>? = null,
     /** Adds the glyph outlines (text area coordinates) to a path, as [drawGlyphs] draws them. */
     private val outlineGlyphs: ((Path, TextPaint) -> Unit)? = null,
@@ -48,7 +48,7 @@ class TextBlock internal constructor(
     /** True when there is nothing to draw (empty text); the box still has a placeholder size. */
     val isEmpty: Boolean get() = drawGlyphs == null
 
-    /** True for text laid out around a picture ([wrapLines]). */
+    /** True for text laid out by [WrapLayout] ([wrapLines]): around a picture, or a frame of a linked story (v1.6). */
     val isWrapped: Boolean get() = wrapLines != null
 
     /** Distance from the box edge to the text area. */
