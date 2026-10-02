@@ -1,0 +1,40 @@
+<svg width="400" height="300" viewBox="0 0 400 300" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g clip-path="url(#clip0_1_2)">
+<rect width="400" height="300" fill="white"/>
+<g filter="url(#filter0_d_1_2)">
+<rect x="40" y="40" width="160" height="100" rx="12" fill="#6366F1"/>
+</g>
+<path fill-rule="evenodd" clip-rule="evenodd" d="M250 50H350V150H250V50ZM270 70V130H330V70H270Z" fill="url(#paint0_linear_1_2)"/>
+<circle cx="300" cy="230" r="40" stroke="#111827" stroke-width="4"/>
+<path d="M40 200C40 188.954 48.9543 180 60 180H180C191.046 180 200 188.954 200 200V260C200 271.046 191.046 280 180 280H60C48.9543 280 40 271.046 40 260V200Z" fill="url(#paint1_radial_1_2)"/>
+<mask id="mask0_1_2" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="40" y="180" width="160" height="100">
+<rect x="40" y="180" width="160" height="100" fill="#D9D9D9"/>
+</mask>
+<g mask="url(#mask0_1_2)">
+<circle cx="120" cy="230" r="30" fill="#F472B6" fill-opacity="0.8"/>
+</g>
+</g>
+<defs>
+<filter id="filter0_d_1_2" x="36" y="40" width="168" height="108" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="4"/>
+<feGaussianBlur stdDeviation="2"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_1_2"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_1_2" result="shape"/>
+</filter>
+<linearGradient id="paint0_linear_1_2" x1="250" y1="50" x2="350" y2="150" gradientUnits="userSpaceOnUse">
+<stop stop-color="#F59E0B"/>
+<stop offset="1" stop-color="#EF4444"/>
+</linearGradient>
+<radialGradient id="paint1_radial_1_2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(120 230) rotate(90) scale(50 80)">
+<stop stop-color="#34D399"/>
+<stop offset="1" stop-color="#065F46"/>
+</radialGradient>
+<clipPath id="clip0_1_2">
+<rect width="400" height="300" fill="white"/>
+</clipPath>
+</defs>
+</svg>

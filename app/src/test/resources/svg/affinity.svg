@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 500 500" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linejoin:round;stroke-miterlimit:2;">
+    <g transform="matrix(1,0,0,1,-120.5,-80.25)">
+        <g id="Layer1" serif:id="Layer 1">
+            <path d="M200,200L400,200L300,380L200,200Z" style="fill:rgb(235,87,87);"/>
+            <g transform="matrix(0.8,0,0,0.8,50,40)">
+                <circle cx="300" cy="300" r="50" style="fill:url(#_Linear1);stroke:black;stroke-width:4.17px;"/>
+            </g>
+            <g transform="matrix(1,0,0,1,150,400)">
+                <use xlink:href="#_Image2" x="0" y="0" width="64px" height="64px"/>
+            </g>
+            <path d="M450,120C480,150 520,150 550,120" style="fill:none;stroke:rgb(40,40,40);stroke-width:6px;stroke-linecap:round;"/>
+            <g transform="matrix(0.866025,0.5,-0.5,0.866025,200,120)">
+                <rect x="0" y="0" width="60" height="30" style="fill:hsl(200,80%,50%);fill-opacity:0.7;"/>
+            </g>
+        </g>
+    </g>
+    <defs>
+        <linearGradient id="_Linear1" x1="0" y1="0" x2="1" y2="0" gradientUnits="userSpaceOnUse" gradientTransform="matrix(100,0,0,100,250,300)"><stop offset="0" style="stop-color:rgb(0,0,0);stop-opacity:1"/><stop offset="1" style="stop-color:white;stop-opacity:0.5"/></linearGradient>
+        <image id="_Image2" width="64px" height="64px" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="/>
+    </defs>
+</svg>
