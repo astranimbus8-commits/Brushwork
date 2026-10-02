@@ -133,13 +133,15 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
      * [layer]'s cache equals a fresh render of its objects: exactly, or (shifted caches, merged
      * caches) all but [maxOffPermille] per mille of the painted pixels within [tolerance] levels.
      */
-    fun assertCacheFresh(where: String, layer: Layer, tolerance: Int = 0, maxOffPermille: Int = 0) {
+    fun assertCacheFresh(where: String, layer: Layer, tolerance: Int = 0, maxOffPermille: Int = 0, near: Boolean = false) {
         val v = layer.vector ?: throw AssertionError("$where: \"${layer.name}\" is not a vector layer")
         val fresh = render(v)
         val cache = pixels(layer.bitmap)
         if (tolerance == 0 && maxOffPermille == 0) {
             if (fresh.contentEquals(cache)) return
         }
+        val w = c.doc.width
+        val h = c.doc.height
         var off = 0
         var worst = 0
         var at = -1
@@ -148,7 +150,26 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
             if (fresh[i] != 0 || cache[i] != 0) painted++
             if (fresh[i] == cache[i]) continue
             var d = 0
-            for (s in intArrayOf(24, 16, 8, 0)) d = maxOf(d, abs(((fresh[i] ushr s) and 0xFF) - ((cache[i] ushr s) and 0xFF)))
+            for (s in intArrayOf(24, 16, 8, 0)) {
+                val cv = (cache[i] ushr s) and 0xFF
+                if (!near) {
+                    d = maxOf(d, abs(((fresh[i] ushr s) and 0xFF) - cv))
+                    continue
+                }
+                // [near]: an anti-aliased edge a fraction of a pixel away (a cache whose pixels were
+                // mirrored or turned) lies between the values of the fresh rendering's 3 x 3
+                // neighbourhood; a missing or stale object does not.
+                val x = i % w
+                val y = i / w
+                var lo = 255
+                var hi = 0
+                for (yy in maxOf(0, y - 1)..minOf(h - 1, y + 1)) for (xx in maxOf(0, x - 1)..minOf(w - 1, x + 1)) {
+                    val fv = (fresh[yy * w + xx] ushr s) and 0xFF
+                    if (fv < lo) lo = fv
+                    if (fv > hi) hi = fv
+                }
+                d = maxOf(d, lo - cv, cv - hi)
+            }
             if (d > tolerance) {
                 off++
                 if (d > worst) { worst = d; at = i }
@@ -166,7 +187,7 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
     // ------------------------------------------------------------------ states and checkpoints
 
     /** One layer as the user can see and the history must restore it. */
-    data class LayerState(val id: Long, val name: String, val vector: VectorContent?, val text: String?, val shape: String?, val bands: List<Int>)
+    data class LayerState(val id: Long, val name: String, val vector: VectorContent?, val text: String?, val shape: String?, val bands: List<Int>, val mask: List<Int>? = null)
 
     data class State(val layers: List<LayerState>) {
         fun layer(id: Long) = layers.first { it.id == id }
@@ -186,7 +207,21 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
         return out
     }
 
-    fun snapshot(): State = State(c.doc.layers.map { LayerState(it.id, it.name, it.vector, it.textData, it.shapeData, bands(it.bitmap)) })
+    fun snapshot(): State = State(c.doc.layers.map { LayerState(it.id, it.name, it.vector, it.textData, it.shapeData, bands(it.bitmap), it.mask?.let { m -> maskBands(m) }) })
+
+    /** [bands] of an ALPHA_8 mask (its alpha bytes as ints). */
+    private fun maskBands(m: Bitmap): List<Int> {
+        if (m.config != Bitmap.Config.ALPHA_8) return bands(m)
+        val bytes = BitmapUtils.alpha8ToBytes(m)
+        val out = ArrayList<Int>()
+        var y = 0
+        while (y < m.height) {
+            val n = minOf(16, m.height - y)
+            out += bytes.copyOfRange(y * m.width, (y + n) * m.width).contentHashCode()
+            y += n
+        }
+        return out
+    }
 
     fun assertState(where: String, expected: State, actual: State = snapshot()) {
         assertEquals("$where: layers", expected.layers.map { it.id to it.name }, actual.layers.map { it.id to it.name })
@@ -197,6 +232,10 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
             if (e.bands != a.bands) {
                 val bad = e.bands.indices.filter { e.bands[it] != a.bands.getOrNull(it) }
                 throw AssertionError("$where: pixels of \"${e.name}\" differ in rows ${bad.map { "${it * 16}..${it * 16 + 15}" }.take(6)}")
+            }
+            if (e.mask != a.mask) {
+                val bad = (e.mask ?: emptyList()).indices.filter { e.mask!![it] != a.mask?.getOrNull(it) }
+                throw AssertionError("$where: mask of \"${e.name}\" ${if (a.mask == null || e.mask == null) "present / missing" else "differs in rows ${bad.map { "${it * 16}..${it * 16 + 15}" }.take(6)}"}")
             }
         }
     }
@@ -213,7 +252,7 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
      * cache is its rendering (exactly unless [tolerance] / [maxOffPermille] say otherwise for this
      * point, e.g. after a pixel-shifted move).
      */
-    fun checkpoint(where: String, steps: Int? = 1, tolerance: Int = 0, maxOffPermille: Int = 0): State {
+    fun checkpoint(where: String, steps: Int? = 1, tolerance: Int = 0, maxOffPermille: Int = 0, near: Boolean = false): State {
         Smoke.step(where)
         Smoke.pump(40)
         assertTrue("$where: still rendering", Smoke.pumpUntil(20_000) { !c.vectors.isRendering && c.busyMessage == null })
@@ -225,7 +264,7 @@ internal class VectorQaRig(val w: Int = 600, val h: Int = 400, background: Int? 
         else assertTrue("$where: $grew undo steps recorded", grew in 0..1)
         val s = snapshot()
         if (grew == 0) last?.let { assertState("$where: changed without an undo step", it, s) }
-        for (l in c.doc.layers) if (l.isVectorLayer) assertCacheFresh(where, l, tolerance, maxOffPermille)
+        for (l in c.doc.layers) if (l.isVectorLayer) assertCacheFresh(where, l, tolerance, maxOffPermille, near)
         // Redo was cleared by the new step: states above it are gone.
         if (grew > 0) history.keys.filter { it > now }.forEach { history.remove(it) }
         history[now] = s

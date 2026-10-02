@@ -1360,7 +1360,8 @@ class EditorController(
         override val byteSize: Long get() = 256L
 
         fun flipBitmap(c: EditorController) = c.structural {
-            layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+            // In place: earlier steps that keep this mask bitmap must keep finding it (v1.5 QA).
+            layer.mask?.let { BitmapUtils.flipInPlace(it, horizontal) }
             layer.markChanged()
         }
 
@@ -1382,9 +1383,12 @@ class EditorController(
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
         val flip: (EditorController) -> Unit = { c ->
             c.structural {
-                val old = layer.bitmap
-                layer.bitmap = BitmapUtils.flipped(old, horizontal)
-                layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+                // In place (self-inverse): the layer keeps its bitmaps, so an earlier step that
+                // holds them (a canvas operation, a merge) still sees every later edit undone in
+                // them; a new bitmap per flip left those edits in the held one, and its redo
+                // brought them back (v1.5 QA).
+                BitmapUtils.flipInPlace(layer.bitmap, horizontal)
+                layer.mask?.let { BitmapUtils.flipInPlace(it, horizontal) }
                 layer.markChanged()
             }
         }
