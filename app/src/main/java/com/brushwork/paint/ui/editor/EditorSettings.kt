@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.AppSettings
+import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.SectionHeader
@@ -51,14 +52,36 @@ class EditorPrefs(private val settings: AppSettings) {
         get() = _autosave
         set(v) { _autosave = v; settings.autosaveSeconds = v }
 
+    /** Bumped when [safeCompositing] is set here (the value itself also changes from the Masks tool). */
+    private var safeCompositingSets by mutableIntStateOf(0)
+
+    /**
+     * "Safe compositing" (v1.5, I5's kill switch): adjustment layers show on the canvas without
+     * their effect. Read from the compositor's live switch (the Masks tool's sheet changes it too),
+     * saved in [AppSettings.safeCompositing].
+     */
+    var safeCompositing: Boolean
+        get() {
+            safeCompositingSets
+            return AdjustmentStage.safeCompositing
+        }
+        set(v) {
+            settings.safeCompositing = v
+            AdjustmentStage.safeCompositing = v
+            safeCompositingSets++
+        }
+
     companion object {
         val AUTOSAVE_CHOICES = listOf(15, 30, 45, 60, 120)
     }
 }
 
-/** Gesture, layout and autosave preferences of the editor. */
+/**
+ * Gesture, layout, display and autosave preferences of the editor. [onCanvasChanged] redraws the
+ * canvas after a display setting changed.
+ */
 @Composable
-fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit) {
+fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChanged: () -> Unit = {}) {
     BwDialog(title = "Editor settings", onDismiss = onDismiss) {
         SectionHeader("Gestures")
         ToggleRow("Two-finger tap to undo", prefs.twoFingerUndo, { prefs.twoFingerUndo = it })
@@ -81,6 +104,13 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit) {
             prefs.leftHanded,
             { prefs.leftHanded = it },
             description = "Brush size and opacity values and the eyedropper on the left of the slider bar",
+        )
+        SectionHeader("Display")
+        ToggleRow(
+            "Safe compositing",
+            prefs.safeCompositing,
+            { prefs.safeCompositing = it; onCanvasChanged() },
+            description = "Show adjustment layers on the canvas without their effect (if the canvas misbehaves). Exports, merging and the eyedropper still use the effect.",
         )
         SectionHeader("Autosave every")
         val choices = EditorPrefs.AUTOSAVE_CHOICES

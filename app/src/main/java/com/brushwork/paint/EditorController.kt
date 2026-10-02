@@ -714,10 +714,10 @@ class EditorController(
         return true
     }
 
-    /** False (with a message) when [layer] is locked or hidden. */
-    private fun checkUsable(layer: Layer): Boolean {
+    /** False (with a message) when [layer] is locked or hidden (unless [allowHidden]). */
+    private fun checkUsable(layer: Layer, allowHidden: Boolean = false): Boolean {
         if (layer.locked) { toast("Layer \"${layer.name}\" is locked"); return false }
-        if (!layer.visible) { toast("Layer \"${layer.name}\" is hidden"); return false }
+        if (!layer.visible && !allowHidden) { toast("Layer \"${layer.name}\" is hidden"); return false }
         return true
     }
 
@@ -923,10 +923,12 @@ class EditorController(
      * Re-renders the editable text layer [layer] with new text: clears [dirty] (document px; it
      * must cover the old AND the new text, null = the whole layer), lets [draw] paint the new text
      * and stores [textData] — one undo step named [label] that restores both pixels and text.
-     * Returns false if the layer is gone or can't be edited. (A wrapper of [updateLayerData].)
+     * Returns false if the layer is gone or can't be edited. With [allowHidden] a hidden (not
+     * locked) layer is updated too: text wrapped around a picture follows it while hidden, so it
+     * is right when shown again. (A wrapper of [updateLayerData].)
      */
-    fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, draw: (Canvas) -> Unit): Boolean =
-        updateLayerData(layer, layer.dataSnapshot().copy(text = textData), label, dirty, EditTarget.CONTENT, draw, "Not enough memory to update the text")
+    fun updateTextLayer(layer: Layer, textData: String, label: String, dirty: Rect? = null, allowHidden: Boolean = false, draw: (Canvas) -> Unit): Boolean =
+        updateLayerData(layer, layer.dataSnapshot().copy(text = textData), label, dirty, EditTarget.CONTENT, draw, "Not enough memory to update the text", allowHidden)
 
     /**
      * Re-renders the editable shape layer [layer]: clears [dirty] (document px; it must cover the
@@ -945,7 +947,9 @@ class EditorController(
      * old AND the new rendering, null = the whole layer) and [draw] paints the new rendering
      * there; the step restores both pixels (tiles of [dirty]) and data. With a null [draw] only
      * the data changes (the pixels must already match). Returns false if the layer is gone,
-     * locked or hidden (adjustment layers are accepted: their data can always change).
+     * locked or hidden (adjustment layers are accepted: their data can always change); with
+     * [allowHidden] a hidden layer is updated too (an edit that follows another layer's, e.g. a
+     * re-flow of wrapped text, not a tool's).
      */
     internal fun updateLayerData(
         layer: Layer,
@@ -953,8 +957,9 @@ class EditorController(
         label: String,
         dirty: Rect?,
         target: EditTarget = EditTarget.CONTENT,
+        allowHidden: Boolean = false,
         draw: ((Canvas) -> Unit)?,
-    ): Boolean = updateLayerData(layer, after, label, dirty, target, draw, "Not enough memory for \"$label\"")
+    ): Boolean = updateLayerData(layer, after, label, dirty, target, draw, "Not enough memory for \"$label\"", allowHidden)
 
     private fun updateLayerData(
         layer: Layer,
@@ -964,8 +969,9 @@ class EditorController(
         target: EditTarget,
         draw: ((Canvas) -> Unit)?,
         oomMessage: String,
+        allowHidden: Boolean = false,
     ): Boolean = editScope {
-        if (doc.indexOf(layer) < 0 || !checkUsable(layer)) return@editScope false
+        if (doc.indexOf(layer) < 0 || !checkUsable(layer, allowHidden)) return@editScope false
         val before = layer.dataSnapshot()
         if (draw == null) {
             storeData(layer, before, after, label, target)
@@ -1516,7 +1522,16 @@ class EditorController(
         }
     }
 
-    fun setMaskEnabled(layer: Layer, enabled: Boolean) = setLayerProps(layer, layer.props().copy(maskEnabled = enabled), if (enabled) "Enable mask" else "Disable mask")
+    /**
+     * Switches [layer]'s mask on or off (one step). It changes what the layer shows, so it is
+     * reported as an edit of the mask (v1.5: text wrapped around the layer re-flows in that step).
+     */
+    fun setMaskEnabled(layer: Layer, enabled: Boolean) = editScope {
+        if (layer.maskEnabled == enabled) return@editScope
+        val label = if (enabled) "Enable mask" else "Disable mask"
+        setLayerProps(layer, layer.props().copy(maskEnabled = enabled), label)
+        if (layer.mask != null) queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+    }
 
     /** Switches painting between the layer's pixels and its mask (not an undoable change). */
     fun setEditingMask(layer: Layer, editing: Boolean) {

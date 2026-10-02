@@ -1,13 +1,10 @@
 package com.brushwork.paint.tools.text
 
 import android.graphics.Canvas
-import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditListener
 import com.brushwork.paint.EditorController
-import com.brushwork.paint.engine.EditTarget
-import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.model.Layer
 import java.lang.ref.WeakReference
 
@@ -15,14 +12,16 @@ import java.lang.ref.WeakReference
  * Re-flows text wrapped around a picture when that picture's layer is edited (v1.5 §4.1). The
  * controller creates it at init (`controller.textWrap`, so it works before the Text tool exists)
  * and registers it as an [EditListener]: after ANY committed edit of a source layer (transform,
- * brush, eraser, clear, filter, vector edit, mask change...), every text layer wrapped around it
+ * brush, eraser, clear, filter, vector edit, mask change, mask switched on or off...), every text
+ * layer wrapped around it
  * gets the picture's new outline and is drawn again INSIDE that edit's undo step
  * ([EditorController.amendLastStep], invariant I2): one undo restores picture and text.
  *
  * - Undo and redo never re-flow (the controller doesn't report them; the amended step restores
  *   the text with its picture).
  * - The text open in the Text tool is skipped: the tool re-flows it live ([TextTool.onWrapSourceEdited]).
- * - Locked or hidden text layers are left as they are (they can't be edited).
+ * - Locked text layers are left as they are (they can't be edited); hidden ones follow their
+ *   picture (`updateTextLayer(allowHidden = true)`), so they are right when shown again.
  * - A picture layer that is deleted is no edit: its texts keep their last outline.
  * - One edit may report several events for a layer (a vector stroke: pixels, then data): the
  *   outline cache ([contours], keyed by content version) makes the second one find nothing new.
@@ -96,51 +95,12 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
         val draw: (Canvas) -> Unit = { cv -> TextRenderer.drawItem(cv, next, prep, null) }
         try {
             c.amendLastStep {
-                val done = if (layer.visible) c.updateTextLayer(layer, json, REFLOW_LABEL, dirty, draw) else updateHidden(layer, json, dirty, draw)
-                if (done) reflowCount++
+                // A hidden text still follows its picture, so it is right when it is shown again.
+                if (c.updateTextLayer(layer, json, REFLOW_LABEL, dirty, allowHidden = true, draw = draw)) reflowCount++
             }
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory to re-flow \"${layer.name}\"")
         }
-    }
-
-    /**
-     * [EditorController.updateTextLayer] for a HIDDEN text layer (it refuses hidden layers: tools
-     * must not edit what can't be seen). A hidden text still follows its picture, so it is right
-     * when it is shown again: the same step by hand, pixels (tiles of [dirty]) and text together
-     * (I1); [EditorController.commitEdit] keeps the text data ([PixelEditRecorder.preserveData]).
-     */
-    private fun updateHidden(layer: Layer, json: String, dirty: Rect, draw: (Canvas) -> Unit): Boolean {
-        val doc = c.doc
-        if (doc.indexOf(layer) < 0 || layer.locked) return false
-        val before = layer.dataSnapshot()
-        val after = before.copy(text = json)
-        val area = Rect(dirty)
-        if (!area.intersect(0, 0, doc.width, doc.height)) area.setEmpty()
-        val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
-        try {
-            if (!area.isEmpty) {
-                rec.touch(area)
-                val cv = Canvas(layer.bitmap)
-                cv.save()
-                cv.clipRect(area)
-                cv.drawColor(0, PorterDuff.Mode.CLEAR)
-                draw(cv)
-                cv.restore()
-            }
-        } catch (e: OutOfMemoryError) {
-            rec.abort()
-            throw e
-        }
-        layer.restoreData(after)
-        val data = LayerDataAction(REFLOW_LABEL, layer, before, after)
-        if (!c.commitEdit(rec, REFLOW_LABEL, listOf(data))) {
-            // No pixel on the canvas (the text is off it): the text alone.
-            layer.markChanged()
-            c.pushUndo(data)
-            c.notifyLayersChanged()
-        }
-        return true
     }
 
     companion object {
