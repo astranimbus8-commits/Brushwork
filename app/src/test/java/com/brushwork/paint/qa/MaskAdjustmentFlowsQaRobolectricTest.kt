@@ -456,6 +456,61 @@ class MaskAdjustmentFlowsQaRobolectricTest {
         assertNotNull(AdjustmentEffects.mapperOf(l!!.adjustment!!))
     }
 
+    @Test
+    fun layerOperationsOnAnAdjustmentLayerKeepItsMaskEditableAndItsEffectWhereItBelongs() {
+        setup()
+        val photo = c.activeLayer
+        val adj = radialTone()
+        tool.adjustmentEdit(adj).preview(AdjustmentEffects.spec(tone, toneValues(1f)))
+        tool.flushAdjustment()
+        // Duplicate: an independent copy (editing its mask leaves the original alone).
+        val copy = c.duplicateLayer(adj)!!
+        assertTrue(copy.isAdjustmentLayer)
+        assertEquals(adj.maskSpec, copy.maskSpec)
+        assertEquals(adj.adjustment, copy.adjustment)
+        val original = maskPixels(adj)
+        c.selectTool(ToolId.BRUSH); c.selectTool(ToolId.MASK)
+        assertSame(copy, c.activeLayer)
+        tap(100f, 75f)
+        drag(140f to 75f, 160f to 75f, 175f to 75f)
+        assertEquals(75f, (copy.maskSpec!!.components.single() as RadialMask).rx, 1e-3f)
+        assertArrayEquals("the original's mask is untouched", original, maskPixels(adj))
+        assertArrayEquals(rendered(copy.maskSpec!!), maskPixels(copy))
+        c.deleteLayer(copy)
+        assertSame(adj, c.activeLayer)
+        // Flip: the spec is mirrored with its mask (still editable, still its rendering).
+        val r0 = adj.maskSpec!!.components.single() as RadialMask
+        tool.updateComponent(r0.copy(cx = 60f), "Move mask")
+        c.selectTool(ToolId.BRUSH)
+        val steps = c.undoManager.undoCount
+        c.flipLayer(adj, horizontal = true)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertNotNull(adj.maskSpec)
+        assertEquals(w - 60f, (adj.maskSpec!!.components.single() as RadialMask).cx, 1e-3f)
+        assertArrayEquals(rendered(adj.maskSpec!!), maskPixels(adj))
+        c.undo()
+        assertEquals(60f, (adj.maskSpec!!.components.single() as RadialMask).cx, 1e-3f)
+        assertArrayEquals(rendered(adj.maskSpec!!), maskPixels(adj))
+        c.undo()
+        assertEquals(100f, (adj.maskSpec!!.components.single() as RadialMask).cx, 1e-3f)
+        // Moved below the photo, the effect no longer changes it (only the white background).
+        c.moveLayerDown(adj)
+        assertEquals(c.doc.indexOf(adj) + 1, c.doc.indexOf(photo))
+        assertEquals("the photo shows unadjusted", photoAt(101), c.compositor.renderFlattened().getPixel(101, 75))
+        c.undo()
+        assertNear("back above it: adjusted again", toneOf(photoAt(101), 1f), c.compositor.renderFlattened().getPixel(101, 75))
+        // Hidden: no effect; the Masks tool refuses to edit it and says why.
+        c.toggleVisibility(adj)
+        assertEquals(photoAt(101), c.compositor.renderFlattened().getPixel(101, 75))
+        c.selectTool(ToolId.MASK)
+        val n = c.undoManager.undoCount
+        c.message = null
+        tool.arm(MaskTool.Kind.RADIAL)
+        drag(30f to 30f, 40f to 30f, 50f to 30f)
+        assertEquals(n, c.undoManager.undoCount)
+        assertTrue("says it's hidden: ${c.message}", c.message?.contains("hidden") == true)
+    }
+
     // ------------------------------------------------------------------ merge down
 
     @Test
