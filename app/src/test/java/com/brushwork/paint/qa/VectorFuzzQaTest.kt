@@ -278,6 +278,78 @@ class VectorFuzzQaTest {
         check("flip canvas")
     }
 
+    /** More of the editor: canvas turns, masks, layer order and visibility, the Selection sheet. */
+    private fun extendedOp() {
+        settleTool()
+        deselectObjects()
+        when (rnd.nextInt(6)) {
+            0 -> {
+                val rot = com.brushwork.paint.engine.CanvasRotation.entries[rnd.nextInt(3)]
+                log += "canvas ${rot.label}"
+                assertTrue(CanvasOps.applyRotate(c, rot))
+                assertTrue(Smoke.pumpUntil(20_000) { c.busyMessage == null && !c.vectors.isRendering && c.undoManager.undoLabel == rot.label })
+                r.view.fitToScreen()
+                Smoke.pump(40)
+                loosen()
+                check("canvas turn")
+            }
+            1 -> {
+                ensureVector()
+                val l = vec()
+                if (l.mask == null) {
+                    log += "add mask to ${l.name}"
+                    com.brushwork.paint.ui.layers.LayerOps.addMask(c, l, fromSelection = false)
+                    check("add mask")
+                }
+                log += "paint the mask of ${l.name}"
+                com.brushwork.paint.ui.layers.LayerOps.editTarget(c, l, mask = true)
+                r.tool(ToolId.BRUSH)
+                c.color = if (rnd.nextBoolean()) 0xFF000000.toInt() else 0xFF808080.toInt()
+                c.brush = BrushLibrary.defaultBrush.copy(size = 10f + rnd.nextFloat() * 20f)
+                r.stroke(pt(), pt())
+                check("paint the mask")
+                com.brushwork.paint.ui.layers.LayerOps.editTarget(c, l, mask = false)
+                check("back to the content", steps = 0)
+            }
+            2 -> {
+                ensureVector()
+                val l = vec()
+                val to = rnd.nextInt(c.doc.layers.size)
+                log += "move ${l.name} to $to"
+                c.moveLayer(l, to)
+                check("move layer", steps = null)
+            }
+            3 -> {
+                val l = c.doc.layers[rnd.nextInt(c.doc.layers.size)]
+                if (l === c.activeLayer) return
+                log += "hide and show ${l.name}"
+                c.toggleVisibility(l); check("hide")
+                c.toggleVisibility(l); check("show")
+            }
+            else -> {
+                ensureVector()
+                // (A pixel selection left from a raster layer goes first: the wand's lands later.)
+                if (c.selection != null) { c.deselect(); check("deselect first", steps = null) }
+                r.tool(ToolId.MAGIC_WAND)
+                val p = pt()
+                log += "wand $p, Selection sheet ${if (rnd.nextBoolean()) "Fill" else "Clear"}"
+                (c.tools.getValue(ToolId.MAGIC_WAND) as com.brushwork.paint.tools.select.MagicWandTool).selectAt(p.first, p.second)
+                Smoke.pumpUntil(5_000) { c.selection != null }
+                check("wand", steps = null)
+                if (c.selection != null) {
+                    c.color = color()
+                    if (log.last().endsWith("Fill")) com.brushwork.paint.tools.select.SelectionEdits.fillSelection(c, c.color)
+                    else com.brushwork.paint.tools.select.SelectionEdits.clearSelection(c)
+                    check("sheet fill / clear", steps = null)
+                    assertTrue("still a vector layer", c.activeLayer.isVectorLayer)
+                    c.deselect()
+                    check("deselect", steps = null)
+                }
+                r.tool(ToolId.BRUSH)
+            }
+        }
+    }
+
     private fun saveReload() {
         settleTool()
         deselectObjects()
@@ -346,7 +418,7 @@ class VectorFuzzQaTest {
 
     // ------------------------------------------------------------------ the session
 
-    private fun session(seed: Int, actions: Int, asyncRenders: Boolean) {
+    private fun session(seed: Int, actions: Int, asyncRenders: Boolean, extended: Boolean = false) {
         rnd = Random(seed)
         async = asyncRenders
         r = VectorQaRig(480, 320)
@@ -362,6 +434,8 @@ class VectorFuzzQaTest {
             check("Vector on")
             repeat(4) { stroke(rnd.nextBoolean()) }
             repeat(actions) {
+                // (Extended sessions draw one more number per action; the others keep their sequences.)
+                if (extended && rnd.nextInt(8) == 0) { extendedOp(); return@repeat }
                 when (val k = rnd.nextInt(100)) {
                     in 0..17 -> stroke(rnd.nextInt(3) == 0)
                     in 18..29 -> erase()
@@ -393,6 +467,13 @@ class VectorFuzzQaTest {
             throw AssertionError("seed $seed (async=$async) at action #${log.size} \"${log.lastOrNull()}\": ${t.message}", t)
         }
     }
+
+    /** With canvas turns, masks, layer order and visibility, the Selection sheet. */
+    @Test
+    fun extendedSeed1299709() = session(1299709, 60, asyncRenders = false, extended = true)
+
+    @Test
+    fun extendedSeed3899127() = session(3899127, 60, asyncRenders = true, extended = true)
 
     @Test
     fun seed1505() = session(1505, 45, asyncRenders = false)
