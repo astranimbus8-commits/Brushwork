@@ -170,8 +170,9 @@ paint bounds, cached per content instance and reusing the bounds of objects an e
 tests, `touching`, renders, cost estimates and the object selection's id lookups go through it.
 A re-render is estimated (`VectorLayerRenderer.estimateUnits` × the measured ns per unit): up to
 25 ms it runs on the main thread, beyond that on one background worker (its own tip and render
-caches) from the immutable content, in patches of at most 1024² px. The patch lands on the main
-thread with the data as one step only if the layer is unchanged (content instance, content
+caches) from the immutable content, in patches of at most 1024² px. The patch lands on a later
+main-thread turn (never inside the `update` call, so an edit the caller computes next from the old
+content is re-based onto it), with the data as one step, only if the layer is unchanged (content instance, content
 version, bitmap); otherwise the edit is re-based onto the current content (`ContentDiff.merge3`)
 and rendered again. While a render is pending the service registers a `DeferredStep`, so any
 other edit, undo or redo first completes it (`flushPending`, also called by `CanvasOps`); edits
