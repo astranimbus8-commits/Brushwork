@@ -988,7 +988,11 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onDeactivate() {
         onCancel()
         pinch?.let { pinch = null; preview.end(); liveSpec = null }
-        stripBase = null
+        // A strip move still being previewed is recorded on the layer it was made on (another
+        // layer is about to become active, or another tool); any other live edit (a sheet slider
+        // never released) is thrown away, so nothing shown belongs to the previous layer.
+        endStripEdit()
+        cancelSpecPreview()
         flushAdjustment()
         adjustEdit = null
         cache?.clear()

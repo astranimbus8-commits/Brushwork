@@ -232,6 +232,38 @@ class MaskToolPreviewRobolectricTest {
     }
 
     @Test
+    fun liveEditsEndWithTheLayerTheyWereMadeOn() {
+        setup()
+        tool.arm(MaskTool.Kind.RADIAL)
+        c.pointerDown(ToolPoint(100f, 75f)); c.pointerMove(ToolPoint(115f, 75f)); c.pointerMove(ToolPoint(140f, 75f)); c.pointerUp(ToolPoint(140f, 75f))
+        val adj = c.activeLayer
+        val photo = c.doc.layers[1]
+        // A strip move that wasn't ended, then another layer is selected: recorded on Tone 1.
+        val steps = c.undoManager.undoCount
+        tool.objectPosition!!.setPosition(60f, null)
+        c.selectLayer(photo)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals("Move mask", c.undoManager.undoLabel)
+        assertEquals(60f, (adj.maskSpec!!.components.single() as RadialMask).cx, 1e-3f)
+        assertNull("nothing of Tone 1 is shown on the photo", tool.displaySpec)
+        assertNull(c.renderOverride)
+        // A sheet slider never released (a live preview), then another layer: thrown away.
+        c.selectLayer(adj)
+        val spec = adj.maskSpec!!
+        tool.previewSpec(spec.copy(density = 0.3f))
+        assertEquals(0.3f, tool.displaySpec!!.density, 0f)
+        c.selectLayer(photo)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(spec, adj.maskSpec)
+        assertNull(tool.displaySpec)
+        assertNull(c.renderOverride)
+        // Back on Tone 1: its own spec, nothing pending.
+        c.selectLayer(adj)
+        assertEquals(spec, tool.displaySpec)
+        assertFalse(tool.preview.isActive)
+    }
+
+    @Test
     fun anEditOfATurnedOffMaskSaysSoOnce() {
         setup()
         tool.arm(MaskTool.Kind.RADIAL)
