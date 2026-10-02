@@ -318,6 +318,19 @@ internal class QaTouch(private val view: android.view.View) {
         idle(50)
     }
 
+    /** Raw events with per-pointer ids and tool types (palm + pen gestures). */
+    fun raw(action: Int, pts: List<RawPointer>, index: Int = 0) {
+        if (action == MotionEvent.ACTION_DOWN) down = SystemClock.uptimeMillis()
+        val props = Array(pts.size) { i -> MotionEvent.PointerProperties().apply { id = pts[i].id; toolType = pts[i].tool } }
+        val coords = Array(pts.size) { i -> MotionEvent.PointerCoords().apply { x = pts[i].x; y = pts[i].y; pressure = pts[i].pressure; size = 0.1f } }
+        val masked = action or (index shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
+        val e = MotionEvent.obtain(down, SystemClock.uptimeMillis(), masked, pts.size, props, coords, 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        view.dispatchTouchEvent(e)
+        e.recycle()
+    }
+
+    data class RawPointer(val id: Int, val x: Float, val y: Float, val tool: Int = MotionEvent.TOOL_TYPE_FINGER, val pressure: Float = 0.6f)
+
     fun tap(x: Float, y: Float) {
         send(MotionEvent.ACTION_DOWN, listOf(Triple(x, y, 0.6f)), 0, MotionEvent.TOOL_TYPE_FINGER)
         idle(40)
