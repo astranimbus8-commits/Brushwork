@@ -182,26 +182,90 @@ class OwnPdfReader(private val src: PdfBytes) : Closeable {
         val channels = when (cs) { "DeviceRGB" -> 3; "DeviceGray" -> 1; else -> return null }
         val bpc = (resolve(s.dict["BitsPerComponent"]) as? PdfObj.Num)?.int ?: 8
         if (bpc != 8) return null
-        val data = streamData(s, w.toLong() * h * channels + h)
-        if (data.size < w * h * channels) return null
-        val alpha = (s.dict["SMask"] as? PdfObj.Ref)?.let { ref ->
-            val ms = obj(ref.num) as? PdfObj.Stream ?: return@let null
-            val mw = (resolve(ms.dict["Width"]) as? PdfObj.Num)?.int
-            val mh = (resolve(ms.dict["Height"]) as? PdfObj.Num)?.int
-            if (mw != w || mh != h) return@let null
-            streamData(ms, w.toLong() * h + h).takeIf { it.size >= w * h }
-        }
+        // Decoded row by row straight into the pixels (no whole decoded copy of the picture or
+        // its mask: a 4000 x 5000 layer needs 80 MB less). The alpha first, then the colors.
         val px = IntArray(w * h)
-        for (i in 0 until w * h) {
-            val a = alpha?.let { it[i].toInt() and 0xFF } ?: 0xFF
-            px[i] = if (channels == 3) {
-                (a shl 24) or ((data[i * 3].toInt() and 0xFF) shl 16) or ((data[i * 3 + 1].toInt() and 0xFF) shl 8) or (data[i * 3 + 2].toInt() and 0xFF)
-            } else {
-                val g = data[i].toInt() and 0xFF
-                (a shl 24) or (g shl 16) or (g shl 8) or g
+        val mask = (s.dict["SMask"] as? PdfObj.Ref)?.let { ref ->
+            (obj(ref.num) as? PdfObj.Stream)?.takeIf { ms ->
+                (resolve(ms.dict["Width"]) as? PdfObj.Num)?.int == w && (resolve(ms.dict["Height"]) as? PdfObj.Num)?.int == h
             }
         }
-        return ArgbImage(w, h, px)
+        val alpha = mask != null && rows(mask, w, h) { row, off, y ->
+            var i = y * w
+            for (x in 0 until w) px[i++] = (row[off + x].toInt() and 0xFF) shl 24
+        }
+        // No (readable) soft mask: opaque.
+        if (!alpha) px.fill(0xFF shl 24)
+        val ok = rows(s, w * channels, h) { row, off, y ->
+            var i = y * w
+            var o = off
+            if (channels == 3) {
+                for (x in 0 until w) {
+                    px[i] = px[i] or ((row[o].toInt() and 0xFF) shl 16) or ((row[o + 1].toInt() and 0xFF) shl 8) or (row[o + 2].toInt() and 0xFF)
+                    i++
+                    o += 3
+                }
+            } else {
+                for (x in 0 until w) {
+                    val g = row[o++].toInt() and 0xFF
+                    px[i] = px[i] or (g shl 16) or (g shl 8) or g
+                    i++
+                }
+            }
+        }
+        return if (ok) ArgbImage(w, h, px) else null
+    }
+
+    /**
+     * The [rows] rows of [rowBytes] bytes of image stream [s] (unfiltered, or FlateDecode with or
+     * without PNG predictors), one at a time: [onRow] gets an array, the row's offset in it and
+     * its index. False when the stream is damaged, too short or filtered otherwise.
+     */
+    private fun rows(s: PdfObj.Stream, rowBytes: Int, rows: Int, onRow: (ByteArray, Int, Int) -> Unit): Boolean {
+        val raw = try {
+            rawData(s)
+        } catch (e: IOException) {
+            return false
+        }
+        val filters = when (val filter = resolve(s.dict["Filter"])) {
+            null -> emptyList()
+            is PdfObj.Name -> listOf(filter.name)
+            is PdfObj.Arr -> filter.items.mapNotNull { (resolve(it) as? PdfObj.Name)?.name }
+            else -> return false
+        }
+        if (filters.isEmpty()) {
+            if (raw.size.toLong() < rowBytes.toLong() * rows) return false
+            for (y in 0 until rows) onRow(raw, y * rowBytes, y)
+            return true
+        }
+        if (filters != listOf("FlateDecode")) return false
+        val parms = resolve(s.dict["DecodeParms"]) as? PdfObj.Dict
+        val predictor = (resolve(parms?.get("Predictor")) as? PdfObj.Num)?.int ?: 1
+        if (predictor >= 10) {
+            val colors = (resolve(parms?.get("Colors")) as? PdfObj.Num)?.int ?: 1
+            val columns = (resolve(parms?.get("Columns")) as? PdfObj.Num)?.int ?: 1
+            if (colors * columns != rowBytes) return false
+            return FilteredZlib.inflateRows(raw, rows, rowBytes, maxOf(1, colors)) { row, y -> onRow(row, 1, y) }
+        }
+        val inf = Inflater()
+        try {
+            inf.setInput(raw)
+            val row = ByteArray(rowBytes)
+            for (y in 0 until rows) {
+                var n = 0
+                while (n < rowBytes) {
+                    val k = inf.inflate(row, n, rowBytes - n)
+                    if (k == 0 && (inf.finished() || inf.needsInput() || inf.needsDictionary())) return false
+                    n += k
+                }
+                onRow(row, 0, y)
+            }
+            return true
+        } catch (e: DataFormatException) {
+            return false
+        } finally {
+            inf.end()
+        }
     }
 
     // ------------------------------------------------------------------ objects

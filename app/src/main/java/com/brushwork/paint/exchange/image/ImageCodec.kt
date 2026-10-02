@@ -231,6 +231,65 @@ object FilteredZlib {
         return if (pa <= pb && pa <= pc) a else if (pb <= pc) b else c
     }
 
+    /**
+     * Reverses the PNG filter of one row in place: [row] is the filter byte then [rowBytes] bytes;
+     * [prev] the row above, already unfiltered (same layout), or null for the first row.
+     */
+    internal fun unfilterRow(row: ByteArray, prev: ByteArray?, rowBytes: Int, bpp: Int) {
+        val f = row[0].toInt() and 0xFF
+        if (f == 0) return
+        if (f > 4) throw IOException("Unknown PNG filter $f")
+        for (i in 0 until rowBytes) {
+            val idx = 1 + i
+            val a = if (i >= bpp) row[idx - bpp].toInt() and 0xFF else 0
+            val b = if (prev != null) prev[idx].toInt() and 0xFF else 0
+            val c = if (prev != null && i >= bpp) prev[idx - bpp].toInt() and 0xFF else 0
+            val x = row[idx].toInt() and 0xFF
+            val v = when (f) {
+                1 -> x + a
+                2 -> x + b
+                3 -> x + ((a + b) ushr 1)
+                else -> x + paeth(a, b, c)
+            }
+            row[idx] = v.toByte()
+        }
+    }
+
+    /**
+     * Inflates zlib [data] row by row: each row of 1 + [rowBytes] bytes (the PNG filter byte
+     * first) is unfiltered and handed to [onRow] with its index; the array is reused (the row
+     * above stays valid until the next call). False when the data ends early or is damaged.
+     * Memory: two rows, whatever the image size.
+     */
+    internal fun inflateRows(data: ByteArray, rows: Int, rowBytes: Int, bpp: Int, onRow: (ByteArray, Int) -> Unit): Boolean {
+        val inf = Inflater()
+        try {
+            inf.setInput(data)
+            var cur = ByteArray(rowBytes + 1)
+            var prev = ByteArray(rowBytes + 1)
+            for (y in 0 until rows) {
+                var n = 0
+                while (n < cur.size) {
+                    val k = inf.inflate(cur, n, cur.size - n)
+                    if (k == 0 && (inf.finished() || inf.needsInput() || inf.needsDictionary())) return false
+                    n += k
+                }
+                unfilterRow(cur, if (y > 0) prev else null, rowBytes, bpp)
+                onRow(cur, y)
+                val t = prev
+                prev = cur
+                cur = t
+            }
+            return true
+        } catch (e: DataFormatException) {
+            return false
+        } catch (e: IOException) {
+            return false
+        } finally {
+            inf.end()
+        }
+    }
+
     /** Reverses PNG row filters in place: [raw] holds rows of 1 + [rowBytes] bytes. */
     internal fun unfilter(raw: ByteArray, rows: Int, rowBytes: Int, bpp: Int) {
         val stride = rowBytes + 1
@@ -367,19 +426,15 @@ object PngDecoder {
         if (w.toLong() * h > maxPixels) return null
         val channels = when (type) { 0 -> 1; 2 -> 3; 3 -> 1; 4 -> 2; 6 -> 4; else -> return null }
         val rowBytes = w * channels
-        val expected = (rowBytes + 1).toLong() * h
-        val raw = inflate(idat.toByteArray(), expected) ?: return null
-        if (raw.size < expected) return null
-        try {
-            FilteredZlib.unfilter(raw, h, rowBytes, channels)
-        } catch (e: IOException) {
-            return null
-        }
-        val px = IntArray(w * h)
         val pal = palette
         val tr = trns
-        for (y in 0 until h) {
-            var o = y * (rowBytes + 1) + 1
+        if (type == 3 && pal == null) return null
+        // Rows are inflated and unfiltered one at a time straight into the pixels (no copy of the
+        // whole filtered image: a 4000 x 5000 layer needs 80 MB less).
+        val px = IntArray(w * h)
+        var bad = false
+        val ok = FilteredZlib.inflateRows(idat.toByteArray(), h, rowBytes, channels) { raw, y ->
+            var o = 1
             var i = y * w
             for (x in 0 until w) {
                 px[i++] = when (type) {
@@ -391,9 +446,14 @@ object PngDecoder {
                     2 -> (0xFF shl 24) or ((raw[o].toInt() and 0xFF) shl 16) or ((raw[o + 1].toInt() and 0xFF) shl 8) or (raw[o + 2].toInt() and 0xFF)
                     3 -> {
                         val k = raw[o].toInt() and 0xFF
-                        val c = pal?.getOrNull(k) ?: return null
-                        val a = if (tr != null && k < tr.size) tr[k].toInt() and 0xFF else 0xFF
-                        (a shl 24) or (c and 0xFFFFFF)
+                        val c = pal!!.getOrNull(k)
+                        if (c == null) {
+                            bad = true
+                            0
+                        } else {
+                            val a = if (tr != null && k < tr.size) tr[k].toInt() and 0xFF else 0xFF
+                            (a shl 24) or (c and 0xFFFFFF)
+                        }
                     }
                     4 -> {
                         val g = raw[o].toInt() and 0xFF
@@ -404,6 +464,7 @@ object PngDecoder {
                 o += channels
             }
         }
+        if (!ok || bad) return null
         return ArgbImage(w, h, px)
     }
 
@@ -411,26 +472,6 @@ object PngDecoder {
     fun size(bytes: ByteArray): Pair<Int, Int>? {
         if (bytes.size < 24 || bytes[1] != 'P'.code.toByte() || String(bytes, 12, 4, Charsets.ISO_8859_1) != "IHDR") return null
         return getInt(bytes, 16) to getInt(bytes, 20)
-    }
-
-    private fun inflate(data: ByteArray, expected: Long): ByteArray? {
-        if (expected > Int.MAX_VALUE) return null
-        val inf = Inflater()
-        try {
-            inf.setInput(data)
-            val out = ByteArray(expected.toInt())
-            var n = 0
-            while (n < out.size && !inf.finished()) {
-                val k = inf.inflate(out, n, out.size - n)
-                if (k == 0 && (inf.needsInput() || inf.needsDictionary())) break
-                n += k
-            }
-            return if (n == out.size) out else null
-        } catch (e: DataFormatException) {
-            return null
-        } finally {
-            inf.end()
-        }
     }
 
     private fun getInt(b: ByteArray, o: Int): Int =

@@ -54,6 +54,9 @@ import kotlin.coroutines.coroutineContext
 /** File types the import picker offers (the content decides what it is). */
 internal val IMPORT_MIME_TYPES = arrayOf("image/svg+xml", "application/pdf", "text/xml", "application/xml", "application/octet-stream")
 
+/** A Brushwork file whose layer data is damaged (its SVG content or PDF pages come in instead). */
+internal const val UNREADABLE_DATA = "The Brushwork data in this file can't be read"
+
 /** A question the import asks before going on. */
 sealed class ExchangeDialog {
     /** A Brushwork file: its layers (editable) or a picture of it? */
@@ -172,7 +175,8 @@ class ExchangeUiState(internal val controller: EditorController) {
             ImportKind.SVG -> {
                 val svg = withContext(Dispatchers.Default) { SvgParser.parse(file.bytes!!) }
                 when {
-                    svg.hasPayload && newArtwork -> restoreSvgPayload(svg, newArtwork = true)
+                    // Brushwork data that can't be read: the file is still an ordinary SVG.
+                    svg.hasPayload && newArtwork -> if (!restoreSvgPayload(svg, newArtwork = true)) return importSvg(svg, true, asPicture = false, file = file)
                     svg.hasPayload -> { dialog = ExchangeDialog.MadeWithBrushwork(file, svg); return true }
                     svg.truncated -> { dialog = ExchangeDialog.TooComplex(file, svg, newArtwork); return true }
                     else -> return importSvg(svg, newArtwork, asPicture = false, file = file)
@@ -188,7 +192,8 @@ class ExchangeUiState(internal val controller: EditorController) {
                     }
                 }
                 if (hasPayload && newArtwork) {
-                    restorePdfPayload(file, newArtwork = true)
+                    // Brushwork data that can't be read: its pages are still there.
+                    if (!restorePdfPayload(file, newArtwork = true)) return pdfPages(file, details)
                 } else if (hasPayload) {
                     dialog = ExchangeDialog.MadeWithBrushwork(file, null)
                     return true
@@ -263,17 +268,39 @@ class ExchangeUiState(internal val controller: EditorController) {
         return false
     }
 
-    private suspend fun restoreSvgPayload(svg: SvgDocument, newArtwork: Boolean) {
-        val payload = withContext(Dispatchers.Default) { svg.payload() } ?: throw ImportException("The Brushwork data can't be read")
+    /** Restores the Brushwork layers of [svg]; false (with a message) when its data can't be read. */
+    private suspend fun restoreSvgPayload(svg: SvgDocument, newArtwork: Boolean): Boolean {
+        val payload = withContext(Dispatchers.Default) { readable { svg.payload() } } ?: return unreadableData()
         restore(payload, newArtwork) { key -> svg.imageData(key)?.let { PngDecoder.decode(it) } }
+        return true
     }
 
-    private suspend fun restorePdfPayload(file: ImportFile, newArtwork: Boolean) {
-        withContext(Dispatchers.IO) { OwnPdfReader.open(file.file!!) }.use { reader ->
-            val payload = withContext(Dispatchers.IO) { reader.payload() } ?: throw ImportException("The Brushwork data can't be read")
+    /** Restores the Brushwork layers of a PDF; false (with a message) when its data can't be read. */
+    private suspend fun restorePdfPayload(file: ImportFile, newArtwork: Boolean): Boolean {
+        val reader = withContext(Dispatchers.IO) { readable { OwnPdfReader.open(file.file!!) } } ?: return unreadableData()
+        reader.use {
+            val payload = withContext(Dispatchers.IO) { readable { reader.payload() } } ?: return unreadableData()
             restore(payload, newArtwork) { key -> reader.payloadImage(key) }
         }
+        return true
     }
+
+    /** [block]'s result, or null when the file's data is damaged. */
+    private inline fun <T> readable(block: () -> T?): T? = try {
+        block()
+    } catch (e: java.io.IOException) {
+        null
+    }
+
+    /** Says the file's Brushwork data is damaged (repeated in the summary of what comes in instead). */
+    private fun unreadableData(): Boolean {
+        controller.toast(UNREADABLE_DATA)
+        note = UNREADABLE_DATA
+        return false
+    }
+
+    /** Said again after the summary of the running import. */
+    private var note: String? = null
 
     private suspend fun restore(payload: BrushworkPayload, newArtwork: Boolean, images: PayloadImport.Images) {
         val replace = if (newArtwork) defaultLayers(includeBackground = true) else emptyList()
@@ -288,15 +315,20 @@ class ExchangeUiState(internal val controller: EditorController) {
 
     // ------------------------------------------------------------------ dialog answers
 
-    /** "Editable layers" for a Brushwork file. */
+    /** "Editable layers" for a Brushwork file (its data unreadable: the SVG's content, the PDF's pages). */
     internal fun answerEditable() {
         val d = dialog as? ExchangeDialog.MadeWithBrushwork ?: return
         dialog = null
         busy("Importing") {
+            var handedOver = false
             try {
-                if (d.svg != null) restoreSvgPayload(d.svg, newArtwork = false) else restorePdfPayload(d.file, newArtwork = false)
+                if (d.svg != null) {
+                    if (!restoreSvgPayload(d.svg, newArtwork = false)) handedOver = importSvg(d.svg, newArtwork = false, asPicture = false, file = d.file)
+                } else if (!restorePdfPayload(d.file, newArtwork = false)) {
+                    handedOver = pdfPages(d.file, null)
+                }
             } finally {
-                withContext(Dispatchers.IO) { d.file.close() }
+                if (!handedOver) withContext(Dispatchers.IO) { d.file.close() }
             }
         }
     }
@@ -395,7 +427,8 @@ class ExchangeUiState(internal val controller: EditorController) {
     }
 
     private fun report(o: ImportOutcome) {
-        controller.toast(ImportSummary.format(o))
+        controller.toast(ImportSummary.format(o) + (note?.let { " · $it" } ?: ""))
+        note = null
     }
 
     private fun ready(): Boolean {
@@ -418,6 +451,7 @@ class ExchangeUiState(internal val controller: EditorController) {
         val holder = arrayOfNulls<Job>(1)
         controller.runBusy(label, onCancel = { holder[0]?.cancel() }) {
             holder[0] = coroutineContext[Job]
+            note = null
             try {
                 block()
             } catch (e: ImportException) {

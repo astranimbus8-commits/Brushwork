@@ -79,8 +79,17 @@ internal object GalleryImports {
     suspend fun svgSpec(file: ImportFile): NewArtworkSpec = withContext(Dispatchers.Default) {
         val svg = SvgParser.parse(file.bytes!!)
         val heap = Runtime.getRuntime().maxMemory()
-        if (svg.hasPayload) {
-            val p = svg.payload() ?: throw ImportException("The Brushwork data can't be read")
+        // Damaged Brushwork data: the file is still an SVG of its own size (the editor says so).
+        val p = if (svg.hasPayload) {
+            try {
+                svg.payload()
+            } catch (e: java.io.IOException) {
+                null
+            }
+        } else {
+            null
+        }
+        if (p != null) {
             NewArtwork.forPayload(file.name, p, heap) ?: throw ImportException("This artwork is too large for this device")
         } else {
             NewArtwork.forSvg(file.name, svg, heap)

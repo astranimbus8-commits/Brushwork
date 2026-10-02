@@ -28,9 +28,12 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import com.brushwork.paint.exchange.image.PngDecoder
+import java.awt.image.BufferedImage
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.util.Base64
+import javax.imageio.ImageIO
 import java.util.concurrent.CancellationException
 
 /**
@@ -99,6 +102,30 @@ class ExchangeLimitsTest {
         val doc = SvgParser.parse(svg.toByteArray())
         assertNotNull(doc.ids["i"]!!.hrefSlice)
         assertArrayEquals(bytes, doc.imageData("i"))
+    }
+
+    @Test
+    fun theRowByRowPngDecoderReadsOtherEncodersFiles() {
+        val w = 37
+        val h = 29
+        for (type in intArrayOf(BufferedImage.TYPE_INT_ARGB, BufferedImage.TYPE_INT_RGB, BufferedImage.TYPE_BYTE_GRAY, BufferedImage.TYPE_BYTE_INDEXED)) {
+            val bi = BufferedImage(w, h, type)
+            for (y in 0 until h) for (x in 0 until w) {
+                val a = if (type == BufferedImage.TYPE_INT_ARGB) (x * 7 + y) and 0xFF else 0xFF
+                bi.setRGB(x, y, (a shl 24) or ((x * 6) shl 16) or ((y * 8) shl 8) or ((x * y) and 0xFF))
+            }
+            val png = ByteArrayOutputStream().also { ImageIO.write(bi, "png", it) }.toByteArray()
+            val img = PngDecoder.decode(png)
+            assertNotNull("type $type", img)
+            for (y in 0 until h) for (x in 0 until w) {
+                // (Gray images: the stored value; getRGB would convert it from linear gray.)
+                val e = if (type == BufferedImage.TYPE_BYTE_GRAY) bi.raster.getSample(x, y, 0).let { g -> (0xFF shl 24) or (g * 0x010101) } else bi.getRGB(x, y)
+                val a = img!!.pixels[y * w + x]
+                if ((e ushr 24) == 0) assertEquals(0, a ushr 24) else assertEquals("type $type at ($x, $y)", e, a)
+            }
+            // Cut short: no image, no exception.
+            assertEquals(null, PngDecoder.decode(png.copyOf(png.size - 20)))
+        }
     }
 
     // ------------------------------------------------------------------ PDF reader
