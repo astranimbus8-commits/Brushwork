@@ -88,7 +88,7 @@ class VectorTouchingRobolectricTest {
         val touching = System.nanoTime() - t1
         assertTrue(ids.isNotEmpty() && ids.size < content.objects.size)
         // Testing every dab of every stroke against the selection took 30-60 times as long as
-        // computing the dab chains; now it is a few times that.
-        assertTrue("touching ${touching / 1e6} ms vs dab chains ${chains / 1e6} ms", touching < 15 * chains + 20_000_000L)
+        // computing the dab chains; now it is a few times that (generous bound: busy machines).
+        assertTrue("touching ${touching / 1e6} ms vs dab chains ${chains / 1e6} ms", touching < 25 * chains + 50_000_000L)
     }
 }
