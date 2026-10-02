@@ -303,7 +303,10 @@ class VectorLayers internal constructor(private val c: EditorController) {
     private var preparing: PreparingEdit? = null
 
     private class PreparingEdit(val onReady: (VectorEditSession?) -> Unit) {
+        /** The main-thread part (waits, then installs). */
         var job: Job? = null
+        /** The worker's render of the hole and floating bitmaps (null while waiting for a pending render). */
+        var render: Job? = null
         var done = false
     }
 
@@ -320,10 +323,31 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * the main thread when cheap ([onReady] runs before this returns), else in the background
      * ([onReady] runs later on the main thread; a newer request answers an older one with null).
      * Memory guard: hole + floating within a heap / 8 budget (else both are rendered smaller).
+     *
+     * While an edit still renders in the background, the session is prepared once that edit has
+     * landed ([onReady] runs later): the main thread never waits for the worker here (the
+     * Transform tool lifts again right after a commit, and on activation).
      */
     fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) {
-        flushPending()
         preparing?.let { old -> cancelPreparing(old) }
+        val p = pending
+        if (p != null && !flushing) {
+            val prep = PreparingEdit(onReady)
+            preparing = prep
+            updateRendering()
+            // (Dispatchers.Main, not immediate: the render may land inside another operation
+            // — an undo, an edit's flush — and the session must be prepared after it, not in it.)
+            prep.job = c.scope.launch(Dispatchers.Main) {
+                p.completion.await()
+                if (prep.done) return@launch
+                prep.done = true
+                if (preparing === prep) preparing = null
+                updateRendering()
+                // Another render may have started meanwhile: then this waits for it too.
+                beginEdit(layer, ids, onReady)
+            }
+            return
+        }
         beginEditAttempt(layer, ids, onReady, 0)
     }
 
@@ -331,6 +355,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         if (p.done) return
         p.done = true
         p.job?.cancel()
+        p.render?.cancel()
         if (preparing === p) preparing = null
         updateRendering()
         p.onReady(null)
@@ -384,6 +409,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
             r
         }
+        prep.render = job
         prep.job = c.scope.launch {
             val parts = try { job.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (prep.done) { parts?.let { recycle(it.first, it.second) }; return@launch }
@@ -559,7 +585,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
     fun dispose() {
         selLayer = null
         selIds = emptySet()
-        preparing?.let { it.done = true; it.job?.cancel() }
+        preparing?.let { it.done = true; it.job?.cancel(); it.render?.cancel() }
         preparing = null
         pending?.let { p ->
             p.finished = true
@@ -645,7 +671,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
     private fun goAsync(estimate: Double): Boolean = goAsyncUnits(estimate)
 
     private fun goAsyncUnits(units: Double): Boolean {
-        if (flushing || pending != null || c.editDepth != 0 || !c.scope.isActive) return false
+        // Synchronous: while a render completes, inside another step (it must land in that
+        // step), when the editor is closing, and under another busy operation's overlay (e.g.
+        // "Saving…" while closing commits the tool's pending work: a background render would be
+        // abandoned unsaved when the editor goes).
+        if (flushing || pending != null || c.editDepth != 0 || !c.scope.isActive || c.busyMessage != null) return false
         return when (policy) {
             Policy.SYNC -> false
             Policy.ASYNC -> true
@@ -704,6 +734,12 @@ class VectorLayers internal constructor(private val c: EditorController) {
         p.job = c.scope.async(worker.dispatcher) {
             val ctx = coroutineContext
             val out = ArrayList<Bitmap>(pieces.size)
+            // Progress reaches the main thread at most once per percent.
+            var posted = -1
+            fun progress(f: Float) {
+                val pct = (f * 100f).toInt()
+                if (pct != posted) { posted = pct; postProgress(f) }
+            }
             try {
                 for ((k, r) in pieces.withIndex()) {
                     ctx.ensureActive()
@@ -713,11 +749,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
                     cv.translate(-r.left.toFloat(), -r.top.toFloat())
                     val content = added?.let { VectorContent(objects = it) } ?: after
                     val finished = VectorLayerRenderer.renderWith(cv, content, r, emptySet(), worker.tips, doc, worker.cache) { done, n ->
-                        postProgress((k + done.toFloat() / max(1, n)) / total)
+                        progress((k + done.toFloat() / max(1, n)) / total)
                         ctx.isActive
                     }
                     if (!finished) ctx.ensureActive()
-                    postProgress((k + 1f) / total)
+                    progress((k + 1f) / total)
                 }
             } catch (t: Throwable) {
                 for (b in out) b.recycle()

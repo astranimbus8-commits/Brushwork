@@ -29,6 +29,9 @@ object VectorCodec {
     /** Largest inflated JSON accepted (2000 long strokes are about 10 MB). */
     private const val MAX_JSON_BYTES = 128L shl 20
 
+    /** Ids (or a nextId) this far from 0 come from a damaged file: the objects are numbered again. */
+    private const val MAX_ID = 1L shl 52
+
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
@@ -101,15 +104,23 @@ object VectorCodec {
 
     /**
      * [c] with unique ids (a later duplicate gets a new id) and a `nextId` beyond every id; the
-     * same instance when it already is.
+     * same instance when it already is. Ids (or a `nextId`) so large that new ids would overflow
+     * come from a damaged file: the objects are then numbered 1..n again (order kept).
      */
     internal fun sanitized(c: VectorContent): VectorContent {
         val seen = HashSet<Long>(c.objects.size * 2)
         var maxId = 0L
         var dup = false
+        var outOfRange = c.nextId >= MAX_ID
         for (o in c.objects) {
             if (!seen.add(o.id)) dup = true
             if (o.id > maxId) maxId = o.id
+            // Ids are far from overflowing (new ones count up from nextId).
+            if (o.id >= MAX_ID || o.id <= -MAX_ID) outOfRange = true
+        }
+        if (outOfRange) {
+            // Damaged ids: number the objects again from 1 (their order is kept).
+            return c.copy(objects = c.objects.mapIndexed { i, o -> if (o.id == i + 1L) o else o.withId(i + 1L) }, nextId = c.objects.size + 1L)
         }
         val next0 = maxOf(c.nextId, maxId + 1, 1L)
         if (!dup && next0 == c.nextId) return c

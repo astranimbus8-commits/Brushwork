@@ -4,12 +4,18 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Rect
+import com.brushwork.paint.brush.BrushPreset
+import com.brushwork.paint.brush.BrushTip
+import com.brushwork.paint.brush.PaperGrain
 import com.brushwork.paint.brush.TipCache
+import com.brushwork.paint.brush.TipShapes
+import com.brushwork.paint.brush.sanitized
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.vector.render.RenderCache
 import com.brushwork.paint.vector.render.VectorLayerRenderer
+import kotlin.math.abs
 
 /**
  * How a layer's editable data follows a canvas geometry change (resize image, canvas size, crop,
@@ -37,6 +43,50 @@ object LayerDataTransforms {
     /** [content] with every object mapped by [m] (3x3 row-major); ids and order kept. */
     fun mapped(content: VectorContent, m: FloatArray): VectorContent =
         content.copy(objects = content.objects.map { VectorOps.transformed(it, m) })
+
+    /**
+     * True when moving a vector layer's cache by whole ([dx], [dy]) document px gives the
+     * rendering of its moved objects (I1), so the pixels can simply move. Paper grain is anchored
+     * to the document's [PaperGrain.SIZE] px grid: a layer that paints with grain moves exactly
+     * only by multiples of it (whatever else a brush paints moves with its points). Otherwise
+     * the layer is drawn again from its objects, or a later partial re-render would show seams in
+     * the grain at tile edges.
+     */
+    fun shiftsExactly(content: VectorContent, dx: Int, dy: Int): Boolean =
+        (dx % PaperGrain.SIZE == 0 && dy % PaperGrain.SIZE == 0) || content.objects.none { o -> brushesOf(o).any { it.grain > 0f } }
+
+    /**
+     * True when turning a vector layer's cache by [quarterTurns] (clockwise) quarter turns, or
+     * mirroring it ([mirror]), gives the rendering of its mapped objects (I1), so the pixels can
+     * be remapped exactly. A replayed brush keeps its tip angle, its scatter offsets along the
+     * document's axes and its paper grain anchored to the document, and textured tips turn each
+     * dab at random: a layer with any of those (or with a tip shape the map does not carry into
+     * itself) is drawn again from its objects instead, or a later partial re-render would show
+     * seams at tile edges (a calligraphy stroke changing its thick and thin parts mid-stroke).
+     */
+    fun turnsExactly(content: VectorContent, quarterTurns: Int, mirror: Boolean): Boolean =
+        content.objects.all { o -> brushesOf(o).all { tipTurnsExactly(it, quarterTurns, mirror) } }
+
+    /** The brushes [o] is replayed with (sanitized): a stroke's preset, a brush outline's brush. */
+    private fun brushesOf(o: VObject): List<BrushPreset> = when (o) {
+        is VStroke -> listOf(o.preset.sanitized())
+        is VPath -> o.stroke?.takeIf { it.kind == VStrokeKind.BRUSH }?.let { listOf(VectorOps.brushOf(it).sanitized()) } ?: emptyList()
+        is VShape -> if (o.shape.paintsWithBrush) listOf(VectorOps.brushPresetOf(o.shape).sanitized()) else emptyList()
+    }
+
+    private fun tipTurnsExactly(p: BrushPreset, quarterTurns: Int, mirror: Boolean): Boolean {
+        if (p.grain > 0f || p.scatter > 0f || TipShapes.isTextured(p.tip)) return false
+        val round = p.roundness >= 0.999f
+        val fourfold = round && (p.tip == BrushTip.SQUARE || p.tip == BrushTip.MARKER)
+        // A circle maps into itself under every turn and mirror.
+        if (round && !fourfold) return true
+        // A square (90° symmetric) or an ellipse / oblong (180° symmetric) at the tip angle.
+        val period = if (fourfold) 90.0 else 180.0
+        if (Math.floorMod(quarterTurns, 2) == 1 && !fourfold) return false
+        if (!mirror) return true
+        // A mirror takes the angle a to -a: the same tip when 2a is a multiple of the period.
+        return abs(Math.IEEEremainder(2.0 * p.angle, period)) < 1e-3
+    }
 
     /**
      * Background-thread re-render of a vector layer for scaling ops (null = keep CanvasOps'

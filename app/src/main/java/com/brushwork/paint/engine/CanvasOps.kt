@@ -7,10 +7,10 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
-import android.graphics.RectF
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.GridSettings
@@ -246,11 +246,12 @@ object CanvasOps {
                 if (fill != null && l.bitmap === bottomBitmap && d.vector != null) d.copy(vector = null) else d
             },
             content = { l, d, sub ->
-                // Objects reaching past the old edges into the new canvas are drawn again there;
-                // otherwise the cache moves exactly.
+                // Objects reaching past the old edges into the new canvas, or paper grain moved
+                // off its document grid, are drawn again; otherwise the cache moves exactly.
                 val v = d?.vector
                 val old = l.vector
-                if (v != null && old != null && exposesObjects(old, snap.width, snap.height, newWidth, newHeight, offsetX, offsetY)) {
+                if (v != null && old != null && (exposesObjects(old, snap.width, snap.height, newWidth, newHeight, offsetX, offsetY) ||
+                        !LayerDataTransforms.shiftsExactly(old, offsetX, offsetY))) {
                     renderVector(v, newWidth, newHeight, snap.colorMode, sub)
                 } else null
             },
@@ -300,8 +301,19 @@ object CanvasOps {
         val w = if (swap) snap.height else snap.width
         val h = if (swap) snap.width else snap.height
         val geometry = CanvasGeometry.rotate(rotation, snap.width, snap.height)
-        // Pixels are remapped exactly; vector objects and mask specs turn with them.
-        val layers = mapLayers(snap, progress, data = { l -> mappedData(l, geometry, w, h) }) { src, _, _ -> transformed(src, w, h, geometry) }
+        // Pixels are remapped exactly; vector objects and mask specs turn with them (a vector
+        // layer whose brushes don't turn into themselves is drawn again from its objects).
+        val layers = mapLayers(
+            snap, progress,
+            data = { l -> mappedData(l, geometry, w, h) },
+            content = { l, d, sub ->
+                val v = d?.vector
+                val old = l.vector
+                if (v != null && old != null && !LayerDataTransforms.turnsExactly(old, rotation.quarterTurnsCw, mirror = false)) {
+                    renderVector(v, w, h, snap.colorMode, sub)
+                } else null
+            },
+        ) { src, _, _ -> transformed(src, w, h, geometry) }
         return CanvasResult(w, h, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -309,7 +321,17 @@ object CanvasOps {
     fun flip(snap: CanvasSnapshot, horizontal: Boolean, progress: (Float) -> Unit = {}): CanvasResult {
         if (snap.layers.isEmpty()) throw CanvasOpException("The drawing has no layers.")
         val geometry = CanvasGeometry.flip(horizontal, snap.width, snap.height)
-        val layers = mapLayers(snap, progress, data = { l -> mappedData(l, geometry, snap.width, snap.height) }) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
+        val layers = mapLayers(
+            snap, progress,
+            data = { l -> mappedData(l, geometry, snap.width, snap.height) },
+            content = { l, d, sub ->
+                val v = d?.vector
+                val old = l.vector
+                if (v != null && old != null && !LayerDataTransforms.turnsExactly(old, 0, mirror = true)) {
+                    renderVector(v, snap.width, snap.height, snap.colorMode, sub)
+                } else null
+            },
+        ) { src, _, _ -> transformed(src, snap.width, snap.height, geometry) }
         return CanvasResult(snap.width, snap.height, snap.dpi, snap.colorMode, layers, geometry)
     }
 
@@ -331,8 +353,49 @@ object CanvasOps {
         dither: Boolean = false,
         progress: (Float) -> Unit = {},
     ): CanvasResult {
-        if (!convertsPixels(snap.colorMode, mode)) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
-        val layers = mapLayers(snap, progress, transformMasks = false) { src, _, sub ->
+        val hasVectors = snap.layers.any { it.vector != null }
+        if (!hasVectors) {
+            if (!convertsPixels(snap.colorMode, mode)) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
+            val plain = mapLayers(snap, progress, transformMasks = false) { src, _, sub ->
+                val out = BitmapUtils.createLayerBitmap(src.width, src.height)
+                try {
+                    convertInto(src, out, mode, threshold, dither, sub)
+                } catch (t: Throwable) { out.recycle(); throw t }
+                out
+            }
+            return CanvasResult(snap.width, snap.height, snap.dpi, mode, plain, CanvasGeometry.IDENTITY)
+        }
+        // Vector layers (v1.5): their cache stays exactly what their objects render to in the
+        // document's mode (every later partial re-render is held to the mode with the standard
+        // conversion), so they keep their objects and never get seams.
+        val convertedData: (CanvasSnapshot.LayerSnapshot) -> LayerData = { l -> if (l.data.isEmpty) l.data else LayerDataTransforms.transformed(l.data, Matrix(), snap.width, snap.height) }
+        if (!convertsPixels(snap.colorMode, mode)) {
+            if (!hasVectors) return CanvasResult(snap.width, snap.height, snap.dpi, mode, emptyList(), CanvasGeometry.IDENTITY)
+            // The pixels already qualify, but vector layers were held to the old mode (grey or
+            // 1-bit): they are drawn again in the new one. Every other layer keeps its pixels
+            // (and its data).
+            val layers = mapLayers(
+                snap, progress, transformMasks = false,
+                data = { l -> l.data },
+                content = { l, d, sub -> d?.vector?.let { v -> renderVector(v, snap.width, snap.height, mode, sub) } ?: l.bitmap },
+            ) { src, _, _ -> src }
+            return CanvasResult(snap.width, snap.height, snap.dpi, mode, layers, CanvasGeometry.IDENTITY)
+        }
+        val layers = mapLayers(
+            snap, progress, transformMasks = false,
+            data = convertedData,
+            content = { l, _, sub ->
+                // A vector layer is converted the standard way (threshold 128, no dithering):
+                // what its later re-renders get, so it stays one consistent rendering.
+                if (l.vector != null && mode == ColorMode.MONOCHROME && (dither || threshold.coerceIn(1, 255) != 128)) {
+                    val out = BitmapUtils.createLayerBitmap(l.bitmap.width, l.bitmap.height)
+                    try {
+                        convertInto(l.bitmap, out, mode, 128, false, sub)
+                    } catch (t: Throwable) { out.recycle(); throw t }
+                    out
+                } else null
+            },
+        ) { src, _, sub ->
             val out = BitmapUtils.createLayerBitmap(src.width, src.height)
             try {
                 convertInto(src, out, mode, threshold, dither, sub)
@@ -520,7 +583,8 @@ object CanvasOps {
         val from = c.doc.colorMode
         if (mode == from) return false
         val label = "Color mode: ${mode.label}"
-        if (!convertsPixels(from, mode)) return applyNow(c, label) { s -> convertColorMode(s, mode) }
+        // Vector layers are drawn again in the new mode (v1.5): in the background then.
+        if (!convertsPixels(from, mode) && c.doc.layers.none { it.isVectorLayer }) return applyNow(c, label) { s -> convertColorMode(s, mode) }
         return run(c, label) { s, p -> convertColorMode(s, mode, threshold, dither, p) }
     }
 
@@ -562,7 +626,8 @@ object CanvasOps {
                 val d = data?.invoke(l)
                 val sub = subProgress()
                 val bmp = content?.invoke(l, d, sub) ?: op(l.bitmap, false, sub)
-                pendingBitmap = bmp
+                // (A layer whose pixels stay keeps the snapshot's own bitmap: never freed here.)
+                pendingBitmap = bmp.takeIf { it !== l.bitmap }
                 progress(++done / total)
                 val mask = if (transformMasks && l.mask != null) {
                     op(l.mask, true, subProgress()).also { progress(++done / total) }

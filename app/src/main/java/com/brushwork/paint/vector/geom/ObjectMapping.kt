@@ -190,10 +190,24 @@ object ObjectMapping {
         return within(pa, pb, slack) && within(pb, pa, slack)
     }
 
+    /**
+     * True when the points of [from] lie within [tol] of [to]. At most [MAX_CHECKED] points,
+     * spread evenly, are checked (a large ellipse flattens to hundreds of points: checking each
+     * against every segment of the other would make flipping a layer of shapes slow); a shape
+     * that doesn't mirror into the candidate misses it by far more than [tol] along whole
+     * stretches of its outline, so the decision stays the same.
+     */
     private fun within(from: List<Polyline>, to: List<Polyline>, tol: Float): Boolean {
+        val total = from.sumOf { it.points.size }
+        val step = max(1, (total + MAX_CHECKED - 1) / MAX_CHECKED)
+        var k = 0
         for (poly in from) for (p in poly.points) {
+            if (k++ % step != 0) continue
             if (VectorOps.distanceToOutline(to, p) > tol) return false
         }
         return true
     }
+
+    /** Points of an outline checked against the other one (see [within]). */
+    private const val MAX_CHECKED = 160
 }

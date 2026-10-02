@@ -17,6 +17,7 @@ import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.select.MarchingSquares
 import com.brushwork.paint.vector.geom.ObjectIndex
+import com.brushwork.paint.vector.geom.TileSet
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -114,11 +115,7 @@ object VectorLayerOps {
             val pixels = if (ids.size == content.objects.size) {
                 BitmapUtils.copy(layer.bitmap)
             } else {
-                BitmapUtils.createLayerBitmap(w, h).also { b ->
-                    val doc = Rect(0, 0, w, h)
-                    VectorLayerRenderer.render(Canvas(b), subset, doc, tips = TipCache(8L shl 20), document = doc)
-                    if (c.doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(b, doc, c.doc.colorMode)
-                }
+                BitmapUtils.createLayerBitmap(w, h).also { b -> if (ids.isNotEmpty()) drawSubset(b, layer, content, subset, ids, w, h, c.doc.colorMode) }
             }
             Layer(c.doc.newLayerId(), uniqueName(c, "${layer.name} copy"), pixels).also {
                 it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
@@ -136,6 +133,40 @@ object VectorLayerOps {
         c.pushUndo(AddLayerAction(copy, at, "Duplicate selection"))
         if (ids.isEmpty()) c.toast("The selection touches no objects of \"${layer.name}\"")
         return copy
+    }
+
+    /**
+     * Draws the rendering of [subset] (the objects [ids] of [layer]'s [content]) into [canvas]
+     * (document px, empty): the grid tiles the other objects can't reach are the layer's cache
+     * there (exactly the rendering of the objects that reach them), so only the tiles both kinds
+     * reach are rendered — a large selection on the main thread stays quick.
+     */
+    private fun drawSubset(target: Bitmap, layer: Layer, content: VectorContent, subset: VectorContent, ids: Set<Long>, w: Int, h: Int, mode: ColorMode) {
+        val canvas = Canvas(target)
+        val t = VectorLayerRenderer.TILE
+        val index = ObjectIndex.of(content)
+        val mine = TileSet(w, h, t)
+        val others = TileSet(w, h, t)
+        for ((i, o) in content.objects.withIndex()) (if (o.id in ids) mine else others).addObject(o, index.bounds(i))
+        val copy = TileSet(w, h, t)
+        val render = TileSet(w, h, t)
+        val r = Rect()
+        for (row in 0 until mine.rows) for (col in 0 until mine.cols) {
+            if (!mine.has(col, row)) continue
+            (if (others.has(col, row)) render else copy).addRect(mine.tileRect(col, row, r))
+        }
+        for (rect in copy.rects()) canvas.drawBitmap(layer.bitmap, rect, rect, null)
+        val doc = Rect(0, 0, w, h)
+        val tips = TipCache(8L shl 20)
+        for (rect in render.rects()) {
+            canvas.save()
+            canvas.clipRect(rect)
+            VectorLayerRenderer.render(canvas, subset, rect, tips = tips, document = doc)
+            canvas.restore()
+        }
+        tips.clear()
+        // The cache is already held to the document's color mode; rendered tiles are held now.
+        if (mode != ColorMode.RGB) for (rect in render.rects()) ColorModeOps.constrain(target, rect, mode)
     }
 
     /**
