@@ -163,6 +163,10 @@ class SvgQaFixturesTest {
         assertIllustratorFile(illustratorText.format("UTF-8").toByteArray(Charsets.UTF_8), "UTF-8")
         val bom8 = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + illustratorText.format("UTF-8").toByteArray(Charsets.UTF_8)
         assertIllustratorFile(bom8, "UTF-8 with a byte order mark")
+        // Saying Latin-1 but written in UTF-8 (a converted or hand-edited file): read as UTF-8.
+        assertIllustratorFile(illustratorText.format("ISO-8859-1").toByteArray(Charsets.UTF_8), "UTF-8 declared as ISO-8859-1")
+        assertIllustratorFile(illustratorText.format("windows-1252").toByteArray(Charsets.UTF_8), "UTF-8 declared as windows-1252")
+        assertIllustratorFile(illustratorText.format("windows-1252").toByteArray(charset("windows-1252")), "windows-1252")
     }
 
     @Test

@@ -38,13 +38,36 @@ object XmlEncoding {
         val name = ENCODING.find(decl)?.groupValues?.get(2)?.trim() ?: return null
         val upper = name.uppercase()
         if (upper == "UTF-8" || upper == "UTF8" || upper == "US-ASCII" || upper == "ASCII") return null
-        return try {
-            val cs = Charset.forName(name)
-            // A declaration that says UTF-16 in a file that isn't (handled above) is ignored.
-            if (cs.name().startsWith("UTF-16") || cs.name().startsWith("UTF-32")) null else cs
+        val cs = try {
+            Charset.forName(name)
         } catch (e: Exception) {
-            null
+            return null
         }
+        // A declaration that says UTF-16 in a file that isn't (handled above) is ignored.
+        if (cs.name().startsWith("UTF-16") || cs.name().startsWith("UTF-32")) return null
+        // A file that says Latin-1 but is valid UTF-8 (converted or hand-edited) is read as UTF-8:
+        // real Latin-1 letters (é = E9 before ASCII) are never valid UTF-8.
+        return if (validUtf8(bytes)) null else cs
+    }
+
+    /** True when [bytes] are well-formed UTF-8 (no copy; up to 20 MB are scanned). */
+    internal fun validUtf8(bytes: ByteArray): Boolean {
+        var i = 0
+        val n = bytes.size
+        while (i < n) {
+            val b = bytes[i].toInt() and 0xFF
+            val extra = when {
+                b < 0x80 -> 0
+                b in 0xC2..0xDF -> 1
+                b in 0xE0..0xEF -> 2
+                b in 0xF0..0xF4 -> 3
+                else -> return false
+            }
+            if (i + extra >= n && extra > 0) return false
+            for (k in 1..extra) if ((bytes[i + k].toInt() and 0xC0) != 0x80) return false
+            i += extra + 1
+        }
+        return true
     }
 
     private val ENCODING = Regex("""encoding\s*=\s*(["'])([A-Za-z0-9._:-]+)\1""")
