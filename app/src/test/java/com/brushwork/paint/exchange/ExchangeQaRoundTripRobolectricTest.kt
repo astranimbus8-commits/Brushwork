@@ -104,6 +104,107 @@ class ExchangeQaRoundTripRobolectricTest {
         }
     }
 
+    private fun svgOf(c: EditorController, options: ExportOptions): org.w3c.dom.Document {
+        val scene = runBlocking { ExportSceneBuilder(c, options, TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build() }
+        val out = ByteArrayOutputStream()
+        runBlocking { SvgWriter(scene).write(out) }
+        return QaExchange.parseXml(out.toByteArray())
+    }
+
+    @Test
+    fun everyChoiceOfTheExportSheetChangesTheFile() {
+        val c = allKinds()
+        val root = { d: org.w3c.dom.Document -> d.documentElement }
+        fun group(d: org.w3c.dom.Document, name: String) = QaExchange.layerGroups(d).single { it.getAttributeNS(QaExchange.INKSCAPE_NS, "label") == name }
+        val plain = svgOf(c, ExportOptions(VectorFormat.SVG))
+        assertTrue(QaExchange.elements(group(plain, "Text: Hello export"), "text").isNotEmpty())
+        assertTrue(QaExchange.elements(group(plain, "Vector 1"), "image").isEmpty())
+        assertTrue(QaExchange.elements(root(plain), "rect").none { it.getAttribute("id") == "background" })
+        assertEquals(1, plain.getElementsByTagNameNS(com.brushwork.paint.exchange.export.Payload.SVG_NAMESPACE, "payload").length)
+        assertTrue(QaExchange.layerGroups(plain).none { it.getAttributeNS(QaExchange.INKSCAPE_NS, "label") == "Hidden" })
+
+        val other = svgOf(
+            c,
+            ExportOptions(
+                VectorFormat.SVG,
+                strokes = com.brushwork.paint.exchange.export.StrokeExport.PICTURES,
+                text = com.brushwork.paint.exchange.export.TextExportMode.OUTLINES,
+                includeHidden = true, whiteBackground = true, includePayload = false,
+            ),
+        )
+        // Text as outlines: no <text> anywhere.
+        assertEquals(0, QaExchange.elements(root(other), "text").size)
+        assertTrue(QaExchange.elements(group(other, "Text: Hello export"), "path").isNotEmpty())
+        // Brush strokes as pictures: the vector layer's stroke is a picture now (its paths stay paths).
+        assertEquals(1, QaExchange.elements(group(other, "Vector 1"), "image").size)
+        assertTrue(QaExchange.elements(group(other, "Vector 1"), "path").size >= 3)
+        // A white background under everything, the hidden layer written hidden, no Brushwork data.
+        val bg = QaExchange.elements(root(other), "rect").single { it.getAttribute("id") == "background" }
+        assertEquals("#ffffff", bg.getAttribute("fill"))
+        assertTrue(group(other, "Hidden").getAttribute("style").contains("display:none"))
+        assertEquals(0, other.getElementsByTagNameNS(com.brushwork.paint.exchange.export.Payload.SVG_NAMESPACE, "payload").length)
+        c.dispose()
+    }
+
+    @Test
+    fun aBrushworkSvgCanComeInAsOnePicture() {
+        val source = allKinds()
+        val file = export(source, VectorFormat.SVG)
+        val target = Smoke.controller(app, Smoke.document(480, 360, layers = 1))
+        val state = ExchangeUiState(target)
+        state.context = app
+        state.importUri(Uri.fromFile(file))
+        assertTrue(Smoke.pumpUntil { state.dialog is ExchangeDialog.MadeWithBrushwork && target.busyMessage == null })
+        val steps = target.undoManager.undoCount
+        state.answerPicture()
+        Smoke.pumpUntil { target.busyMessage == null && target.doc.layers.size >= 2 }
+        // "The artwork as a picture": one layer that looks exactly like the artwork (the layer
+        // mask, blend modes and texts included, which the SVG drawing alone can't all show).
+        assertEquals("message ${target.message}: ${target.doc.layers.map { it.name }}", 2, target.doc.layers.size)
+        val picture = target.doc.layers[1]
+        assertEquals("Imported SVG (picture)", picture.name)
+        assertEquals(steps + 1, target.undoManager.undoCount)
+        target.currentTool.commit()
+        Smoke.pumpUntil { target.busyMessage == null }
+        val flat = source.compositor.renderFlattened()
+        val raster = source.doc.layers.single { it.name == "Raster" }
+        // A point the raster layer's mask hides: the picture shows what the canvas shows there.
+        assertEquals(0, raster.mask!!.getPixel(60, 180) and 0xFF)
+        assertEquals(flat.getPixel(60, 180), picture.bitmap.getPixel(60, 180))
+        assertTrue("exactly the artwork", ExchangeFixtures.pixels(flat).contentEquals(ExchangeFixtures.pixels(picture.bitmap)))
+        target.dispose()
+        source.dispose()
+    }
+
+    @Test
+    fun exportingCommitsAMoveInProgressFirstAsItsOwnStep() {
+        val c = allKinds()
+        val vector = c.doc.layers.single { it.name == "Vector 1" }
+        c.selectLayer(vector)
+        c.selectTool(ToolId.TRANSFORM)
+        assertTrue(Smoke.pumpUntil { c.currentTool.hasPendingWork })
+        (c.currentTool as TransformTool).moveBy(-200f, 0f)
+        val steps = c.undoManager.undoCount
+        val before = vector.vector!!.objects.map { com.brushwork.paint.vector.VectorOps.bounds(it).left }
+        // Export PDF... runs the real job (its pending-work rule), into a file.
+        val out = File(app.cacheDir, "moved.pdf")
+        val state = ExchangeUiState(c)
+        state.context = app
+        state.exportOptions = ExportOptions(VectorFormat.PDF)
+        val uri = Uri.fromFile(out)
+        org.robolectric.Shadows.shadowOf(app.contentResolver).registerOutputStreamSupplier(uri) { java.io.FileOutputStream(out) }
+        state.exportTo(uri)
+        assertTrue(Smoke.pumpUntil { c.busyMessage == null })
+        assertEquals("the move became its own step", steps + 1, c.undoManager.undoCount)
+        assertTrue("still a vector layer", vector.isVectorLayer)
+        val after = vector.vector!!.objects.map { com.brushwork.paint.vector.VectorOps.bounds(it).left }
+        for ((a, b) in before.zip(after)) assertEquals(a - 200f, b, 1f)
+        // The file has the moved objects (its Brushwork data equals the document now).
+        val r = QaExchange.checkPdf(out.readBytes())
+        assertEquals(vector.vector, r.payload()!!.layers.single { it.props.name == "Vector 1" }.vector)
+        c.dispose()
+    }
+
     @Test
     fun aWrappedTextRestoredIntoTheGallerysNewArtworkKeepsItsPicture() {
         val source = allKinds()

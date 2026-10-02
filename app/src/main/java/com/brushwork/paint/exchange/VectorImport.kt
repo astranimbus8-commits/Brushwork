@@ -67,6 +67,9 @@ object VectorImport {
     const val MAX_TEXTS = 8
     const val LABEL = "Import SVG"
 
+    /** The layer an SVG imported as a picture becomes. */
+    const val PICTURE_NAME = "Imported SVG (picture)"
+
     /** Layers prepared by [prepare]: bottom first, texts placed on the main thread. */
     class Prepared(
         val layers: List<NewLayer>,
@@ -144,7 +147,7 @@ object VectorImport {
                 } else {
                     val bmp = BitmapUtils.createLayerBitmap(target.width, target.height)
                     drawPictures(bmp, content.items, target)
-                    layers += NewLayer("Imported SVG (picture)", bmp)
+                    layers += NewLayer(PICTURE_NAME, bmp)
                     transformLayer = layers.lastIndex
                     room--
                 }

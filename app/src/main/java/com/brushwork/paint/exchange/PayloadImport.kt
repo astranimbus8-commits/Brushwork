@@ -8,6 +8,8 @@ import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.model.Document
 import com.brushwork.paint.exchange.export.BrushworkPayload
 import com.brushwork.paint.exchange.export.PayloadKind
 import com.brushwork.paint.exchange.export.PayloadLayer
@@ -100,6 +102,31 @@ object PayloadImport {
         if (rasterized > 0) dropped["text and shape layers (kept as pixels: other canvas size)"] = rasterized
         val outcome = ImportOutcome(layers = out.size, dropped = dropped)
         return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
+    }
+
+    /**
+     * The artwork of [p] as ONE picture for [target] (placed like [prepare]): its layers restored
+     * and composited exactly as the editor draws them — masks, blend modes, clipping groups,
+     * adjustment layers and texts included. Null when all its layers don't fit in memory next to
+     * the picture ([ImportTarget.room] layers). Not on the main thread (only its own layers).
+     */
+    fun picture(p: BrushworkPayload, images: Images, target: ImportTarget): Bitmap? {
+        if (p.layers.isEmpty() || fitting(p.layers, target.room - 1).size < p.layers.size) return null
+        val prepared = prepare(p, images, target.copy(room = target.room - 1))
+        try {
+            val doc = Document("picture", "picture", target.width, target.height, p.dpi)
+            doc.colorMode = target.colorMode
+            for (n in prepared.layers) {
+                doc.layers += Layer(doc.newLayerId(), n.name, n.bitmap).also { l ->
+                    n.props?.let { l.copyPropsFrom(it) }
+                    l.mask = n.mask
+                    l.restoreData(n.data)
+                }
+            }
+            return Compositor(doc) { null }.renderFlattened()
+        } finally {
+            prepared.layers.forEach { it.bitmap.recycle(); it.mask?.recycle() }
+        }
     }
 
     /**

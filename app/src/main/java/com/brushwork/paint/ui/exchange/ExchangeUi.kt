@@ -24,6 +24,7 @@ import com.brushwork.paint.exchange.ImportLayers
 import com.brushwork.paint.exchange.ImportOutcome
 import com.brushwork.paint.exchange.ImportSource
 import com.brushwork.paint.exchange.ImportTarget
+import com.brushwork.paint.exchange.NewLayer
 import com.brushwork.paint.exchange.PayloadImport
 import com.brushwork.paint.exchange.PendingImport
 import com.brushwork.paint.exchange.PendingImports
@@ -342,11 +343,40 @@ class ExchangeUiState(internal val controller: EditorController) {
         busy("Importing") {
             var handedOver = false
             try {
-                if (d.svg != null) importSvg(d.svg, newArtwork = false, asPicture = true) else handedOver = pdfPages(d.file, null)
+                if (d.svg != null) {
+                    if (!payloadPicture(d.svg)) importSvg(d.svg, newArtwork = false, asPicture = true)
+                } else {
+                    handedOver = pdfPages(d.file, null)
+                }
             } finally {
                 if (!handedOver) withContext(Dispatchers.IO) { d.file.close() }
             }
         }
+    }
+
+    /**
+     * A Brushwork SVG "as a picture": its layers restored and composited exactly as the editor
+     * draws them, into one layer placed with Transform (one undo step). The SVG drawing can't show
+     * everything (layer masks, blend modes). False when its data can't be read or its layers don't
+     * fit in memory: the SVG is drawn instead.
+     */
+    private suspend fun payloadPicture(svg: SvgDocument): Boolean {
+        val payload = withContext(Dispatchers.Default) { readable { svg.payload() } } ?: return false
+        val target = target()
+        val picture = withContext(Dispatchers.Default) {
+            PayloadImport.picture(payload, { key -> svg.imageData(key)?.let { PngDecoder.decode(it) } }, target)
+        } ?: return false
+        if (!coroutineContext.isActive) {
+            picture.recycle()
+            coroutineContext.ensureActive()
+        }
+        val created = ImportLayers.insert(controller, listOf(NewLayer(VectorImport.PICTURE_NAME, picture)), VectorImport.LABEL)
+        created.firstOrNull()?.let { layer ->
+            controller.selectLayer(layer)
+            VectorImport.openTransform(controller)
+        }
+        report(ImportOutcome(pictures = 1, layers = created.size))
+        return true
     }
 
     /** "Import as a picture" for an SVG over the limits. */
