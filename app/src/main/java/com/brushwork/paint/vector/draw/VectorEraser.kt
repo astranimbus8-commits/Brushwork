@@ -101,7 +101,7 @@ internal class VectorEraserRecorder(
             c.toast("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)")
         }
         try {
-            state.update(layer, after, ERASE_LABEL) { removePreview(); finish() }
+            state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
         } catch (e: Throwable) {
             removePreview()
             throw e

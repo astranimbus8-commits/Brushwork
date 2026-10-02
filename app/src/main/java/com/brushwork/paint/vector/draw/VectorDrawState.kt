@@ -1,11 +1,14 @@
 package com.brushwork.paint.vector.draw
 
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VectorContent
+import kotlinx.coroutines.Job
 import java.util.IdentityHashMap
 import java.util.WeakHashMap
 
@@ -14,10 +17,16 @@ import java.util.WeakHashMap
  * the eraser mode (Compose state, persisted in `AppSettings.vectorEraserMode`), the one-time
  * hints of this editor session, the object geometry cache and the queue of their content
  * updates. Main thread.
+ *
+ * It never holds its editor (nor a layer it doesn't need): the states live in a weak map keyed
+ * by the editor, and a value that referenced its key would keep every closed editor, with its
+ * document and layer bitmaps, alive for the life of the app. Jobs waiting for an update do hold
+ * their editor: they are dropped when the editor closes (its scope ends; a background render on
+ * its way is abandoned then and never reports back).
  */
-internal class VectorDrawState(private val c: EditorController) {
+internal class VectorDrawState(initialMode: VectorEraseMode) {
     /** The vector eraser's mode (Compose state). */
-    val eraseMode: MutableState<VectorEraseMode> = mutableStateOf(VectorEraseMode.parse(c.settings.vectorEraserMode))
+    val eraseMode: MutableState<VectorEraseMode> = mutableStateOf(initialMode)
 
     /** "Selections don't limit vector strokes" was shown. */
     var selectionHintShown = false
@@ -37,16 +46,19 @@ internal class VectorDrawState(private val c: EditorController) {
     // ------------------------------------------------------------------ content updates
 
     /**
-     * Applies new content to a vector layer: `VectorLayers.update`, which may render in the
-     * background and call its last argument later (replaceable in tests).
+     * Applies new content to a vector layer of editor `c`: `VectorLayers.update`, which may
+     * render in the background and call its last argument later (replaceable in tests).
      */
-    var update: (layer: Layer, after: VectorContent, label: String, onDone: (Boolean) -> Unit) -> Unit =
-        { layer, after, label, onDone -> c.vectors.update(layer, after, label, onDone = onDone) }
+    var update: (c: EditorController, layer: Layer, after: VectorContent, label: String, onDone: (Boolean) -> Unit) -> Unit = DEFAULT_UPDATE
 
-    /** Per layer: when the running update started (uptime ms) and the jobs waiting for it. */
-    private val running = IdentityHashMap<Layer, Long>()
-    /** Per layer: the number of the latest run (weak: a deleted layer is not kept alive by it; layers compare by identity). */
+    /**
+     * Per layer: when the running update started (uptime ms). Weak (layers compare by identity):
+     * an update that never reports back doesn't keep a deleted layer and its bitmap alive.
+     */
+    private val running = WeakHashMap<Layer, Long>()
+    /** Per layer: the number of the latest run (weak, as [running]). */
     private val generation = WeakHashMap<Layer, Int>()
+    /** Per layer: the jobs waiting for the running update (drained as the updates report back). */
     private val waiting = IdentityHashMap<Layer, ArrayDeque<(() -> Unit) -> Unit>>()
 
     /**
@@ -86,6 +98,12 @@ internal class VectorDrawState(private val c: EditorController) {
         }
     }
 
+    /** The editor closed: the updates on their way never report back, the jobs waiting for them are dropped. */
+    fun abandon() {
+        waiting.clear()
+        running.clear()
+    }
+
     private fun next(layer: Layer) {
         val queue = waiting[layer]
         val job = queue?.removeFirstOrNull()
@@ -103,9 +121,20 @@ internal class VectorDrawState(private val c: EditorController) {
         /** An update that has not reported back after this long (ms) no longer holds the next ones. */
         private const val STUCK_MS = 30_000L
 
+        private val DEFAULT_UPDATE: (EditorController, Layer, VectorContent, String, (Boolean) -> Unit) -> Unit =
+            { c, layer, after, label, onDone -> c.vectors.update(layer, after, label, onDone = onDone) }
+
+        /** Per editor (weak keys; a state never references its editor, see the class comment). */
         private val states = WeakHashMap<EditorController, VectorDrawState>()
 
-        fun of(c: EditorController): VectorDrawState = states.getOrPut(c) { VectorDrawState(c) }
+        fun of(c: EditorController): VectorDrawState {
+            states[c]?.let { return it }
+            val s = VectorDrawState(VectorEraseMode.parse(c.settings.vectorEraserMode))
+            states[c] = s
+            // (The handler is held by the editor's own scope, not by anything static.)
+            c.scope.coroutineContext[Job]?.invokeOnCompletion { Handler(Looper.getMainLooper()).post { s.abandon() } }
+            return s
+        }
     }
 }
 

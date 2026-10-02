@@ -242,6 +242,19 @@ internal class BrushStrokePreview(
      */
     var onLiveChanged: (() -> Unit)? = null
 
+    /** The random values of the brush for this editing session (a replay with it gives the same texture). */
+    val sessionSeed: Long get() = seed
+
+    /**
+     * Paints with the random values [s] from now on (a reopened path keeps the texture it was
+     * painted with). A live stroke with other values is dropped first.
+     */
+    fun useSeed(s: Long) {
+        if (s == seed) return
+        cancel()
+        seed = s
+    }
+
     /** The brush the stroke is painted with ([presetOverride], else the tool's current one). */
     private fun presetOf(id: ToolId): BrushPreset? = presetOverride() ?: controller.presetFor(id)
 
@@ -313,13 +326,8 @@ internal class BrushStrokePreview(
     internal var dragReplayLimitMs = MAX_DRAG_REPLAY_MS
     /** The waiting replay is held back until the drag ends (see [flush]). */
     private var deferred = false
-    /**
-     * Random values of the brush for this editing session: a replay never changes its texture.
-     * Readable (v1.5: a vector shape stores the seed its outline was painted with, so its replay
-     * equals the preview) and settable while no stroke is live (a reopened shape shows its own
-     * texture); [end] picks a new one.
-     */
-    internal var seed = newSeed()
+    /** Random values of the brush for this editing session: a replay never changes its texture. */
+    private var seed = newSeed()
     private val input = PathStrokeInput(1024)
 
     /** True while an unfinished preview stroke is shown. */

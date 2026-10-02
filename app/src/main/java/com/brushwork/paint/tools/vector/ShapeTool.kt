@@ -1728,7 +1728,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         controller.color = shape.strokeColor
         loadedObject = objectFor(shape.box, shape.points)
         // The outline is shown with its own texture (its replay's random values).
-        brushPreview.seed = current.seed
+        brushPreview.useSeed(current.seed)
         refreshPreview()
     }
 
@@ -1785,7 +1785,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val path = if (o.paintsWithBrush) ShapeOutlines.brushOutline(o) else null
         // Kept live only when nothing plain goes under the stroke (a fill must be drawn first).
         val livePath = path?.takeIf { ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer) }
-        val shape = VShape(0, shape = o, seed = brushPreview.seed)
+        val shape = VShape(0, shape = o, seed = brushPreview.sessionSeed)
         val pendingPoints = points
         val pendingTarget = targetLayer
         var ids: List<Long> = emptyList()
@@ -1846,7 +1846,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (o == loadedObject) { lastVectorId = vectorEditId; discard(); return }
         if (!controller.checkEditable(layer)) return
         if (o.paintsWithBrush && brushMovesPixels()) { controller.toast(movesPixelsMessage()); return }
-        val shape = VShape(vectorEditId, opacity = vectorEditOpacity, shape = o, seed = brushPreview.seed)
+        val shape = VShape(vectorEditId, opacity = vectorEditOpacity, shape = o, seed = brushPreview.sessionSeed)
         lastVectorId = vectorEditId
         inCommit = true
         try {

@@ -106,7 +106,7 @@ class VectorDrawReviewRobolectricTest {
         val held = ArrayList<() -> Unit>()
 
         init {
-            VectorDrawState.of(c).update = { layer, after, label, done -> held += { c.vectors.update(layer, after, label, onDone = done) } }
+            VectorDrawState.of(c).update = { cc, layer, after, label, done -> held += { cc.vectors.update(layer, after, label, onDone = done) } }
         }
 
         fun release() = held.removeAt(0).invoke()

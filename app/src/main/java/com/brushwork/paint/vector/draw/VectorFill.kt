@@ -47,8 +47,13 @@ object VectorFill {
     const val FILL_OBJECT_LABEL = "Fill object"
     const val FILL_AREA_LABEL = "Fill"
 
-    /** How far beside a line (dp on screen) a tap still recolors it. */
-    private const val TAP_TOLERANCE_DP = 8f
+    /**
+     * How far beside a line's paint (dp on screen) a tap still recolors it. Small: a tap beside
+     * line art is most often meant to fill the area the lines enclose (small areas, an eye, the
+     * gaps between strands of hair, or a whole drawing zoomed out, are mostly within a few dp of
+     * a line), and the raster bucket recolors a line only when the tap is on it too.
+     */
+    internal const val TAP_TOLERANCE_DP = 4f
 
     /** Simplification of a traced area's outline (document px). */
     private const val TRACE_EPSILON = 0.75f
@@ -100,7 +105,7 @@ object VectorFill {
             if (current == null || now == null || after == null) {
                 finish()
             } else {
-                state.update(layer, current.replaced(mapOf(now.obj.id to listOf(after))), FILL_OBJECT_LABEL) { finish() }
+                state.update(c, layer, current.replaced(mapOf(now.obj.id to listOf(after))), FILL_OBJECT_LABEL) { finish() }
             }
         }
         return true
@@ -182,7 +187,7 @@ object VectorFill {
                             finish()
                         }
                         !c.checkEditable(layer) -> finish()
-                        else -> state.update(layer, atBottom(content, path), FILL_AREA_LABEL) { finish() }
+                        else -> state.update(c, layer, atBottom(content, path), FILL_AREA_LABEL) { finish() }
                     }
                 }
             } catch (e: CancellationException) {
