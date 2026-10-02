@@ -62,6 +62,12 @@ data class ShapeAnchor(
 /** Where a point lies on a custom outline: segment [segment] at parameter [t]. */
 data class ShapeHit(val segment: Int, val t: Float, val point: Vec2, val distance: Float)
 
+/**
+ * Which tangent handles of a point the Handles group scales (v1.6 §3.3, Shape Points): both, or
+ * only the one coming in / going out (its length changes, never its direction).
+ */
+enum class ShapeHandleSide { BOTH, IN, OUT }
+
 object ShapePoints {
     /** Fewest points of a closed / open custom shape. */
     const val MIN_CLOSED = 3
@@ -339,6 +345,34 @@ object ShapePoints {
     /** Drops the explicit handles of point [i] (a smooth point gets its automatic tangent back). */
     fun autoTangent(a: List<ShapeAnchor>, i: Int): List<ShapeAnchor> =
         a.mapIndexed { k, p -> if (k == i) p.copy(handleIn = null, handleOut = null) else p }
+
+    /** Smallest and largest factor [scaledHandles] applies. */
+    const val MIN_HANDLE_SCALE = 0.01f
+    const val MAX_HANDLE_SCALE = 100f
+
+    /**
+     * The points [indices] of [a] with their tangent handles scaled by [k] (clamped to
+     * [MIN_HANDLE_SCALE]..[MAX_HANDLE_SCALE]; NaN: 1), v1.6 §3.3 for the shape tool's points. Each
+     * handle keeps its own direction, so a smooth point stays smooth (its handles collinear) and a
+     * sharp one keeps its angle; [side] IN or OUT changes one handle's length only. Automatic
+     * (Catmull-Rom) tangents are made explicit first ([handles]: the outline is the same at 1).
+     * A point without handles (a sharp corner between straight edges) is left as it is, and so are
+     * indices out of range. O(points).
+     */
+    fun scaledHandles(a: List<ShapeAnchor>, indices: IntArray, k: Float, side: ShapeHandleSide, closed: Boolean): List<ShapeAnchor> {
+        val kk = if (k.isNaN()) 1f else k.coerceIn(MIN_HANDLE_SCALE, MAX_HANDLE_SCALE)
+        val out = a.toMutableList()
+        for (i in indices) {
+            if (i !in a.indices) continue
+            val (hIn, hOut) = handles(a, i, closed)
+            if (hIn.lengthSq < 1e-12f && hOut.lengthSq < 1e-12f) continue
+            out[i] = a[i].copy(
+                handleIn = if (side == ShapeHandleSide.OUT) hIn else hIn * kk,
+                handleOut = if (side == ShapeHandleSide.IN) hOut else hOut * kk,
+            )
+        }
+        return out
+    }
 
     /**
      * Point [i] with one handle dragged to [v] (an offset). A smooth point keeps its other handle

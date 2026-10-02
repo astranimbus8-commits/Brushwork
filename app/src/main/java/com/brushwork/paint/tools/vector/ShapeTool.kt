@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -47,6 +48,8 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -760,6 +763,95 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = np
     }
 
+    // ------------------------------------------------------------------ handle scaling (v1.6 §3.3, Points)
+
+    /** Which handles the Handles group scales (Compose state). */
+    var handleSide by mutableStateOf(ShapeHandleSide.BOTH)
+
+    /** The Handles group acts on every point even while one is selected (Compose state). */
+    var handlesAllPoints by mutableStateOf(false)
+
+    /**
+     * The factor of the handle change in progress, relative to the handles when it began (1 at
+     * rest: the group's value then reads 100 %; Compose state).
+     */
+    var handleScale by mutableFloatStateOf(1f)
+        private set
+
+    /** The points (document px) when the handle change in progress began; null at rest. */
+    private var handleBase: List<ShapeAnchor>? = null
+
+    /** The points the change in progress scales. */
+    private var handleIndices = IntArray(0)
+
+    /** True while a handle change (a slider drag, a held arrow) is in progress. */
+    val handleScaling: Boolean get() = handleBase != null
+
+    /**
+     * Starts a change of the tangent handles (the Handles group in points mode): the selected
+     * point's, or every point's without a selection or with [handlesAllPoints]. Everything until
+     * [endHandleScale] is ONE in-tool undo step, its factor relative to the handles as they are
+     * now. False without a shape with its own points.
+     */
+    fun beginHandleScale(): Boolean {
+        if (handleBase != null) return true
+        val anchors = docAnchors() ?: return false
+        if (anchors.isEmpty()) return false
+        // A step of its own (not merged into an edit just before).
+        historyKey = null
+        pushHistory()
+        handleBase = anchors
+        val sel = selectedPoint
+        handleIndices = if (handlesAllPoints || sel !in anchors.indices) IntArray(anchors.size) { it } else intArrayOf(sel)
+        handleScale = 1f
+        return true
+    }
+
+    /** The handles of the change in progress at [k] × their length when it began (see [ShapePoints.scaledHandles]). */
+    fun scaleHandlesTo(k: Float) {
+        val base = handleBase ?: return
+        val b = box ?: return
+        if (!k.isFinite()) return
+        val kk = k.coerceIn(ShapePoints.MIN_HANDLE_SCALE, ShapePoints.MAX_HANDLE_SCALE)
+        if (kk == handleScale) return
+        handleScale = kk
+        applyAnchors(ShapePoints.scaledHandles(base, handleIndices, kk, handleSide, closedShape), b.rotationDeg)
+        refreshPreview()
+    }
+
+    /** The handle change is complete: the next one starts from the handles as they are (100 % again). */
+    fun endHandleScale() {
+        handleBase = null
+        handleScale = 1f
+        historyKey = null
+    }
+
+    /** A typed handle scale ([k] = 1.5 for 150 %), exactly as typed: one in-tool undo step. */
+    fun scaleHandles(k: Float) {
+        if (!k.isFinite() || !beginHandleScale()) return
+        scaleHandlesTo(k)
+        endHandleScale()
+    }
+
+    /**
+     * One press (or repeat, while held) of ‹ / ›: shorter or [longer] handles, × 0.9 / × 1.1, or to
+     * the next multiple of the Scale increment (100 → 110 → 120 % of the change's start) while
+     * increments are on. The release ends the change ([endHandleScale]).
+     */
+    fun stepHandles(longer: Boolean) {
+        if (!beginHandleScale()) return
+        val k = handleScale
+        val step = controller.increments.step(IncrementKind.SCALE)
+        val next = if (step == null) {
+            if (longer) k * 1.1f else k * 0.9f
+        } else {
+            val m = k * 100f / step
+            val n = if (longer) floor(m + 1e-4f) + 1f else ceil(m - 1e-4f) - 1f
+            max(n, 1f) * step / 100f
+        }
+        scaleHandlesTo(next)
+    }
+
     // ------------------------------------------------------------------ in-tool history
 
     /**
@@ -792,6 +884,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         redoCount = 0
         canUndoStep = false
         historyKey = null
+        handleBase = null
+        handleScale = 1f
     }
 
     /**
@@ -824,6 +918,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     private fun restoreState(s: PendingState) {
+        handleBase = null
+        handleScale = 1f
         box = s.box
         points = s.points
         pointsMode = s.pointsMode && s.points != null
