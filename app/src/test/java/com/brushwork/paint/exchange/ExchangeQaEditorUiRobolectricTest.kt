@@ -117,6 +117,7 @@ class ExchangeQaEditorUiRobolectricTest {
         section("Brushwork SVG and PDF back into an open artwork") { importOwnFiles() }
         section("a foreign SVG into an open artwork: one step, Transform on its objects") { importForeignSvg() }
         section("import over an untouched Transform lift") { importOverUntouchedLift() }
+        section("Undo right after an import takes it back in one press") { undoRightAfterImport() }
         section("a PDF's pages through the page picker") { pdfPagePicker() }
         section("the export sheet fits a 360 dp phone") { exportSheetAt360() }
         dog.interrupt()
@@ -418,6 +419,31 @@ class ExchangeQaEditorUiRobolectricTest {
         Smoke.assertQuiet(c, "import over a lift")
     }
 
+    // ================================================================== undo after import
+
+    private fun undoRightAfterImport() {
+        val c = freshController()
+        val activity = editor(c)
+        val before = c.undoManager.undoCount
+        val active = c.doc.activeLayerIndex
+        importFrom(activity, fixture("inkscape-layers.svg"))
+        assertTrue(waitIdle(c) { c.doc.layers.any { it.name == "Imported SVG" } })
+        settle()
+        assertTrue("Transform is open on the import", c.currentTool.hasPendingWork)
+        assertTrue("Undo is offered", SmokeUi.isEnabled("Undo"))
+        click("Undo", exact = true)
+        settle()
+        assertEquals("one press takes the import back", listOf("Layer 1", "Layer 2"), c.doc.layers.map { it.name })
+        assertEquals(before, c.undoManager.undoCount)
+        assertEquals(active, c.doc.activeLayerIndex)
+        assertFalse("no lift left over", c.currentTool.hasPendingWork)
+        assertTrue("Redo brings it back", SmokeUi.isEnabled("Redo"))
+        click("Redo", exact = true)
+        settle()
+        assertTrue(c.doc.layers.single { it.name == "Imported SVG" }.isVectorLayer)
+        Smoke.assertQuiet(c, "undo after import")
+    }
+
     // ================================================================== PDF pages
 
     private fun pdfPagePicker() {
@@ -456,7 +482,7 @@ class ExchangeQaEditorUiRobolectricTest {
         org.robolectric.RuntimeEnvironment.setQualifiers("w360dp-h640dp-xhdpi")
         try {
             val c = allKindsController()
-            editor(c)
+            val activity = editor(c)
             click("More options")
             click("Export PDF…", exact = true)
             val window = SmokeUi.windows().last()
@@ -465,6 +491,24 @@ class ExchangeQaEditorUiRobolectricTest {
                 assertTrue("\"$label\" inside the screen: ${e.bounds} in ${window.width}", e.bounds.left >= 0f && e.bounds.right <= window.width + 0.5f)
             }
             assertTrue("Save as… is clickable", SmokeUi.isEnabled("Save as…"))
+            click("Close", exact = true)
+            // The import question's three answers fit too.
+            val file = svgFile ?: throw AssertionError("the SVG export section did not run")
+            val layers = c.doc.layers.size
+            val steps = c.undoManager.undoCount
+            importFrom(activity, file)
+            assertTrue(Smoke.pumpUntil { settle(1); has("Made with Brushwork", exact = true) })
+            val dialog = SmokeUi.windows().last()
+            for (label in listOf("Editable layers", "Picture", "Cancel")) {
+                val e = SmokeUi.find(label, exact = true) ?: throw AssertionError("\"$label\" not shown at 360 dp")
+                assertTrue("\"$label\" inside the dialog: ${e.bounds} in ${dialog.width}", e.bounds.left >= 0f && e.bounds.right <= dialog.width + 0.5f && e.bounds.height >= 40f)
+            }
+            click("Cancel", exact = true)
+            assertFalse(has("Made with Brushwork", exact = true))
+            settle()
+            assertEquals("nothing imported", layers, c.doc.layers.size)
+            assertEquals("no undo step", steps, c.undoManager.undoCount)
+            assertNull(c.busyMessage)
         } finally {
             org.robolectric.RuntimeEnvironment.setQualifiers("w392dp-h873dp-xxhdpi")
         }

@@ -61,6 +61,7 @@ class GalleryExchangeQaUiRobolectricTest {
     }
 
     private lateinit var activity: MainActivity
+    private lateinit var ctl: org.robolectric.android.controller.ActivityController<MainActivity>
     private lateinit var app: BrushworkApp
 
     private fun projects() = runBlocking { app.repository.list() }
@@ -92,13 +93,15 @@ class GalleryExchangeQaUiRobolectricTest {
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog()
         SmokeUi.markBaseline()
-        activity = Robolectric.buildActivity(MainActivity::class.java).setup().get()
+        ctl = Robolectric.buildActivity(MainActivity::class.java).setup()
+        activity = ctl.get()
         app = activity.application as BrushworkApp
         assertTrue("gallery loaded", Smoke.pumpUntil { settle(1); has("New canvas") })
         section("an Inkscape SVG: its size, one vector layer per layer, saved and loaded") { inkscape() }
         section("a PDF: the gallery's page picker, then the pages") { pdf() }
         section("a Brushwork SVG: restored exactly") { brushwork() }
         section("files that aren't SVG or PDF, and a backed-out picker") { refusals() }
+        section("Export PDF while the activity is recreated behind the file picker") { exportAcrossRecreation() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -119,7 +122,8 @@ class GalleryExchangeQaUiRobolectricTest {
         assertTrue(c.doc.layers.drop(1).all { it.isVectorLayer })
         assertEquals(listOf(1, 1, 2), c.doc.layers.drop(1).map { it.vector!!.objects.size })
         assertFalse("a new artwork made for the file isn't lifted for Transform", c.currentTool.hasPendingWork)
-        assertTrue("the summary: ${SmokeUi.shown().take(30)}", has("Imported 4 shapes"))
+        // (The snackbar needs a few frames to appear.)
+        assertTrue("the summary: ${SmokeUi.shown().take(30)}", Smoke.pumpUntil(5_000) { settle(1); has("Imported 4 shapes") })
         // The sky fills the canvas (the file's viewport is the canvas).
         val top = c.doc.layers[1].bitmap.getPixel(512, 1)
         assertTrue("sky blue at the top: ${Integer.toHexString(top)}", top ushr 24 == 0xFF && (top and 0xFF) > ((top shr 16) and 0xFF) + 60)
@@ -182,6 +186,46 @@ class GalleryExchangeQaUiRobolectricTest {
         assertTrue(c.doc.layers.single { it.name == "Tone 1" }.isAdjustmentLayer)
         backToGallery()
         src.dispose()
+    }
+
+    /**
+     * Export PDF…, Letter, Save as…: while the system's file picker is in front, the editor's
+     * activity is recreated (a configuration change it doesn't handle itself: font size, dark
+     * theme, a language change; or "Don't keep activities"). The picked file must still get the
+     * PDF the user asked for, with the options chosen.
+     */
+    private fun exportAcrossRecreation() {
+        val id = runBlocking { app.repository.create(com.brushwork.paint.storage.NewCanvasSpec("Recreated", 400, 300, 300f)) }
+        assertTrue(Smoke.pumpUntil { settle(1); has("Recreated", exact = true) })
+        click("Recreated", exact = true)
+        assertTrue("editor", Smoke.pumpUntil(30_000) {
+            settle(1)
+            (app.editorSession?.state as? EditorSession.State.Ready) != null && Smoke.find(activity.window.decorView, CanvasView::class.java)?.width ?: 0 > 0
+        })
+        val c = (app.editorSession!!.state as EditorSession.State.Ready).controller
+        assertEquals(id, c.doc.id)
+        click("More options")
+        click("Export PDF…", exact = true)
+        click("Letter", exact = true)
+        click("Save as…", exact = true)
+        val started = org.robolectric.Shadows.shadowOf(activity).nextStartedActivityForResult ?: throw AssertionError("no picker")
+        assertEquals("Recreated.pdf", started.intent.getStringExtra(Intent.EXTRA_TITLE))
+        // Recreated behind the picker (Robolectric's recreate() needs frames to run by themselves).
+        org.robolectric.shadows.ShadowChoreographer.setPaused(false)
+        ctl.recreate()
+        org.robolectric.shadows.ShadowChoreographer.setPaused(true)
+        activity = ctl.get()
+        settle()
+        val uri = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload%2FRecreated.pdf")
+        val out = java.io.ByteArrayOutputStream()
+        org.robolectric.Shadows.shadowOf(activity.contentResolver).registerOutputStreamSupplier(uri) { out }
+        org.robolectric.Shadows.shadowOf(activity).receiveResult(started.intent, android.app.Activity.RESULT_OK, Intent().setData(uri))
+        assertTrue("exported", Smoke.pumpUntil(30_000) { settle(1); c.busyMessage == null && out.size() > 0 })
+        val bytes = out.toByteArray()
+        assertEquals("the file the picker made for a PDF holds a PDF", "%PDF-", String(bytes, 0, 5, Charsets.ISO_8859_1))
+        val r = QaExchange.checkPdf(bytes)
+        assertEquals("the Letter page chosen before", listOf(0.0, 0.0, 792.0, 612.0), QaExchange.mediaBox(QaExchange.pdfPages(r)[0]).map { Math.round(it * 1000) / 1000.0 })
+        backToGallery()
     }
 
     private fun refusals() {

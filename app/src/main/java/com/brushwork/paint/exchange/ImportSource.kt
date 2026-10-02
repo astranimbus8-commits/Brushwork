@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.brushwork.paint.exchange.export.Payload
 import com.brushwork.paint.exchange.svg.SvgDocument
+import com.brushwork.paint.exchange.svg.XmlEncoding
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
@@ -76,7 +77,8 @@ object ImportSource {
         val start = String(head, 0, minOf(head.size, 1024), Charsets.ISO_8859_1)
         if (start.contains("%PDF-")) return ImportKind.PDF
         if (head.size >= 2 && head[0] == 0x1F.toByte() && head[1] == 0x8B.toByte()) return ImportKind.SVG
-        val text = String(head, Charsets.UTF_8).trimStart('﻿', ' ', '\n', '\r', '\t')
+        // UTF-16 (Illustrator's SVG Options) or an 8-bit encoding named by the XML declaration.
+        val text = String(head, XmlEncoding.charsetOf(head) ?: Charsets.UTF_8).trimStart('﻿', ' ', '\n', '\r', '\t')
         if (text.startsWith("<svg") || text.contains("<svg") && (text.startsWith("<?xml") || text.startsWith("<!--") || text.startsWith("<!DOCTYPE"))) {
             return ImportKind.SVG
         }

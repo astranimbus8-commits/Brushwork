@@ -173,7 +173,8 @@ object SvgParser {
     )
 
     fun parse(bytes: ByteArray): SvgDocument {
-        val tok = XmlTokenizer(bytes)
+        // UTF-16 and 8-bit encodings (Illustrator's SVG Options) are read as UTF-8.
+        val tok = XmlTokenizer(XmlEncoding.toUtf8(bytes))
         val skipped = LinkedHashMap<String, Int>()
         fun skip(what: String, n: Int = 1) { skipped[what] = (skipped[what] ?: 0) + n }
         var root: SvgElement? = null

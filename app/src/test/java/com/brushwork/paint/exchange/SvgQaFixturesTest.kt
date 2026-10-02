@@ -136,6 +136,35 @@ class SvgQaFixturesTest {
         assertEquals(listOf(0xFF000000.toInt(), 0xFF000000.toInt()), labels.map { it.color })
     }
 
+    /** Illustrator's SVG Options offer UTF-8, UTF-16 and ISO-8859-1 encodings. */
+    private val illustratorText = """<?xml version="1.0" encoding="%s"?>
+        <!-- Generator: Adobe Illustrator 24.0.0, SVG Export Plug-In . SVG Version: 6.00 Build 0)  -->
+        <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" viewBox="0 0 200 100" style="enable-background:new 0 0 200 100;" xml:space="preserve">
+        <style type="text/css">.st0{fill:#E30613;}</style>
+        <rect x="10" y="10" class="st0" width="80" height="40"/>
+        <text transform="matrix(1 0 0 1 10 80)">Café crème</text>
+        </svg>"""
+
+    private fun assertIllustratorFile(bytes: ByteArray, what: String) {
+        assertEquals("$what is an SVG", ImportKind.SVG, ImportSource.sniff(bytes.copyOf(minOf(bytes.size, 64 * 1024))))
+        val c = SvgToVector.convert(SvgParser.parse(bytes), 96f)
+        val shape = c.items.filterIsInstance<SvgItem.Shape>().single()
+        assertEquals(VPaint.Solid(0xFFE30613.toInt()), shape.path.fill)
+        assertEquals(what, listOf("Café crème"), c.items.filterIsInstance<SvgItem.Label>().single().text.lines)
+    }
+
+    @Test
+    fun illustratorFilesInUtf16AndLatin1Import() {
+        val bom16le = byteArrayOf(0xFF.toByte(), 0xFE.toByte()) + illustratorText.format("UTF-16").toByteArray(Charsets.UTF_16LE)
+        assertIllustratorFile(bom16le, "UTF-16 (little endian, with a byte order mark)")
+        val bom16be = byteArrayOf(0xFE.toByte(), 0xFF.toByte()) + illustratorText.format("UTF-16").toByteArray(Charsets.UTF_16BE)
+        assertIllustratorFile(bom16be, "UTF-16 (big endian)")
+        assertIllustratorFile(illustratorText.format("ISO-8859-1").toByteArray(Charsets.ISO_8859_1), "ISO-8859-1")
+        assertIllustratorFile(illustratorText.format("UTF-8").toByteArray(Charsets.UTF_8), "UTF-8")
+        val bom8 = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) + illustratorText.format("UTF-8").toByteArray(Charsets.UTF_8)
+        assertIllustratorFile(bom8, "UTF-8 with a byte order mark")
+    }
+
     @Test
     fun figmaFillNoneOnTheRootIsInherited() {
         val c = fixture("figma.svg")
