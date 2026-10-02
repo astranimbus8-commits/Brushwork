@@ -123,7 +123,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * ids are returned at once.
      */
     fun addObjects(layer: Layer, objects: List<VObject>, label: String): List<Long> {
-        if (objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
+        if (disposed || objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
         flushPending()
         val current = layer.vector ?: return emptyList()
         if (!usable(layer)) return emptyList()
@@ -157,7 +157,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * rendering of objects): returns no ids otherwise.
      */
     fun appendData(layer: Layer, objects: List<VObject>, label: String): List<Long> {
-        if (objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
+        if (disposed || objects.isEmpty() || c.doc.indexOf(layer) < 0) return emptyList()
         flushPending()
         val before = layer.dataSnapshot()
         val current = before.vector ?: return emptyList()
@@ -216,7 +216,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
     ) {
         fun done(ok: Boolean) { beforeApply?.invoke(); onDone(ok) }
         val callerBase = layer.vector
-        if (callerBase == null || c.doc.indexOf(layer) < 0) { done(false); return }
+        if (disposed || callerBase == null || c.doc.indexOf(layer) < 0) { done(false); return }
         var target = after
         val p = pending
         if (p != null) {
@@ -326,7 +326,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * longer exist are left out of the session's [VectorEditSession.ids].
      *
      * Lifting every object uses a cropped copy of the cache as the floating bitmap and an empty
-     * hole (nothing is rendered). Otherwise the hole (the other objects within the edited ones'
+     * hole (nothing is rendered) when the objects lie on the canvas; objects reaching past it are
+     * rendered instead, so their off-canvas parts show in the preview. Otherwise the hole (the other objects within the edited ones'
      * grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
      * the main thread when cheap ([onReady] runs before this returns), else in the background
      * ([onReady] runs later on the main thread; a newer request answers an older one with null;
@@ -338,6 +339,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * Transform tool lifts again right after a commit, and on activation).
      */
     fun beginEdit(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit) {
+        if (disposed) { onReady(null); return }
         preparing?.let { old -> cancelPreparing(old) }
         val p = pending
         if (p != null && !flushing) {
@@ -384,6 +386,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val holeRect: Rect,
         val fScale: Float,
         val hScale: Float,
+        /**
+         * Every object is lifted and all of them lie on the canvas: the floating bitmap is a copy
+         * of the cache (exactly their rendering). Objects reaching past the canvas are rendered
+         * instead, so their off-canvas parts show in the Transform preview too.
+         */
+        val fromCache: Boolean,
+        /** Where the floating render cuts brush dabs: the document, or (past it) nowhere but the floating rect. */
+        val floatingCut: Rect?,
     )
 
     private fun beginEditAttempt(layer: Layer, ids: Set<Long>, onReady: (VectorEditSession?) -> Unit, attempt: Int) {
@@ -392,8 +402,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val present = ids.filterTo(LinkedHashSet()) { content.byId(it) != null }
         if (present.isEmpty() || !usable(layer)) { onReady(null); return }
         val plan = planEdit(content, present)
-        val units = if (plan.all) 0.0 else editUnits(plan)
-        if (plan.all || !goAsyncUnits(units)) {
+        val units = if (plan.fromCache) 0.0 else editUnits(plan)
+        if (plan.fromCache || !goAsyncUnits(units)) {
             val parts = try {
                 renderEdit(layer.bitmap, plan, tips, renderCache) { true }
             } catch (e: OutOfMemoryError) {
@@ -479,7 +489,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
             fScale *= s
             hScale = s
         }
-        return EditPlan(present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale)
+        val onCanvas = Rect(0, 0, docW, docH).contains(floatingRect)
+        return EditPlan(
+            present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale,
+            fromCache = all && onCanvas,
+            // On the canvas, dabs are cut at the document exactly as in the cache; past it they
+            // are drawn whole, so a stroke reaching off the canvas shows there while it is moved.
+            floatingCut = if (onCanvas) Rect(0, 0, docW, docH) else null,
+        )
     }
 
     private fun editUnits(plan: EditPlan): Double {
@@ -490,7 +507,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     /**
      * Renders an edit session's floating and hole bitmaps ([cache]: the layer's bitmap, read on
-     * the main thread only when every object is lifted). [active] false stops (returns what is
+     * the main thread only for [EditPlan.fromCache]). [active] false stops (returns what is
      * done, freed by the caller).
      */
     private fun renderEdit(cache: Bitmap?, plan: EditPlan, tips: TipCache, rc: RenderCache, active: () -> Boolean): Pair<Bitmap?, Bitmap?> {
@@ -506,11 +523,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
                     val cv = Canvas(b)
                     cv.scale(plan.fScale, plan.fScale)
                     cv.translate(-fr.left.toFloat(), -fr.top.toFloat())
-                    if (plan.all && cache != null) {
-                        // Every object is lifted: the cache is exactly their rendering.
+                    if (plan.fromCache && cache != null) {
+                        // Every object is lifted and on the canvas: the cache is exactly their rendering.
                         cv.drawBitmap(cache, 0f, 0f, if (plan.fScale == 1f) null else Paint(Paint.FILTER_BITMAP_FLAG))
                     } else {
-                        VectorLayerRenderer.renderWith(cv, VectorContent(objects = plan.edited), fr, emptySet(), tips, doc, rc) { _, _ -> active() }
+                        VectorLayerRenderer.renderWith(cv, VectorContent(objects = plan.edited), fr, emptySet(), tips, plan.floatingCut, rc) { _, _ -> active() }
                     }
                 }
             }
@@ -606,17 +623,24 @@ class VectorLayers internal constructor(private val c: EditorController) {
     /** Object selection feedback (A2). */
     fun drawOverlay(canvas: Canvas, t: ViewTransform) = VectorObjectSelection.drawOverlay(c, canvas, t)
 
-    /** The editor closes: drop every cache and background job (a pending render is abandoned). */
+    /**
+     * The editor closes: drop every cache and background job. A pending render is abandoned and
+     * its caller told so (`onDone(false)`, exactly once), as is a preparing edit session
+     * (`onReady(null)`); every request after this is refused the same way.
+     */
     fun dispose() {
+        disposed = true
         selLayer = null
         selIds = emptySet()
+        val prep = preparing?.takeIf { !it.done }
         preparing?.let { it.markDone(); it.job?.cancel(); it.render?.cancel() }
         preparing = null
-        pending?.let { p ->
-            p.finished = true
-            p.job?.cancel()
-            p.copies?.forEach { if (!it.isRecycled) it.recycle() }
-            p.completion.complete(Unit)
+        val p = pending?.takeIf { !it.finished }
+        pending?.let { pd ->
+            pd.finished = true
+            pd.job?.cancel()
+            pd.copies?.forEach { if (!it.isRecycled) it.recycle() }
+            pd.completion.complete(Unit)
         }
         pending = null
         c.removeDeferredStep(deferredStep)
@@ -627,7 +651,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
         ObjectIndex.clearCache()
         StrokeHits.clear()
         VectorLayerRenderer.clearCaches()
+        // Whoever waits hears it once, after the service is quiet (a callback that starts more
+        // work is refused). A failing callback must not stop the editor from closing.
+        if (prep != null) runCatching { prep.onReady(null) }
+        if (p != null) runCatching { p.beforeApply?.invoke(); p.onDone(false) }
     }
+
+    /** True once [dispose] ran: every request is refused (onDone(false), no ids, no session). */
+    private var disposed = false
 
     // ------------------------------------------------------------------ background renders
 
