@@ -32,7 +32,7 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.6 foundation (§4.1, §4.9): the new tools are registered everywhere a tool must be — a
- * factory entry, an icon, a tools-grid tile and a tool-menu cell, a history label, an options
+ * factory entry, an icon, a tool-menu cell (v1.6: the menu replaced the tools grid), a history label, an options
  * strip, a coordinate source — and selecting and touching them is safe while they are stubs
  * (Path behaves as Curve; Text frames does nothing).
  */
@@ -62,7 +62,6 @@ class ToolIdRegistrationTest {
 
         for (id in newIds) {
             assertNotNull(EditorIcons.tool(id))
-            assertTrue("$id in the tools grid", id in ToolGrid.tools)
             assertTrue("$id in the tool menu", id in ToolMenu.tools)
             assertTrue(HistoryLabels.stepName(id).isNotBlank())
             assertNull("$id starts on a raster layer", LayerToolRules.refusal(id, c.activeLayer))

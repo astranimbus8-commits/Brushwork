@@ -18,7 +18,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.EditorScreen
-import com.brushwork.paint.ui.editor.ToolGrid
+import com.brushwork.paint.ui.editor.ToolMenu
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,10 +33,10 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 
 /**
- * Final QA (v1.5 §4.9, §5.9) of the editor chrome on a narrow phone (360 dp): a new canvas, the
- * Vector button first in the top bar (its highlight follows the active layer, also when layers
- * are picked in the layers window and when undo takes the conversion back), drawing on the
- * converted layer, the Tools grid (sections, "px" badges, the Filters tile with the vector banner),
+ * Final QA (v1.5 §4.9, §5.9; v1.6 ibisPaint chrome) of the editor chrome on a narrow phone (360 dp):
+ * a new canvas, the Vector circle before Selection in the top row (its highlight follows the active
+ * layer, also when layers are picked in the layers window and when undo takes the conversion back),
+ * drawing on the converted layer, the tool menu ("px" badges, the Filters cell with the vector banner),
  * the layers window badges and menu entries of vector, adjustment and editable-mask layers, and
  * "+" adding a vector layer in vector mode.
  *
@@ -188,15 +188,16 @@ class Qa3ChromeNarrowUiRobolectricTest {
         val (_, c) = editor { newCanvas(it) }
         SmokeUi.click("Vector", exact = true)
         assertTrue(c.isVectorMode)
+        // v1.6: the ibisPaint tool menu replaced the sectioned tools grid.
         SmokeUi.click("Tools (current")
-        for (s in ToolGrid.sections) assertTrue("section ${s.title}", SmokeUi.has(s.title, exact = true))
-        for (id in ToolGrid.tools) assertTrue("tile ${id.label}", SmokeUi.has(id.label, exact = true))
+        SmokeUi.assertPanelShown("Tools")
+        for (id in ToolMenu.tools) assertTrue("cell ${id.label}", SmokeUi.has(id.label, exact = true))
         val badges = RobolectricUi.elements().count { e ->
             e.node.layoutInfo.isPlaced && e.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any { it.text == "px" } == true
         }
-        val pixelOnly = ToolGrid.tools.count { it in LayerToolRules.PIXEL_ONLY }
+        val pixelOnly = ToolMenu.tools.count { it in LayerToolRules.PIXEL_ONLY }
         assertTrue("pixel-only tools exist", pixelOnly > 0)
-        assertEquals("a px badge on each pixel-only tile", pixelOnly, badges)
+        assertEquals("a px badge on each pixel-only cell", pixelOnly, badges)
         SmokeUi.click("Filters", exact = true)
         SmokeUi.assertPanelShown("Filters")
         assertTrue("the vector banner", SmokeUi.has("Applying rasterizes this vector layer"))
@@ -206,7 +207,9 @@ class Qa3ChromeNarrowUiRobolectricTest {
         assertFalse(c.isVectorMode)
         SmokeUi.click("Tools (current")
         assertFalse("no px badges in raster mode", SmokeUi.has("px", exact = true))
-        SmokeUi.click("Close", exact = true)
+        // The tools button closes the menu again.
+        SmokeUi.click("Tools (current")
+        assertFalse("menu closed", "Tools" in SmokeUi.sheetTitles())
     }
 
     private fun layersWindow() {

@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.platform.testTag
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.theme.IbisColors
@@ -41,7 +42,8 @@ internal fun OptionsStripPanel(controller: EditorController, modifier: Modifier 
                     .height(IbisDims.OptionsStripHeight)
                     .clip(shape)
                     .background(IbisColors.OptionsStrip, shape)
-                    .blockCanvasTouches(),
+                    .blockCanvasTouches()
+                    .testTag(ChromeTags.OPTIONS_STRIP),
             ) {
                 ToolOptionsBar(controller, Modifier.fillMaxSize(), onContentWidth = { w -> if ((w <= 0) != empty) empty = w <= 0 })
             }

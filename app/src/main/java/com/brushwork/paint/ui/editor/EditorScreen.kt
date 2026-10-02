@@ -87,6 +87,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -117,6 +118,7 @@ import com.brushwork.paint.ui.editor.chrome.BottomBar
 import com.brushwork.paint.ui.editor.chrome.ChromeGlyphs
 import com.brushwork.paint.ui.editor.chrome.ChromeLayout
 import com.brushwork.paint.ui.editor.chrome.ChromeLayout.TopSlot
+import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.editor.chrome.ToolMenuPanel
 import com.brushwork.paint.ui.editor.chrome.TopButton
@@ -564,7 +566,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     .padding(top = pillTop.dp, start = IbisDims.PillStart, end = IbisDims.PillStart),
             ) {
                 // Left out of the canvas fit inset, so it never moves the canvas.
-                Box(Modifier.onSizeChanged { pillPx = it.height }) { CoordinatePill(controller) }
+                Box(Modifier.testTag(ChromeTags.PILL_SLOT).onSizeChanged { pillPx = it.height }) { CoordinatePill(controller) }
             }
         }
 
@@ -581,13 +583,13 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         ) {
             if (objectBarVisible) {
                 // Selected vector objects get their own bar in the selection bar's place (v1.5).
-                VectorObjectBar(controller, Modifier.onSizeChanged { selectionBarPx = it.height })
+                VectorObjectBar(controller, Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height })
             } else {
                 SelectionActionBar(
                     controller = controller,
                     onMore = { openPanel(EditorPanel.SELECTION) },
                     onHide = if (hasSelection) null else ({ hiddenClipboard = controller.clipboard }),
-                    modifier = Modifier.onSizeChanged { selectionBarPx = it.height },
+                    modifier = Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height },
                 )
             }
         }
@@ -615,7 +617,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         leftHanded = prefs.leftHanded,
                         onDragChange = { draggingSlider = it },
                         onEditValue = { kind -> controller.endCanvasGesture(); editingValue = kind },
-                        modifier = Modifier.windowInsetsPadding(horizontalSafe),
+                        modifier = Modifier.windowInsetsPadding(horizontalSafe).testTag(ChromeTags.SLIDER_ROWS),
                     )
                 }
                 Box(Modifier.fillMaxWidth().background(IbisColors.BottomBar).windowInsetsPadding(horizontalSafe)) {
@@ -642,6 +644,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                             }
                         },
                         onBack = onExit,
+                        modifier = Modifier.testTag(ChromeTags.BOTTOM_BAR),
                     )
                 }
                 // The navigation bar: black, with light icons.
@@ -668,6 +671,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     .align(Alignment.BottomStart)
                     .windowInsetsPadding(horizontalSafe)
                     .padding(start = IbisDims.ToolMenuStart, bottom = (navDp + IbisDims.BottomBarHeight.value + IbisDims.ToolMenuAboveBar.value).dp)
+                    .testTag(ChromeTags.TOOL_MENU)
                     .onGloballyPositioned { menuBounds.window = it },
             )
         }
@@ -685,6 +689,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         .align(Alignment.TopStart)
                         .offset(x = (insetLeftDp + layerWindow.x).dp, y = layerWindow.top.dp)
                         .size(layerWindow.width.dp, layerWindow.height.dp)
+                        .testTag(ChromeTags.LAYER_WINDOW)
                         .onGloballyPositioned { layersBounds.window = it },
                     onLayerDeleted = onLayerDeleted,
                     onOpenPanel = openPanel,
@@ -709,6 +714,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .size(window.width.dp, window.height.dp)
+                            .testTag(ChromeTags.LAYER_WINDOW)
                             .onGloballyPositioned { layersBounds.window = it },
                         onLayerDeleted = onLayerDeleted,
                         onOpenPanel = openPanel,
@@ -725,6 +731,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 layersVisible && layerWindow.short -> PendingWorkBar(
                     controller, tool,
                     Modifier
+                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomStart)
                         .windowInsetsPadding(horizontalSafe)
                         .padding(start = 10.dp, bottom = (ChromeLayout.fitInsetBottom(navDp) + 12f).dp),
@@ -734,6 +741,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 layersVisible -> PendingWorkBar(
                     controller, tool,
                     Modifier
+                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomEnd)
                         .padding(
                             end = (screenW - insetLeftDp - layerWindow.x - layerWindow.width).coerceAtLeast(0f).dp,
@@ -744,6 +752,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 toolMenuVisible -> PendingWorkBar(
                     controller, tool,
                     Modifier
+                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomEnd)
                         .windowInsetsPadding(horizontalSafe)
                         .padding(end = IbisDims.PendingBarGap, bottom = pendingBottom.dp),
@@ -751,6 +760,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 else -> PendingWorkBar(
                     controller, tool,
                     Modifier
+                        .testTag(ChromeTags.PENDING_BAR)
                         .align(Alignment.BottomCenter)
                         .padding(bottom = pendingBottom.dp),
                 )

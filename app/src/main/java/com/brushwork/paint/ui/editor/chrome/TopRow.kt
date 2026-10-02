@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
@@ -74,7 +75,7 @@ internal fun TopRow(
     modifier: Modifier = Modifier,
 ) {
     val bySlot = buttons.associateBy { it.slot }
-    Box(modifier.fillMaxWidth().height(IbisDims.TopRowHeight)) {
+    Box(modifier.fillMaxWidth().height(IbisDims.TopRowHeight).testTag(ChromeTags.TOP_ROW)) {
         Row(Modifier.blockCanvasTouches()) {
             for (slot in spec.slots) {
                 val b = bySlot[slot] ?: continue
