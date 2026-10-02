@@ -152,11 +152,11 @@ class Qa3StripUndoUiRobolectricTest {
         val (_, c) = editor { Smoke.controller(it, Smoke.document(400, 300, layers = 2)) }
         val shape = pendingShapeWithPoints(c)
         val b0 = shape.box!!
-        drag("X slider", 60f, at = 0.3f)
+        drag("X slider", 80f, at = 0.3f)
         val b1 = shape.box!!
         assertNotEquals("the first drag moved the shape", b0.cx, b1.cx)
         idle(100)
-        drag("X slider", 60f, at = 0.6f)
+        drag("X slider", 80f, at = 0.6f)
         val b2 = shape.box!!
         assertNotEquals("the second drag moved the shape", b1.cx, b2.cx)
         assertTrue(shape.undoStep())
@@ -196,10 +196,10 @@ class Qa3StripUndoUiRobolectricTest {
         assertTrue(tool.undoStep())
         assertEquals("one undo takes back the whole drag", before, tool.anchors[1].pos)
         // Two quick drags: two steps.
-        drag("X slider", 40f, at = 0.3f)
+        drag("X slider", 80f, at = 0.3f)
         val mid = tool.anchors[1].pos
         idle(100)
-        drag("X slider", 40f, at = 0.6f)
+        drag("X slider", 80f, at = 0.6f)
         assertNotEquals(mid, tool.anchors[1].pos)
         assertTrue(tool.undoStep())
         assertEquals(mid, tool.anchors[1].pos)
