@@ -237,6 +237,34 @@ class ExchangeQaChecklistRobolectricTest {
         assertEquals(item0.cy, item1.cy, 0.5f)
     }
 
+    /** Layer and artwork names with XML and PDF special characters and non-Latin letters. */
+    @Test
+    fun namesWithSpecialCharactersSurviveBothFormats() {
+        val repo = ProjectRepository(app)
+        val c = newCanvas(repo, "Tom & Jerry's <b>\"best\"</b> (draft) café ☕ 日本")
+        val names = listOf("Sky & \"clouds\" <1>", "Café (2) \\ back", "猫 ☕ 🐱")
+        val layers = names.map { n -> c.addLayer(n)!!.also { l -> c.selectLayer(l); QaExchange.brush(c, 0xFF336699.toInt(), 50f to 50f, 200f to 120f) } }
+        assertEquals(names, layers.map { it.name })
+        idle(c)
+        val svg = export(c, payload = true)
+        val xml = QaExchange.parseXml(svg.readBytes())
+        val labels = QaExchange.layerGroups(xml).map { it.getAttributeNS(QaExchange.INKSCAPE_NS, "label") }
+        assertTrue("SVG layer names: $labels", labels.containsAll(names))
+        val title = xml.getElementsByTagNameNS(QaExchange.SVG_NS, "title").let { if (it.length > 0) it.item(0).textContent else null }
+        assertTrue("the artwork's name as the title: $title", title == null || title == c.doc.name)
+        val options = ExportOptions(VectorFormat.PDF)
+        val scene = runBlocking { ExportSceneBuilder(c, options, TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build() }
+        val out = ByteArrayOutputStream()
+        runBlocking { com.brushwork.paint.exchange.export.PdfWriter(scene).write(out) }
+        val r = QaExchange.checkPdf(out.toByteArray())
+        val (ocgs, _) = QaExchange.ocgs(r)
+        assertTrue("PDF layer names: $ocgs", ocgs.containsAll(names))
+        // And back: the layers keep their names.
+        val target = newCanvas(repo, "Names")
+        importFile(target, svg, editable = true)
+        assertTrue(target.doc.layers.map { it.name }.containsAll(names))
+    }
+
     @Test
     fun vectorWorkSurvivesUndoSaveExportAndImport() {
         val repo = ProjectRepository(app)

@@ -100,6 +100,7 @@ class GalleryExchangeQaUiRobolectricTest {
         section("an Inkscape SVG: its size, one vector layer per layer, saved and loaded") { inkscape() }
         section("a PDF: the gallery's page picker, then the pages") { pdf() }
         section("a Brushwork SVG: restored exactly") { brushwork() }
+        section("a Brushwork PDF: restored exactly, no page picker") { brushworkPdf() }
         section("files that aren't SVG or PDF, and a backed-out picker") { refusals() }
         section("Export PDF while the activity is recreated behind the file picker") { exportAcrossRecreation() }
         dog.interrupt()
@@ -186,6 +187,44 @@ class GalleryExchangeQaUiRobolectricTest {
         assertTrue(c.doc.layers.single { it.name == "Tone 1" }.isAdjustmentLayer)
         backToGallery()
         src.dispose()
+    }
+
+    private fun brushworkPdf() {
+        val doc = Smoke.document(480, 360, layers = 2, whiteBottom = true)
+        doc.dpi = 300f
+        val src = Smoke.controller(app, doc)
+        QaExchange.allKinds(src)
+        val scene = runBlocking { ExportSceneBuilder(src, ExportOptions(VectorFormat.PDF, page = com.brushwork.paint.exchange.export.PdfPage.A4), TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build() }
+        val out = ByteArrayOutputStream()
+        runBlocking { com.brushwork.paint.exchange.export.PdfWriter(scene, com.brushwork.paint.exchange.export.PdfPage.A4).write(out) }
+        val file = File(activity.cacheDir, "mine.pdf").apply { writeBytes(out.toByteArray()) }
+        // No platform renderer is needed (the file's own layers come in); one that fails says so.
+        val saved = GalleryImports.rasterizers
+        GalleryImports.rasterizers = PageRasterizerFactory { _, _ -> throw AssertionError("the pages were rendered") }
+        try {
+            val c = newFrom(file)!!
+            assertTrue("restored", Smoke.pumpUntil { settle(1); c.busyMessage == null && c.doc.layers.size == src.doc.layers.size && c.doc.layers.any { it.name == "Raster" } })
+            assertFalse("no page picker", has("New artwork from PDF pages", exact = true))
+            // The artwork's own canvas, not the A4 page it was printed on.
+            assertEquals(480 to 360, c.doc.width to c.doc.height)
+            assertEquals(300f, c.doc.dpi)
+            assertEquals(src.doc.layers.map { it.name }, c.doc.layers.map { it.name })
+            assertEquals(src.doc.layers.map { it.props() }, c.doc.layers.map { it.props() })
+            for ((e, a) in src.doc.layers.zip(c.doc.layers)) {
+                if (e.isTextLayer) {
+                    // (A wrap link points at the restored picture's new id.)
+                    assertEquals(e.name, TextCodec.decode(e.textData)!!.text, TextCodec.decode(a.textData)!!.text)
+                } else {
+                    assertEquals(e.name, e.dataSnapshot(), a.dataSnapshot())
+                }
+                if (!e.isVectorLayer) assertTrue("${e.name} pixels", ExchangeFixtures.pixels(e.bitmap).contentEquals(ExchangeFixtures.pixels(a.bitmap)))
+            }
+            assertEquals("one undo step", 1, c.undoManager.undoCount)
+            backToGallery()
+        } finally {
+            GalleryImports.rasterizers = saved
+            src.dispose()
+        }
     }
 
     /**

@@ -318,7 +318,9 @@ private fun LayersButton(number: Int, open: Boolean, onClick: () -> Unit) {
  */
 @Composable
 fun ToolPickerSheet(controller: EditorController, onDismiss: () -> Unit, onOpenFilters: () -> Unit) {
-    BwSheet(title = "Tools", onDismiss = onDismiss) {
+    // Tall enough for the whole grid on a 392 x 873 dp phone (v1.5 added Clone stamp, Masks and
+    // Filters to it): no searching a half sheet for a tool. Picking one closes the sheet.
+    BwSheet(title = "Tools", onDismiss = onDismiss, maxHeightFraction = 0.85f) {
         val active = controller.activeToolId
         val vectorMode = controller.isVectorMode
         val filtersEnabled = controller.filterSession == null

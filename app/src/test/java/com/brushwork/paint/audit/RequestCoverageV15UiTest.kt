@@ -206,6 +206,7 @@ class RequestCoverageV15UiTest {
         section("two-finger scaling: one finger inside the box or both, not both just close") { pinchRule() }
         section("wrap text around image") { wrapText() }
         section("export in pdf and svg, import these files") { exchangeEntries() }
+        section("all of it within reach on a 360 dp phone") { at360dp() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -228,7 +229,13 @@ class RequestCoverageV15UiTest {
         click("Tools (current:")
         SmokeUi.assertPanelShown("Tools")
         assertTrue("a Filters tile in the Tools grid", has("Filters", exact = true))
-        click("Filters", exact = true)
+        // On the user's phone the whole grid shows at once: Filters (and the other tools the
+        // request added: Masks, Clone stamp, Curve, Text) without searching the sheet.
+        for (t in listOf("Filters", "Masks", "Clone stamp", "Transform", "Text", "Shape", "Curve", "Ruler")) {
+            assertTrue("\"$t\" is visible without scrolling the Tools sheet at 392 x 873 dp", scrollIntoView(t))
+        }
+        SmokeUi.tap("Filters", exact = true)
+        settle()
         assertTrue("the tile opens the filter browser", has("Search filters"))
         closePanels()
     }
@@ -610,5 +617,110 @@ class RequestCoverageV15UiTest {
         click("Export SVG…", exact = true)
         assertTrue("the export sheet", has("Export SVG", exact = true) && has("Save as…", exact = true) && has("Share", exact = true))
         closePanels()
+    }
+
+    // ================================================================== 360 dp
+
+    /**
+     * [label] is on the screen, inside its window's width, and either inside its height or in a
+     * list that scrolls to it; its clickable area is finger-sized (40 dp or more on one side, 24 dp
+     * on the other, as Material's dense chips).
+     */
+    /**
+     * True when [label] is visible as it is; otherwise the list it is in is scrolled (as a finger
+     * would) until it is, and false is returned (it needed scrolling).
+     */
+    private fun scrollIntoView(label: String): Boolean {
+        // Wholly visible: not clipped by the list it is in.
+        fun visible() = SmokeUi.find(label, exact = true)?.let { e ->
+            e.bounds.width > 0f && e.bounds.height >= e.node.size.height - 1f && e.bounds.width >= e.node.size.width - 1f
+        } == true
+        if (visible()) return true
+        val e = SmokeUi.find(label, exact = true) ?: throw AssertionError("\"$label\" not shown: ${SmokeUi.shown().take(60)}")
+        var n: androidx.compose.ui.semantics.SemanticsNode? = e.node
+        while (n != null && n.config.getOrNull(SemanticsActions.ScrollBy) == null) n = n.parent
+        val scroll = requireNotNull(n?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is clipped and nothing scrolls to it" }
+        val sideways = n?.config?.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null
+        fun by(d: Float) { if (sideways) scroll.invoke(d, 0f) else scroll.invoke(0f, d) }
+        // To the start first, then on (as a finger would look for it).
+        repeat(30) { by(-400f) }
+        settle(2)
+        repeat(40) {
+            if (visible()) return false
+            by(60f)
+            settle(2)
+        }
+        throw AssertionError("\"$label\" never scrolled into view")
+    }
+
+    private fun assertReachable(label: String) {
+        scrollIntoView(label)
+        val e = SmokeUi.find(label, exact = true) ?: throw AssertionError("\"$label\" not shown at 360 dp: ${SmokeUi.shown().take(60)}")
+        assertTrue("\"$label\" has a size: ${e.bounds}", e.bounds.width > 0f && e.bounds.height > 0f)
+        val root = e.window
+        val b = e.bounds
+        var n: androidx.compose.ui.semantics.SemanticsNode? = e.node
+        var scrollsV = false
+        var scrollsH = false
+        while (n != null) {
+            if (n.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) != null) scrollsV = true
+            if (n.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null) scrollsH = true
+            n = n.parent
+        }
+        assertTrue("\"$label\" inside the width or in a row that scrolls to it: $b in ${root.width}", (b.left >= -0.5f && b.right <= root.width + 0.5f) || scrollsH)
+        assertTrue("\"$label\" inside the height or in a list that scrolls to it: $b in ${root.height}", b.bottom <= root.height + 0.5f || scrollsV)
+        val c = clickableBounds(label)
+        val dp = activity.resources.displayMetrics.density
+        assertTrue("\"$label\" is finger-sized: $c", maxOf(c.width, c.height) >= 40f * dp - 0.5f && minOf(c.width, c.height) >= 24f * dp - 0.5f)
+    }
+
+    private fun at360dp() {
+        org.robolectric.RuntimeEnvironment.setQualifiers("w360dp-h640dp-xhdpi")
+        try {
+            editor()
+            assertEquals(720, activity.window.decorView.width)
+            // The top bar: Vector (where Filters was) and the menu.
+            assertReachable("Vector")
+            assertReachable("More options")
+            // The Tools grid: every tool of the request.
+            click("Tools (current:")
+            SmokeUi.assertPanelShown("Tools")
+            for (t in listOf("Filters", "Masks", "Clone stamp", "Curve", "Text", "Transform", "Shape", "Lasso", "Bucket", "Eraser")) assertReachable(t)
+            closePanels()
+            // The menu's exchange entries.
+            click("More options")
+            for (entry in listOf("Export SVG…", "Export PDF…", "Import SVG or PDF…")) assertReachable(entry)
+            // (The menu closes by picking an entry; the sheet it opens by its ✕.)
+            click("Export PDF…", exact = true)
+            assertReachable("Save as…")
+            closePanels()
+            assertEquals("the menu and the sheet are closed", 1, SmokeUi.windows().size)
+            // The Masks strip, the Transform strip's options and X / Y, the curve's point thickness.
+            tool("Masks")
+            for (k in listOf("+ Linear", "+ Radial", "+ Brush")) assertReachable(k)
+            val layer = c.doc.layers[1]
+            seed(layer, 100f, 80f, 220f, 180f, 0xFF2266CC.toInt())
+            tool("Transform")
+            assertTrue(Smoke.pumpUntil { settle(1); (c.currentTool as TransformTool).transformState != null })
+            for (label in listOf("Distort", "Delete")) assertReachable(label)
+            for (s in listOf("X slider", "Y slider")) {
+                val b = slider(s).bounds
+                assertTrue("$s fits: $b", b.left >= 0f && b.right <= 720.5f && b.bottom <= 1280.5f)
+            }
+            (c.currentTool as TransformTool).discard()
+            settle()
+            tool("Curve")
+            val curve = c.currentTool as CurveTool
+            tap(80f, 150f)
+            tap(320f, 150f)
+            curve.select(1)
+            settle()
+            val thick = slider("Point thickness slider").bounds
+            assertTrue("the point thickness slider fits: $thick", thick.left >= 0f && thick.right <= 720.5f && thick.bottom <= 1280.5f)
+            curve.discard()
+            settle()
+        } finally {
+            org.robolectric.RuntimeEnvironment.setQualifiers("w392dp-h873dp-xxhdpi")
+        }
     }
 }
