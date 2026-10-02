@@ -155,7 +155,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /**
      * v1.6: in PATH mode, the X / Y pill's target (the selected control point); null = the Curve
-     * adapter (`CurvePointPosition`: the selected anchor). Implemented by area B.
+     * adapter (`CurvePointPosition`: the selected anchor). Implemented by area B. The X / Y strip
+     * reads it ONCE per selected tool (`coordinateSourceOf` is remembered per tool), so in PATH
+     * mode it must be one stable, non-null instance whose `position` is null while no control
+     * point is selected.
      */
     val splinePointPosition: ObjectPosition? get() = null
 

@@ -34,7 +34,10 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      * Re-flows story [storyId] into its frames inside the current step ([EditorController.amendLastStep]);
      * false when nothing changed. Frames whose wrap outline is stale first get their picture's
      * current outline (`c.textWrap.contours`): `TextWrapReflow` hands every re-traced frame
-     * here instead of re-rendering it alone. Stub: false.
+     * here instead of re-rendering it alone — once per frame whose outline changed, so one edit
+     * can call it several times for the same story (the later calls must find nothing to do).
+     * As for plain text, `TextWrapReflow` never calls it for a locked frame or for the layer open
+     * in the Text tool. Stub: false.
      */
     fun reflowStory(storyId: Long): Boolean = false
 
