@@ -282,7 +282,23 @@ class VectorFuzzQaTest {
     private fun extendedOp() {
         settleTool()
         deselectObjects()
-        when (rnd.nextInt(6)) {
+        when (rnd.nextInt(7)) {
+            6 -> {
+                // An editable gradient mask on the vector layer (Masks tool, This layer).
+                ensureVector()
+                val l = vec()
+                if (l.mask != null) return
+                log += "gradient mask on ${l.name}"
+                com.brushwork.paint.ui.layers.LayerOps.addGradientMask(c, l)
+                Smoke.pump(40)
+                r.stroke(pt(), pt())
+                Smoke.pumpUntil(5_000) { l.maskSpec != null }
+                check("gradient mask", steps = null)
+                r.tool(ToolId.BRUSH)
+                if (c.activeLayer !== l) c.selectLayer(l)
+                if (l.editingMask) com.brushwork.paint.ui.layers.LayerOps.editTarget(c, l, mask = false)
+                check("back to the objects", steps = null)
+            }
             0 -> {
                 val rot = com.brushwork.paint.engine.CanvasRotation.entries[rnd.nextInt(3)]
                 log += "canvas ${rot.label}"
