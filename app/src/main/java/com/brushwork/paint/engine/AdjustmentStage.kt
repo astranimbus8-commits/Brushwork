@@ -38,6 +38,12 @@ class AdjustmentScratch {
     private var source: IntArray = IntArray(0)
 
     internal val maskPaint = BitmapUtils.newMaskApplyPaint()
+
+    /** The mask paint's sampling without its color filter, drawing as SRC (the fused path's scaled masks). */
+    internal val maskSamplePaint = Paint(maskPaint).apply {
+        colorFilter = null
+        xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC)
+    }
     internal val plainPaint = Paint()
     internal val whitePaint = Paint().apply { color = -1 }
     internal val dstOutPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
@@ -145,10 +151,59 @@ class AdjustmentScratch {
         return source
     }
 
+    // ------------------------------------------------------------------ v1.6: the fused NORMAL path (§3.1 C1)
+
+    /** The mapped and blended chunk of the fused path (reused). */
+    private var fused: IntArray = IntArray(0)
+
+    /** The mask factors of the fused path's chunk (alpha = m; reused). */
+    private var factors: IntArray = IntArray(0)
+
+    /** Chunk the fused path draws the mask into: opaque white, then the mask as DST_IN (reused). */
+    private var maskChunk: Bitmap? = null
+    private var maskCanvas: Canvas? = null
+
+    /** Matrix of the mask draw: `translate(-x, -y) · docToTarget` (reused). */
+    internal val chunkMatrix = Matrix()
+
+    /** The fused path's result buffer, at least [n] ints. */
+    internal fun fusedPixels(n: Int): IntArray {
+        if (fused.size < n) fused = IntArray(n)
+        return fused
+    }
+
+    /** The fused path's mask-factor buffer, at least [n] ints. */
+    internal fun factorPixels(n: Int): IntArray {
+        if (factors.size < n) factors = IntArray(n)
+        return factors
+    }
+
+    /** A canvas on a reused bitmap of at least [w] x [h] for the fused path's mask chunk. */
+    internal fun maskChunkCanvas(w: Int, h: Int): Pair<Bitmap, Canvas> {
+        val cur = maskChunk?.takeUnless { it.isRecycled }
+        val cc = maskCanvas
+        if (cur != null && cc != null && cur.width >= w && cur.height >= h) return cur to cc
+        val nw = max(w, cur?.width ?: 0)
+        val nh = max(h, cur?.height ?: 0)
+        cur?.recycle()
+        maskChunk = null
+        maskCanvas = null
+        val b = Bitmap.createBitmap(nw, nh, Bitmap.Config.ARGB_8888)
+        val c = Canvas(b)
+        maskChunk = b
+        maskCanvas = c
+        return b to c
+    }
+
     /** Frees the buffers. */
     fun release() {
         bitmap?.recycle()
         bitmap = null
+        maskChunk?.recycle()
+        maskChunk = null
+        maskCanvas = null
+        fused = IntArray(0)
+        factors = IntArray(0)
         pixels = IntArray(0)
         source = IntArray(0)
         boundsMasks.fill(null)
@@ -226,6 +281,18 @@ interface MaskCoverageHint {
  * An unknown effect, an effect without a mapper or one that is exactly the identity draws
  * nothing (pass-through), as does every adjustment layer on the canvas while [safeCompositing]
  * is on.
+ *
+ * v1.6 fused NORMAL path (§3.1 C1): with the NORMAL blend mode and a [CompositeTarget.directWrite]
+ * target (every caller: the canvas draws straight into the target, clipped by a rect, with no
+ * pending saveLayer) the result is computed per pixel and written straight back into the target
+ * with `setPixels`, with no scratch bitmap, saveLayer or DST_IN pass: per chunk the composite
+ * below is read, the mask factor `m` is the alpha of an opaque white chunk with the mask drawn
+ * over it by the unchanged v1.5 DST_IN luminance paint (or the override's mask), the mapper runs,
+ * and `rgb = lerp(below.rgb, F.rgb, k)` with `k = m·opacity` (non-premultiplied, exactly rounded)
+ * while the composite's alpha is kept. That is the documented `lerp(below, F(below), mask·opacity)`
+ * for opaque and non-opaque composites alike (the v1.5 two-pass rule), within one level of the v1.5
+ * Skia path. Every caller (canvas tiles, live proxies, exports, thumbnails, tool patches) takes it,
+ * so what is exported equals what is shown. Other blend modes keep the v1.5 path.
  */
 object AdjustmentStage {
     /** Largest side of one processed chunk (target px). */
@@ -283,6 +350,16 @@ object AdjustmentStage {
         if (alpha <= 0) return
         val normal = layer.blendMode == LayerBlendMode.NORMAL
         val mode = scratch.colorMode
+        if (normal && target.directWrite) {
+            // The canvas clip is the caller's rect [bounds] (CompositeTarget contract); Skia rounds
+            // a non-anti-aliased clip to the nearest pixel edge, and so do we: the fused path writes
+            // exactly the pixels the v1.5 draw could reach.
+            val clip = RectF(bounds)
+            target.docToTarget.mapRect(clip)
+            if (!t.intersect(Math.round(clip.left), Math.round(clip.top), Math.round(clip.right), Math.round(clip.bottom)) || t.isEmpty) return
+            drawFused(mapper, mode, if (masked) mask else null, ov, masked, target, t, alpha, scratch)
+            return
+        }
         val blendPaint = BlendModes.paint(layer.blendMode, o).apply { isFilterBitmap = false }
         val cw0 = min(CHUNK, t.width()); val ch0 = min(CHUNK, t.height())
         val s = scratch.scratchBitmap(cw0, ch0)
@@ -337,6 +414,168 @@ object AdjustmentStage {
             }
             y += ch
         }
+    }
+
+    /**
+     * The fused NORMAL path (§3.1 C1): target pixels [t] (already clipped to the canvas clip and
+     * the bitmap) become `lerp(below, F(below), m·alpha)` with the composite's alpha kept, written
+     * straight into `target.bitmap`. [mask] is the layer's enabled mask (null: none, or the
+     * override supplies it); [masked] says whether a mask applies at all.
+     */
+    private fun drawFused(
+        mapper: PixelMapper,
+        mode: ColorMode,
+        mask: Bitmap?,
+        ov: LayerRenderOverride?,
+        masked: Boolean,
+        target: CompositeTarget,
+        t: Rect,
+        alpha: Int,
+        scratch: AdjustmentScratch,
+    ) {
+        val bmp = target.bitmap
+        val cw0 = min(CHUNK, t.width()); val ch0 = min(CHUNK, t.height())
+        val n0 = cw0 * ch0
+        val below = scratch.scratchPixels(n0)
+        val out = scratch.fusedPixels(n0)
+        val factors = if (masked) scratch.factorPixels(n0) else null
+        val m = scratch.chunkMatrix
+        // The layer's own mask on a target that is document pixels shifted by whole pixels (canvas
+        // tiles, flattened images, tool patches) is read as it is: its luminance is exactly what
+        // the DST_IN luminance paint gives (no resampling), without a color-filtered draw.
+        val tx = integerTranslation(target.docToTarget, X)
+        val ty = integerTranslation(target.docToTarget, Y)
+        var y = t.top
+        while (y < t.bottom) {
+            val ch = min(CHUNK, t.bottom - y)
+            var x = t.left
+            while (x < t.right) {
+                val cw = min(CHUNK, t.right - x)
+                val n = cw * ch
+                bmp.getPixels(below, 0, cw, x, y, cw, ch)
+                // How the chunk's mask factors are stored: none (m = 255), as alpha (an override
+                // drew its mask through the DST_IN luminance paint) or as the luminance of the
+                // mask's own grey.
+                var kind = FACTORS_NONE
+                if (factors != null) {
+                    m.set(target.docToTarget)
+                    m.postTranslate(-x.toFloat(), -y.toFloat())
+                    if (ov != null && drawOverrideMask(ov, m, cw, ch, factors, scratch)) {
+                        kind = FACTORS_ALPHA
+                    } else if (mask != null) {
+                        if (tx != NOT_INTEGER && ty != NOT_INTEGER) readMask(mask, x - tx, y - ty, cw, ch, factors)
+                        else sampleMask(mask, m, cw, ch, factors, scratch)
+                        kind = FACTORS_LUMINANCE
+                    }
+                }
+                if (n < PARALLEL_MIN) fuseRange(mapper, mode, below, out, factors, kind, alpha, 0, n)
+                else Parallel.forRange(ch, 8) { r0, r1 -> fuseRange(mapper, mode, below, out, factors, kind, alpha, r0 * cw, r1 * cw) }
+                bmp.setPixels(out, 0, cw, x, y, cw, ch)
+                x += cw
+            }
+            y += ch
+        }
+    }
+
+    private const val FACTORS_NONE = 0
+    private const val FACTORS_ALPHA = 1
+    private const val FACTORS_LUMINANCE = 2
+    private const val X = 0
+    private const val Y = 1
+    private const val NOT_INTEGER = Int.MIN_VALUE
+
+    /** The whole-pixel translation of [m] along [axis] when [m] is exactly such a translation, else [NOT_INTEGER]. */
+    private fun integerTranslation(m: Matrix, axis: Int): Int {
+        val v = FloatArray(9)
+        m.getValues(v)
+        if (v[Matrix.MSCALE_X] != 1f || v[Matrix.MSCALE_Y] != 1f || v[Matrix.MSKEW_X] != 0f || v[Matrix.MSKEW_Y] != 0f ||
+            v[Matrix.MPERSP_0] != 0f || v[Matrix.MPERSP_1] != 0f || v[Matrix.MPERSP_2] != 1f
+        ) return NOT_INTEGER
+        val tr = if (axis == X) v[Matrix.MTRANS_X] else v[Matrix.MTRANS_Y]
+        val r = Math.round(tr)
+        return if (tr == r.toFloat() && kotlin.math.abs(r) < 1_000_000_000) r else NOT_INTEGER
+    }
+
+    /**
+     * The override's mask over an opaque white chunk of [cw] x [ch] through the v1.5 DST_IN
+     * luminance paint (the [LayerRenderOverride.drawMask] contract; e.g. the Masks tool's
+     * half-resolution preview), drawn with [m] (`translate(-x, -y) · docToTarget`); [factors]
+     * gets the chunk (m = alpha). False when the override leaves the mask to the default.
+     */
+    private fun drawOverrideMask(ov: LayerRenderOverride, m: Matrix, cw: Int, ch: Int, factors: IntArray, scratch: AdjustmentScratch): Boolean {
+        val (mb, mc) = scratch.maskChunkCanvas(cw, ch)
+        val save = mc.save()
+        mc.clipRect(0, 0, cw, ch)
+        mc.drawColor(-1, PorterDuff.Mode.SRC)
+        mc.concat(m)
+        val drawn = ov.drawMask(mc, scratch.maskPaint)
+        mc.restoreToCount(save)
+        if (drawn) mb.getPixels(factors, 0, cw, 0, 0, cw, ch)
+        return drawn
+    }
+
+    /** Mask pixels ([mx], [my]) + [cw] x [ch] into [factors]; outside the mask white (the DST_IN draw leaves those). */
+    private fun readMask(mask: Bitmap, mx: Int, my: Int, cw: Int, ch: Int, factors: IntArray) {
+        val r = Rect(mx, my, mx + cw, my + ch)
+        if (r.left < 0 || r.top < 0 || r.right > mask.width || r.bottom > mask.height) {
+            factors.fill(-1, 0, cw * ch)
+            if (!r.intersect(0, 0, mask.width, mask.height)) return
+        }
+        mask.getPixels(factors, (r.top - my) * cw + (r.left - mx), cw, r.left, r.top, r.width(), r.height())
+    }
+
+    /**
+     * [mask] resampled onto the chunk with [m] (a scaled target: thumbnails, live proxies), with
+     * the sampling of the v1.5 mask paint but no color filter; outside the mask white.
+     */
+    private fun sampleMask(mask: Bitmap, m: Matrix, cw: Int, ch: Int, factors: IntArray, scratch: AdjustmentScratch) {
+        val (mb, mc) = scratch.maskChunkCanvas(cw, ch)
+        val save = mc.save()
+        mc.clipRect(0, 0, cw, ch)
+        mc.drawColor(-1, PorterDuff.Mode.SRC)
+        mc.concat(m)
+        mc.drawBitmap(mask, 0f, 0f, scratch.maskSamplePaint)
+        mc.restoreToCount(save)
+        mb.getPixels(factors, 0, cw, 0, 0, cw, ch)
+    }
+
+    /**
+     * Pixels [from] until [until] of the fused path: [out] = F([below]) (mapped, held to the color
+     * mode, [revealed] where the mapper changed the alpha), then blended with [below] by
+     * `k = m·alpha`, alpha kept. m comes from [factors] as [kind] says (255 without a mask).
+     */
+    private fun fuseRange(mapper: PixelMapper, mode: ColorMode, below: IntArray, out: IntArray, factors: IntArray?, kind: Int, alpha: Int, from: Int, until: Int) {
+        System.arraycopy(below, from, out, from, until - from)
+        mapRange(mapper, mode, out, below, from, until)
+        for (i in from until until) {
+            val m = when (kind) {
+                FACTORS_ALPHA -> factors!![i] ushr 24
+                FACTORS_LUMINANCE -> luminance(factors!![i])
+                else -> 255
+            }
+            out[i] = blend(below[i], out[i], (m * alpha + 127) / 255)
+        }
+    }
+
+    /**
+     * What the v1.5 DST_IN luminance paint makes of mask pixel [c] (unpremultiplied): the alpha
+     * `0.299 r + 0.587 g + 0.114 b`, rounded; a grey's own level.
+     */
+    internal fun luminance(c: Int): Int = ((c shr 16 and 0xFF) * 299 + (c shr 8 and 0xFF) * 587 + (c and 0xFF) * 114 + 500) / 1000
+
+    /**
+     * [below] with its colour moved towards [mapped]'s by [k] / 255 (non-premultiplied, exactly
+     * rounded per channel) and its own alpha: `lerp(below, F, k)` at the composite's alpha.
+     */
+    internal fun blend(below: Int, mapped: Int, k: Int): Int {
+        if (k <= 0) return below
+        val a = below and 0xFF000000.toInt()
+        if (k >= 255) return a or (mapped and 0xFFFFFF)
+        val inv = 255 - k
+        val r = ((mapped shr 16 and 0xFF) * k + (below shr 16 and 0xFF) * inv + 127) / 255
+        val g = ((mapped shr 8 and 0xFF) * k + (below shr 8 and 0xFF) * inv + 127) / 255
+        val bl = ((mapped and 0xFF) * k + (below and 0xFF) * inv + 127) / 255
+        return a or (r shl 16) or (g shl 8) or bl
     }
 
     /**
