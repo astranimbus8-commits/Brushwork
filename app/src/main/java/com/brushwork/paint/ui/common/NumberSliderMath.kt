@@ -1,6 +1,10 @@
 package com.brushwork.paint.ui.common
 
+import com.brushwork.paint.core.IncrementMath
+import com.brushwork.paint.core.Units
+import com.brushwork.paint.model.IncrementKind
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.expm1
 import kotlin.math.floor
 import kotlin.math.ln1p
@@ -205,4 +209,114 @@ object NumberSliderMath {
         val exp = minOf(floor(log10(step)).toInt(), -1) - 6
         return roundToPowerOfTen(v, exp.coerceAtLeast(-12)).coerceIn(min, max)
     }
+}
+
+/**
+ * The pure rules of the v1.6 increments in the shared number controls (§3.4; area G): which
+ * kind a control has, the custom key of one without a kind, and how sliders, -/+ buttons and
+ * scrub handles move on the step's multiples. Steps are in the control's SHOWN unit (a 0..1
+ * slider shown as a percentage steps by 5 %, i.e. 0.05 of its value). Typed values never come
+ * through here: they are never quantized.
+ */
+object IncrementStepping {
+
+    /**
+     * The unit shown after a value: "45 %" → "%", "+0.50 EV" → "EV", "15.0°" → "°", "3.0 ×
+     * width" → "× width". Text without a digit ("Off", "None") has no unit: "".
+     */
+    fun suffixOf(valueText: String): String {
+        val i = valueText.indexOfLast { it.isDigit() }
+        if (i < 0) return ""
+        return valueText.substring(i + 1).trim()
+    }
+
+    /**
+     * The kind a control's unit implies (design §3.4 (c)): `%` → PERCENT ("% of the path" too),
+     * `°` → ANGLE, `px` → SIZE (a length in px is a [LengthField], which is LENGTH by itself);
+     * anything else has no kind (it steps by its own custom step, if one is set).
+     */
+    fun kindForSuffix(suffix: String): IncrementKind? {
+        val s = suffix.trim()
+        return when {
+            s.startsWith("%") -> IncrementKind.PERCENT
+            s.startsWith("°") -> IncrementKind.ANGLE
+            s == "px" -> IncrementKind.SIZE
+            else -> null
+        }
+    }
+
+    /** The custom-step key of a control without a kind: "$label|$suffix" (e.g. "Exposure|EV"). */
+    fun customKey(label: String, suffix: String): String = "$label|$suffix"
+
+    /**
+     * Shown units per value unit of a slider whose caller doesn't say ([SliderTyping.scale]): a
+     * percentage slider over 0..1 (or 0..2, scatter) shows its value × 100; others show it as is.
+     */
+    fun impliedScale(kind: IncrementKind?, rangeMax: Float): Float =
+        if (kind == IncrementKind.PERCENT && rangeMax <= 2f) 100f else 1f
+
+    /** A usable step: finite and > 0 (anything else means "no step"). */
+    fun valid(step: Double?): Boolean = step != null && step.isFinite() && step > 0.0
+
+    /**
+     * [v] moved [n] steps of [step] along the step's multiples: the first step goes to the next
+     * multiple in that direction (37 +1 → 40, 37 −1 → 30; 40 +1 → 50), each further one a whole
+     * step. 0 steps (or no valid step) leave [v] as it is.
+     */
+    fun stepBy(v: Double, n: Long, step: Double): Double {
+        if (!valid(step) || !v.isFinite() || n == 0L) return v
+        var k = v / step
+        val r = Math.rint(k)
+        // A value on a multiple up to binary noise (0.30000000000000004 / 0.1) counts as on it.
+        if (abs(k - r) < 1e-6) k = r
+        val base = if (n > 0) floor(k) else ceil(k)
+        return clean((base + n) * step, step)
+    }
+
+    /**
+     * A slider value on the nearest multiple of [step] within [min]..[max], the ends staying
+     * reachable ([IncrementMath.snapInRange]), without binary noise. No valid step: [v] clamped.
+     */
+    fun snapSlider(v: Double, step: Double?, min: Double, max: Double): Double {
+        if (!valid(step) || !(min <= max)) return if (min <= max && v.isFinite()) v.coerceIn(min, max) else v
+        val s = IncrementMath.snapInRange(v, step!!, min, max)
+        if (s == min || s == max) return s
+        return clean(s, step).coerceIn(min, max)
+    }
+
+    /** [v] (a multiple of [step] up to float noise) rounded to well below the step's precision. */
+    private fun clean(v: Double, step: Double): Double {
+        val exp = (floor(log10(step)).toInt() - 6).coerceIn(-12, 12)
+        return NumberSliderMath.roundToPowerOfTen(v, exp)
+    }
+
+    /** "lengths", "sizes", "scales", "angles", "percentages": what a kind's steps are for (popup titles). */
+    fun plural(kind: IncrementKind): String = when (kind) {
+        IncrementKind.LENGTH -> "lengths"
+        IncrementKind.SIZE -> "sizes"
+        IncrementKind.SCALE -> "scales"
+        IncrementKind.ANGLE -> "angles"
+        IncrementKind.PERCENT -> "percentages"
+    }
+
+    /**
+     * The name a custom key stands for: the label of "$label|$suffix" ("Exposure|EV" → "Exposure"),
+     * or the last part of a dotted key, capitalized ("mask.feather" → "Feather").
+     */
+    fun nameOfKey(key: String): String {
+        val name = if ('|' in key) key.substringBefore('|') else key.substringAfterLast('.')
+        return name.trim().replaceFirstChar { it.uppercase() }.ifEmpty { key }
+    }
+
+    /** The unit of a custom key ("Exposure|EV" → "EV"; "" when it has none). */
+    fun suffixOfKey(key: String): String = if ('|' in key) key.substringAfter('|').trim() else ""
+
+    /** The Step popup's title: "Step for angles", "Step for Exposure". */
+    fun popupTitle(kind: IncrementKind?, key: String?, name: String? = null): String = when {
+        kind != null -> "Step for ${plural(kind)}"
+        else -> "Step for ${name ?: key?.let(::nameOfKey).orEmpty()}"
+    }
+
+    /** A step value as shown in fields and toasts ("10", "0.25", "12.5"). */
+    fun format(step: Float): String = Units.formatNumber(step.toDouble(), 3)
 }
