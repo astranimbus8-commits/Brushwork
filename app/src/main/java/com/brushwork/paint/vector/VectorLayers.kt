@@ -39,6 +39,7 @@ import com.brushwork.paint.vector.render.VectorLayerRenderer
 import com.brushwork.paint.vector.select.VectorObjectSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -444,7 +445,9 @@ class VectorLayers internal constructor(private val c: EditorController) {
         // (Cancelled before it ran, or failed: the copied cache part is not needed any more.)
         if (base != null) job.invokeOnCompletion { cause -> if (cause != null) recycle(base) }
         prep.render = job
-        prep.job = c.scope.launch {
+        // (Dispatched, like a pending render's landing: a background preparation never answers
+        // inside this call, even when the worker is already done.)
+        prep.job = c.scope.launch(Dispatchers.Main) {
             val parts = try { job.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (prep.done) { parts?.let { recycle(it.first, it.second) }; return@launch }
             prep.markDone()
@@ -703,13 +706,18 @@ class VectorLayers internal constructor(private val c: EditorController) {
     // ------------------------------------------------------------------ background renders
 
     /** The background worker: one render at a time, with its own tips and prepared objects. */
-    private class Worker {
-        val dispatcher = Dispatchers.Default.limitedParallelism(1)
+    private class Worker(val dispatcher: CoroutineDispatcher) {
         val tips = TipCache(8L shl 20)
         val cache = RenderCache()
     }
 
-    private val worker by lazy { Worker() }
+    /**
+     * Test seam: the background worker's dispatcher (null = one thread of Dispatchers.Default).
+     * Read once, when the first background job starts.
+     */
+    internal var workerDispatcher: CoroutineDispatcher? = null
+
+    private val worker by lazy { Worker(workerDispatcher ?: Dispatchers.Default.limitedParallelism(1)) }
 
     /** An edit whose pixels are rendering in the background (at most one at a time). */
     private inner class Pending(
@@ -857,7 +865,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
             copies ?: out
         }
-        c.scope.launch {
+        // Dispatched (Main, not immediate): a render that is already done when this starts still
+        // lands on a later main-thread turn, never inside this `update` call. So an async edit
+        // is always pending when `update` returns, whatever the worker's timing: an edit the
+        // caller computes next from the old content is re-based onto it (see [updateInternal]).
+        c.scope.launch(Dispatchers.Main) {
             val result = try { p.job?.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (!p.finished) finish(p, result) else if (result != null && result !== p.copies) result.forEach { if (!it.isRecycled) it.recycle() }
         }

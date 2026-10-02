@@ -189,6 +189,45 @@ class VectorLayersIntegrationRobolectricTest {
         assertEquals(1, ready.size)
     }
 
+    /**
+     * Whatever the worker's timing, an async edit is still pending when `update` returns (it lands
+     * on a later main-thread turn), so an edit computed next from the old content is re-based
+     * onto it. Before, a worker that was already done let the first edit land inside the call,
+     * and the second, computed from the old content, silently brought its object back (seen as
+     * flaky VectorAsync / VectorReview failures on a loaded machine).
+     */
+    @Test
+    fun anAsyncEditIsPendingWhenUpdateReturnsEvenIfTheWorkerIsAlreadyDone() {
+        val c = setup()
+        // A worker that runs each job at once, on the calling thread: done before the call returns.
+        c.vectors.workerDispatcher = Dispatchers.Unconfined
+        val base = seeded(c)
+        var first: Boolean? = null
+        c.vectors.update(c.l1, base.without(setOf(1L)), "Delete") { first = it }
+        assertNull("not applied inside the call", first)
+        assertTrue(c.vectors.isRendering)
+        assertSame(base, c.l1.vector)
+        // An edit computed from the same old content while the first is pending: re-based onto it.
+        var second: Boolean? = null
+        c.vectors.update(c.l1, base.without(setOf(3L)), "Delete") { second = it }
+        assertEquals(true, first)
+        runUntil({ second != null && !c.vectors.isRendering })
+        assertEquals(true, second)
+        assertEquals("both edits kept", listOf(2L), c.l1.vector!!.objects.map { it.id })
+        assertEquals(3, c.undoManager.undoCount)
+        assertTrue(fresh(c.l1.vector!!).contentEquals(px(c.l1.bitmap)))
+        // A background edit preparation answers on a later turn too.
+        c.vectors.addObjects(c.l1, objects(), "Add")
+        runUntil({ !c.vectors.isRendering })
+        val ready = ArrayList<VectorEditSession?>()
+        c.vectors.beginEdit(c.l1, setOf(2L)) { ready += it }
+        assertTrue("not answered inside the call", ready.isEmpty())
+        assertTrue(c.vectors.isRendering)
+        runUntil({ ready.isNotEmpty() })
+        assertNotNull(ready.single())
+        ready.single()!!.cancel()
+    }
+
     // ------------------------------------------------------------------ B-c: the selection's id lookups
 
     @Test
