@@ -246,6 +246,42 @@ class VectorHistoryInFlightRobolectricTest {
     }
 
     /**
+     * Review fix: switching layers right after an Object bar action that waits for a render makes
+     * the action on its layer first (it was dropped: it only works on the active layer). With
+     * nothing waiting, switching layers (or anything else that records no step) never waits for
+     * the render still running in the background.
+     */
+    @Test
+    fun switchingLayersMakesTheWaitingObjectBarActionFirstAndOtherwiseNeverWaits() {
+        val c = drawing()
+        val layer = c.vec
+        val background = c.doc.layers[0]
+        c.vectors.setSelection(layer, setOf(1L))
+        c.vectors.update(layer, layer.vector!!.without(setOf(3L)), "Erase")
+        assertTrue(ObjectActions.duplicate(c))
+        c.selectLayer(background)
+        assertSame(background, c.activeLayer)
+        assertEquals("the duplicate was made on its layer", 3, ids(c).size)
+        assertEquals(ObjectActions.DUPLICATE_LABEL, c.undoManager.undoLabel)
+        settle(c)
+        assertEquals(3, ids(c).size)
+        assertCacheFresh(c)
+        // Nothing waiting: back to the vector layer while an edit renders, and its mask switched
+        // on for painting, without waiting for the render.
+        c.selectLayer(layer)
+        c.addMask(layer, fromSelection = false)
+        c.vectors.update(layer, layer.vector!!.without(setOf(1L)), "Erase")
+        assertTrue(c.vectors.isRendering)
+        c.selectLayer(background)
+        c.selectLayer(layer)
+        c.setEditingMask(layer, true)
+        assertTrue("no wait for the render", c.vectors.isRendering)
+        settle(c)
+        assertEquals("Erase", c.undoManager.undoLabel)
+        assertCacheFresh(c)
+    }
+
+    /**
      * Review fix: a layer operation (here Flip layer) right after an Object bar action that waits
      * for a render: the action lands first, in order (move, duplicate, flip: one step each), and
      * the lift it starts again is let go before the operation, never left open over the content

@@ -117,6 +117,9 @@ internal object PendingRenders {
         }
     }
 
+    /** True while any work waits ([whenIdle]) for an update in flight. */
+    fun hasWaiting(c: EditorController): Boolean = states[c]?.get()?.waiting?.isNotEmpty() == true
+
     /** True while work queued under [key] waits (e.g. one Object bar action at a time). */
     fun isWaiting(c: EditorController, key: Any): Boolean = states[c]?.get()?.waiting?.any { it.first == key } == true
 

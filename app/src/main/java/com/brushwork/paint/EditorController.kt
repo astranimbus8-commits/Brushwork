@@ -466,6 +466,15 @@ class EditorController(
         PendingRenders.settle(this)
     }
 
+    /**
+     * [settleVectorWork] when object edits are queued behind a vector render (an Object bar action
+     * pressed a moment ago); otherwise nothing, so an operation that records no step (switching
+     * layers, painting the mask) never waits for a render still running in the background.
+     */
+    private fun settleQueuedVectorWork() {
+        if (PendingRenders.hasWaiting(this)) settleVectorWork()
+    }
+
     /** Runs an undo / redo: edits it causes (a tool reacting to a restored selection...) are not reported to edit listeners. */
     private inline fun inHistoryDo(block: () -> Boolean): Boolean {
         val prev = inHistory
@@ -848,6 +857,9 @@ class EditorController(
 
     fun selectLayer(layer: Layer) {
         if (layer === activeLayer) return
+        // An Object bar action waiting for a vector render is made on its layer first (v1.5; it
+        // works on the active layer's objects, so it would be dropped after the switch).
+        settleQueuedVectorWork()
         // Deactivating may commit pending work that inserts a layer, so resolve the index after.
         currentTool.onDeactivate()
         val idx = doc.indexOf(layer)
@@ -874,7 +886,7 @@ class EditorController(
         // Object edits queued behind a vector render (v1.5) land first, while the tool is still
         // active: one of them may lift its objects again, which the pause then commits or lets go
         // (never a lift of the content as it was before this operation, left open across it).
-        settleVectorWork()
+        settleQueuedVectorWork()
         currentTool.onDeactivate()
         try {
             return block()
