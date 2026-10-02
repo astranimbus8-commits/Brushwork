@@ -9,6 +9,7 @@ import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.filters.GradientStop
+import com.brushwork.paint.filters.PixelMapper
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -31,11 +32,19 @@ class ColorBalanceFilter : Filter("adjust.color_balance", "Color Balance", Filte
     }
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val m = mapperOrNull(values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperOrNull(values) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** Null when every shift is 0 (nothing changes). */
+    private fun mapperOrNull(values: FilterValues): PixelMapper? {
         fun v(key: String) = (values.float(key) / 100f).coerceIn(-1f, 1f)
         val cr = floatArrayOf(v("shadowsCR"), v("midtonesCR"), v("highlightsCR"))
         val mg = floatArrayOf(v("shadowsMG"), v("midtonesMG"), v("highlightsMG"))
         val yb = floatArrayOf(v("shadowsYB"), v("midtonesYB"), v("highlightsYB"))
-        if (cr.all { it == 0f } && mg.all { it == 0f } && yb.all { it == 0f }) return src.copy()
+        if (cr.all { it == 0f } && mg.all { it == 0f } && yb.all { it == 0f }) return null
         val preserve = values.bool("preserveLuminosity")
         // Shift per channel indexed by (max + min) of the 0..255 components, i.e. HSL lightness * 510.
         val shR = FloatArray(511); val shG = FloatArray(511); val shB = FloatArray(511)
@@ -45,7 +54,7 @@ class ColorBalanceFilter : Filter("adjust.color_balance", "Color Balance", Filte
             shG[l2] = mg[0] * wts[0] + mg[1] * wts[1] + mg[2] * wts[2]
             shB[l2] = yb[0] * wts[0] + yb[1] * wts[1] + yb[2] * wts[2]
         }
-        return FilterMath.mapPixels(src, ctx) { c ->
+        return AdjustMath.pointwise { c ->
             if (c ushr 24 == 0) c else {
                 val r = (c shr 16) and 0xFF; val g = (c shr 8) and 0xFF; val b = c and 0xFF
                 val l2 = max(r, max(g, b)) + min(r, min(g, b))
@@ -93,28 +102,42 @@ class HueSaturationFilter : Filter("adjust.hue_saturation", "Hue / Saturation / 
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val m = mapperOrNull(values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperOrNull(values) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** Null when nothing changes. Each [PixelMapper.map] call uses its own scratch arrays (thread-safe). */
+    private fun mapperOrNull(values: FilterValues): PixelMapper? {
         val hue = values.float("hue")
         val sat = (values.float("saturation") / 100f).coerceIn(-1f, 1f)
         val light = (values.float("brightness") / 100f).coerceIn(-1f, 1f)
         if (values.bool("colorize")) {
             val h = (((hue % 360f) + 360f) % 360f) / 360f
             val s = (sat + 1f) * 0.5f
-            return AdjustMath.mapWithScratch(src, ctx) { c, rgb, _ ->
-                if (c ushr 24 == 0) c else {
+            return PixelMapper { px, from, until ->
+                val rgb = FloatArray(3)
+                for (i in from until until) {
+                    val c = px[i]
+                    if (c ushr 24 == 0) continue
                     var l = AdjustMath.luma(c) / 255f
                     l = if (light > 0f) l * (1f - light) + light else l * (1f + light)
                     AdjustMath.hslToRgb(h, s, l, rgb)
-                    AdjustMath.pack(c ushr 24, rgb[0], rgb[1], rgb[2])
+                    px[i] = AdjustMath.pack(c ushr 24, rgb[0], rgb[1], rgb[2])
                 }
             }
         }
-        if (hue == 0f && sat == 0f && light == 0f) return src.copy()
+        if (hue == 0f && sat == 0f && light == 0f) return null
         val shift = hue / 360f
-        return AdjustMath.mapWithScratch(src, ctx) { c, rgb, hsl ->
-            if (c ushr 24 == 0) c else {
+        return PixelMapper { px, from, until ->
+            val rgb = FloatArray(3); val hsl = FloatArray(3)
+            for (i in from until until) {
+                val c = px[i]
+                if (c ushr 24 == 0) continue
                 rgb[0] = ((c shr 16) and 0xFF) / 255f; rgb[1] = ((c shr 8) and 0xFF) / 255f; rgb[2] = (c and 0xFF) / 255f
                 AdjustMath.adjustHsb(rgb, hsl, shift, sat, light)
-                AdjustMath.pack(c ushr 24, rgb[0], rgb[1], rgb[2])
+                px[i] = AdjustMath.pack(c ushr 24, rgb[0], rgb[1], rgb[2])
             }
         }
     }
@@ -145,6 +168,21 @@ class ReplaceColorFilter : Filter("adjust.replace_color", "Replace Color", Filte
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
         val ref = if (values.choice("source") == 0) sampleReference(src, values.point("point"), ctx) ?: return src.copy()
         else values.color("target") or ALPHA
+        val m = mapperFor(ref, values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    /**
+     * Pointwise with a chosen "Target color"; a reference point reads the image there (content
+     * dependent: no mapper).
+     */
+    override fun pixelMapper(values: FilterValues): PixelMapper? {
+        if (values.choice("source") == 0) return null
+        return mapperFor(values.color("target") or ALPHA, values) ?: AdjustMath.IDENTITY_MAPPER
+    }
+
+    /** The replacement of colors near [ref]; null when it changes nothing. */
+    private fun mapperFor(ref: Int, values: FilterValues): PixelMapper? {
         val tol = (values.float("tolerance") / 100f).coerceIn(0f, 1f) * MAX_DISTANCE
         val inner = tol * (1f - (values.float("softness") / 100f).coerceIn(0f, 1f))
         val tol2 = tol * tol; val inner2 = inner * inner
@@ -152,7 +190,7 @@ class ReplaceColorFilter : Filter("adjust.replace_color", "Replace Color", Filte
         val sat = (values.float("saturation") / 100f).coerceIn(-1f, 1f)
         val light = (values.float("brightness") / 100f).coerceIn(-1f, 1f)
         val mode = values.choice("mode")
-        if (mode == 0 && hueShift == 0f && sat == 0f && light == 0f) return src.copy()
+        if (mode == 0 && hueShift == 0f && sat == 0f && light == 0f) return null
 
         val rY = AdjustMath.luma(ref) / 255f
         val rCb = ((ref and 0xFF) / 255f - rY) * CB
@@ -170,33 +208,37 @@ class ReplaceColorFilter : Filter("adjust.replace_color", "Replace Color", Filte
         val refH = tmpHsl[0]; val refS = tmpHsl[1]; val refL = tmpHsl[2]
         val dS = tS - refS; val dL = tL - refL
 
-        return AdjustMath.mapWithScratch(src, ctx) { c, rgb, hsl ->
-            val a = c ushr 24
-            if (a == 0) return@mapWithScratch c
-            val r = ((c shr 16) and 0xFF) / 255f; val g = ((c shr 8) and 0xFF) / 255f; val b = (c and 0xFF) / 255f
-            val y = r * 0.299f + g * 0.587f + b * 0.114f
-            val dy = y - rY; val dcb = (b - y) * CB - rCb; val dcr = (r - y) * CR - rCr
-            val dist2 = LUMA_WEIGHT * dy * dy + dcb * dcb + dcr * dcr
-            val weight = when {
-                dist2 <= inner2 -> 1f
-                dist2 >= tol2 -> 0f
-                else -> 1f - AdjustMath.smoothstep(inner, tol, sqrt(dist2))
-            }
-            if (weight <= 0f) return@mapWithScratch c
-            when (mode) {
-                0 -> {
-                    rgb[0] = r; rgb[1] = g; rgb[2] = b
-                    AdjustMath.adjustHsb(rgb, hsl, hueShift, sat, light)
+        return PixelMapper { px, from, until ->
+            val rgb = FloatArray(3); val hsl = FloatArray(3)
+            for (i in from until until) {
+                val c = px[i]
+                val a = c ushr 24
+                if (a == 0) continue
+                val r = ((c shr 16) and 0xFF) / 255f; val g = ((c shr 8) and 0xFF) / 255f; val b = (c and 0xFF) / 255f
+                val y = r * 0.299f + g * 0.587f + b * 0.114f
+                val dy = y - rY; val dcb = (b - y) * CB - rCb; val dcr = (r - y) * CR - rCr
+                val dist2 = LUMA_WEIGHT * dy * dy + dcb * dcb + dcr * dcr
+                val weight = when {
+                    dist2 <= inner2 -> 1f
+                    dist2 >= tol2 -> 0f
+                    else -> 1f - AdjustMath.smoothstep(inner, tol, sqrt(dist2))
                 }
-                1 -> {
-                    AdjustMath.rgbToHsl(r, g, b, hsl)
-                    val baseH = if (hsl[1] < GRAY_S) refH else hsl[0]
-                    val h = if (refS < GRAY_S) tH else baseH + (tH - refH)
-                    AdjustMath.hslToRgb(h, hsl[1] + dS, hsl[2] + dL, rgb)
+                if (weight <= 0f) continue
+                when (mode) {
+                    0 -> {
+                        rgb[0] = r; rgb[1] = g; rgb[2] = b
+                        AdjustMath.adjustHsb(rgb, hsl, hueShift, sat, light)
+                    }
+                    1 -> {
+                        AdjustMath.rgbToHsl(r, g, b, hsl)
+                        val baseH = if (hsl[1] < GRAY_S) refH else hsl[0]
+                        val h = if (refS < GRAY_S) tH else baseH + (tH - refH)
+                        AdjustMath.hslToRgb(h, hsl[1] + dS, hsl[2] + dL, rgb)
+                    }
+                    else -> { rgb[0] = solidR; rgb[1] = solidG; rgb[2] = solidB }
                 }
-                else -> { rgb[0] = solidR; rgb[1] = solidG; rgb[2] = solidB }
+                px[i] = AdjustMath.pack(a, r + (rgb[0] - r) * weight, g + (rgb[1] - g) * weight, b + (rgb[2] - b) * weight)
             }
-            AdjustMath.pack(a, r + (rgb[0] - r) * weight, g + (rgb[1] - g) * weight, b + (rgb[2] - b) * weight)
         }
     }
 
@@ -250,11 +292,19 @@ class GradationMapFilter : Filter("adjust.gradation_map", "Gradation Map", Filte
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val m = mapperOrNull(values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperOrNull(values) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** Null at 0 % opacity (nothing changes). */
+    private fun mapperOrNull(values: FilterValues): PixelMapper? {
         val opacity = (values.float("opacity") / 100f).coerceIn(0f, 1f)
-        if (opacity <= 0f) return src.copy()
+        if (opacity <= 0f) return null
         val lut = AdjustMath.gradientLut(values.gradient("gradient"))
         if (values.bool("reverse")) lut.reverse()
-        return FilterMath.mapPixels(src, ctx) { c ->
+        return AdjustMath.pointwise { c ->
             val a = c ushr 24
             if (a == 0) c else {
                 val m = lut[ColorUtils.luminance(c)]
@@ -278,10 +328,18 @@ class MonocolorFilter : Filter("adjust.monocolor", "Monocolor", FilterCategory.A
     )
 
     override fun apply(src: PixelBuffer, values: FilterValues, ctx: FilterContext): PixelBuffer {
+        val m = mapperOrNull(values) ?: return src.copy()
+        return AdjustMath.applyMapper(src, ctx, m)
+    }
+
+    override fun pixelMapper(values: FilterValues): PixelMapper = mapperOrNull(values) ?: AdjustMath.IDENTITY_MAPPER
+
+    /** Null at 0 % strength (nothing changes). */
+    private fun mapperOrNull(values: FilterValues): PixelMapper? {
         val amount = (values.float("amount") / 100f).coerceIn(0f, 1f)
-        if (amount <= 0f) return src.copy()
+        if (amount <= 0f) return null
         val lut = rampLut(values.color("color"))
-        return FilterMath.mapPixels(src, ctx) { c ->
+        return AdjustMath.pointwise { c ->
             val a = c ushr 24
             if (a == 0) c else {
                 val m = (lut[ColorUtils.luminance(c)] and 0xFFFFFF) or (a shl 24)

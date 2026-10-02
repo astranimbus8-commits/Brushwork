@@ -7,6 +7,7 @@ import com.brushwork.paint.filters.CurvePoint
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.GradientStop
+import com.brushwork.paint.filters.PixelMapper
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -42,9 +43,45 @@ object AdjustMath {
      */
     fun applyRgbLut(src: PixelBuffer, ctx: FilterContext, lr: IntArray, lg: IntArray = lr, lb: IntArray = lr): PixelBuffer {
         if (isIdentity(lr) && isIdentity(lg) && isIdentity(lb)) return src.copy()
-        return FilterMath.mapPixels(src, ctx) { c ->
-            if (c ushr 24 == 0) c
-            else (c and ALPHA_MASK) or (lr[(c shr 16) and 0xFF] shl 16) or (lg[(c shr 8) and 0xFF] shl 8) or lb[c and 0xFF]
+        return applyMapper(src, ctx, lutMapper(lr, lg, lb))
+    }
+
+    // ---------------------------------------------------------------- pointwise mappers (v1.5)
+
+    /** The mapper that changes nothing. */
+    val IDENTITY_MAPPER: PixelMapper = PixelMapper { _, _, _ -> }
+
+    /**
+     * The `apply()` of a pointwise filter: a copy of [src] mapped by [mapper] in parallel row
+     * chunks. Filters build their mapper once and use it both here and as their
+     * [com.brushwork.paint.filters.Filter.pixelMapper], so the two are equal per pixel by
+     * construction (adjustment layers show exactly what applying the filter gives).
+     */
+    fun applyMapper(src: PixelBuffer, ctx: FilterContext, mapper: PixelMapper): PixelBuffer {
+        val out = src.copy()
+        val px = out.pixels
+        val w = src.width
+        Parallel.forRows(src.height) { y0, y1 ->
+            ctx.checkCancelled()
+            mapper.map(px, y0 * w, y1 * w)
+        }
+        return out
+    }
+
+    /** A mapper applying [f] to every pixel (thread-safe as long as [f] only reads shared state). */
+    inline fun pointwise(crossinline f: (Int) -> Int): PixelMapper = PixelMapper { px, from, until ->
+        for (i in from until until) px[i] = f(px[i])
+    }
+
+    /** [applyRgbLut]'s mapping as a [PixelMapper] (alpha kept, fully transparent pixels untouched). */
+    fun lutMapper(lr: IntArray, lg: IntArray = lr, lb: IntArray = lr): PixelMapper {
+        if (isIdentity(lr) && isIdentity(lg) && isIdentity(lb)) return IDENTITY_MAPPER
+        return PixelMapper { px, from, until ->
+            for (i in from until until) {
+                val c = px[i]
+                if (c ushr 24 == 0) continue
+                px[i] = (c and ALPHA_MASK) or (lr[(c shr 16) and 0xFF] shl 16) or (lg[(c shr 8) and 0xFF] shl 8) or lb[c and 0xFF]
+            }
         }
     }
 
