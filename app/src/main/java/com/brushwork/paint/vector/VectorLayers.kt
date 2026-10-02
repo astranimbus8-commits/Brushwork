@@ -393,7 +393,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
          * these are rendered past its edges, so their off-canvas parts show in the Transform
          * preview too.
          */
-        val overflow: List<VObject>,
+        val overflow: VectorContent,
+        /**
+         * The parts of the floating rect past the canvas (disjoint, document px; empty unless
+         * [overflow] has objects): only these are rendered, so a stroke that merely reaches past
+         * an edge costs its dabs there, not its whole replay.
+         */
+        val overflowBands: List<Rect>,
         /** Where the floating render of some objects cuts brush dabs: the document, or (reaching past it) nowhere but the floating rect. */
         val floatingCut: Rect?,
     )
@@ -405,7 +411,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         if (present.isEmpty() || !usable(layer)) { onReady(null); return }
         val plan = planEdit(content, present)
         val units = editUnits(plan)
-        if ((plan.all && plan.overflow.isEmpty()) || !goAsyncUnits(units)) {
+        if ((plan.all && plan.overflowBands.isEmpty()) || !goAsyncUnits(units)) {
             val parts = try {
                 renderEdit(layer.bitmap, plan, tips, renderCache, null) { true }
             } catch (e: OutOfMemoryError) {
@@ -512,7 +518,9 @@ class VectorLayers internal constructor(private val c: EditorController) {
             !b.isEmpty && !(b.left >= 0f && b.top >= 0f && b.right <= docW && b.bottom <= docH)
         }
         return EditPlan(
-            present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale, overflow,
+            present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale,
+            overflow = VectorContent(objects = overflow),
+            overflowBands = if (overflow.isEmpty()) emptyList() else outside(floatingRect, docRect),
             // On the canvas, dabs are cut at the document exactly as in the cache; past it they
             // are drawn whole, so a stroke reaching off the canvas shows there while it is moved.
             floatingCut = if (docRect.contains(floatingRect)) docRect else null,
@@ -521,7 +529,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     /** Cost units of preparing [plan] (every object lifted: only what is drawn past the canvas). */
     private fun editUnits(plan: EditPlan): Double {
-        if (plan.all) return if (plan.overflow.isEmpty()) 0.0 else VectorLayerRenderer.estimateUnits(VectorContent(objects = plan.overflow), plan.floatingRect)
+        if (plan.all) return VectorLayerRenderer.estimateUnits(plan.overflow, plan.overflowBands)
         var u = VectorLayerRenderer.estimateUnits(VectorContent(objects = plan.edited), plan.floatingRect)
         if (!plan.holeRect.isEmpty) u += VectorLayerRenderer.estimateUnits(plan.others, plan.holeRect)
         return u
@@ -563,10 +571,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
             if (!fr.isEmpty) {
                 if (plan.all) {
                     val b = floating ?: floatingFromCache(requireNotNull(cache) { "an every-object lift copies the cache" }, plan)?.also { floating = it }
-                    if (b != null && plan.overflow.isNotEmpty() && active()) {
+                    if (b != null && plan.overflowBands.isNotEmpty()) {
+                        // Only past the canvas (the bands exclude it): dabs are cut at each band.
                         val cv = documentCanvas(b, plan)
-                        cv.clipOutRect(doc)
-                        VectorLayerRenderer.renderWith(cv, VectorContent(objects = plan.overflow), fr, emptySet(), tips, null, rc) { _, _ -> active() }
+                        for (band in plan.overflowBands) {
+                            if (!active()) break
+                            VectorLayerRenderer.renderWith(cv, plan.overflow, band, emptySet(), tips, null, rc) { _, _ -> active() }
+                        }
                     }
                 } else {
                     val (b, cv) = newFloating(plan)
@@ -1115,6 +1126,23 @@ class VectorLayers internal constructor(private val c: EditorController) {
     }
 
     internal companion object {
+        /**
+         * The parts of [r] outside [doc], as at most four disjoint rects: the bands above and
+         * below the document (full width of [r]), then those left and right of it (between them).
+         */
+        fun outside(r: Rect, doc: Rect): List<Rect> {
+            if (r.isEmpty) return emptyList()
+            val out = ArrayList<Rect>(4)
+            fun add(l: Int, t: Int, rt: Int, b: Int) { if (l < rt && t < b) out += Rect(l, t, rt, b) }
+            val top = max(r.top, min(r.bottom, doc.top))
+            val bottom = min(r.bottom, max(r.top, doc.bottom))
+            add(r.left, r.top, r.right, top)
+            add(r.left, bottom, r.right, r.bottom)
+            add(r.left, top, min(r.right, doc.left), bottom)
+            add(max(r.left, doc.right), top, r.right, bottom)
+            return out
+        }
+
         /** Largest side of a floating preview bitmap (px). */
         const val MAX_FLOATING = 2048f
 

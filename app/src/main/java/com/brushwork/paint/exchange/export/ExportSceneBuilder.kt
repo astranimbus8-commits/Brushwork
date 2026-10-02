@@ -28,7 +28,7 @@ import com.brushwork.paint.tools.text.TextOutlinePart
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.transform.ContentBounds
-import com.brushwork.paint.tools.vector.CurveGeometry
+import com.brushwork.paint.tools.vector.CurveWidths
 import com.brushwork.paint.tools.vector.JoinStyle
 import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -42,7 +42,6 @@ import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VStrokeStyle
-import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.render.VectorLayerRenderer
@@ -88,8 +87,8 @@ interface TextSource {
  * - raster layers are pictures cropped to their content; vector layers become paths (brush
  *   strokes of solid brushes as outlines, other strokes as pictures, consecutive ones in one
  *   picture, z-order kept); text layers real text (SVG) or outlines of every painted part
- *   (A7's [TextExport]; PDF always), their pixels only when the letters have no outlines; layer
- *   masks luminance masks;
+ *   (A7's [TextExport]; PDF always), their pixels only when some letters have no outlines
+ *   (color emoji); layer masks luminance masks;
  * - the payload lists every layer (hidden ones too) with its data and where its pixels are.
  *
  * Runs on the main thread (one layer at a time, yielding between layers: it only takes
@@ -258,12 +257,14 @@ class ExportSceneBuilder(
      * A text layer (§4.10b) as real text — SVG with "Editable", horizontal straight text in a
      * built-in font: its box (background, border) as shapes under one `<text>` — or else as filled
      * outlines, every part the text paints with its own color (box, outline stroke, letters; PDF
-     * always); null = its pixels (letters without outlines, e.g. color emoji only).
+     * always); null = its pixels: letters without outlines, i.e. color emoji (their glyphs are
+     * pictures, so outlines would leave them out; a real `<text>` keeps them).
      */
     private fun textItems(layer: Layer, item: TextItem): List<SceneItem>? {
         val spec = item.spec
         val straight = !item.path.isActive
         val parts = text.parts(item)
+        val emoji = ColorGlyphs.has(item.text)
         if (parts != null) {
             if (options.format == VectorFormat.SVG && options.text == TextExportMode.EDITABLE && straight && !spec.vertical && spec.fontId == null) {
                 val runs = text.lines(item)
@@ -272,6 +273,7 @@ class ExportSceneBuilder(
                     return box + realText(spec, runs)
                 }
             }
+            if (emoji) return null
             if (item.text.isNotBlank() && parts.none { it.kind == TextOutlinePart.Kind.TEXT }) return null
             return partItems(parts).ifEmpty { null }
         }
@@ -281,6 +283,7 @@ class ExportSceneBuilder(
             val runs = text.lines(item)
             if (!runs.isNullOrEmpty()) return frame.orEmpty() + realText(spec, runs)
         }
+        if (emoji) return null
         val outline = text.outlines(doc, layer) ?: return null
         val path = vectorPathOf(outline)
         if (path.isEmpty) return null
@@ -552,52 +555,18 @@ class ExportSceneBuilder(
         return if (ops.isEmpty()) null else VectorPath(ops)
     }
 
-    /** A plain line whose anchors have different widths, as the renderer fills it. */
+    /**
+     * A plain line whose anchors have different widths, exactly as the renderer and the Curve
+     * tool fill it ([CurveWidths.line] + [VariableWidthOutline], non-zero contours).
+     */
     private fun varyingOutline(p: VPath, st: VStrokeStyle): VectorPath {
         val ops = ArrayList<PathOp>()
         for (s in p.subpaths) {
-            val line = widthLine(s, p.tension, p.polyline, st.width) ?: continue
-            val o = VariableWidthOutline.build(line.first, line.second, line.third, line.first.size, s.closed && s.anchors.size > 2, 0.25f)
-            ops += o.ops
+            val closed = s.closed && s.anchors.size > 2
+            val line = CurveWidths.line(VectorOps.curveAnchors(s), closed, p.tension, p.polyline, st.width, CurveWidths.LINE_TOLERANCE) ?: continue
+            ops += VariableWidthOutline.build(line.xs, line.ys, line.ws, line.n, closed, CurveWidths.LINE_TOLERANCE).ops
         }
         return if (ops.isEmpty()) VectorPath.EMPTY else VectorPath(ops)
-    }
-
-    /** A sub-path flattened with the full line width at each point (smoothstep between anchors along arc length, §4.5). */
-    private fun widthLine(s: VSubpath, tension: Float, polyline: Boolean, width: Float): Triple<FloatArray, FloatArray, FloatArray>? {
-        val anchors = VectorOps.curveAnchors(s)
-        val n = anchors.size
-        if (n == 0) return null
-        fun w(i: Int) = anchors[i % n].width.let { if (it.isFinite()) it.coerceAtLeast(0f) else 1f } * width
-        if (n == 1) return Triple(floatArrayOf(anchors[0].x), floatArrayOf(anchors[0].y), floatArrayOf(w(0)))
-        val closed = s.closed && n > 2
-        val xs = ArrayList<Float>(); val ys = ArrayList<Float>(); val ws = ArrayList<Float>()
-        xs += anchors[0].x; ys += anchors[0].y; ws += w(0)
-        val pts = ArrayList<Vec2>()
-        for (seg in 0 until CurveGeometry.segmentCount(n, closed)) {
-            val (p0, c1, c2, p1) = CurveGeometry.segment(anchors, seg, closed, tension, polyline)
-            pts.clear()
-            pts += p0
-            VectorPath.flattenCubic(p0, c1, c2, p1, 0.25f, pts)
-            var total = 0f
-            for (k in 1 until pts.size) total += pts[k - 1].distanceTo(pts[k])
-            var acc = 0f
-            val wa = w(seg); val wb = w(seg + 1)
-            for (k in 1 until pts.size) {
-                val a = pts[k - 1]; val b = pts[k]
-                val len = a.distanceTo(b)
-                val pieces = if (wa == wb) 1 else ceil(len / 2f).toInt().coerceIn(1, 1024)
-                for (q in 1..pieces) {
-                    val f = q.toFloat() / pieces
-                    val t = if (total > 0f) ((acc + len * f) / total).coerceIn(0f, 1f) else 1f
-                    val e = t * t * (3f - 2f * t)
-                    val pt = if (q == pieces) b else a.lerp(b, f)
-                    xs += pt.x; ys += pt.y; ws += wa + (wb - wa) * e
-                }
-                acc += len
-            }
-        }
-        return Triple(xs.toFloatArray(), ys.toFloatArray(), ws.toFloatArray())
     }
 
     /** A picture of [objects] rendered like the layer's cache, over their bounds within the document. */
@@ -714,5 +683,32 @@ class ExportSceneBuilder(
             if (open) ops += PathOp.Close
             return VectorPath(ops)
         }
+    }
+}
+
+/**
+ * Characters Android draws from its color emoji font (pictures, not outlines): text holding them
+ * cannot be exported as glyph outlines without losing them.
+ */
+internal object ColorGlyphs {
+    /** True when [text] has a character drawn as a color emoji. */
+    fun has(text: String): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            if (isEmoji(cp)) return true
+            i += Character.charCount(cp)
+        }
+        return false
+    }
+
+    private fun isEmoji(cp: Int): Boolean = when {
+        // Emoji presentation selector and the keycap mark (❤️, #️⃣), pictographs, emoticons,
+        // flags (regional indicators) and the other supplementary emoji blocks.
+        cp == 0xFE0F || cp == 0x20E3 || cp in 0x1F000..0x1FAFF -> true
+        // BMP characters shown as emoji by default (⚡, ✅, ⌚, ⭐ …).
+        android.os.Build.VERSION.SDK_INT >= 28 ->
+            android.icu.lang.UCharacter.hasBinaryProperty(cp, android.icu.lang.UProperty.EMOJI_PRESENTATION)
+        else -> cp in 0x2600..0x27BF || cp in 0x2B00..0x2BFF || cp in 0x2300..0x23FF
     }
 }
