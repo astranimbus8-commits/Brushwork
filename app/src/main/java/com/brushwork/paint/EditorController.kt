@@ -1711,8 +1711,17 @@ class EditorController(
     private var vectorHintShown = false
 
     /**
+     * The vector layer the Vector button last left, and the raster layer it went to: tapped again
+     * from there, the button goes back to that same vector layer (a new transparent canvas's empty
+     * Background must not become a second vector layer).
+     */
+    private var vectorLeftLayer: Layer? = null
+    private var vectorLeftTo: Layer? = null
+
+    /**
      * The Vector button. Off: an empty plain layer is converted in place; else the visible,
      * unlocked vector layer right above is selected; else a new "Vector N" layer is added above.
+     * Tapped again on the layer it just went back to, it returns to the vector layer it left.
      * On: back to the layer it came from (else the nearest raster layer below, then above, else a
      * new layer). Not while a filter is previewed.
      */
@@ -1726,6 +1735,18 @@ class EditorController(
             val back = vectorReturnLayer?.takeIf { doc.indexOf(it) >= 0 && isRasterLayer(it) } ?: nearestRasterLayer(layer)
             vectorReturnLayer = null
             if (back != null) selectLayer(back) else addLayer()
+            vectorLeftLayer = layer
+            vectorLeftTo = activeLayer.takeIf { it !== layer }
+            return
+        }
+        val left = vectorLeftLayer?.takeIf {
+            layer === vectorLeftTo && doc.indexOf(it) >= 0 && it.isVectorLayer && it.visible && !it.locked
+        }
+        vectorLeftLayer = null
+        vectorLeftTo = null
+        if (left != null) {
+            selectLayer(left)
+            vectorReturnLayer = layer
             return
         }
         val idx = doc.indexOf(layer)
