@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.placement
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -78,8 +79,9 @@ fun TextToolOptions(tool: TextTool) {
             selected = tool.isVertical && !onPath,
             enabled = !onPath,
         )
-        LettersChip(tool)
+        // Wrap stays on the first screen of a 360 dp phone; "Letters" follows it.
         WrapChip(tool)
+        LettersChip(tool)
         SnapToObjectsChip(c)
         Spacer(Modifier.width(4.dp))
         Hint(
@@ -115,13 +117,15 @@ internal fun LettersChip(tool: TextTool) {
             containerColor = if (on) BrushworkColors.AccentDim else Color.Transparent,
             contentColor = if (on) Color.White else BrushworkColors.OnChrome,
         ),
+        // Slim sides (the button keeps its 40 dp minimum height): the whole chip fits on a 392 dp phone's first screen.
+        contentPadding = PaddingValues(horizontal = 8.dp),
         modifier = Modifier.semantics {
             contentDescription = "Letter scaling"
             stateDescription = if (on) "On" else "Off"
         },
     ) {
         Icon(Icons.Filled.FormatSize, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(6.dp))
+        Spacer(Modifier.width(4.dp))
         Text("Letters", maxLines = 1)
     }
 }
