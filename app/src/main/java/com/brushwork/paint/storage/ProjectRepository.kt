@@ -15,6 +15,7 @@ import com.brushwork.paint.masks.MaskCodec
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.vector.CorruptVectorException
 import com.brushwork.paint.vector.VectorCodec
 import kotlinx.coroutines.CancellationException
@@ -283,6 +284,7 @@ class ProjectRepository(private val context: Context) {
             throw e
         }
         sanitizeAdjustmentClipping(doc.layers)
+        reserveWrapSourceIds(doc)
         doc.activeLayerIndex = dto.activeLayerIndex.coerceIn(0, doc.layers.lastIndex)
         for (layer in doc.layers) layer.savedVersion = layer.contentVersion
         return doc
@@ -320,6 +322,19 @@ class ProjectRepository(private val context: Context) {
                     if (FilterRegistry.byId(spec.filterId) == null) warnings += "Adjustment layer \"$name\" uses an unknown effect: it shows no effect."
                 }
             }
+        }
+    }
+
+    /**
+     * A text wrapped around a picture that was deleted keeps that picture's layer id (v1.5 §4.1:
+     * it keeps its outline, and its sheet says the layer is gone). Ids are only made unique above
+     * the layers that were saved, so a new layer could take the deleted picture's id and the text
+     * would follow that layer: the ids such texts name are reserved as well.
+     */
+    private fun reserveWrapSourceIds(doc: Document) {
+        for (layer in doc.layers) {
+            val source = TextCodec.wrapSourceId(layer.textData)
+            if (source in 1..MAX_RESERVED_LAYER_ID) doc.ensureNextLayerIdAbove(source)
         }
     }
 
@@ -633,6 +648,9 @@ class ProjectRepository(private val context: Context) {
         const val MAX_SIDE = CanvasLimits.MAX_SIDE
         private const val MAX_NAME = 100
         private const val DUP_PREFIX = ".dup-"
+
+        /** Wrap source ids above this are not reserved (damaged data must not exhaust the id range). */
+        private const val MAX_RESERVED_LAYER_ID = Int.MAX_VALUE.toLong()
 
         /** Size of the stored thumbnail (longest side [ProjectFormat.THUMB_SIZE]), like `Compositor.renderThumbnail`. */
         internal fun thumbnailSize(w: Int, h: Int): Pair<Int, Int> {

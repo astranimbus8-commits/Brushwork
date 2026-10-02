@@ -45,4 +45,24 @@ object TextCodec {
             null
         }
     }
+
+    /**
+     * Id of the picture layer the text in [data] wraps around (v1.5), also when that layer was
+     * deleted (the text keeps its outline); 0 when it doesn't wrap or can't be read. Layer ids a
+     * document hands out must stay clear of it, or the text would follow an unrelated layer.
+     */
+    fun wrapSourceId(data: String?): Long {
+        if (data.isNullOrBlank() || !data.contains("sourceLayerId")) return 0L
+        return decode(data)?.wrap?.takeIf { it.isOn }?.sourceLayerId ?: 0L
+    }
+
+    /**
+     * [data] wrapping around layer [sourceLayerId] instead (its outline and layout unchanged: the
+     * renderer uses only the stored outline). [data] itself when it doesn't wrap or can't be read.
+     */
+    fun withWrapSource(data: String, sourceLayerId: Long): String {
+        val item = decode(data) ?: return data
+        if (!item.wrap.isOn || item.wrap.sourceLayerId == sourceLayerId || sourceLayerId <= 0L) return data
+        return encode(item.copy(wrap = item.wrap.copy(sourceLayerId = sourceLayerId)))
+    }
 }
