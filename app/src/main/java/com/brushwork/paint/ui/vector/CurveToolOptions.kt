@@ -816,13 +816,14 @@ private fun HandleSizeSection(tool: CurveTool) {
 private fun PathSettingsSection(tool: CurveTool) {
     val controller = tool.controller
     SectionHeader("Path")
+    // (Labels other than the strip's chips: both can be on screen at once.)
     ToggleRow(
-        "Cyclic", tool.pathCyclic, { v -> tool.setCyclic(v) },
+        "Cyclic path", tool.pathCyclic, { v -> tool.setCyclic(v) },
         description = "Closes the curve smoothly (3 points or more)",
     )
     if (!tool.pathCyclic) {
         ToggleRow(
-            "Endpoint", tool.pathEndpoint, { v -> tool.setEndpoint(v) },
+            "Touch the end points", tool.pathEndpoint, { v -> tool.setEndpoint(v) },
             description = if (tool.pathEndpoint) "The curve touches its first and last points" else "The curve starts and ends inside the control polygon",
         )
     }
