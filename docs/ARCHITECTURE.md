@@ -312,9 +312,10 @@ an own XML tokenizer (no DTD) into editable vector layers, and PDF pages through
 raster layers. An SVG imported into an open artwork is one undo step, after which Transform opens
 with the imported objects lifted as objects (✓ keeps the layer a vector layer).
 Every export (SVG / PDF through `ExportJob`, PNG / JPG and Share through `EditorActions`) first
-lands the vector work still on its way — the Object bar actions waiting for a render, the tool's
-pending work, the render its commit started (`settleVectorWork`, commit, `vectors.flushPending`) —
-so the file holds what is on the canvas (`qa/VectorExchangeQaTest`).
+lands, behind its busy overlay, the work still on its way — the Object bar actions waiting for a
+render, the tool's pending work (a Transform's render then runs right there), a vector render in
+flight (`settleVectorWork`, commit, `vectors.flushPending`) — so the file holds what is on the
+canvas and the screen never freezes before the overlay shows (`qa/VectorExchangeQaTest`).
 `ui/exchange/ExchangeUi.kt` hosts the pickers, sheets and progress.
 
 ## Snapping (`snap/`)
