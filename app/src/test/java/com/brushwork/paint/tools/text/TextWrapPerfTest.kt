@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.text.WrapFixtures.LOREM
 import com.brushwork.paint.tools.text.WrapFixtures.setup
 import org.junit.Assert.assertTrue
@@ -53,7 +54,7 @@ class TextWrapPerfTest {
         }
         val cold = median(11) { TextRenderer.prepare(base.copy(cx = 501f + dy++)) }
         println("[perf] wrap layout of 2000 chars: drag ${"%.2f".format(drag)} ms, cold ${"%.2f".format(cold)} ms")
-        assertTrue("drag re-layout $drag ms", drag < 40.0)
+        assertTrue("drag re-layout $drag ms", drag < PerfBudget.ms(40.0))
     }
 
     @Test
@@ -77,7 +78,7 @@ class TextWrapPerfTest {
         println("[perf] outline of a 1024² layer ${"%.2f".format(trace)} ms; picture edit + re-flow ${"%.2f".format(reflow)} ms")
         assertTrue(text.isTextLayer)
         assertTrue(s.c.textWrap.reflowCount >= reflows + 5)
-        assertTrue("outline $trace ms", trace < 250.0)
-        assertTrue("edit + re-flow $reflow ms", reflow < 600.0)
+        assertTrue("outline $trace ms", trace < PerfBudget.ms(250.0))
+        assertTrue("edit + re-flow $reflow ms", reflow < PerfBudget.ms(600.0))
     }
 }
