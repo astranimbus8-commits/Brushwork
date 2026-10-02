@@ -277,12 +277,13 @@ class ExchangeUiState(internal val controller: EditorController) {
 
     private suspend fun restore(payload: BrushworkPayload, newArtwork: Boolean, images: PayloadImport.Images) {
         val replace = if (newArtwork) defaultLayers(includeBackground = true) else emptyList()
-        // A new artwork made for the file takes its color mode (it has nothing else yet).
-        if (newArtwork && replace.size == controller.doc.layers.size) controller.doc.colorMode = payload.colorMode
-        val target = target().let { it.copy(room = it.room + replace.size) }
+        // A new artwork made for the file takes its color mode (it has nothing else yet), in
+        // the import's undo step.
+        val mode = if (newArtwork && replace.size == controller.doc.layers.size) payload.colorMode else null
+        val target = target().let { it.copy(room = it.room + replace.size, colorMode = mode ?: it.colorMode) }
         val prepared = withContext(Dispatchers.IO) { PayloadImport.prepare(payload, images, target) }
         stopIfCancelled(prepared.layers)
-        report(PayloadImport.apply(controller, prepared, replace))
+        report(PayloadImport.apply(controller, prepared, replace, mode))
     }
 
     // ------------------------------------------------------------------ dialog answers

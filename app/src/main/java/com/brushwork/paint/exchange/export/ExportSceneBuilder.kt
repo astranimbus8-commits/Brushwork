@@ -385,7 +385,9 @@ class ExportSceneBuilder(
                 v.mask = l.mask
                 v.adjustment = l.adjustment
                 v.maskSpec = l.maskSpec
-                if (opaqueBase && idx == 0) { v.opacity = 1f; v.blendMode = LayerBlendMode.NORMAL; v.clipping = false }
+                // A hidden group (exported with "Include hidden layers") still shows its content:
+                // the exported group is the one hidden.
+                if (opaqueBase && idx == 0) { v.opacity = 1f; v.blendMode = LayerBlendMode.NORMAL; v.clipping = false; v.visible = true }
             }
         }
         return SceneImage(key("img"), rect.left, rect.top, rect.width(), rect.height(), false) {

@@ -15,6 +15,7 @@ import com.brushwork.paint.exchange.export.SceneItem
 import com.brushwork.paint.exchange.export.TextSource
 import com.brushwork.paint.exchange.svg.SvgParser
 import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
@@ -115,6 +116,42 @@ class ExchangeImportRulesRobolectricTest {
         assertFalse(byName.getValue("Tone").clipping)
         assertFalse("right above an adjustment layer", byName.getValue("Above").clipping)
         assertTrue("an ordinary clipping layer stays clipping", byName.getValue("Clipped").clipping)
+    }
+
+    @Test
+    fun aRestoredArtworkTakesItsColorModeInTheImportStep() {
+        val fresh = Smoke.document(60, 40, layers = 2, whiteBottom = true)
+        val c = controller(fresh)
+        val payload = BrushworkPayload(width = 60, height = 40, colorMode = ColorMode.GRAYSCALE, layers = listOf(PayloadLayer(1, props("Ink"))))
+        val replace = fresh.layers.toList()
+        val before = c.undoManager.undoCount
+        val t = target(c).let { it.copy(room = it.room + replace.size, colorMode = ColorMode.GRAYSCALE) }
+        PayloadImport.apply(c, PayloadImport.prepare(payload, { null }, t), replace, ColorMode.GRAYSCALE)
+        assertEquals(before + 1, c.undoManager.undoCount)
+        assertEquals(ColorMode.GRAYSCALE, c.doc.colorMode)
+        assertEquals(listOf("Ink"), c.doc.layers.map { it.name })
+        c.undo()
+        assertEquals(ColorMode.RGB, c.doc.colorMode)
+        assertEquals(listOf("Layer 1", "Layer 2"), c.doc.layers.map { it.name })
+        c.redo()
+        assertEquals(ColorMode.GRAYSCALE, c.doc.colorMode)
+    }
+
+    @Test
+    fun aHiddenClippingGroupExportedWithHiddenLayersKeepsItsPicture() {
+        val doc = ExchangeFixtures.document()
+        doc.layers.first { it.name == "Base" }.visible = false
+        val c = controller(doc)
+        val scene = runBlocking {
+            ExportSceneBuilder(c, ExportOptions(VectorFormat.SVG, includeHidden = true), TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build()
+        }
+        val base = scene.layers.first { it.name == "Base" }
+        assertTrue(base.hidden)
+        val img = (base.items.single() as SceneItem.Image).image
+        val px = runBlocking { img.source.load() }
+        // The clipped magenta inside the (hidden) base, the base's blue around it.
+        assertEquals(0xFFFF00FF.toInt(), px.pixels[(40 - img.top) * img.width + (160 - img.left)])
+        assertEquals(0xFF0000FF.toInt(), px.pixels[(25 - img.top) * img.width + (160 - img.left)])
     }
 
     @Test

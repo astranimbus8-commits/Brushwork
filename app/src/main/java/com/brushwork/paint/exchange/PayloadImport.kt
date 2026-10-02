@@ -87,9 +87,13 @@ object PayloadImport {
         return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
     }
 
-    /** Inserts [prepared] as ONE undo step (removing [replace]) and selects the payload's active layer. Main thread. */
-    fun apply(c: EditorController, prepared: Prepared, replace: List<Layer> = emptyList()): ImportOutcome {
-        val created = ImportLayers.insert(c, prepared.layers, LABEL, replace)
+    /**
+     * Inserts [prepared] as ONE undo step (removing [replace]; the document taking [colorMode]
+     * when given: prepare for a target of that mode) and selects the payload's active layer.
+     * Main thread.
+     */
+    fun apply(c: EditorController, prepared: Prepared, replace: List<Layer> = emptyList(), colorMode: ColorMode? = null): ImportOutcome {
+        val created = ImportLayers.insert(c, prepared.layers, LABEL, replace, colorMode)
         created.getOrNull(prepared.activeIndex)?.let { c.selectLayer(it) }
         return ImportOutcome(layers = created.size, dropped = prepared.outcome.dropped)
     }
