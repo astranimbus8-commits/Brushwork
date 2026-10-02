@@ -67,6 +67,7 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.CoroutineScope
@@ -1232,7 +1233,90 @@ class EditorController(
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
     fun flipLayer(layer: Layer = activeLayer, horizontal: Boolean) {
         if (!checkEditable(layer)) return
-        withToolPaused { flipLayerNow(layer, horizontal) }
+        withToolPaused {
+            // A vector edit still rendering lands first: the flip mirrors its result.
+            vectors.flushPending()
+            val content = layer.vector
+            if (content != null && !LayerDataTransforms.turnsExactly(content, 0, mirror = true)) flipVectorLayerNow(layer, horizontal, content)
+            else flipLayerNow(layer, horizontal)
+        }
+    }
+
+    /**
+     * Flip layer for a vector layer whose brushes don't mirror into themselves (paper grain,
+     * scatter, textured or angled tips; v1.5): its mirrored objects are rendered again instead of
+     * flipping its pixels, as canvas flips do, or a later partial re-render would show seams in
+     * the texture. One step, rendered in the background when it is long (`vectors.update`); a mask
+     * flips with it, in the same step, when the new pixels land.
+     */
+    private fun flipVectorLayerNow(layer: Layer, horizontal: Boolean, content: VectorContent) {
+        val label = flipLabel(horizontal)
+        val mirrored = VectorLayerOps.flipped(content, doc.width, doc.height, horizontal) ?: return flipLayerNow(layer, horizontal)
+        val mask = if (layer.mask != null) flipMaskAction(layer, horizontal, label) else null
+        if (mirrored == content) {
+            // The drawing mirrors into itself: its pixels already are its rendering.
+            if (mask != null) editScope {
+                mask.redo(this)
+                pushUndo(mask)
+                queueEdit(EditEvent(layer, EditTarget.MASK, null, label))
+            }
+            return
+        }
+        if (mask == null) {
+            vectors.update(layer, mirrored, label)
+            return
+        }
+        // The mask bitmap flips right before the new pixels are drawn (the step's edit event sees
+        // both flipped); its spec and its undo action join the step once it is recorded.
+        vectors.updateInternal(
+            layer, mirrored, label, null, null,
+            beforeApply = { mask.flipBitmap(this) },
+            onDone = { applied ->
+                if (!applied) {
+                    mask.flipBitmap(this)
+                } else {
+                    mask.setSpec(this, after = true)
+                    if (undoManager.undoLabel == label) amendLastStep { pushUndo(mask) } else pushUndo(mask)
+                }
+            },
+            attempt = 0,
+        )
+    }
+
+    private fun flipLabel(horizontal: Boolean) = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+
+    /** [layer]'s mask bitmap and spec mirrored (an undo action: undo flips back, redo flips again). */
+    private fun flipMaskAction(layer: Layer, horizontal: Boolean, label: String): FlipMaskAction {
+        val m = Matrix().apply { if (horizontal) setScale(-1f, 1f, doc.width / 2f, 0f) else setScale(1f, -1f, 0f, doc.height / 2f) }
+        val specBefore = layer.maskSpec
+        val specAfter = specBefore?.let { MaskSpecs.transformed(it, m) }
+        if (specBefore != null && specAfter == null) toast("The mask of \"${layer.name}\" is now a painted mask (undo to get the editable mask back)")
+        return FlipMaskAction(label, layer, horizontal, specBefore, specAfter)
+    }
+
+    /** Mirrors a layer's mask (self-inverse bitmap flip) and sets its spec before / after. */
+    private class FlipMaskAction(
+        override val label: String,
+        private val layer: Layer,
+        private val horizontal: Boolean,
+        private val specBefore: MaskSpec?,
+        private val specAfter: MaskSpec?,
+    ) : UndoAction {
+        override val byteSize: Long get() = 256L
+
+        fun flipBitmap(c: EditorController) = c.structural {
+            layer.mask = layer.mask?.let { BitmapUtils.flipped(it, horizontal) }
+            layer.markChanged()
+        }
+
+        fun setSpec(c: EditorController, after: Boolean) {
+            layer.maskSpec = if (after) specAfter else specBefore
+            layer.markChanged()
+            c.notifyLayersChanged()
+        }
+
+        override fun undo(c: EditorController) { flipBitmap(c); setSpec(c, after = false) }
+        override fun redo(c: EditorController) { flipBitmap(c); setSpec(c, after = true) }
     }
 
     private fun flipLayerNow(layer: Layer, horizontal: Boolean) = editScope {
@@ -1245,7 +1329,7 @@ class EditorController(
             }
         }
         flip(this)
-        val label = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+        val label = flipLabel(horizontal)
         val flipAction = LambdaAction(label, onUndo = flip, onRedo = flip)
         // Vector content and mask specs are mirrored with the pixels when they can be (A1 / A5);
         // what can't be is cleared like any pixel edit (text and shapes are, as in v1.4).
