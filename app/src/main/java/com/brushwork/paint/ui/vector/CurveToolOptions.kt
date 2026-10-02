@@ -2,6 +2,8 @@ package com.brushwork.paint.ui.vector
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +51,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -194,7 +197,14 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     val percent = width * 100f
     fun current(): Float = (tool.anchors.getOrNull(index)?.width ?: 1f) * 100f
     fun setPercent(p: Float) = tool.setWidth(index, p / 100f)
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+    // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
+    // chip in front, or on a narrow phone, its slider would start off the screen).
+    val bring = remember { BringIntoViewRequester() }
+    LaunchedEffect(index) {
+        withFrameNanos { }
+        bring.bringIntoView()
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.bringIntoViewRequester(bring).padding(horizontal = 2.dp)) {
         Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
             setPercent(stepThickness(current(), up = false))

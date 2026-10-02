@@ -841,7 +841,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
             // A fill of the line color follows the main color, as it did when it was drawn.
             fillColor = if (fillColor == null || st == null || fillColor == st.color) null else fillColor,
             taper = brushTaper,
-            taperPercent = if (brushTaper) st!!.taperPercent.coerceIn(1f, 50f) else taperPercent,
+            taperPercent = if (brushTaper && st != null) st.taperPercent.coerceIn(1f, 50f) else taperPercent,
         )
     }
 
@@ -879,15 +879,15 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val r = reopened ?: return
         val s = r.session
         val floating = s.floating
-        // Unchanged (or a brush stroke not replayed yet): the path's own pixels.
+        // Unchanged (or a brush stroke whose replay is still waiting): the path's own pixels.
         val useFloating = floating != null && !floating.isRecycled &&
-            (pristine || (strokeMode(r.layer) == CurveStroke.BRUSH && !brushPreview.isLive && sessionSpecs.isEmpty() && sessionGradient == null))
-        if (useFloating) {
+            (pristine || (strokeMode(r.layer) == CurveStroke.BRUSH && !brushPreview.isLive && brushPreview.hasPending && sessionSpecs.isEmpty() && sessionGradient == null))
+        if (floating != null && useFloating) {
             val fr = s.floatingRect
             if (s.floatingScale == 1f) {
-                canvas.drawBitmap(floating!!, fr.left.toFloat(), fr.top.toFloat(), null)
+                canvas.drawBitmap(floating, fr.left.toFloat(), fr.top.toFloat(), null)
             } else {
-                canvas.drawBitmap(floating!!, null, RectF(fr), floatingPaint)
+                canvas.drawBitmap(floating, null, RectF(fr), floatingPaint)
             }
             return
         }
@@ -933,12 +933,25 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         return controller.presetFor(controller.lastPaintTool)
     }
 
-    /** How the path is stroked on [layer] right now (a brush that needs pixels draws a plain line on a vector layer). */
-    private fun strokeMode(layer: Layer): CurveStroke {
+    /**
+     * How the path's line is stored on [layer] (a brush that needs pixels is a plain line on a
+     * vector layer), whatever the points' thickness.
+     */
+    private fun strokeKind(layer: Layer): CurveStroke {
         val s = settings.stroke
         if (s != CurveStroke.BRUSH || !vectorTarget(layer) || brushFitsVector()) return s
         return CurveStroke.PLAIN
     }
+
+    /**
+     * True when every point is at 0 % thickness: the line draws nothing (as a vector layer
+     * renders such a path), only the fill if there is one.
+     */
+    private fun lineDrawsNothing(): Boolean = anchors.isNotEmpty() && !(CurveWidths.maxFactor(anchors) > 0f)
+
+    /** How the path is drawn on [layer] right now: [strokeKind], or no line at all when [lineDrawsNothing]. */
+    private fun strokeMode(layer: Layer): CurveStroke =
+        if (lineDrawsNothing()) CurveStroke.NONE else strokeKind(layer)
 
     /** Message shown once per path when the brush can't be used on a vector layer. */
     private var warnedPlain = false
@@ -950,7 +963,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
     val brushDrawsPlain: Boolean
         get() {
             controller.layersVersion
-            return settings.stroke == CurveStroke.BRUSH && strokeMode(targetLayer ?: controller.doc.activeLayer) == CurveStroke.PLAIN
+            return settings.stroke == CurveStroke.BRUSH && strokeKind(targetLayer ?: controller.doc.activeLayer) == CurveStroke.PLAIN
         }
 
     // ------------------------------------------------------------------ preview
@@ -1161,7 +1174,8 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val color = controller.color
         val orig = r?.original
         val origStroke = orig?.stroke
-        val stroke = when (strokeMode(layer)) {
+        // (A line at 0 % everywhere keeps its style next to a fill: thickness can come back.)
+        val stroke = when (strokeKind(layer)) {
             CurveStroke.PLAIN -> VStrokeStyle(
                 kind = VStrokeKind.PLAIN, color = color, width = lineWidth,
                 cap = origStroke?.takeIf { it.kind == VStrokeKind.PLAIN }?.cap ?: LineCapStyle.ROUND,
@@ -1190,7 +1204,7 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         } else {
             null
         }
-        if (stroke == null && fill == null) return null
+        if (fill == null && (stroke == null || lineDrawsNothing())) return null
         return VPath(
             id = orig?.id ?: 0L,
             opacity = orig?.opacity ?: 1f,
@@ -1257,8 +1271,9 @@ class CurveTool(controller: EditorController, val polyline: Boolean) : Tool(cont
         val g = brushGeometry(path, settings)
         val a = anchors
         val closed = settings.closed && a.size > 2
-        // (The painting tool paints the active layer: a path on another layer is drawn by its layer.)
-        if (vp.stroke?.kind != VStrokeKind.BRUSH || layer !== controller.doc.activeLayer) {
+        // (The painting tool paints the active layer: a path on another layer is drawn by its
+        // layer, as is a brush line at 0 % everywhere, which paints nothing.)
+        if (vp.stroke?.kind != VStrokeKind.BRUSH || strokeMode(layer) != CurveStroke.BRUSH || layer !== controller.doc.activeLayer) {
             brushPreview.cancel()
             val ids = controller.vectors.addObjects(layer, listOf(vp), label)
             // Refused (no memory...): the path stays pending.

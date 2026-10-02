@@ -74,7 +74,9 @@ class CurveOptionsUiRobolectricTest {
         settle()
         val s = slider("Point thickness slider")
         val screenW = activity.window.decorView.width
-        assertTrue("visible without scrolling: ${s.bounds} in $screenW", s.bounds.right <= screenW)
+        // (Its real place: boundsInWindow is clipped to the scrolling strip, so it can't tell.)
+        val right = s.node.positionInWindow.x + s.node.size.width
+        assertTrue("visible without scrolling: ${s.node.positionInWindow.x}..$right in $screenW", s.node.positionInWindow.x >= 0f && right <= screenW)
         assertTrue(SmokeUi.has("Point thickness 100 %"))
 
         // The slider: one in-tool step.
