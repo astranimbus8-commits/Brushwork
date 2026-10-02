@@ -814,7 +814,14 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         // Messages must not land on the layer window, the tool menu or a panel (a snackbar would
         // cover their controls and take their taps): while one is open they show near the top,
         // under the feedback chip. Otherwise above everything at the bottom (✓ / ✕, a panel's pill).
-        val snackbarPlacement = if (layersVisible || sheetHost.hasExpanded || toolMenuVisible) {
+        val snackbarPlacement = if (layersVisible && !layerWindow.short) {
+            // Right above the layer window (and its ✓ / ✕), never on it.
+            val above = screenH - layerWindow.top + IbisDims.PendingBarGap.value + if (pendingWork) PendingButtonSize.value + IbisDims.PendingBarGap.value else 0f
+            Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(horizontalSafe)
+                .padding(bottom = above.dp)
+        } else if (layersVisible || sheetHost.hasExpanded || toolMenuVisible) {
             Modifier
                 .align(Alignment.TopCenter)
                 .windowInsetsPadding(horizontalSafe)
