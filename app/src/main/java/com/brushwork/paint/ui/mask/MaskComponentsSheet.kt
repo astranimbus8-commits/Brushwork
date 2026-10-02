@@ -52,6 +52,7 @@ import com.brushwork.paint.masks.MaskMode
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.masks.RadialMask
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.mask.MaskHandles
 import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.ChoiceChips
@@ -142,6 +143,8 @@ internal fun MaskComponentsSheet(tool: MaskTool) {
             },
             description = "Show adjustment layers on the canvas without their effect (if the canvas misbehaves). Exports, merging and the eyedropper still use the effect.",
         )
+        // v1.6 §3.1a: live adjustment sessions (proxies while dragging, refined when the finger stops).
+        FastAdjustPreviewToggle(c)
     }
 }
 
@@ -225,6 +228,8 @@ private fun ComponentRow(tool: MaskTool, shown: MaskSpec, committed: MaskSpec, c
                 valueRange = 0f..1f,
                 valueText = "${(comp.feather * 100f).toInt()}%",
                 typing = SliderTyping.Percent,
+                // v1.6 §3.4c: the feather's own step (in %), shared with the canvas handle.
+                incrementKey = MaskHandles.FEATHER_KEY,
             )
         }
     }

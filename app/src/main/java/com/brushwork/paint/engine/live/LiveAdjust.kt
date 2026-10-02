@@ -70,6 +70,19 @@ class LiveAdjust(private val c: EditorController) {
     /** Time source in nanoseconds (replaceable in tests; refinement budgets use it too). */
     var clock: () -> Long = System::nanoTime
 
+    /**
+     * "Fast adjustment preview" (`AppSettings.fastAdjustPreview`, default on): sessions may start.
+     * Cached (frames never read the preferences): loaded with the controller and again whenever a
+     * session starts, so a change saved elsewhere counts from the next drag. Setting it saves the
+     * setting; turning it off ends a running session (the next frame is exact).
+     */
+    var fastPreview: Boolean = c.settings.fastAdjustPreview
+        set(v) {
+            field = v
+            if (c.settings.fastAdjustPreview != v) c.settings.fastAdjustPreview = v
+            if (!v && session != null) abort(null)
+        }
+
     // ------------------------------------------------------------------ tunables (tests change them)
 
     /** Most bytes one session's proxy tiles and below-caches may hold. */
@@ -142,6 +155,10 @@ class LiveAdjust(private val c: EditorController) {
     /** Bytes the proxy tiles hold now (tests). */
     internal val proxyBytes: Long get() = proxies?.bytes ?: 0L
 
+    /** How many below-caches were drawn so far (tests: the per-frame key keeps them while nothing below changes). */
+    internal var belowBuilds = 0
+        private set
+
     // ------------------------------------------------------------------ the callers' API
 
     /**
@@ -151,6 +168,8 @@ class LiveAdjust(private val c: EditorController) {
      * always under Robolectric's EXACT policy) it only invalidates, as v1.5 did.
      */
     fun touch(layer: Layer, region: Rect?) {
+        // A new drag picks up a setting changed elsewhere (Settings); frames use the cached value.
+        if (session == null && policy == Policy.LIVE) fastPreview = c.settings.fastAdjustPreview
         if (!canRun(layer) || refused === layer) {
             if (session?.layer === layer) abort(null)
             c.invalidateDoc(region)
@@ -234,6 +253,8 @@ class LiveAdjust(private val c: EditorController) {
         val p = try {
             proxiesFor(s, pending, zoomOf(docToScreen))
         } catch (e: OutOfMemoryError) {
+            // One toast: the rest of this drag runs the exact path (until [end]).
+            refused = s.layer
             abort(OUT_OF_MEMORY)
             return false
         }
@@ -278,11 +299,11 @@ class LiveAdjust(private val c: EditorController) {
     // ------------------------------------------------------------------ frames
 
     private fun canRun(layer: Layer): Boolean =
-        policy == Policy.LIVE && layer.isAdjustmentLayer && layer.visible && c.doc.indexOf(layer) >= 0 && c.settings.fastAdjustPreview
+        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && layer.visible && c.doc.indexOf(layer) >= 0
 
     private fun valid(s: Session): Boolean =
-        policy == Policy.LIVE && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 &&
-            s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height && c.settings.fastAdjustPreview
+        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 &&
+            s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
 
     /** Session tiles that are dirty and intersect [visible] (null: anywhere), in index order. */
     private fun pendingTiles(s: Session, visible: Rect?): IntArray {
@@ -373,6 +394,7 @@ class LiveAdjust(private val c: EditorController) {
         c.compositor.drawDocument(cv, clip, useOverrides = true, target = CompositeTarget(b, proxy.matrix, display = true), layerRange = 0 until split)
         proxy.key.capture(c.doc, split, safe)
         proxy.belowStale = false
+        belowBuilds++
     }
 
     /** The proxy's pixels in document px (the last column / row may reach past the document). */
