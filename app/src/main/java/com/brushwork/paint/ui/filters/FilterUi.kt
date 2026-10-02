@@ -90,6 +90,7 @@ import com.brushwork.paint.filters.FilterCategory
 import com.brushwork.paint.filters.FilterRecents
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
+import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SectionHeader
@@ -274,7 +275,7 @@ fun FilterSessionPanel(session: FilterSession, modifier: Modifier = Modifier) {
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
             ) {
-                if (session.filter.isAdjustmentCapable) AsAdjustmentLayerRow(session, enabled = !busy)
+                if (session.filter.isAdjustmentCapable) AsAdjustmentLayerRow(session, enabledByPanel = !busy)
                 if (!session.filter.livePreview) PreviewOnDemand(session)
                 val params = session.filter.params
                 if (params.isEmpty()) {
@@ -400,8 +401,11 @@ private fun ApplyProgress(session: FilterSession) {
  * selection becomes the adjustment's mask.
  */
 @Composable
-private fun AsAdjustmentLayerRow(session: FilterSession, enabled: Boolean) {
+private fun AsAdjustmentLayerRow(session: FilterSession, enabledByPanel: Boolean) {
     val controller = session.controller
+    // Settings that look at the whole picture (Levels' "Auto levels"...) can't be live.
+    val live = remember(session.filter, session.values) { AdjustmentEffects.isLive(session.filter, session.values) }
+    val enabled = enabledByPanel && live
     Row(
         Modifier
             .fillMaxWidth()
@@ -422,7 +426,11 @@ private fun AsAdjustmentLayerRow(session: FilterSession, enabled: Boolean) {
         Column(Modifier.weight(1f)) {
             Text("As adjustment layer", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             Text(
-                if (controller.selection != null) "Stays editable · the selection becomes its mask" else "Stays editable · changes every layer below",
+                when {
+                    !live -> "Not with these settings: they look at the whole picture"
+                    controller.selection != null -> "Stays editable · the selection becomes its mask"
+                    else -> "Stays editable · changes every layer below"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = BrushworkColors.OnChromeDim,
                 maxLines = 1,

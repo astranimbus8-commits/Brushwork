@@ -434,6 +434,28 @@ class MaskAdjustmentFlowsQaRobolectricTest {
         assertNotNull("undo brings the selection back", c.selection)
     }
 
+    @Test
+    fun asAdjustmentLayerIsRefusedForSettingsThatCantBeLive() {
+        setup()
+        val levels = FilterRegistry.byId("adjust.levels")!!
+        val bw = FilterRegistry.byId("adjust.black_white")!!
+        val layers = c.doc.layers.size
+        val steps = c.undoManager.undoCount
+        // "Auto levels" and a smoothed / anti-aliased Black & White look at the whole picture: a
+        // layer made with them would silently show nothing.
+        c.message = null
+        assertNull(AdjustmentLayerOps.fromFilter(c, levels, levels.defaultValues().set("auto", true)))
+        assertTrue("says why: ${c.message}", c.message?.contains("can't be live") == true)
+        assertNull(AdjustmentLayerOps.fromFilter(c, bw, bw.defaultValues().set("smoothing", 2f)))
+        assertNull(AdjustmentLayerOps.fromFilter(c, bw, bw.defaultValues().set("antialias", true)))
+        assertEquals(layers, c.doc.layers.size)
+        assertEquals(steps, c.undoManager.undoCount)
+        // Manual levels are fine, and they do something.
+        val l = AdjustmentLayerOps.fromFilter(c, levels, levels.defaultValues().set("gamma", 2f))
+        assertNotNull(l)
+        assertNotNull(AdjustmentEffects.mapperOf(l!!.adjustment!!))
+    }
+
     // ------------------------------------------------------------------ merge down
 
     @Test

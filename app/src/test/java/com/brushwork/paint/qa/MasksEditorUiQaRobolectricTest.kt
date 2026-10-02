@@ -157,6 +157,7 @@ class MasksEditorUiQaRobolectricTest {
         section("Tools grid → Masks → + Linear → drag → Adjust → Components") { masksFlow() }
         section("Filters → exposure → Tone → As adjustment layer") { asAdjustmentLayer() }
         section("clone stamp strip") { cloneStrip() }
+        section("Adjust settings that can't be live are refused") { notLiveSettings() }
         dog.interrupt()
         if (failures.isNotEmpty()) {
             val first = failures.first()
@@ -258,6 +259,45 @@ class MasksEditorUiQaRobolectricTest {
         assertEquals(c.doc.indexOf(photo) + 1, c.doc.indexOf(adj))
         assertEquals(steps + 1, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "as adjustment layer")
+    }
+
+    /**
+     * Black & White's anti-aliasing and Levels' "Auto levels" look at neighbours / the whole
+     * picture: an adjustment layer can't apply them live. Switching them on in the Adjust sheet
+     * must not silently turn the effect off; the Filters panel doesn't offer "As adjustment
+     * layer" for such settings either.
+     */
+    private fun notLiveSettings() {
+        val s = editor()
+        val c = s.c
+        val bw = com.brushwork.paint.filters.FilterRegistry.byId("adjust.black_white")!!
+        val adj = c.addAdjustmentLayer(com.brushwork.paint.masks.AdjustmentEffects.defaultSpec(bw), null)!!
+        c.selectTool(ToolId.MASK)
+        val tool = c.tools.getValue(ToolId.MASK) as MaskTool
+        tool.openAdjust()
+        settle()
+        SmokeUi.assertPanelShown("Adjust: ${adj.name}")
+        assertNotNull(com.brushwork.paint.masks.AdjustmentEffects.mapperOf(adj.adjustment!!))
+        assertTrue(scrollIntoView(verticalScrollerOf("Threshold"), "Anti-aliasing", horizontal = false))
+        c.message = null
+        click("Anti-aliasing", exact = true)
+        assertNotNull("the effect still shows", com.brushwork.paint.masks.AdjustmentEffects.mapperOf(adj.adjustment!!))
+        assertTrue("explained: ${c.message}", c.message?.contains("can't be live") == true || has("can't be live"))
+        click("Close", exact = true)
+
+        // Filters panel: Levels with Auto on offers no "As adjustment layer".
+        c.selectLayer(c.doc.layers[1])
+        val levels = com.brushwork.paint.filters.FilterRegistry.byId("adjust.levels")!!
+        c.startFilter(levels)
+        settle()
+        val session = c.filterSession!!
+        assertTrue(SmokeUi.isEnabled("Add as adjustment layer", exact = false))
+        session.update("auto", true)
+        settle()
+        assertFalse("not offered with Auto levels", SmokeUi.isEnabled("Add as adjustment layer", exact = false))
+        session.cancel()
+        settle()
+        Smoke.assertQuiet(c, "not live")
     }
 
     private fun cloneStrip() {
