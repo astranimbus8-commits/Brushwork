@@ -9,6 +9,11 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
+import com.brushwork.paint.vector.VectorOps
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 /**
  * Preview of objects being edited (reopened path or shape, transform lift; v1.5 §5.4; API
@@ -142,7 +147,9 @@ class VectorEditSession internal constructor(
      * position, same id); edited objects without one are removed; replacements with any other id
      * are new objects placed right above the topmost edited one, with new ids. The session ends
      * at once; it is uninstalled (see [cancel]) right before the layer's pixels change — so a
-     * large edit rendering in the background keeps this preview on screen until it lands.
+     * large edit rendering in the background keeps this preview on screen until it lands. A
+     * pure whole-pixel move (each replacement is `VectorOps.transformed` of its object by an
+     * integer translation) goes through `VectorLayers.update`'s shift fast path.
      */
     fun commit(replacements: List<VObject>, label: String, onDone: (Boolean) -> Unit = {}) {
         if (ended) { onDone(false); return }
@@ -172,7 +179,37 @@ class VectorEditSession internal constructor(
             content.copy(objects = out, nextId = next)
         }
         if (after == content) { release(); onDone(true); return }
-        c.vectors.updateInternal(layer, after, label, null, null, { release() }, onDone, 0)
+        c.vectors.updateInternal(layer, after, label, null, pureMove(content, present, replacements), { release() }, onDone, 0)
+    }
+
+    /**
+     * The edit as a [VectorLayers.ShiftHint] when it only moves the edited objects by whole
+     * pixels (every replacement is exactly its object under that translation, as
+     * `VectorOps.transformed` maps it, and nothing is added or removed): the update can then move
+     * the cache pixels instead of rendering (a lifted drawing dragged with Transform). Null
+     * otherwise.
+     */
+    private fun pureMove(content: VectorContent, present: Set<Long>, replacements: List<VObject>): VectorLayers.ShiftHint? {
+        if (replacements.size != present.size || present.isEmpty()) return null
+        val byId = HashMap<Long, VObject>(replacements.size * 2)
+        for (r in replacements) if (r.id !in present || byId.put(r.id, r) != null) return null
+        val first = content.byId(present.first()) ?: return null
+        val moved = byId[first.id] ?: return null
+        val ob = VectorOps.bounds(first)
+        val nb = VectorOps.bounds(moved)
+        if (ob.isEmpty || nb.isEmpty) return null
+        val fx = nb.left - ob.left
+        val fy = nb.top - ob.top
+        if (!fx.isFinite() || !fy.isFinite() || abs(fx) > 1e7f || abs(fy) > 1e7f) return null
+        val dx = fx.roundToInt()
+        val dy = fy.roundToInt()
+        if (dx == 0 && dy == 0) return null
+        val m = floatArrayOf(1f, 0f, dx.toFloat(), 0f, 1f, dy.toFloat(), 0f, 0f, 1f)
+        for (id in present) {
+            val o = content.byId(id) ?: return null
+            if (byId[id] != VectorOps.transformed(o, m)) return null
+        }
+        return VectorLayers.ShiftHint(present, dx, dy)
     }
 
     /**

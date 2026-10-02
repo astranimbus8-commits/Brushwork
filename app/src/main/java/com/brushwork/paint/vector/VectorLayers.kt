@@ -308,6 +308,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
         /** The worker's render of the hole and floating bitmaps (null while waiting for a pending render). */
         var render: Job? = null
         var done = false
+            private set
+        /** Completes when the preparation ends (installed, refused, cancelled). */
+        val completion = CompletableDeferred<Unit>()
+
+        fun markDone() {
+            done = true
+            completion.complete(Unit)
+        }
     }
 
     /**
@@ -321,7 +329,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * hole (nothing is rendered). Otherwise the hole (the other objects within the edited ones'
      * grid tiles) and the floating bitmap (the edited objects, at most 2048 px) are rendered: on
      * the main thread when cheap ([onReady] runs before this returns), else in the background
-     * ([onReady] runs later on the main thread; a newer request answers an older one with null).
+     * ([onReady] runs later on the main thread; a newer request answers an older one with null;
+     * a long preparation shows the busy overlay "Rendering vectors…", whose Stop answers null).
      * Memory guard: hole + floating within a heap / 8 budget (else both are rendered smaller).
      *
      * While an edit still renders in the background, the session is prepared once that edit has
@@ -340,7 +349,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             prep.job = c.scope.launch(Dispatchers.Main) {
                 p.completion.await()
                 if (prep.done) return@launch
-                prep.done = true
+                prep.markDone()
                 if (preparing === prep) preparing = null
                 updateRendering()
                 // Another render may have started meanwhile: then this waits for it too.
@@ -353,7 +362,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     private fun cancelPreparing(p: PreparingEdit) {
         if (p.done) return
-        p.done = true
+        p.markDone()
         p.job?.cancel()
         p.render?.cancel()
         if (preparing === p) preparing = null
@@ -383,7 +392,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val present = ids.filterTo(LinkedHashSet()) { content.byId(it) != null }
         if (present.isEmpty() || !usable(layer)) { onReady(null); return }
         val plan = planEdit(content, present)
-        if (plan.all || !goAsyncUnits(editUnits(plan))) {
+        val units = if (plan.all) 0.0 else editUnits(plan)
+        if (plan.all || !goAsyncUnits(units)) {
             val parts = try {
                 renderEdit(layer.bitmap, plan, tips, renderCache) { true }
             } catch (e: OutOfMemoryError) {
@@ -413,7 +423,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         prep.job = c.scope.launch {
             val parts = try { job.await() } catch (e: CancellationException) { null } catch (e: Throwable) { null }
             if (prep.done) { parts?.let { recycle(it.first, it.second) }; return@launch }
-            prep.done = true
+            prep.markDone()
             if (preparing === prep) preparing = null
             updateRendering()
             if (parts == null) {
@@ -429,6 +439,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
             install(layer, plan, parts.first, parts.second, onReady)
         }
+        // Feedback for a long preparation (the tool waits for it): the busy overlay, at once when
+        // it is expected to take long, else after a short delay; Stop gives up the edit.
+        if (estimateMs(units) > BUSY_AFTER_MS) showPreparing(prep) else c.scope.launch { delay(BUSY_AFTER_MS.toLong()); showPreparing(prep) }
+    }
+
+    private fun showPreparing(prep: PreparingEdit) {
+        if (prep.done || c.busyMessage != null) return
+        c.runBusy(BUSY_LABEL, onCancel = { cancelPreparing(prep) }) { prep.completion.await() }
     }
 
     private fun recycle(vararg b: Bitmap?) { for (x in b) if (x != null && !x.isRecycled) x.recycle() }
@@ -537,12 +555,19 @@ class VectorLayers internal constructor(private val c: EditorController) {
             return if (l.isVectorLayer && c.doc.indexOf(l) >= 0) l else null
         }
 
-    /** The selected objects of [selectedLayer] that still exist (Compose state). */
+    /**
+     * The selected objects of [selectedLayer] that still exist (Compose state). While an edit of
+     * that layer renders in the background, the content it is becoming counts (objects it adds,
+     * e.g. a duplicate, are selectable at once; the Object bar doesn't flicker).
+     */
     val selectedIds: Set<Long>
         get() {
             val ids = selIds
             if (ids.isEmpty()) return ids
-            val content = selectedLayer?.vector ?: return emptySet()
+            val layer = selectedLayer ?: return emptySet()
+            // (Read for Compose: re-evaluated when a background render starts or lands.)
+            val busy = rendering
+            val content = pending?.takeIf { busy && it.layer === layer && !it.finished }?.after ?: layer.vector ?: return emptySet()
             val index = ObjectIndex.of(content)
             return if (ids.all { index.indexOfId(it) >= 0 }) ids else ids.filterTo(HashSet()) { index.indexOfId(it) >= 0 }
         }
@@ -585,7 +610,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
     fun dispose() {
         selLayer = null
         selIds = emptySet()
-        preparing?.let { it.done = true; it.job?.cancel(); it.render?.cancel() }
+        preparing?.let { it.markDone(); it.job?.cancel(); it.render?.cancel() }
         preparing = null
         pending?.let { p ->
             p.finished = true

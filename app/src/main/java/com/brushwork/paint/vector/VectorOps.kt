@@ -105,6 +105,16 @@ object VectorOps {
                 if (b.isEmpty) continue
                 val r = Rect(floor(b.left).toInt() - 1, floor(b.top).toInt() - 1, ceil(b.right).toInt() + 1, ceil(b.bottom).toInt() + 1)
                 if (!r.intersect(sel.bounds)) continue
+                // A stroke: only the part of its dab chain near the selection is tested, and a
+                // dab centred on a selected pixel touches it at once (a lasso around many
+                // strokes stays quick).
+                val near = if (o is VStroke) StrokeNear.of(StrokeHits.dabs(o), sb) else null
+                if (near != null) {
+                    if (near.count == 0) continue
+                    if (near.centreSelected(sel)) { out += o.id; continue }
+                    r.set(near.area)
+                    if (!r.intersect(sb)) continue
+                }
                 val p = probe ?: try {
                     FootprintProbe(sel).also { probe = it }
                 } catch (e: OutOfMemoryError) {
@@ -112,12 +122,82 @@ object VectorOps {
                     out += o.id
                     continue
                 }
-                if (p.touches(footprint(o), r)) out += o.id
+                if (p.touches(near?.footprint() ?: footprint(o), r)) out += o.id
             }
         } finally {
             probe?.release()
         }
         return out
+    }
+
+    /**
+     * The dabs of a stroke's chain ([d]: x, y, radius triples) that reach [area] (a dab, or the
+     * capsule joining it to its neighbour), for [touching]. Not thread-safe.
+     */
+    private class StrokeNear private constructor(private val d: FloatArray, private val keep: BooleanArray, val count: Int, val area: Rect) {
+        /** True when a kept dab's centre lies on a selected pixel (that dab paints it). */
+        fun centreSelected(sel: Selection): Boolean {
+            val m = sel.mask
+            val n = d.size / 3
+            var lx = Float.NaN
+            var ly = Float.NaN
+            for (i in 0 until n) {
+                if (!keep[i]) continue
+                val x = d[3 * i]; val y = d[3 * i + 1]
+                // Neighbouring dabs overlap: sample about one per radius along the chain.
+                val step = max(1f, d[3 * i + 2])
+                if (!lx.isNaN() && abs(x - lx) < step && abs(y - ly) < step) continue
+                lx = x; ly = y
+                if (!(x.isFinite() && y.isFinite())) continue
+                val px = floor(x).toInt(); val py = floor(y).toInt()
+                if (px < 0 || py < 0 || px >= m.width || py >= m.height) continue
+                if ((m.getPixel(px, py) ushr 24) != 0) return true
+            }
+            return false
+        }
+
+        /** The kept dabs and the capsules between kept neighbours, as [footprint] draws a stroke. */
+        fun footprint(): (Canvas, Paint) -> Unit = { c, paint ->
+            val n = d.size / 3
+            paint.style = Paint.Style.FILL
+            for (i in 0 until n) if (keep[i]) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeCap = Paint.Cap.ROUND
+            for (i in 1 until n) {
+                if (!keep[i] || !keep[i - 1]) continue
+                paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
+                c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+            }
+        }
+
+        companion object {
+            fun of(d: FloatArray, area: Rect): StrokeNear {
+                val n = d.size / 3
+                val keep = BooleanArray(n)
+                val l = area.left - 1f; val t = area.top - 1f; val r = area.right + 1f; val b = area.bottom + 1f
+                val box = Rect()
+                var count = 0
+                fun take(i: Int) {
+                    if (keep[i]) return
+                    keep[i] = true
+                    count++
+                    val e = max(0.5f, d[3 * i + 2]) + 1f
+                    val x = d[3 * i]; val y = d[3 * i + 1]
+                    if (x.isFinite() && y.isFinite()) box.union(floor(x - e).toInt(), floor(y - e).toInt(), ceil(x + e).toInt(), ceil(y + e).toInt())
+                }
+                for (i in 0 until n) {
+                    val x = d[3 * i]; val y = d[3 * i + 1]; val e = max(0.5f, d[3 * i + 2])
+                    if (x + e >= l && x - e <= r && y + e >= t && y - e <= b) take(i)
+                    if (i > 0) {
+                        // The capsule from the previous dab (its width is the smaller radius).
+                        val px = d[3 * i - 3]; val py = d[3 * i - 2]
+                        val ce = max(0.5f, min(d[3 * i - 1], d[3 * i + 2]))
+                        if (max(x, px) + ce >= l && min(x, px) - ce <= r && max(y, py) + ce >= t && min(y, py) - ce <= b) { take(i - 1); take(i) }
+                    }
+                }
+                return StrokeNear(d, keep, count, box)
+            }
+        }
     }
 
     /** Side of the squares footprints are tested in by [touching] (one reused ALPHA_8 buffer). */

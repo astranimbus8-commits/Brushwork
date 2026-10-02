@@ -151,6 +151,34 @@ class VectorReviewRobolectricTest {
     }
 
     @Test
+    fun aLongEditPreparationShowsTheBusyOverlayAndStopGivesItUp() {
+        val c = setup(VectorLayers.Policy.SYNC)
+        c.vectors.addObjects(c.l1, objects(), "Add")
+        c.vectors.policy = VectorLayers.Policy.AUTO
+        c.vectors.nsPerUnit = 1e6 // every render "takes" far more than 400 ms
+        var answered = false
+        var session: VectorEditSession? = null
+        c.vectors.beginEdit(c.l1, setOf(2L)) { session = it; answered = true }
+        assertFalse(answered)
+        assertEquals(VectorLayers.BUSY_LABEL, c.busyMessage)
+        val stop = c.busyCancel
+        assertNotNull("Stop is offered", stop)
+        stop!!.invoke()
+        assertTrue(answered)
+        assertNull(session)
+        awaitIdle(c)
+        assertNull(c.busyMessage)
+        assertNull(c.renderOverride)
+        // Without Stop the session is installed when ready and the overlay goes.
+        c.vectors.beginEdit(c.l1, setOf(2L)) { session = it }
+        assertEquals(VectorLayers.BUSY_LABEL, c.busyMessage)
+        awaitIdle(c)
+        assertNull(c.busyMessage)
+        assertSame(session, c.renderOverride)
+        session!!.cancel()
+    }
+
+    @Test
     fun aNewerEditRequestWhileWaitingAnswersTheOlderOneWithNull() {
         val c = setup(VectorLayers.Policy.SYNC)
         c.vectors.addObjects(c.l1, objects(), "Add")
@@ -182,6 +210,75 @@ class VectorReviewRobolectricTest {
         awaitIdle(c)
         assertArrayEquals(fresh(c.l1.vector!!), px(c.l1.bitmap))
         session?.cancel()
+    }
+
+    @Test
+    fun objectsAnEditAddsAreSelectableWhileItRenders() {
+        // The Object bar's Duplicate selects the copies right away: the bar must not vanish
+        // while the copies render in the background.
+        val c = setup(VectorLayers.Policy.SYNC)
+        c.vectors.addObjects(c.l1, objects(), "Add")
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        val base = c.l1.vector!!
+        val (after, newIds) = base.plus(listOf(VectorOps.transformed(base.objects[1], floatArrayOf(1f, 0f, 16f, 0f, 1f, 16f, 0f, 0f, 1f))))
+        c.vectors.update(c.l1, after, "Duplicate")
+        assertTrue(c.vectors.isRendering)
+        c.vectors.setSelection(c.l1, newIds.toSet())
+        assertEquals(newIds.toSet(), c.vectors.selectedIds)
+        assertSame(c.l1, c.vectors.selectedLayer)
+        awaitIdle(c)
+        assertSame(after, c.l1.vector)
+        assertEquals(newIds.toSet(), c.vectors.selectedIds)
+        // Undo removes the copy: it is no longer selected.
+        c.undo()
+        assertTrue(c.vectors.selectedIds.isEmpty())
+    }
+
+    @Test
+    fun anEditSessionCommittingAWholePixelMoveShiftsTheCache() {
+        val c = setup(VectorLayers.Policy.SYNC)
+        // Two separate objects: the ellipse moves, the stroke far away stays.
+        c.vectors.addObjects(c.l1, listOf(ellipse(200f, 200f), stroke(40f, 540f, 640f, 520f, "pen", 9L)), "Add")
+        val before = c.l1.vector!!
+        val pixels = px(c.l1.bitmap)
+        val shifts = c.vectors.shiftCount
+        var session: VectorEditSession? = null
+        c.vectors.beginEdit(c.l1, setOf(1L)) { session = it }
+        val m = floatArrayOf(1f, 0f, 37f, 0f, 1f, 21f, 0f, 0f, 1f)
+        var ok: Boolean? = null
+        session!!.commit(listOf(VectorOps.transformed(before.byId(1L)!!, m)), "Transform objects") { ok = it }
+        assertEquals(true, ok)
+        assertEquals("moved by shifting the cache", shifts + 1, c.vectors.shiftCount)
+        assertNull(c.renderOverride)
+        val now = px(c.l1.bitmap)
+        // The ellipse's pixels moved by (37, 21); the stroke's stayed.
+        for (y in 100 until 320) for (x in 60 until 340) assertEquals(pixels[y * w + x], now[(y + 21) * w + (x + 37)])
+        for (y in 480 until h) for (x in 0 until w) assertEquals(pixels[y * w + x], now[y * w + x])
+        assertEquals(1, c.undoManager.undoCount - 1)
+        c.undo()
+        assertSame(before, c.l1.vector)
+        assertArrayEquals(pixels, px(c.l1.bitmap))
+        // A fractional move is drawn again.
+        c.vectors.beginEdit(c.l1, setOf(1L)) { session = it }
+        session!!.commit(listOf(VectorOps.transformed(before.byId(1L)!!, floatArrayOf(1f, 0f, 10.5f, 0f, 1f, 3f, 0f, 0f, 1f))), "Transform objects")
+        assertEquals(shifts + 1, c.vectors.shiftCount)
+        assertArrayEquals(fresh(c.l1.vector!!), px(c.l1.bitmap))
+    }
+
+    @Test
+    fun mergingAfterAnAsyncEditKeepsBothEdits() {
+        val c = setup(VectorLayers.Policy.SYNC)
+        c.vectors.addObjects(c.l1, objects(), "Add")
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        val base = c.l1.vector!!
+        c.vectors.update(c.l1, base.without(setOf(1L)), "Delete")
+        // A second edit computed from the same (old) content while the first still renders.
+        c.vectors.update(c.l1, base.without(setOf(3L)), "Delete")
+        awaitIdle(c)
+        val now = c.l1.vector!!
+        assertEquals(listOf(2L, 4L), now.objects.map { it.id })
+        assertArrayEquals(fresh(now), px(c.l1.bitmap))
+        assertEquals(3, c.undoManager.undoCount)
     }
 
     // ------------------------------------------------------------------ duplicate with a selection

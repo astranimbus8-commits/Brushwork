@@ -5,11 +5,13 @@ import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.ColorModeOps
+import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -58,7 +60,6 @@ object VectorLayerOps {
         if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.mask != null || upper.maskSpec != null ||
             upper.clipping || upper.adjustment != null) return false
         if (lower.opacity < 1f || lower.mask != null || lower.maskSpec != null || lower.adjustment != null) return false
-        if (lower.locked || !lower.visible) return false
         val idx = c.doc.indexOf(upper)
         if (idx <= 0 || c.doc.layers[idx - 1] !== lower) return false
         c.vectors.flushPending()
@@ -69,31 +70,46 @@ object VectorLayerOps {
             area.set(floor(b.left).toInt(), floor(b.top).toInt(), ceil(b.right).toInt(), ceil(b.bottom).toInt())
         }
         if (!area.intersect(0, 0, c.doc.width, c.doc.height)) area.setEmpty()
-        val lowerPixels = try {
-            if (area.isEmpty) null else Bitmap.createBitmap(lower.bitmap, area.left, area.top, area.width(), area.height())
-        } catch (e: OutOfMemoryError) {
-            return false
-        }
+        val label = "Merge down"
         var ok = false
-        try {
-            c.groupUndo("Merge down") {
-                ok = c.updateLayerData(lower, lower.dataSnapshot().copy(vector = merged), "Merge down", if (area.isEmpty) null else area, EditTarget.CONTENT,
-                    if (area.isEmpty) null else { canvas ->
-                        canvas.drawBitmap(lowerPixels!!, area.left.toFloat(), area.top.toFloat(), null)
-                        canvas.drawBitmap(upper.bitmap, area, area, null)
-                    },
-                )
-                if (!ok) return@groupUndo
-                val at = c.doc.indexOf(upper)
-                val remove = RemoveLayerAction(upper, at, "Merge down")
-                remove.redo(c)
-                c.pushUndo(remove)
-                c.structural { c.doc.activeLayerIndex = c.doc.indexOf(lower) }
+        // Like the raster merge, a locked or hidden lower layer is merged into as well (its
+        // objects stay editable): the step is recorded here, not through the checks of
+        // updateLayerData.
+        c.groupUndo(label) {
+            val before = lower.dataSnapshot()
+            val data = before.copy(vector = merged)
+            val dataAction = LayerDataAction(label, lower, before, data)
+            if (!area.isEmpty) {
+                val rec = c.beginEdit(lower, EditTarget.CONTENT).also { it.preserveData = true }
+                try {
+                    rec.touch(area)
+                    Canvas(lower.bitmap).drawBitmap(upper.bitmap, area, area, null)
+                } catch (e: OutOfMemoryError) {
+                    rec.abort()
+                    return@groupUndo
+                }
+                lower.restoreData(data)
+                if (!c.commitEdit(rec, label, listOf(dataAction))) pushData(c, lower, dataAction, label)
+            } else {
+                lower.restoreData(data)
+                pushData(c, lower, dataAction, label)
             }
-        } finally {
-            lowerPixels?.takeIf { it !== lower.bitmap }?.recycle()
+            val at = c.doc.indexOf(upper)
+            val remove = RemoveLayerAction(upper, at, label)
+            remove.redo(c)
+            c.pushUndo(remove)
+            c.structural { c.doc.activeLayerIndex = c.doc.indexOf(lower) }
+            ok = true
         }
         return ok
+    }
+
+    /** Records [action] (already applied to [layer]) as a data change: saved, redrawn, reported. */
+    private fun pushData(c: EditorController, layer: Layer, action: LayerDataAction, label: String) {
+        layer.markChanged()
+        c.pushUndo(action)
+        c.notifyLayersChanged()
+        c.queueEdit(EditEvent(layer, EditTarget.CONTENT, null, label))
     }
 
     /**
