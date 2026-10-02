@@ -25,3 +25,6 @@ keystore.properties
 Thumbs.db
 # Agent worktrees
 /.wt/
+
+# Kotlin daemon / incremental compiler logs
+.kotlin/
