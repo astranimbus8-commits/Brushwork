@@ -1620,12 +1620,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     /**
      * The brush outline of a shape on vector [layer] can be the painting tool's live stroke: the
-     * stroke paints the active layer's content exactly as the object's replay will (not clipped
-     * by a selection or an alpha lock, not a smudge / blur / watercolor tool that moves pixels).
+     * stroke paints the active layer's content exactly as the object's replay will (started
+     * unclipped by the selection and the alpha lock, see the init block; not a smudge / blur /
+     * watercolor tool that moves pixels).
      */
     private fun liveBrushOnVector(layer: Layer): Boolean {
         if (layer !== controller.doc.activeLayer || !layer.visible || layer.locked) return false
-        if (controller.editTargetOf(layer) != EditTarget.CONTENT || layer.alphaLocked || controller.selection != null) return false
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT) return false
         return !brushMovesPixels()
     }
 
@@ -1985,6 +1986,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     init {
         brushPreview.onLiveChanged = { onBrushLiveChanged() }
+        // The brush outline of a shape object on a vector layer is neither clipped by the
+        // selection nor by alpha lock (objects aren't): its live pixels are then exactly the
+        // object's replay, also while a selection is active (A4's BrushStrokePreview.unclipped).
+        brushPreview.unclipped = { vectorLayerOfPending() != null }
     }
 
     /**
@@ -2394,8 +2399,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onSelectionChanged() {
-        // (Committing an edited brush shape sets the selection aside for a moment.)
-        if (inCommit) return
+        // (Committing an edited brush shape sets the selection aside for a moment, and so does
+        // starting the unclipped live stroke of a shape object's brush outline.)
+        if (inCommit || brushPreview.liftingClip) return
         if (box != null || creatingBox != null) refreshPreview()
     }
 
