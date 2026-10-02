@@ -214,14 +214,53 @@ object SplineBezier {
         private val dim = NurbsGeometry.DIM
         private val h = DoubleArray((p + 1) * dim)
         private val scratch = DoubleArray((p + 1) * dim)
-        private val work = DoubleArray((p + 1) * dim)
+        /** The span's homogeneous polynomial in the power basis (Horner evaluation: ~6× cheaper than de Casteljau per sample). */
+        private val power = DoubleArray((p + 1) * dim)
         private val v0 = DoubleArray(dim); private val d0 = DoubleArray(dim)
         private val v1 = DoubleArray(dim); private val d1 = DoubleArray(dim)
         private val vs = DoubleArray(dim); private val ds = DoubleArray(dim)
 
         fun span(span: Int, out: PieceSink) {
             NurbsGeometry.spanBezier(s, b, span, h, scratch)
-            if (p <= 3 && constantWeight()) exact(out) else approximate(out)
+            if (p <= 3 && constantWeight()) exact(out) else {
+                toPowerBasis()
+                approximate(out)
+            }
+        }
+
+        /** [h] (Bernstein, degree [p]) in the power basis: c_k = C(p, k) Σ_{i ≤ k} (−1)^(k−i) C(k, i) b_i. */
+        private fun toPowerBasis() {
+            for (k in 0..p) {
+                val ck = binom(p, k)
+                for (d in 0 until dim) {
+                    var acc = 0.0
+                    for (i in 0..k) {
+                        val sign = if ((k - i) % 2 == 0) 1.0 else -1.0
+                        acc += sign * binom(k, i) * h[i * dim + d]
+                    }
+                    power[k * dim + d] = ck * acc
+                }
+            }
+        }
+
+        private fun binom(n: Int, k: Int): Double {
+            var r = 1.0
+            for (j in 1..k) r = r * (n - k + j) / j
+            return r
+        }
+
+        /** The span's homogeneous point at [u] into [value] (and d/du into [deriv] when it is not null), by Horner. */
+        private fun horner(u: Double, value: DoubleArray, deriv: DoubleArray?) {
+            for (d in 0 until dim) {
+                var v = power[p * dim + d]
+                var dv = 0.0
+                for (k in p - 1 downTo 0) {
+                    dv = dv * u + v
+                    v = v * u + power[k * dim + d]
+                }
+                value[d] = v
+                if (deriv != null) deriv[d] = dv
+            }
         }
 
         /** All homogeneous weights of the span equal: a polynomial curve (exact cubic). */
@@ -295,7 +334,7 @@ object SplineBezier {
          * into [v], dx, dy into [d].
          */
         private fun at(u: Double, v: DoubleArray, d: DoubleArray) {
-            NurbsGeometry.bezierAt(h, p, u, vs, ds, work)
+            horner(u, vs, ds)
             val w = vs[2]
             val x = vs[0] / w
             val y = vs[1] / w
@@ -333,7 +372,7 @@ object SplineBezier {
             geo[o + 7] = v1[0]; geo[o + 8] = v1[1]; geo[o + 9] = v1[3]
         }
 
-        private val sv = DoubleArray(dim); private val sd = DoubleArray(dim)
+        private val sv = DoubleArray(dim)
         /** The spline at the sample parameters of the piece: [CHECK_SAMPLES] fitted ones, then the points between them. */
         private val qx = DoubleArray(SAMPLE_COUNT); private val qy = DoubleArray(SAMPLE_COUNT)
         /** The standard-form parameter of each sample. */
@@ -345,8 +384,9 @@ object SplineBezier {
         private fun sample(a: Double, c: Double, rho: Double) {
             for (j in 0 until SAMPLE_COUNT) {
                 val f = sf[j]
-                at(a + (c - a) * (rho * f / ((1.0 - f) + rho * f)), sv, sd)
-                qx[j] = sv[0]; qy[j] = sv[1]
+                horner(a + (c - a) * (rho * f / ((1.0 - f) + rho * f)), sv, null)
+                val w = sv[2]
+                qx[j] = sv[0] / w; qy[j] = sv[1] / w
             }
         }
         /**
