@@ -199,6 +199,53 @@ class RequestCoverageV15Test {
         assertNotEquals(before, TextCodec.decode(text2.textData))
     }
 
+    /**
+     * "it should happen when you have at least one finger inside the object selection box or both
+     * but not when they are both just close" — for every object a pinch can scale, not only
+     * Transform's: a shape being drawn and a text being placed (document px, as the canvas hands
+     * the fingers over).
+     */
+    @Test
+    fun theTwoFingerRuleHoldsForShapesAndTextsToo() {
+        val c = controller(Smoke.document(400, 300, layers = 2, whiteBottom = true))
+        // A rectangle being drawn: 100 x 80 around (200, 140).
+        c.selectTool(ToolId.SHAPE)
+        val shape = c.tools.getValue(ToolId.SHAPE) as com.brushwork.paint.tools.vector.ShapeTool
+        drag(c, 150f to 100f, 250f to 180f)
+        val box = shape.box!!
+        assertEquals(100f, box.w, 1f)
+        // Both fingers close beside it (20 px out): the view's gesture, not the shape's.
+        assertTrue("both beside: not the shape's", !c.twoFingerStart(Vec2(200f, 140f), Vec2(130f, 140f), Vec2(270f, 140f)))
+        // One finger on it: the shape scales.
+        assertTrue("one inside: the shape's", c.twoFingerStart(Vec2(260f, 140f), Vec2(220f, 140f), Vec2(300f, 140f)))
+        c.twoFingerGesture(Vec2(0f, 0f), 1.5f, 0f)
+        c.twoFingerEnd(cancelled = false)
+        assertEquals("scaled", 150f, shape.box!!.w, 2f)
+        // Both on it: scales too.
+        assertTrue(c.twoFingerStart(Vec2(200f, 140f), Vec2(180f, 140f), Vec2(220f, 140f)))
+        c.twoFingerGesture(Vec2(0f, 0f), 0.5f, 0f)
+        c.twoFingerEnd(cancelled = false)
+        assertEquals(75f, shape.box!!.w, 2f)
+        shape.discard()
+
+        // A text being placed.
+        c.selectTool(ToolId.TEXT)
+        val text = c.tools.getValue(ToolId.TEXT) as TextTool
+        text.startTextAt(200f, 150f)
+        text.setText("Pinch")
+        text.updateSpec { it.copy(sizePx = 40f) }
+        text.confirmEditor()
+        val size0 = text.item!!.spec.sizePx
+        // Far beside the word (it is about 100 px wide, 50 high): not the text's.
+        assertTrue("both beside: not the text's", !c.twoFingerStart(Vec2(200f, 150f), Vec2(200f, 60f), Vec2(200f, 240f)))
+        assertTrue("one inside: the text's", c.twoFingerStart(Vec2(200f, 200f), Vec2(200f, 150f), Vec2(200f, 250f)))
+        c.twoFingerGesture(Vec2(0f, 0f), 2f, 0f)
+        c.twoFingerEnd(cancelled = false)
+        val item = text.item!!
+        assertTrue("the text grew: ${item.spec.sizePx} from $size0", item.spec.sizePx > size0 * 1.5f)
+        text.discard()
+    }
+
     @Test
     fun toneIsTheFirstColorAdjustmentWithItsSixSlidersAndWorksAsALiveAdjustment() {
         val adjust = FilterRegistry.byCategory().entries.first { it.key == FilterCategory.ADJUST }.value
