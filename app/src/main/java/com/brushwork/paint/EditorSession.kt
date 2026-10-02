@@ -95,7 +95,12 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         controller?.runBusy("Saving…") { saved.await() }
         app.appScope.launch {
             try {
-                controller?.let { c -> runCatching { c.currentTool.onDeactivate() } }
+                controller?.let { c ->
+                    runCatching { c.currentTool.onDeactivate() }
+                    // A vector edit still rendering in the background (v1.5) lands now, so it is
+                    // saved: dispose() would drop it.
+                    runCatching { c.vectors.flushPending() }
+                }
                 save()
                 controller?.dispose()
                 controller = null

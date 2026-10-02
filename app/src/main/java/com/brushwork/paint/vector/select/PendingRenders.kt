@@ -100,6 +100,23 @@ internal object PendingRenders {
         if (st.waiting.isNotEmpty()) watch(c, st)
     }
 
+    /**
+     * Undo or redo is about to run (v1.5 integration, lead; `EditorController.undo` / `redo`):
+     * everything asked for before it lands first, in order, so undo takes back the newest of
+     * those steps (never an older one, with a waiting action landing on top of what was undone
+     * later). The vector service completes its render in flight, then the waiting work runs now,
+     * each piece's own render completed at once. Work that waits for one of A2's own updates
+     * which has not reported back stays queued (it runs when that update reports).
+     */
+    fun settle(c: EditorController) {
+        c.vectors.flushPending()
+        val st = states[c]?.get() ?: return
+        while (st.waiting.isNotEmpty() && st.inFlight == 0) {
+            st.waiting.removeFirst().second.invoke()
+            c.vectors.flushPending()
+        }
+    }
+
     /** True while work queued under [key] waits (e.g. one Object bar action at a time). */
     fun isWaiting(c: EditorController, key: Any): Boolean = states[c]?.get()?.waiting?.any { it.first == key } == true
 

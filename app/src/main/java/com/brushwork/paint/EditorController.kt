@@ -68,6 +68,7 @@ import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
+import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -419,6 +420,9 @@ class EditorController(
         if (session != null) { session.cancel(); return }
         // A pending live edit becomes its step first: undo then takes it back.
         flushDeferredSteps()
+        // So do vector edits still rendering and the object edits waiting for them (v1.5): undo
+        // takes back the newest, and nothing lands on top of what it took back.
+        PendingRenders.settle(this)
         val tool = currentTool
         if (tool.hasPendingWork) {
             // Tools with steps (points of a curve/polygon) take back only the last one.
@@ -437,6 +441,8 @@ class EditorController(
         if (filterSession != null) return
         // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
         flushDeferredSteps()
+        // So do vector edits still rendering and the object edits waiting for them (v1.5).
+        PendingRenders.settle(this)
         val tool = currentTool
         if (tool.hasPendingWork) {
             if (tool.redoStep()) { invalidateOverlay(); return }
@@ -1476,6 +1482,9 @@ class EditorController(
         if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         filterSession?.cancel()
         currentTool.onDeactivate()
+        // A vector edit still rendering lands first (v1.5): the filter previews and applies to
+        // its result, and the render can't land inside the filter's own step later.
+        vectors.flushPending()
         if (!checkEditable()) return
         // A session that closes itself during start() (target not usable) must not stay installed.
         filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
