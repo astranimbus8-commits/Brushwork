@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector.lift
 
+import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Layer
@@ -13,11 +14,13 @@ import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.select.ObjectBounds
 import com.brushwork.paint.vector.select.ObjectTouch
 import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.Job
 import java.lang.ref.WeakReference
 import java.util.WeakHashMap
+import kotlin.math.max
 
 /**
  * The Transform tool on vector layers (v1.5 §4.9, owned by A2): lifts objects (the object
@@ -212,12 +215,23 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
         return begin(layer, content.objects.mapTo(LinkedHashSet()) { it.id }, onReady)
     }
 
+    /** The objects of the lift whose preview is being prepared (see [liftBox]), with their layer. */
+    private class Preparing(layer: Layer, val ids: Set<Long>) {
+        private val ref = WeakReference(layer)
+        val layer: Layer? get() = ref.get()
+    }
+
+    private var preparing: Preparing? = null
+
     /** Starts the preview of [ids] ([onReady] gets the lift, or null); false = refused right away. */
     private fun begin(layer: Layer, ids: Set<Long>, onReady: (ObjectLift?) -> Unit): Boolean {
         request = null
         var refused = false
         var sync = true
+        val prep = Preparing(layer, ids)
+        preparing = prep
         c.vectors.beginEdit(layer, ids) { session ->
+            if (preparing === prep) preparing = null
             if (session == null) {
                 if (sync) refused = true else onReady(null)
                 return@beginEdit
@@ -240,26 +254,38 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
         return !refused
     }
 
+    /** A tap outside the lifted objects' box at [p] (see [tap]). */
+    override fun tapped(p: Vec2): Boolean = tap(p, inside = false, moved = false)
+
     /**
-     * A tap outside the lifted objects' box at [p]: the object there is selected alone and lifted
-     * instead (tapping the same spot again goes one object deeper among overlapping ones); a tap
-     * on empty canvas goes back to all objects. False when nothing would change.
+     * A tap at [p] while objects are lifted: the object there is selected alone and lifted
+     * instead; tapping the same spot again goes one object deeper among overlapping ones (and
+     * round again from the top). Outside the box, a tap on empty canvas goes back to all
+     * objects. Inside the box (lead, v1.5 integration: after the default "every object" lift the
+     * box covers everything, so this is where objects are picked) a tap on empty space does
+     * nothing, and so does any tap once the lifted objects were [moved]: they are not where the
+     * layer's data has them, and the user is placing them. Lifted objects that were moved are
+     * not hit where they were (their hole shows there). False when nothing would change.
      */
-    override fun tapped(p: Vec2): Boolean {
+    override fun tap(p: Vec2, inside: Boolean, moved: Boolean): Boolean {
+        if (inside && moved) return false
         val layer = c.activeLayer
         val content = layer.vector ?: return false
         if (!p.x.isFinite() || !p.y.isFinite()) return false
         val t = c.viewTransform
         val tol = t.screenToDocLength(t.dp(TAP_TOLERANCE_DP))
+        val lifted = current?.takeIf { it.isOpen && it.layer === layer }?.ids
+        val away = if (moved && lifted != null) lifted else emptySet()
         val prev = lastTap?.takeIf { memo ->
-            memo.layer === layer && t.docToScreen(memo.p).distanceTo(t.docToScreen(p)) <= t.dp(SAME_SPOT_DP) &&
+            memo.layer === layer && memo.id !in away && t.docToScreen(memo.p).distanceTo(t.docToScreen(p)) <= t.dp(SAME_SPOT_DP) &&
                 content.byId(memo.id)?.let { VectorOps.hit(it, p, tol) } == true
         }
-        val hit: VObject? = c.vectors.hitTest(layer, p, tol, below = prev?.id)
-        val lifted = current?.takeIf { it.isOpen && it.layer === layer }?.ids
+        val hit: VObject? = if (away.isEmpty()) c.vectors.hitTest(layer, p, tol, below = prev?.id) else hitExcept(content, p, tol, prev?.id, away)
         val v = c.vectors
         if (hit == null) {
             lastTap = null
+            // Empty space inside the box: the lifted objects stay as they are.
+            if (inside) return false
             // Empty canvas: back to every object (unless that is what is lifted already).
             if (lifted != null && lifted.size == content.objects.size) return false
             v.setSelection(null, emptySet())
@@ -271,6 +297,57 @@ internal class VectorLiftProvider(private val c: EditorController) : ObjectLiftP
         liftAll = null
         v.setSelection(layer, setOf(hit.id))
         return true
+    }
+
+    /**
+     * The topmost object of [content] under [p] (within [tol]) that is not one of [away]; with
+     * [below], only objects under that one, else from the top again (as `VectorLayers.hitTest`).
+     */
+    private fun hitExcept(content: VectorContent, p: Vec2, tol: Float, below: Long?, away: Set<Long>): VObject? {
+        val objs = content.objects
+        val pad = if (tol.isFinite()) max(0f, tol) else 0f
+        fun hits(o: VObject): Boolean {
+            if (o.id in away) return false
+            val b = ObjectBounds.of(content, o)
+            if (p.x < b.left - pad || p.x > b.right + pad || p.y < b.top - pad || p.y > b.bottom + pad) return false
+            return VectorOps.hit(o, p, tol)
+        }
+        val from = below?.let { id -> objs.indexOfFirst { it.id == id } } ?: -1
+        for (i in (if (from >= 0) from - 1 else objs.lastIndex) downTo 0) if (hits(objs[i])) return objs[i]
+        if (from >= 0) for (i in objs.lastIndex downTo from) if (hits(objs[i])) return objs[i]
+        return null
+    }
+
+    /**
+     * The box (document px) of the objects a lift of [layer] shows: those being prepared, else
+     * the ones [lift] would take now (the object selection, else the pixel selection's bounds,
+     * else every object); null for a layer without objects.
+     */
+    override fun liftBox(layer: Layer): RectF? {
+        val content = layer.vector ?: return null
+        if (content.objects.isEmpty()) return null
+        preparing?.takeIf { it.layer === layer }?.let { return boxOf(content, it.ids) }
+        val v = c.vectors
+        val la = liftAll
+        val all = la != null && la.selection === c.selection && !(v.selectedLayer === layer && v.selectedIds.isNotEmpty())
+        if (!all && v.selectedLayer === layer) {
+            val ids = v.selectedIds
+            if (ids.isNotEmpty()) return boxOf(content, ids)
+        }
+        val sel = c.selection
+        if (!all && sel != null) return if (sel.isEmpty) null else RectF(sel.bounds)
+        return boxOf(content, null)
+    }
+
+    /** The union of the paint bounds of [ids] of [content] (null = every object), or null when empty. */
+    private fun boxOf(content: VectorContent, ids: Set<Long>?): RectF? {
+        val box = RectF()
+        for (o in content.objects) {
+            if (ids != null && o.id !in ids) continue
+            val b = ObjectBounds.of(content, o)
+            if (!b.isEmpty) box.union(b)
+        }
+        return box.takeUnless { it.isEmpty }
     }
 
     companion object {

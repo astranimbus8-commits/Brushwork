@@ -319,6 +319,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** True while an object lift is being prepared (its provider calls back later). */
     private var objectLiftPending = false
 
+    /** The provider and layer of the object lift being prepared (a pinch meanwhile is judged by its box). */
+    private var pendingObjectProvider: ObjectLiftProvider? = null
+    private var pendingObjectLayer: Layer? = null
+
+    /** Identifies the object lift the tool waits for (an answer to an abandoned one is let go). */
+    private var objectLiftTicket: Any? = null
+
     /** The provider that lifts objects of [layer] for [target], or null to lift pixels. */
     private fun objectProviderFor(layer: Layer, target: EditTarget): ObjectLiftProvider? {
         if (!layer.isVectorLayer || target != EditTarget.CONTENT) return null
@@ -547,16 +554,24 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     override fun onUp(p: ToolPoint) {
         val g = gesture ?: return
-        // Lifted objects: a tap outside the box selects the object there instead (A2).
+        // Lifted objects: a tap selects the object there instead (A2), outside the box or inside
+        // it (tapping one object of the lifted drawing picks it alone, tapping the same spot
+        // again goes one object deeper); the provider decides.
         val s0 = session
         val provider = s0?.objectProvider
-        if (s0 != null && provider != null && !g.dragging && g.hit.kind == HandleKind.MOVE &&
-            p.x.isFinite() && p.y.isFinite() && !onQuad(g.start, Vec2(p.x, p.y), 0f) && provider.tapped(Vec2(p.x, p.y))
-        ) {
+        if (s0 != null && provider != null && !g.dragging && g.hit.kind == HandleKind.MOVE && p.x.isFinite() && p.y.isFinite()) {
+            val q = Vec2(p.x, p.y)
+            // (Judged on the state before this tap.)
+            val taken = provider.tap(q, inside = onQuad(g.start, q, 0f), moved = !g.start.sameGeometry(s0.initial))
             gesture = null
             clearGuides()
-            applyPending(s0, moveSelection = false)
-            if (session == null) beginLift()
+            // On lifted objects a tap selects (or does nothing): the finger's jitter while tapping
+            // never moves them, and the pending transform is applied as it was before the tap.
+            if (transformState != g.start) applyState(g.start)
+            if (taken) {
+                applyPending(s0, moveSelection = false)
+                if (session == null) beginLift()
+            }
             controller.invalidateOverlay()
             return
         }
@@ -841,7 +856,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val p = pinch ?: return
         if (p.start == null) {
             // Still lifting: a finished pinch is applied when the content lands.
-            if (cancelled || liftJob == null) pinch = null else p.ended = true
+            if (cancelled || (liftJob == null && !objectLiftPending)) pinch = null else p.ended = true
             return
         }
         finishPinch(p, cancelled)
@@ -879,12 +894,23 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val pts = listOf(a, b)
         // Already being prepared (the first finger's touch started it): the pixels under the
         // fingers tell whether they are on the content.
-        if (liftJob != null || objectLiftPending) return !objectLiftPending && probe(src, pts, probeRadius)
-        val objects = objectProviderFor(src.layer, src.target) != null
+        if (liftJob != null) return probe(src, pts, probeRadius)
+        // Vector objects (v1.5): judged by the box their lift will show, also while that lift is
+        // still being prepared in the background (it takes the pinch over when it lands).
+        val provider = if (objectLiftPending) pendingObjectProvider.takeIf { pendingObjectLayer === src.layer } else objectProviderFor(src.layer, src.target)
+        if (objectLiftPending && provider == null) return false
+        if (provider != null) {
+            val box = provider.liftBox(src.layer)
+            val onObjects = if (box != null) PinchTargeting.acceptsRect(a, b, box, t) else onContent(src, a, b, pts, probeRadius) == true
+            if (!onObjects) return false
+            if (objectLiftPending) return true
+            beginLift()
+            return session != null || objectLiftPending
+        }
         val sel = controller.selection
         if (sel != null) {
             if (!PinchTargeting.acceptsRect(a, b, RectF(sel.bounds), t)) return false
-            return if (objects) beginLift() else lift(src, sel.bounds, sel)
+            return lift(src, sel.bounds, sel)
         }
         val known = if (isSmall(src.bitmap)) {
             ContentBounds.of(src.bitmap, src.empty) ?: return false
@@ -893,12 +919,28 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         if (known != null) {
             if (!PinchTargeting.acceptsRect(a, b, RectF(known), t)) return false
-            if (!objects && isSmall(src.bitmap)) return lift(src, known, null)
+            if (isSmall(src.bitmap)) return lift(src, known, null)
         } else if (!probe(src, pts, probeRadius)) {
             return false
         }
         beginLift()
         return session != null || liftJob != null
+    }
+
+    /**
+     * Whether finger [a] or [b] is on what a lift of [src] would take, judged by its pixels: the
+     * selection's bounds, the content bounds (known or found on a small layer), else the pixels
+     * right under the fingers. Null when a small layer is empty.
+     */
+    private fun onContent(src: LiftSource, a: Vec2, b: Vec2, pts: List<Vec2>, probeRadius: Float): Boolean? {
+        val t = controller.viewTransform
+        controller.selection?.let { return PinchTargeting.acceptsRect(a, b, RectF(it.bounds), t) }
+        val known = if (isSmall(src.bitmap)) {
+            ContentBounds.of(src.bitmap, src.empty) ?: return null
+        } else {
+            controller.snapping.bounds(src.layer).takeIf { src.target == EditTarget.CONTENT }
+        }
+        return if (known != null) PinchTargeting.acceptsRect(a, b, RectF(known), t) else probe(src, pts, probeRadius)
     }
 
     /** True when [src] has content within [radius] (capped) of one of [pts]: a few small reads, no full scan. */
@@ -1174,21 +1216,38 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val layer = src.layer
         objectLiftPending = true
         isPreparing = true
+        pendingObjectProvider = provider
+        pendingObjectLayer = layer
+        val ticket = Any()
+        objectLiftTicket = ticket
         val accepted = provider.lift(layer) { lift ->
-            objectLiftPending = false
-            isPreparing = false
-            if (lift == null) return@lift
+            // Given up meanwhile (✓, ✕, another tool, a newer lift): the objects are let go.
+            if (objectLiftTicket !== ticket) { lift?.release(); return@lift }
+            endObjectLiftWait()
+            if (lift == null) { dropWaitingPinch(); return@lift }
             val stillWanted = session == null && controller.activeToolId == ToolId.TRANSFORM && controller.activeLayer === layer &&
                 controller.doc.indexOf(layer) >= 0 && !lift.floating.isRecycled && lift.sourceRect.width() > 0 && lift.sourceRect.height() > 0
-            if (!stillWanted) { lift.release(); return@lift }
+            if (!stillWanted) { lift.release(); dropWaitingPinch(); return@lift }
             startObjectSession(lift, provider)
         }
         if (!accepted) {
-            objectLiftPending = false
-            isPreparing = false
+            endObjectLiftWait()
             return false
         }
         return session != null
+    }
+
+    private fun endObjectLiftWait() {
+        objectLiftPending = false
+        isPreparing = false
+        pendingObjectProvider = null
+        pendingObjectLayer = null
+        objectLiftTicket = null
+    }
+
+    /** A pinch that waited for a lift which brought nothing has nothing to act on. */
+    private fun dropWaitingPinch() {
+        if (session == null && pinch?.start == null) pinch = null
     }
 
     private fun startObjectSession(lift: ObjectLift, provider: ObjectLiftProvider) {
@@ -1358,8 +1417,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun cancelJobs() {
         activationJob?.cancel(); activationJob = null
         liftJob?.cancel(); liftJob = null
-        objectLiftPending = false
-        isPreparing = false
+        endObjectLiftWait()
         // A pinch still waiting for its lift has nothing to act on any more.
         if (pinch?.start == null) pinch = null
     }

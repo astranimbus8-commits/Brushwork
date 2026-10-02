@@ -34,6 +34,16 @@ enum class SampleSource(val label: String) {
     CANVAS("Canvas"),
 }
 
+/**
+ * A plain tap of Lasso / Select shape in "New" mode: nothing is selected any more. That is the
+ * pixel selection (one "Deselect" step, as before) and, on a vector layer, the selected objects
+ * too (v1.5: object selection is not history, so that part records nothing).
+ */
+internal fun deselectOnTap(c: EditorController) {
+    if (c.selection != null) c.deselect()
+    if (c.vectors.selectedLayer != null) c.vectors.setSelection(null, emptySet())
+}
+
 /** ALPHA_8 selection-mask helpers (thread-safe: they only touch the bitmaps passed in). */
 internal object SelectionMasks {
     /** Reads [rect] (inside the mask) of an ALPHA_8 mask as packed bytes. */

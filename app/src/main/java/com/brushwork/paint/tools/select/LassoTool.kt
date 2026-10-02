@@ -206,7 +206,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
             val tap = stroke.extent() < docLength(8f)
             if (tap || stroke.size < 3) {
                 stroke.clear()
-                if (tap && mode == SelectionMode.REPLACE && controller.selection != null) controller.deselect()
+                if (tap && mode == SelectionMode.REPLACE) deselectOnTap(controller)
             } else {
                 val path = stroke.toPath()
                 stroke.clear()
