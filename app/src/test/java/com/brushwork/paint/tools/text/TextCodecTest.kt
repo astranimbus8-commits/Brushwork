@@ -50,7 +50,7 @@ class TextCodecTest {
         val item = TextItem("Hi", TextSpec(font = TextFont.SERIF, fontId = id, fontName = "Comic Pop", box = TextBoxSpec(width = 200f, minHeight = 150f)))
         val json = TextCodec.encode(item)
         assertTrue(json, json.contains("\"fontId\":\"$id\"") && json.contains("\"fontName\":\"Comic Pop\""))
-        assertTrue(json.contains("\"version\":2"))
+        assertTrue(json.contains("\"version\":${TextCodec.VERSION}"))
         assertEquals(item, TextCodec.decode(json))
         assertEquals("Comic Pop", item.spec.fontLabel)
         assertTrue(item.spec.usesImportedFont)

@@ -226,11 +226,97 @@ data class TextSpec(
     }
 }
 
+/** What text wraps around: the opaque outline of the picture, or its content bounds. */
+@Serializable
+enum class WrapContour(val label: String) {
+    SHAPE("Shape"),
+    BOX("Box"),
+}
+
+/** On which side(s) of the picture the lines of wrapped text go. */
+@Serializable
+enum class WrapSides(val label: String) {
+    /** Per line, the side with more room. */
+    LARGEST("Largest side"),
+
+    /** A line fills the room left of the picture, then continues right of it. */
+    BOTH("Both sides"),
+    LEFT("Left only"),
+    RIGHT("Right only"),
+}
+
+/** One closed outline of a wrap obstacle, in DOCUMENT pixels (the closing edge is implicit). */
+@Serializable
+data class WrapPolygon(val xs: List<Float>, val ys: List<Float>) {
+    val size: Int get() = xs.size
+}
+
+/**
+ * Text flowing around a picture (v1.5, horizontal straight text only). [sourceLayerId] names the
+ * picture layer (0 = off); [polygons] is its outline frozen when the text was last laid out, in
+ * DOCUMENT pixels: rendering uses only these polygons, never the source layer, so a text renders
+ * the same after a reload, in an export or with its picture deleted. The text keeps [gapPx] away
+ * from the outline; runs narrower than [minRunEm] (in em) are left empty.
+ */
+@Serializable
+data class TextWrapSpec(
+    val sourceLayerId: Long = 0,
+    val contour: WrapContour = WrapContour.SHAPE,
+    val gapPx: Float = 0f,
+    val sides: WrapSides = WrapSides.LARGEST,
+    val polygons: List<WrapPolygon> = emptyList(),
+    val minRunEm: Float = 1.5f,
+) {
+    /** True when a picture is chosen (the layout wraps; see [TextItem.wrapActive]). */
+    val isOn: Boolean get() = sourceLayerId != 0L
+
+    /** Total number of outline points. */
+    val pointCount: Int get() = polygons.sumOf { it.size }
+
+    /**
+     * Usable numbers only: the gap and the shortest run kept in range, outlines with a non-finite
+     * point, fewer than three points or mismatched coordinate lists dropped, and at most
+     * [MAX_STORED_POINTS] points kept (damaged or crafted data can't make a layout slow).
+     */
+    fun sanitized(): TextWrapSpec {
+        val g = if (gapPx.isFinite()) gapPx.coerceIn(0f, MAX_GAP_PX) else 0f
+        val run = if (minRunEm.isFinite()) minRunEm.coerceIn(MIN_RUN_EM, MAX_RUN_EM) else 1.5f
+        var budget = MAX_STORED_POINTS
+        val polys = ArrayList<WrapPolygon>(polygons.size)
+        for (p in polygons) {
+            if (p.xs.size != p.ys.size || p.xs.size < 3 || p.xs.size > budget) continue
+            if (p.xs.any { !it.isFinite() || kotlin.math.abs(it) > MAX_COORD } || p.ys.any { !it.isFinite() || kotlin.math.abs(it) > MAX_COORD }) continue
+            budget -= p.xs.size
+            polys += p
+        }
+        val sameList = polys.size == polygons.size
+        return if (g == gapPx && run == minRunEm && sameList && sourceLayerId >= 0L) this
+        else copy(gapPx = g, minRunEm = run, polygons = if (sameList) polygons else polys, sourceLayerId = sourceLayerId.coerceAtLeast(0L))
+    }
+
+    companion object {
+        /** Largest distance between the text and the picture (the Distance field's range). */
+        const val MAX_GAP_PX = 200f
+        const val MIN_RUN_EM = 0.5f
+        const val MAX_RUN_EM = 20f
+
+        /** Outline points a contour is simplified to (design: at most 600). */
+        const val MAX_POINTS = 600
+
+        /** Points accepted when reading stored data. */
+        const val MAX_STORED_POINTS = 4000
+
+        /** Coordinates far beyond any canvas are damaged data. */
+        const val MAX_COORD = 1_000_000f
+    }
+}
+
 /**
  * A placed text object: the block of laid-out text is centered on ([cx], [cy]) in document
  * pixels and rotated by [rotationDeg] (clockwise on screen) around that center. When [path] is
  * active the text follows that shape instead (its geometry is in document pixels); [cx]/[cy]/
  * [rotationDeg] then move along with it, so switching back to straight text puts it nearby.
+ * [wrap] makes horizontal straight text flow around a picture (see [TextWrapSpec]).
  */
 @Serializable
 data class TextItem(
@@ -240,7 +326,14 @@ data class TextItem(
     val cy: Float = 0f,
     val rotationDeg: Float = 0f,
     val path: TextPathSpec = TextPathSpec(),
+    val wrap: TextWrapSpec = TextWrapSpec(),
 ) {
+    /** Whether the text can wrap around a picture: horizontal straight text. */
+    val canWrap: Boolean get() = !spec.vertical && !path.isActive
+
+    /** True when the layout flows around [wrap]'s outline (on, horizontal and straight). */
+    val wrapActive: Boolean get() = wrap.isOn && canWrap
+
     /** Name for the layer the text is committed into: "Text: " + the first 12 characters. */
     fun layerName(): String {
         val flat = text.trim().replace(Regex("\\s+"), " ")
@@ -316,6 +409,7 @@ data class TextItem(
                 rotationDeg = f(p.rotationDeg, d.rotationDeg), offset = f(p.offset, d.offset),
                 baselineShift = f(p.baselineShift, d.baselineShift),
             ),
+            wrap = wrap.sanitized(),
         )
     }
 

@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.WrapText
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
@@ -27,6 +28,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
@@ -56,7 +58,10 @@ fun TextToolOptions(tool: TextTool) {
             }
             else -> {
                 StripButton(Icons.Filled.Edit, "Edit text") { tool.openEditor() }
-                StripButton(Icons.Filled.Tune, "Numbers") { tool.numbersOpen = true }
+                StripButton(Icons.Filled.Tune, "Numbers") {
+                    tool.wrapSheetOpen = false
+                    tool.numbersOpen = true
+                }
             }
         }
         ToolIconButton(
@@ -71,6 +76,8 @@ fun TextToolOptions(tool: TextTool) {
         Spacer(Modifier.width(4.dp))
         Hint(
             when {
+                // Wrap is set but the text can't wrap (vertical, on a path).
+                item != null && item.wrap.isOn && !item.canWrap -> TextTool.WRAP_HORIZONTAL_ONLY
                 onPath -> "Drag the dots to shape the path, two fingers to scale or turn"
                 item != null && item.spec.box.wrapFor(item.spec.vertical) > 0f ->
                     if (item.spec.vertical) "Bottom / side handles: box size" else "Side / bottom handles: box size"
@@ -82,6 +89,7 @@ fun TextToolOptions(tool: TextTool) {
     }
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)
+    if (tool.wrapSheetOpen && item != null && !tool.editorOpen) TextWrapSheet(tool)
 }
 
 /** Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog. */
@@ -128,11 +136,28 @@ fun FrameDividerOptions(tool: FrameDividerTool) {
 }
 
 /**
- * The "Wrap" chip of the text options (text flowing around a picture, v1.5 §4.1; owned by A7):
- * opens the wrap sheet. Foundation slot: shows nothing yet.
+ * The "Wrap" chip of the text options (text flowing around a picture, v1.5 §4.1): opens the wrap
+ * sheet (a text that doesn't wrap yet starts wrapping around the default picture). Highlighted
+ * while the text wraps; dimmed for vertical text and text on a path, where a tap explains that
+ * wrap works with horizontal text.
  */
 @Composable
-internal fun WrapChip(tool: TextTool) {}
+internal fun WrapChip(tool: TextTool) {
+    val item = tool.item
+    val wrappable = item != null && item.canWrap
+    val on = item != null && item.wrapActive
+    ToolIconButton(
+        icon = Icons.AutoMirrored.Filled.WrapText,
+        contentDescription = when {
+            item != null && !item.canWrap -> "Wrap around picture (works with horizontal text)"
+            on -> "Wrap around picture: on"
+            else -> "Wrap around picture"
+        },
+        onClick = { tool.openWrapSheet() },
+        selected = on,
+        modifier = Modifier.alpha(if (wrappable) 1f else 0.45f),
+    )
+}
 
 @Composable
 private fun Hint(text: String) {

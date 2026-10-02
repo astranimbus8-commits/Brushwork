@@ -25,7 +25,6 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
-import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
@@ -115,6 +114,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
     /** Replace the text (true) or add to it. */
     var placeholderReplace by mutableStateOf(true)
 
+    /** The "Wrap around a picture" sheet is showing (v1.5). */
+    var wrapSheetOpen by mutableStateOf(false)
+
+    /** The outline of the picture a pending text wraps around is drawn (dashed). */
+    var showWrapOutline by mutableStateOf(true)
+
+    init {
+        // The re-flow listener skips the text open here and tells this tool when its picture changes.
+        controller.textWrap.attach(this)
+    }
+
     override val hasPendingWork: Boolean get() = item != null
 
     /** A text layer that was only tapped (nothing changed yet) doesn't swallow an undo. */
@@ -177,6 +187,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
             controller.toast("Layer limit reached (${controller.maxLayers}) for this canvas size: delete or merge a layer to add text")
             return
         }
+        rememberVectorLayer()
         endLayerEdit()
         item = TextItem("", specForNewText(), x.coerceIn(0f, doc.width.toFloat()), y.coerceIn(0f, doc.height.toFloat()))
         editorBackup = null
@@ -203,11 +214,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
             return false
         }
         if (!controller.checkEditable(layer)) return false
+        // The vector layer to go back to (v1.5): the active one, or the one an earlier text came from.
+        val back = controller.activeLayer.takeIf { it.isVectorLayer } ?: vectorReturn
         // Finish another pending text first (placing it adds a layer).
-        if (item != null && !commitItem()) discard()
+        if (item != null && !commitItem()) discardItem()
         if (doc.indexOf(layer) < 0) return false
         // Selecting pauses this tool (onDeactivate/onActivate); nothing is pending at this point.
         controller.selectLayer(layer)
+        vectorReturn = back
         editingLayer = layer
         loadedItem = loaded
         loadedInk = inkOf(layer, loaded)
@@ -217,6 +231,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
         layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
         loadedInk?.let { controller.tiles.invalidate(it) }
         item = loaded
+        // A wrapped text whose picture changed while it couldn't follow (it was locked, or the
+        // picture's mask was switched on or off): shown, and on ✓ committed, around the picture
+        // as it is now. (Unchanged: nothing is pending, a tap records no step.)
+        refreshedWrap(loaded)?.let { item = it }
         if (TextRenderer.isFontMissing(loaded.spec)) {
             controller.toast("The font \"${loaded.spec.fontLabel}\" isn't on this device: the text shows in ${loaded.spec.font.label} until it is imported again")
         }
@@ -334,12 +352,20 @@ class TextTool(controller: EditorController) : Tool(controller) {
             if (deleteEmptiedLayer()) {
                 editorOpen = false
                 editorBackup = null
+                returnToVectorLayer()
             }
             return
         }
         editorOpen = false
         editorBackup = null
-        if (cur == null || cur.text.isBlank()) item = null else nextSpec = styleToRemember(cur.spec)
+        if (cur == null || cur.text.isBlank()) {
+            item = null
+            // Nothing was placed: the active layer never changed.
+            vectorReturn = null
+            wrapSheetOpen = false
+        } else {
+            nextSpec = styleToRemember(cur.spec)
+        }
         controller.invalidateOverlay()
     }
 
@@ -348,6 +374,10 @@ class TextTool(controller: EditorController) : Tool(controller) {
         editorOpen = false
         item = if (editingNew) null else editorBackup ?: item
         editorBackup = null
+        if (item == null) {
+            vectorReturn = null
+            wrapSheetOpen = false
+        }
         controller.invalidateOverlay()
     }
 
@@ -359,14 +389,14 @@ class TextTool(controller: EditorController) : Tool(controller) {
      */
     private fun deleteEmptiedLayer(): Boolean {
         val layer = editingLayer ?: return true
-        if (doc.indexOf(layer) < 0) { discard(); return true }
+        if (doc.indexOf(layer) < 0) { discardItem(); return true }
         if (doc.layers.size <= 1) {
-            discard()
+            discardItem()
             controller.toast("The text is empty, but a drawing needs at least one layer: the old text was kept")
             return true
         }
         if (!controller.checkEditable(layer)) return false
-        discard()
+        discardItem()
         controller.deleteLayer(layer)
         controller.toast("Text layer deleted — undo to restore")
         return true
@@ -492,7 +522,17 @@ class TextTool(controller: EditorController) : Tool(controller) {
      * Turns the fixed box size on (lines wrap at the current natural width; columns at the
      * current natural height) or off (the box fits the text).
      */
-    fun setFixedBox(on: Boolean) = updateSpec { s ->
+    fun setFixedBox(on: Boolean) {
+        // Lines can only flow around a picture inside a box of fixed width (a box fitting the
+        // text would be one long line).
+        if (!on && item?.wrapActive == true) {
+            controller.toast(WRAP_NEEDS_WIDTH)
+            return
+        }
+        setFixedBoxSpec(on)
+    }
+
+    private fun setFixedBoxSpec(on: Boolean) = updateSpec { s ->
         val box = s.box
         // Off: the box fits the text again (its fixed other side goes too).
         if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f, minWidth = 0f) else box.copy(width = 0f, minHeight = 0f))
@@ -550,6 +590,172 @@ class TextTool(controller: EditorController) : Tool(controller) {
         }
     }
 
+    // ------------------------------------------------------------------ wrap around a picture (v1.5 §4.1)
+
+    /** Outlines of layers, shared with the re-flow listener. */
+    private val contours: WrapContours get() = controller.textWrap.contours
+
+    /** Whether the current text can wrap around a picture (horizontal straight text). */
+    val canWrap: Boolean get() = item?.canWrap == true
+
+    /**
+     * Layers the current text can wrap around, top first: every layer but text layers,
+     * adjustment layers and the text's own layer. A picture may be above or below the text.
+     */
+    fun wrapSources(): List<Layer> = doc.layers.asReversed().filter { it !== editingLayer && !it.isTextLayer && !it.isAdjustmentLayer }
+
+    /** The layer the current text wraps around (null when wrap is off or that layer was deleted). */
+    fun wrapSourceLayer(): Layer? {
+        val w = item?.wrap ?: return null
+        if (!w.isOn) return null
+        return doc.layerById(w.sourceLayerId)?.takeIf { !it.isTextLayer && !it.isAdjustmentLayer }
+    }
+
+    /** Wrap is on but its picture layer is gone: the text keeps the last outline. */
+    val wrapSourceDeleted: Boolean get() = item?.wrap?.isOn == true && wrapSourceLayer() == null
+
+    /** Document bounds of [t]'s box (straight text), or null. */
+    private fun boxBounds(t: TextItem): RectF? {
+        val block = preparedFor(t).block ?: return null
+        val c = t.corners(block.width, block.height)
+        return RectF(c.minOf { it.x }, c.minOf { it.y }, c.maxOf { it.x }, c.maxOf { it.y }).takeIf { it.width() > 0f && it.height() > 0f }
+    }
+
+    /**
+     * The picture a text wraps around by default: the topmost visible layer of [wrapSources]
+     * whose content overlaps [t]'s box and covers less than 90 % of it (so a background is never
+     * chosen); null when none does.
+     */
+    fun defaultWrapSource(t: TextItem? = item): Layer? {
+        val text = t ?: return null
+        val box = boxBounds(text) ?: return null
+        val area = box.width() * box.height()
+        for (l in wrapSources()) {
+            if (!l.visible) continue
+            val b = contours.outline(l)?.bounds ?: continue
+            val inter = RectF(b)
+            if (!inter.intersect(box)) continue
+            if (inter.width() * inter.height() < WRAP_DEFAULT_MAX_COVER * area) return l
+        }
+        return null
+    }
+
+    /**
+     * The Wrap chip: opens the wrap sheet. A text that doesn't wrap yet starts wrapping around
+     * [defaultWrapSource] (when there is one; the sheet shows Off otherwise). Vertical text and
+     * text on a path can't wrap (a message says so).
+     */
+    fun openWrapSheet() {
+        if (item == null) {
+            val active = controller.activeLayer
+            // No pending text but a text layer is active (the strip offers "Edit text"): wrap that
+            // one (editLayer says why when it can't be edited).
+            if (!active.isTextLayer) {
+                controller.toast("Tap the canvas to add a text, then wrap it around a picture")
+                return
+            }
+            if (!editLayer(active)) return
+        }
+        val cur = item ?: return
+        if (!cur.canWrap) {
+            controller.toast(WRAP_HORIZONTAL_ONLY)
+            return
+        }
+        numbersOpen = false
+        if (!cur.wrap.isOn) defaultWrapSource(cur)?.let { setWrapSource(it) }
+        wrapSheetOpen = true
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * Wraps the current text around [layer]'s picture (null = off). The first time, the distance
+     * becomes 0.3 em; a text without a fixed box width gets one (its width, at least 8 em, at most
+     * the canvas width), keeping its left edge in place.
+     */
+    fun setWrapSource(layer: Layer?) {
+        val cur = item ?: return
+        if (layer == null) {
+            if (cur.wrap.isOn) update { it.copy(wrap = it.wrap.copy(sourceLayerId = 0L, polygons = emptyList())) }
+            return
+        }
+        if (!cur.canWrap || doc.indexOf(layer) < 0 || layer.isTextLayer || layer.isAdjustmentLayer || layer === editingLayer) return
+        val polys = contours.polygons(layer, cur.wrap.contour) ?: run {
+            controller.toast("Not enough memory to trace \"${layer.name}\"")
+            return
+        }
+        update { t ->
+            val first = t.wrap == TextWrapSpec()
+            val gap = if (first) (WRAP_DEFAULT_GAP_EM * t.spec.sizePx).coerceIn(0f, TextWrapSpec.MAX_GAP_PX) else t.wrap.gapPx
+            val wrapped = t.copy(wrap = t.wrap.copy(sourceLayerId = layer.id, polygons = polys, gapPx = gap))
+            if (t.spec.box.width > 0f) wrapped else withFixedWidth(wrapped)
+        }
+    }
+
+    /** [t] (auto width) with its box width fixed at max(its width, 8 em) within the canvas, left edge kept. */
+    private fun withFixedWidth(t: TextItem): TextItem {
+        val spec = t.spec
+        val natural = TextRenderer.layout(t.text, spec, measureInk = false).contentWidth
+        val width = max(natural, WRAP_MIN_WIDTH_EM * spec.sizePx).coerceAtMost(doc.width.toFloat()).coerceIn(spec.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
+        val dx = (width - natural) / 2f
+        val shift = Vec2(dx, 0f).rotated(Math.toRadians(t.rotationDeg.toDouble()).toFloat())
+        return t.copy(spec = spec.copy(box = spec.box.copy(width = width)), cx = t.cx + shift.x, cy = t.cy + shift.y)
+    }
+
+    /** Follows the picture's opaque pixels ([WrapContour.SHAPE]) or its content bounds ([WrapContour.BOX]). */
+    fun setWrapContour(contour: WrapContour) {
+        val cur = item ?: return
+        if (cur.wrap.contour == contour) return
+        val src = wrapSourceLayer()
+        val polys = when {
+            !cur.wrap.isOn -> cur.wrap.polygons
+            src != null -> contours.polygons(src, contour) ?: return
+            // The picture is gone: its box can still be had from the kept outline.
+            contour == WrapContour.BOX -> boxOfPolygons(cur.wrap.polygons)
+            else -> cur.wrap.polygons
+        }
+        update { it.copy(wrap = it.wrap.copy(contour = contour, polygons = polys)) }
+    }
+
+    /** Distance between the text and the picture (px, 0..[TextWrapSpec.MAX_GAP_PX]). */
+    fun setWrapGap(px: Float) {
+        if (!px.isFinite()) return
+        val v = px.coerceIn(0f, TextWrapSpec.MAX_GAP_PX)
+        update { if (it.wrap.gapPx == v) it else it.copy(wrap = it.wrap.copy(gapPx = v)) }
+    }
+
+    fun setWrapSides(sides: WrapSides) = update { if (it.wrap.sides == sides) it else it.copy(wrap = it.wrap.copy(sides = sides)) }
+
+    /**
+     * [t] with the current outline of its picture, or null when that is what [t] already has (or
+     * it doesn't wrap, its picture is gone or can't be traced).
+     */
+    private fun refreshedWrap(t: TextItem): TextItem? {
+        if (!t.wrapActive) return null
+        val src = doc.layerById(t.wrap.sourceLayerId)?.takeIf { !it.isTextLayer && !it.isAdjustmentLayer } ?: return null
+        val polys = contours.polygons(src, t.wrap.contour) ?: return null
+        return if (polys == t.wrap.polygons) null else t.copy(wrap = t.wrap.copy(polygons = polys))
+    }
+
+    /**
+     * The picture of the pending text was edited (the re-flow listener skips text open here):
+     * its outline is traced again and the text re-flows live, as part of the pending edit.
+     */
+    internal fun onWrapSourceEdited(source: Layer) {
+        val cur = item ?: return
+        if (!cur.wrap.isOn || cur.wrap.sourceLayerId != source.id || !cur.canWrap) return
+        val polys = contours.polygons(source, cur.wrap.contour) ?: return
+        if (polys != cur.wrap.polygons) update { it.copy(wrap = it.wrap.copy(polygons = polys)) }
+    }
+
+    private fun boxOfPolygons(polys: List<WrapPolygon>): List<WrapPolygon> {
+        if (polys.isEmpty()) return polys
+        val l = polys.minOf { p -> p.xs.min() }
+        val r = polys.maxOf { p -> p.xs.max() }
+        val t = polys.minOf { p -> p.ys.min() }
+        val b = polys.maxOf { p -> p.ys.max() }
+        return listOf(WrapPolygon(listOf(l, r, r, l), listOf(t, t, b, b)))
+    }
+
     private fun update(transform: (TextItem) -> TextItem) {
         val cur = item ?: return
         item = transform(cur)
@@ -565,12 +771,23 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ commit / discard
 
-    override fun commit() { commitItem() }
+    /** ✓: bakes the text; a text placed or opened while a vector layer was active goes back to it (v1.5). */
+    override fun commit() {
+        if (commitItem()) returnToVectorLayer()
+    }
 
+    /** ✕ (and undo of pending text): drops the pending text, then back to the vector layer it came from (v1.5). */
     override fun discard() {
+        discardItem()
+        returnToVectorLayer()
+    }
+
+    /** Drops the pending text (no layer change). */
+    private fun discardItem() {
         item = null
         editorOpen = false
         numbersOpen = false
+        wrapSheetOpen = false
         editingNew = false
         editorBackup = null
         mode = Mode.NONE
@@ -583,7 +800,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
 
     override fun onDeactivate() {
         endSnap()
-        if (hasPendingWork && !commitItem()) discard()
+        if (hasPendingWork) {
+            if (!commitItem()) discardItem()
+            // Switching tools with a text pending: vector mode doesn't flip off. (Not while
+            // committing, when addLayerWithContent pauses this tool with nothing pending.)
+            returnToVectorLayer()
+        }
         // Never leave the old pixels of a text layer hidden.
         if (item == null && layerPreview != null) endLayerEdit()
     }
@@ -593,40 +815,34 @@ class TextTool(controller: EditorController) : Tool(controller) {
         prepared = null
     }
 
+    // ------------------------------------------------------------------ vector mode (v1.5 §4.9)
+
+    /**
+     * The vector layer that was active when the pending text was placed or opened: placing a
+     * text adds (and selects) a text layer, opening one selects it, which would turn vector mode
+     * off; after ✓ or ✕ that vector layer is selected again.
+     */
+    private var vectorReturn: Layer? = null
+
+    private fun rememberVectorLayer() {
+        val active = controller.activeLayer
+        if (active.isVectorLayer) vectorReturn = active
+    }
+
+    /** Selects [vectorReturn] again (once), when nothing is pending and it is still a vector layer. */
+    private fun returnToVectorLayer() {
+        val back = vectorReturn ?: return
+        vectorReturn = null
+        if (item != null || doc.indexOf(back) < 0 || !back.isVectorLayer || controller.activeLayer === back) return
+        controller.selectLayer(back)
+    }
+
     /**
      * Where the pixels of the text layer [layer] (drawn from [item]) really are: fonts may differ
      * from the device that drew them, so the pixels are scanned. Only the area around the
      * computed bounds is read, unless the ink reaches its edge (then the whole layer is).
      */
-    private fun inkOf(layer: Layer, item: TextItem): Rect? {
-        val guess = rectOf(item)
-        return try {
-            if (guess != null) {
-                val margin = max(64, max(guess.width(), guess.height()) / 4)
-                val region = Rect(guess).apply { inset(-margin, -margin) }
-                if (region.intersect(0, 0, layer.width, layer.height)) {
-                    val ink = ContentBounds.of(layer.bitmap, region = region)
-                    val atEdge = ink != null && (
-                        (ink.left <= region.left && region.left > 0) || (ink.top <= region.top && region.top > 0) ||
-                            (ink.right >= region.right && region.right < layer.width) || (ink.bottom >= region.bottom && region.bottom < layer.height)
-                        )
-                    if (ink != null && !atEdge) return ink
-                }
-            }
-            ContentBounds.of(layer.bitmap) ?: guess
-        } catch (e: OutOfMemoryError) {
-            guess
-        }
-    }
-
-    /** Pixel rect (rounded out) of everything [t] paints, or null when it paints nothing. */
-    private fun rectOf(t: TextItem): Rect? {
-        val prep = TextRenderer.prepare(t)
-        if (prep.isEmpty) return null
-        val r = Rect()
-        prep.docBounds(t).roundOut(r)
-        return r.takeUnless { it.isEmpty }
-    }
+    private fun inkOf(layer: Layer, item: TextItem): Rect? = textInkOf(layer, item)
 
     /**
      * Bakes the text: a new text goes into a new text layer above the active one (clipped to the
@@ -641,7 +857,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
             // The layer went away meanwhile: place the text as a new one.
             endLayerEdit()
         }
-        if (cur.text.isBlank()) { discard(); return true }
+        if (cur.text.isBlank()) { discardItem(); return true }
         val prep = preparedFor(cur)
         val rect = Rect()
         prep.docBounds(cur).roundOut(rect)
@@ -659,6 +875,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         item = null
         editorOpen = false
         numbersOpen = false
+        wrapSheetOpen = false
         editorBackup = null
         // addLayerWithContent applies the color mode and handles a failed layer allocation itself;
         // the catch covers its grayscale/1-bit conversion, which allocates a canvas-sized buffer.
@@ -685,7 +902,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val loaded = loadedItem
         // An emptied text deletes its layer (undoable, see deleteEmptiedLayer).
         if (cur.text.isBlank()) return deleteEmptiedLayer()
-        if (cur == loaded) { discard(); return true }
+        if (cur == loaded) { discardItem(); return true }
         val prep = preparedFor(cur)
         val newRect = Rect()
         prep.docBounds(cur).roundOut(newRect)
@@ -697,7 +914,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         // Everything the old text covered (its real pixels and its computed bounds) plus the new text.
         val dirty = Rect(newRect)
         loadedInk?.let { dirty.union(it) }
-        loaded?.let { rectOf(it) }?.let { dirty.union(it) }
+        loaded?.let { textRectOf(it) }?.let { dirty.union(it) }
         dirty.inset(-1, -1)
         val json = TextCodec.encode(cur)
         val oldName = layer.name
@@ -717,6 +934,7 @@ class TextTool(controller: EditorController) : Tool(controller) {
         item = null
         editorOpen = false
         numbersOpen = false
+        wrapSheetOpen = false
         editorBackup = null
         endLayerEdit()
         nextSpec = styleToRemember(cur.spec)
@@ -1089,8 +1307,23 @@ class TextTool(controller: EditorController) : Tool(controller) {
         val rot = Math.toRadians(start.rotationDeg.toDouble()).toFloat()
         val anchorRight = start.spec.vertical && !start.spec.columnsLeftToRight
         val anchor = start.localToDoc(if (anchorRight) b0.width else 0f, 0f, b0.width, b0.height)
-        val half = Vec2(if (anchorRight) -nb.width / 2f else nb.width / 2f, nb.height / 2f).rotated(rot)
-        return moved.copy(cx = anchor.x + half.x, cy = anchor.y + half.y)
+        fun place(b: TextBlock): TextItem {
+            val half = Vec2(if (anchorRight) -b.width / 2f else b.width / 2f, b.height / 2f).rotated(rot)
+            return moved.copy(cx = anchor.x + half.x, cy = anchor.y + half.y)
+        }
+        var placed = place(nb)
+        // Wrapped text: its height depends on where it is (the picture), so the corner is kept
+        // for the block it has where it lands.
+        if (moved.wrapActive) {
+            var last = nb
+            repeat(ANCHOR_REFINE_PASSES) {
+                val b = preparedFor(placed).block ?: return placed
+                if (b.width == last.width && b.height == last.height) return placed
+                last = b
+                placed = place(b)
+            }
+        }
+        return placed
     }
 
     override fun onUp(p: ToolPoint) {
@@ -1108,8 +1341,12 @@ class TextTool(controller: EditorController) : Tool(controller) {
             // While the editor is open a tap neither applies the text nor reopens the editor.
             editorOpen -> {}
             m == Mode.MOVE && downInside -> openEditor()
-            // Tap away from the text: place it, then edit the text tapped or start a new one there.
-            m == Mode.MOVE -> if (commitItem()) tapAt(p.x, p.y)
+            // Tap away from the text: place it (like ✓, back to the vector layer it came from),
+            // then edit the text tapped or start a new one there.
+            m == Mode.MOVE -> if (commitItem()) {
+                returnToVectorLayer()
+                tapAt(p.x, p.y)
+            }
         }
         controller.invalidateOverlay()
     }
@@ -1256,6 +1493,8 @@ class TextTool(controller: EditorController) : Tool(controller) {
             canvas.restoreToCount(save)
         }
 
+        if (cur.wrapActive && showWrapOutline) drawWrapOutline(canvas, t, cur.wrap.polygons)
+
         haloPaint.strokeWidth = t.dp(3f)
         linePaint.strokeWidth = t.dp(1.5f)
         val block = prep.block
@@ -1318,6 +1557,38 @@ class TextTool(controller: EditorController) : Tool(controller) {
         for (hp in TextOnPath.handles(cur.path)) drawHandle(canvas, t, t.docToScreen(hp), filled = true)
     }
 
+    private val wrapPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = WRAP_OUTLINE_COLOR }
+    private var wrapDashDensity = 0f
+    private var wrapOutlineKey: List<WrapPolygon>? = null
+    private val wrapOutlineDoc = Path()
+    private val wrapOutlineScreen = Path()
+
+    /** The outline the text wraps around: dashed magenta over a dark halo (document polygons mapped to the screen). */
+    private fun drawWrapOutline(canvas: Canvas, t: ViewTransform, polygons: List<WrapPolygon>) {
+        if (polygons.isEmpty()) return
+        if (wrapOutlineKey !== polygons) {
+            wrapOutlineDoc.rewind()
+            for (p in polygons) {
+                if (p.size < 2) continue
+                wrapOutlineDoc.moveTo(p.xs[0], p.ys[0])
+                for (i in 1 until p.size) wrapOutlineDoc.lineTo(p.xs[i], p.ys[i])
+                wrapOutlineDoc.close()
+            }
+            wrapOutlineKey = polygons
+        }
+        wrapOutlineScreen.rewind()
+        wrapOutlineScreen.addPath(wrapOutlineDoc)
+        wrapOutlineScreen.transform(t.matrix)
+        if (wrapDashDensity != t.density) {
+            wrapDashDensity = t.density
+            wrapPaint.pathEffect = DashPathEffect(floatArrayOf(t.dp(5f), t.dp(4f)), 0f)
+        }
+        haloPaint.strokeWidth = t.dp(2.5f)
+        canvas.drawPath(wrapOutlineScreen, haloPaint)
+        wrapPaint.strokeWidth = t.dp(1.5f)
+        canvas.drawPath(wrapOutlineScreen, wrapPaint)
+    }
+
     private fun drawHandle(canvas: Canvas, t: ViewTransform, at: Vec2, filled: Boolean) {
         val r = t.dp(HANDLE_RADIUS_DP)
         fillPaint.color = 0x99000000.toInt()
@@ -1355,6 +1626,26 @@ class TextTool(controller: EditorController) : Tool(controller) {
     }
 
     companion object {
+        /** Shown when vertical text or text on a path is asked to wrap. */
+        const val WRAP_HORIZONTAL_ONLY = "Wrap works with horizontal text"
+
+        /** Shown when the fixed width of a text that wraps around a picture is turned off. */
+        const val WRAP_NEEDS_WIDTH = "Text that wraps around a picture needs a fixed width: turn Wrap off first"
+
+        /** A layer whose content covers this much of the text box is never the default picture (a background). */
+        private const val WRAP_DEFAULT_MAX_COVER = 0.9f
+
+        /** Distance a text keeps from its picture when wrap is first turned on (em). */
+        private const val WRAP_DEFAULT_GAP_EM = 0.3f
+
+        /** Narrowest box (em) a text without a fixed width gets when it starts wrapping. */
+        private const val WRAP_MIN_WIDTH_EM = 8f
+
+        private const val WRAP_OUTLINE_COLOR = 0xFFFF3DD8.toInt()
+
+        /** Layouts a resized wrapped text gets to keep its corner (its height depends on its place). */
+        private const val ANCHOR_REFINE_PASSES = 2
+
         private const val ACCENT = 0xFF4DA3FF.toInt()
         private const val HANDLE_RADIUS_DP = 9f
         private const val HANDLE_HIT_DP = 24f
