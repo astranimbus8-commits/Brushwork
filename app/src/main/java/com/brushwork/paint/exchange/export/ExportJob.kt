@@ -149,11 +149,17 @@ class ExportJob(private val c: EditorController, private val options: ExportOpti
             return false
         }
         c.endCanvasGesture()
+        // Vector edits still rendering in the background and the Object bar actions waiting for
+        // them land first (v1.5 QA), before the tool lets go (an action may lift its objects).
+        c.settleVectorWork()
         val tool = c.currentTool
         if (tool.hasPendingWork) {
             tool.commit()
             c.invalidateOverlay()
         }
+        // (What the commit rendered in the background too: the file holds what is on the canvas,
+        // not the objects as they were before the last edit.)
+        c.vectors.flushPending()
         return true
     }
 

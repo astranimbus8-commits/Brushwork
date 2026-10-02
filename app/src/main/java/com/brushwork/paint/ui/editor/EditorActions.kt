@@ -116,13 +116,19 @@ internal class EditorActions(private val controller: EditorController, private v
         return true
     }
 
-    /** Bakes uncommitted tool work (placed text, transform...) so exports include it. */
+    /**
+     * Bakes uncommitted tool work (placed text, transform...) so exports include it, and lands the
+     * vector edits still rendering in the background (also what this commit starts; v1.5 QA): the
+     * flattened picture is what is on the canvas.
+     */
     private fun commitPendingWork() {
+        controller.settleVectorWork()
         val tool = controller.currentTool
         if (tool.hasPendingWork) {
             tool.commit()
             controller.invalidateOverlay()
         }
+        controller.vectors.flushPending()
     }
 
     /**
