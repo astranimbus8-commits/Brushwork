@@ -224,9 +224,15 @@ object IncrementStepping {
      * The unit shown after a value: "45 %" → "%", "+0.50 EV" → "EV", "15.0°" → "°", "3.0 ×
      * width" → "× width". Text without a digit ("Off", "None") has no unit: "".
      */
-    fun suffixOf(valueText: String): String {
+    fun suffixOf(valueText: String): String = unitOf(valueText).orEmpty()
+
+    /**
+     * [suffixOf], or null for a text without a number ("Off", "None"): such a text says nothing
+     * about the control's unit (a stroke width reads "None" at 0 and "4 px" otherwise).
+     */
+    fun unitOf(valueText: String): String? {
         val i = valueText.indexOfLast { it.isDigit() }
-        if (i < 0) return ""
+        if (i < 0) return null
         return valueText.substring(i + 1).trim()
     }
 

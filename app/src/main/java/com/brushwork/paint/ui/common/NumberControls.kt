@@ -147,7 +147,12 @@ fun LabeledSlider(
     val focusManager = LocalFocusManager.current
     // Increments: the kind or custom key, and the step in slider units (null: the v1.5 slider).
     val inc = LocalIncrements.current
-    val unitSuffix = typing?.suffix?.takeIf { it.isNotEmpty() } ?: IncrementStepping.suffixOf(valueText)
+    // A value shown without a number ("None", "Off" at 0) keeps the unit the slider showed last,
+    // so its kind (and its Step popup) doesn't flip while the slider moves to and from 0.
+    val lastUnit = remember { arrayOfNulls<String>(1) }
+    val shownUnit = typing?.suffix?.takeIf { it.isNotEmpty() } ?: IncrementStepping.unitOf(valueText)
+    if (shownUnit != null) lastUnit[0] = shownUnit
+    val unitSuffix = shownUnit ?: lastUnit[0].orEmpty()
     val (kind, key) = IncrementStepping.resolve(incrementKind, incrementKey, label, unitSuffix)
     val shownScale = typing?.scale?.takeIf { it.isFinite() && it != 0f } ?: IncrementStepping.impliedScale(kind, valueRange.endInclusive)
     val sliderStep = inc?.stepFor(kind, key)?.let { (it / shownScale).toDouble() }?.takeIf { IncrementStepping.valid(it) }

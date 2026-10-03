@@ -29,6 +29,10 @@ class IncrementSteppingTest {
         assertEquals("°", IncrementStepping.suffixOf("15.0°"))
         assertEquals("× width", IncrementStepping.suffixOf("3.0 × width"))
         assertEquals("", IncrementStepping.suffixOf("Off"))
+        // A text without a number says nothing about the unit (the slider keeps the last one it showed).
+        assertEquals(null, IncrementStepping.unitOf("None"))
+        assertEquals("px", IncrementStepping.unitOf("4 px"))
+        assertEquals("", IncrementStepping.unitOf("12"))
         assertEquals("Exposure|EV", IncrementStepping.customKey("Exposure", "EV"))
         // A 0..1 percentage slider shows its value × 100.
         assertEquals(100f, IncrementStepping.impliedScale(IncrementKind.PERCENT, 1f), 0f)

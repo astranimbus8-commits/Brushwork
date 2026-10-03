@@ -45,7 +45,8 @@ import kotlin.math.round
  * step of 10 and its slider then lands on multiples of 10 %; "Exposure" (EV, no kind) gets a step
  * of its own, 0.25 EV, under the key "Exposure|EV", and its slider lands on multiples of 0.25. A
  * real finger held on the value opens the popup without opening the value editor; a typed value
- * stays exactly as typed. (The layer window's own "Layer opacity" control is area F's: it hooks
+ * stays exactly as typed. A slider that reads "None" at 0 keeps the unit it showed last (a Size
+ * stays a Size). (The layer window's own "Layer opacity" control is area F's: it hooks
  * the same popup through `Modifier.stepOnLongPress`.)
  *
  * One test (Compose's frame clock only serves the first test of a sandbox), own sandbox.
@@ -110,6 +111,7 @@ class StepPopupUiRobolectricTest {
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
         var opacity by mutableFloatStateOf(0.5f)
         var exposure by mutableFloatStateOf(0f)
+        var stroke by mutableFloatStateOf(0f)
         activity.setContent {
             BrushworkTheme {
                 CompositionLocalProvider(LocalIncrements provides inc) {
@@ -122,6 +124,11 @@ class StepPopupUiRobolectricTest {
                             LabeledSlider(
                                 "Exposure", exposure, { exposure = it }, -5f..5f,
                                 valueText = "%+.2f EV".format(exposure), typing = SliderTyping(decimals = 2, suffix = "EV"),
+                            )
+                            // Reads "None" at 0 (no number, so no unit), "4.37 px" otherwise.
+                            LabeledSlider(
+                                "Stroke", stroke, { stroke = it }, 0f..20f,
+                                valueText = if (stroke <= 0f) "None" else "%.2f px".format(java.util.Locale.US, stroke),
                             )
                         }
                     }
@@ -188,5 +195,21 @@ class StepPopupUiRobolectricTest {
         longClick(valueButton("Exposure"))
         SmokeUi.click("No step", exact = true)
         assertEquals(null, inc.state.custom["Exposure|EV"])
+
+        // A slider that reads "None" at 0 keeps the unit it showed last ("px": a Size), so it
+        // doesn't turn into a control of its own while it rests at 0.
+        stroke = 4.37f
+        settle(4)
+        stroke = 0f
+        settle(4)
+        assertTrue(SmokeUi.has("None", exact = true))
+        val strokeValue = RobolectricUi.elements().lastOrNull { it.node.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Step for sizes" }
+        assertNotNull("\"None\" still offers the Size step: ${RobolectricUi.elements().mapNotNull { it.node.config.getOrNull(SemanticsActions.OnLongClick)?.label }}", strokeValue)
+        val strokeSlider = RobolectricUi.elements()
+            .filter { it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsActions.SetProgress) != null }
+            .sortedBy { it.bounds.top }[2]
+        requireNotNull(strokeSlider.node.config[SemanticsActions.SetProgress].action).invoke(6.63f)
+        settle(4)
+        assertEquals("from 0 the first move already lands on the Size step", 7f, stroke, 1e-5f)
     }
 }
