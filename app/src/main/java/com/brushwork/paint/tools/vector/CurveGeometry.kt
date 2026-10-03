@@ -214,8 +214,8 @@ object CurveGeometry {
     }
 }
 
-/** Which handles of an anchor a handle scale changes (v1.6, §3.3). */
-enum class HandleSide(val label: String) { BOTH("Both"), IN("In"), OUT("Out") }
+/** Which handles of an anchor a handle scale changes (v1.6, §3.3): the chips read as the Shape tool's ("In and out" / "In" / "Out"). */
+enum class HandleSide(val label: String) { BOTH("In and out"), IN("In"), OUT("Out") }
 
 /**
  * A flattened line with its full width at every point (document px): [n] points in [xs] / [ys],

@@ -219,7 +219,8 @@ private fun StrokeFillAndSheets(tool: CurveTool, onSettings: () -> Unit, onNumbe
     OptionChip("Fill", s.fill, { set { it.copy(fill = !it.fill) } }, icon = Icons.Filled.FormatColorFill)
     SnapToObjectsChip(tool.controller)
     ActionChip("Numbers", Icons.Filled.Pin) { onNumbers() }
-    ActionChip("Settings", Icons.Filled.Tune) { onSettings() }
+    // I10: shows "Settings", known as "Curve settings" / "Polyline settings" / "Path settings".
+    ActionChip("Settings", Icons.Filled.Tune, contentDescription = "${tool.id.label} settings") { onSettings() }
 }
 
 // ====================================================================== the Path tool (v1.6, §3.2)
@@ -456,7 +457,7 @@ internal fun fractionToHandleScale(f: Float): Float {
 /**
  * The Curve tool's Handles group (§3.3): ⟷, ‹ "Shorter handles", the value (tap: "Type handle
  * scale"), › "Longer handles", the "Handle scale" mini slider (10–400 %, log), and the chips
- * Both / In / Out and All points. The value is relative to the lengths when a change began and
+ * In and out / In / Out (as the Shape tool's) and All points. The value is relative to the lengths when a change began and
  * goes back to 100 % at rest; ‹ › multiply by 0.9 / 1.1 (or step by the Scale increment) and
  * repeat while held. One in-tool step per slider drag, held arrow or typed value.
  */

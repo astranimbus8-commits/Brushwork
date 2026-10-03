@@ -20,7 +20,7 @@ import kotlin.math.atan2
 /**
  * v1.6 §3.3: scaling Bézier handles in the Curve tool. One in-tool step per slider drag, held
  * arrow, typed value and pinch; the value is relative to the lengths when the change began and
- * back at 100 % at rest; Both / In / Out and All points; a pinch on the selected point (or its
+ * back at 100 % at rest; In and out / In / Out and All points; a pinch on the selected point (or its
  * handle ends) scales its handles, rotation ignored, anywhere else it is the view's; with
  * increments on the steps are 110 % and 120 %. "Handle size" scales the grab radius.
  */

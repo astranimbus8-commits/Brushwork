@@ -29,7 +29,7 @@ import org.robolectric.annotation.Config
 /**
  * v1.6 §3.2a / §3.3 at the user's phone size: the Path tool's strip (Order stepper, Endpoint,
  * Cyclic, Shapes ▾ while empty, the selected point's Weight, To Bézier) and the Curve tool's
- * Handles group (‹ › 110 %, typed value, the log slider, Both / In / Out, All points), each
+ * Handles group (‹ › 110 %, typed value, the log slider, In and out / In / Out, All points), each
  * control an in-tool step.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
@@ -118,7 +118,7 @@ class PathOptionsUiRobolectricTest {
         for (p in listOf(Vec2(60f, 200f), Vec2(150f, 80f), Vec2(260f, 210f), Vec2(350f, 90f))) tool.addAnchor(p)
         tool.select(1)
         settle()
-        for (label in listOf("Handles", "Shorter handles", "Longer handles", "Type handle scale", "Handles: Both", "Handles: In", "Handles: Out", "Handles: All points")) {
+        for (label in listOf("Handles", "Shorter handles", "Longer handles", "Type handle scale", "Handles: In and out", "Handles: In", "Handles: Out", "Handles: All points")) {
             assertTrue("$label: ${SmokeUi.shown()}", SmokeUi.has(label, exact = true))
         }
         assertTrue(SmokeUi.has("100 %", exact = true))

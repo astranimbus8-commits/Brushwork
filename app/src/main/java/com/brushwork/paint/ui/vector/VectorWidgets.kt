@@ -44,6 +44,9 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
@@ -160,16 +163,30 @@ internal fun OptionChip(label: String, selected: Boolean, onClick: () -> Unit, i
     )
 }
 
-/** One-shot action chip used in the tool option strips. */
+/**
+ * One-shot action chip used in the tool option strips. With [contentDescription] the chip still
+ * shows [label] but is known by the description alone (I10): the strips' "Settings" chips are
+ * "Curve settings", "Shape settings"…, told apart from the tool menu's "Settings" cell (as the
+ * Text tool's Letters chips are).
+ */
 @Composable
-internal fun ActionChip(label: String, icon: ImageVector, tint: Color = BrushworkColors.OnChrome, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun ActionChip(
+    label: String,
+    icon: ImageVector,
+    tint: Color = BrushworkColors.OnChrome,
+    enabled: Boolean = true,
+    contentDescription: String? = null,
+    onClick: () -> Unit,
+) {
     AssistChip(
         onClick = onClick,
         enabled = enabled,
-        label = { Text(label, maxLines = 1) },
+        label = { Text(label, maxLines = 1, modifier = if (contentDescription != null) Modifier.clearAndSetSemantics {} else Modifier) },
         leadingIcon = { Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = tint) },
         colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome),
-        modifier = Modifier.padding(horizontal = 3.dp),
+        modifier = Modifier
+            .padding(horizontal = 3.dp)
+            .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier),
     )
 }
 
