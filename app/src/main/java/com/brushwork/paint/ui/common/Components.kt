@@ -77,6 +77,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -298,7 +302,11 @@ fun NudgePad(onNudge: (dx: Int, dy: Int) -> Unit, modifier: Modifier = Modifier)
     }
 }
 
-/** Icon button that repeats [onClick] while held (after a short delay); [onRelease] runs when the finger lifts. */
+/**
+ * Icon button that repeats [onClick] while held (after a short delay); [onRelease] runs when the
+ * finger lifts. A screen reader (and a test) presses it with its click action: one [onClick], then
+ * [onRelease], like a quick tap.
+ */
 @Composable
 fun RepeatIconButton(
     icon: ImageVector,
@@ -315,6 +323,17 @@ fun RepeatIconButton(
         modifier
             .size(40.dp)
             .clip(CircleShape)
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                onClick {
+                    if (enabled) {
+                        current()
+                        released?.invoke()
+                    }
+                    enabled
+                }
+                if (!enabled) disabled()
+            }
             .pointerInput(enabled) {
                 if (!enabled) return@pointerInput
                 awaitEachGesture {
