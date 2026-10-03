@@ -65,9 +65,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -89,6 +93,7 @@ import com.brushwork.paint.vector.VSpline
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
+import kotlin.math.min
 import com.brushwork.paint.tools.vector.ArrowHeadStyle
 import com.brushwork.paint.tools.vector.ArrowHeads
 import com.brushwork.paint.tools.vector.CornerStyle
@@ -251,8 +256,28 @@ private fun PathToolOptions(tool: CurveTool) {
     OptionChip("Cyclic", f.cyclic, { tool.setCyclic(!f.cyclic) }, icon = Icons.Filled.Loop)
     val a = selInfo
     if (a != null) {
-        WeightControl(tool, a.index, a.weight)
-        ThicknessControl(tool, a.index, a.width)
+        // A point just got selected: the strip scrolls so its controls start near the left edge
+        // (the whole Weight control, then the Thickness arrows and value). The two together are
+        // wider than a phone: the strip is asked to show their first screen width (a part that
+        // fits, so it lands there exactly), not all of them (it would show the Thickness slider
+        // and push Weight off).
+        val bring = remember { BringIntoViewRequester() }
+        val groupSize = remember { IntArray(2) }
+        val shownWidth = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - POINT_GROUP_MARGIN).toPx() }
+        LaunchedEffect(a.index) {
+            withFrameNanos { }
+            val w = min(groupSize[0].toFloat(), shownWidth)
+            bring.bringIntoView(if (w > 0f) Rect(0f, 0f, w, groupSize[1].toFloat()) else null)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .bringIntoViewRequester(bring)
+                .onSizeChanged { groupSize[0] = it.width; groupSize[1] = it.height },
+        ) {
+            WeightControl(tool, a.index, a.weight)
+            ThicknessControl(tool, a.index, a.width, bringIntoView = false)
+        }
         if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
         ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(a.index) }
         ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
@@ -267,6 +292,9 @@ private fun PathToolOptions(tool: CurveTool) {
 
 /** The Path strip's order, Endpoint and Cyclic (pending path's, else the next path's). */
 private data class PathFlags(val order: Int, val endpoint: Boolean, val cyclic: Boolean)
+
+/** The screen width the strip does not show (its panel's margins, with room to spare). */
+private val POINT_GROUP_MARGIN = 24.dp
 
 /** "Order 4" with ‹ ›: 2–6 (2 is the straight control polygon; the effective order is limited by the points). */
 @Composable
@@ -553,10 +581,11 @@ private fun thicknessSliderSteps(step: Float): Int {
  * The selected point's thickness in the options strip (§4.5): ‹ › steps of 5 % (hold to
  * repeat), the value (tap to type it) and a 0–300 % slider (double-tap it for 100 %). While the
  * slider is dragged the canvas shows a ring of the real line diameter at the point. One undo
- * step per drag, held arrow or typed value.
+ * step per drag, held arrow or typed value. With [bringIntoView] a newly selected point scrolls
+ * the strip so the whole control shows (the Path strip scrolls its point group instead).
  */
 @Composable
-private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
+private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringIntoView: Boolean = true) {
     var typing by remember { mutableStateOf(false) }
     val percent = width * 100f
     // v1.6 §3.4: with increments on, the slider and ‹ › use the Percent step (5 % by default, as before).
@@ -579,9 +608,11 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
     // chip in front, or on a narrow phone, its slider would start off the screen).
     val bring = remember { BringIntoViewRequester() }
-    LaunchedEffect(index) {
-        withFrameNanos { }
-        bring.bringIntoView()
+    if (bringIntoView) {
+        LaunchedEffect(index) {
+            withFrameNanos { }
+            bring.bringIntoView()
+        }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.bringIntoViewRequester(bring).padding(horizontal = 2.dp)) {
         Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
