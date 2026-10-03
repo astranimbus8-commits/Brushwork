@@ -134,6 +134,49 @@ class ShapeHandleScaleRobolectricTest {
     }
 
     @Test
+    fun aChangeThatChangesNothingLeavesNoStep() {
+        val c = controller()
+        val tool = ellipsePoints(c)
+        tool.selectPoint(0)
+        val out0 = handleOut(tool, 0)
+        // A tap on the slider at 100 % (or a typed 100): no in-tool step.
+        assertTrue(tool.beginHandleScale())
+        tool.scaleHandlesTo(1f)
+        tool.endHandleScale()
+        tool.scaleHandles(1f)
+        assertEquals(out0, handleOut(tool, 0), 1e-4f)
+        // So the next undo takes back the edit before it: the conversion to points.
+        assertTrue(tool.undoStep())
+        assertEquals("the conversion to points was the last step", null, tool.points)
+    }
+
+    @Test
+    fun aSelectedSharpPointHasNothingToScale() {
+        val c = controller()
+        val tool = ellipsePoints(c)
+        tool.setPointSmooth(0, false)
+        val before = tool.docAnchors()!!
+        tool.selectPoint(0)
+        assertFalse("a sharp point between straight edges has no handle", tool.canScaleHandles)
+        assertFalse(tool.beginHandleScale())
+        tool.stepHandles(longer = true)
+        tool.endHandleScale()
+        tool.scaleHandles(2f)
+        assertEquals("nothing changed", before, tool.docAnchors())
+        // No step was added: undo takes back the sharp corner.
+        assertTrue(tool.undoStep())
+        assertTrue(tool.docAnchors()!![0].smooth)
+        // "All points" (or no selection) reaches the smooth ones again.
+        tool.setPointSmooth(0, false)
+        tool.selectPoint(0)
+        tool.handlesAllPoints = true
+        assertTrue(tool.canScaleHandles)
+        val out1 = handleOut(tool, 1)
+        tool.scaleHandles(2f)
+        assertEquals(out1 * 2f, handleOut(tool, 1), 1e-3f)
+    }
+
+    @Test
     fun allPointsInAndOut() {
         val c = controller()
         val tool = ellipsePoints(c)

@@ -784,25 +784,44 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** The points the change in progress scales. */
     private var handleIndices = IntArray(0)
 
+    /** The change in progress has saved its undo step (it does so at its first actual change). */
+    private var handleStepSaved = false
+
     /** True while a handle change (a slider drag, a held arrow) is in progress. */
     val handleScaling: Boolean get() = handleBase != null
+
+    /** The points the Handles group acts on now: the selected one, or all of them without a selection or with [handlesAllPoints]. */
+    private fun handleTargets(count: Int): IntArray {
+        val sel = selectedPoint
+        return if (handlesAllPoints || sel !in 0 until count) IntArray(count) { it } else intArrayOf(sel)
+    }
+
+    /**
+     * The Handles group has something to scale: one of the points it acts on (see [handleTargets])
+     * has a tangent handle (a smooth point, or explicit handles). Reads Compose state.
+     */
+    val canScaleHandles: Boolean
+        get() {
+            val anchors = docAnchors() ?: return false
+            return handleTargets(anchors.size).any { ShapePoints.hasHandles(anchors, it, closedShape) }
+        }
 
     /**
      * Starts a change of the tangent handles (the Handles group in points mode): the selected
      * point's, or every point's without a selection or with [handlesAllPoints]. Everything until
-     * [endHandleScale] is ONE in-tool undo step, its factor relative to the handles as they are
-     * now. False without a shape with its own points.
+     * [endHandleScale] is ONE in-tool undo step (saved at the first actual change, so a change
+     * that changes nothing leaves no step), its factor relative to the handles as they are now.
+     * False without a shape with its own points, or when none of those points has a handle.
      */
     fun beginHandleScale(): Boolean {
         if (handleBase != null) return true
         val anchors = docAnchors() ?: return false
         if (anchors.isEmpty()) return false
-        // A step of its own (not merged into an edit just before).
-        historyKey = null
-        pushHistory()
+        val targets = handleTargets(anchors.size)
+        if (targets.none { ShapePoints.hasHandles(anchors, it, closedShape) }) return false
         handleBase = anchors
-        val sel = selectedPoint
-        handleIndices = if (handlesAllPoints || sel !in anchors.indices) IntArray(anchors.size) { it } else intArrayOf(sel)
+        handleIndices = targets
+        handleStepSaved = false
         handleScale = 1f
         return true
     }
@@ -814,6 +833,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (!k.isFinite()) return
         val kk = k.coerceIn(ShapePoints.MIN_HANDLE_SCALE, ShapePoints.MAX_HANDLE_SCALE)
         if (kk == handleScale) return
+        if (!handleStepSaved) {
+            // A step of its own (not merged into an edit just before), saved before the first change.
+            historyKey = null
+            pushHistory()
+            handleStepSaved = true
+        }
         handleScale = kk
         applyAnchors(ShapePoints.scaledHandles(base, handleIndices, kk, handleSide, closedShape), b.rotationDeg)
         refreshPreview()
@@ -822,6 +847,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** The handle change is complete: the next one starts from the handles as they are (100 % again). */
     fun endHandleScale() {
         handleBase = null
+        handleStepSaved = false
         handleScale = 1f
         historyKey = null
     }
@@ -885,6 +911,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         canUndoStep = false
         historyKey = null
         handleBase = null
+        handleStepSaved = false
         handleScale = 1f
     }
 
@@ -919,6 +946,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     private fun restoreState(s: PendingState) {
         handleBase = null
+        handleStepSaved = false
         handleScale = 1f
         box = s.box
         points = s.points

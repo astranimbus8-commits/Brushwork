@@ -346,6 +346,13 @@ object ShapePoints {
     fun autoTangent(a: List<ShapeAnchor>, i: Int): List<ShapeAnchor> =
         a.mapIndexed { k, p -> if (k == i) p.copy(handleIn = null, handleOut = null) else p }
 
+    /** Point [i] has a tangent handle to scale (explicit, or the automatic one of a smooth point; not zero-length). */
+    fun hasHandles(a: List<ShapeAnchor>, i: Int, closed: Boolean): Boolean {
+        if (i !in a.indices) return false
+        val (hIn, hOut) = handles(a, i, closed)
+        return hIn.lengthSq >= 1e-12f || hOut.lengthSq >= 1e-12f
+    }
+
     /** Smallest and largest factor [scaledHandles] applies. */
     const val MIN_HANDLE_SCALE = 0.01f
     const val MAX_HANDLE_SCALE = 100f

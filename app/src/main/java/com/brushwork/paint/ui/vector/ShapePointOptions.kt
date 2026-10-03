@@ -142,37 +142,42 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
  * "All points"; the value is relative to the handles when a change began and reads 100 % again
  * at rest. ‹ › multiply by 0.9 / 1.1, or step by the Scale increment, and repeat while held;
  * the slider lands on the Scale step's multiples while increments are on; a typed value is exact.
- * Each slider drag, held arrow or typed value is one in-tool undo step.
+ * Each slider drag, held arrow or typed value that changes something is one in-tool undo step.
+ * While the points it acts on have no handle (a selected sharp corner) the arrows, the value and
+ * the slider are disabled.
  */
 @Composable
 private fun ShapeHandlesGroup(tool: ShapeTool, selected: Int) {
     var typing by remember { mutableStateOf(false) }
     val percent = tool.handleScale * 100f
+    // A selected sharp point between straight edges has no handle: nothing to scale until another
+    // point (or "All points") is chosen, so the arrows, value and slider rest disabled.
+    val canScale by remember(tool) { derivedStateOf { tool.canScaleHandles } }
     Icon(
         Icons.Filled.SwapHoriz,
         contentDescription = null,
         tint = BrushworkColors.OnChromeDim,
         modifier = Modifier.padding(start = 8.dp, end = 2.dp).size(20.dp),
     )
-    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = false) }
+    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = false) }
     Box(
         Modifier
             .heightIn(min = 40.dp)
             .widthIn(min = 56.dp)
             .clip(RoundedCornerShape(8.dp))
             .stepOnLongPress(IncrementKind.SCALE)
-            .clickable(onClickLabel = "Type handle scale", role = Role.Button) { typing = true },
+            .clickable(enabled = canScale, onClickLabel = "Type handle scale", role = Role.Button) { typing = true },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             "${Units.formatNumber(percent.toDouble(), 0)} %",
             style = MaterialTheme.typography.labelLarge,
-            color = BrushworkColors.OnChrome,
+            color = if (canScale) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim,
             maxLines = 1,
         )
     }
-    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = true) }
-    HandleScaleSlider(tool)
+    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = true) }
+    HandleScaleSlider(tool, canScale)
     for (side in ShapeHandleSide.entries) {
         OptionChip(sideLabel(side), tool.handleSide == side, { tool.handleSide = side })
     }
@@ -199,7 +204,7 @@ private fun ShapeHandlesGroup(tool: ShapeTool, selected: Int) {
 
 /** The mini slider of the Handles group: 10–400 % of the handles when the drag began, logarithmic. */
 @Composable
-private fun HandleScaleSlider(tool: ShapeTool) {
+private fun HandleScaleSlider(tool: ShapeTool, enabled: Boolean) {
     val scaleStep = LocalIncrements.current?.step(IncrementKind.SCALE)
     val k = tool.handleScale
     Slider(
@@ -211,6 +216,7 @@ private fun HandleScaleSlider(tool: ShapeTool) {
             }
         },
         onValueChangeFinished = { tool.endHandleScale() },
+        enabled = enabled,
         colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
         modifier = Modifier
             .width(IbisDims.HandleScaleSlider)

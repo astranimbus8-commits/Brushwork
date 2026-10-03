@@ -109,6 +109,31 @@ class ShapeHandlesUiRobolectricTest {
         SmokeUi.click("All points", exact = true)
         assertTrue(tool.handlesAllPoints)
 
+        // A selected sharp point has no handle: the arrows, the value and the slider rest
+        // (disabled, nothing changes, no in-tool step) until "All points" reaches the others.
+        SmokeUi.click("All points", exact = true)
+        assertFalse(tool.handlesAllPoints)
+        tool.setPointSmooth(0, false)
+        tool.selectPoint(0)
+        SmokeUi.settle(4)
+        val before = tool.docAnchors()
+        SmokeUi.tap("Longer handles", exact = true)
+        SmokeUi.settle(4)
+        assertEquals("nothing to scale", before, tool.docAnchors())
+        fun valueNode() = RobolectricUi.elements().last { it.node.config.getOrNull(SemanticsActions.OnClick)?.label == "Type handle scale" }
+        fun sliderNode() = RobolectricUi.elements().last { e ->
+            e.node.config.getOrNull(SemanticsActions.SetProgress) != null &&
+                e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Handle scale") == true
+        }
+        assertTrue("the value rests", valueNode().node.config.contains(SemanticsProperties.Disabled))
+        assertTrue("the slider rests", sliderNode().node.config.contains(SemanticsProperties.Disabled))
+        assertTrue("undo takes back the sharp corner (no empty step)", tool.undoStep())
+        assertTrue(tool.docAnchors()!![0].smooth)
+        SmokeUi.settle(4)
+        assertFalse("a smooth point again", valueNode().node.config.contains(SemanticsProperties.Disabled))
+        SmokeUi.click("All points", exact = true)
+        assertTrue(tool.handlesAllPoints)
+
         // A long-press on the value: the Scale step's popup.
         val value = RobolectricUi.elements().last { it.node.config.getOrNull(SemanticsActions.OnClick)?.label == "Type handle scale" }
         requireNotNull(value.node.config[SemanticsActions.OnLongClick].action).invoke()

@@ -104,30 +104,61 @@ internal fun IncrementSettings.summary(): String =
 fun Modifier.stepOnLongPress(kind: IncrementKind?, key: String? = null): Modifier =
     if (kind == null && key == null) this else stepOnLongPressFor(StepTarget(kind, key))
 
-/** [stepOnLongPress] with the control's own name and unit for the popup. */
-internal fun Modifier.stepOnLongPressFor(target: StepTarget, enabled: Boolean = true): Modifier = composed {
-    val inc = LocalIncrements.current
-    if (inc == null || !enabled || (target.kind == null && target.key == null)) return@composed Modifier
-    val host = rememberStepPopupHost()
-    val latest by rememberUpdatedState(target)
-    Modifier
-        .semantics { onLongClick(label = target.actionLabel) { host.open(inc, latest); true } }
-        .longPressInitialPass { host.open(inc, latest) }
+/**
+ * Set while a finger held on a control is opening its Step popup (from the long-press until that
+ * finger lifts). A text field reads it to refuse focus meanwhile ([NumberField]): its own
+ * long-press (select a word, focus, keyboard) must not happen behind the popup.
+ */
+internal class StepHold {
+    var active: Boolean = false
 }
 
 /**
- * Calls [onLongPress] when a finger rests here (within the touch slop) for the long-press time.
- * It watches the touch in the Initial pass and, once it fired, consumes the rest of that touch,
- * so a clickable or slider under it never acts on the release.
+ * [stepOnLongPress] with the control's own name and unit for the popup. [enabled] is read when a
+ * touch starts (the touch handler stays attached when it changes, so a change never cuts a
+ * gesture short); [hold] is told while a held finger opens the popup.
  */
-internal fun Modifier.longPressInitialPass(onLongPress: () -> Unit): Modifier = composed {
+internal fun Modifier.stepOnLongPressFor(target: StepTarget, enabled: Boolean = true, hold: StepHold? = null): Modifier = composed {
+    val inc = LocalIncrements.current
+    if (inc == null || (target.kind == null && target.key == null)) return@composed Modifier
+    val host = rememberStepPopupHost()
+    val latest by rememberUpdatedState(target)
+    val on by rememberUpdatedState(enabled)
+    Modifier
+        .semantics { if (enabled) onLongClick(label = target.actionLabel) { host.open(inc, latest); true } }
+        .longPressInitialPass(isEnabled = { on }, onHold = { hold?.active = it }) { host.open(inc, latest) }
+}
+
+/**
+ * Part of the system long-press time after which a held finger opens the Step popup: a little
+ * before the controls under it (a text field's own long-press) act on the same touch, so the
+ * popup always wins.
+ */
+internal const val STEP_LONG_PRESS_FRACTION = 0.85f
+
+/**
+ * Calls [onLongPress] when a finger rests here (within the touch slop) for
+ * [STEP_LONG_PRESS_FRACTION] of the long-press time, while [isEnabled] (read when the touch
+ * starts). It watches the touch in the Initial pass and, once it fired, consumes the rest of that
+ * touch, so a clickable, slider or text field under it never acts on the move or release;
+ * [onHold] is true from the long-press until that touch ends.
+ */
+internal fun Modifier.longPressInitialPass(
+    isEnabled: () -> Boolean = { true },
+    onHold: (Boolean) -> Unit = {},
+    onLongPress: () -> Unit,
+): Modifier = composed {
     val latest by rememberUpdatedState(onLongPress)
+    val enabled by rememberUpdatedState(isEnabled)
+    val held by rememberUpdatedState(onHold)
     pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (!enabled()) return@awaitEachGesture
             val slop = viewConfiguration.touchSlop
+            val timeout = (viewConfiguration.longPressTimeoutMillis * STEP_LONG_PRESS_FRACTION).toLong().coerceAtLeast(1L)
             val fired = try {
-                withTimeout(viewConfiguration.longPressTimeoutMillis) {
+                withTimeout(timeout) {
                     var lifted = false
                     while (!lifted) {
                         val ev = awaitPointerEvent(PointerEventPass.Initial)
@@ -141,12 +172,17 @@ internal fun Modifier.longPressInitialPass(onLongPress: () -> Unit): Modifier = 
                 true
             }
             if (!fired) return@awaitEachGesture
-            latest()
-            // The rest of this touch belongs to the popup: nothing under it acts on the release.
-            while (true) {
-                val ev = awaitPointerEvent(PointerEventPass.Initial)
-                ev.changes.forEach { it.consume() }
-                if (ev.changes.none { it.pressed }) break
+            held(true)
+            try {
+                latest()
+                // The rest of this touch belongs to the popup: nothing under it acts on the release.
+                while (true) {
+                    val ev = awaitPointerEvent(PointerEventPass.Initial)
+                    ev.changes.forEach { it.consume() }
+                    if (ev.changes.none { it.pressed }) break
+                }
+            } finally {
+                held(false)
             }
         }
     }

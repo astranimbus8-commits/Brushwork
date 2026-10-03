@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
@@ -403,7 +404,11 @@ internal fun NumberFieldCore(
     val stepTarget = remember(kind, key, label, suffix) { if (auto == null) null else StepTarget(kind, key, if (kind == null) label else null, if (kind == null) suffix else null) }
     /** [v] moved [n] steps: to the next multiples of the increment, else by [by]. */
     fun stepped(v: Double, n: Int, by: Double): Double = if (incStep != null) IncrementStepping.stepBy(v, n.toLong(), incStep) else v + n * by
-    val longPress: Modifier = if (stepTarget == null) Modifier else Modifier.stepOnLongPressFor(stepTarget, enabled && !focused)
+    // A finger held on the field opens the Step popup; meanwhile the field refuses focus, so its
+    // own long-press (select a word, keyboard) doesn't happen behind the popup. While it is being
+    // typed in, a long-press is the text field's (select, paste).
+    val stepHold = remember { StepHold() }
+    val longPress: Modifier = if (stepTarget == null) Modifier else Modifier.stepOnLongPressFor(stepTarget, enabled && !focused, stepHold)
 
     val field: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -432,6 +437,7 @@ internal fun NumberFieldCore(
                 modifier = Modifier
                     .weight(1f)
                     .then(longPress)
+                    .focusProperties { canFocus = !stepHold.active }
                     .onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
             )
             if (step != null) {
