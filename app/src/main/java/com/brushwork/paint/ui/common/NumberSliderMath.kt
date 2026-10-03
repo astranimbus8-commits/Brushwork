@@ -249,6 +249,20 @@ object IncrementStepping {
     fun customKey(label: String, suffix: String): String = "$label|$suffix"
 
     /**
+     * The kind and custom key a control steps by (design §3.4 (c): the inference is "overridable
+     * through the incrementKind / incrementKey parameters"): an explicit [kind] wins (no key);
+     * an explicit [key] alone is a custom step under that key, whatever the unit implies (a
+     * feather shown in % with "mask.feather"); otherwise the kind the [suffix] implies
+     * ([kindForSuffix]); otherwise a custom step under "$label|$suffix" ([customKey]). Exactly one
+     * of the two is non-null.
+     */
+    fun resolve(kind: IncrementKind?, key: String?, label: String, suffix: String): Pair<IncrementKind?, String?> = when {
+        kind != null -> kind to null
+        key != null -> null to key
+        else -> kindForSuffix(suffix)?.let { it to null } ?: (null to customKey(label, suffix))
+    }
+
+    /**
      * Shown units per value unit of a slider whose caller doesn't say ([SliderTyping.scale]): a
      * percentage slider over 0..1 (or 0..2, scatter) shows its value × 100; others show it as is.
      */

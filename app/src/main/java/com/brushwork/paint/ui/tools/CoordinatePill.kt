@@ -232,7 +232,9 @@ private fun AxisCell(
                     CustomAccessibilityAction("Decrease $axis") { nudge(-1); true },
                 )
             }
-            .pointerInput(Unit) {
+            // Restarted for another target (a different tool's pill in the same place), so a drag
+            // always begins and ends the edit of what it moves.
+            .pointerInput(target) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     down.consume()

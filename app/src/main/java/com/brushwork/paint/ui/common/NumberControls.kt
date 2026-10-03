@@ -81,11 +81,11 @@ import kotlin.math.roundToInt
  *
  * v1.6 increments (§3.4): inside the editor ([LocalIncrements]) every control has a kind,
  * inferred from its unit (`%` → PERCENT, `°` → ANGLE, `px` → SIZE; a [LengthField] is LENGTH) or
- * given by `incrementKind`, or else a custom step of its own under `incrementKey` (default
- * "$label|$suffix"). While increments are on, sliders land on multiples of the step (the range
- * ends stay reachable), and -/+ buttons and scrub handles move to the next multiples; typed values
- * are never quantized. A long-press on the value opens the Step popup. With increments off every
- * control behaves exactly as in v1.5 (I8).
+ * given by `incrementKind`, or else a custom step of its own under `incrementKey` (an explicit key
+ * overrides the inferred kind; default "$label|$suffix"). While increments are on, sliders land
+ * on multiples of the step (the range ends stay reachable), and -/+ buttons and scrub handles
+ * move to the next multiples; typed values are never quantized. A long-press on the value opens
+ * the Step popup. With increments off every control behaves exactly as in v1.5 (I8).
  */
 
 /**
@@ -119,8 +119,9 @@ class SliderTyping(val scale: Float = 1f, val decimals: Int = 0, val suffix: Str
  *
  * v1.6 increments (§3.4): [incrementKind] overrides the kind inferred from the value's unit
  * ([typing]'s suffix, else the text after the number in [valueText]: `%` → PERCENT, `°` → ANGLE,
- * `px` → SIZE); [incrementKey] names the control's custom step when it has no kind (default
- * "$label|$suffix"). Steps are in the shown unit ([SliderTyping.scale]; a 0..1 percentage slider
+ * `px` → SIZE); [incrementKey] without [incrementKind] makes it a custom step under that key
+ * whatever its unit says, and a control with neither and no kind of its unit has a custom step
+ * under "$label|$suffix". Steps are in the shown unit ([SliderTyping.scale]; a 0..1 percentage slider
  * without typing counts as × 100). While increments are on the slider lands on the step's
  * multiples; a long-press on the value opens the Step popup.
  */
@@ -146,8 +147,7 @@ fun LabeledSlider(
     // Increments: the kind or custom key, and the step in slider units (null: the v1.5 slider).
     val inc = LocalIncrements.current
     val unitSuffix = typing?.suffix?.takeIf { it.isNotEmpty() } ?: IncrementStepping.suffixOf(valueText)
-    val kind = incrementKind ?: IncrementStepping.kindForSuffix(unitSuffix)
-    val key = if (kind == null) incrementKey ?: IncrementStepping.customKey(label, unitSuffix) else null
+    val (kind, key) = IncrementStepping.resolve(incrementKind, incrementKey, label, unitSuffix)
     val shownScale = typing?.scale?.takeIf { it.isFinite() && it != 0f } ?: IncrementStepping.impliedScale(kind, valueRange.endInclusive)
     val sliderStep = inc?.stepFor(kind, key)?.let { (it / shownScale).toDouble() }?.takeIf { IncrementStepping.valid(it) }
     val stepTarget = remember(kind, key, label, unitSuffix) { StepTarget(kind, key, if (kind == null) label else null, unitSuffix) }
@@ -294,8 +294,9 @@ private val MinInlineTextWidth = 112.dp
  * (text committed, slider or scrub released, -/+ released), e.g. to record undo or save.
  *
  * v1.6 increments (§3.4): [incrementKind] overrides the inferred kind (suffix `%` → PERCENT,
- * `°` → ANGLE, `px` → SIZE); [incrementKey] names the custom step of a control without a kind
- * (default "$label|$suffix"). While increments are on, the slider lands on the step's multiples,
+ * `°` → ANGLE, `px` → SIZE); [incrementKey] without [incrementKind] makes it a custom step under
+ * that key whatever its unit says (otherwise a control without a kind steps by "$label|$suffix").
+ * While increments are on, the slider lands on the step's multiples,
  * -/+ and the scrub handle move to the next multiples; typed values are never quantized. A
  * long-press on the field (while it isn't being typed in) or on the scrub handle opens the Step
  * popup.
@@ -394,8 +395,7 @@ internal fun NumberFieldCore(
 
     // Increments: the kind or custom key, and the step in the shown unit (null: the v1.5 field).
     val auto = increments as? IncrementBinding.Auto
-    val kind = auto?.let { it.kind ?: IncrementStepping.kindForSuffix(suffix) }
-    val key = if (auto != null && kind == null) auto.key ?: IncrementStepping.customKey(label, suffix) else null
+    val (kind, key) = if (auto == null) null to null else IncrementStepping.resolve(auto.kind, auto.key, label, suffix)
     val inc = LocalIncrements.current
     val incStep: Double? = if (auto == null) null else inc?.stepFor(kind, key)?.toDouble()
         ?.let { if (kind != null) it * auto.stepScale else it }
@@ -488,7 +488,8 @@ internal fun NumberFieldCore(
  * A length in document pixels, edited in [unit] (converted with [dpi]).
  *
  * v1.6 increments (§3.4): a length field is a LENGTH control unless [incrementKind] says
- * otherwise (e.g. SIZE for a font size); [incrementKey] as in [NumberField]. Length and size steps
+ * otherwise (e.g. SIZE for a font size); [incrementKey] alone makes it a custom step under that
+ * key, in the field's shown unit (as in [NumberField]). Length and size steps
  * are document px, shown in [unit] (10 px is 0.847 mm at 300 dpi: an mm field lands on its
  * multiples).
  */
@@ -516,7 +517,8 @@ fun LengthField(
     val pxScale = remember(adjust, minPx, maxPx, sliderMinPx, sliderMaxPx, logSlider) {
         NumberSliderMath.scaleFor(adjust, minPx, maxPx, sliderMinPx, sliderMaxPx, logSlider)
     }
-    val kind = incrementKind ?: IncrementKind.LENGTH
+    // A length field is LENGTH unless told otherwise; a key alone is a custom step (in the shown unit).
+    val kind = incrementKind ?: if (incrementKey != null) null else IncrementKind.LENGTH
     // Length and size steps are px: shown in this field's unit.
     val stepScale = if (kind == IncrementKind.LENGTH || kind == IncrementKind.SIZE) unit.fromPx(1.0, dpi) else 1.0
     NumberFieldCore(

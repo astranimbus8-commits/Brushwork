@@ -37,6 +37,19 @@ class IncrementSteppingTest {
     }
 
     @Test
+    fun anExplicitKindOrKeyOverridesTheInference() {
+        // An explicit kind wins over the unit (and a key given with it is not used).
+        assertEquals(IncrementKind.SCALE to null, IncrementStepping.resolve(IncrementKind.SCALE, "whatever", "Scale", "%"))
+        // A key alone is a custom step under it, whatever the unit implies (A's feather shown in %).
+        assertEquals(null to "mask.feather", IncrementStepping.resolve(null, "mask.feather", "Feather", "%"))
+        assertEquals(null to "path.weight", IncrementStepping.resolve(null, "path.weight", "Weight", ""))
+        // Neither: the unit's kind, else "$label|$suffix".
+        assertEquals(IncrementKind.PERCENT to null, IncrementStepping.resolve(null, null, "Feather", "%"))
+        assertEquals(IncrementKind.ANGLE to null, IncrementStepping.resolve(null, null, "Rotation", "°"))
+        assertEquals(null to "Exposure|EV", IncrementStepping.resolve(null, null, "Exposure", "EV"))
+    }
+
+    @Test
     fun plusAndMinusGoToTheNextMultiple() {
         assertEquals(40.0, IncrementStepping.stepBy(37.0, 1, 10.0), 0.0)
         assertEquals(30.0, IncrementStepping.stepBy(37.0, -1, 10.0), 0.0)
