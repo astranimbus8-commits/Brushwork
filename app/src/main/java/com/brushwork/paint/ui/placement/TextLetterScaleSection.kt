@@ -2,15 +2,19 @@ package com.brushwork.paint.ui.placement
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -28,6 +32,7 @@ import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LabeledSlider
+import com.brushwork.paint.ui.common.LocalSheetGroup
 import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -109,19 +114,27 @@ fun TextLetterScaleSection(host: TextEditorHost) {
  */
 fun letterAlignLabel(a: LetterScaleAlign): String = "Letters: ${a.label}"
 
-/** Center / Baseline / Top as chips that can be disabled (vertical text). */
+/**
+ * Center / Baseline / Top as chips that can be disabled (vertical text), looking like the
+ * [ChoiceChips] around them (the same selected colours).
+ */
 @Composable
 private fun AlignChips(selected: LetterScaleAlign, enabled: Boolean, onSelect: (LetterScaleAlign) -> Unit) {
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        LetterScaleAlign.entries.forEach { a ->
-            FilterChip(
-                selected = enabled && a == selected,
-                onClick = { onSelect(a) },
-                // The visible word stays short; the chip's label is unique (see letterAlignLabel).
-                label = { Text(a.label, modifier = Modifier.clearAndSetSemantics {}) },
-                enabled = enabled,
-                modifier = Modifier.semantics { contentDescription = letterAlignLabel(a) },
-            )
+    // Scroll only when the width is bounded (as ChoiceChips: a nested horizontal scroll would crash).
+    BoxWithConstraints {
+        val scroll = if (constraints.hasBoundedWidth) Modifier.horizontalScroll(rememberScrollState()) else Modifier
+        Row(scroll, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            LetterScaleAlign.entries.forEach { a ->
+                FilterChip(
+                    selected = enabled && a == selected,
+                    onClick = { onSelect(a) },
+                    // The visible word stays short; the chip's label is unique (see letterAlignLabel).
+                    label = { Text(a.label, modifier = Modifier.clearAndSetSemantics {}) },
+                    enabled = enabled,
+                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White),
+                    modifier = Modifier.semantics { contentDescription = letterAlignLabel(a) },
+                )
+            }
         }
     }
 }
@@ -137,13 +150,23 @@ private fun Note(text: String) {
 }
 
 /**
+ * The group of the "Letter scaling" sheet in the editor's sheet host ([LocalSheetGroup]): the
+ * "Letters" chip brings it back on top when another sheet (the open text editor) covers it.
+ */
+internal object LettersSheetGroup
+
+/**
  * The Text tool's small "Letter scaling" sheet, opened by the options strip's "Letters" chip:
- * the same controls as the editor's section, while the text stays draggable on the canvas.
+ * the same controls as the editor's section, while the text stays draggable on the canvas. It
+ * also opens over the text editor (stacked on it: closing it shows the editor again), so the
+ * chip is never a dead tap while the editor is open or folded into its pill.
  */
 @Composable
 fun TextLetterScaleSheet(tool: TextTool) {
     if (tool.item == null) return
-    BwSheet(title = "Letter scaling", onDismiss = { tool.lettersSheetOpen = false }) {
-        TextLetterScaleSection(tool)
+    CompositionLocalProvider(LocalSheetGroup provides LettersSheetGroup) {
+        BwSheet(title = "Letter scaling", onDismiss = { tool.lettersSheetOpen = false }) {
+            TextLetterScaleSection(tool)
+        }
     }
 }

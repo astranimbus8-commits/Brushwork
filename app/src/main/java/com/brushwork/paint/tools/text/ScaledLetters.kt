@@ -5,6 +5,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.text.TextPaint
+import kotlin.math.max
 import kotlin.math.min
 
 /**
@@ -97,7 +98,12 @@ internal class ScaledLetters(
         return maxOf(0f, over)
     }
 
-    /** Every non-blank cluster of [lines]: its characters, where it is drawn and its factor. */
+    /**
+     * Every non-blank cluster of [lines]: its characters, where it is drawn and its factor. A line
+     * that starts inside a cluster (a word too wide for the box is broken between characters, which
+     * on some platforms split what the ramp keeps as one cluster, such as an emoji sequence; or a
+     * frame of a story starting there) draws that cluster's part on it too, so no character is lost.
+     */
     private inline fun forEachLetter(lines: List<WrapLine>, wt: WrapText, block: (Int, Int, Float, Float, Float) -> Unit) {
         val n = text.length
         val bounds = ramp.bounds
@@ -105,9 +111,11 @@ internal class ScaledLetters(
         for (l in lines) {
             if (l.end <= l.start) continue
             val end = min(l.end, n)
-            var c = ramp.clusterAtOrAfter(offset + l.start)
+            val pos = offset + l.start
+            var c = ramp.clusterAtOrAfter(pos)
+            if (c > 0 && bounds[c] > pos) c--
             while (c < last) {
-                val s = bounds[c] - offset
+                val s = max(bounds[c] - offset, l.start)
                 if (s >= end) break
                 if (!ramp.blank[c]) {
                     val e = min(bounds[c + 1] - offset, end)

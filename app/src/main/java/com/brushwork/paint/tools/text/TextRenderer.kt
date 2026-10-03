@@ -283,9 +283,11 @@ object TextRenderer {
     /** Width of [text] on one line (newlines as spaces) with [spec]'s font, size and letter spacing. */
     fun lineWidth(text: String, spec: TextSpec): Float {
         val p = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
-        val line = text.replace('\n', ' ')
-        // v1.6: scaled letters take their scaled advances (each letter as it is drawn alone).
-        val ramp = rampFor(spec, line) ?: return p.measureText(line)
+        if (!scalesLetters(spec, text)) return p.measureText(text.replace('\n', ' '))
+        // v1.6: scaled letters take their scaled advances (each letter as it is drawn alone), on
+        // the one line the path lays out (every break and tab a space, the ramp over that line).
+        val line = TextOnPathEngine.oneLine(text)
+        val ramp = LetterRamp.of(line, spec.letterScale)
         p.fontFeatureSettings = SCALED_LETTER_FEATURES
         val adv = FloatArray(line.length)
         p.getTextWidths(line, 0, line.length, adv)

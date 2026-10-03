@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -100,7 +101,8 @@ fun TextToolOptions(tool: TextTool) {
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)
     if (tool.wrapSheetOpen && item != null && !tool.editorOpen) TextWrapSheet(tool)
-    if (tool.lettersSheetOpen && item != null && !tool.editorOpen) TextLetterScaleSheet(tool)
+    // Also over the open editor (stacked on it), so the chip always shows what it opens.
+    if (tool.lettersSheetOpen && item != null) TextLetterScaleSheet(tool)
 }
 
 /**
@@ -111,8 +113,14 @@ fun TextToolOptions(tool: TextTool) {
 @Composable
 internal fun LettersChip(tool: TextTool) {
     val on = tool.item?.spec?.letterScale?.isOn == true
+    val sheets = LocalSheetHost.current
     TextButton(
-        onClick = { tool.openLettersSheet() },
+        onClick = {
+            tool.openLettersSheet()
+            // Already open under another sheet (the editor opened over it), or folded into its
+            // pill: brought back on top and shown.
+            if (tool.lettersSheetOpen) sheets?.bringToFront(LettersSheetGroup)
+        },
         colors = ButtonDefaults.textButtonColors(
             containerColor = if (on) BrushworkColors.AccentDim else Color.Transparent,
             contentColor = if (on) Color.White else BrushworkColors.OnChrome,
