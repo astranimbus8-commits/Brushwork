@@ -1,11 +1,16 @@
 package com.brushwork.paint.ui.vector
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -17,29 +22,49 @@ import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.vector.ShapeHandleSide
+import com.brushwork.paint.tools.vector.ShapePoints
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
+import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.SliderScale
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.stepOnLongPress
+import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisDims
 
 /*
  * The "Points" parts of the shape tool's options: the strip's point editing toggle and the
@@ -55,6 +80,8 @@ private data class PointsInfo(
     val selected: Int,
     val smooth: Boolean,
     val explicitHandles: Boolean,
+    /** Some point has tangent handles (smooth, or explicit ones): the Handles group has something to scale. */
+    val anyHandles: Boolean,
 )
 
 @Composable
@@ -72,6 +99,7 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
                 selected = if (p != null) sel else -1,
                 smooth = p?.smooth == true,
                 explicitHandles = p != null && (p.handleIn != null || p.handleOut != null),
+                anyHandles = pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
             )
         }
     }
@@ -80,8 +108,9 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
 
 /**
  * Strip chips for the pending shape's points: "Points" (edit them), the in-tool undo / redo of
- * point edits, the selected point's actions (sharp / smooth, automatic tangent, delete) and
- * "Reset shape" (back to the regular outline). Nothing without a pending shape.
+ * point edits, the selected point's actions (sharp / smooth, automatic tangent, delete), the
+ * Handles group while some point has tangent handles (v1.6) and "Reset shape" (back to the
+ * regular outline). Nothing without a pending shape.
  */
 @Composable
 internal fun ShapePointsStrip(tool: ShapeTool) {
@@ -100,8 +129,115 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
             ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count > tool.minPoints) { tool.deletePoint(sel) }
             ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.selectPoint(-1) }, size = 44.dp)
         }
+        if (info.anyHandles) ShapeHandlesGroup(tool, sel)
     }
     if (info.custom) ActionChip("Reset shape", Icons.Filled.RestartAlt) { tool.resetShape() }
+}
+
+/**
+ * The Handles group (v1.6 §3.3, the shape tool's points): ⟷, ‹ "Shorter handles", the value
+ * ("100 %"; tap: "Type handle scale", long-press: the Scale step), › "Longer handles", a 120 dp
+ * "Handle scale" slider (10–400 %, logarithmic), the side ("In and out" / "In" / "Out") and "All
+ * points". It acts on the [selected] point's handles, or every point's without a selection or with
+ * "All points"; the value is relative to the handles when a change began and reads 100 % again
+ * at rest. ‹ › multiply by 0.9 / 1.1, or step by the Scale increment, and repeat while held;
+ * the slider lands on the Scale step's multiples while increments are on; a typed value is exact.
+ * Each slider drag, held arrow or typed value that changes something is one in-tool undo step.
+ * While the points it acts on have no handle (a selected sharp corner) the arrows, the value and
+ * the slider are disabled.
+ */
+@Composable
+private fun ShapeHandlesGroup(tool: ShapeTool, selected: Int) {
+    var typing by remember { mutableStateOf(false) }
+    val percent = tool.handleScale * 100f
+    // A selected sharp point between straight edges has no handle: nothing to scale until another
+    // point (or "All points") is chosen, so the arrows, value and slider rest disabled.
+    val canScale by remember(tool) { derivedStateOf { tool.canScaleHandles } }
+    Icon(
+        Icons.Filled.SwapHoriz,
+        contentDescription = null,
+        tint = BrushworkColors.OnChromeDim,
+        modifier = Modifier.padding(start = 8.dp, end = 2.dp).size(20.dp),
+    )
+    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = false) }
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .widthIn(min = 56.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .stepOnLongPress(IncrementKind.SCALE)
+            .clickable(enabled = canScale, onClickLabel = "Type handle scale", role = Role.Button) { typing = true },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            "${Units.formatNumber(percent.toDouble(), 0)} %",
+            style = MaterialTheme.typography.labelLarge,
+            color = if (canScale) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim,
+            maxLines = 1,
+        )
+    }
+    RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = true) }
+    HandleScaleSlider(tool, canScale)
+    for (side in ShapeHandleSide.entries) {
+        OptionChip(sideLabel(side), tool.handleSide == side, { tool.handleSide = side })
+    }
+    // Without a selected point the group acts on all of them anyway.
+    OptionChip("All points", tool.handlesAllPoints || selected < 0, { tool.handlesAllPoints = !tool.handlesAllPoints }, enabled = selected >= 0)
+    if (typing) {
+        ValueInputDialog(
+            title = "Handle scale",
+            label = "Scale",
+            initial = 100f,
+            format = { Units.formatNumber(it.toDouble(), 1) },
+            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(TYPED_MIN, TYPED_MAX) },
+            step = { v, up -> if (up) v * 1.1f else v * 0.9f },
+            toFraction = { v -> HandleScaleRange.fraction(v / 100.0) },
+            fromFraction = { f -> (HandleScaleRange.value(f) * 100.0).toFloat() },
+            rangeText = "10 – 400 % of the handles now",
+            suffix = "%",
+            onApply = { v -> tool.scaleHandles(v / 100f) },
+            onDismiss = { typing = false },
+            incrementKind = IncrementKind.SCALE,
+        )
+    }
+}
+
+/** The mini slider of the Handles group: 10–400 % of the handles when the drag began, logarithmic. */
+@Composable
+private fun HandleScaleSlider(tool: ShapeTool, enabled: Boolean) {
+    val scaleStep = LocalIncrements.current?.step(IncrementKind.SCALE)
+    val k = tool.handleScale
+    Slider(
+        value = HandleScaleRange.fraction(k.toDouble()),
+        onValueChange = { f ->
+            if (tool.beginHandleScale()) {
+                val raw = HandleScaleRange.value(f).toFloat()
+                tool.scaleHandlesTo(if (scaleStep != null) IncrementMath.snapFactor(raw, scaleStep) else raw)
+            }
+        },
+        onValueChangeFinished = { tool.endHandleScale() },
+        enabled = enabled,
+        colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+        modifier = Modifier
+            .width(IbisDims.HandleScaleSlider)
+            .semantics {
+                contentDescription = "Handle scale"
+                stateDescription = "${Units.formatNumber((k * 100f).toDouble(), 0)} %"
+            },
+    )
+}
+
+/** The Handles group's slider range: 10 % to 400 %, logarithmic (100 % a little past the middle). */
+private val HandleScaleRange = SliderScale.log(0.1, 4.0)
+
+/** Typed handle scales (percent) are kept within the factors the geometry allows. */
+private const val TYPED_MIN = ShapePoints.MIN_HANDLE_SCALE * 100f
+private const val TYPED_MAX = ShapePoints.MAX_HANDLE_SCALE * 100f
+
+private fun sideLabel(side: ShapeHandleSide): String = when (side) {
+    ShapeHandleSide.BOTH -> "In and out"
+    ShapeHandleSide.IN -> "In"
+    ShapeHandleSide.OUT -> "Out"
 }
 
 /**

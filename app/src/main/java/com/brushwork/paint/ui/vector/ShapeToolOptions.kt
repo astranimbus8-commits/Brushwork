@@ -30,6 +30,10 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -48,6 +52,7 @@ import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.vector.ArrowHeadStyle
 import com.brushwork.paint.tools.vector.ArrowHeads
 import com.brushwork.paint.tools.vector.CornerStyle
@@ -65,9 +70,12 @@ import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
+import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.NudgePad
+import com.brushwork.paint.ui.common.NumberAdjust
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
 import com.brushwork.paint.ui.common.SectionHeader
@@ -250,9 +258,15 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 description = "Squares, circles and regular polygons / stars",
             )
         }
+        // v1.6: while increments are on, the Angle step replaces this 15° option.
+        val angleStep = LocalIncrements.current?.step(IncrementKind.ANGLE)
         ToggleRow(
             "Snap angle", s.snapAngle, { v -> set { it.copy(snapAngle = v) } },
-            description = if (s.type.isLineLike) "Lines snap to 15° steps" else "Rotation snaps to 15° steps",
+            description = when {
+                angleStep != null -> "Increments are on: angles step by ${Units.formatNumber(angleStep.toDouble(), 2)}° instead"
+                s.type.isLineLike -> "Lines snap to 15° steps"
+                else -> "Rotation snaps to 15° steps"
+            },
         )
         ShapeEditingSettings(tool)
     }
@@ -271,11 +285,12 @@ private fun StrokeWidthControls(tool: ShapeTool, unit: LengthUnit, onUnit: (Leng
         "Use brush size", s.useBrushSize, { v -> tool.update { it.copy(useBrushSize = v) } },
         description = if (s.useBrushSize) "The width follows the brush size slider" else "The width set here is used",
     )
-    LengthEditor(
+    SteppedLengthEditor(
         label = if (brush) "Stroke width (arrowheads)" else "Stroke width",
         px = tool.strokeWidth, onPx = { tool.setStrokeWidth(it) },
         unit = unit, onUnit = onUnit, dpi = dpi,
         minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
+        kind = IncrementKind.SIZE,
         showSlider = showSlider, showUnit = showUnit,
     )
     if (s.useBrushSize) Hint("Same as the brush size: changing it here resizes the brush too")
@@ -321,11 +336,12 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
         SectionHeader("Corners")
         ChoiceChips(CornerStyle.entries.map { it.label }, s.corner.ordinal, { i -> set { it.copy(corner = CornerStyle.entries[i]) } })
         Spacer(Modifier.padding(top = 4.dp))
-        LengthEditor(
+        // v1.6: a length, so its field and slider step by the Length increment.
+        SteppedLengthEditor(
             label = if (s.corner == CornerStyle.ROUND || s.corner == CornerStyle.INVERTED) "Corner radius" else "Corner size",
             px = s.cornerRadius, onPx = { r -> set { it.copy(cornerRadius = r) } },
             unit = s.unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi,
-            minPx = 0f, maxPx = ShapeSettings.MAX_LENGTH, sliderMin = 1f, sliderMax = 1000f,
+            minPx = 0f, maxPx = ShapeSettings.MAX_LENGTH, kind = IncrementKind.LENGTH, sliderMin = 1f, sliderMax = 1000f,
             showSlider = true, showUnit = !compact, enabled = s.corner != CornerStyle.SHARP,
         )
         if (s.corner != CornerStyle.SHARP) Hint("Limited to half of the shorter edge at each corner")
@@ -379,7 +395,7 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 onValueChange = { deg -> tool.place(ShapeBox.line(st, st + direction(deg.toFloat()) * b.w)) },
                 modifier = Modifier.fillMaxWidth(), decimals = 1, suffix = "°", min = -360.0, max = 360.0, step = 1.0,
             )
-            AngleSlider("Angle", b.rotationDeg, s.snapAngle) { deg -> tool.place(ShapeBox.line(st, st + direction(deg) * b.w)) }
+            ShapeAngleSlider("Angle", b.rotationDeg, s.snapAngle) { deg -> tool.place(ShapeBox.line(st, st + direction(deg) * b.w)) }
             Hint("The start point stays put when the length or angle changes")
         } else {
             SectionHeader("Position")
@@ -410,7 +426,7 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
                 onValueChange = { deg -> tool.place(b.copy(rotationDeg = deg.toFloat())) },
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp), decimals = 1, suffix = "°", min = -360.0, max = 360.0, step = 1.0,
             )
-            AngleSlider("Rotation", b.rotationDeg, s.snapAngle) { deg -> tool.place(b.copy(rotationDeg = deg)) }
+            ShapeAngleSlider("Rotation", b.rotationDeg, s.snapAngle) { deg -> tool.place(b.copy(rotationDeg = deg)) }
         }
 
         ShapeParamFields(tool, compact = true)
@@ -429,5 +445,87 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
             onNudge = { dx, dy -> tool.nudge(dx, dy) },
         )
     }
+}
+
+/**
+ * [LengthEditor] (VectorWidgets) whose logarithmic slider also follows the increments (v1.6
+ * §3.4): the field and the slider land on the multiples of the [kind] step while increments are
+ * on (the slider's ends stay reachable). The stroke width is a SIZE (it steps by the Size
+ * increment, not the Length one); the corner radius a LENGTH.
+ */
+@Composable
+private fun SteppedLengthEditor(
+    label: String,
+    px: Float,
+    onPx: (Float) -> Unit,
+    unit: LengthUnit,
+    onUnit: (LengthUnit) -> Unit,
+    dpi: Float,
+    minPx: Float,
+    maxPx: Float,
+    kind: IncrementKind,
+    sliderMin: Float = 0.5f,
+    sliderMax: Float = 500f,
+    showSlider: Boolean = true,
+    showUnit: Boolean = true,
+    enabled: Boolean = true,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        LengthField(
+            label = label,
+            px = px.toDouble(),
+            onPxChange = { onPx(it.toFloat()) },
+            unit = unit,
+            dpi = dpi.toDouble(),
+            modifier = Modifier.weight(1f),
+            minPx = minPx.toDouble(),
+            maxPx = maxPx.toDouble(),
+            enabled = enabled,
+            // Its own log slider follows below: no second one in the field.
+            adjust = if (showSlider) NumberAdjust.NONE else NumberAdjust.AUTO,
+            incrementKind = kind,
+        )
+        if (showUnit) UnitSelector(unit, onUnit)
+    }
+    if (showSlider) {
+        val scale = LogScale(sliderMin, sliderMax)
+        // The step in document px (the slider's own unit).
+        val pxStep = LocalIncrements.current?.step(kind)?.toDouble()
+        Slider(
+            value = scale.toPos(px),
+            onValueChange = { pos ->
+                val v = scale.fromPos(pos)
+                onPx(if (pxStep == null) v else IncrementStepping.snapSlider(v.toDouble(), pxStep, sliderMin.toDouble(), sliderMax.toDouble()).toFloat())
+            },
+            enabled = enabled,
+            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+            // For screen readers (the field above carries the same name).
+            modifier = Modifier.semantics { contentDescription = "$label slider" },
+        )
+    }
+}
+
+/**
+ * [AngleSlider] (VectorWidgets) whose 15° option gives way to the Angle increment while that is
+ * on (v1.6 §3.4: the step replaces the soft detents; the slider itself lands on its multiples).
+ */
+@Composable
+private fun ShapeAngleSlider(label: String, deg: Float, snap: Boolean, onChange: (Float) -> Unit) {
+    val stepping = LocalIncrements.current?.step(IncrementKind.ANGLE) != null
+    LabeledSlider(
+        label = label,
+        value = deg,
+        onValueChange = { v ->
+            onChange(
+                when {
+                    stepping -> v
+                    snap -> ShapeGeometry.snapDegrees(v)
+                    else -> v.roundToInt().toFloat()
+                },
+            )
+        },
+        valueRange = -180f..180f,
+        valueText = "${Units.formatNumber(deg.toDouble(), 1)}°",
+    )
 }
 

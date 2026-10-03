@@ -14,6 +14,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.LengthField
@@ -126,6 +127,8 @@ fun TransformNumbersSheet(tool: TransformTool) {
             logSlider = true,
             modifier = Modifier.padding(top = 4.dp),
             onValueChangeFinished = finished,
+            // v1.6: a Transform scale steps by the Scale step (100, 110, 120 % of the original), not the Percent one.
+            incrementKind = IncrementKind.SCALE,
         )
 
         SectionHeader("Nudge")

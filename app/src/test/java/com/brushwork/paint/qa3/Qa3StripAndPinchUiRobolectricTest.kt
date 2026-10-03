@@ -281,7 +281,7 @@ class Qa3StripAndPinchUiRobolectricTest {
         assertArrayEquals("the canvas doesn't move when the strip appears", before, matrixOf(c), 0f)
         val pin0 = tool.objectPosition!!.position!!
         val steps = c.undoManager.undoCount
-        dragSlider("X slider", 60f)
+        dragSlider("X slider", 80f)
         val pin1 = tool.objectPosition!!.position!!
         assertNotEquals(pin0.x, pin1.x)
         assertEquals("one step per drag", steps + 1, c.undoManager.undoCount)
@@ -311,7 +311,7 @@ class Qa3StripAndPinchUiRobolectricTest {
         assertArrayEquals("the canvas doesn't move when the strip appears", before, matrixOf(c), 0f)
         setSlider("X slider", 300f)
         assertEquals(Vec2(300f, 90f), tool.objectPosition!!.position)
-        dragSlider("Y slider", 40f)
+        dragSlider("Y slider", 80f)
         assertTrue(tool.objectPosition!!.position!!.y > 90f)
     }
 

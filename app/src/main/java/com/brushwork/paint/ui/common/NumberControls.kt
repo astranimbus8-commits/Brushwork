@@ -44,6 +44,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
@@ -77,9 +78,27 @@ import kotlin.math.roundToInt
 /*
  * The shared number controls (moved out of Components.kt by the v1.6 foundation, §4.5; same
  * package, same signatures; owned by area G): typeable sliders, numeric and length fields with
- * units, automatic sliders and drag-to-scrub handles. v1.6 adds the increment parameters
- * (`incrementKind` / `incrementKey`), no-ops until area G infers and applies the steps.
+ * units, automatic sliders and drag-to-scrub handles.
+ *
+ * v1.6 increments (§3.4): inside the editor ([LocalIncrements]) every control has a kind,
+ * inferred from its unit (`%` → PERCENT, `°` → ANGLE, `px` → SIZE; a [LengthField] is LENGTH) or
+ * given by `incrementKind`, or else a custom step of its own under `incrementKey` (an explicit key
+ * overrides the inferred kind; default "$label|$suffix"). While increments are on, sliders land
+ * on multiples of the step (the range ends stay reachable), and -/+ buttons and scrub handles
+ * move to the next multiples; typed values are never quantized. A long-press on the value opens
+ * the Step popup. With increments off every control behaves exactly as in v1.5 (I8).
  */
+
+/**
+ * How a number control takes part in increments (internal): [Auto] infers or takes its kind or
+ * custom key; [None] never steps (the step fields of the Increments sheet themselves).
+ */
+internal sealed interface IncrementBinding {
+    /** [kind] (null: inferred from the suffix, else the custom step [key]); a kind's step × [stepScale] is in the shown unit. */
+    class Auto(val kind: IncrementKind?, val key: String?, val stepScale: Double = 1.0) : IncrementBinding
+
+    data object None : IncrementBinding
+}
 
 /**
  * Makes the value of a [LabeledSlider] typeable: tap the number, type, Done. The value is shown
@@ -99,9 +118,13 @@ class SliderTyping(val scale: Float = 1f, val decimals: Int = 0, val suffix: Str
  * With [typing] the value text is a button: tapping it lets the number be typed in (committed on
  * Done or when the field loses focus, then [onValueChangeFinished] fires).
  *
- * v1.6 increments (§3.4; applied by area G): [incrementKind] overrides the kind inferred from
- * the value's suffix (`%` → PERCENT, `°` → ANGLE); [incrementKey] names the control's custom step
- * when it has no kind (default "$label|$suffix"). No-ops in the foundation.
+ * v1.6 increments (§3.4): [incrementKind] overrides the kind inferred from the value's unit
+ * ([typing]'s suffix, else the text after the number in [valueText]: `%` → PERCENT, `°` → ANGLE,
+ * `px` → SIZE); [incrementKey] without [incrementKind] makes it a custom step under that key
+ * whatever its unit says, and a control with neither and no kind of its unit has a custom step
+ * under "$label|$suffix". Steps are in the shown unit ([SliderTyping.scale]; a 0..1 percentage slider
+ * without typing counts as × 100). While increments are on the slider lands on the step's
+ * multiples; a long-press on the value opens the Step popup.
  */
 @Composable
 fun LabeledSlider(
@@ -122,6 +145,21 @@ fun LabeledSlider(
     val latestChange by rememberUpdatedState(onValueChange)
     val latestFinished by rememberUpdatedState(onValueChangeFinished)
     val focusManager = LocalFocusManager.current
+    // Increments: the kind or custom key, and the step in slider units (null: the v1.5 slider).
+    val inc = LocalIncrements.current
+    // A value shown without a number ("None", "Off" at 0) keeps the unit the slider showed last,
+    // so its kind (and its Step popup) doesn't flip while the slider moves to and from 0.
+    val lastUnit = remember { arrayOfNulls<String>(1) }
+    val shownUnit = typing?.suffix?.takeIf { it.isNotEmpty() } ?: IncrementStepping.unitOf(valueText)
+    if (shownUnit != null) lastUnit[0] = shownUnit
+    val unitSuffix = shownUnit ?: lastUnit[0].orEmpty()
+    val (kind, key) = IncrementStepping.resolve(incrementKind, incrementKey, label, unitSuffix)
+    val shownScale = typing?.scale?.takeIf { it.isFinite() && it != 0f } ?: IncrementStepping.impliedScale(kind, valueRange.endInclusive)
+    val sliderStep = inc?.stepFor(kind, key)?.let { (it / shownScale).toDouble() }?.takeIf { IncrementStepping.valid(it) }
+    val stepTarget = remember(kind, key, label, unitSuffix) { StepTarget(kind, key, if (kind == null) label else null, unitSuffix) }
+    val sliderChange: (Float) -> Unit = if (sliderStep == null) onValueChange else { v ->
+        onValueChange(IncrementStepping.snapSlider(v.toDouble(), sliderStep, valueRange.start.toDouble(), valueRange.endInclusive.toDouble()).toFloat())
+    }
     Column(modifier.fillMaxWidth()) {
         // A typeable value is a finger-sized target (a near miss would land on the slider below
         // and move it), so its row is as tall as the target.
@@ -149,6 +187,7 @@ fun LabeledSlider(
                         .heightIn(min = MinTouchTarget)
                         .widthIn(min = 48.dp)
                         .clip(RoundedCornerShape(8.dp))
+                        .stepOnLongPressFor(stepTarget)
                         .clickable(onClickLabel = "Type a value for $label", role = Role.Button) { editing = true },
                     contentAlignment = Alignment.CenterEnd,
                 ) {
@@ -163,12 +202,17 @@ fun LabeledSlider(
                             .padding(horizontal = 8.dp, vertical = 3.dp),
                     )
                 }
-                else -> Text(valueText, style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
+                else -> Text(
+                    valueText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BrushworkColors.OnChromeDim,
+                    modifier = Modifier.stepOnLongPressFor(stepTarget, enabled),
+                )
             }
         }
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
-            onValueChange = onValueChange,
+            onValueChange = sliderChange,
             valueRange = valueRange,
             steps = steps,
             enabled = enabled,
@@ -255,10 +299,13 @@ private val MinInlineTextWidth = 112.dp
  * each slider / scrub move, each -/+ repeat); [onValueChangeFinished] once a change is complete
  * (text committed, slider or scrub released, -/+ released), e.g. to record undo or save.
  *
- * v1.6 increments (§3.4; applied by area G): [incrementKind] overrides the inferred kind (suffix
- * `%` → PERCENT, `°` → ANGLE, `px` → SIZE); [incrementKey] names the custom step of a control
- * without a kind (default "$label|$suffix"). Typed values are never quantized. No-ops in the
- * foundation.
+ * v1.6 increments (§3.4): [incrementKind] overrides the inferred kind (suffix `%` → PERCENT,
+ * `°` → ANGLE, `px` → SIZE); [incrementKey] without [incrementKind] makes it a custom step under
+ * that key whatever its unit says (otherwise a control without a kind steps by "$label|$suffix").
+ * While increments are on, the slider lands on the step's multiples,
+ * -/+ and the scrub handle move to the next multiples; typed values are never quantized. A
+ * long-press on the field (while it isn't being typed in) or on the scrub handle opens the Step
+ * popup.
  */
 @Composable
 fun NumberField(
@@ -280,6 +327,32 @@ fun NumberField(
     onValueChangeFinished: (() -> Unit)? = null,
     incrementKind: IncrementKind? = null,
     incrementKey: String? = null,
+) = NumberFieldCore(
+    label, value, onValueChange, modifier, decimals, suffix, min, max, step, enabled, adjust,
+    sliderMin, sliderMax, logSlider, dragStep, onValueChangeFinished,
+    IncrementBinding.Auto(incrementKind, incrementKey),
+)
+
+/** [NumberField] with its [increments] binding spelled out (a [LengthField] converts its steps into its unit). */
+@Composable
+internal fun NumberFieldCore(
+    label: String,
+    value: Double,
+    onValueChange: (Double) -> Unit,
+    modifier: Modifier,
+    decimals: Int,
+    suffix: String,
+    min: Double,
+    max: Double,
+    step: Double?,
+    enabled: Boolean,
+    adjust: NumberAdjust,
+    sliderMin: Double?,
+    sliderMax: Double?,
+    logSlider: Boolean?,
+    dragStep: Double?,
+    onValueChangeFinished: (() -> Unit)?,
+    increments: IncrementBinding,
 ) {
     // "NaN", "Infinity" and "1e999" parse as doubles: they are invalid text here like any other
     // garbage (NaN would pass coerceIn, and an infinite value would reach the model).
@@ -326,10 +399,26 @@ fun NumberField(
     val scrubStep = dragStep?.takeIf { it > 0.0 && it.isFinite() } ?: step ?: NumberSliderMath.defaultDragStep(decimals)
     val scrubStart = remember { DoubleArray(1) }
 
+    // Increments: the kind or custom key, and the step in the shown unit (null: the v1.5 field).
+    val auto = increments as? IncrementBinding.Auto
+    val (kind, key) = if (auto == null) null to null else IncrementStepping.resolve(auto.kind, auto.key, label, suffix)
+    val inc = LocalIncrements.current
+    val incStep: Double? = if (auto == null) null else inc?.stepFor(kind, key)?.toDouble()
+        ?.let { if (kind != null) it * auto.stepScale else it }
+        ?.takeIf { IncrementStepping.valid(it) }
+    val stepTarget = remember(kind, key, label, suffix) { if (auto == null) null else StepTarget(kind, key, if (kind == null) label else null, if (kind == null) suffix else null) }
+    /** [v] moved [n] steps: to the next multiples of the increment, else by [by]. */
+    fun stepped(v: Double, n: Int, by: Double): Double = if (incStep != null) IncrementStepping.stepBy(v, n.toLong(), incStep) else v + n * by
+    // A finger held on the field opens the Step popup; meanwhile the field refuses focus, so its
+    // own long-press (select a word, keyboard) doesn't happen behind the popup. While it is being
+    // typed in, a long-press is the text field's (select, paste).
+    val stepHold = remember { StepHold() }
+    val longPress: Modifier = if (stepTarget == null) Modifier else Modifier.stepOnLongPressFor(stepTarget, enabled && !focused, stepHold)
+
     val field: @Composable () -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (step != null) {
-                RepeatIconButton(Icons.Filled.Remove, "Decrease $label", enabled = enabled, onRelease = ::finish) { set(latestValue - step) }
+                RepeatIconButton(Icons.Filled.Remove, "Decrease $label", enabled = enabled, onRelease = ::finish) { set(stepped(latestValue, -1, step)) }
             }
             OutlinedTextField(
                 value = text,
@@ -352,19 +441,27 @@ fun NumberField(
                 keyboardActions = KeyboardActions(onDone = { commit(); defaultKeyboardAction(ImeAction.Done) }),
                 modifier = Modifier
                     .weight(1f)
+                    .then(longPress)
+                    .focusProperties { canFocus = !stepHold.active }
                     .onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
             )
             if (step != null) {
-                RepeatIconButton(Icons.Filled.Add, "Increase $label", enabled = enabled, onRelease = ::finish) { set(latestValue + step) }
+                RepeatIconButton(Icons.Filled.Add, "Increase $label", enabled = enabled, onRelease = ::finish) { set(stepped(latestValue, 1, step)) }
             }
             if (scrub) {
                 ScrubHandle(
                     label = label,
                     enabled = enabled,
                     onStart = { scrubStart[0] = latestValue },
-                    onDrag = { dp -> set(NumberSliderMath.scrubValue(scrubStart[0], dp, scrubStep, min, max)) },
+                    onDrag = { dp ->
+                        set(
+                            if (incStep != null) IncrementStepping.stepBy(scrubStart[0], NumberSliderMath.scrubSteps(dp), incStep).coerceIn(min, max)
+                            else NumberSliderMath.scrubValue(scrubStart[0], dp, scrubStep, min, max),
+                        )
+                    },
                     onEnd = ::finish,
-                    onStep = { direction -> set(latestValue + direction * scrubStep); finish() },
+                    onStep = { direction -> set(stepped(latestValue, direction, scrubStep)); finish() },
+                    modifier = longPress,
                 )
             }
         }
@@ -378,7 +475,10 @@ fun NumberField(
             val focusManager = LocalFocusManager.current
             Slider(
                 value = scale.fraction(value),
-                onValueChange = { f -> set(NumberSliderMath.sliderValue(f, scale, decimals, min, max)) },
+                onValueChange = { f ->
+                    val v = NumberSliderMath.sliderValue(f, scale, decimals, min, max)
+                    set(if (incStep == null) v else IncrementStepping.snapSlider(v, incStep, maxOf(scale.min, min), minOf(scale.max, max)))
+                },
                 onValueChangeFinished = ::finish,
                 enabled = enabled,
                 colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
@@ -398,9 +498,11 @@ fun NumberField(
 /**
  * A length in document pixels, edited in [unit] (converted with [dpi]).
  *
- * v1.6 increments (§3.4; applied by area G): a length field is a LENGTH control unless
- * [incrementKind] says otherwise (e.g. SIZE for a font size); [incrementKey] as in [NumberField].
- * No-ops in the foundation.
+ * v1.6 increments (§3.4): a length field is a LENGTH control unless [incrementKind] says
+ * otherwise (e.g. SIZE for a font size); [incrementKey] alone makes it a custom step under that
+ * key, in the field's shown unit (as in [NumberField]). Length and size steps
+ * are document px, shown in [unit] (10 px is 0.847 mm at 300 dpi: an mm field lands on its
+ * multiples).
  */
 @Composable
 fun LengthField(
@@ -426,7 +528,11 @@ fun LengthField(
     val pxScale = remember(adjust, minPx, maxPx, sliderMinPx, sliderMaxPx, logSlider) {
         NumberSliderMath.scaleFor(adjust, minPx, maxPx, sliderMinPx, sliderMaxPx, logSlider)
     }
-    NumberField(
+    // A length field is LENGTH unless told otherwise; a key alone is a custom step (in the shown unit).
+    val kind = incrementKind ?: if (incrementKey != null) null else IncrementKind.LENGTH
+    // Length and size steps are px: shown in this field's unit.
+    val stepScale = if (kind == IncrementKind.LENGTH || kind == IncrementKind.SIZE) unit.fromPx(1.0, dpi) else 1.0
+    NumberFieldCore(
         label = label,
         value = unit.fromPx(px, dpi),
         onValueChange = { onPxChange(unit.toPx(it, dpi).coerceIn(minPx, maxPx)) },
@@ -443,8 +549,7 @@ fun LengthField(
         logSlider = pxScale?.log,
         dragStep = step ?: unit.defaultStep,
         onValueChangeFinished = onValueChangeFinished,
-        incrementKind = incrementKind,
-        incrementKey = incrementKey,
+        increments = IncrementBinding.Auto(kind, incrementKey, stepScale.takeIf { it.isFinite() && it > 0.0 } ?: 1.0),
     )
 }
 
@@ -515,6 +620,7 @@ private fun ScrubHandle(
     onDrag: (Float) -> Unit,
     onEnd: () -> Unit,
     onStep: (Int) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val focusManager = LocalFocusManager.current
     val start by rememberUpdatedState(onStart)
@@ -523,7 +629,7 @@ private fun ScrubHandle(
     val stepBy by rememberUpdatedState(onStep)
     var active by remember { mutableStateOf(false) }
     Box(
-        Modifier
+        modifier
             .size(width = 40.dp, height = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (active) BrushworkColors.AccentDim else BrushworkColors.ChromeHigh.copy(alpha = 0.6f))

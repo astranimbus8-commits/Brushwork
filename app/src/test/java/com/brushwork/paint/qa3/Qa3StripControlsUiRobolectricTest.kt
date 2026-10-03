@@ -36,11 +36,14 @@ import org.robolectric.shadows.ShadowLog
 import java.time.Duration
 
 /**
- * Final QA (v1.5 §4.6, §7 checklist 5) of the X / Y strip's own controls with real fingers at the
- * user's 392 dp, on a raster picture in the Transform tool: the ‹ › arrows (tap and hold), a
- * drag that turns fine when the finger leaves the track, a value typed in cm at the document DPI;
- * all of it part of the pending transform (✓ is one step). The fold is remembered by the next
- * editor, and folding / unfolding never moves the canvas.
+ * Final QA (v1.5 §4.6, §7 checklist 5; v1.6 §3.7.8 pill) of the X / Y pill's own controls with
+ * real fingers at the user's 392 dp, on a raster picture in the Transform tool: the screen
+ * reader's "Increase X" / "Decrease Y" (the v1.5 ‹ › arrows: 1 px each), a drag of the number
+ * that turns fine when the finger goes far above or below the cell, the "#" cell switching
+ * increments on (a drag then lands on multiples of 10 px, "Increase X" goes to the next
+ * multiple), a value typed in cm at the document DPI; all of it part of the pending transform
+ * (✓ is one step). The fold is remembered by the next editor, and folding / unfolding never moves
+ * the canvas.
  *
  * Own sandbox; all UI work in ONE test split into sections.
  */
@@ -90,29 +93,16 @@ class Qa3StripControlsUiRobolectricTest {
 
     private fun matrixOf(c: EditorController): FloatArray = FloatArray(9).also { c.viewTransform.matrix.getValues(it) }
 
-    private fun element(label: String): RobolectricUi.Element = RobolectricUi.elements().lastOrNull { e ->
-        e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it == label } == true
-    } ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown()}")
 
     private fun slider(name: String): RobolectricUi.Element = RobolectricUi.elements().last { e ->
         e.node.layoutInfo.isPlaced && e.node.config.contains(SemanticsActions.SetProgress) &&
             e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(name) == true
     }
 
-    /** A finger on [e] for [holdMs] of real time (a tap when short: the repeat runs on wall-clock delays). */
-    private fun press(e: RobolectricUi.Element, holdMs: Long = 40) {
-        val x = e.bounds.center.x
-        val y = e.bounds.center.y
-        val t0 = SystemClock.uptimeMillis()
-        fun send(action: Int) {
-            val ev = MotionEvent.obtain(t0, SystemClock.uptimeMillis(), action, x, y, 0).apply { source = InputDevice.SOURCE_TOUCHSCREEN }
-            e.window.dispatchTouchEvent(ev)
-            ev.recycle()
-        }
-        send(MotionEvent.ACTION_DOWN)
-        val end = System.currentTimeMillis() + holdMs
-        while (System.currentTimeMillis() < end) { Thread.sleep(10); idle(10) }
-        send(MotionEvent.ACTION_UP)
+    /** Runs the screen reader's custom action [label] of the cell [cellLabel] ("X slider"). */
+    private fun action(cellLabel: String, label: String) {
+        val cell = slider(cellLabel)
+        cell.node.config[SemanticsActions.CustomActions].single { it.label == label }.action.invoke()
         settle(4)
     }
 
@@ -143,17 +133,13 @@ class Qa3StripControlsUiRobolectricTest {
         val steps = c.undoManager.undoCount
         assertEquals(200f, tool.anchorPosition!!.x, 0.01f)
 
-        // ‹ › taps: 1 px each.
-        repeat(3) { press(element("X plus 1 pixel")) }
-        assertEquals("three taps on ›", 203f, tool.anchorPosition!!.x, 0.01f)
-        press(element("Y minus 1 pixel"))
+        // The screen reader's increase / decrease (the v1.5 arrows): 1 px each.
+        repeat(3) { action("X slider", "Increase X") }
+        assertEquals("three increases", 203f, tool.anchorPosition!!.x, 0.01f)
+        action("Y slider", "Decrease Y")
         assertEquals(149f, tool.anchorPosition!!.y, 0.01f)
-        // Held: it repeats.
-        press(element("X minus 1 pixel"), holdMs = 1_000)
-        val held = tool.anchorPosition!!.x
-        assertTrue("holding ‹ repeats: $held", held < 203f - 5f)
 
-        // A drag that leaves the track (fine mode): the second half moves a tenth as far.
+        // A drag of the number that goes far from the cell (fine mode): the second half moves a tenth as far.
         val e = slider("X slider")
         val x0 = e.bounds.left + e.bounds.width * 0.5f
         val y0 = e.bounds.center.y
@@ -170,7 +156,7 @@ class Qa3StripControlsUiRobolectricTest {
         for (i in 1..6) send(MotionEvent.ACTION_MOVE, x0 + 10f * i, y0)
         val coarse = tool.anchorPosition!!.x - atDown
         assertTrue("the drag moved it: $coarse", coarse > 10f)
-        // The finger goes 60 dp down (more than 48 dp from the track) and on 60 px to the right.
+        // The finger goes 60 dp down (more than 48 dp from the cell) and on 60 px to the right.
         send(MotionEvent.ACTION_MOVE, x0 + 60f, y0 + 60f * dp)
         settle(2)
         assertTrue("\"Fine\" shows while the finger is away from the track", SmokeUi.has("Fine", exact = true))
@@ -181,6 +167,23 @@ class Qa3StripControlsUiRobolectricTest {
         send(MotionEvent.ACTION_UP, x0 + 120f, y0 + 60f * dp)
         settle(4)
         assertFalse("\"Fine\" goes with the finger", SmokeUi.has("Fine", exact = true))
+
+        // "#": increments on (Length 10 px). A drag lands the value on a multiple of 10 px, and
+        // "Increase X" goes to the next multiple.
+        assertFalse(c.increments.enabled)
+        SmokeUi.click("Increments", exact = true)
+        assertTrue("the # cell switches increments on", c.increments.enabled)
+        val cell = slider("X slider")
+        RobolectricUi.drag(cell.window, cell.bounds.center.x to cell.bounds.center.y, cell.bounds.center.x + 107f to cell.bounds.center.y)
+        val stepped = tool.anchorPosition!!.x
+        assertEquals("on a multiple of 10 px: $stepped", Math.round(stepped / 10f) * 10f, stepped, 1e-3f)
+        tool.setAnchorPosition(x = 203.0)
+        tool.endNumericEdit()
+        settle()
+        action("X slider", "Increase X")
+        assertEquals("the next multiple", 210f, tool.anchorPosition!!.x, 1e-3f)
+        SmokeUi.click("Increments", exact = true)
+        assertFalse("off again", c.increments.enabled)
 
         // Typed in cm at the document DPI.
         tool.unit = LengthUnit.CM
@@ -217,7 +220,7 @@ class Qa3StripControlsUiRobolectricTest {
         settle()
         val view0 = matrixOf(c)
         SmokeUi.click("Fold the X / Y strip")
-        assertTrue("folded: one line", SmokeUi.has("X 200 · Y 150 px"))
+        assertTrue("folded: a lone ✥", SmokeUi.has("Unfold the X / Y strip"))
         assertFalse(SmokeUi.has("X slider"))
         assertArrayEquals("folding doesn't move the canvas", view0, matrixOf(c), 0f)
         tool.commit()

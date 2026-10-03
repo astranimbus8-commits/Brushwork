@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.vector
 
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Vec2
 import kotlinx.serialization.Serializable
 import kotlin.math.PI
@@ -579,5 +580,94 @@ object ShapeGeometry {
         }
         val c = start.toDoc(Vec2((l + r) / 2f, (t + b) / 2f))
         return ShapeBox(c.x, c.y, r - l, b - t, start.rotationDeg)
+    }
+
+    /**
+     * v1.6 increments (§3.4): [resize] with the dragged sizes on multiples of [step] document px
+     * (absolute widths and heights, at least one step). [stepW] / [stepH] say which of the box's
+     * own sizes may be stepped (false: a guide or the grid decided it, and the finger's size is
+     * kept). With [aspect] the leading size (the dragged one; for a corner the longer one) is
+     * stepped and the other follows the proportions. The fixed sides (or the center with
+     * [fromCenter]) stay where [resize] keeps them. A step that is NaN or ≤ 0 is [resize].
+     */
+    fun resizeStepped(
+        start: ShapeBox,
+        handle: Handle,
+        p: Vec2,
+        fromCenter: Boolean,
+        aspect: Float?,
+        step: Float,
+        stepW: Boolean = true,
+        stepH: Boolean = true,
+        minSize: Float = 1f,
+    ): ShapeBox {
+        val raw = resize(start, handle, p, fromCenter, aspect, minSize)
+        if (!(step > 0f) || !step.isFinite()) return raw
+        fun stepped(v: Float): Float = max(IncrementMath.snap(v, step), step)
+        var w = raw.w
+        var h = raw.h
+        val dragsW = handle.fx != 0
+        val dragsH = handle.fy != 0
+        if (aspect != null && aspect > 0f) {
+            val wLeads = if (dragsW && dragsH) aspect >= 1f else dragsW
+            if (wLeads) {
+                if (!stepW) return raw
+                w = stepped(w)
+                h = w / aspect
+            } else {
+                if (!stepH) return raw
+                h = stepped(h)
+                w = h * aspect
+            }
+        } else {
+            if (dragsW && stepW) w = stepped(w)
+            if (dragsH && stepH) h = stepped(h)
+        }
+        if (w == raw.w && h == raw.h) return raw
+        // Box-local center: the fixed side stays (the center with fromCenter or for an undragged axis).
+        val hw = start.w / 2f
+        val hh = start.h / 2f
+        val lx = when {
+            fromCenter || handle.fx == 0 -> 0f
+            handle.fx < 0 -> hw - w / 2f
+            else -> -hw + w / 2f
+        }
+        val ly = when {
+            fromCenter || handle.fy == 0 -> 0f
+            handle.fy < 0 -> hh - h / 2f
+            else -> -hh + h / 2f
+        }
+        val c = start.toDoc(Vec2(lx, ly))
+        return ShapeBox(c.x, c.y, w, h, start.rotationDeg)
+    }
+
+    /**
+     * v1.6 increments: [dragBox] with the width ([stepW]) and height ([stepH]) on the nearest
+     * multiples of [step] document px (0 included: a drag too small for one step makes nothing);
+     * with [aspect] the longer size is stepped and the other follows. A bad step is [dragBox].
+     */
+    fun dragBoxStepped(anchor: Vec2, current: Vec2, fromCenter: Boolean, aspect: Float?, step: Float, stepW: Boolean = true, stepH: Boolean = true): ShapeBox {
+        if (!(step > 0f) || !step.isFinite()) return dragBox(anchor, current, fromCenter, aspect)
+        val dx = current.x - anchor.x
+        val dy = current.y - anchor.y
+        var w = abs(dx) * (if (fromCenter) 2f else 1f)
+        var h = abs(dy) * (if (fromCenter) 2f else 1f)
+        fun stepped(v: Float): Float = max(IncrementMath.snap(v, step), 0f)
+        if (aspect != null && aspect > 0f) {
+            if (h * aspect < w) {
+                if (stepW) w = stepped(w)
+                h = w / aspect
+            } else {
+                if (stepH) h = stepped(h)
+                w = h * aspect
+            }
+        } else {
+            if (stepW) w = stepped(w)
+            if (stepH) h = stepped(h)
+        }
+        if (fromCenter) return ShapeBox(anchor.x, anchor.y, w, h, 0f)
+        val sx = if (dx < 0f) -1f else 1f
+        val sy = if (dy < 0f) -1f else 1f
+        return ShapeBox(anchor.x + sx * w / 2f, anchor.y + sy * h / 2f, w, h, 0f)
     }
 }

@@ -33,8 +33,12 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.brush.BrushPresetStore
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.IncrementStepping
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.RepeatIconButton
+import com.brushwork.paint.ui.common.stepFor
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -42,6 +46,11 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * keyboard up, OK / the keyboard's Done applies it (clamped by [parse]), invalid text is refused
  * (the dialog stays open and says so). -/+ step the value ([step]) and the slider ([toFraction] /
  * [fromFraction]) sets it quickly; both only change the text until it is applied.
+ *
+ * v1.6 increments (§3.4): with [incrementKind] (or a custom step under [incrementKey]) and
+ * increments on, -/+ move to the next multiples of that step and the slider lands on them;
+ * [incrementScale] is the step's unit per value unit (100 for a 0..1 value typed as %, px per
+ * unit for a length typed in mm). The typed value itself is applied exactly as typed.
  */
 @Composable
 fun ValueInputDialog(
@@ -57,6 +66,9 @@ fun ValueInputDialog(
     suffix: String,
     onApply: (Float) -> Unit,
     onDismiss: () -> Unit,
+    incrementKind: IncrementKind? = null,
+    incrementKey: String? = null,
+    incrementScale: Float = 1f,
 ) {
     fun selectedAll(s: String) = TextFieldValue(s, selection = TextRange(0, s.length))
     var field by remember { mutableStateOf(selectedAll(format(initial))) }
@@ -64,11 +76,31 @@ fun ValueInputDialog(
     val focus = remember { FocusRequester() }
     /** The value shown right now (the last valid one while the text is being edited). */
     var current by remember { mutableStateOf(initial) }
+    // The increment in value units (null: the v1.5 steps).
+    val incStep = LocalIncrements.current?.stepFor(incrementKind, incrementKey)
+        ?.let { it.toDouble() / incrementScale.toDouble() }
+        ?.takeIf { IncrementStepping.valid(it) }
 
     fun setValue(v: Float) {
         current = v
         field = selectedAll(format(v))
         error = false
+    }
+
+    /** -/+: the next multiple of the increment (kept within what [parse] accepts), else [step]. */
+    fun stepped(v: Float, up: Boolean): Float {
+        if (incStep == null) return step(v, up)
+        val r = IncrementStepping.stepBy(v.toDouble(), if (up) 1 else -1, incStep).toFloat()
+        return parse(format(r)) ?: r
+    }
+
+    /** The slider: on the increment's multiples (the ends stay reachable) while increments are on. */
+    fun fromSlider(f: Float): Float {
+        val v = fromFraction(f)
+        if (incStep == null) return v
+        val a = fromFraction(0f).toDouble()
+        val b = fromFraction(1f).toDouble()
+        return IncrementStepping.snapSlider(v.toDouble(), incStep, minOf(a, b), maxOf(a, b)).toFloat()
     }
 
     val apply = {
@@ -83,7 +115,7 @@ fun ValueInputDialog(
 
     BwDialog(title = title, onDismiss = onDismiss, confirmText = "OK", onConfirm = apply) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            RepeatIconButton(Icons.Filled.Remove, "Decrease $label") { setValue(step(parse(field.text) ?: current, false)) }
+            RepeatIconButton(Icons.Filled.Remove, "Decrease $label") { setValue(stepped(parse(field.text) ?: current, false)) }
             OutlinedTextField(
                 value = field,
                 onValueChange = { v ->
@@ -101,11 +133,11 @@ fun ValueInputDialog(
                 keyboardActions = KeyboardActions(onDone = { apply() }),
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
-            RepeatIconButton(Icons.Filled.Add, "Increase $label") { setValue(step(parse(field.text) ?: current, true)) }
+            RepeatIconButton(Icons.Filled.Add, "Increase $label") { setValue(stepped(parse(field.text) ?: current, true)) }
         }
         Slider(
             value = toFraction(current).coerceIn(0f, 1f),
-            onValueChange = { f -> setValue(fromFraction(f)) },
+            onValueChange = { f -> setValue(fromSlider(f)) },
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp).semantics { contentDescription = "$label slider" },
         )
@@ -144,6 +176,7 @@ fun BrushValueDialog(controller: EditorController, kind: SliderKind, onDismiss: 
             suffix = "px",
             onApply = apply,
             onDismiss = onDismiss,
+            incrementKind = IncrementKind.SIZE,
         )
         SliderKind.OPACITY -> ValueInputDialog(
             title = "${toolId.label} opacity",
@@ -158,6 +191,8 @@ fun BrushValueDialog(controller: EditorController, kind: SliderKind, onDismiss: 
             suffix = "%",
             onApply = apply,
             onDismiss = onDismiss,
+            incrementKind = IncrementKind.PERCENT,
+            incrementScale = 100f,
         )
     }
 }

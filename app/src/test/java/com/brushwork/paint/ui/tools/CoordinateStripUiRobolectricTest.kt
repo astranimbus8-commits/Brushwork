@@ -41,12 +41,12 @@ import org.robolectric.shadows.ShadowLog
 import java.time.Duration
 
 /**
- * v1.5 §4.6 (A4): the X / Y strip in the real editor at the user's phone size. Hidden without
- * anything to place; shown while transforming (its slider moves the transformed content, which
- * stays one pending transform: ✓ is one step), for a pending shape and for the selected curve
- * point; a typed value in mm lands at the document DPI; a drag that strays far from the track is
- * fine (a tenth of the movement) and is one in-tool undo step; showing the strip doesn't refit
- * the canvas; the fold is remembered.
+ * v1.5 §4.6 / v1.6 §3.7.8 (G): the X / Y pill in the real editor at the user's phone size. Hidden
+ * without anything to place; shown while transforming (its cell moves the transformed content,
+ * which stays one pending transform: ✓ is one step), for a pending shape and for the selected
+ * curve point; a typed value in mm lands at the document DPI; a drag of the number follows the
+ * finger in document px, is fine (a tenth of the movement) far above or below the cell, and is
+ * one in-tool undo step; showing the pill doesn't refit the canvas; the fold is remembered.
  *
  * Own sandbox (the test recomposer policy and paused Choreographer are global); all UI work in
  * ONE test split into sections (Compose's frame clock only runs in the first test of a sandbox).
@@ -197,13 +197,12 @@ class CoordinateStripUiRobolectricTest {
         assertTrue(tool.undoStep())
         assertEquals(200f, tool.anchors[1].x, 0.01f)
 
-        // A real drag: the value jumps to the finger, follows it, then a tenth of it once the
-        // finger is far from the track; the whole drag is one step.
+        // A real drag of the number: the value follows the finger's travel in document px (dx /
+        // zoom), a tenth of it once the finger is far above or below the cell; one step.
         val e = slider("X slider")
         val b = e.bounds
         val density = activity.resources.displayMetrics.density
-        val trackW = b.width - 2 * 10f * density
-        val span = 600f // the canvas (400) and a quarter on each side
+        val zoom = c.viewTransform.zoom
         val x0 = b.center.x
         val y0 = b.center.y
         val t0 = SystemClock.uptimeMillis()
@@ -217,18 +216,17 @@ class CoordinateStripUiRobolectricTest {
         }
         val historyBefore = tool.anchors[1].x
         send(MotionEvent.ACTION_DOWN, x0, y0)
-        val v0 = tool.anchors[1].x
-        assertEquals("jumped to the finger", 200f, v0, span / trackW * 2f)
+        assertEquals("a touch alone changes nothing", 200f, tool.anchors[1].x, 0f)
         for (s in 1..8) send(MotionEvent.ACTION_MOVE, x0 + 60f * s / 8f, y0)
         val v1 = tool.anchors[1].x
-        assertEquals(60f / trackW * span, v1 - v0, 1.5f)
+        assertEquals("the finger's travel in document px", 60f / zoom, v1 - 200f, 0.05f)
         val far = 80f * density
         for (s in 1..8) send(MotionEvent.ACTION_MOVE, x0 + 60f, y0 + far * s / 8f)
-        assertEquals("no jump when fine starts", v1, tool.anchors[1].x, 0.5f)
+        assertEquals("no jump when fine starts", v1, tool.anchors[1].x, 0.01f)
         assertTrue("says Fine", SmokeUi.has("Fine", exact = true))
         for (s in 1..8) send(MotionEvent.ACTION_MOVE, x0 + 60f + 60f * s / 8f, y0 + far)
         val v2 = tool.anchors[1].x
-        assertEquals("a tenth of the movement", 6f / trackW * span, v2 - v1, 0.5f)
+        assertEquals("a tenth of the movement", 6f / zoom, v2 - v1, 0.05f)
         send(MotionEvent.ACTION_UP, x0 + 120f, y0 + far)
         settle(4)
         assertFalse(SmokeUi.has("Fine", exact = true))
@@ -250,7 +248,9 @@ class CoordinateStripUiRobolectricTest {
         SmokeUi.click("Fold the X / Y strip")
         assertTrue(c.settings.coordinateStripFolded)
         assertFalse(hasSlider("X slider"))
-        assertTrue(SmokeUi.has("X 60 · Y 70 px"))
+        // Folded: a lone ✥.
+        assertTrue(SmokeUi.has("Unfold the X / Y strip"))
+        assertFalse(SmokeUi.has("Increments", exact = true))
         // Remembered by a new editor screen.
         activities.forEach { runCatching { it.pause().stop().destroy() } }
         activities.clear()

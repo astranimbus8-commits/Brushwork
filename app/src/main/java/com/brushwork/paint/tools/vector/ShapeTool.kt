@@ -6,6 +6,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -14,12 +15,15 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeKind
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.GridType
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
@@ -29,11 +33,13 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.transform.DocBox
+import com.brushwork.paint.tools.transform.IncrementReadout
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.transform.SnapGuideRenderer
 import com.brushwork.paint.tools.transform.SnapHit
 import com.brushwork.paint.tools.transform.SnapLine
+import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.edit.VectorEditSession
@@ -42,6 +48,8 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -181,6 +189,14 @@ data class ShapeSettings(
  * the other shape layers ([ShapeOutlines.featurePoints]) and the shape's own other points, with
  * magenta guides; the shape layer being edited is not a target. Axes that don't snap keep
  * following the square grid when grid snapping is on.
+ *
+ * INCREMENTS (v1.6 §3.4, `controller.increments`; off by default, and then every gesture is the
+ * v1.5 one): a moved shape, a dragged point or tangent handle moves by multiples of the Length
+ * step from where it started; a new or resized box gets its dragged width / height, and a line its
+ * length, on multiples of it (absolute sizes); the rotation handle, a line's direction and a
+ * pinch's angle land on the Angle step (instead of the 15° option); a pinch scales by multiples of
+ * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
+ * (`increments.readout`) says where a stepped gesture is.
  */
 class ShapeTool(controller: EditorController) : Tool(controller) {
     override val id = ToolId.SHAPE
@@ -747,6 +763,121 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = np
     }
 
+    // ------------------------------------------------------------------ handle scaling (v1.6 §3.3, Points)
+
+    /** Which handles the Handles group scales (Compose state). */
+    var handleSide by mutableStateOf(ShapeHandleSide.BOTH)
+
+    /** The Handles group acts on every point even while one is selected (Compose state). */
+    var handlesAllPoints by mutableStateOf(false)
+
+    /**
+     * The factor of the handle change in progress, relative to the handles when it began (1 at
+     * rest: the group's value then reads 100 %; Compose state).
+     */
+    var handleScale by mutableFloatStateOf(1f)
+        private set
+
+    /** The points (document px) when the handle change in progress began; null at rest. */
+    private var handleBase: List<ShapeAnchor>? = null
+
+    /** The points the change in progress scales. */
+    private var handleIndices = IntArray(0)
+
+    /** The change in progress has saved its undo step (it does so at its first actual change). */
+    private var handleStepSaved = false
+
+    /** True while a handle change (a slider drag, a held arrow) is in progress. */
+    val handleScaling: Boolean get() = handleBase != null
+
+    /** The points the Handles group acts on now: the selected one, or all of them without a selection or with [handlesAllPoints]. */
+    private fun handleTargets(count: Int): IntArray {
+        val sel = selectedPoint
+        return if (handlesAllPoints || sel !in 0 until count) IntArray(count) { it } else intArrayOf(sel)
+    }
+
+    /**
+     * The Handles group has something to scale: one of the points it acts on (see [handleTargets])
+     * has a tangent handle (a smooth point, or explicit handles). Reads Compose state.
+     */
+    val canScaleHandles: Boolean
+        get() {
+            val anchors = docAnchors() ?: return false
+            return handleTargets(anchors.size).any { ShapePoints.hasHandles(anchors, it, closedShape) }
+        }
+
+    /**
+     * Starts a change of the tangent handles (the Handles group in points mode): the selected
+     * point's, or every point's without a selection or with [handlesAllPoints]. Everything until
+     * [endHandleScale] is ONE in-tool undo step (saved at the first actual change, so a change
+     * that changes nothing leaves no step), its factor relative to the handles as they are now.
+     * False without a shape with its own points, or when none of those points has a handle.
+     */
+    fun beginHandleScale(): Boolean {
+        if (handleBase != null) return true
+        val anchors = docAnchors() ?: return false
+        if (anchors.isEmpty()) return false
+        val targets = handleTargets(anchors.size)
+        if (targets.none { ShapePoints.hasHandles(anchors, it, closedShape) }) return false
+        handleBase = anchors
+        handleIndices = targets
+        handleStepSaved = false
+        handleScale = 1f
+        return true
+    }
+
+    /** The handles of the change in progress at [k] × their length when it began (see [ShapePoints.scaledHandles]). */
+    fun scaleHandlesTo(k: Float) {
+        val base = handleBase ?: return
+        val b = box ?: return
+        if (!k.isFinite()) return
+        val kk = k.coerceIn(ShapePoints.MIN_HANDLE_SCALE, ShapePoints.MAX_HANDLE_SCALE)
+        if (kk == handleScale) return
+        if (!handleStepSaved) {
+            // A step of its own (not merged into an edit just before), saved before the first change.
+            historyKey = null
+            pushHistory()
+            handleStepSaved = true
+        }
+        handleScale = kk
+        applyAnchors(ShapePoints.scaledHandles(base, handleIndices, kk, handleSide, closedShape), b.rotationDeg)
+        refreshPreview()
+    }
+
+    /** The handle change is complete: the next one starts from the handles as they are (100 % again). */
+    fun endHandleScale() {
+        handleBase = null
+        handleStepSaved = false
+        handleScale = 1f
+        historyKey = null
+    }
+
+    /** A typed handle scale ([k] = 1.5 for 150 %), exactly as typed: one in-tool undo step. */
+    fun scaleHandles(k: Float) {
+        if (!k.isFinite() || !beginHandleScale()) return
+        scaleHandlesTo(k)
+        endHandleScale()
+    }
+
+    /**
+     * One press (or repeat, while held) of ‹ / ›: shorter or [longer] handles, × 0.9 / × 1.1, or to
+     * the next multiple of the Scale increment (100 → 110 → 120 % of the change's start) while
+     * increments are on. The release ends the change ([endHandleScale]).
+     */
+    fun stepHandles(longer: Boolean) {
+        if (!beginHandleScale()) return
+        val k = handleScale
+        val step = controller.increments.step(IncrementKind.SCALE)
+        val next = if (step == null) {
+            if (longer) k * 1.1f else k * 0.9f
+        } else {
+            val m = k * 100f / step
+            val n = if (longer) floor(m + 1e-4f) + 1f else ceil(m - 1e-4f) - 1f
+            max(n, 1f) * step / 100f
+        }
+        scaleHandlesTo(next)
+    }
+
     // ------------------------------------------------------------------ in-tool history
 
     /**
@@ -779,6 +910,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         redoCount = 0
         canUndoStep = false
         historyKey = null
+        handleBase = null
+        handleStepSaved = false
+        handleScale = 1f
     }
 
     /**
@@ -811,6 +945,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     private fun restoreState(s: PendingState) {
+        handleBase = null
+        handleStepSaved = false
+        handleScale = 1f
         box = s.box
         points = s.points
         pointsMode = s.pointsMode && s.points != null
@@ -907,6 +1044,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             // The preview follows the finger as cheaply as possible until it lifts.
             setDragging(true)
         }
+        stepReadout = null
         when (mode) {
             Mode.NONE -> return
             Mode.CREATE -> creatingBox = creationBox(pt)
@@ -916,7 +1054,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 val h = handle ?: return
                 val aspect = if (s.keepProportions && start.h > 0f) start.w / start.h else null
                 val target = resizeTarget(start, h, grabStart + (pt - downPoint))
-                val nb = clean(ShapeGeometry.resize(start, h, target.first, s.fromCenter, aspect))
+                val step = controller.increments.step(IncrementKind.LENGTH)
+                val nb = clean(
+                    if (step == null) ShapeGeometry.resize(start, h, target.first, s.fromCenter, aspect)
+                    else resizeStepped(start, h, target, s.fromCenter, aspect, step),
+                )
                 box = nb
                 resizeGuides = resizeGuidesFor(nb, target.second, target.third)
             }
@@ -927,23 +1069,25 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 if (v.lengthSq < 1e-6f || v0.lengthSq < 1e-6f) return
                 // Relative to where the handle was grabbed, so the shape never jumps.
                 var deg = start.rotationDeg + Math.toDegrees(ShapeGeometry.signedAngle(v0, v).toDouble()).toFloat()
-                deg = if (s.snapAngle) ShapeGeometry.snapDegrees(deg) else ShapeGeometry.normalizeDegrees(deg)
+                // v1.6: an Angle step replaces the 15° option (absolute multiples).
+                val angleStep = controller.increments.step(IncrementKind.ANGLE)
+                deg = when {
+                    angleStep != null -> IncrementMath.snapAngle(deg, angleStep).also { stepReadout = IncrementReadout.angle(it) }
+                    s.snapAngle -> ShapeGeometry.snapDegrees(deg)
+                    else -> ShapeGeometry.normalizeDegrees(deg)
+                }
                 box = start.copy(rotationDeg = deg)
             }
             Mode.LINE_START, Mode.LINE_END -> {
                 val start = startBox ?: return
                 val fixed = if (mode == Mode.LINE_START) start.end else start.start
-                var q = snap.snapPoint(grabStart + (pt - downPoint))
-                if (s.snapAngle) {
-                    val a = ShapeGeometry.snapAngle(fixed, q)
-                    if (a.distanceTo(q) > 1e-3f) snap.clearGuides()
-                    q = a
-                }
+                val q = lineEnd(fixed, snap.snapPoint(grabStart + (pt - downPoint)), s.snapAngle)
                 box = if (mode == Mode.LINE_START) ShapeBox.line(q, fixed) else ShapeBox.line(fixed, q)
             }
             Mode.POINT, Mode.NEW_POINT -> dragPoint(pt)
             Mode.HANDLE_IN, Mode.HANDLE_OUT -> dragHandle(pt)
         }
+        showReadout(stepReadout)
         refreshPreview()
     }
 
@@ -957,7 +1101,107 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val g = controller.snapToGrid(ref + delta) - ref
         val dx = if (r != null && r.snappedX) delta.x + r.dx else g.x
         val dy = if (r != null && r.snappedY) delta.y + r.dy else g.y
+        // v1.6: an axis that neither a guide nor the grid decided moves by multiples of the Length step.
+        val step = controller.increments.step(IncrementKind.LENGTH)
+        if (step != null && !gridSnaps) {
+            val sx = if (r != null && r.snappedX) dx else IncrementMath.snapDelta(delta.x, step)
+            val sy = if (r != null && r.snappedY) dy else IncrementMath.snapDelta(delta.y, step)
+            stepReadout = IncrementReadout.move(sx, sy)
+            return start.translated(sx, sy)
+        }
         return start.translated(dx, dy)
+    }
+
+    // ------------------------------------------------------------------ increments (v1.6 §3.4)
+
+    /**
+     * Square-grid snapping is on: an axis that no guide decided follows the grid, which beats the
+     * increment (§3.4: a guide, then the grid, then the step).
+     */
+    private val gridSnaps: Boolean
+        get() {
+            val g = controller.grid
+            return g.enabled && g.snap && g.type == GridType.SQUARE && g.spacingPx > 0f
+        }
+
+    /** What the gesture being stepped shows ([com.brushwork.paint.snap.Increments.readout]); null when nothing is stepped. */
+    private var stepReadout: String? = null
+
+    private fun showReadout(text: String?) {
+        val inc = controller.increments
+        if (inc.readout != text) inc.readout = text
+    }
+
+    /**
+     * A point dragged by [d] from [from] that the snap session put at [snapped]: with a Length
+     * step, each axis that neither a guide nor the grid decided moves by a multiple of the step.
+     */
+    private fun steppedPoint(from: Vec2, d: Vec2, snapped: Vec2): Vec2 {
+        val step = controller.increments.step(IncrementKind.LENGTH) ?: return snapped
+        if (gridSnaps) return snapped
+        val gx = snap.guides.any { it.axis == SnapAxis.X }
+        val gy = snap.guides.any { it.axis == SnapAxis.Y }
+        val p = Vec2(
+            if (gx) snapped.x else from.x + IncrementMath.snapDelta(d.x, step),
+            if (gy) snapped.y else from.y + IncrementMath.snapDelta(d.y, step),
+        )
+        stepReadout = IncrementReadout.move(p.x - from.x, p.y - from.y)
+        return p
+    }
+
+    /**
+     * The free end of a line seen from its [fixed] end, [q] being the finger's point after the snap
+     * session. Without increments exactly v1.5 (the 15° option); with an Angle step the direction
+     * lands on its multiples instead of 15°, and with a Length step the length (× [lengthFactor]:
+     * 2 for a line drawn from its center) on the step's multiples, unless a guide or the grid
+     * placed [q].
+     */
+    private fun lineEnd(fixed: Vec2, q: Vec2, snapAngle: Boolean, lengthFactor: Float = 1f): Vec2 {
+        val inc = controller.increments
+        val angleStep = inc.step(IncrementKind.ANGLE)
+        val lengthStep = inc.step(IncrementKind.LENGTH)
+        var p = q
+        if (angleStep != null) {
+            if (snap.guides.isEmpty() && !gridSnaps) p = ShapeGeometry.snapAngle(fixed, p, angleStep)
+        } else if (snapAngle) {
+            val a = ShapeGeometry.snapAngle(fixed, p)
+            if (a.distanceTo(p) > 1e-3f) snap.clearGuides()
+            p = a
+        }
+        if (angleStep == null && lengthStep == null) return p
+        if (lengthStep != null && snap.guides.isEmpty() && !gridSnaps) {
+            val d = p - fixed
+            val len = d.length * lengthFactor
+            if (len > 1e-6f) p = fixed + d * (max(IncrementMath.snap(len, lengthStep), lengthStep) / len)
+        }
+        val d = p - fixed
+        stepReadout = "${IncrementReadout.length(d.length * lengthFactor)} · ${IncrementReadout.angle(Math.toDegrees(kotlin.math.atan2(d.y, d.x).toDouble()).toFloat())}"
+        return p
+    }
+
+    /**
+     * A resize handle dragged with a Length step: the dragged width / height on multiples of
+     * [step] (see [ShapeGeometry.resizeStepped]), except a size whose moving side a guide placed
+     * ([target]'s hits, on boxes turned by a multiple of 90°; any guide on other boxes) or that
+     * follows the grid.
+     */
+    private fun resizeStepped(start: ShapeBox, h: ShapeGeometry.Handle, target: Triple<Vec2, SnapHit?, SnapHit?>, fromCenter: Boolean, aspect: Float?, step: Float): ShapeBox {
+        val rot = ShapeGeometry.normalizeDegrees(start.rotationDeg)
+        val quarter = (rot / 90f).roundToInt()
+        val aligned = abs(rot - quarter * 90f) <= 1e-3f
+        val grid = gridSnaps
+        val (guideW, guideH) = if (aligned) {
+            val swap = quarter % 2 != 0
+            val gx = target.second != null
+            val gy = target.third != null
+            if (swap) gy to gx else gx to gy
+        } else {
+            val any = snap.guides.isNotEmpty()
+            any to any
+        }
+        val b = ShapeGeometry.resizeStepped(start, h, target.first, fromCenter, aspect, step, stepW = !grid && !guideW, stepH = !grid && !guideH)
+        stepReadout = IncrementReadout.size(b.w, b.h)
+        return b
     }
 
     /**
@@ -993,7 +1237,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun dragPoint(pt: Vec2) {
         val start = startBox ?: return
         if (dragIndex !in startAnchors.indices) return
-        val target = snap.snapPoint(grabStart + (pt - downPoint))
+        val d = pt - downPoint
+        val target = steppedPoint(grabStart, d, snap.snapPoint(grabStart + d))
         applyAnchors(startAnchors.mapIndexed { i, a -> if (i == dragIndex) a.moved(target) else a }, start.rotationDeg)
     }
 
@@ -1001,7 +1246,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private fun dragHandle(pt: Vec2) {
         val start = startBox ?: return
         val a = startAnchors.getOrNull(dragIndex) ?: return
-        val end = snap.snapPoint(grabStart + (pt - downPoint))
+        val d = pt - downPoint
+        val end = steppedPoint(grabStart, d, snap.snapPoint(grabStart + d))
         val v = end - a.pos
         if (v.length < 1e-3f) return
         applyAnchors(ShapePoints.dragHandle(startAnchors, dragIndex, closedShape, out = mode == Mode.HANDLE_OUT, v = v), start.rotationDeg)
@@ -1028,6 +1274,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         startBounds = null
         handle = null
         snap.end()
+        showReadout(null)
         if (resizeGuides.isNotEmpty()) { resizeGuides = emptyList(); controller.invalidateOverlay() }
         // The drag is over: a plain shape goes back into the layer, a brush outline is refined
         // once it rests a moment.
@@ -1077,6 +1324,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onCancel() {
         setDragging(false)
         snap.end()
+        showReadout(null)
         resizeGuides = emptyList()
         when (mode) {
             Mode.CREATE -> creatingBox = null
@@ -1177,6 +1425,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val start = pinchStart ?: return
         pinchStart = null
+        showReadout(null)
         setDragging(false)
         if (cancelled && box != null) {
             box = start
@@ -1191,11 +1440,24 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * by [translation] (rotation snapped to 15° steps with [snap]).
      */
     private fun pinched(start: ShapeBox, focus: Vec2, translation: Vec2, scale: Float, rotationDeg: Float, snap: Boolean): ShapeBox {
+        // v1.6 increments: the scale on the Scale step relative to the pinch's start (100, 110,
+        // 120 % of the shape as it was), the angle on the Angle step instead of the 15° option.
+        val inc = controller.increments
+        val scaleStep = inc.step(IncrementKind.SCALE)
+        val angleStep = inc.step(IncrementKind.ANGLE)
+        val k = if (scaleStep != null) TransformIncrements.relativeFactor(scale, scaleStep) else scale
         val target = start.rotationDeg + rotationDeg
-        val deg = if (snap) ShapeGeometry.snapDegrees(target) else ShapeGeometry.normalizeDegrees(target)
+        val deg = when {
+            angleStep != null -> IncrementMath.snapAngle(target, angleStep)
+            snap -> ShapeGeometry.snapDegrees(target)
+            else -> ShapeGeometry.normalizeDegrees(target)
+        }
+        if (scaleStep != null || angleStep != null) {
+            showReadout(listOfNotNull(scaleStep?.let { IncrementReadout.percent(k * 100f) }, angleStep?.let { IncrementReadout.angle(deg) }).joinToString(" · "))
+        }
         val delta = ShapeGeometry.normalizeDegrees(deg - start.rotationDeg) * Geometry.DEG
-        val c = focus + (start.center - focus).rotated(delta) * scale + translation
-        return clean(ShapeBox(c.x, c.y, start.w * scale, start.h * scale, deg))
+        val c = focus + (start.center - focus).rotated(delta) * k + translation
+        return clean(ShapeBox(c.x, c.y, start.w * k, start.h * k, deg))
     }
 
     /** True when [p] is on the pending shape (its box with a finger's margin, or near a line). */
@@ -1215,14 +1477,20 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val s = newShapeSettings()
         var cur = snap.snapPoint(pt)
         return if (s.type.isLineLike) {
-            if (s.snapAngle) {
-                val a = ShapeGeometry.snapAngle(anchor, cur)
-                if (a.distanceTo(cur) > 1e-3f) snap.clearGuides()
-                cur = a
-            }
+            cur = lineEnd(anchor, cur, s.snapAngle, if (s.fromCenter) 2f else 1f)
             if (s.fromCenter) ShapeBox.line(anchor * 2f - cur, cur) else ShapeBox.line(anchor, cur)
         } else {
-            ShapeGeometry.dragBox(anchor, cur, s.fromCenter, if (s.keepProportions) naturalAspect(s) else null)
+            val aspect = if (s.keepProportions) naturalAspect(s) else null
+            // v1.6: the width and height on multiples of the Length step (axes no guide or grid decided).
+            val step = controller.increments.step(IncrementKind.LENGTH)
+            if (step == null || gridSnaps) {
+                ShapeGeometry.dragBox(anchor, cur, s.fromCenter, aspect)
+            } else {
+                val gx = snap.guides.any { it.axis == SnapAxis.X }
+                val gy = snap.guides.any { it.axis == SnapAxis.Y }
+                ShapeGeometry.dragBoxStepped(anchor, cur, s.fromCenter, aspect, step, stepW = !gx, stepH = !gy)
+                    .also { stepReadout = IncrementReadout.size(it.w, it.h) }
+            }
         }
     }
 
@@ -2431,6 +2699,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         mode = Mode.NONE
         pinchStart = null
         snap.end()
+        showReadout(null)
         resizeGuides = emptyList()
         if (hasPendingWork) commit()
         if (hasPendingWork) discard()
