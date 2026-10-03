@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import com.brushwork.paint.engine.BitmapUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -22,8 +23,11 @@ import java.util.zip.CRC32
  * Right-to-left and shaping scripts are drawn unscaled even with letter scaling on (§3.5a: per
  * cluster drawing would break joining), so their scaled items must hash like the unscaled ones.
  *
- * The hashes depend on Robolectric's native graphics and the fonts it ships (machine specific):
- * regenerate them only from the v1.5 renderer, never from the code under test.
+ * The hashes depend on Robolectric's native graphics and the fonts it ships, which differ by
+ * host OS: they were taken on Windows (the development PC), so the hash check runs there only
+ * (GitHub's Linux runners draw text differently). The two other checks compare against a fresh
+ * unscaled rendering and run everywhere.
+ * Regenerate the hashes only from the v1.5 renderer, never from the code under test.
  */
 @RunWith(RobolectricTestRunner::class)
 class UnscaledParityGoldenTest {
@@ -111,6 +115,7 @@ class UnscaledParityGoldenTest {
 
     @Test
     fun unscaledTextDrawsTheV15Pixels() {
+        assumeTrue("the goldens are Windows hashes", System.getProperty("os.name").orEmpty().startsWith("Windows"))
         val got = cases().mapValues { (_, item) -> crc(item) }
         if (golden.isEmpty()) {
             println("GOLDENS:\n" + got.entries.joinToString(",\n") { "\"${it.key}\" to ${it.value}L" })
@@ -124,7 +129,7 @@ class UnscaledParityGoldenTest {
         for (name in listOf("arabic", "hebrew", "devanagari", "thai", "mixedRtl", "arabicOnPath")) {
             val item = cases().getValue(name)
             val scaled = item.copy(spec = item.spec.copy(letterScale = on))
-            assertEquals("\"$name\" with letter scaling on draws unscaled", golden[name], crc(scaled))
+            assertEquals("\"$name\" with letter scaling on draws unscaled", crc(item), crc(scaled))
         }
     }
 
@@ -133,7 +138,7 @@ class UnscaledParityGoldenTest {
         val on = LetterScaleSpec(smallestPercent = 40f)
         for (name in listOf("plain", "boxed", "wrapped", "frame")) {
             val item = cases().getValue(name)
-            assertNotEquals("\"$name\" with letter scaling on is scaled", golden[name], crc(item.copy(spec = item.spec.copy(letterScale = on))))
+            assertNotEquals("\"$name\" with letter scaling on is scaled", crc(item), crc(item.copy(spec = item.spec.copy(letterScale = on))))
         }
     }
 }
