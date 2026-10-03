@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor.chrome
 
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.LinearMask
@@ -114,6 +115,33 @@ internal object UniqueLabels {
             c.addLayer()!!.shapeData = ShapeCodec.encode(ShapeObject(cx = 120f + 100f * i, cy = 220f, w = 60f, h = 40f))
         }
         c.notifyLayersChanged()
+    }
+
+    /**
+     * The More menu scrolls between the top row and the bottom bar (§3.7.6; some entries are below
+     * its fold): [check] gets the clickables on screen (the menu's and the editor's) at each
+     * position from the menu's top to its end. Returns every menu entry seen, by node.
+     */
+    private fun walkMenu(s: ChromeScreen, check: (List<Clickables.Item>) -> Unit): Map<Int, Clickables.Item> {
+        val decor = s.activity.window.decorView
+        val seen = linkedMapOf<Int, Clickables.Item>()
+        fun body() = s.placed().firstOrNull {
+            it.window !== decor && it.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange) != null
+        }?.node
+        body()?.let { n ->
+            assertEquals("the menu opens at its top", 0f, n.config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange].value(), 0.5f)
+        }
+        for (step in 0 until 30) {
+            val all = Clickables.onScreen(s)
+            check(all)
+            all.filter { it.window !== decor }.forEach { seen[it.node.id] = it }
+            val node = body() ?: break
+            val range = node.config[androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange]
+            if (range.value() >= range.maxValue() - 0.5f) break
+            node.config[androidx.compose.ui.semantics.SemanticsActions.ScrollBy].action?.invoke(0f, node.size.height * 0.6f)
+            settle()
+        }
+        return seen
     }
 
     /** Back on the More menu's popup window closes it. */
@@ -247,9 +275,12 @@ internal object UniqueLabels {
             val s = h.editor()
             click("More options")
             val popup = Clickables.onScreen(s).filter { it.window !== s.activity.window.decorView }
-            assertTrue("the menu is a dropdown: ${popup.size}", popup.size >= 15)
-            assertUnique("More menu", popup)
-            // (The menu scrolls on a short phone: the last entries may be below its fold.)
+            assertTrue("the menu is a dropdown: ${popup.size} entries in view", popup.size >= 8)
+            // (The menu scrolls between the top row and the bottom bar: the last entries are below
+            // its fold. Every position of it is checked, and the whole menu is counted.)
+            val whole = walkMenu(s) { all -> assertUnique("More menu", all.filter { it.window !== s.activity.window.decorView }) }
+            assertTrue("the menu is a dropdown: ${whole.size} entries ${whole.values.map { it.labels }}", whole.size >= 15)
+            assertUnique("the whole More menu", whole.values.toList())
             for (entry in listOf("Canvas…", "Increments…", "Settings", "Export SVG…", "Fit to screen")) {
                 assertTrue("\"$entry\" in the menu", SmokeUi.has(entry, exact = true))
                 assertTrue("\"$entry\" at most once on screen", popup.count { entry in it.labels } <= 1)
@@ -263,18 +294,22 @@ internal object UniqueLabels {
             assertNotNull(s.tagged(ChromeTags.LAYER_WINDOW))
             click("More options")
             val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("the layer window stays")
-            val all = Clickables.onScreen(s)
-            val menu = all.filter { it.window !== s.activity.window.decorView }
-            val editor = all.filter { it.window === s.activity.window.decorView }
-            assertTrue("the menu is open: ${menu.size}", menu.size >= 15)
-            assertUnique("More menu and the chrome around the layer window", menu + editor.filter { !window.contains(it.bounds.center) })
-            // Against the window's controls, known by their own names (rows show values).
-            val windowNames = Clickables.ownLabelsInside(editor.filter { window.contains(it.bounds.center) }, window).flatMap { it.labels }.toSet()
-            assertTrue("the window's \"Import picture\": $windowNames", "Import picture" in windowNames)
-            assertTrue("not in the menu over it", menu.none { "Import picture" in it.labels })
-            val clash = menu.flatMap { it.labels }.filter { it in windowNames }
-            assertTrue("More entries repeating a layer window control: $clash", clash.isEmpty())
-            assertEquals("\"Import picture\" on one control", 1, all.count { "Import picture" in it.labels })
+            val menuOpen = Clickables.onScreen(s).filter { it.window !== s.activity.window.decorView }
+            assertTrue("the menu is open: ${menuOpen.size} entries in view", menuOpen.size >= 8)
+            // At each position of the scrolling menu (§3.7.6).
+            val wholeOver = walkMenu(s) { all ->
+                val menu = all.filter { it.window !== s.activity.window.decorView }
+                val editor = all.filter { it.window === s.activity.window.decorView }
+                assertUnique("More menu and the chrome around the layer window", menu + editor.filter { !window.contains(it.bounds.center) })
+                // Against the window's controls, known by their own names (rows show values).
+                val windowNames = Clickables.ownLabelsInside(editor.filter { window.contains(it.bounds.center) }, window).flatMap { it.labels }.toSet()
+                assertTrue("the window's \"Import picture\": $windowNames", "Import picture" in windowNames)
+                assertTrue("not in the menu over it", menu.none { "Import picture" in it.labels })
+                val clash = menu.flatMap { it.labels }.filter { it in windowNames }
+                assertTrue("More entries repeating a layer window control: $clash", clash.isEmpty())
+                assertEquals("\"Import picture\" on one control", 1, all.count { "Import picture" in it.labels })
+            }
+            assertTrue("the menu is open: ${wholeOver.size} entries ${wholeOver.values.map { it.labels }}", wholeOver.size >= 15)
             closeMenu()
             click("Close layers", exact = true)
             // Opened over the tool menu, the menu closes it first: its cells would repeat "Settings".

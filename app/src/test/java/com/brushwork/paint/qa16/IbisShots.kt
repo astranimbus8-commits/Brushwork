@@ -94,6 +94,8 @@ internal object IbisShots {
         for (e in els) {
             val cfg = e.node.config
             val b = e.bounds
+            // Entries scrolled out of the menu are placed with no visible bounds: nothing shows.
+            if (b.width < 1f || b.height < 1f) continue
             if (cfg.getOrNull(androidx.compose.ui.semantics.SemanticsActions.OnClick) != null) {
                 c.drawRect(b.left + d, b.top + d, b.right - d, b.bottom - d, dim)
             }

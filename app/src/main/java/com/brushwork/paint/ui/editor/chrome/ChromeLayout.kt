@@ -110,6 +110,18 @@ object ChromeLayout {
         return max(IbisDims.ToolCellHeight.value, min(IbisDims.ToolMenuMaxHeight.value, room))
     }
 
+    /**
+     * The More menu's height limit (§3.7.6: "under the top row … scrolling"): the room between the
+     * top row and the bottom bar, less a gap. Without it the menu (some 17 entries) is taller than
+     * that room, and Material's dropdown, finding no place below its anchor, moves it up over the
+     * top row and down over the bottom bar. (Material keeps a menu below its anchor only when it
+     * ends 48 dp above the window's bottom: the bottom bar and the gap leave that.)
+     */
+    fun moreMenuMaxHeight(screenHeightDp: Float, statusDp: Float, navDp: Float): Float {
+        val room = bottomBarTop(screenHeightDp, navDp) - topRowBottom(statusDp) - IbisDims.LayerWindowTopRoom.value
+        return max(IbisDims.ToolCellHeight.value, room)
+    }
+
     // ------------------------------------------------------------------ layer window (§3.7.7, sizing owned by E)
 
     /**

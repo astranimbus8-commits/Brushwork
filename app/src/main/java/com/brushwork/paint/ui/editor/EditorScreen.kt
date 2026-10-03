@@ -550,6 +550,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     onMoreOpenChange = { moreOpen = it },
                     moreHeader = "${doc.name} · ${doc.width} × ${doc.height} px",
                     moreEntries = moreEntries,
+                    moreMaxHeight = ChromeLayout.moreMenuMaxHeight(screenH, statusDp, navDp).dp,
                 )
                 // Tool options act on the document; the tool is not usable while a filter is previewed.
                 if (session == null) {
