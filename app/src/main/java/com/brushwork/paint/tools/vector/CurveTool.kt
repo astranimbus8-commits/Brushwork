@@ -944,14 +944,26 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (handleBase == null) beginHandleScale()
         val base = handleBase ?: return
         val f = CurveGeometry.clampHandleScale(k)
-        pushHistory(NumericKey("handles", -1))
         handleScale = f
-        anchors = CurveGeometry.scaledHandles(base, handleTargets, f, handleSide, isClosed, tension)
+        // Back at 100 %: the handles exactly as they were (automatic tangents stay automatic, so
+        // they still follow their neighbours); a change that changes nothing records no step.
+        val next = if (f == 1f) base else CurveGeometry.scaledHandles(base, handleTargets, f, handleSide, isClosed, tension)
+        if (next == anchors) return
+        pushHistory(NumericKey("handles", -1))
+        anchors = next
         changed()
     }
 
     /** The change of the handles is complete: the value goes back to 100 % (the next change starts from the lengths then). */
     fun endHandleScale() {
+        val base = handleBase
+        if (base != null && anchors == base && history.size > handleHistorySize) {
+            // It ended where it began (a slider dragged back to 100 %): no step.
+            while (history.size > handleHistorySize) history.removeLast()
+            redo.clear(); redo.addAll(handleRedo)
+            redoCount = redo.size
+            canUndoStep = history.isNotEmpty()
+        }
         handleBase = null
         handleScale = 1f
         controller.increments.readout = null

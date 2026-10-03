@@ -77,6 +77,39 @@ class HandleScaleRobolectricTest {
     }
 
     @Test
+    fun backAt100PercentTheHandlesAreExactlyAsTheyWere() {
+        val c = controller()
+        val t = curveWithFourPoints(c)
+        c.tap(150f, 80f)
+        val before = t.anchors
+        assertFalse("automatic tangents", before[1].hasCustomTangent)
+        // A slider drag that comes back to 100 %: the automatic tangents stay automatic (they
+        // still follow the neighbours), and the drag records nothing.
+        t.beginHandleScale()
+        t.scaleHandles(1.4f)
+        assertTrue(t.anchors[1].hasCustomTangent)
+        t.scaleHandles(1f)
+        t.endHandleScale()
+        assertEquals(before, t.anchors)
+        // (The next undo takes back the last point placed, not a drag that changed nothing.)
+        assertTrue(t.undoStep())
+        assertEquals(3, t.anchors.size)
+        assertTrue(t.redoStep())
+        assertEquals(before, t.anchors)
+        // A typed 100 % changes nothing and is no step either.
+        t.select(1)
+        t.applyHandleScale(100f)
+        assertEquals(before, t.anchors)
+        assertTrue(t.undoStep())
+        assertEquals(3, t.anchors.size)
+        assertTrue(t.redoStep())
+        // Moving a neighbour still turns the point's automatic tangent.
+        val (_, o0) = t.handlesOf(1)
+        c.drag(260f to 210f, 270f to 230f, 290f to 260f)
+        assertTrue(t.handlesOf(1).second.distanceTo(o0) > 1f)
+    }
+
+    @Test
     fun inOutAndAllPoints() {
         val c = controller()
         val t = curveWithFourPoints(c)
