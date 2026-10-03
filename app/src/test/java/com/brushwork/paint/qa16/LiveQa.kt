@@ -195,6 +195,7 @@ internal class LiveCanvas(val s: ChromeScreen) {
         val tile = BitmapUtils.createLayerBitmap(tiles.tileSize, tiles.tileSize)
         val tv = Canvas(tile)
         val tr = Rect()
+        quiet()
         val t0 = System.nanoTime()
         for (idx in 0 until tiles.tileCount) {
             tiles.tileRect(idx % tiles.cols, idx / tiles.cols, tr)
@@ -217,9 +218,20 @@ internal class LiveCanvas(val s: ChromeScreen) {
         val policy = c.liveAdjust.policy
         c.liveAdjust.policy = LiveAdjust.Policy.EXACT
         c.invalidateDoc(null)
+        quiet()
         val ms = drawWithoutOverlays()
         c.liveAdjust.policy = policy
         return ms
+    }
+
+    /**
+     * A collection before a measured frame or drag: in the full suite a fork runs 40 classes and
+     * keeps their sandboxes, and a 20 MP stack leaves little of the 1.5 GB heap, so a collection
+     * that falls inside a measured frame would be counted as frame time (the phone's heap holds
+     * this document only).
+     */
+    fun quiet() {
+        System.gc()
     }
 
     // ------------------------------------------------------------------ fingers
