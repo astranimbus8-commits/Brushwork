@@ -52,10 +52,10 @@ class IbisLayoutMetricsLandscapeTest {
         near("screen width", 873f, w)
         near("screen height", 392f, hh)
 
-        // ---- top row: all 8 circles, left-aligned at the 48 dp pitch.
+        // ---- top row: all 8 circles, left-aligned at the 48 dp pitch, the 8 dp gap after Redo (v16 polish).
         listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options").forEachIndexed { i, label ->
             val b = s.clickable(label) ?: throw AssertionError("no \"$label\"")
-            near("$label centre x", 24f + 48f * i, b.center.x)
+            near("$label centre x", 24f + 48f * i + (if (i >= 2) 8f else 0f), b.center.x)
             near("$label touch width", 48f, b.width)
             near("$label top", st, b.top)
         }

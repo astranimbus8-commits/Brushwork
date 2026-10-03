@@ -56,8 +56,9 @@ class ChromeLayoutTest {
         assertEquals(40f, wide.circle, 0.01f)
         assertEquals(TopSlot.entries.toList(), wide.slots)
         assertTrue(wide.folded.isEmpty())
-        // Centres at 24 + 48·i.
-        for (i in 0 until 8) assertEquals(24f + 48f * i, wide.centerX(i), 0.01f)
+        // Centres at 24, 72, then 128 + 48·(i − 2): ibisPaint's 8 dp gap after Redo (v16 polish).
+        assertEquals(8f, wide.gap, 0.01f)
+        for (i in 0 until 8) assertEquals(24f + 48f * i + (if (i >= 2) 8f else 0f), wide.centerX(i), 0.01f)
         val narrow = ChromeLayout.topRow(360f)
         assertEquals("pitch = (360 − 8) / 8", 44f, narrow.pitch, 0.01f)
         assertEquals(36f, narrow.circle, 0.01f)
@@ -82,6 +83,7 @@ class ChromeLayoutTest {
         for (w in listOf(335f, 320f, 300f, 280f, 260f, 240f)) {
             val r = ChromeLayout.topRow(w)
             assertTrue("$w: the row fits", r.pitch * r.slots.size <= w - 8f + 0.01f)
+            assertTrue("$w: with the gap after Redo", r.pitch * r.slots.size + r.gap <= w + 0.01f && r.gap >= 0f)
             assertTrue("$w: targets ≥ 40 dp (${r.pitch})", r.pitch >= 40f)
             assertTrue("$w: circles 36..40", r.circle in 36f..40f)
         }

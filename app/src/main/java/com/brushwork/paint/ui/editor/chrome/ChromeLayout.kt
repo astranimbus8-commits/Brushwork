@@ -24,14 +24,18 @@ object ChromeLayout {
     /**
      * The top row on a screen [widthDp] wide (after horizontal insets): the [slots] shown at
      * [pitch] dp (each slot's touch target is pitch × [IbisDims.TopRowHeight]), circles of
-     * [circle] dp, and the slots [folded] into the More menu.
+     * [circle] dp, and the slots [folded] into the More menu. Like ibisPaint, a [gap] of up to
+     * [IbisDims.TopRedoGap] after Redo sets undo / redo apart from the mode circles.
      */
-    data class TopRow(val pitch: Float, val circle: Float, val slots: List<TopSlot>) {
+    data class TopRow(val pitch: Float, val circle: Float, val slots: List<TopSlot>, val gap: Float = 0f) {
         val folded: List<TopSlot> get() = FOLD_ORDER.filter { it !in slots }
 
-        /** Centre x (dp from the row's start) of slot [index]. */
-        fun centerX(index: Int): Float = pitch * index + pitch / 2f
+        /** Centre x (dp from the row's start) of slot [index] (the slots after Redo's, index 1, sit [gap] further right). */
+        fun centerX(index: Int): Float = pitch * index + pitch / 2f + (if (index > REDO_INDEX) gap else 0f)
     }
+
+    /** Redo's index in the row (never folded): the gap follows it. */
+    const val REDO_INDEX = 1
 
     fun topRow(widthDp: Float): TopRow {
         val usable = (widthDp - IbisDims.TopNarrowMargin.value).coerceAtLeast(1f)
@@ -46,7 +50,10 @@ object ChromeLayout {
         // 40 at the 48 dp pitch, 36 at 44 dp and below (the ring of surround between circles stays 8 dp).
         val circle = (pitch - (IbisDims.TopPitch.value - IbisDims.TopCircle.value))
             .coerceIn(IbisDims.TopNarrowCircleMin.value, IbisDims.TopCircle.value)
-        return TopRow(pitch, circle, slots)
+        // 8 dp on the reference phone (392 = 8 × 48 + 8) and wherever there is room; whatever the
+        // width leaves beside the slots on a narrower screen (never negative), so the row still fits.
+        val gap = (widthDp - slots.size * pitch).coerceIn(0f, IbisDims.TopRedoGap.value)
+        return TopRow(pitch, circle, slots, gap)
     }
 
     // ------------------------------------------------------------------ vertical bands

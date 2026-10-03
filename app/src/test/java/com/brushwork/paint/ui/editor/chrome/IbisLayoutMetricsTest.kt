@@ -59,14 +59,15 @@ class IbisLayoutMetricsTest {
         val hh = s.heightDp
         near("screen width", 392f, w)
 
-        // ---- top row: 8 circles, touch 48 × 48 at a 48 dp pitch, centres 24 + 48·i
+        // ---- top row: 8 circles, touch 48 × 48 at a 48 dp pitch, centres 24, 72, then 128 + 48·(i − 2)
+        // (v16 polish: ibisPaint's 8 dp gap after Redo)
         val top = s.tagged(ChromeTags.TOP_ROW) ?: throw AssertionError("no top row")
         near("top row top", st, top.top)
         near("top row height", 48f, top.height)
         val labels = listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options")
         labels.forEachIndexed { i, label ->
             val b = s.clickable(label) ?: throw AssertionError("no \"$label\"")
-            near("$label centre x", 24f + 48f * i, b.center.x)
+            near("$label centre x", 24f + 48f * i + (if (i >= 2) 8f else 0f), b.center.x)
             near("$label touch width", 48f, b.width)
             near("$label touch height", 48f, b.height)
             near("$label top", st, b.top)
@@ -266,13 +267,13 @@ class IbisLayoutMetricsNarrowTest {
             val w = s.widthDp
             val hh = s.heightDp
             near("screen width", 360f, w)
-            // Top row: pitch min(48, (360 − 8) / 8) = 44, circles 36.
+            // Top row: pitch min(48, (360 − 8) / 8) = 44, circles 36, the 8 dp gap after Redo (v16 polish).
             val spec = ChromeLayout.topRow(w)
             assertEquals(44f, spec.pitch, 0.01f)
             assertEquals(36f, spec.circle, 0.01f)
             listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options").forEachIndexed { i, label ->
                 val b = s.clickable(label) ?: throw AssertionError("no \"$label\"")
-                near("$label centre x", 22f + 44f * i, b.center.x)
+                near("$label centre x", 22f + 44f * i + (if (i >= 2) 8f else 0f), b.center.x)
                 near("$label touch width", 44f, b.width)
                 near("$label touch height", 48f, b.height)
                 near("$label top", st, b.top)

@@ -100,6 +100,8 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -117,6 +119,7 @@ import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.EditorPanel
+import com.brushwork.paint.ui.editor.chrome.ChromeGlyphs
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
@@ -215,13 +218,13 @@ internal fun leftActions(env: LayerWindowEnv): List<WindowAction> {
             onLongClick = { c.endCanvasGesture(); ui.special = SpecialMenuAnchor.ADD },
             popup = { SpecialLayerMenu(env, SpecialMenuAnchor.ADD) },
         ) { c.fromPanel { LayerOps.addLayer(c) } },
-        WindowAction(LayerLabels.FLIP_CANVAS_H, true, iconGlyph(Icons.Filled.Flip)) { c.fromPanel { LayerOps.flipCanvas(c, horizontal = true) } },
+        WindowAction(LayerLabels.FLIP_CANVAS_H, true, iconGlyph(ChromeGlyphs.FlipHorizontal)) { c.fromPanel { LayerOps.flipCanvas(c, horizontal = true) } },
         WindowAction(
             if (env.hasSelection) LayerLabels.DUPLICATE_SELECTION else LayerLabels.DUPLICATE,
             env.canAddLayer,
             iconGlyph(Icons.Outlined.LibraryAdd),
         ) { c.fromPanel { LayerOps.duplicate(c, env.layer) } },
-        WindowAction(LayerLabels.FLIP_CANVAS_V, true, iconGlyph(Icons.Filled.Flip, rotation = 90f)) { c.fromPanel { LayerOps.flipCanvas(c, horizontal = false) } },
+        WindowAction(LayerLabels.FLIP_CANVAS_V, true, iconGlyph(ChromeGlyphs.FlipVertical)) { c.fromPanel { LayerOps.flipCanvas(c, horizontal = false) } },
         // Close first so the transform placement of the imported picture is visible.
         WindowAction(LayerLabels.IMPORT, env.canAddLayer, iconGlyph(Icons.Filled.PhotoCamera)) { c.endCanvasGesture(); env.onDismiss(); env.onImportPicture() },
         WindowAction(
@@ -250,8 +253,8 @@ internal fun stripActions(env: LayerWindowEnv): List<WindowAction> {
             c.fromPanel { LayerOps.transform(c, layer) }
             env.onDismiss()
         },
-        WindowAction(LayerLabels.FLIP_H, true, iconGlyph(Icons.Filled.Flip)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = true) } },
-        WindowAction(LayerLabels.FLIP_V, true, iconGlyph(Icons.Filled.Flip, rotation = 90f)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = false) } },
+        WindowAction(LayerLabels.FLIP_H, true, iconGlyph(ChromeGlyphs.FlipHorizontal)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = true) } },
+        WindowAction(LayerLabels.FLIP_V, true, iconGlyph(ChromeGlyphs.FlipVertical)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = false) } },
         WindowAction(
             if (row.isAdjustment) LayerLabels.APPLY_BELOW else LayerLabels.MERGE,
             env.docIndex > 0,
@@ -471,7 +474,8 @@ private fun MenuItem(text: String, icon: ImageVector, enabled: Boolean = true, i
 
 /**
  * The blend row (56 dp, black): ↙ "Clipping", α "Alpha lock" and 🔒 "Lock layer" toggles (48 dp
- * each, with their v1.5 captions), then the white "Normal ˄" dropdown ("Choose blend mode").
+ * each, icons only as ibisPaint's; their v1.5 captions are still said), then the white "Normal ˄"
+ * dropdown ("Choose blend mode").
  * [wrap]: the dropdown on a line of its own under the toggles ([LayerWindowMetrics.blendWraps]).
  */
 @Composable
@@ -527,7 +531,11 @@ private fun BlendToggles(controller: EditorController, row: LayerRowModel, isBot
     ) { tint -> Icon(if (row.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) }
 }
 
-/** A blend-row toggle: glyph over a 9 sp caption, 48 dp wide, accent while on. */
+/**
+ * A blend-row toggle: its glyph alone, centred in a 48 dp cell (ibisPaint shows no caption),
+ * accent while on. The [caption] is no longer drawn but is still said, as the toggle's own text,
+ * with its [description] (I10: the toggles keep the strings they are known by).
+ */
 @Composable
 private fun BlendToggle(
     description: String?,
@@ -541,18 +549,19 @@ private fun BlendToggle(
         !enabled -> Color.White.copy(alpha = 0.3f)
         else -> Color.White
     }
-    Column(
+    Box(
         Modifier
             .size(width = IbisDims.BlendToggle, height = 48.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(if (checked) IbisColors.Accent else Color.Transparent)
-            .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
+            .semantics {
+                if (description != null) contentDescription = description
+                text = AnnotatedString(caption)
+            }
             .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() }),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
+        contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.height(22.dp), contentAlignment = Alignment.Center) { glyph(tint) }
-        Text(caption, color = tint, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1)
+        glyph(tint)
     }
 }
 

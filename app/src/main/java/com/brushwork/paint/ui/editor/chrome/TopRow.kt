@@ -6,6 +6,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -62,7 +63,7 @@ internal class TopButton(
 
 /**
  * The ibisPaint top row (v1.6 §3.7.3): up to 8 grey circles over the canvas surround (no bar
- * background), left-aligned at [spec]'s pitch. "On" fills a circle with [IbisColors.TopButtonOn];
+ * background), left-aligned at [spec]'s pitch with its gap after Redo. "On" fills a circle with [IbisColors.TopButtonOn];
  * a disabled one is lighter with a faded glyph. The last circle opens the More menu, a dark
  * dropdown under the row's left end ([moreHeader] over [moreEntries]; on narrow screens the folded
  * circles come first as checkable entries, [folded]).
@@ -84,6 +85,9 @@ internal fun TopRow(
             for (slot in spec.slots) {
                 val b = bySlot[slot] ?: continue
                 TopCircle(b, spec)
+                // ibisPaint's gap after Redo (ChromeLayout.TopRow.gap; part of the row, so the
+                // canvas doesn't take a touch there either).
+                if (slot == ChromeLayout.TopSlot.REDO && spec.gap > 0f) Spacer(Modifier.width(spec.gap.dp))
             }
         }
         // The More menu drops from the row's left end (ibisPaint's dropdown position).

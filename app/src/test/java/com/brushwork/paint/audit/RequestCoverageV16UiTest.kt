@@ -443,7 +443,8 @@ class RequestCoverageV16UiTest {
         val top = listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options")
         top.forEachIndexed { i, label ->
             val b = s.clickable(label) ?: throw AssertionError("no \"$label\" in the top row")
-            assertEquals("$label at 24 + 48·$i", 24f + 48f * i, b.center.x, 1f)
+            // Centres 24, 72, then 128 + 48·(i − 2): ibisPaint's 8 dp gap after Redo (v16 polish).
+            assertEquals("$label at 24 + 48·$i (+ 8 after Redo)", 24f + 48f * i + (if (i >= 2) 8f else 0f), b.center.x, 1f)
             assertEquals("$label in the top row", st + 24f, b.center.y, 1f)
         }
         // The bottom bar: ibisPaint's 7 slots in its order.
@@ -571,7 +572,7 @@ class RequestCoverageV16UiTest {
             val top = listOf("Undo", "Redo", "Vector", "Selection", "Stabilizer", "Grid", "Ruler", "More options")
             top.forEachIndexed { i, label ->
                 val b = s.clickable(label) ?: throw AssertionError("no \"$label\" at 360 dp")
-                assertEquals("$label at 22 + 44·$i", 22f + 44f * i, b.center.x, 1f)
+                assertEquals("$label at 22 + 44·$i (+ 8 after Redo)", 22f + 44f * i + (if (i >= 2) 8f else 0f), b.center.x, 1f)
                 assertTrue("$label ≥ 40 dp", b.width >= 40f - 0.5f && b.height >= 40f - 0.5f)
             }
             // Every tool of the request in the tool menu.
