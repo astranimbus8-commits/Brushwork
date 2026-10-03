@@ -15,6 +15,8 @@ import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.ui.layers.FrameBadge
 import com.brushwork.paint.ui.layers.LayerLabels
 import org.junit.Assert.assertEquals
@@ -78,7 +80,8 @@ internal object UniqueLabels {
 
     /**
      * Above the two plain layers: two text layers, two vector layers, two Tone adjustment layers
-     * with editable masks, two frames "1 of 1" of two stories (bottom first, layers 3 to 10).
+     * with editable masks, two frames "1 of 1" of two stories, two shape layers (bottom first,
+     * layers 3 to 12).
      */
     private fun twoOfEachKind(c: EditorController) {
         fun text(item: TextItem) {
@@ -105,6 +108,10 @@ internal object UniqueLabels {
                     thread = TextThreadSpec(storyId = story, index = 0, story = words, start = 0, end = words.length, rev = 1),
                 ),
             )
+        }
+        repeat(2) { i ->
+            c.selectLayer(c.doc.layers.last())
+            c.addLayer()!!.shapeData = ShapeCodec.encode(ShapeObject(cx = 120f + 100f * i, cy = 220f, w = 60f, h = 40f))
         }
         c.notifyLayersChanged()
     }
@@ -173,14 +180,15 @@ internal object UniqueLabels {
             val s = h.editor(setup = ::twoOfEachKind)
             val layers = s.c.doc.layers
             assertEquals(
-                "bottom first: 2 plain, 2 text, 2 vector, 2 masked adjustments, 2 frames",
-                listOf("-", "-", "T", "T", "V", "V", "A", "A", "F", "F"),
+                "bottom first: 2 plain, 2 text, 2 vector, 2 masked adjustments, 2 frames, 2 shapes",
+                listOf("-", "-", "T", "T", "V", "V", "A", "A", "F", "F", "S", "S"),
                 layers.map { l ->
                     when {
                         l.isAdjustmentLayer -> "A"
                         l.isVectorLayer -> "V"
                         l.textData?.let { TextCodec.decode(it)?.threaded } == true -> "F"
                         l.isTextLayer -> "T"
+                        l.isShapeLayer -> "S"
                         else -> "-"
                     }
                 },
@@ -191,6 +199,7 @@ internal object UniqueLabels {
             // Each pair on screen together (the list opens with the row above the active one
             // first): every badge names its own row, so no two rows share a label (I10).
             for ((top, badges) in listOf(
+                12 to listOf(LayerLabels.badge(12, LayerLabels.SHAPE_BADGE), LayerLabels.badge(11, LayerLabels.SHAPE_BADGE)),
                 10 to listOf(LayerLabels.frameBadge(10, FrameBadge(0, 1, false)), LayerLabels.frameBadge(9, FrameBadge(0, 1, false))),
                 8 to listOf(
                     LayerLabels.badge(8, LayerLabels.ADJUSTMENT_BADGE), LayerLabels.badge(7, LayerLabels.ADJUSTMENT_BADGE),

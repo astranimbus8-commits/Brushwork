@@ -65,10 +65,11 @@ internal object SmokeUi {
      * global snapshot manager, one loop for the whole sandbox (dropped, no state write would ever
      * be applied again); what the previous test's disposed compositions left there runs against
      * nothing. A flag cleared while a message was really pending only means one more pass over
-     * empty queues. A class whose tests never call [installTestRecomposer] doesn't get this:
-     * there only its first test method can rely on recomposition.
+     * empty queues. A Compose class whose tests don't call [installTestRecomposer] calls this
+     * first in every test method instead (an `@Before`), or only its first test method can rely
+     * on recomposition.
      */
-    private fun restartUiDispatcher() {
+    fun restartUiDispatcher() {
         val d = AndroidUiDispatcher.Main[ContinuationInterceptor] as? AndroidUiDispatcher ?: return
         fun field(name: String) = AndroidUiDispatcher::class.java.getDeclaredField(name).apply { isAccessible = true }
         synchronized(field("lock").get(d)!!) {

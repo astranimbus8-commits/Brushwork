@@ -8,6 +8,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.ui.placement.FrameDividerOptions
@@ -17,6 +18,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -27,10 +29,15 @@ import java.time.Duration
 
 /**
  * Composes the text / frame option strips with their dialogs and sheets in a real activity, so
- * composition errors (missing state, bad layout constraints) surface in tests.
+ * composition errors (missing state, bad layout constraints) surface in tests. Two test methods in
+ * one sandbox: each first restarts Compose's main dispatcher ([SmokeUi.restartUiDispatcher]), or
+ * the second would see its first composition and no recomposition (no dialog would open).
  */
 @RunWith(RobolectricTestRunner::class)
 class TextFrameUiRobolectricTest {
+
+    @Before
+    fun restartCompose() = SmokeUi.restartUiDispatcher()
 
     private fun settle() = repeat(6) { shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20)) }
 
