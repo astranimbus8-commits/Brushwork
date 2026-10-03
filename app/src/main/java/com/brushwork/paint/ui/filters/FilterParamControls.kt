@@ -32,6 +32,7 @@ import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LabeledSlider
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
@@ -127,9 +128,11 @@ private fun ParamLabel(text: String) {
 @Composable
 private fun SliderControl(host: ParamHost, p: FilterParam.Slider, enabled: Boolean) {
     val v = host.values.float(p.key)
+    // v1.6 §3.4: the slider and its −/+ use one increment (off: the parameter's own steps).
+    val inc = LocalIncrements.current
     Row(verticalAlignment = Alignment.CenterVertically) {
         RepeatIconButton(Icons.Filled.Remove, "Decrease ${p.label}", enabled = enabled, onRelease = host.onChangeFinished) {
-            host.update(p.key, SliderFormat.nudge(p, host.values.float(p.key), -1))
+            host.update(p.key, ParamIncrements.nudge(p, host.values.float(p.key), -1, inc))
         }
         LabeledSlider(
             label = p.label,
@@ -140,11 +143,13 @@ private fun SliderControl(host: ParamHost, p: FilterParam.Slider, enabled: Boole
             valueText = SliderFormat.format(p, v),
             enabled = enabled,
             // Tap the number to type it (snapped to the parameter's step like the slider).
-            typing = SliderTyping(decimals = SliderFormat.decimals(p), suffix = if (p.pixels) "px" else p.suffix),
+            typing = SliderTyping(decimals = SliderFormat.decimals(p), suffix = ParamIncrements.suffixOf(p)),
             modifier = Modifier.weight(1f),
+            incrementKind = ParamIncrements.kindOf(p),
+            incrementKey = ParamIncrements.keyOf(p),
         )
         RepeatIconButton(Icons.Filled.Add, "Increase ${p.label}", enabled = enabled, onRelease = host.onChangeFinished) {
-            host.update(p.key, SliderFormat.nudge(p, host.values.float(p.key), 1))
+            host.update(p.key, ParamIncrements.nudge(p, host.values.float(p.key), 1, inc))
         }
     }
 }
