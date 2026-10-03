@@ -76,6 +76,10 @@ android {
             all {
                 // ~1450 Robolectric tests with real Skia need more than the default 512 MB.
                 it.maxHeapSize = "1536m"
+                // Each test class with its own instrumentedPackages gets a Robolectric sandbox, and
+                // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
+                // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
+                it.forkEvery = 40
             }
         }
     }

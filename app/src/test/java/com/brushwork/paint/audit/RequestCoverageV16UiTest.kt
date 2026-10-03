@@ -59,7 +59,7 @@ class RequestCoverageV16UiTest {
 
     companion object {
         /** True once areas A, B, C, D, F and G are merged (§6.2): their own controls must then be on screen. */
-        const val REQUIRE_MERGED_AREAS = false
+        const val REQUIRE_MERGED_AREAS = true
     }
 
     private val pending = mutableListOf<String>()
