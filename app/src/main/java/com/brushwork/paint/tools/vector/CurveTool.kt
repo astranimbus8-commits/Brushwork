@@ -170,6 +170,8 @@ data class CurveSettings(
  *   path"). Curve / Polyline tapping such a path switch to Path, Path tapping a plain path
  *   switches to the tool that edits it. [toBezier] hands the pending path to the Curve tool
  *   (one in-tool step there: its undo hands it back). Path has its own settings ("vec.path").
+ *   The Capsule quick start's look and a handed-over path's look are that pending path's only:
+ *   the tool's own settings come back when it ends ([ownSettings]).
  * - **Handles** (Curve): the selected point's handles (or all points') scale by a factor
  *   relative to the change's start ([scaleHandles]; slider, ‹ ›, typed value or a pinch on
  *   the point, one in-tool step each). "Handle size" ([handleSize], app-wide) scales the drawn
@@ -598,7 +600,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (isPath) {
             // A control point at the end (or after the selected one), selected.
             val s = spline
-            if (s != null && s.points.size >= VSpline.MAX_POINTS) return false
+            if (s != null && s.points.size >= VSpline.MAX_POINTS) {
+                controller.toast(TOO_MANY_POINTS)
+                return false
+            }
             pushHistory()
             if (targetLayer == null) targetLayer = controller.doc.activeLayer
             val at = if (s != null && selectedPoint in s.points.indices) selectedPoint + 1 else s?.points?.size ?: 0
@@ -1154,7 +1159,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     private fun newPointAt(pt: Vec2) {
         val s0 = spline
-        if (s0 != null && s0.points.size >= VSpline.MAX_POINTS) { drag = Drag.IGNORE; return }
+        if (s0 != null && s0.points.size >= VSpline.MAX_POINTS) {
+            drag = Drag.IGNORE
+            controller.toast(TOO_MANY_POINTS)
+            return
+        }
         beginSnap(except = -1)
         pushHistory()
         val s = s0 ?: newSpline()
@@ -2428,6 +2437,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         const val PATH_LABEL = "Path"
         /** Shown when ✓ of the Curve tool stores a former Path-tool path without its spline. */
         const val EDITED_AS_BEZIER = "Path edited as a Bézier curve"
+        /** Shown when a point is added to a path that has [VSpline.MAX_POINTS] already. */
+        const val TOO_MANY_POINTS = "A path has at most ${VSpline.MAX_POINTS} control points"
         /** ‹ › of the Handles group without increments: × 1.1 / × 0.9 per step. */
         const val HANDLE_STEP_UP = 1.1f
         const val HANDLE_STEP_DOWN = 0.9f
