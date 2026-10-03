@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
+import com.brushwork.paint.tools.text.frames.FrameGeometry
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
@@ -310,13 +311,24 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         controller.invalidateOverlay()
     }
 
-    /** Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null. */
+    /**
+     * Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null.
+     * v1.6: a frame of a linked story is hit anywhere in its box, also when it shows no text (an
+     * empty frame after "Unlink here", a frame past its story's end), so a tap hands it to the
+     * Text frames tool ([editLayer]) instead of starting a new text on it; its box is known
+     * without laying the frame out.
+     */
     fun textLayerAt(p: Vec2): Layer? {
         val t = controller.viewTransform
         val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
         val active = doc.activeLayer
+        val box = RectF()
         fun hits(l: Layer): Boolean {
             if (!l.isTextLayer || !l.visible || l.locked) return false
+            controller.textThreads.frameOf(l)?.let { frame ->
+                FrameGeometry.outerRect(frame, box)
+                return p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol
+            }
             val (it, prep) = layerText(l) ?: return false
             return it.text.isNotBlank() && prep.contains(it, p, tol)
         }
