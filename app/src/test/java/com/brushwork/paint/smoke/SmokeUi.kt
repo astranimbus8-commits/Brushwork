@@ -60,8 +60,13 @@ internal object SmokeUi {
      * state write not yet applied, a frame not yet drawn) leaves the flags set with no message to
      * clear them: in the next test of the same class nothing on the dispatcher ever runs again
      * (no snapshot apply, no recomposition; the first composition of `setContent` still happens,
-     * which hid it). Clearing the flags and posting a no-op restarts it; a flag cleared while a
-     * message was really pending only means one more harmless pass over empty queues.
+     * which hid it). Clearing the flags and posting a no-op restarts it. The work left queued
+     * then runs at the start of the new test, and must: it holds the continuation of Compose's
+     * global snapshot manager, one loop for the whole sandbox (dropped, no state write would ever
+     * be applied again); what the previous test's disposed compositions left there runs against
+     * nothing. A flag cleared while a message was really pending only means one more pass over
+     * empty queues. A class whose tests never call [installTestRecomposer] doesn't get this:
+     * there only its first test method can rely on recomposition.
      */
     private fun restartUiDispatcher() {
         val d = AndroidUiDispatcher.Main[ContinuationInterceptor] as? AndroidUiDispatcher ?: return
