@@ -50,7 +50,9 @@ background dispatcher on *copies* of pixels and comes back to the main thread to
   `refineStep()`.
 - **I9 Data and derived data change together.** A `VPath` with `spline != null` has
   `subpaths == listOf(SplineBezier.toSubpath(spline))` within 0.01 px (the Path tool re-opens a
-  spline only after checking it); a threaded `TextItem` has `text == thread.story.substring(start,
+  spline only after checking it, `SplineBezier.matches`; an approximated spline — order 5–6 or
+  unequal weights — that went through an affine transform may be cut into pieces differently, so
+  it also passes within 0.5 px of a fresh conversion, else it is edited as a plain Bézier path); a threaded `TextItem` has `text == thread.story.substring(start,
   end)`; every frame of a story carries the same `story`, `storyId`, `rev` and `spec` (except the box
   width and height). Every edit keeps these or clears the extra data (`spline = null`, thread
   cleared) in the same step.
@@ -163,6 +165,33 @@ locked ones not — inside that edit's undo step (`amendLastStep`); undo and red
 Opening a wrapped text refreshes a stale outline. `TextExport` gives exporters the laid-out lines
 (`lines`), the letters' outlines (`outlines`) and every painted part with its color
 (`outlineParts`: box fill, border, outline stroke, letters).
+
+**Letter scaling (v1.6, `TextSpec.letterScale`).** `LetterRamp` gives each grapheme cluster a
+factor from 100 % down to "Smallest letter" (or up, End → start), in Even steps or by the Same
+ratio, over the whole text or each paragraph; whitespace takes no step. `ScaledLetters` draws one
+letter per call, measured and drawn with ligatures off; Align shifts the baseline (Baseline: none,
+Center: capH·(1−f)/2, Top: capH·(1−f)). Scaled text always goes through `WrapLayout` with the
+full-size line pitch, and a display tile draws only the lines near it; unscaled text keeps the
+v1.5 `StaticLayout` path bit for bit. Vertical text keeps letters centred on the column; text on a
+path scales along its one line; right-to-left and complex scripts are drawn unscaled with a note.
+`TextExport.lines` returns null first when scaling is on, so exporters fall back to outlines.
+
+**Text frames (v1.6, `tools/text/frames`, `ToolId.TEXT_FRAMES`).** Linked frames are ordinary
+text layers whose `TextItem.thread` (`TextThreadSpec`: story, storyId, rev, start, end) names
+their slice of one story (I9). `TextRenderer.frameLayout` lays a frame out from the story at its
+start in its fixed box (one letter-scaling ramp over the whole story), and `frameEnd` gives where
+the next frame starts, so rendering and flow are one function. `StoryWriter` writes a story edit
+across the chain as one step; `TextThreads` (an edit and layer-list listener) heals the chain
+inside the triggering step (delete, merge down, painting, Transform, a v1.5 edit, wrap-source
+changes) with `amendLastStep`, and splits frames that repeat a story id (a Brushwork SVG/PDF
+imported back into its own artwork) into separate stories; undo and redo never re-flow.
+`StoryMeasureCache` reuses measured tails (unscaled by text, scaled by story and start, capped at
+600k characters). `ThreadPreview` previews moves and resizes of several frames through one
+`MultiLayerRenderOverride`. The tool draws frames (the story editor opens through
+`StoryEditorHost`), shows overflow as a red + on the out-port with "+ N characters", links by
+out-port or "Link…", and has Unlink here, Delete frame (the story re-flows in the same step),
+Edit story and per-frame wrap around a picture. A duplicated frame becomes an unlinked text;
+locked frames keep their slice.
 
 ## Shape layers (`tools/vector/Shape*`)
 With "Editable (own layer)" on (the default), each new shape goes into its own layer whose
@@ -301,6 +330,27 @@ length (`CurveWidths`): plain lines are filled `VariableWidthOutline`s of `Curve
 get `CurveWidths.atSamples` as pressure on a brush sized to the thickest sample — the renderer uses
 the same functions, so a re-render equals the live stroke the tool kept.
 
+**Path tool (v1.6, `CurveKind.PATH`, `tools/vector/spline`).** A Blender-like NURBS path: the
+pending `VSpline` (control points with weight 0.1–10 and thickness, order 2–6, Endpoint, Cyclic)
+is the tool's state, and its anchors are always derived through `SplineBezier.toSubpath`, so
+preview, brush, fill and both commits reuse the Curve pipeline. `NurbsGeometry` has the knots and
+rational de Boor evaluation; `SplineBezier` converts order ≤ 4 with equal weights exactly and
+approximates the rest with cubics within 0.05 px (Hermite plus least squares, ≤ 16 pieces per
+span); `SplineEditing` inserts / deletes / moves points; `SplinePresets` has the Circle and Capsule
+quick starts; `PathOverlay` draws the dashed control polygon. ✓ on a vector layer stores one
+`VPath` with `spline` and exactly its Bézier form (I9); a tap on a spline path reopens it in Path
+(after `SplineBezier.matches`), a tap on a plain path from Path switches to Curve. "To Bézier"
+hands the path to Curve as one in-tool step with smooth, grabbable anchors. Path keeps its own
+preferences under "vec.path".
+
+**Bézier handle scaling (v1.6).** `CurveGeometry.scaledHandles` scales a point's handles (both,
+in or out; automatic tangents are made explicit first; factor held to 0.01–100). The Curve
+strip's Handles group (‹ › arrows, value, 10–400 % log slider, side chips, "All points") and a
+pinch that starts within 40 dp of the point or its handle ends are each one in-tool step; the value
+is relative and rests at 100 %. The Shape tool's Points mode has the same group. "Handle size"
+(`AppSettings.curveHandleScale`, 75–200 %) scales the drawn handles and their grab radii for Curve,
+Polyline and Path.
+
 ## Adjustment layers & editable masks (`masks/`, v1.5)
 `Layer.maskSpec` (`masks/MaskModel.kt`) is a parametric mask — linear, radial and brush components
 combined by Add / Subtract / Intersect, invert, density — rendered into the existing `Layer.mask`
@@ -349,6 +399,29 @@ adjustment layers (there are no pixels to apply it to).
   canvas of another size map a mask spec with the layer and draw the mask again from it, so the
   mask stays exactly the spec's rendering.
 
+**Faster adjustments (v1.6).** Two layers of speed-up, neither of which changes saved pixels:
+- **Fused NORMAL path** (`AdjustmentStage`, used when `CompositeTarget.directWrite`): the stage
+  reads the composite below with `getPixels`, takes the mask factor from the unchanged DST_IN
+  luminance paint (or straight from the mask bitmap for whole-pixel translations, or from
+  `MaskFactorCache` during a live session), maps rows in parallel, lerps by mask·opacity with
+  the below alpha kept, and `setPixels` straight into the target. Other blend modes and
+  `directWrite = false` keep the v1.5 Skia path byte for byte. It stays within 1 level of a float
+  reference (2 where v1.5 itself was 2 off).
+- **Live sessions** (`engine/live/LiveAdjust`, `ProxyTiles`): while a slider, a mask handle or a
+  layer-window opacity drag changes an adjustment layer, `touch(layer, region)` starts a session
+  that draws the visible part of the region from 512 px proxy tiles at a power-of-two scale (1/8–1,
+  halved after a frame over 33 ms). The composite below the layer is cached per frame under a
+  `BelowKey` (every layer below, its data and props, colour mode, safe compositing, overrides);
+  layers above are drawn exactly every frame. After `end()` (or 150 ms idle) refinement redraws
+  the region exactly, centre-out, 8 ms per frame (`DisplayTiles.updateBudgeted`), so the screen
+  converges bit for bit to a no-session render (I7). Memory is capped at 32 MB (the scale halves
+  first; an OOM ends the session with one toast; buffers are freed 2 s later or on
+  `onTrimMemory`). `changed(layer, region)` is the one-shot form for discrete edits (undo, a typed
+  value). Under Robolectric the policy is EXACT (I8); tests opt in with LIVE and an injected clock.
+- `AdjustmentEdit.preview` no longer bumps `layersVersion` on every move (the sheet follows its own
+  `version` state). "Fast adjustment preview" (`AppSettings.fastAdjustPreview`, in the Masks
+  Components sheet and in Settings) turns sessions off; it is read at each session start.
+
 ## SVG/PDF exchange (`exchange/`, v1.5)
 Export (overflow menu: Export SVG… / Export PDF…) builds one `ExportScene` from the document and
 writes it with pure-Kotlin writers (SVG, and a PDF writer with layers as optional content groups);
@@ -385,6 +458,22 @@ in the background and cached per layer content version (`LayerBoundsCache`). A t
 transform, shape, curve, polyline, lasso (polygon / curve), marquee, text, ruler and frame divider
 tools use it; the math is `tools/transform/SnapGuides.kt`.
 
+**Increments (v1.6, `controller.increments`, `snap/Increments`).** One switch ("Use increments",
+off by default: then every gesture and control is exactly v1.5, I8) and five steps by
+`IncrementKind`: LENGTH 10 px, SIZE 1 px, SCALE 10 %, ANGLE 15°, PERCENT 5 %, plus custom steps per
+control key. The shared number controls infer a kind from the unit (% → PERCENT, ° → ANGLE, px →
+SIZE — for sliders too, including the filter and adjustment sliders — `LengthField` → LENGTH) or
+take an explicit `incrementKind` / `incrementKey` (`IncrementStepping.resolve`; a key alone makes a
+custom step, e.g. "mask.feather"). Sliders land on multiples with the range ends reachable, −/+ and
+scrubs go to the next multiple, and typed values are never rounded. Long-pressing any value opens
+the Step popup (`Modifier.stepOnLongPress`, at 85 % of the long-press time; a held `NumberField`
+refuses focus until the finger lifts). Gestures step too — Transform (moves, scales of the
+original with mirrored axes keeping their sign, rotation, pinch, distort), Shape (moves, sizes,
+lines, angles, points, handles), Curve / Path points and handles, Masks handles, Text and frame
+moves — in the order object guide, then grid, then increment, per axis, with the step shown in the
+top info chip (`increments.readout`) while a gesture is stepped. The steps live in the Increments
+sheet ("Increment steps", More › Increments…), in Settings, and behind the X / Y pill's "#" cell.
+
 ## Storage (`storage/`)
 Each project is a folder in app-private storage: `project.json` (document + layer properties),
 one compressed raw pixel file per layer/mask, and `thumb.png`. Saves are incremental (only layers
@@ -399,21 +488,48 @@ nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number 
 sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
 parameters) — use them everywhere.
 
-Editor layout (`ui/editor`): top bar (Vector first, then panels, and the overflow menu), tool
-options strip (`ToolOptionsBar`, starting with a VECTOR chip in vector mode) with the X / Y strip
-under it (`ui/tools/CoordinateStrip`: two 40 dp rows of ‹ value › and an absolute slider, folding
-to one 28 dp line; left out of the canvas fit inset so it never moves the canvas; adapters in
-`CoordinateSources` for Transform, Shape, Text, the Curve point and any `PositionedTool` — Masks,
-Clone; a drag, arrow run or typed value is one edit from `beginPositionEdit` to `endPositionEdit`,
-however long the finger rests on the way — the Curve and Shape tools hold their in-tool step open
-in between, `beginNumericEdit` / `endNumericEdit`, as the point thickness sliders do), the Tools sheet (`ToolGrid` sections; Filters is a tile there), floating selection bar
-(copy / cut / paste / deselect…) while a selection or clipboard exists — or the object bar while
-vector objects are selected — the canvas, the brush size/opacity slider bar (values can be tapped and typed)
-and the hotbar at the bottom. Panels (`BwSheet`) are half-height and translucent (the Tools sheet
-up to 85 %, so the whole grid shows at once on a 392 x 873 dp phone); inside the editor
-they are drawn by a non-modal `SheetHost` (ui/common/SheetHost.kt): touching the canvas minimizes
-the top panel to a pill and the touch reaches the canvas, so the view and objects stay editable.
-The layers panel is a non-modal floating window in the bottom-right corner (a tap outside closes it).
+Editor layout (`ui/editor`, v1.6 ibisPaint main screen): the canvas is full bleed on the light
+surround (`IbisColors.Surround`; dark status-bar icons, black navigation bar). At the top: the top
+row (`chrome/TopRow`: 8 circles Undo, Redo, Vector, Selection, Stabilizer, Grid, Ruler, More
+options at a 48 dp pitch; under 336 dp Ruler, Grid and Stabilizer fold into the More menu), the
+floating options strip (`chrome/OptionsStripPanel` around `ToolOptionsBar`, hidden for tools
+without options), the X / Y pill and the selection / object bar under it. At the bottom: the brush
+slider rows (`SliderBar.BrushSliderRows`: [value][−][track][+], relative drag, Size / Percent
+increments, long-press Step popup) and the bottom bar (`chrome/BottomBar`: eraser switch, tool
+menu, size disc, colour, hide interface, layers, back to the gallery). The tool menu
+(`chrome/ToolMenuPanel`, two columns of cells in `ToolMenu` order, Filters / Canvas / Settings
+among them) replaced the Tools sheet and `ToolGrid`; More options opens a dropdown with the v1.5
+overflow entries plus Canvas… and Increments…, headed by the document's name and size. The bands
+are pure functions of the screen size and insets in `chrome/ChromeLayout` (values from
+`IbisDims`); the pill, the selection bar and "hide interface" never refit the canvas. Panels
+(`BwSheet` in the non-modal `SheetHost`, ui/common/SheetHost.kt) sit on the bottom bar at half
+height (black α 0.78, top corners 12): touching the canvas minimizes the top panel to a pill
+(announced as "<title>, minimized", acting as "Show <title>") and the touch reaches the canvas.
+✓ / ✕ float centred 8 dp above the slider rows (right-aligned while the tool menu is open, above
+the layer window's top-right corner while it is open). The InfoChip slot (top centre) shows tap
+feedback, zoom / rotation and the increments readout. The selection bar's delete item reads
+"Clear" (its step's name; "Delete" is the Transform strip's).
+
+The X / Y pill (`ui/tools/CoordinatePill`, v1.6) replaced the two-row X / Y strip: a fold cell,
+beveled "X" and "Y" cells whose number IS the slider (drag it: dx / zoom document px; more than
+48 dp off the cell gives Fine ×0.1; detents at 0, the centre and the edge; Length steps with
+increments on; tap types a value, long-press opens the Step popup) and the "#" increments cell.
+Screen readers get "X slider" / "Y slider" with setProgress and the "Increase X" / "Decrease X"
+actions (the v1.5 "X plus 1 pixel" arrows are gone). Adapters in `CoordinateSources` serve
+Transform, Shape, Text, the Curve and Path points and any `PositionedTool` (Masks, Clone); a drag
+or typed value is one edit from `beginPositionEdit` to `endPositionEdit`, however long the finger
+rests on the way — the Curve and Shape tools hold their in-tool step open in between
+(`beginNumericEdit` / `endNumericEdit`).
+
+The layer window (`ui/layers`, v1.6) is a non-modal floating window the host sizes
+(`ChromeLayout.layerWindow`: min(382, w − 10) × min(520, room below the top row − 8) at x 5, its
+bottom on the bottom bar; screens under 480 dp tall keep the v1.5 side-by-side layout) and
+`LayersPanel` fills (`LayerWindowMetrics`): a 46 dp header (title, "n / max", ✕ "Close layers"),
+a left column with the canvas preview (rendered at most every 500 ms, after the window's first
+frame) over six buttons, the bottom-aligned list with the Selection Layer row and 80 dp rows
+(clip bracket, thumbnail with kind / frame badge, mask square, eye, opacity over blend mode, locks,
+≡ handle), the transparency squares, the 9-icon right strip, the 56 dp blend row and the 48 dp
+opacity row (an adjustment layer's opacity goes through `liveAdjust`; Percent increments).
 
 Other packages: `fonts/` (imported fonts: zip/ttf/otf import, name-table parsing, favorites),
 `inpaint/` (content-aware fill: multi-scale PatchMatch completion, used by the selection bar and
