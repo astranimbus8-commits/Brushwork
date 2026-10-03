@@ -35,8 +35,9 @@ import kotlin.random.Random
  * - A DUPLICATED frame layer becomes an unlinked plain fixed-box text of its slice, drawn again
  *   (its own text layout), in the duplicate's step.
  * - Frames brought in again under the same story id (a Brushwork SVG / PDF imported into the
- *   artwork it came from: layer imports emit no layer-list events) are taken apart into separate
- *   stories on the next committed edit, before anything re-flows.
+ *   artwork it came from) are taken apart into separate stories in the import's own step (the
+ *   import reports the layers it adds), before anything re-flows: a frame's own edit right
+ *   after it never sees the story twice.
  * - Its own writes carry [TextWrapReflow.REFLOW_LABEL] and are ignored; a re-flow whose frames
  *   come out as stored writes nothing. Delivery therefore converges within 2 of the controller's
  *   4 rounds.

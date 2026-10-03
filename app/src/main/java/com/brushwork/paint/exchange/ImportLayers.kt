@@ -2,6 +2,8 @@ package com.brushwork.paint.exchange
 
 import android.graphics.Bitmap
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.LayerListEvent
+import com.brushwork.paint.LayerListKind
 import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.engine.UndoAction
@@ -80,6 +82,10 @@ object ImportLayers {
                         doc.activeLayerIndex = index
                     }
                     c.pushUndo(AddLayerAction(layer, index, label))
+                    // Reported like any added layer (v1.6 QA): frames brought in again under a
+                    // story id the document has are taken apart in THIS step, before any edit
+                    // (a frame's own edit would otherwise flow both copies as one chain).
+                    c.queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, label))
                     created += layer
                     at++
                 }
