@@ -11,6 +11,7 @@ import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tap
 import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -64,6 +65,25 @@ class CurveIncrementsRobolectricTest {
         c.updateGrid(GridSettings(enabled = true, snap = true, type = GridType.SQUARE, spacingPx = 25f))
         c.drag(300f to 200f, 320f to 230f, 333f to 241f)
         assertEquals("on the grid, not on 7 px steps", Vec2(325f, 250f), t.anchors[1].pos)
+    }
+
+    @Test
+    fun anObjectGuideComesBeforeTheIncrementOnItsAxis() {
+        val c = controller()
+        c.snapping.enabled = true
+        val t = c.tool(ToolId.PATH)
+        c.tap(103f, 100f)
+        c.tap(300f, 220f)
+        c.increments.update { it.copy(enabled = true) }
+        // x lands 4 px from the canvas centre (200): the guide wins over the step (+93 → +90 would
+        // give 193); y (+33 from the point) steps to +30.
+        c.pointerDown(ToolPoint(103f, 100f))
+        c.pointerMove(ToolPoint(150f, 120f))
+        c.pointerMove(ToolPoint(196f, 133f))
+        assertEquals(Vec2(200f, 130f), SplineEditing.pos(t.spline!!.points[0]))
+        assertTrue("a guide shows", t.activeGuides.isNotEmpty())
+        c.pointerUp(ToolPoint(196f, 133f))
+        assertEquals(Vec2(200f, 130f), SplineEditing.pos(t.spline!!.points[0]))
     }
 
     @Test
