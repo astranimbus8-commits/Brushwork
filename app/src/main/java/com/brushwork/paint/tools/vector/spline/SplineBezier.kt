@@ -8,6 +8,7 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorOps
+import java.lang.ref.WeakReference
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -72,14 +73,27 @@ object SplineBezier {
      */
     fun matches(p: VPath): Boolean {
         val spline = p.spline ?: return false
-        if (p.subpaths.size != 1) return false
-        val sanitized = spline.sanitized()
-        if (sanitized.points.size < 2 || sanitized.points.size != spline.points.size) return false
-        val stored = p.subpaths[0]
-        val fresh = toSubpath(sanitized)
-        if (structurallyEqual(stored, fresh, MATCH_TOLERANCE)) return true
-        return curvesClose(stored, fresh, GEOMETRIC_TOLERANCE)
+        // (A tap checks a path, then the tool that reopens it checks the same instance again:
+        // paths are immutable, so the last answer is kept for that instance.)
+        synchronized(this) { if (lastChecked?.get() === p) return lastMatch }
+        val result = run {
+            if (p.subpaths.size != 1) return@run false
+            val sanitized = spline.sanitized()
+            if (sanitized.points.size < 2 || sanitized.points.size != spline.points.size) return@run false
+            val stored = p.subpaths[0]
+            val fresh = toSubpath(sanitized)
+            structurallyEqual(stored, fresh, MATCH_TOLERANCE) || curvesClose(stored, fresh, GEOMETRIC_TOLERANCE)
+        }
+        synchronized(this) {
+            lastChecked = WeakReference(p)
+            lastMatch = result
+        }
+        return result
     }
+
+    /** The path [matches] checked last (weakly held) and its answer. */
+    private var lastChecked: WeakReference<VPath>? = null
+    private var lastMatch = false
 
     /** Same anchors (positions, handles, kinds, widths) within [tol]. */
     fun structurallyEqual(a: VSubpath, b: VSubpath, tol: Float): Boolean {
