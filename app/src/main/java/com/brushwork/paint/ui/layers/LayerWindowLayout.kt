@@ -51,7 +51,12 @@ data class LayerWindowMetrics(
     val transparencyRow: Float,
     /** Width of the controls column in [sideBySide] (0 otherwise). */
     val controls: Float,
+    /** [sideBySide] with a narrow controls column: the blend dropdown has a line of its own ([blendRow] is then both lines). */
+    val blendWraps: Boolean = false,
 ) {
+    /** Buttons per row of the side-by-side controls' grid (every cell at least 40 dp wide). */
+    val gridColumns: Int get() = if (controls >= 5 * MIN_CELL) 5 else 4
+
     /** The strip's 9 icons don't fit the main block: it scrolls (each target stays 40 dp). */
     val stripScrolls: Boolean get() = !sideBySide && main < IbisDims.LayerStripIcons * IbisDims.LayerStripPitch.value
 
@@ -100,6 +105,20 @@ data class LayerWindowMetrics(
         /** The side-by-side controls column: half the window, within these bounds. */
         const val CONTROLS_WIDTH = 236f
         const val CONTROLS_MAX_WIDTH = 280f
+
+        /**
+         * A side-by-side list keeps at least this much (gutter 4, thumbnail 44, the eye over the
+         * mask square 40, 4 + 44 for "100%" / "Normal", ≡ 40): a narrower window takes it from
+         * the controls column, down to [CONTROLS_NARROW_WIDTH], whose blend dropdown then wraps.
+         */
+        const val MIN_SIDE_LIST = 176f
+        const val CONTROLS_NARROW_WIDTH = 180f
+
+        /** The wrapped blend row: the toggles' 56 dp line, the dropdown's 40 dp target, a 4 dp pad. */
+        const val BLEND_WRAPPED = 100f
+
+        /** The smallest grid cell of the side-by-side controls. */
+        const val MIN_CELL = 40f
         const val COMPACT_PAD = 4f
         const val COMPACT_LEFT = 50f
 
@@ -119,13 +138,17 @@ data class LayerWindowMetrics(
             val transparency = IbisDims.TransparencyRow.value
             if ((shortScreen || h < SIDE_BY_SIDE_HEIGHT) && w >= SIDE_BY_SIDE_MIN_WIDTH) {
                 // Half the window for the controls (the blend dropdown then shows "Normal" whole
-                // in a 520 dp landscape window), the rest for the list.
-                val controls = (w / 2f).coerceIn(CONTROLS_WIDTH, CONTROLS_MAX_WIDTH)
+                // in a 520 dp landscape window), the rest for the list; a narrow window keeps the
+                // list's minimum and narrows the controls (their dropdown wraps).
+                val half = (w / 2f).coerceIn(CONTROLS_WIDTH, CONTROLS_MAX_WIDTH)
+                val controls = minOf(half, w - 3 * COMPACT_PAD - MIN_SIDE_LIST).coerceAtLeast(CONTROLS_NARROW_WIDTH)
+                val wraps = controls < CONTROLS_WIDTH
                 val list = (w - controls - 3 * COMPACT_PAD).coerceAtLeast(0f)
                 val shortRows = list >= SIDE_LIST_FOR_SHORT_ROWS
                 return LayerWindowMetrics(
                     width = w, height = h, sideBySide = true, compact = true,
-                    header = header, main = (h - header).coerceAtLeast(0f), blendRow = blend, opacityRow = opacity, bottomPad = COMPACT_PAD,
+                    header = header, main = (h - header).coerceAtLeast(0f), blendRow = if (wraps) BLEND_WRAPPED else blend,
+                    opacityRow = opacity, bottomPad = COMPACT_PAD,
                     padStart = COMPACT_PAD, gap1 = COMPACT_PAD, gap2 = 0f, padEnd = COMPACT_PAD,
                     leftColumn = 0f, leftColumns = 0, preview = 0f, buttonsPane = 0f,
                     list = list, strip = 0f,
@@ -133,6 +156,7 @@ data class LayerWindowMetrics(
                     thumb = if (shortRows) SMALL_THUMB else thumbFor(list),
                     transparencyRow = transparency,
                     controls = controls,
+                    blendWraps = wraps,
                 )
             }
             val main = (h - header - blend - opacity - pad).coerceAtLeast(MIN_MAIN)

@@ -65,6 +65,7 @@ import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -456,18 +457,25 @@ private fun RowThumbnail(
                 filterQuality = FilterQuality.Low,
                 modifier = Modifier.fillMaxSize(),
             )
-            if (overlayText != null) {
-                // The effect's name is spoken with the row's values (RowValues), not here.
-                Text(
-                    overlayText,
-                    color = IbisColors.ListText,
-                    fontSize = 9.sp,
-                    lineHeight = 10.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.background(Color(0xCCFFFFFF)).padding(horizontal = 2.dp).clearAndSetSemantics { },
-                )
-            }
+        }
+        if (overlayText != null) {
+            // Across the whole thumbnail, not just the picture: a tall canvas's picture is too
+            // narrow for a word ("To" / "ne"). The effect's name is spoken with the row's values
+            // (RowValues), not here.
+            Text(
+                overlayText,
+                color = IbisColors.ListText,
+                fontSize = 9.sp,
+                lineHeight = 10.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .padding(horizontal = 3.dp)
+                    .background(Color(0xCCFFFFFF))
+                    .padding(horizontal = 2.dp)
+                    .clearAndSetSemantics { },
+            )
         }
         badge()
     }

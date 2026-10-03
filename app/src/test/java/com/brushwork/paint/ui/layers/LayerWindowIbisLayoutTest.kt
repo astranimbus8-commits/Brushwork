@@ -96,6 +96,11 @@ class LayerWindowIbisLayoutTest {
         val preview = probe.tagged(LayerWindowTags.PREVIEW)
         probe.assertSize("preview", 100f, 240f, preview)
         probe.assertDp("preview at the top", 0f, preview.top - main.top)
+        // The canvas picture is as wide as the pane and sits on its bottom edge (ibisPaint).
+        val picture = probe.tagged(LayerWindowTags.PREVIEW_PICTURE)
+        probe.assertDp("the picture as wide as the pane", 100f, picture.width)
+        probe.assertDp("at the canvas's aspect (400 × 300)", 75f, picture.height)
+        probe.assertDp("on the pane's bottom edge", 0f, preview.bottom - picture.bottom)
         val buttons = probe.tagged(LayerWindowTags.BUTTONS)
         probe.assertSize("buttons pane", 100f, 120f, buttons)
         probe.assertDp("buttons under the preview", 0f, buttons.top - preview.bottom)
@@ -226,6 +231,15 @@ class LayerWindowIbisLayoutTest {
         assertTrue("side by side", probe.hasTag(LayerWindowTags.CONTROLS))
         val controls = probe.tagged(LayerWindowTags.CONTROLS)
         assertTrue("the list beside the controls", probe.tagged(LayerWindowTags.LIST).right <= controls.left + 1f)
+        // (The user's phone in split screen gets 380 dp from area E.) The list keeps its minimum,
+        // so "100%" / "Normal" keep their room beside the eye over the mask square; the narrower
+        // controls put the blend dropdown under the toggles.
+        probe.assertDp("the list keeps its minimum", LayerWindowMetrics.MIN_SIDE_LIST, probe.tagged(LayerWindowTags.LIST).width)
+        assertTrue("room for \"100%\" / \"Normal\"", probe.dp(probe.tagged(LayerWindowTags.values(top.id)).width) >= 40f)
+        probe.assertDp("the blend row wraps", LayerWindowMetrics.BLEND_WRAPPED, probe.tagged(LayerWindowTags.BLEND).height)
+        val wrapped = probe.control(LayerLabels.BLEND)
+        assertTrue("the dropdown under the toggles", wrapped.top >= probe.control(LayerLabels.ALPHA_LOCK).bottom - 1f)
+        assertTrue("the dropdown as wide as the controls", probe.dp(wrapped.width) >= LayerWindowMetrics.CONTROLS_NARROW_WIDTH - 8f - 1f)
         probe.assertTouchTargets("380 × 260", wide, activityWindow)
         probe.assertUniqueLabels("380 × 260", wide, activityWindow)
         probe.assertUniqueMergedLabels("380 × 260", wide, activityWindow)

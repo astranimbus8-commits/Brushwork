@@ -472,44 +472,59 @@ private fun MenuItem(text: String, icon: ImageVector, enabled: Boolean = true, i
 /**
  * The blend row (56 dp, black): ↙ "Clipping", α "Alpha lock" and 🔒 "Lock layer" toggles (48 dp
  * each, with their v1.5 captions), then the white "Normal ˄" dropdown ("Choose blend mode").
+ * [wrap]: the dropdown on a line of its own under the toggles ([LayerWindowMetrics.blendWraps]).
  */
 @Composable
-internal fun BlendRow(controller: EditorController, row: LayerRowModel, isBottom: Boolean, modifier: Modifier = Modifier) {
-    val layer = row.layer
-    Row(modifier.fillMaxWidth().background(IbisColors.PanelStrip).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        BlendToggle(
-            description = null,
-            caption = LayerLabels.CLIPPING,
-            checked = row.clipping,
-            // A clipping flag on the bottom layer has no effect; only allow turning it off there.
-            enabled = !isBottom || row.clipping,
-            onToggle = { controller.fromPanel { controller.toggleClipping(layer) } },
-        ) { tint -> Icon(Icons.Filled.SubdirectoryArrowRight, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp).rotate(90f)) }
-        BlendToggle(
-            description = LayerLabels.ALPHA_LOCK,
-            caption = LayerLabels.ALPHA_LOCK_CAPTION,
-            checked = row.alphaLocked,
-            onToggle = { controller.fromPanel { controller.toggleAlphaLock(layer) } },
-        ) { tint ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("α", color = tint, fontSize = 15.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
-                Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+internal fun BlendRow(controller: EditorController, row: LayerRowModel, isBottom: Boolean, modifier: Modifier = Modifier, wrap: Boolean = false) {
+    val onSelect = { m: LayerBlendMode -> controller.fromPanel { controller.setBlendMode(row.layer, m) } }
+    if (wrap) {
+        // A narrow controls column (a small side-by-side window): the dropdown gets its own line,
+        // so "Normal" stays whole instead of "N…".
+        Column(modifier.fillMaxWidth().background(IbisColors.PanelStrip).padding(start = 4.dp, end = 4.dp, bottom = 4.dp)) {
+            Row(Modifier.fillMaxWidth().height(IbisDims.BlendRow), verticalAlignment = Alignment.CenterVertically) {
+                BlendToggles(controller, row, isBottom)
             }
+            BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.fillMaxWidth())
         }
-        BlendToggle(
-            description = LayerLabels.LOCK,
-            caption = LayerLabels.LOCK_CAPTION,
-            checked = row.locked,
-            onToggle = { controller.fromPanel { controller.toggleLock(layer) } },
-        ) { tint -> Icon(if (row.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) }
+        return
+    }
+    Row(modifier.fillMaxWidth().background(IbisColors.PanelStrip).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        BlendToggles(controller, row, isBottom)
         Spacer(Modifier.width(6.dp))
-        BlendModeDropdown(
-            mode = row.blendMode,
-            onSelect = { m -> controller.fromPanel { controller.setBlendMode(layer, m) } },
-            modifier = Modifier.weight(1f),
-        )
+        BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.weight(1f))
         Spacer(Modifier.width(4.dp))
     }
+}
+
+/** ↙ "Clipping", α "Alpha lock" and 🔒 "Lock layer" (48 dp each). */
+@Composable
+private fun BlendToggles(controller: EditorController, row: LayerRowModel, isBottom: Boolean) {
+    val layer = row.layer
+    BlendToggle(
+        description = null,
+        caption = LayerLabels.CLIPPING,
+        checked = row.clipping,
+        // A clipping flag on the bottom layer has no effect; only allow turning it off there.
+        enabled = !isBottom || row.clipping,
+        onToggle = { controller.fromPanel { controller.toggleClipping(layer) } },
+    ) { tint -> Icon(Icons.Filled.SubdirectoryArrowRight, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp).rotate(90f)) }
+    BlendToggle(
+        description = LayerLabels.ALPHA_LOCK,
+        caption = LayerLabels.ALPHA_LOCK_CAPTION,
+        checked = row.alphaLocked,
+        onToggle = { controller.fromPanel { controller.toggleAlphaLock(layer) } },
+    ) { tint ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("α", color = tint, fontSize = 15.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
+            Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(12.dp))
+        }
+    }
+    BlendToggle(
+        description = LayerLabels.LOCK,
+        caption = LayerLabels.LOCK_CAPTION,
+        checked = row.locked,
+        onToggle = { controller.fromPanel { controller.toggleLock(layer) } },
+    ) { tint -> Icon(if (row.locked) Icons.Filled.Lock else Icons.Filled.LockOpen, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp)) }
 }
 
 /** A blend-row toggle: glyph over a 9 sp caption, 48 dp wide, accent while on. */

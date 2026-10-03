@@ -130,13 +130,35 @@ class LayerWindowMetricsTest {
         assertFalse(landscape.stripScrolls)
         assertFalse(landscape.buttonsScroll)
 
-        // A smaller landscape phone (640 dp: E gives 416): the controls keep their minimum, and
-        // the narrower list gets 80 dp rows (a masked row stacks its eye over its mask square).
-        val small = LayerWindowMetrics.of(416f, 300f, shortScreen = true)
-        assertTrue(small.sideBySide)
-        assertDp("controls minimum", LayerWindowMetrics.CONTROLS_WIDTH, small.controls)
-        assertDp("list", 416f - LayerWindowMetrics.CONTROLS_WIDTH - 3 * LayerWindowMetrics.COMPACT_PAD, small.list)
-        assertDp("80 dp rows", 80f, small.row)
+        assertFalse("the dropdown beside the toggles", landscape.blendWraps)
+        assertDp("blend row", 56f, landscape.blendRow)
+        assertEquals(5, landscape.gridColumns)
+
+        // A window of 424 dp: the controls at their minimum, the list at its own.
+        val mid = LayerWindowMetrics.of(424f, 300f, shortScreen = true)
+        assertDp("controls minimum", LayerWindowMetrics.CONTROLS_WIDTH, mid.controls)
+        assertDp("list minimum", LayerWindowMetrics.MIN_SIDE_LIST, mid.list)
+        assertFalse(mid.blendWraps)
+
+        // A smaller landscape phone (640 dp: E gives 416), or the user's phone in split screen (E
+        // gives 380): the list keeps its minimum (80 dp rows; a masked row stacks its eye over its
+        // mask square, and "100%" / "Normal" keep 44 dp); the controls narrow and the blend
+        // dropdown gets a line of its own.
+        for (w in listOf(416f, 380f)) {
+            val small = LayerWindowMetrics.of(w, 300f, shortScreen = true)
+            assertTrue(small.sideBySide)
+            assertDp("$w: list minimum", LayerWindowMetrics.MIN_SIDE_LIST, small.list)
+            assertDp("$w: controls", w - LayerWindowMetrics.MIN_SIDE_LIST - 3 * LayerWindowMetrics.COMPACT_PAD, small.controls)
+            assertDp("$w: 80 dp rows", 80f, small.row)
+            assertDp("$w: thumbnail", LayerWindowMetrics.SMALL_THUMB, small.thumb)
+            assertTrue("$w: the dropdown wraps", small.blendWraps)
+            assertDp("$w: both blend lines", LayerWindowMetrics.BLEND_WRAPPED, small.blendRow)
+            assertTrue("$w: grid cells ≥ 40 dp", small.controls / small.gridColumns >= 40f)
+        }
+        // The narrowest side-by-side window: the controls stop narrowing.
+        val narrowest = LayerWindowMetrics.of(LayerWindowMetrics.SIDE_BY_SIDE_MIN_WIDTH, 300f, shortScreen = true)
+        assertDp("controls floor", LayerWindowMetrics.CONTROLS_NARROW_WIDTH, narrowest.controls)
+        assertEquals(4, narrowest.gridColumns)
         // A very wide one: the controls stop growing.
         assertDp("controls maximum", LayerWindowMetrics.CONTROLS_MAX_WIDTH, LayerWindowMetrics.of(800f, 300f, shortScreen = true).controls)
 
@@ -167,8 +189,8 @@ class LayerWindowMetricsTest {
                 assertTrue("$w × $h: strip ${m.strip}", m.strip >= 40f)
                 assertTrue("$w × $h: left cells ${m.leftColumn / m.leftColumns}", m.leftColumn / m.leftColumns >= 40f)
             } else {
-                // 15 actions, 5 per row, across the controls column.
-                assertTrue("$w × $h: grid cells", m.controls / 5f >= 40f)
+                // 15 actions, 4 or 5 per row, across the controls column.
+                assertTrue("$w × $h: grid cells", m.controls / m.gridColumns >= 40f)
             }
         }
     }

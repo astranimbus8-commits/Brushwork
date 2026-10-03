@@ -34,6 +34,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -183,7 +184,11 @@ fun LayersPanel(
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val m = LayerWindowMetrics.of(maxWidth.value, maxHeight.value, shortScreen = LayerListMath.isShortScreen(screenHeightDp))
-            val list: @Composable (Modifier) -> Unit = { mod ->
+            // A new row height or thumbnail size (the window resized: rotation, a split screen)
+            // builds the list afresh: the lazy rows would otherwise keep their last measured
+            // size until something else re-measured them.
+            @Composable
+            fun list(mod: Modifier) = key(m.row, m.thumb) {
                 LayerList(
                     controller = controller,
                     rows = rows,
@@ -214,9 +219,9 @@ fun LayersPanel(
                                 .testTag(LayerWindowTags.CONTROLS)
                                 .verticalScroll(rememberScrollState()),
                         ) {
-                            BlendRow(controller, activeRow, isBottom = activeDocIndex == 0, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND))
+                            BlendRow(controller, activeRow, isBottom = activeDocIndex == 0, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND), wrap = m.blendWraps)
                             OpacityRow(controller, active, activeRow.opacity, onType = { opacityId = active.id }, Modifier.height(m.opacityRow.dp).testTag(LayerWindowTags.OPACITY))
-                            ActionGrid(leftActions(env) + stripActions(env), perRow = 5, Modifier.fillMaxWidth())
+                            ActionGrid(leftActions(env) + stripActions(env), perRow = m.gridColumns, Modifier.fillMaxWidth())
                         }
                     }
                 } else {
