@@ -516,8 +516,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             TopButton(TopSlot.RULER, "Ruler", Icons.Outlined.DesignServices, on = rulerOn) { openPanel(EditorPanel.RULER) },
             // The menu drops over the canvas: the tool menu closes first (its cells would repeat
             // the menu's "Settings", I10). The layer window stays, as it does for every chrome
-            // button: "Fit to screen" or "Paste" with the layers in view (the window's own "Import
-            // picture" does the same as the menu's, and the open menu takes every touch).
+            // button: "Fit to screen" or "Paste" with the layers in view. Its own "Import picture"
+            // button is then the only one: the menu leaves that entry out (moreMenuEntries).
             TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
         )
         controller.docVersion // size changes (canvas resize) refresh the More menu's header
@@ -527,6 +527,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             hasSelection = hasSelection,
             docActionsEnabled = docActionsEnabled,
             canPaste = clipboard != null,
+            layerWindowShown = layersVisible,
             onImportPicture = { launchImport() },
             onImportVector = { controller.endCanvasGesture(); exchange.requestImport() },
             onExport = requestExport,
@@ -900,12 +901,15 @@ private fun FeedbackChips(
 /**
  * The More menu's entries (v1.6 §3.7.6; the v1.5 overflow labels unchanged, plus Canvas… and
  * Increments…). The narrow-screen top-row circles that fold into it come first (TopRow adds them).
+ * While the layer window is shown ([layerWindowShown]) "Import picture" is left out: the window has
+ * the same button, and two controls never share a label (I10).
  */
 private fun moreMenuEntries(
     controller: EditorController,
     hasSelection: Boolean,
     docActionsEnabled: Boolean,
     canPaste: Boolean,
+    layerWindowShown: Boolean,
     onImportPicture: () -> Unit,
     onImportVector: () -> Unit,
     onExport: (ExportFormat) -> Unit,
@@ -916,7 +920,7 @@ private fun moreMenuEntries(
     onIncrements: () -> Unit,
     onSaveNow: () -> Unit,
     onSettings: () -> Unit,
-): List<MenuEntry> = listOf(
+): List<MenuEntry> = listOfNotNull(
     MenuEntry(if (hasSelection) "Copy selection" else "Copy layer", Icons.Filled.ContentCopy, enabled = docActionsEnabled) {
         controller.endCanvasGesture()
         controller.copySelection()
@@ -925,8 +929,8 @@ private fun moreMenuEntries(
         controller.endCanvasGesture()
         controller.paste()
     },
-    MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled, dividerBefore = true) { onImportPicture() },
-    MenuEntry("Import SVG or PDF…", Icons.Filled.FileOpen, enabled = docActionsEnabled) { onImportVector() },
+    if (layerWindowShown) null else MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled, dividerBefore = true) { onImportPicture() },
+    MenuEntry("Import SVG or PDF…", Icons.Filled.FileOpen, enabled = docActionsEnabled, dividerBefore = layerWindowShown) { onImportVector() },
     MenuEntry("Export PNG", Icons.Filled.SaveAlt, enabled = docActionsEnabled) { onExport(ExportFormat.PNG) },
     MenuEntry("Export JPG", Icons.Filled.Image, enabled = docActionsEnabled) { onExport(ExportFormat.JPEG) },
     MenuEntry("Export SVG…", Icons.Filled.Polyline, enabled = docActionsEnabled) { onExportVector(VectorFormat.SVG) },

@@ -21,9 +21,10 @@ import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.robolectric.Robolectric
 
 /**
- * Shared plumbing of the v1.6 chrome tests: sections (all UI work of a class runs in ONE test, as
- * Compose's frame clock only serves the first test of a sandbox), the editor in a fresh activity,
- * and measurements in dp relative to the editor's root.
+ * Shared plumbing of the v1.6 chrome tests: sections (all UI work of a class runs in ONE test, a
+ * habit from before [SmokeUi.installTestRecomposer] restarted Compose's main dispatcher for each
+ * test; a section's failure doesn't hide the next section's), the editor in a fresh activity, and
+ * measurements in dp relative to the editor's root.
  */
 internal class ChromeHarness {
     private val failures = mutableListOf<Throwable>()

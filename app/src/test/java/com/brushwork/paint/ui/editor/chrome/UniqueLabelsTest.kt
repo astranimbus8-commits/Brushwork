@@ -1,11 +1,24 @@
 package com.brushwork.paint.ui.editor.chrome
 
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.masks.AdjustmentEffects
+import com.brushwork.paint.masks.LinearMask
+import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextBoxSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.ui.layers.FrameBadge
+import com.brushwork.paint.ui.layers.LayerLabels
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -18,14 +31,15 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * I10 (v1.6 §3.7.11): labels are an API, unique among the visible clickables — on the main
- * screen, with the tool menu open, with the layer window open, with a minimized panel's pill
- * beside the X / Y pill, and with the More menu open — at the user's phone size, and on a 360 dp
- * phone ([UniqueLabelsNarrowTest]).
+ * screen, with the tool menu open, with the layer window open (also over two layers of each kind:
+ * their badges name their rows), with a minimized panel's pill beside the X / Y pill, and with the
+ * More menu open — at the user's phone size, and on a 360 dp phone ([UniqueLabelsNarrowTest]).
  *
  * One pair is shared by design and allowed here: with the tool menu open, the top row's "Ruler"
  * circle (the Ruler panel) and the tool menu's "Ruler" cell (the Ruler tool) — I10 keeps both
  * labels ("Ruler" on the top row, every tool label). The menu is checked with the Brush active
- * (another tool's options strip shows its own chips beside the menu).
+ * (another tool's options strip shows its own chips beside the menu). The More menu opened over
+ * the layer window leaves out its "Import picture" (the window's button is the one).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.uniquelabelssandbox"])
@@ -63,6 +77,44 @@ internal object UniqueLabels {
         "Close layers", "Add layer", "Duplicate layer", "Delete layer", "Merge down", "More layer actions",
         "Choose blend mode", "Type layer opacity",
     )
+
+    /**
+     * Above the two plain layers: two text layers, two vector layers, two Tone adjustment layers
+     * with editable masks, two frames "1 of 1" of two stories, two shape layers (bottom first,
+     * layers 3 to 12).
+     */
+    private fun twoOfEachKind(c: EditorController) {
+        fun text(item: TextItem) {
+            c.selectLayer(c.doc.layers.last())
+            c.addLayer()!!.textData = TextCodec.encode(item)
+        }
+        text(TextItem("One", cx = 100f, cy = 80f))
+        text(TextItem("Two", cx = 100f, cy = 160f))
+        repeat(2) { c.selectLayer(c.doc.layers.last()); c.addVectorLayer()!! }
+        repeat(2) {
+            c.selectLayer(c.doc.layers.last())
+            c.addAdjustmentLayer(
+                AdjustmentEffects.defaultSpec(),
+                MaskSpec(components = listOf(LinearMask(1, x0 = 40f, y0 = 0f, x1 = 360f, y1 = 0f)), nextId = 2),
+            )!!
+        }
+        for (story in 1L..2L) {
+            val words = "Story $story"
+            text(
+                TextItem(
+                    words,
+                    spec = TextSpec(box = TextBoxSpec(width = 120f, minHeight = 40f)),
+                    cx = 200f, cy = 60f * story,
+                    thread = TextThreadSpec(storyId = story, index = 0, story = words, start = 0, end = words.length, rev = 1),
+                ),
+            )
+        }
+        repeat(2) { i ->
+            c.selectLayer(c.doc.layers.last())
+            c.addLayer()!!.shapeData = ShapeCodec.encode(ShapeObject(cx = 120f + 100f * i, cy = 220f, w = 60f, h = 40f))
+        }
+        c.notifyLayersChanged()
+    }
 
     /** Back on the More menu's popup window closes it. */
     private fun closeMenu() {
@@ -124,6 +176,51 @@ internal object UniqueLabels {
             click("Close layers", exact = true)
             Smoke.assertQuiet(s.c, "labels")
         }
+        h.section("two layers of each kind in the layer window") {
+            val s = h.editor(setup = ::twoOfEachKind)
+            val layers = s.c.doc.layers
+            assertEquals(
+                "bottom first: 2 plain, 2 text, 2 vector, 2 masked adjustments, 2 frames, 2 shapes",
+                listOf("-", "-", "T", "T", "V", "V", "A", "A", "F", "F", "S", "S"),
+                layers.map { l ->
+                    when {
+                        l.isAdjustmentLayer -> "A"
+                        l.isVectorLayer -> "V"
+                        l.textData?.let { TextCodec.decode(it)?.threaded } == true -> "F"
+                        l.isTextLayer -> "T"
+                        l.isShapeLayer -> "S"
+                        else -> "-"
+                    }
+                },
+            )
+            assertTrue("the adjustments' masks are editable (spec) masks", layers.subList(6, 8).all { it.mask != null && it.maskSpec != null })
+            assertEquals("Layer 10: text frame 1 of 1", LayerLabels.frameBadge(10, FrameBadge(0, 1, overset = false)))
+            assertEquals("Editable mask of layer 8", LayerLabels.specMaskBadge(8))
+            // Each pair on screen together (the list opens with the row above the active one
+            // first): every badge names its own row, so no two rows share a label (I10).
+            for ((top, badges) in listOf(
+                12 to listOf(LayerLabels.badge(12, LayerLabels.SHAPE_BADGE), LayerLabels.badge(11, LayerLabels.SHAPE_BADGE)),
+                10 to listOf(LayerLabels.frameBadge(10, FrameBadge(0, 1, false)), LayerLabels.frameBadge(9, FrameBadge(0, 1, false))),
+                8 to listOf(
+                    LayerLabels.badge(8, LayerLabels.ADJUSTMENT_BADGE), LayerLabels.badge(7, LayerLabels.ADJUSTMENT_BADGE),
+                    LayerLabels.specMaskBadge(8), LayerLabels.specMaskBadge(7),
+                ),
+                6 to listOf(LayerLabels.badge(6, LayerLabels.VECTOR_BADGE), LayerLabels.badge(5, LayerLabels.VECTOR_BADGE)),
+                4 to listOf(LayerLabels.badge(4, LayerLabels.TEXT_BADGE), LayerLabels.badge(3, LayerLabels.TEXT_BADGE)),
+            )) {
+                s.c.selectLayer(layers[top - 1])
+                settle()
+                click("Open layers")
+                val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
+                val items = Clickables.onScreen(s)
+                for (badge in badges) {
+                    assertEquals("\"$badge\" on one row: ${items.map { it.own }}", 1, items.count { badge in it.own })
+                }
+                assertUnique("layer window, layers $top and ${top - 1}", Clickables.ownLabelsInside(items, window))
+                click("Close layers", exact = true)
+            }
+            Smoke.assertQuiet(s.c, "two of each kind")
+        }
         h.section("a minimized panel's pill beside the X / Y pill") {
             val s = h.editor()
             s.c.selectAll()
@@ -157,10 +254,11 @@ internal object UniqueLabels {
                 assertTrue("\"$entry\" in the menu", SmokeUi.has(entry, exact = true))
                 assertTrue("\"$entry\" at most once on screen", popup.count { entry in it.labels } <= 1)
             }
+            assertTrue("\"Import picture\" in the menu without the layer window", SmokeUi.has("Import picture", exact = true))
             closeMenu()
             assertEquals(1, SmokeUi.windows().size)
-            // Opened over the layer window, the menu leaves it open (like every chrome button):
-            // only "Import picture" is in both (the same action; the open menu takes every touch).
+            // Opened over the layer window, the menu leaves it open (like every chrome button)
+            // and leaves out "Import picture": the window's own button is the only one.
             click("Open layers")
             assertNotNull(s.tagged(ChromeTags.LAYER_WINDOW))
             click("More options")
@@ -172,8 +270,11 @@ internal object UniqueLabels {
             assertUnique("More menu and the chrome around the layer window", menu + editor.filter { !window.contains(it.bounds.center) })
             // Against the window's controls, known by their own names (rows show values).
             val windowNames = Clickables.ownLabelsInside(editor.filter { window.contains(it.bounds.center) }, window).flatMap { it.labels }.toSet()
-            val clash = menu.flatMap { it.labels }.filter { it in windowNames && it != "Import picture" }
+            assertTrue("the window's \"Import picture\": $windowNames", "Import picture" in windowNames)
+            assertTrue("not in the menu over it", menu.none { "Import picture" in it.labels })
+            val clash = menu.flatMap { it.labels }.filter { it in windowNames }
             assertTrue("More entries repeating a layer window control: $clash", clash.isEmpty())
+            assertEquals("\"Import picture\" on one control", 1, all.count { "Import picture" in it.labels })
             closeMenu()
             click("Close layers", exact = true)
             // Opened over the tool menu, the menu closes it first: its cells would repeat "Settings".

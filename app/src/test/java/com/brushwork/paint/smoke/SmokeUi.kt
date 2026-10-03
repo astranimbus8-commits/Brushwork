@@ -2,6 +2,7 @@ package com.brushwork.paint.smoke
 
 import android.view.View
 import androidx.compose.ui.InternalComposeUiApi
+import androidx.compose.ui.platform.AndroidUiDispatcher
 import androidx.compose.ui.platform.InfiniteAnimationPolicy
 import androidx.compose.ui.platform.WindowRecomposerPolicy
 import androidx.compose.ui.platform.createLifecycleAwareWindowRecomposer
@@ -14,6 +15,8 @@ import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.BwSheetPillKey
 import com.brushwork.paint.ui.common.BwSheetTitleKey
 import org.junit.Assert.assertTrue
+import kotlin.coroutines.ContinuationInterceptor
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** Semantics lookups on top of [RobolectricUi] (click labels, texts, windows). */
 internal object SmokeUi {
@@ -36,11 +39,44 @@ internal object SmokeUi {
      * default Robolectric's Choreographer advances the clock itself when a frame is requested and
      * delivers it at once, so a coroutine that awaits every frame (the layer list's auto-scroll
      * while a row is dragged) keeps the looper busy forever.
+     *
+     * Call it first in every test method (not once per class): it also restarts Compose's main
+     * dispatcher, which the previous test of the class may have left stuck (see
+     * [restartUiDispatcher]); without that a second test method saw its first composition and
+     * then no recomposition at all.
      */
     @OptIn(InternalComposeUiApi::class)
     fun installTestRecomposer() {
         WindowRecomposerPolicy.setFactory { root -> root.createLifecycleAwareWindowRecomposer(ParkInfiniteAnimations) }
         org.robolectric.shadows.ShadowChoreographer.setPaused(true)
+        restartUiDispatcher()
+    }
+
+    /**
+     * Compose's main-thread dispatcher ([AndroidUiDispatcher.Main]) lives as long as the sandbox,
+     * across the test methods of a class. It posts one message (and one frame callback) at a time
+     * and sets a flag until that message runs. Robolectric clears the main looper's queue and
+     * resets the Choreographer after each test, so work still queued at the end of one test (a
+     * state write not yet applied, a frame not yet drawn) leaves the flags set with no message to
+     * clear them: in the next test of the same class nothing on the dispatcher ever runs again
+     * (no snapshot apply, no recomposition; the first composition of `setContent` still happens,
+     * which hid it). Clearing the flags and posting a no-op restarts it. The work left queued
+     * then runs at the start of the new test, and must: it holds the continuation of Compose's
+     * global snapshot manager, one loop for the whole sandbox (dropped, no state write would ever
+     * be applied again); what the previous test's disposed compositions left there runs against
+     * nothing. A flag cleared while a message was really pending only means one more pass over
+     * empty queues. A Compose class whose tests don't call [installTestRecomposer] calls this
+     * first in every test method instead (an `@Before`), or only its first test method can rely
+     * on recomposition.
+     */
+    fun restartUiDispatcher() {
+        val d = AndroidUiDispatcher.Main[ContinuationInterceptor] as? AndroidUiDispatcher ?: return
+        fun field(name: String) = AndroidUiDispatcher::class.java.getDeclaredField(name).apply { isAccessible = true }
+        synchronized(field("lock").get(d)!!) {
+            field("scheduledTrampolineDispatch").setBoolean(d, false)
+            field("scheduledFrameDispatch").setBoolean(d, false)
+        }
+        d.dispatch(EmptyCoroutineContext, Runnable {})
     }
 
     /** Windows that existed before the current screen was shown (other activities). */

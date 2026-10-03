@@ -18,6 +18,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.ui.color.RobolectricUi.byDescription
 import com.brushwork.paint.ui.color.RobolectricUi.byText
 import com.brushwork.paint.ui.color.RobolectricUi.drag
@@ -28,6 +29,7 @@ import com.brushwork.paint.ui.theme.BrushworkTheme
 import kotlinx.coroutines.MainScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -40,14 +42,18 @@ import org.robolectric.annotation.Config
  * the sheet/dialog windows, and drives the dialog with real touch events. Elements are located
  * through the semantics tree (see [RobolectricUi]), not fixed pixel positions.
  *
- * Compose keeps a process-static frame clock bound to the first test's Choreographer, so frames
- * (animations) stall in later tests of the same Robolectric sandbox. These tests only rely on
- * composition, layout and synchronous input dispatch, and the placeholder instrumented package
- * gives this class its own sandbox so it can't affect other Compose tests.
+ * Compose's main dispatcher outlives a test method: work a test leaves queued would stall it for
+ * the next test of the same sandbox (no recomposition, no frames), so each test first restarts it
+ * ([SmokeUi.restartUiDispatcher]). These tests rely on composition, layout and synchronous input
+ * dispatch, and the placeholder instrumented package gives this class its own sandbox so it can't
+ * affect other Compose tests.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h760dp-hdpi", instrumentedPackages = ["com.brushwork.paint.ui.color.uitestsandbox"])
 class ColorPickerUiSmokeTest {
+
+    @Before
+    fun restartCompose() = SmokeUi.restartUiDispatcher()
 
     private fun assertWindowsLaidOut() {
         val roots = windowRoots()
@@ -97,8 +103,8 @@ class ColorPickerUiSmokeTest {
 
     /**
      * The dialog's title-row actions and body composed straight into the activity. The real
-     * dialog is a bottom sheet, which only animates into view in the first test of a sandbox
-     * (see the class comment), so touch tests drive the same pieces without the sheet.
+     * dialog is a bottom sheet that animates into view over several frames, so touch tests drive
+     * the same pieces without the sheet (their positions don't depend on the animation).
      */
     @Composable
     private fun DialogWithoutSheet(initial: Int, showAlpha: Boolean, onPick: (Int) -> Unit, onDismiss: () -> Unit) {

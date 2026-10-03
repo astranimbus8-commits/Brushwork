@@ -259,8 +259,12 @@ class RequestCoverageV16UiTest {
         settle()
         if (areaControl("B", "Longer handles")) {
             val before = curve.anchors
-            // ‹ › are hold-to-repeat arrows (no click action); the "Handle scale" slider (10–400 %,
-            // logarithmic, 100 % at about 0.62) is the accessible way: well above 100 % here.
+            // ‹ › are hold-to-repeat arrows; a screen reader presses them with their click action
+            // (one step, like a quick tap).
+            click("Longer handles", exact = true)
+            assertTrue("› made the handles longer", curve.anchors != before)
+            // The "Handle scale" slider (10–400 %, logarithmic, 100 % at about 0.62): well above
+            // 100 % here.
             setSlider("Handle scale", 0.85f)
             assertTrue("the handles got longer", curve.anchors != before)
         }

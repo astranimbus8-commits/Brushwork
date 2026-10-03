@@ -382,8 +382,9 @@ class LayerWindowActionsRobolectricTest {
         assertTrue("a threaded item", TextCodec.decode(frame.textData)!!.threaded)
         c.notifyLayersChanged()
         SmokeUi.settle()
-        assertTrue("the frame badge (⛓ 1/1 with a red +)", SmokeUi.has("Text frame 1 of 1, more text than fits", exact = true))
-        assertFalse("the frame badge replaces the T badge", SmokeUi.has(LayerLabels.TEXT_BADGE, exact = true))
+        val fn = c.doc.indexOf(frame) + 1
+        assertTrue("the frame badge (⛓ 1/1 with a red +)", SmokeUi.has("Layer $fn: text frame 1 of 1, more text than fits", exact = true))
+        assertFalse("the frame badge replaces the T badge", SmokeUi.has(LayerLabels.badge(fn, LayerLabels.TEXT_BADGE), exact = true))
         click(LayerLabels.MORE)
         click("Edit text")
         // The Text frames tool opens a frame (textThreads.openForEditing, area D); until it does,
