@@ -5,6 +5,7 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.masks.BrushMask
@@ -13,6 +14,8 @@ import com.brushwork.paint.masks.MaskComponent
 import com.brushwork.paint.masks.MaskGeometry
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.masks.RadialMask
+import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.snap.Increments
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -150,29 +153,55 @@ internal object MaskHandles {
      * [start] changed by dragging handle [k] from document point [from] to [to] (relative: the
      * component never jumps under the finger). Linear ramps keep at least 1 px, radii at least
      * 1 px; the feather stays in 0..1.
+     *
+     * v1.6 increments (§3.4c, [inc] = `controller.increments`; null or off: exactly v1.5): a pin
+     * moves by multiples of the Length step from where the drag began ([pinDelta]); a linear
+     * ramp's width (p0–p1) and a radial's radii land on multiples of the Length step (absolute);
+     * rotation knobs turn the component to multiples of the Angle step (its absolute angle: the
+     * radial's rotation, the linear ramp's direction); the feather lands on multiples of the
+     * custom step [FEATHER_KEY] (in %, as its slider shows it).
      */
-    fun dragged(start: MaskComponent, k: Kind, from: Vec2, to: Vec2): MaskComponent {
+    fun dragged(start: MaskComponent, k: Kind, from: Vec2, to: Vec2, inc: Increments? = null): MaskComponent {
         val delta = to - from
+        val stepped = inc?.enabled == true
         return when (start) {
             is LinearMask -> {
                 val u = direction(start)
                 when (k) {
-                    Kind.PIN -> MaskGeometry.transformed(start, MaskGeometry.Affine.translate(delta.x, delta.y)) ?: start
+                    Kind.PIN -> {
+                        val d = pinDelta(from, to, inc)
+                        MaskGeometry.transformed(start, MaskGeometry.Affine.translate(d.x, d.y)) ?: start
+                    }
                     Kind.LINEAR_START -> {
-                        if (u == null) return start.copy(x0 = start.x0 + delta.x, y0 = start.y0 + delta.y)
+                        if (u == null) {
+                            val d = if (stepped) inc.lengthDelta(delta) else delta
+                            return start.copy(x0 = start.x0 + d.x, y0 = start.y0 + d.y)
+                        }
                         val len = (Vec2(start.x1, start.y1) - Vec2(start.x0, start.y0)).length
-                        val along = delta.dot(u).coerceAtMost(len - 1f)
+                        var along = delta.dot(u).coerceAtMost(len - 1f)
+                        // The width (len − along) on the Length step's multiples.
+                        if (stepped) along = len - steppedLength(len - along, inc)
                         start.copy(x0 = start.x0 + u.x * along, y0 = start.y0 + u.y * along)
                     }
                     Kind.LINEAR_END -> {
-                        if (u == null) return start.copy(x1 = start.x1 + delta.x, y1 = start.y1 + delta.y)
+                        if (u == null) {
+                            val d = if (stepped) inc.lengthDelta(delta) else delta
+                            return start.copy(x1 = start.x1 + d.x, y1 = start.y1 + d.y)
+                        }
                         val len = (Vec2(start.x1, start.y1) - Vec2(start.x0, start.y0)).length
-                        val along = delta.dot(u).coerceAtLeast(1f - len)
+                        var along = delta.dot(u).coerceAtLeast(1f - len)
+                        // The width (len + along) on the Length step's multiples.
+                        if (stepped) along = steppedLength(len + along, inc) - len
                         start.copy(x1 = start.x1 + u.x * along, y1 = start.y1 + u.y * along)
                     }
                     Kind.LINEAR_ROTATE -> {
                         val m = Vec2((start.x0 + start.x1) / 2f, (start.y0 + start.y1) / 2f)
-                        val deg = angleDeg(m, from, to)
+                        var deg = angleDeg(m, from, to)
+                        if (stepped && u != null) {
+                            // The ramp's direction (p0 → p1) on the Angle step's multiples.
+                            val a0 = Math.toDegrees(atan2(u.y, u.x).toDouble()).toFloat()
+                            deg = MaskGeometry.normalizeDegrees(inc.angle(a0 + deg) - a0)
+                        }
                         MaskGeometry.transformed(start, MaskGeometry.Affine.similarity(m.x, m.y, 1f, deg)) ?: start
                     }
                     else -> start
@@ -181,21 +210,156 @@ internal object MaskHandles {
             is RadialMask -> {
                 val (ux, uy) = axes(start)
                 val ctr = Vec2(start.cx, start.cy)
+                fun radius(r: Float): Float = if (stepped) steppedLength(r, inc) else max(1f, r)
                 when (k) {
-                    Kind.PIN -> start.copy(cx = start.cx + delta.x, cy = start.cy + delta.y)
-                    Kind.RX_POS -> start.copy(rx = max(1f, start.rx + delta.dot(ux)))
-                    Kind.RX_NEG -> start.copy(rx = max(1f, start.rx - delta.dot(ux)))
-                    Kind.RY_POS -> start.copy(ry = max(1f, start.ry + delta.dot(uy)))
-                    Kind.RY_NEG -> start.copy(ry = max(1f, start.ry - delta.dot(uy)))
-                    Kind.ROTATE -> start.copy(rotationDeg = MaskGeometry.normalizeDegrees(start.rotationDeg + angleDeg(ctr, from, to)))
+                    Kind.PIN -> {
+                        val d = pinDelta(from, to, inc)
+                        start.copy(cx = start.cx + d.x, cy = start.cy + d.y)
+                    }
+                    Kind.RX_POS -> start.copy(rx = radius(start.rx + delta.dot(ux)))
+                    Kind.RX_NEG -> start.copy(rx = radius(start.rx - delta.dot(ux)))
+                    Kind.RY_POS -> start.copy(ry = radius(start.ry + delta.dot(uy)))
+                    Kind.RY_NEG -> start.copy(ry = radius(start.ry - delta.dot(uy)))
+                    Kind.ROTATE -> {
+                        val deg = start.rotationDeg + angleDeg(ctr, from, to)
+                        start.copy(rotationDeg = if (stepped) MaskGeometry.normalizeDegrees(inc.angle(deg)) else MaskGeometry.normalizeDegrees(deg))
+                    }
                     Kind.FEATHER -> {
                         val d0 = ellipseDistance(start, from); val d1 = ellipseDistance(start, to)
-                        start.copy(feather = (start.feather - (d1 - d0)).coerceIn(0f, 1f))
+                        val f = (start.feather - (d1 - d0)).coerceIn(0f, 1f)
+                        start.copy(feather = steppedFeather(f, inc))
                     }
                     else -> start
                 }
             }
-            is BrushMask -> if (k == Kind.PIN) MaskGeometry.transformed(start, MaskGeometry.Affine.translate(delta.x, delta.y)) ?: start else start
+            is BrushMask -> if (k == Kind.PIN) {
+                val d = pinDelta(from, to, inc)
+                MaskGeometry.transformed(start, MaskGeometry.Affine.translate(d.x, d.y)) ?: start
+            } else {
+                start
+            }
+        }
+    }
+
+    /** Custom increment key of the radial feather (its slider and handle; the step is in %). */
+    const val FEATHER_KEY = "mask.feather"
+
+    /** How far a pin dragged from [from] to [to] moves its component: on the Length step's multiples when [inc] is on. */
+    fun pinDelta(from: Vec2, to: Vec2, inc: Increments?): Vec2 {
+        val d = to - from
+        return if (inc?.enabled == true) inc.lengthDelta(d) else d
+    }
+
+    /** A length (ramp width, radius) on the Length step's multiples, at least 1 px (and one step when the step is that big). */
+    private fun steppedLength(v: Float, inc: Increments): Float {
+        val s = inc.lengthAbs(v)
+        if (s >= 1f) return s
+        val step = inc.step(IncrementKind.LENGTH) ?: 1f
+        return max(1f, step)
+    }
+
+    /** A feather (0..1) on the custom step [FEATHER_KEY] (in %; 0 and 100 % stay reachable); unchanged without one. */
+    fun steppedFeather(f: Float, inc: Increments?): Float {
+        val step = inc?.customStep(FEATHER_KEY) ?: return f
+        return (IncrementMath.snapInRange(f * 100.0, step.toDouble(), 0.0, 100.0) / 100.0).toFloat()
+    }
+
+    /**
+     * What a stepped drag of handle [k] shows while it runs (`Increments.readout`, the InfoChip
+     * slot): the move ("X +30 px  Y −10 px"), the width or radius ("Width 120 px"), the angle
+     * ("45°") or the feather ("Feather 40 %"); null when [inc] is off.
+     */
+    fun readout(start: MaskComponent, k: Kind, result: MaskComponent, from: Vec2, to: Vec2, inc: Increments?): String? {
+        if (inc?.enabled != true) return null
+        return when (k) {
+            Kind.PIN -> pinDelta(from, to, inc).let { "X ${signed(it.x)} px  Y ${signed(it.y)} px" }
+            Kind.LINEAR_START, Kind.LINEAR_END -> (result as? LinearMask)?.let { "Width ${number(Vec2(it.x1 - it.x0, it.y1 - it.y0).length)} px" }
+            Kind.LINEAR_ROTATE -> (result as? LinearMask)?.let { direction(it) }?.let { "${number(Math.toDegrees(atan2(it.y, it.x).toDouble()).toFloat())}°" }
+            Kind.RX_POS, Kind.RX_NEG -> (result as? RadialMask)?.let { "Radius X ${number(it.rx)} px" }
+            Kind.RY_POS, Kind.RY_NEG -> (result as? RadialMask)?.let { "Radius Y ${number(it.ry)} px" }
+            Kind.ROTATE -> (result as? RadialMask)?.let { "${number(it.rotationDeg)}°" }
+            Kind.FEATHER -> (result as? RadialMask)?.let { "Feather ${number(it.feather * 100f)} %" }
+        }
+    }
+
+    /**
+     * Where a creating drag of a linear ramp from [a] to [b] ends with [inc] (null or off: [b]):
+     * the ramp's width on the Length step's multiples (at least one step) and its direction on
+     * the Angle step's multiples.
+     */
+    fun steppedLinearEnd(a: Vec2, b: Vec2, inc: Increments?): Vec2 {
+        if (inc?.enabled != true) return b
+        val d = b - a
+        val len = d.length
+        if (!(len > 1e-4f) || !len.isFinite()) return b
+        val w = steppedLength(len, inc)
+        val deg = inc.angle(Math.toDegrees(atan2(d.y, d.x).toDouble()).toFloat())
+        val r = Math.toRadians(deg.toDouble())
+        return Vec2(a.x + (cos(r) * w).toFloat(), a.y + (sin(r) * w).toFloat())
+    }
+
+    /** The radius of a radial being created by a drag ([r] px) with [inc] (null or off: [r]): on the Length step's multiples. */
+    fun steppedRadius(r: Float, inc: Increments?): Float = if (inc?.enabled == true) steppedLength(r, inc) else r
+
+    /** The readout of a stepped creating drag ("Width 120 px  30°", "Radius 80 px"); null when [inc] is off. */
+    fun createReadout(c: MaskComponent, inc: Increments?): String? {
+        if (inc?.enabled != true) return null
+        return when (c) {
+            is LinearMask -> direction(c)?.let { u ->
+                "Width ${number(Vec2(c.x1 - c.x0, c.y1 - c.y0).length)} px  ${number(Math.toDegrees(atan2(u.y, u.x).toDouble()).toFloat())}°"
+            }
+            is RadialMask -> "Radius ${number(c.rx)} px"
+            is BrushMask -> null
+        }
+    }
+
+    /** A two-finger gesture on a component after the increments: its move, scale factor and rotation (degrees). */
+    data class Pinch(val translation: Vec2, val scale: Float, val rotationDeg: Float)
+
+    /**
+     * The two-finger gesture ([translation], [scale], [rotationDeg] since it began) on [comp]
+     * stepped by [inc] (null or off: unchanged): the move on the Length step, the scale relative
+     * to the gesture start on the Scale step, and the component's absolute angle (a radial's
+     * rotation, a linear ramp's direction; a brush part's turn) on the Angle step.
+     */
+    fun steppedPinch(comp: MaskComponent, translation: Vec2, scale: Float, rotationDeg: Float, inc: Increments?): Pinch {
+        if (inc?.enabled != true) return Pinch(translation, scale, rotationDeg)
+        val a0 = absoluteAngle(comp)
+        val rot = when {
+            a0 != null -> MaskGeometry.normalizeDegrees(inc.angle(a0 + rotationDeg) - a0)
+            else -> inc.step(IncrementKind.ANGLE)?.let { IncrementMath.snapDelta(rotationDeg, it) } ?: rotationDeg
+        }
+        return Pinch(inc.lengthDelta(translation), inc.factor(scale), rot)
+    }
+
+    /** The readout of a stepped two-finger gesture ("120 %  45°"); null when [inc] is off. */
+    fun pinchReadout(start: MaskComponent, p: Pinch, inc: Increments?): String? {
+        if (inc?.enabled != true) return null
+        val a0 = absoluteAngle(start)
+        val angle = if (a0 != null) MaskGeometry.normalizeDegrees(a0 + p.rotationDeg) else p.rotationDeg
+        return "${number(p.scale * 100f)} %  ${number(angle)}°"
+    }
+
+    /** The angle that turns with [c] (degrees): a radial's rotation, a linear ramp's direction; null for a brush part. */
+    private fun absoluteAngle(c: MaskComponent): Float? = when (c) {
+        is RadialMask -> c.rotationDeg
+        is LinearMask -> direction(c)?.let { Math.toDegrees(atan2(it.y, it.x).toDouble()).toFloat() }
+        is BrushMask -> null
+    }
+
+    /** [v] with at most one decimal (none when whole). */
+    internal fun number(v: Float): String {
+        val r = Math.round(v * 10f) / 10f
+        return if (r == Math.round(r).toFloat()) Math.round(r).toString() else r.toString()
+    }
+
+    /** [v] as [number] with its sign ("+30", "−10", "0"). */
+    internal fun signed(v: Float): String {
+        val n = number(v)
+        return when {
+            n == "0" || n == "-0" -> "0"
+            v > 0f -> "+$n"
+            else -> "−" + n.removePrefix("-")
         }
     }
 

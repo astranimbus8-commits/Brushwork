@@ -39,6 +39,7 @@ import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentHistogram
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.mask.AdjustmentEdit
 import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.LabeledSlider
@@ -60,7 +61,7 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 @Composable
 internal fun AdjustmentSheet(tool: MaskTool) {
     val c = tool.controller
-    // Layers aren't Compose state: layersVersion is (every preview bumps it).
+    // Layers aren't Compose state: layersVersion is (a layer switch bumps it).
     val layer = remember(c.layersVersion) { c.activeLayer }
     if (!layer.isAdjustmentLayer) return
     val edit = remember(layer) { tool.adjustmentEdit(layer) }
@@ -76,14 +77,16 @@ internal fun AdjustmentSheet(tool: MaskTool) {
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { edit.flush() }
 
     BwSheet(title = "Adjust: ${layer.name}", onDismiss = { edit.flush(); tool.adjustOpen = false }) {
-        AdjustmentBody(c, layer, edit::preview)
+        AdjustmentBody(c, layer, edit)
     }
 }
 
 @Composable
-private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brushwork.paint.masks.AdjustmentSpec?, Float, String) -> Unit) {
-    // The layer's fields aren't Compose state; layersVersion is (every preview bumps it).
-    if (c.layersVersion < 0) return
+private fun AdjustmentBody(c: EditorController, layer: Layer, edit: AdjustmentEdit) {
+    val preview: (com.brushwork.paint.masks.AdjustmentSpec?, Float, String) -> Unit = edit::preview
+    // The layer's fields aren't Compose state; the edit's version is (every preview bumps it,
+    // v1.6: without recomposing the layer UI), and layersVersion follows undo / redo.
+    if (edit.version < 0 || c.layersVersion < 0) return
     val spec = layer.adjustment ?: return
     val filter = AdjustmentEffects.filterOf(spec)
     val enabled = !layer.locked
@@ -95,7 +98,8 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
             modifier = Modifier.padding(vertical = 8.dp),
         )
     }
-    EffectPicker(c, layer, filter, enabled, preview)
+    // Picking an effect or resetting it is a discrete change: the canvas refines at once.
+    EffectPicker(c, layer, filter, enabled) { s, o, n -> edit.preview(s, o, n); edit.settled() }
     if (filter == null) {
         Text(
             "This adjustment uses an effect this version doesn't have (${spec.filterId}), so it shows no effect. Pick another effect to use it.",
@@ -111,7 +115,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
             ParamHost(
                 valuesOf = {
                     // Read in composition: the controls follow every change.
-                    if (c.layersVersion < 0) filter.defaultValues()
+                    if (edit.version < 0 || c.layersVersion < 0) filter.defaultValues()
                     else layer.adjustment?.takeIf { it.filterId == filter.id }?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
                 },
                 update = { key, value ->
@@ -130,7 +134,10 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
                     val cur = layer.adjustment?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
                     val def = AdjustmentEffects.defaultValues(filter, c.color).raw(p.key) ?: p.defaultValue()
                     preview(AdjustmentEffects.spec(filter, cur.copy().set(key, def)), layer.opacity, layer.name)
+                    edit.settled()
                 },
+                // A slider let go: the canvas refines to the exact image at once (§3.1a).
+                onChangeFinished = edit::settled,
             )
         }
         if (filter.params.isEmpty()) {
@@ -142,6 +149,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, preview: (com.brus
         label = "Amount",
         value = layer.opacity,
         onValueChange = { preview(layer.adjustment, it.coerceIn(0f, 1f), layer.name) },
+        onValueChangeFinished = edit::settled,
         valueRange = 0f..1f,
         valueText = "${(layer.opacity * 100f).toInt()}%",
         typing = SliderTyping.Percent,

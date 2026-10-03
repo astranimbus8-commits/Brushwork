@@ -47,7 +47,9 @@ private enum class PressResult { UP, MOVED }
 /**
  * Interactive tone-curve editor: tap to add a point, drag points, drag a point off the box or
  * long-press it to delete it. The curve is drawn with the same monotone cubic interpolation the
- * filters use, over the luminance [histogram] of the image (optional).
+ * filters use, over the luminance [histogram] of the image (optional). [onChangeFinished] (v1.6):
+ * a touch that changed the curve ended, or the delete button changed it (an adjustment layer's
+ * live preview refines to the exact image then).
  */
 @Composable
 fun CurveEditor(
@@ -57,9 +59,11 @@ fun CurveEditor(
     histogram: IntArray? = null,
     enabled: Boolean = true,
     onReset: (() -> Unit)? = null,
+    onChangeFinished: () -> Unit = {},
 ) {
     val current by rememberUpdatedState(CurveEditing.normalized(points))
     val emit by rememberUpdatedState(onChange)
+    val finished by rememberUpdatedState(onChangeFinished)
     var selected by remember { mutableIntStateOf(-1) }
     var removing by remember { mutableStateOf(false) }
     val shown = current
@@ -85,69 +89,76 @@ fun CurveEditor(
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         down.consume()
-                        val w = size.width - 2 * pad
-                        val h = size.height - 2 * pad
-                        fun nx(o: Offset) = (o.x - pad) / w
-                        fun ny(o: Offset) = 1f - (o.y - pad) / h
-                        val start = current
-                        val hit = CurveEditing.hitTest(start, nx(down.position), ny(down.position), hitR / w, hitR / h)
-                        var working = start
-                        var index = hit
-                        if (hit < 0) {
-                            val added = CurveEditing.add(start, nx(down.position), ny(down.position))
-                            if (added == null) {
-                                selected = -1
-                                return@awaitEachGesture
-                            }
-                            working = added.first
-                            index = added.second
-                            emit(working)
-                        }
-                        selected = index
-                        val id: PointerId = down.id
-                        if (hit >= 0) {
-                            // Long-press on an existing interior point deletes it.
-                            val press = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
-                                var result = PressResult.UP
-                                while (true) {
-                                    val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
-                                    if (!ch.pressed) { ch.consume(); break }
-                                    if ((ch.position - down.position).getDistance() > viewConfiguration.touchSlop) { result = PressResult.MOVED; break }
-                                    ch.consume()
-                                }
-                                result
-                            }
-                            when (press) {
-                                null -> {
-                                    if (CurveEditing.canRemove(working, index)) { emit(CurveEditing.remove(working, index)); selected = -1 }
-                                    while (true) {
-                                        val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
-                                        ch.consume()
-                                        if (!ch.pressed) break
-                                    }
+                        var changed = false
+                        try {
+                            val w = size.width - 2 * pad
+                            val h = size.height - 2 * pad
+                            fun nx(o: Offset) = (o.x - pad) / w
+                            fun ny(o: Offset) = 1f - (o.y - pad) / h
+                            val start = current
+                            val hit = CurveEditing.hitTest(start, nx(down.position), ny(down.position), hitR / w, hitR / h)
+                            var working = start
+                            var index = hit
+                            if (hit < 0) {
+                                val added = CurveEditing.add(start, nx(down.position), ny(down.position))
+                                if (added == null) {
+                                    selected = -1
                                     return@awaitEachGesture
                                 }
-                                PressResult.UP -> return@awaitEachGesture
-                                PressResult.MOVED -> {}
-                            }
-                        }
-                        while (true) {
-                            val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
-                            if (!ch.pressed) { ch.consume(); break }
-                            ch.consume()
-                            val p = ch.position
-                            val outside = p.x < -deleteMargin || p.y < -deleteMargin ||
-                                p.x > size.width + deleteMargin || p.y > size.height + deleteMargin
-                            if (outside && CurveEditing.canRemove(working, index)) {
-                                if (!removing) { removing = true; selected = -1; emit(CurveEditing.remove(working, index)) }
-                            } else {
-                                removing = false
-                                selected = index
-                                working = CurveEditing.move(working, index, nx(p), ny(p))
+                                working = added.first
+                                index = added.second
+                                changed = true
                                 emit(working)
                             }
+                            selected = index
+                            val id: PointerId = down.id
+                            if (hit >= 0) {
+                                // Long-press on an existing interior point deletes it.
+                                val press = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                                    var result = PressResult.UP
+                                    while (true) {
+                                        val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
+                                        if (!ch.pressed) { ch.consume(); break }
+                                        if ((ch.position - down.position).getDistance() > viewConfiguration.touchSlop) { result = PressResult.MOVED; break }
+                                        ch.consume()
+                                    }
+                                    result
+                                }
+                                when (press) {
+                                    null -> {
+                                        if (CurveEditing.canRemove(working, index)) { changed = true; emit(CurveEditing.remove(working, index)); selected = -1 }
+                                        while (true) {
+                                            val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
+                                            ch.consume()
+                                            if (!ch.pressed) break
+                                        }
+                                        return@awaitEachGesture
+                                    }
+                                    PressResult.UP -> return@awaitEachGesture
+                                    PressResult.MOVED -> {}
+                                }
+                            }
+                            while (true) {
+                                val ch = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: break
+                                if (!ch.pressed) { ch.consume(); break }
+                                ch.consume()
+                                val p = ch.position
+                                val outside = p.x < -deleteMargin || p.y < -deleteMargin ||
+                                    p.x > size.width + deleteMargin || p.y > size.height + deleteMargin
+                                changed = true
+                                if (outside && CurveEditing.canRemove(working, index)) {
+                                    if (!removing) { removing = true; selected = -1; emit(CurveEditing.remove(working, index)) }
+                                } else {
+                                    removing = false
+                                    selected = index
+                                    working = CurveEditing.move(working, index, nx(p), ny(p))
+                                    emit(working)
+                                }
+                            }
+                            removing = false
+                        } finally {
+                            if (changed) finished()
                         }
-                        removing = false
                     }
                 },
         ) {
@@ -195,7 +206,7 @@ fun CurveEditor(
             }
             Text(info, style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim, modifier = Modifier.weight(1f))
             IconButton(
-                onClick = { if (sel != null) { emit(CurveEditing.remove(shown, sel)); selected = -1 } },
+                onClick = { if (sel != null) { emit(CurveEditing.remove(shown, sel)); selected = -1; finished() } },
                 enabled = enabled && sel != null && CurveEditing.canRemove(shown, sel),
             ) { Icon(Icons.Filled.Delete, contentDescription = "Delete point") }
             if (onReset != null) TextButton(onClick = { selected = -1; onReset() }, enabled = enabled) { Text("Reset") }

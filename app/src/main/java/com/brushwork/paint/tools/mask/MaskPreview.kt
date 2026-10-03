@@ -142,10 +142,10 @@ internal class MaskPreview(private val c: EditorController) {
             val before = if (l.mask == null) Rect(0, 0, w, h) else MaskSpecs.coverageBounds(prev, w, h)?.let { padded(it) }
             val dirty = union(before, shownRegion)
             touched = union(touched, dirty ?: Rect())
-            c.invalidateDoc(dirty ?: Rect())
+            redraw(l, dirty ?: Rect())
         } else if (shownRegion != null && override != null) {
             touched = union(touched, shownRegion)
-            c.invalidateDoc(shownRegion)
+            l?.let { redraw(it, shownRegion) } ?: c.invalidateDoc(shownRegion)
         }
         c.invalidateOverlay()
     }
@@ -159,13 +159,27 @@ internal class MaskPreview(private val c: EditorController) {
         }
     }
 
-    /** Stops the preview (the override goes; the area it showed is redrawn). */
+    /**
+     * Shows what changed in [region] of [l]'s mask: an adjustment layer's live session (v1.6
+     * §3.1 C2: drawn from proxies while the finger moves), else a plain redraw.
+     */
+    private fun redraw(l: Layer, region: Rect) {
+        if (l.isAdjustmentLayer) c.liveAdjust.touch(l, region) else c.invalidateDoc(region)
+    }
+
+    /**
+     * Stops the preview (the override goes; the area it showed is redrawn). An adjustment layer's
+     * live session refines to exact from here (the tool records the full-resolution mask next).
+     */
     fun end() {
         val ov = override
         override = null
         if (ov != null) {
             if (c.renderOverride === ov) c.renderOverride = null
-            touched?.let { c.invalidateDoc(it) }
+            val l = ov.layer
+            touched?.let { r ->
+                if (l.isAdjustmentLayer && c.doc.indexOf(l) >= 0) c.liveAdjust.changed(l, r) else c.invalidateDoc(r)
+            }
         }
         touched = null
         shown = null

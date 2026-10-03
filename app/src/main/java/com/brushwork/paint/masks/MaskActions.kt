@@ -47,7 +47,7 @@ class MaskSpecAction(
         if (mask != null && spec != null) MaskSpecs.renderInto(mask, spec, region)
         layer.markChanged()
         c.notifyLayersChanged()
-        c.invalidateDoc(region)
+        MaskEdits.redraw(c, layer, region)
     }
 
     override fun undo(c: EditorController) = set(c, before)
@@ -77,7 +77,7 @@ class AdjustmentAction(
         layer.name = name
         layer.markChanged()
         c.notifyLayersChanged()
-        c.invalidateDoc(MaskEdits.effectRegion(c, layer))
+        MaskEdits.redraw(c, layer, MaskEdits.effectRegion(c, layer))
     }
 
     override fun undo(c: EditorController) = set(c, specBefore, opacityBefore, nameBefore)
@@ -95,6 +95,15 @@ object MaskEdits {
         if (layer.locked) { c.toast("Layer \"${layer.name}\" is locked"); return false }
         if (!layer.visible) { c.toast("Layer \"${layer.name}\" is hidden"); return false }
         return true
+    }
+
+    /**
+     * Shows a committed change of [layer] in [region] (null = everywhere): an adjustment layer's
+     * through its live session (v1.6 §3.1 C2: proxies at once, then refined without a hitch on a
+     * large canvas; the plain redraw under Robolectric's EXACT policy), anything else redrawn.
+     */
+    fun redraw(c: EditorController, layer: Layer, region: Rect?) {
+        if (layer.isAdjustmentLayer && c.doc.indexOf(layer) >= 0) c.liveAdjust.changed(layer, region) else c.invalidateDoc(region)
     }
 
     /** The document area an adjustment layer's effect shows in (null = the whole document). */
@@ -144,13 +153,16 @@ object MaskEdits {
             }
             layer.restoreData(dataAfter)
             c.commitEdit(rec, label, listOf(LayerDataAction(label, layer, dataBefore, dataAfter)))
+            // v1.6: an adjustment layer's canvas catches up through its live session (proxies at
+            // once, then refined), not by re-rendering every visible tile in one frame.
+            if (layer.isAdjustmentLayer) c.liveAdjust.changed(layer, reg)
         } else {
             MaskSpecs.renderInto(mask, after, reg, brushes)
             layer.restoreData(dataAfter)
             layer.markChanged()
             c.pushUndo(MaskSpecAction(label, layer, dataBefore, dataAfter, reg))
             c.notifyLayersChanged()
-            c.invalidateDoc(reg)
+            redraw(c, layer, reg)
             c.queueEdit(EditEvent(layer, EditTarget.MASK, Rect(reg), label))
         }
         true

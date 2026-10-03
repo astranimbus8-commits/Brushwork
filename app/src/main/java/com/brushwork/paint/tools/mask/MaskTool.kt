@@ -421,6 +421,21 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
     private var gesture: Gesture? = null
 
+    /** True while this tool shows the increments readout of a stepped drag (it clears only its own). */
+    private var readoutShown = false
+
+    /** Shows [text] as the increments readout (`controller.increments.readout`); null clears this tool's. */
+    private fun showReadout(text: String?) {
+        if (text == null) {
+            if (!readoutShown) return
+            readoutShown = false
+            controller.increments.readout = null
+            return
+        }
+        controller.increments.readout = text
+        readoutShown = true
+    }
+
     /** A render override that leaves the layer as it is, so the compositor knows its mask is being painted. */
     private var paintOverride: LayerRenderOverride? = null
 
@@ -549,9 +564,11 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                     g.moved = true
                     preview.begin(g.layer, g.base, cache)
                 }
-                g.spec = MaskGeometry.added(g.base, created(g.kind, g.start, pos, g.compId))
+                val comp = created(g.kind, g.start, pos, g.compId)
+                g.spec = MaskGeometry.added(g.base, comp)
                 liveSpec = g.spec
                 preview.update(g.spec)
+                showReadout(MaskHandles.createReadout(comp, controller.increments))
                 flashOverlay()
             }
             is Drag -> {
@@ -560,11 +577,18 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                     g.moved = true
                     preview.begin(g.layer, g.base, cache)
                 }
-                val comp = MaskHandles.dragged(g.startComp, g.handle, g.start, pos)
+                val inc = controller.increments
+                val comp = MaskHandles.dragged(g.startComp, g.handle, g.start, pos, inc)
                 g.spec = MaskGeometry.replaced(g.base, comp.id, comp)
                 liveSpec = g.spec
-                val moved = if (g.startComp is BrushMask && g.handle == MaskHandles.Kind.PIN) g.startComp.id to MaskGeometry.Affine.translate(pos.x - g.start.x, pos.y - g.start.y) else null
+                val moved = if (g.startComp is BrushMask && g.handle == MaskHandles.Kind.PIN) {
+                    val d = MaskHandles.pinDelta(g.start, pos, inc)
+                    g.startComp.id to MaskGeometry.Affine.translate(d.x, d.y)
+                } else {
+                    null
+                }
                 preview.update(g.spec, moved)
+                showReadout(MaskHandles.readout(g.startComp, g.handle, comp, g.start, pos, inc))
                 flashOverlay()
             }
             is Paint -> paintTo(g, pos, p.pressure)
@@ -575,6 +599,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onUp(p: ToolPoint) {
         val g = gesture ?: return
         val pos = Vec2(p.x, p.y)
+        showReadout(null)
         when (g) {
             is PinTap -> {
                 gesture = null
@@ -613,7 +638,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                     controller.invalidateOverlay()
                     return
                 }
-                val comp = MaskHandles.dragged(g.startComp, g.handle, g.start, pos)
+                val comp = MaskHandles.dragged(g.startComp, g.handle, g.start, pos, controller.increments)
                 commitSpec(MaskGeometry.replaced(g.base, comp.id, comp), if (g.handle == MaskHandles.Kind.PIN) "Move mask" else "Edit mask")
             }
             is Paint -> {
@@ -627,6 +652,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onCancel() {
         val g = gesture ?: return
         gesture = null
+        showReadout(null)
         if (g is Paint && g.live) {
             g.rec?.abort()
             removePaintOverride()
@@ -645,11 +671,17 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         return t.docToScreen(a).distanceTo(t.docToScreen(b)) >= t.dp(4f)
     }
 
-    /** The component a creating drag from [a] to [b] makes. */
+    /**
+     * The component a creating drag from [a] to [b] makes (v1.6: with increments on, the ramp's
+     * width and direction, or the radius, land on the Length and Angle steps).
+     */
     private fun created(kind: Kind, a: Vec2, b: Vec2, id: Long): MaskComponent = when (kind) {
-        Kind.LINEAR -> LinearMask(id, mode = newMode, x0 = a.x, y0 = a.y, x1 = b.x, y1 = b.y)
+        Kind.LINEAR -> {
+            val e = MaskHandles.steppedLinearEnd(a, b, controller.increments)
+            LinearMask(id, mode = newMode, x0 = a.x, y0 = a.y, x1 = e.x, y1 = e.y)
+        }
         Kind.RADIAL -> {
-            val r = max(2f, a.distanceTo(b))
+            val r = MaskHandles.steppedRadius(max(2f, a.distanceTo(b)), controller.increments)
             RadialMask(id, mode = newMode, cx = a.x, cy = a.y, rx = r, ry = r)
         }
         Kind.BRUSH -> BrushMask(id, mode = newMode)
@@ -886,17 +918,22 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
         val pz = pinch ?: return
         if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || scale <= 0f || !rotationDeg.isFinite()) return
-        val m = MaskGeometry.Affine.similarity(pz.focus.x, pz.focus.y, scale, rotationDeg, translation.x, translation.y)
+        // v1.6 increments (off: unchanged): move, scale and angle on their steps.
+        val inc = controller.increments
+        val p = MaskHandles.steppedPinch(pz.comp, translation, scale, rotationDeg, inc)
+        val m = MaskGeometry.Affine.similarity(pz.focus.x, pz.focus.y, p.scale, p.rotationDeg, p.translation.x, p.translation.y)
         val comp = MaskGeometry.transformed(pz.comp, m) ?: return
         val s = MaskGeometry.replaced(pz.base, comp.id, comp)
         liveSpec = s
         preview.update(s, if (comp is BrushMask) comp.id to m else null)
+        showReadout(MaskHandles.pinchReadout(pz.comp, p, inc))
         flashOverlay()
     }
 
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val pz = pinch ?: return
         pinch = null
+        showReadout(null)
         val s = liveSpec
         if (cancelled || s == null) {
             preview.end()
@@ -1000,6 +1037,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onDeactivate() {
         onCancel()
         pinch?.let { pinch = null; preview.end(); liveSpec = null }
+        showReadout(null)
         // A strip move still being previewed is recorded on the layer it was made on (another
         // layer is about to become active, or another tool); any other live edit (a sheet slider
         // never released) is thrown away, so nothing shown belongs to the previous layer.
