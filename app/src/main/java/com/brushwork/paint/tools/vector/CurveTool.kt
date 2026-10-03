@@ -2172,6 +2172,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         redo.clear()
         redoCount = 0
         historyKey = null
+        // A held edit never carries over to the next path (a slider that left the screen mid-drag).
+        numericHeld = false
         canUndoStep = false
     }
 
