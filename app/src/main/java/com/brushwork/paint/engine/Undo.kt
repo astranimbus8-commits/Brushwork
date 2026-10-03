@@ -3,6 +3,7 @@ package com.brushwork.paint.engine
 import android.graphics.Bitmap
 import android.graphics.Rect
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
@@ -254,8 +255,23 @@ class MoveLayerAction(private val layer: Layer, private val from: Int, private v
 
 class LayerPropsAction(private val layer: Layer, private val before: LayerProps, private val after: LayerProps, override val label: String = "Layer properties") : UndoAction {
     override val byteSize = 0L
-    override fun undo(c: EditorController) = c.structural { layer.copyPropsFrom(before) }
-    override fun redo(c: EditorController) = c.structural { layer.copyPropsFrom(after) }
+    override fun undo(c: EditorController) = set(c, before)
+    override fun redo(c: EditorController) = set(c, after)
+
+    /**
+     * v1.6: only an adjustment layer's opacity changing is redrawn as the change itself was (the
+     * layer window's slider, −/+, a typed value): where the effect shows, through the live session
+     * (design §3.1 C2, `changed` = the one-shot form for undo), not the whole canvas at once.
+     */
+    private fun set(c: EditorController, props: LayerProps) {
+        if (layer.isAdjustmentLayer && c.doc.indexOf(layer) >= 0 && layer.props().copy(opacity = props.opacity) == props) {
+            layer.opacity = props.opacity
+            c.notifyLayersChanged()
+            MaskEdits.redraw(c, layer, MaskEdits.effectRegion(c, layer))
+        } else {
+            c.structural { layer.copyPropsFrom(props) }
+        }
+    }
 }
 
 /**
