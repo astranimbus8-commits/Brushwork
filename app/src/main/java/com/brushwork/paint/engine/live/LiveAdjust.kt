@@ -38,7 +38,9 @@ import kotlin.math.min
  * How a frame is made while a session runs:
  * - Display tiles touched by the session ("session tiles") that are dirty and on screen are not
  *   rendered while the finger moves: the proxy covers their changed part (the rest of the tile
- *   keeps its exact pixels). Every other dirty visible tile renders as usual.
+ *   keeps its exact pixels). Every other dirty visible tile renders as usual, and so does a
+ *   session tile that was exact already when a change the session didn't make reached it (it
+ *   leaves the session: a stroke right after a slider was let go is never shown from a proxy).
  * - The proxy scale `s` is the largest power of two at most the view zoom, in 1/8..1, halved
  *   (for the rest of the session) after a live frame over 33 ms (below-cache builds and frames
  *   that made proxies don't count), or while the proxies needed would exceed 32 MB. Each proxy
@@ -128,6 +130,25 @@ class LiveAdjust(private val c: EditorController) {
             val ts = tiles.tileSize
             for (row in r.top / ts..(r.bottom - 1) / ts) for (col in r.left / ts..(r.right - 1) / ts) inSession[tiles.tileIndexOf(col, row)] = true
         }
+
+        /**
+         * A change the session didn't make lands in [r] (document px, within the document; told
+         * before the display tiles mark it): session tiles there that are exact already (refined,
+         * or left clean by the drag) leave the session, so the change renders exactly like any
+         * edit instead of being shown from a proxy until refinement comes back to it (a stroke or
+         * a mask dab right after a slider was let go). Tiles still waiting stay: their proxy is
+         * redrawn with the change and they refine as planned.
+         */
+        fun releaseExact(r: Rect) {
+            if (r.isEmpty) return
+            val ts = tiles.tileSize
+            val c1 = ((r.right - 1) / ts).coerceAtMost(tiles.cols - 1)
+            val r1 = ((r.bottom - 1) / ts).coerceAtMost(tiles.rows - 1)
+            for (row in (r.top / ts).coerceAtLeast(0)..r1) for (col in (r.left / ts).coerceAtLeast(0)..c1) {
+                val i = tiles.tileIndexOf(col, row)
+                if (inSession[i] && !tiles.isDirty(i)) inSession[i] = false
+            }
+        }
     }
 
     private var session: Session? = null
@@ -144,7 +165,11 @@ class LiveAdjust(private val c: EditorController) {
     /** A layer whose session was refused (over the memory cap): plain invalidation until [end]. */
     private var refused: Layer? = null
 
-    private val hook: (Rect) -> Unit = { r -> proxies?.invalidate(r, foreign = !ownInvalidation) }
+    private val hook: (Rect) -> Unit = { r ->
+        val foreign = !ownInvalidation
+        proxies?.invalidate(r, foreign)
+        if (foreign) session?.takeIf { it.tiles === hooked }?.releaseExact(r)
+    }
 
     /** True while a session is running (proxy frames or refinement left). */
     val isActive: Boolean get() = session != null
@@ -447,6 +472,9 @@ class LiveAdjust(private val c: EditorController) {
         val skip = BooleanArray(tiles.tileCount)
         for (i in pending) skip[i] = true
         tiles.draw(canvas, visible, smooth) { skip[it] }
+        // Reduced proxies are always filtered; at 1:1 they follow the tiles (zoomed far in the
+        // canvas shows crisp pixels, so the drag must not show blurred ones that pop on refinement).
+        val proxyPaint = if (smooth || p.scale < 1f) ProxyTiles.drawPaint else ProxyTiles.crispPaint
         val tr = Rect()
         for (i in pending) {
             val col = i % tiles.cols; val row = i / tiles.cols
@@ -464,7 +492,7 @@ class LiveAdjust(private val c: EditorController) {
             val proxy = p.get(p.indexOfTile(col, row)) ?: continue
             val s2 = canvas.save()
             canvas.clipRect(d)
-            canvas.drawBitmap(proxy.bitmap, null, proxy.drawnRect, ProxyTiles.drawPaint)
+            canvas.drawBitmap(proxy.bitmap, null, proxy.drawnRect, proxyPaint)
             canvas.restoreToCount(s2)
         }
         canvas.restoreToCount(save)

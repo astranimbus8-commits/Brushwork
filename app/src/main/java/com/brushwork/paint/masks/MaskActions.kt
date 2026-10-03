@@ -153,6 +153,9 @@ object MaskEdits {
             }
             layer.restoreData(dataAfter)
             c.commitEdit(rec, label, listOf(LayerDataAction(label, layer, dataBefore, dataAfter)))
+            // v1.6: an adjustment layer's canvas catches up through its live session (proxies at
+            // once, then refined), not by re-rendering every visible tile in one frame.
+            if (layer.isAdjustmentLayer) c.liveAdjust.changed(layer, reg)
         } else {
             MaskSpecs.renderInto(mask, after, reg, brushes)
             layer.restoreData(dataAfter)

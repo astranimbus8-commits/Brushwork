@@ -75,10 +75,11 @@ internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Bo
     Column(modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         when (param) {
             is FilterParam.Slider -> SliderControl(host, param, enabled)
-            is FilterParam.Toggle -> ToggleRow(param.label, host.values.bool(param.key), { if (enabled) host.update(param.key, it) })
+            // A switch or a chip is a whole change at once (v1.6: an adjustment refines at once).
+            is FilterParam.Toggle -> ToggleRow(param.label, host.values.bool(param.key), { if (enabled) { host.update(param.key, it); host.onChangeFinished() } })
             is FilterParam.Choice -> {
                 ParamLabel(param.label)
-                ChoiceChips(param.options, host.values.choice(param.key), { if (enabled) host.update(param.key, it) })
+                ChoiceChips(param.options, host.values.choice(param.key), { if (enabled) { host.update(param.key, it); host.onChangeFinished() } })
             }
             is FilterParam.Color -> ColorControl(host, param, enabled)
             is FilterParam.Point -> PointControl(host, param, enabled)
@@ -90,6 +91,7 @@ internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Bo
                     histogram = host.histogram,
                     enabled = enabled,
                     onReset = { host.resetParam(param.key) },
+                    onChangeFinished = host.onChangeFinished,
                 )
             }
             is FilterParam.Gradient -> {
@@ -99,6 +101,7 @@ internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Bo
                     onChange = { host.update(param.key, it) },
                     defaultStops = param.default,
                     enabled = enabled,
+                    onChangeFinished = host.onChangeFinished,
                 )
             }
             is FilterParam.Text -> OutlinedTextField(

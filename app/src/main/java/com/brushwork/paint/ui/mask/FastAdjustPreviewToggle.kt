@@ -20,11 +20,12 @@ const val FAST_ADJUST_PREVIEW_DESCRIPTION =
  * The "Fast adjustment preview" switch of the Masks tool's sheet (v1.6 §3.1a): live adjustment
  * sessions on or off ([com.brushwork.paint.engine.live.LiveAdjust.fastPreview], saved in
  * `AppSettings.fastAdjustPreview`). Turning it off mid-session ends the session (the next frame
- * is exact).
+ * is exact). It shows the saved setting (read once when the sheet composes), not the live
+ * adjustment's cached copy, which only catches up with a change made in Settings at the next drag.
  */
 @Composable
 fun FastAdjustPreviewToggle(controller: EditorController) {
-    var on by remember(controller) { mutableStateOf(controller.liveAdjust.fastPreview) }
+    var on by remember(controller) { mutableStateOf(controller.settings.fastAdjustPreview) }
     ToggleRow(
         FAST_ADJUST_PREVIEW_LABEL,
         on,

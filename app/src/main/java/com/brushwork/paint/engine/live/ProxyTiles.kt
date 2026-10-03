@@ -239,7 +239,13 @@ internal class ProxyTiles(val docWidth: Int, val docHeight: Int, val tileSize: I
         /** Restores below-caches 1:1 (premultiplied pixels copied as they are). */
         val copyPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
 
-        /** Draws frames onto the canvas under the view matrix (always filtered, §3.1 C2). */
+        /** Draws frames onto the canvas under the view matrix (filtered, §3.1 C2). */
         val drawPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+        /**
+         * Draws 1:1 frames ([scale] 1) unfiltered while the canvas shows crisp pixels (zoomed far
+         * in). Explicitly: a new Paint filters bitmaps by default on current Android versions.
+         */
+        val crispPaint = Paint().apply { isFilterBitmap = false }
     }
 }

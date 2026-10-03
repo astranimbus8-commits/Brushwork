@@ -67,7 +67,9 @@ internal fun gradientBrush(stops: List<GradientStop>): Brush {
 
 /**
  * Gradient editor: tap the bar to add a stop, drag stops (drag one far off the bar to delete it),
- * tap a stop to change its color, plus presets and reverse.
+ * tap a stop to change its color, plus presets and reverse. [onChangeFinished] (v1.6): a touch
+ * on the bar ended, or a button changed the gradient at once (an adjustment layer's live preview
+ * refines to the exact image then).
  */
 @Composable
 fun GradientEditor(
@@ -76,10 +78,12 @@ fun GradientEditor(
     defaultStops: List<GradientStop>,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    onChangeFinished: () -> Unit = {},
 ) {
     val sorted = remember(stops) { GradientEditing.sorted(stops) }
     val current by rememberUpdatedState(sorted)
     val emit by rememberUpdatedState(onChange)
+    val finished by rememberUpdatedState(onChangeFinished)
     var selected by remember { mutableIntStateOf(-1) }
     var pickerFor by remember { mutableIntStateOf(-1) }
     var removing by remember { mutableStateOf(false) }
@@ -97,38 +101,45 @@ fun GradientEditor(
                     awaitEachGesture {
                         val down = awaitFirstDown()
                         down.consume()
-                        val span = (size.width - 2 * pad).coerceAtLeast(1f)
-                        fun pos(x: Float) = ((x - pad) / span).coerceIn(0f, 1f)
-                        val start = current
-                        val hit = GradientEditing.hitTest(start, pos(down.position.x), 18.dp.toPx() / span)
-                        var working = start
-                        var index = hit
-                        if (hit < 0) {
-                            val (list, i) = GradientEditing.add(start, pos(down.position.x))
-                            working = list; index = i
-                            emit(working)
-                        }
-                        selected = index
-                        var moved = false
-                        while (true) {
-                            val ch = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
-                            if (!ch.pressed) { ch.consume(); break }
-                            ch.consume()
-                            if (!moved && (ch.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
-                            if (!moved) continue
-                            val y = ch.position.y
-                            val off = y < -deleteDistance || y > size.height + deleteDistance
-                            if (off && GradientEditing.canRemove(working, index)) {
-                                if (!removing) { removing = true; selected = -1; emit(GradientEditing.remove(working, index)) }
-                            } else {
-                                removing = false
-                                val (list, i) = GradientEditing.move(working, index, pos(ch.position.x))
-                                working = list; index = i; selected = i
+                        var changed = false
+                        try {
+                            val span = (size.width - 2 * pad).coerceAtLeast(1f)
+                            fun pos(x: Float) = ((x - pad) / span).coerceIn(0f, 1f)
+                            val start = current
+                            val hit = GradientEditing.hitTest(start, pos(down.position.x), 18.dp.toPx() / span)
+                            var working = start
+                            var index = hit
+                            if (hit < 0) {
+                                val (list, i) = GradientEditing.add(start, pos(down.position.x))
+                                working = list; index = i
+                                changed = true
                                 emit(working)
                             }
+                            selected = index
+                            var moved = false
+                            while (true) {
+                                val ch = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                if (!ch.pressed) { ch.consume(); break }
+                                ch.consume()
+                                if (!moved && (ch.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                                if (!moved) continue
+                                val y = ch.position.y
+                                val off = y < -deleteDistance || y > size.height + deleteDistance
+                                changed = true
+                                if (off && GradientEditing.canRemove(working, index)) {
+                                    if (!removing) { removing = true; selected = -1; emit(GradientEditing.remove(working, index)) }
+                                } else {
+                                    removing = false
+                                    val (list, i) = GradientEditing.move(working, index, pos(ch.position.x))
+                                    working = list; index = i; selected = i
+                                    emit(working)
+                                }
+                            }
+                            if (removing) removing = false
+                            else if (!moved && hit >= 0) pickerFor = hit
+                        } finally {
+                            if (changed) finished()
                         }
-                        if (removing) removing = false
-                        else if (!moved && hit >= 0) pickerFor = hit
                     }
                 },
         ) {
@@ -167,7 +178,7 @@ fun GradientEditor(
                 Spacer(Modifier.width(10.dp))
                 Text("Stop at ${(sorted[sel].position * 100).roundToInt()}%", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
                 IconButton(
-                    onClick = { emit(GradientEditing.remove(sorted, sel)); selected = -1 },
+                    onClick = { emit(GradientEditing.remove(sorted, sel)); selected = -1; finished() },
                     enabled = enabled && GradientEditing.canRemove(sorted, sel),
                 ) { Icon(Icons.Filled.Delete, contentDescription = "Delete color stop") }
             } else {
@@ -178,7 +189,7 @@ fun GradientEditor(
                     modifier = Modifier.weight(1f),
                 )
             }
-            IconButton(onClick = { emit(GradientEditing.reverse(sorted)); selected = -1 }, enabled = enabled) {
+            IconButton(onClick = { emit(GradientEditing.reverse(sorted)); selected = -1; finished() }, enabled = enabled) {
                 Icon(Icons.Filled.SwapHoriz, contentDescription = "Reverse gradient")
             }
         }
@@ -191,7 +202,7 @@ fun GradientEditor(
                 Column(
                     Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable(enabled = enabled) { emit(GradientEditing.sorted(preset)); selected = -1 }
+                        .clickable(enabled = enabled) { emit(GradientEditing.sorted(preset)); selected = -1; finished() }
                         .padding(4.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
@@ -217,7 +228,7 @@ fun GradientEditor(
     if (picking != null) {
         ColorPickerDialog(
             initial = sorted[picking].color,
-            onPick = { c -> emit(GradientEditing.recolor(current, picking, c)) },
+            onPick = { c -> emit(GradientEditing.recolor(current, picking, c)); finished() },
             onDismiss = { pickerFor = -1 },
             title = "Stop color",
             showAlpha = true,
