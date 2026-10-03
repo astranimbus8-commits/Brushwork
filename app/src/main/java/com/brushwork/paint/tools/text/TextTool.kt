@@ -18,6 +18,7 @@ import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
+import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.PinchTargeting
@@ -27,6 +28,7 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.POINT_GUIDE_EPS
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
+import com.brushwork.paint.tools.text.frames.FrameGeometry
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
@@ -310,13 +312,24 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         controller.invalidateOverlay()
     }
 
-    /** Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null. */
+    /**
+     * Topmost visible, unlocked text layer whose text is at [p] (the active layer first), or null.
+     * v1.6: a frame of a linked story is hit anywhere in its box, also when it shows no text (an
+     * empty frame after "Unlink here", a frame past its story's end), so a tap hands it to the
+     * Text frames tool ([editLayer]) instead of starting a new text on it; its box is known
+     * without laying the frame out.
+     */
     fun textLayerAt(p: Vec2): Layer? {
         val t = controller.viewTransform
         val tol = t.screenToDocLength(t.dp(HIT_TOLERANCE_DP))
         val active = doc.activeLayer
+        val box = RectF()
         fun hits(l: Layer): Boolean {
             if (!l.isTextLayer || !l.visible || l.locked) return false
+            controller.textThreads.frameOf(l)?.let { frame ->
+                FrameGeometry.outerRect(frame, box)
+                return p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol
+            }
             val (it, prep) = layerText(l) ?: return false
             return it.text.isNotBlank() && prep.contains(it, p, tol)
         }
@@ -1045,6 +1058,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     /** The text's box when the move started (document px), or null. */
     private var startBox: DocBox? = null
 
+    /** Whether a point dragged onto the square grid snaps to it (the snap session leaves the grid to its callers). */
+    private val gridSnaps: Boolean
+        get() = controller.grid.let { it.enabled && it.snap && it.type == GridType.SQUARE && it.spacingPx > 0f }
+
     /** What the guide labels keep away from (the moving box or point), or null. */
     private var snapMoving: DocBox? = null
 
@@ -1267,7 +1284,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         val c = Vec2(start.cx, start.cy)
         when (mode) {
             Mode.MOVE -> {
-                var dx = q.x - downDoc.x; var dy = q.y - downDoc.y
+                val rawDx = q.x - downDoc.x
+                val rawDy = q.y - downDoc.y
+                var dx = rawDx; var dy = rawDy
                 var snappedX = false
                 var snappedY = false
                 // The box the finger alone gives snaps (never the last snapped one), so moving
@@ -1280,11 +1299,17 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
                     snappedY = r.snappedY
                     snapMoving = if (r.snappedX || r.snappedY) b.offset(dx, dy) else null
                 }
-                // v1.6 increments: an axis no guide holds moves in Length steps from the start.
+                // v1.6 increments: an axis no guide holds puts the box's top-left corner on the
+                // grid when grid snapping is on, else moves in Length steps from the start (§3.4:
+                // guide, then grid, then increment; as a text frame's move). With increments off
+                // the move stays v1.5's (guides only: I8).
                 if (increments.step(IncrementKind.LENGTH) != null) {
                     val stepped = increments.lengthDelta(Vec2(dx, dy))
-                    if (!snappedX) dx = stepped.x
-                    if (!snappedY) dy = stepped.y
+                    val grid = startBox?.takeIf { gridSnaps }?.let { b ->
+                        controller.snapping.gridPoint(Vec2(b.left + rawDx, b.top + rawDy)).let { g -> Vec2(g.x - b.left, g.y - b.top) }
+                    }
+                    if (!snappedX) dx = grid?.x ?: stepped.x
+                    if (!snappedY) dy = grid?.y ?: stepped.y
                     showReadout(signedLength(dx) + ", " + signedLength(dy))
                 }
                 val next = translated(start, dx, dy)

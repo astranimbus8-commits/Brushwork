@@ -8,6 +8,7 @@ import android.graphics.RectF
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
+import kotlin.math.abs
 
 /**
  * One frame as the Text frames tool's overlay shows it (v1.6, §3.6a): its outer box (document
@@ -84,26 +85,35 @@ internal class FrameOverlay {
                 }
             }
         }
+        var sel: OverlayFrame? = null
         for (f in frames) {
-            val sel = f.layer != null && f.layer === selected
+            val isSel = f.layer != null && f.layer === selected
+            if (isSel) sel = f
             val c = corners(t, f.rect)
             val q = quad(c)
-            line.strokeWidth = if (sel) t.dp(1.5f) else stroke
+            line.strokeWidth = if (isSel) t.dp(1.5f) else stroke
             line.color = when {
                 f.overset -> OVERSET
-                sel -> ACCENT
+                isSel -> ACCENT
                 else -> FRAME
             }
             canvas.drawPath(q, halo)
             canvas.drawPath(q, line)
             drawPort(canvas, t, FramePorts.inPort(t, f.rect), PortKind.IN, false, 0f)
-            val kind = when {
-                f.overset -> PortKind.OVERSET
-                f.linked -> PortKind.LINKED
-                else -> PortKind.EMPTY
+            drawOutPort(canvas, t, f, loaded, pulse)
+        }
+        // The selected frame's handles above every frame (whatever the layer order), and above
+        // them the other frames' out-ports a handle lies on (a frame drawn from a port has its
+        // top-left handle exactly there): a tap there is the port's (TextFrameTool.onDown), so
+        // the port is what shows.
+        sel?.let { s ->
+            val at = FrameGeometry.Handle.entries.map { t.docToScreen(it.at(s.rect)) }
+            for (h in at) drawHandle(canvas, t, h, s.locked)
+            for (f in frames) {
+                if (f === s) continue
+                val port = FramePorts.outPort(t, f.rect)
+                if (at.any { FramePorts.isOn(t, it, port) }) drawOutPort(canvas, t, f, loaded, pulse)
             }
-            drawPort(canvas, t, FramePorts.outPort(t, f.rect), kind, f.layer != null && f.layer === loaded, pulse)
-            if (sel) for (h in FrameGeometry.Handle.entries) drawHandle(canvas, t, t.docToScreen(h.at(f.rect)), f.locked)
         }
         if (drawing != null) {
             if (dashDensity != t.density) {
@@ -118,6 +128,16 @@ internal class FrameOverlay {
     }
 
     private enum class PortKind { IN, EMPTY, LINKED, OVERSET }
+
+    /** [f]'s out-port: a red "+" (overset), an arrow (linked) or empty; pulsing while [loaded]. */
+    private fun drawOutPort(canvas: Canvas, t: ViewTransform, f: OverlayFrame, loaded: Layer?, pulse: Float) {
+        val kind = when {
+            f.overset -> PortKind.OVERSET
+            f.linked -> PortKind.LINKED
+            else -> PortKind.EMPTY
+        }
+        drawPort(canvas, t, FramePorts.outPort(t, f.rect), kind, f.layer != null && f.layer === loaded, pulse)
+    }
 
     private fun drawPort(canvas: Canvas, t: ViewTransform, at: Vec2, kind: PortKind, loaded: Boolean, pulse: Float) {
         val half = t.dp(PORT_DP) / 2f
@@ -189,6 +209,20 @@ internal class FrameOverlay {
 internal object FramePorts {
     /** Distance of a port's centre from its corner, along each axis (dp). */
     const val OFFSET_DP = 13f
+
+    /**
+     * A press within this of an out-port's centre on each axis is ON the port (its 14 dp square
+     * and a little slack, v1.6 integration): a tap there is the port's even under one of the
+     * selected frame's handles. Only other frames' ports are taken so (TextFrameTool.onDown): a
+     * frame's own bottom-right handle and out-port, 13 dp apart on each axis, keep the nearest-wins rule.
+     */
+    const val TAP_DP = 10f
+
+    /** Whether screen point [s] is on the port centred at [port] (screen px; see [TAP_DP]). */
+    fun isOn(t: ViewTransform, s: Vec2, port: Vec2): Boolean {
+        val r = t.dp(TAP_DP)
+        return abs(s.x - port.x) <= r && abs(s.y - port.y) <= r
+    }
 
     private fun offsetDoc(t: ViewTransform): Float = t.screenToDocLength(t.dp(OFFSET_DP))
 

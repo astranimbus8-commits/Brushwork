@@ -96,9 +96,10 @@ class WrapText internal constructor(
     /** Per paragraph: positions where a line may end (absolute, increasing, the paragraph end last). */
     internal val breaks: Array<IntArray>,
     /**
-     * v1.6 letter scaling: what the advances were scaled for besides [text] (the scale spec, the
-     * whole story and where [text] starts in it), null when unscaled. A measurement is reused only
-     * for the same key: a frame's letters are smaller or larger depending on the letters before it.
+     * v1.6 letter scaling: what the advances were scaled for besides [text] (a text's own scale
+     * spec and text: [ScaleKey]; a linked story's tail: its characters' factors, [TailScaleKey]),
+     * null when unscaled. A measurement is reused only for the same key: a frame's letters are
+     * smaller or larger depending on the letters before it.
      */
     internal val scaleKey: Any? = null,
 ) {

@@ -452,6 +452,13 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     /** The out-port touched. */
     private var portLayer: Layer? = null
 
+    /**
+     * Another frame's out-port a press on one of the selected frame's handles started ON (within
+     * [FramePorts.TAP_DP] of its centre), or null: a frame drawn from a port has its top-left
+     * handle exactly there. A tap is then the port's, a drag stays the handle's.
+     */
+    private var tapPortLayer: Layer? = null
+
     /** The rectangle being drawn (document px). */
     private var drawRect: RectF? = null
 
@@ -480,6 +487,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         mode = Mode.NONE
         moved = false
         lockedToastShown = false
+        tapPortLayer = null
         endSnap()
         // While the story editor is open the canvas shows its preview (drags don't edit frames).
         if (story.isOpen) return
@@ -512,17 +520,30 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
                 }
             }
         }
+        // Another frame's out-port the finger is on, if any (the nearest; see FramePorts.isOn).
+        // The selected frame's own out-port keeps the nearest-wins rule with its handles.
+        var onPort: Layer? = null
+        var onPortD = Float.MAX_VALUE
         for (f in threads.allFrames()) {
             if (!f.layer.visible) continue
-            val d = s.distanceTo(FramePorts.outPort(t, FrameGeometry.outerRect(f.item)))
+            val at = FramePorts.outPort(t, FrameGeometry.outerRect(f.item))
+            val d = s.distanceTo(at)
             if (d <= t.dp(PORT_HIT_DP) && d < best) {
                 best = d
                 mode = Mode.PORT
                 portLayer = f.layer
             }
+            if (f.layer !== sel && FramePorts.isOn(t, s, at) && d < onPortD) {
+                onPortD = d
+                onPort = f.layer
+            }
         }
         if (mode != Mode.NONE) {
-            if (mode == Mode.RESIZE) beginSnap()
+            if (mode == Mode.RESIZE) {
+                // A handle on a port (a frame drawn from that port): a tap is the port's (onUp).
+                tapPortLayer = onPort
+                beginSnap()
+            }
             return
         }
         val hit = if (linking) null else frameAt(downDoc)
@@ -699,8 +720,11 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (!moved) {
             // The out-port under the finger (clearDrag forgets it).
             val port = portLayer
+            val handlePort = tapPortLayer
             clearDrag()
-            onTap(m, Vec2(p.x, p.y), port)
+            // A tap on a handle that lies on an out-port is the port's (the handle keeps drags).
+            if (m == Mode.RESIZE && handlePort != null) onTap(Mode.PORT, Vec2(p.x, p.y), handlePort)
+            else onTap(m, Vec2(p.x, p.y), port)
             controller.invalidateOverlay()
             return
         }
@@ -733,6 +757,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         dragHandle = null
         drawRect = null
         portLayer = null
+        tapPortLayer = null
         if (!story.isOpen) pendingFlow = null
     }
 

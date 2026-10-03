@@ -16,6 +16,39 @@ import kotlin.math.min
 internal data class ScaleKey(val spec: LetterScaleSpec, val source: String, val offset: Int)
 
 /**
+ * What a scaled measurement of a linked story's TAIL (`story[offset, length)`, see
+ * [TextRenderer.frameLayout]) depends on besides its own text and the paint: the factors of its
+ * characters, `ramp.factors[offset, length)` (v1.6 integration). Every advance is measured on the
+ * tail's own characters and multiplied by its character's factor, so two tails with the same text
+ * and these same factors measure exactly alike, wherever and in whichever story they start: the
+ * factors hold the letters before the tail (its place in the ramp) and the letters of its scope
+ * (the whole story, or the tail's paragraph). Retyping a letter, or adding a space, before a tail
+ * keeps its factors; a letter more or less (in its scope) changes them.
+ *
+ * Compared by content (never by identity). Holds its own copy of the factors (4 bytes per character).
+ */
+internal class TailScaleKey private constructor(private val factors: FloatArray) {
+
+    /** Whether this key is the tail of [ramp] from [offset]. */
+    fun matches(ramp: LetterRampResult, offset: Int): Boolean {
+        val f = ramp.factors
+        if (offset < 0 || f.size - offset != factors.size) return false
+        for (i in factors.indices) if (factors[i].toBits() != f[offset + i].toBits()) return false
+        return true
+    }
+
+    override fun equals(other: Any?): Boolean = other is TailScaleKey && factors.contentEquals(other.factors)
+
+    override fun hashCode(): Int = factors.contentHashCode()
+
+    companion object {
+        /** The key of [ramp]'s tail from [offset]. */
+        fun of(ramp: LetterRampResult, offset: Int): TailScaleKey =
+            TailScaleKey(ramp.factors.copyOfRange(offset.coerceIn(0, ramp.factors.size), ramp.factors.size))
+    }
+}
+
+/**
  * The letters of a horizontal text drawn one grapheme cluster at a time, each at its own size
  * (v1.6 §3.5c): letter k at `sizePx · f(k)`, at the x its scaled advances give (the lines come
  * from [WrapLayout] on those advances) and on its line's baseline shifted by [align]:

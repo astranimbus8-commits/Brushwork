@@ -17,23 +17,27 @@ import com.brushwork.paint.tools.text.WrapText
  *
  * A tail is found by its TEXT (and the look): typing in the first frame of a long story moves the
  * later frames' starts, but their tails are often the very same characters as before, which are
- * not measured again. Scaled letters (§3.5) depend on where the tail starts in the whole story
- * (each letter's place in the ramp): their tails are found by (story, start) instead.
+ * not measured again. Scaled letters (§3.5) also depend on the letters before the tail (each
+ * letter's place in the ramp): a scaled tail found by its text is only taken when it was measured
+ * with the factors the item's story gives it ([TextRenderer.canReuseMeasured]); otherwise it is a
+ * miss. So retyping a letter or adding a space in frame 1 finds the later tails again, a letter
+ * more or less (with "Whole text") measures them again, and with "Each paragraph" an edit in an
+ * earlier paragraph finds the tails of the later paragraphs again.
  *
- * Exactness (I1): nothing here derives a measurement; an entry is only ever the [WrapText]
- * `frameLayout` produced for that very tail and look (`frameLayout` checks the text again before
- * it reuses one), so a frame laid out through the cache equals a fresh layout of it.
+ * Exactness (I1, I7): nothing here derives a measurement; an entry is only ever the [WrapText]
+ * `frameLayout` produced for that very tail and look, handed out only when `frameLayout` would
+ * reuse it (the same check: the text and, for scaled letters, the factors), so a frame laid out
+ * through the cache equals a fresh layout of it.
  *
  * Main thread (it is not synchronized). Bounded by the characters it holds.
  */
 class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT_MAX_CHARS) {
 
     /**
-     * What a measurement depends on: the tail's text (unscaled letters; [start] is -1), or the
-     * whole story and the tail's start in it (scaled letters); the look without the frame's size;
-     * the imported fonts.
+     * Where a measurement is filed: the tail's text, the look without the frame's size, the
+     * imported fonts. (Scaled letters' factors are checked on [get]: one entry per tail text.)
      */
-    private data class Key(val text: String, val start: Int, val look: TextSpec, val fonts: Int)
+    private data class Key(val text: String, val look: TextSpec, val fonts: Int)
 
     private val map = LinkedHashMap<Key, WrapText>(16, 0.75f, true)
     private var chars = 0L
@@ -50,16 +54,17 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
     private fun keyOf(item: TextItem, tail: String?): Key? {
         val th = item.thread
         if (!th.isOn) return null
-        val look = lookOf(item.spec)
         val start = th.start.coerceIn(0, th.story.length)
-        return if (look.letterScale.isOn) Key(th.story, start, look, FontStore.generation)
-        else Key(tail ?: th.story.substring(start), -1, look, FontStore.generation)
+        return Key(tail ?: th.story.substring(start), lookOf(item.spec), FontStore.generation)
     }
 
-    /** The measured tail of frame [item]'s story from its start, if this cache has it. */
+    /**
+     * The measured tail of frame [item]'s story from its start, if this cache has it measured as
+     * [TextRenderer.frameLayout] measures it for [item] (scaled letters: with the same factors).
+     */
     fun get(item: TextItem): WrapText? {
         val k = keyOf(item, null) ?: return null
-        val w = map[k]
+        val w = map[k]?.takeIf { TextRenderer.canReuseMeasured(item, it) }
         if (w != null) hits++ else misses++
         return w
     }
@@ -115,7 +120,8 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
 
     companion object {
         /**
-         * Characters of measured tails kept (about 11 bytes each: 6 MB at most). A 50,000-character
+         * Characters of measured tails kept (about 11 bytes each, 15 with scaled letters, whose
+         * tails keep their factors: 6 MB, or 9 MB with scaled letters, at most). A 50,000-character
          * story in 10 frames has about 275,000 characters of tails.
          */
         const val DEFAULT_MAX_CHARS = 600_000
