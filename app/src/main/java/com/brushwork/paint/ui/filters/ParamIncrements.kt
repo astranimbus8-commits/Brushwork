@@ -10,22 +10,36 @@ import kotlin.math.max
 
 /**
  * v1.6 §3.4 increments for a filter parameter slider (a filter session's sheet and the Masks
- * tool's Adjust sheet). Its kind or custom key is the design's inference made explicit — `%` →
- * Percent, `°` → Angle, anything else the custom step `"label|suffix"` (Exposure: `"Exposure|EV"`)
- * — and handed to the slider, so the slider (whose Step popup and landing are the shared
+ * tool's Adjust sheet). Its kind or custom key is the shared number controls' inference from the
+ * shown unit made explicit (the same rule as `IncrementStepping.kindForSuffix` of area G: `%` →
+ * Percent, `°` → Angle, `px` → Size, anything else the custom step `"label|suffix"`, Exposure:
+ * `"Exposure|EV"`), so a blur radius in px steps by Size like every other px slider of the app.
+ * It is handed to the slider, so the slider (whose Step popup and landing are the shared
  * controls') and its −/+ buttons always use the same step. Every value is in the units the slider
- * shows (all `%` sliders run 0..100, `°` ones are degrees). With increments off, or no step for
- * the parameter, the −/+ keep the parameter's own nudge (I8: exactly v1.5).
+ * shows (`%` sliders show their value as is, none is a 0..1 fraction; `°` ones are degrees, `px`
+ * ones image px). With increments off, or no step for the parameter, the −/+ keep the
+ * parameter's own nudge (I8: exactly v1.5).
  */
 internal object ParamIncrements {
     /** The unit the slider shows after its number. */
     fun suffixOf(p: FilterParam.Slider): String = if (p.pixels) "px" else p.suffix
 
     /** The increment kind of [p]'s slider, or null when it takes a custom step ([keyOf]). */
-    fun kindOf(p: FilterParam.Slider): IncrementKind? = when (suffixOf(p)) {
-        "%" -> IncrementKind.PERCENT
-        "°" -> IncrementKind.ANGLE
-        else -> null
+    fun kindOf(p: FilterParam.Slider): IncrementKind? = kindForSuffix(suffixOf(p))
+
+    /**
+     * The kind a shown unit implies, exactly as the shared number controls infer it for a slider
+     * without an explicit kind or key (`IncrementStepping.kindForSuffix`): `%` (or "% of ...") →
+     * Percent, `°` → Angle, `px` → Size; anything else none.
+     */
+    fun kindForSuffix(suffix: String): IncrementKind? {
+        val s = suffix.trim()
+        return when {
+            s.startsWith("%") -> IncrementKind.PERCENT
+            s.startsWith("°") -> IncrementKind.ANGLE
+            s == "px" -> IncrementKind.SIZE
+            else -> null
+        }
     }
 
     /** The custom step key of [p]'s slider (`"label|suffix"`), or null when it has a kind. */

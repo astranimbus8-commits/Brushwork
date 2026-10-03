@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.filters
 
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.filters.FilterParam
+import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.snap.Increments
 import org.junit.Assert.assertEquals
@@ -41,8 +42,53 @@ class ParamIncrementsRobolectricTest {
         assertEquals(IncrementKind.ANGLE, ParamIncrements.kindOf(hue))
         assertNull(ParamIncrements.keyOf(hue))
         assertEquals(IncrementKind.PERCENT, ParamIncrements.kindOf(amount))
-        assertEquals("Smoothing|px", ParamIncrements.keyOf(smoothing))
+        // A distance in image px steps by Size, like every other px slider of the app.
+        assertEquals(IncrementKind.SIZE, ParamIncrements.kindOf(smoothing))
+        assertNull(ParamIncrements.keyOf(smoothing))
+        assertNull(ParamIncrements.kindOf(contrast))
         assertEquals("Contrast|", ParamIncrements.keyOf(contrast))
+    }
+
+    /**
+     * The unit table, kept equal to the shared number controls' own inference
+     * (`IncrementStepping.kindForSuffix` in ui/common/NumberSliderMath.kt, area G): the filter
+     * sliders pass their kind or key explicitly, and a slider elsewhere showing the same unit must
+     * step the same way. Change both together.
+     */
+    @Test
+    fun theUnitTableIsTheSharedNumberControlsOne() {
+        assertEquals(IncrementKind.PERCENT, ParamIncrements.kindForSuffix("%"))
+        assertEquals(IncrementKind.PERCENT, ParamIncrements.kindForSuffix(" % of the path"))
+        assertEquals(IncrementKind.ANGLE, ParamIncrements.kindForSuffix("°"))
+        assertEquals(IncrementKind.ANGLE, ParamIncrements.kindForSuffix("°/s"))
+        assertEquals(IncrementKind.SIZE, ParamIncrements.kindForSuffix("px"))
+        assertEquals(IncrementKind.SIZE, ParamIncrements.kindForSuffix(" px "))
+        assertNull(ParamIncrements.kindForSuffix("px/s"))
+        assertNull(ParamIncrements.kindForSuffix("EV"))
+        assertNull(ParamIncrements.kindForSuffix(""))
+        // Every slider of every registered filter: a kind or a key, never both, never neither.
+        for (f in FilterRegistry.all) for (p in f.params.filterIsInstance<FilterParam.Slider>()) {
+            val kind = ParamIncrements.kindOf(p)
+            val key = ParamIncrements.keyOf(p)
+            assertTrue("${f.id}.${p.key}: exactly one of kind / key", (kind == null) != (key == null))
+            if (p.pixels || p.suffix == "px") assertEquals("${f.id}.${p.key}", IncrementKind.SIZE, kind)
+        }
+    }
+
+    @Test
+    fun aPxSliderStepsByTheSizeStep() {
+        val on = increments(on = true)
+        // Size defaults to 1 px.
+        assertEquals(1f, ParamIncrements.stepOf(smoothing, on)!!, 0f)
+        assertEquals(1f, ParamIncrements.nudge(smoothing, 0.3f, 1, on), 1e-6f)
+        assertEquals(0f, ParamIncrements.nudge(smoothing, 0.3f, -1, on), 1e-6f)
+        on.update { it.with(IncrementKind.SIZE, 2.5f) }
+        assertEquals(2.5f, ParamIncrements.nudge(smoothing, 0f, 1, on), 1e-6f)
+        assertEquals(5f, ParamIncrements.nudge(smoothing, 2.5f, 1, on), 1e-6f)
+        assertEquals(10f, ParamIncrements.nudge(smoothing, 9f, 1, on), 1e-6f)
+        // A custom step under the old "label|px" key no longer applies (the kind wins).
+        on.update { it.withCustom("Smoothing|px", 0.2f) }
+        assertEquals(2.5f, ParamIncrements.stepOf(smoothing, on)!!, 0f)
     }
 
     @Test
