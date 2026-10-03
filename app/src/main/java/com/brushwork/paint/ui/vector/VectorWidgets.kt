@@ -52,14 +52,17 @@ import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.UnitSelector
@@ -89,7 +92,9 @@ internal class LogScale(private val min: Float, private val max: Float) {
 /**
  * A length in document pixels: numeric field in [unit] + unit picker (unless [showUnit] is
  * false because the sheet has a shared one), and optionally a logarithmic slider from
- * [sliderMin] to [sliderMax] px.
+ * [sliderMin] to [sliderMax] px. With an [incrementKind] (v1.6 §3.4) the field's − / + and the
+ * slider land on the multiples of that step while increments are on (the slider's ends stay
+ * reachable); without one the field steps by the Length increment and the slider is free.
  */
 @Composable
 internal fun LengthEditor(
@@ -106,6 +111,7 @@ internal fun LengthEditor(
     showSlider: Boolean = true,
     showUnit: Boolean = true,
     enabled: Boolean = true,
+    incrementKind: IncrementKind? = null,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         LengthField(
@@ -120,14 +126,20 @@ internal fun LengthEditor(
             enabled = enabled,
             // Its own log slider follows below: no second one in the field.
             adjust = if (showSlider) com.brushwork.paint.ui.common.NumberAdjust.NONE else com.brushwork.paint.ui.common.NumberAdjust.AUTO,
+            incrementKind = incrementKind,
         )
         if (showUnit) UnitSelector(unit, onUnit)
     }
     if (showSlider) {
         val scale = LogScale(sliderMin, sliderMax)
+        // The step in document px (the slider's own unit).
+        val pxStep = incrementKind?.let { LocalIncrements.current?.step(it) }?.toDouble()
         Slider(
             value = scale.toPos(px),
-            onValueChange = { onPx(scale.fromPos(it)) },
+            onValueChange = { pos ->
+                val v = scale.fromPos(pos)
+                onPx(if (pxStep == null) v else IncrementStepping.snapSlider(v.toDouble(), pxStep, sliderMin.toDouble(), sliderMax.toDouble()).toFloat())
+            },
             enabled = enabled,
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
         )

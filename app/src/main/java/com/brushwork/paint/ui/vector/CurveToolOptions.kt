@@ -405,6 +405,8 @@ private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
                 tool.endNumericEdit()
             },
             onDismiss = { typing = false },
+            // The weight's own step: − / + and the slider land on its multiples (as the strip's slider).
+            incrementKey = PATH_WEIGHT_KEY,
         )
     }
 }
@@ -546,6 +548,8 @@ private fun HandlesGroup(tool: CurveTool) {
             suffix = "%",
             onApply = { v -> tool.applyHandleScale(v) },
             onDismiss = { typing = false },
+            // − / + and the slider step by the Scale increment while increments are on (as ‹ ›).
+            incrementKind = IncrementKind.SCALE,
         )
     }
 }
@@ -782,6 +786,8 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     label = "Line width", px = tool.lineWidth, onPx = { w -> tool.setLineWidth(w) },
                     unit = s.unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi,
                     minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
+                    // A width is a size (as the Shape tool's stroke width): the Size increment.
+                    incrementKind = IncrementKind.SIZE,
                 )
                 when {
                     tool.isReopened -> Hint("This path keeps its own width")
@@ -948,7 +954,9 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     tool.setWidth(sel, v / 100f)
                 },
                 valueRange = 0f..300f,
-                steps = 59,
+                // v1.5's 5 % ticks; with increments on, the Percent step's (as the strip's slider),
+                // so a finer step than 5 % is reachable (the slider then lands on its multiples).
+                steps = thicknessSliderSteps(controller.increments.step(IncrementKind.PERCENT) ?: THICKNESS_STEP),
                 valueText = "${(width * 100f).roundToInt()} %",
                 onValueChangeFinished = { thicknessSliding[0] = false; tool.endNumericEdit() },
                 typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),

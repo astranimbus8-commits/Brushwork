@@ -1352,7 +1352,12 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
                 if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path.type, handleIndex)) {
                     val d = increments.lengthDelta(q - downDoc)
                     val stepped = downDoc + handleGrab + d
-                    at = Vec2(if (at.x == raw.x) stepped.x else at.x, if (at.y == raw.y) stepped.y else at.y)
+                    // Which axes a guide or the grid placed (asked, not told from the snapped
+                    // value: a finger exactly on a guide or grid line is placed too and keeps it).
+                    val grid = controller.snapping.enabled && gridSnaps
+                    val placedX = grid || snap.snapValue(raw.x, SnapAxis.X) != null
+                    val placedY = grid || snap.snapValue(raw.y, SnapAxis.Y) != null
+                    at = Vec2(if (placedX) at.x else stepped.x, if (placedY) at.y else stepped.y)
                     showReadout(signedLength(d.x) + ", " + signedLength(d.y))
                 }
                 item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))

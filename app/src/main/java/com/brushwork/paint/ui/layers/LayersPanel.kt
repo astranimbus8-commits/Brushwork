@@ -61,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.TransparencyDisplay
@@ -302,6 +303,9 @@ fun LayersPanel(
             suffix = "%",
             onApply = { v -> controller.fromPanel { setLayerOpacity(controller, layer, v) } },
             onDismiss = { opacityId = null },
+            // As the row's − / + and slider: − / + and the slider step by the Percent increment.
+            incrementKind = IncrementKind.PERCENT,
+            incrementScale = 100f,
         )
     }
 }

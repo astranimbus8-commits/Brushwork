@@ -37,9 +37,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.remove.CafSource
 import com.brushwork.paint.tools.remove.RemoveSettings
 import com.brushwork.paint.tools.remove.RemoveTool
+import com.brushwork.paint.ui.common.IncrementStepping
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.ln
 import kotlin.math.exp
@@ -53,12 +56,20 @@ import kotlin.math.roundToInt
 fun RemoveToolOptions(tool: RemoveTool) {
     val s = tool.settings
     val size = tool.size
+    val sizeStep = LocalIncrements.current?.step(IncrementKind.SIZE)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text("Size", style = MaterialTheme.typography.labelLarge, color = BrushworkColors.OnChromeDim)
         Slider(
             value = RemoveSizeScale.toPosition(size),
-            // Live while dragging (the canvas shows the brush), saved on release.
-            onValueChange = { pos -> tool.previewSize(RemoveSizeScale.fromPosition(pos)) },
+            // Live while dragging (the canvas shows the brush), saved on release. v1.6 §3.4: a px
+            // size, so on the Size increment's multiples while increments are on (ends reachable).
+            onValueChange = { pos ->
+                val v = RemoveSizeScale.fromPosition(pos)
+                val step = sizeStep?.toDouble()
+                val min = RemoveSettings.MIN_SIZE.toDouble()
+                val max = RemoveSettings.MAX_SIZE.toDouble()
+                tool.previewSize(if (step == null) v else IncrementStepping.snapSlider(v.toDouble(), step, min, max).toFloat())
+            },
             onValueChangeFinished = { tool.commitSize() },
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
