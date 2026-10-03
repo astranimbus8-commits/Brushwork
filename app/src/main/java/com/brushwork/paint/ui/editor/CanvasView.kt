@@ -140,6 +140,12 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         }
     }
 
+    /**
+     * The part of this view the chrome leaves free (view px, as [setFitInsets] reported): where
+     * the fit centres the canvas, and where the Path tool's quick starts go (v1.6 §3.2a).
+     */
+    fun freeArea(): RectF = RectF(insetLeft, insetTop, width - insetRight, height - insetBottom)
+
     fun setMirrored(mirrored: Boolean) {
         if (viewport.mirrored == mirrored) return
         interruptStroke()

@@ -1,5 +1,7 @@
 package com.brushwork.paint.ui.vector
 
+import android.view.View
+import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.relocation.BringIntoViewRequester
@@ -123,6 +125,7 @@ import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
+import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.cos
@@ -426,13 +429,20 @@ private fun ShapesChip(tool: CurveTool) {
                     text = { Text(shape.label) },
                     onClick = {
                         open = false
-                        val root = view.rootView
-                        tool.startShape(shape, tool.shapeArea(root.width, root.height))
+                        // The part of the canvas that shows: the canvas view less the chrome over it.
+                        tool.startShape(shape, tool.shapeArea(findCanvasView(view.rootView)?.freeArea()))
                     },
                 )
             }
         }
     }
+}
+
+/** The editor's canvas view under [root] (a depth-first walk), or null when none is shown. */
+private fun findCanvasView(root: View): CanvasView? {
+    if (root is CanvasView) return root
+    if (root is ViewGroup) for (i in 0 until root.childCount) findCanvasView(root.getChildAt(i))?.let { return it }
+    return null
 }
 
 // ====================================================================== the Handles group (v1.6, §3.3)

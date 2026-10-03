@@ -825,13 +825,25 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     /**
-     * The area quick starts fit into: the part of the canvas visible in a view of [viewWidth] ×
-     * [viewHeight] screen px, or the whole canvas when that is unknown or misses it.
+     * The area quick starts fit into (document px): the canvas seen in [viewArea], the part of
+     * the canvas view the chrome leaves free (view px, the view transform's screen space), cut to
+     * the canvas; the whole canvas when that is unknown (null) or misses it. The area is centred
+     * on the document point under [viewArea]'s centre and is as large as [viewArea] at the
+     * current zoom (its sides swapped when the view is turned nearer a quarter turn than not), so
+     * a zoomed-in, panned or turned canvas gets the shape in the middle of what shows, sized to it.
      */
-    fun shapeArea(viewWidth: Int, viewHeight: Int): RectF {
+    fun shapeArea(viewArea: RectF?): RectF {
         val doc = RectF(0f, 0f, controller.doc.width.toFloat(), controller.doc.height.toFloat())
-        if (viewWidth <= 0 || viewHeight <= 0) return doc
-        val v = controller.viewTransform.visibleDocRect(viewWidth, viewHeight)
+        if (viewArea == null || !(viewArea.width() > 1f) || !(viewArea.height() > 1f)) return doc
+        val t = controller.viewTransform
+        val zoom = t.zoom
+        if (!(zoom > 0f) || !zoom.isFinite()) return doc
+        val c = t.screenToDoc(viewArea.centerX(), viewArea.centerY())
+        if (!c.x.isFinite() || !c.y.isFinite()) return doc
+        val turned = abs(abs(t.rotationDeg) - 90f) < 45f
+        val hw = (if (turned) viewArea.height() else viewArea.width()) / zoom / 2f
+        val hh = (if (turned) viewArea.width() else viewArea.height()) / zoom / 2f
+        val v = RectF(c.x - hw, c.y - hh, c.x + hw, c.y + hh)
         return if (v.intersect(doc) && v.width() > 1f && v.height() > 1f) v else doc
     }
 
