@@ -45,12 +45,12 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 
 /**
- * The v1.1 editor chrome at runtime (Robolectric, real Skia, a 360 x 760 dp hdpi phone): the
- * brush slider bar above the hotbar and its typed values, the non-modal layers window in the
- * bottom-right corner (drawing around it keeps working, a tap outside closes it), the selection
- * bar's copy / cut / paste /
- * deselect flow into a placed "Pasted" layer, duplicating only the selection, step-wise undo of
- * a curve from the hotbar and the new settings.
+ * The editor chrome at runtime (v1.1, in v1.6's ibisPaint layout; Robolectric, real Skia, a
+ * 360 x 760 dp hdpi phone): the brush slider rows above the bottom bar and their typed values, the
+ * non-modal layer window over the bottom of the screen (drawing above it keeps working, a tap
+ * outside closes it), the selection bar's copy / cut / paste / deselect flow into a placed
+ * "Pasted" layer, duplicating only the selection, step-wise undo of a curve from the top row's
+ * Undo and the new settings.
  *
  * Like [EditorSmokeTest], this class has its own sandbox (Compose's frame clock only runs in the
  * first test of one) and does all of its UI work in ONE test split into sections.
@@ -117,9 +117,9 @@ class ChromeSmokeTest {
         return Vec2(p.x, p.y)
     }
 
-    /** Bounds (window pixels) of the layers window: the node titled "Layers" as a pane. */
+    /** Bounds (window pixels) of the layer window, as the editor places it (v1.6 sizing contract). */
     private fun layersWindowBounds(): Rect? = RobolectricUi.elements()
-        .lastOrNull { it.node.config.getOrNull(SemanticsProperties.PaneTitle) == "Layers" }?.bounds
+        .lastOrNull { it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == com.brushwork.paint.ui.editor.chrome.ChromeTags.LAYER_WINDOW }?.bounds
 
     private fun sliderNamed(name: String) = RobolectricUi.elements().last { e ->
         e.node.config.contains(SemanticsActions.SetProgress) &&
@@ -135,7 +135,7 @@ class ChromeSmokeTest {
         section("layers window is non-modal") { layersWindow() }
         section("selection bar: copy, paste, cut, deselect") { selectionBar() }
         section("smart select results are copyable") { smartSelectCopy() }
-        section("hotbar undo takes back one curve point") { curveUndo() }
+        section("the Undo button takes back one curve point") { curveUndo() }
         dog.interrupt()
         val errors = Smoke.errorLogs()
         if (errors.isNotEmpty()) failures += AssertionError("error logs:\n" + errors.joinToString("\n"))
@@ -155,12 +155,12 @@ class ChromeSmokeTest {
         assertWindowsLaidOut()
         val touch = Smoke.Touch(activity.window.decorView)
 
-        // The bar sits directly above the hotbar, with the values readable.
+        // The ibisPaint slider rows sit directly above the bottom bar, with the values readable.
         val size = sliderNamed("Brush size")
         val opacity = sliderNamed("Brush opacity")
-        val undo = SmokeUi.find("Undo", exact = true) ?: throw AssertionError("no Undo button")
-        assertTrue("size above opacity above the hotbar", size.bounds.bottom <= opacity.bounds.top + 1f && opacity.bounds.bottom <= undo.bounds.top)
-        assertTrue("values shown", has("20 px", exact = true) && has("100%", exact = true))
+        val bar = SmokeUi.find("Open color picker", exact = true) ?: throw AssertionError("no bottom bar")
+        assertTrue("size above opacity above the bottom bar", size.bounds.bottom <= opacity.bounds.top + 1f && opacity.bounds.bottom <= bar.bounds.top + 1f)
+        assertTrue("values shown (ibisPaint's \"20.0\" and \"100\")", has("20.0", exact = true) && has("100", exact = true))
         assertTrue("sliders are wide: ${size.bounds.width}", size.bounds.width > 180f)
         SmokeUi.assertIdle("slider bar at rest", settleMs = 600)
 
@@ -177,7 +177,7 @@ class ChromeSmokeTest {
         val grown = c.brush.size
         assertTrue("dragging right grew the brush: $grown", grown > 20f)
         assertEquals("the new size is saved with the preset", grown, BrushPresetStore.get(activity).current(ToolId.BRUSH).size)
-        assertTrue("value text follows", has("${SliderMath.formatSize(grown)} px", exact = true))
+        assertTrue("value text follows", has(SliderMath.formatSizeFixed(grown), exact = true))
 
         // Dragging the opacity slider left lowers the opacity.
         val ob = sliderNamed("Brush opacity").bounds
@@ -216,7 +216,7 @@ class ChromeSmokeTest {
         click("Type brush opacity")
         SmokeUi.typeAndDone("Brush opacity", "40")
         assertEquals(0.4f, c.brush.opacity, 1e-6f)
-        assertTrue(has("40%", exact = true))
+        assertTrue(has("40", exact = true))
 
         // The bar follows the painting tool: the eraser has its own size.
         click("Switch to eraser")
@@ -229,7 +229,8 @@ class ChromeSmokeTest {
         click("Eraser on: switch to")
         assertEquals(ToolId.BRUSH, c.activeToolId)
 
-        // Settings: left-handed puts the values on the left; hold-to-pick can be turned off.
+        // Settings: left-handed mirrors the rows (ibisPaint's values on the left move to the
+        // right); hold-to-pick can be turned off.
         click("More options")
         click("Settings", exact = true)
         click("Left-handed layout", exact = true)
@@ -240,14 +241,18 @@ class ChromeSmokeTest {
         click("Close", exact = true)
         assertEquals(1, SmokeUi.windows().size)
         val chip = SmokeUi.find("Type brush size") ?: throw AssertionError("no size value")
-        assertTrue("value left of the slider when left-handed", chip.bounds.right <= sliderNamed("Brush size").bounds.left + 1f)
+        assertTrue("value right of the slider when left-handed", chip.bounds.left >= sliderNamed("Brush size").bounds.right - 1f)
         Smoke.assertQuiet(c, "slider bar done")
     }
 
     // ================================================================== layers window
 
     private fun layersWindow() {
-        val (activity, c) = editor { Smoke.controller(it, Smoke.document(400, 300, layers = 2)) }
+        // A portrait artwork: its top part shows above the layer window, which covers the bottom
+        // of the screen (and the slider rows) as in ibisPaint.
+        val w = 300
+        val h = 600
+        val (activity, c) = editor { Smoke.controller(it, Smoke.document(w, h, layers = 2)) }
         c.seed()
         c.brush = c.brush.copy(size = 12f, opacity = 1f, hardness = 1f, taperStart = 0f, taperEnd = 0f)
         c.color = 0xFFCC0000.toInt()
@@ -258,45 +263,46 @@ class ChromeSmokeTest {
         click("Open layers")
         assertEquals("non-modal: no extra window", 1, SmokeUi.windows().size)
         val wb = layersWindowBounds() ?: throw AssertionError("no layers window; shown: ${SmokeUi.shown().take(60)}")
-        // Bottom-right corner, above the slider bar and hotbar, smaller than the screen.
-        val sizeSlider = sliderNamed("Brush size").bounds
-        assertTrue("right edge near the screen edge: $wb in ${root.width}", root.width - wb.right in 0f..(16f * density))
-        assertTrue("above the slider bar: $wb vs $sizeSlider", wb.bottom <= sizeSlider.top)
-        assertTrue("about 300 dp wide at most: ${wb.width / density} dp", wb.width / density <= 301f && wb.width / density >= 240f)
-        assertTrue("about half the screen tall: ${wb.height / density} dp", wb.height / density in 250f..400f)
+        // ibisPaint's placement (§3.7.7): x 5, w − 10 wide, its bottom on the bottom bar, over
+        // the slider rows.
+        val bar = SmokeUi.find("Open color picker", exact = true)?.bounds ?: throw AssertionError("no bottom bar")
+        assertEquals("at x 5", 5f, wb.left / density, 1f)
+        assertEquals("w − 10 wide", root.width / density - 10f, wb.width / density, 1f)
+        assertEquals("its bottom on the bottom bar", bar.top, wb.bottom, density)
+        assertTrue("over the slider rows: $wb", wb.top < bar.top - 80f * density)
+        assertTrue("at most 520 dp tall: ${wb.height / density} dp", wb.height / density <= 520.5f)
         assertTrue("the window shows the layers", has("Layer 2", exact = true) && has("Layer 1", exact = true))
         SmokeUi.assertIdle("layers window open", settleMs = 600)
 
-        // Drawing next to the window works while it is open.
-        val docLeft = screen(activity, c, 0f, 0f).first
-        assertTrue("some canvas is left of the window: doc at $docLeft, window at ${wb.left}", docLeft + 12f * density < wb.left)
-        val sx = (docLeft + wb.left) / 2f
-        val docX = doc(activity, c, sx, 0f).x
-        val top = screen(activity, c, docX, 40f)
-        val bottom = screen(activity, c, docX, 260f)
+        // Drawing above the window works while it is open.
+        val docTop = screen(activity, c, 0f, 0f).second
+        assertTrue("some artwork is above the window: doc at $docTop, window at ${wb.top}", docTop + 24f * density < wb.top)
+        val docY = doc(activity, c, 0f, (docTop + wb.top) / 2f).y
+        val left = screen(activity, c, 30f, docY)
+        val right = screen(activity, c, 270f, docY)
         val touch = Smoke.Touch(root)
         val layer = c.activeLayer
         val n0 = c.undoManager.undoCount
         touch.idle(300)
-        touch.stroke(top, bottom)
+        touch.stroke(left, right)
         settle()
-        assertEquals("the stroke next to the window was drawn", n0 + 1, c.undoManager.undoCount)
-        assertTrue("painted under the finger", layer.bitmap.getPixel(docX.toInt(), 150) ushr 24 > 0)
+        assertEquals("the stroke above the window was drawn", n0 + 1, c.undoManager.undoCount)
+        assertTrue("painted under the finger", layer.bitmap.getPixel(150, docY.toInt()) ushr 24 > 0)
         assertTrue("still open", layersWindowBounds() != null)
 
         // A drag that starts on the window never reaches the canvas.
-        val before = IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
+        val before = IntArray(w * h).also { layer.bitmap.getPixels(it, 0, w, 0, 0, w, h) }
         val a = (wb.left + wb.width * 0.55f) to (wb.top + 20f * density)
         val b = (wb.left + wb.width * 0.2f) to (wb.top + 22f * density)
         touch.idle(300)
         touch.stroke(a, b)
         settle()
         assertEquals("no stroke through the window", n0 + 1, c.undoManager.undoCount)
-        assertTrue("no pixels through the window", before.contentEquals(IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }))
+        assertTrue("no pixels through the window", before.contentEquals(IntArray(w * h).also { layer.bitmap.getPixels(it, 0, w, 0, 0, w, h) }))
         Smoke.assertQuiet(c, "drawing beside the window")
 
         // Duplicate with a selection copies only the selected pixels of that one layer.
-        c.setSelection(Selection.fromBytes(ByteArray(400 * 300) { i -> if (i % 400 in 100..199 && i / 400 in 80..159) -1 else 0 }, 400, 300))
+        c.setSelection(Selection.fromBytes(ByteArray(w * h) { i -> if (i % w in 100..199 && i / w in 80..159) -1 else 0 }, w, h))
         settle()
         val source = c.activeLayer
         val layers0 = c.doc.layers.size
@@ -323,16 +329,16 @@ class ChromeSmokeTest {
         settle()
         assertNotNull("back after the panel", layersWindowBounds())
 
-        // A tap on the canvas beside the window closes it, and paints nothing.
+        // A tap on the canvas above the window closes it, and paints nothing.
         val undoTap = c.undoManager.undoCount
-        val pixelsTap = IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
-        val tapAt = screen(activity, c, docX, 60f)
+        val pixelsTap = IntArray(w * h).also { layer.bitmap.getPixels(it, 0, w, 0, 0, w, h) }
+        val tapAt = screen(activity, c, 150f, docY)
         touch.idle(300)
         touch.tap(tapAt.first, tapAt.second)
         settle()
         assertNull("a tap outside closed the window", layersWindowBounds())
         assertEquals("the tap drew nothing", undoTap, c.undoManager.undoCount)
-        assertTrue(pixelsTap.contentEquals(IntArray(400 * 300).also { layer.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }))
+        assertTrue(pixelsTap.contentEquals(IntArray(w * h).also { layer.bitmap.getPixels(it, 0, w, 0, 0, w, h) }))
         click("Open layers")
         assertNotNull(layersWindowBounds())
 

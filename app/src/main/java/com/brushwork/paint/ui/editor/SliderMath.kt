@@ -81,4 +81,35 @@ object SliderMath {
         val pct = (fraction.coerceIn(0f, 1f) * 100f).roundToInt()
         return ((pct + if (up) 1 else -1).coerceIn(0, 100)) / 100f
     }
+
+    // ------------------------------------------------------------------ v1.6: ibis slider rows, increments
+
+    /** The ibisPaint readout of a brush size: always one decimal ("72.0", "2.5", "1000.0"). */
+    fun formatSizeFixed(size: Float): String = String.format(java.util.Locale.US, "%.1f", size.toDouble())
+
+    /** A slider size on the Size increment [step] (px): multiples of it, with 0.5 and 1000 still reachable. */
+    fun snapSize(size: Float, step: Float): Float =
+        com.brushwork.paint.core.IncrementMath.snapInRange(size.toDouble(), step.toDouble(), MIN_BRUSH_SIZE.toDouble(), MAX_BRUSH_SIZE.toDouble()).toFloat()
+
+    /**
+     * The next brush size for a -/+ button while the Size increment is [step] px: the next multiple
+     * of the step up or down (from an off-step value, the nearest one in that direction), clamped
+     * to 0.5..1000.
+     */
+    fun stepSizeBy(size: Float, up: Boolean, step: Float): Float {
+        if (!step.isFinite() || step <= 0f) return stepSize(size, up)
+        val s = size.coerceIn(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE).toDouble()
+        val k = s / step
+        val next = if (up) (kotlin.math.floor(k + 1e-6) + 1.0) * step else (kotlin.math.ceil(k - 1e-6) - 1.0) * step
+        return next.toFloat().coerceIn(MIN_BRUSH_SIZE, MAX_BRUSH_SIZE)
+    }
+
+    /** The next opacity (0..1) for a -/+ button while the Percent increment is [stepPercent] %. */
+    fun stepPercentBy(fraction: Float, up: Boolean, stepPercent: Float): Float {
+        if (!stepPercent.isFinite() || stepPercent <= 0f) return stepPercent(fraction, up)
+        val pct = fraction.coerceIn(0f, 1f) * 100.0
+        val k = pct / stepPercent
+        val next = if (up) (kotlin.math.floor(k + 1e-6) + 1.0) * stepPercent else (kotlin.math.ceil(k - 1e-6) - 1.0) * stepPercent
+        return (next.coerceIn(0.0, 100.0) / 100.0).toFloat()
+    }
 }

@@ -168,6 +168,14 @@ class RequestCoverageV15UiTest {
         return requireNotNull(n) { "\"$label\" is not clickable" }.boundsInWindow
     }
 
+    /** Layout size (px) of the clickable element labelled [label] (its own, or its clickable ancestor's). */
+    private fun clickableSize(label: String): androidx.compose.ui.unit.IntSize {
+        val e = SmokeUi.find(label, exact = true) ?: throw AssertionError("no \"$label\"")
+        var n: androidx.compose.ui.semantics.SemanticsNode? = e.node
+        while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+        return requireNotNull(n) { "\"$label\" is not clickable" }.size
+    }
+
     private fun slider(name: String): RobolectricUi.Element = RobolectricUi.elements().last { e ->
         e.node.layoutInfo.isPlaced && e.node.config.contains(SemanticsActions.SetProgress) &&
             e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.contains(name) } == true
@@ -186,6 +194,11 @@ class RequestCoverageV15UiTest {
     private fun closePanels() {
         repeat(4) {
             if (!SmokeUi.menuOpen()) return
+            // v1.6: the tool menu has no ✕; its button (bottom bar slot 2) closes it.
+            if ("Tools" in SmokeUi.sheetTitles()) {
+                click("Tools (current:")
+                return@repeat
+            }
             val closer = listOf("Close", "Cancel", "Done").firstOrNull { SmokeUi.find(it, exact = true) != null } ?: return
             click(closer, exact = true)
         }
@@ -228,12 +241,16 @@ class RequestCoverageV15UiTest {
         assertTrue("the Vector button is on screen and finger-sized: $button", button.left >= 0f && button.width >= 40f * 3f && button.height >= 40f * 3f)
         click("Tools (current:")
         SmokeUi.assertPanelShown("Tools")
-        assertTrue("a Filters tile in the Tools grid", has("Filters", exact = true))
-        // On the user's phone the whole grid shows at once: Filters (and the other tools the
-        // request added: Masks, Clone stamp, Curve, Text) without searching the sheet.
-        for (t in listOf("Filters", "Masks", "Clone stamp", "Transform", "Text", "Shape", "Curve", "Ruler")) {
-            assertTrue("\"$t\" is visible without scrolling the Tools sheet at 392 x 873 dp", scrollIntoView(t))
-        }
+        assertTrue("a Filters cell in the tool menu", has("Filters", exact = true))
+        // v1.6: ibisPaint's tool menu (150 × 434 dp) shows its first rows at once — Filters among
+        // them, beside Lasso — and scrolls to the others (the request's Masks, Clone stamp,
+        // Curve, Text...), as ibisPaint's does.
+        assertTrue("\"Filters\" is visible without scrolling the tool menu at 392 x 873 dp", scrollIntoView("Filters"))
+        for (t in listOf("Masks", "Clone stamp", "Transform", "Text", "Shape", "Curve", "Ruler")) scrollIntoView(t)
+        scrollIntoView("Filters")
+        // Let the menu's scroll animation end: a finger landing on a moving list only stops it.
+        Smoke.pump(600)
+        settle()
         SmokeUi.tap("Filters", exact = true)
         settle()
         assertTrue("the tile opens the filter browser", has("Search filters"))
@@ -642,9 +659,9 @@ class RequestCoverageV15UiTest {
         val scroll = requireNotNull(n?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is clipped and nothing scrolls to it" }
         val sideways = n?.config?.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null
         fun by(d: Float) { if (sideways) scroll.invoke(d, 0f) else scroll.invoke(0f, d) }
-        // To the start first, then on (as a finger would look for it).
-        repeat(30) { by(-400f) }
-        settle(2)
+        // To the start first, then on (as a finger would look for it). Each scroll is animated
+        // and a new one cancels the running one, so let each finish before the next.
+        repeat(30) { by(-400f); settle(2) }
         repeat(40) {
             if (visible()) return false
             by(60f)
@@ -669,7 +686,8 @@ class RequestCoverageV15UiTest {
         }
         assertTrue("\"$label\" inside the width or in a row that scrolls to it: $b in ${root.width}", (b.left >= -0.5f && b.right <= root.width + 0.5f) || scrollsH)
         assertTrue("\"$label\" inside the height or in a list that scrolls to it: $b in ${root.height}", b.bottom <= root.height + 0.5f || scrollsV)
-        val c = clickableBounds(label)
+        // The target's own size (a tool-menu cell partly under the menu's edge is still a whole cell).
+        val c = clickableSize(label)
         val dp = activity.resources.displayMetrics.density
         assertTrue("\"$label\" is finger-sized: $c", maxOf(c.width, c.height) >= 40f * dp - 0.5f && minOf(c.width, c.height) >= 24f * dp - 0.5f)
     }

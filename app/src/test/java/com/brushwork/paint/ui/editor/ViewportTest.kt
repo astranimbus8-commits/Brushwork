@@ -363,6 +363,26 @@ class ViewportTest {
     }
 
     @Test
+    fun resizeAsksForANewFitUntilTheUserAdjustsTheView() {
+        // v1.6: the chrome's fit insets are constant, so a rotation refits through the resize.
+        val v = viewport(1080, 1920)
+        v.fit(3000, 4000)
+        v.fittedDocVersion = 7
+        v.resize(1080, 1920)
+        assertEquals("the same size changes nothing", 7, v.fittedDocVersion)
+        v.resize(1080, 1200)
+        assertEquals("a height-only change (keyboard, split screen) keeps the framing", 7, v.fittedDocVersion)
+        v.resize(1080, 1920)
+        v.resize(1920, 1080)
+        assertEquals("a rotation of an untouched view asks for a new fit", Int.MIN_VALUE, v.fittedDocVersion)
+        v.fit(3000, 4000)
+        v.fittedDocVersion = 8
+        v.userAdjusted = true
+        v.resize(1080, 1920)
+        assertEquals("a view the user zoomed keeps its framing", 8, v.fittedDocVersion)
+    }
+
+    @Test
     fun snapshotRestoresTheTransform() {
         val v = viewport()
         v.fit(1000, 1000)

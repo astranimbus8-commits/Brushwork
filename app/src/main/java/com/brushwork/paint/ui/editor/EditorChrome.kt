@@ -2,42 +2,25 @@ package com.brushwork.paint.ui.editor
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Layers
-import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -45,45 +28,21 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
-import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.Tool
-import com.brushwork.paint.tools.ToolId
-import com.brushwork.paint.ui.common.BwSheet
-import com.brushwork.paint.ui.common.ColorSwatch
-import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
-import kotlin.math.ln
+import com.brushwork.paint.ui.theme.IbisColors
 import kotlin.math.roundToInt
 
-/** A top-bar action; actions that don't fit the width move into the overflow menu. */
-data class BarAction(
-    val label: String,
-    val icon: ImageVector,
-    val selected: Boolean = false,
-    val enabled: Boolean = true,
-    val onClick: () -> Unit,
-)
-
-/** An overflow menu entry; [checked] non-null shows a check mark when true (toggles). */
+/** A More-menu entry; [checked] non-null shows a check mark when true (toggles). */
 data class MenuEntry(
     val label: String,
     val icon: ImageVector,
@@ -103,62 +62,6 @@ internal fun EditorController.endCanvasGesture() {
     if (isInteracting) pointerCancel()
 }
 
-private val BarButtonSize = 40.dp
-private val TitleMinWidth = 104.dp
-
-/**
- * Compact editor top bar: back, document name + size, as many [actions] as fit the width, and
- * an overflow menu holding the remaining actions followed by [menu].
- */
-@Composable
-fun EditorTopBar(
-    title: String,
-    subtitle: String,
-    onBack: () -> Unit,
-    actions: List<BarAction>,
-    menu: List<MenuEntry>,
-    modifier: Modifier = Modifier,
-) {
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val reserved = BarButtonSize * 2 + TitleMinWidth + 8.dp
-        val fitting = ((maxWidth - reserved) / BarButtonSize).toInt().coerceIn(0, actions.size)
-        val inBar = actions.take(fitting)
-        val overflow = actions.drop(fitting).map {
-            MenuEntry(it.label, it.icon, checked = if (it.selected) true else null, enabled = it.enabled, onClick = it.onClick)
-        }
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            ToolIconButton(Icons.AutoMirrored.Filled.ArrowBack, "Back to gallery", onBack, size = BarButtonSize)
-            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = BrushworkColors.OnChrome)
-                Text(subtitle, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, color = BrushworkColors.OnChromeDim)
-            }
-            inBar.forEach { ToolIconButton(it.icon, it.label, it.onClick, selected = it.selected, enabled = it.enabled, size = BarButtonSize) }
-            OverflowMenu(overflow, menu)
-        }
-    }
-}
-
-@Composable
-private fun OverflowMenu(first: List<MenuEntry>, rest: List<MenuEntry>) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        ToolIconButton(Icons.Filled.MoreVert, "More options", { open = true }, size = BarButtonSize)
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            val entries = if (first.isEmpty()) rest else first + rest.mapIndexed { i, e -> if (i == 0) e.copy(dividerBefore = true) else e }
-            entries.forEach { e ->
-                if (e.dividerBefore) HorizontalDivider(color = BrushworkColors.ChromeBorder)
-                DropdownMenuItem(
-                    text = { Text(e.label) },
-                    leadingIcon = { Icon(e.icon, contentDescription = null) },
-                    trailingIcon = if (e.checked == true) ({ Icon(Icons.Filled.Check, contentDescription = "On", tint = BrushworkColors.Accent) }) else null,
-                    onClick = { open = false; e.onClick() },
-                    enabled = e.enabled,
-                )
-            }
-        }
-    }
-}
-
 /**
  * Keeps touches on a chrome container (including the gaps between its controls) from falling
  * through to the full-screen canvas behind it, like a Material Surface does.
@@ -175,254 +78,14 @@ internal fun canRedoNow(controller: EditorController): Boolean {
     return controller.canRedo && !tool.hasUserChanges
 }
 
-/**
- * Bottom tool bar (ibisPaint-like): tool picker, brush/eraser toggle, brush size, color,
- * layers, undo, redo. Seven 44dp targets fit a 360dp-wide phone. [onHistory] receives the
- * feedback text of an undo/redo pressed here (see [HistoryLabels]); [layersOpen] highlights the
- * Layers button while the layers window is shown.
- */
-@Composable
-fun Hotbar(
-    controller: EditorController,
-    onToolPicker: () -> Unit,
-    onBrushPanel: () -> Unit,
-    onColorPanel: () -> Unit,
-    onLayersPanel: () -> Unit,
-    modifier: Modifier = Modifier,
-    layersOpen: Boolean = false,
-    onHistory: (String) -> Unit = {},
-) {
-    val active = controller.activeToolId
-    val paintTool = controller.lastPaintTool
-    val erasing = active == ToolId.ERASER
-    val preset = controller.presetFor(controller.sliderToolId)
-    controller.layersVersion // observe layer changes for the active layer number
-    val layerNumber = controller.doc.activeLayerIndex.coerceIn(0, (controller.doc.layers.size - 1).coerceAtLeast(0)) + 1
-    // Derived: the tool state behind these changes on every move of a transform / curve / shape
-    // drag, which must not recompose the bar each time. Undo acts when there is history, the
-    // user's own tool work to take back, or a filter preview to cancel (an untouched automatic
-    // lift alone has nothing to undo).
-    val undoEnabled by remember(controller) {
-        derivedStateOf { controller.canUndo || controller.currentTool.hasUserChanges || controller.filterSession != null }
-    }
-    val redoEnabled by remember(controller) { derivedStateOf { canRedoNow(controller) } }
-    Box(
-        modifier
-            .fillMaxWidth()
-            .background(BrushworkColors.Chrome)
-            .blockCanvasTouches()
-            .windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
-        contentAlignment = Alignment.Center,
-    ) {
-        // Capped width so the buttons stay together on tablets and in landscape.
-        Row(
-            Modifier
-                .widthIn(max = 520.dp)
-                .fillMaxWidth()
-                .height(56.dp)
-                .padding(horizontal = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ToolIconButton(EditorIcons.tool(active), "Tools (current: ${active.label})", onToolPicker)
-            ToolIconButton(
-                icon = if (erasing) EditorIcons.Eraser else EditorIcons.tool(paintTool),
-                contentDescription = if (erasing) "Eraser on: switch to ${paintTool.label.lowercase()}" else "Switch to eraser",
-                onClick = { controller.endCanvasGesture(); controller.toggleEraser() },
-                selected = erasing || active == paintTool,
-            )
-            BrushSizeButton(preset?.size ?: 0f, onBrushPanel)
-            Box(
-                Modifier
-                    .size(44.dp)
-                    .clip(CircleShape)
-                    .clickable(onClickLabel = "Open color picker", role = Role.Button, onClick = onColorPanel),
-                contentAlignment = Alignment.Center,
-            ) { ColorSwatch(controller.color, size = 30.dp) }
-            LayersButton(layerNumber, layersOpen, onLayersPanel)
-            ToolIconButton(
-                Icons.AutoMirrored.Filled.Undo, "Undo",
-                {
-                    controller.endCanvasGesture()
-                    onHistory(HistoryLabels.performUndo(controller))
-                },
-                enabled = undoEnabled,
-            )
-            ToolIconButton(
-                Icons.AutoMirrored.Filled.Redo, "Redo",
-                {
-                    controller.endCanvasGesture()
-                    onHistory(HistoryLabels.performRedo(controller))
-                },
-                enabled = redoEnabled,
-            )
-        }
-    }
-}
-
-/** Shows the current brush diameter as a dot (log-scaled) and a number; opens the brush panel. */
-@Composable
-private fun BrushSizeButton(size: Float, onClick: () -> Unit) {
-    val dot = (4f + 14f * (ln(size.coerceIn(0.5f, 1000f) / 0.5f) / ln(2000f))).dp
-    Column(
-        Modifier
-            .size(44.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClickLabel = "Open brush settings", role = Role.Button, onClick = onClick),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(Modifier.height(18.dp), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(dot).clip(CircleShape).background(BrushworkColors.OnChrome))
-        }
-        Text(SliderMath.formatSize(size), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = BrushworkColors.OnChrome, maxLines = 1)
-    }
-}
-
-@Composable
-private fun LayersButton(number: Int, open: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .size(44.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (open) BrushworkColors.AccentDim else Color.Transparent)
-            .clickable(
-                onClickLabel = if (open) "Close layers (active layer $number)" else "Open layers (active layer $number)",
-                role = Role.Button,
-                onClick = onClick,
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(Icons.Filled.Layers, contentDescription = null, tint = if (open) Color.White else BrushworkColors.OnChrome)
-        Text(
-            number.toString(),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-            color = Color.White,
-            maxLines = 1,
-            modifier = Modifier
-                .align(Alignment.BottomEnd)
-                .padding(end = 2.dp, bottom = 4.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(BrushworkColors.AccentDim)
-                .border(1.dp, BrushworkColors.Chrome, RoundedCornerShape(6.dp))
-                .padding(horizontal = 4.dp),
-        )
-    }
-}
-
-/**
- * The tools grid ([ToolGrid] sections, 4 tiles per row); the current tool is highlighted. In
- * vector mode, tools that need pixels carry a small "px" badge (they stay tappable). The
- * Filters tile opens the filter browser ([onOpenFilters]; disabled while a filter is previewed).
- */
-@Composable
-fun ToolPickerSheet(controller: EditorController, onDismiss: () -> Unit, onOpenFilters: () -> Unit) {
-    // Tall enough for the whole grid on a 392 x 873 dp phone (v1.5 added Clone stamp, Masks and
-    // Filters to it): no searching a half sheet for a tool. Picking one closes the sheet.
-    BwSheet(title = "Tools", onDismiss = onDismiss, maxHeightFraction = 0.85f) {
-        val active = controller.activeToolId
-        val vectorMode = controller.isVectorMode
-        val filtersEnabled = controller.filterSession == null
-        ToolGrid.sections.forEach { section ->
-            SectionLabel(section.title)
-            section.entries.chunked(4).forEach { row ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEach { entry ->
-                        when (entry) {
-                            is ToolGridEntry.Tool -> {
-                                val id = entry.id
-                                ToolTile(
-                                    EditorIcons.tool(id), id.label, selected = id == active, modifier = Modifier.weight(1f),
-                                    badge = if (vectorMode && id in LayerToolRules.PIXEL_ONLY) "px" else null,
-                                ) {
-                                    controller.endCanvasGesture()
-                                    controller.selectTool(id)
-                                    onDismiss()
-                                }
-                            }
-                            ToolGridEntry.Filters -> ToolTile(
-                                EditorIcons.FiltersTile, "Filters", selected = false, modifier = Modifier.weight(1f), enabled = filtersEnabled,
-                            ) {
-                                controller.endCanvasGesture()
-                                onOpenFilters()
-                            }
-                        }
-                    }
-                    repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionLabel(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.labelMedium,
-        color = BrushworkColors.OnChromeDim,
-        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp, start = 2.dp),
-    )
-}
-
-@Composable
-private fun ToolTile(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    modifier: Modifier,
-    enabled: Boolean = true,
-    badge: String? = null,
-    onClick: () -> Unit,
-) {
-    val shape = RoundedCornerShape(12.dp)
-    val content = when {
-        selected -> Color.White
-        enabled -> BrushworkColors.OnChrome
-        else -> BrushworkColors.OnChromeDim
-    }
-    Box(modifier) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .clip(shape)
-                .background(if (selected) BrushworkColors.AccentDim else BrushworkColors.ChromeHigh)
-                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-                .padding(vertical = 10.dp, horizontal = 2.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Icon(icon, contentDescription = null, tint = content)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = content,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-            )
-        }
-        if (badge != null) {
-            Text(
-                badge,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                color = BrushworkColors.OnChrome,
-                maxLines = 1,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 4.dp, end = 4.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(BrushworkColors.ChromeBorder)
-                    .padding(horizontal = 3.dp),
-            )
-        }
-    }
-}
+/** Size of the floating ✓ / ✕ buttons (v1.6: 44 dp, y 209–253 above the layer window on the reference phone). */
+internal val PendingButtonSize = 44.dp
 
 /**
  * Floating apply / discard buttons for a tool with uncommitted editable work; [vertical] stacks
- * them (apply on top), for the narrow strip beside the layers window.
+ * them (apply on top). The editor places them (v1.6 §3.7.9): centred above the slider rows,
+ * right-aligned while the tool menu is open, above the layer window's top-right corner while it
+ * is open.
  */
 @Composable
 fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier = Modifier, vertical: Boolean = false) {
@@ -431,7 +94,7 @@ fun PendingWorkBar(controller: EditorController, tool: Tool, modifier: Modifier 
             PendingButtons(controller, tool, applyFirst = true)
         }
     } else {
-        Row(modifier, horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(modifier, horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
             PendingButtons(controller, tool, applyFirst = false)
         }
     }
@@ -443,20 +106,20 @@ private fun PendingButtons(controller: EditorController, tool: Tool, applyFirst:
         Surface(
             onClick = { controller.endCanvasGesture(); tool.commit(); controller.invalidateOverlay() },
             shape = CircleShape,
-            color = BrushworkColors.Accent,
+            color = IbisColors.Accent,
             shadowElevation = 4.dp,
-            modifier = Modifier.size(52.dp),
+            modifier = Modifier.size(PendingButtonSize),
         ) {
-            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Check, contentDescription = "Apply ${tool.id.label.lowercase()} edit", tint = Color(0xFF002B55)) }
+            Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Check, contentDescription = "Apply ${tool.id.label.lowercase()} edit", tint = Color.White) }
         }
     }
     if (applyFirst) apply()
     Surface(
         onClick = { controller.endCanvasGesture(); tool.discard(); controller.invalidateOverlay() },
         shape = CircleShape,
-        color = BrushworkColors.ChromeHigh,
+        color = IbisColors.SliderButton,
         shadowElevation = 4.dp,
-        modifier = Modifier.size(52.dp),
+        modifier = Modifier.size(PendingButtonSize),
     ) {
         Box(contentAlignment = Alignment.Center) { Icon(Icons.Filled.Close, contentDescription = "Discard ${tool.id.label.lowercase()} edit", tint = BrushworkColors.Danger) }
     }
@@ -512,10 +175,10 @@ fun BusyOverlay(message: String, progress: () -> Float, onCancel: (() -> Unit)? 
     }
 }
 
-/** Small toast-like pill (undo/redo feedback, zoom readout). */
+/** Small toast-like pill (undo/redo feedback, zoom readout, the increments readout). */
 @Composable
 fun InfoChip(text: String, modifier: Modifier = Modifier) {
-    Surface(color = BrushworkColors.ChromeHigh.copy(alpha = 0.94f), shape = RoundedCornerShape(50), shadowElevation = 2.dp, modifier = modifier) {
+    Surface(color = IbisColors.Sheet, shape = RoundedCornerShape(50), shadowElevation = 2.dp, modifier = modifier) {
         Text(text, style = MaterialTheme.typography.labelLarge, color = BrushworkColors.OnChrome, maxLines = 1, modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp))
     }
 }

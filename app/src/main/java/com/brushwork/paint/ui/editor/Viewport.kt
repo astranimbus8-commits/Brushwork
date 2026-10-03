@@ -144,8 +144,15 @@ class Viewport {
         if (hasSize && width > 0 && height > 0) {
             val p = FloatArray(2)
             screenToDoc(viewWidth / 2f, viewHeight / 2f, p)
+            val widthChanged = width != viewWidth
             viewWidth = width; viewHeight = height
             anchor(p[0], p[1], width / 2f, height / 2f)
+            // v1.6: the canvas is full bleed under constant chrome bands, so a rotation no longer
+            // changes its fit insets (which used to refit it). While the user hasn't adjusted the
+            // view since the last fit, a new width (rotation, a side-by-side window resized) asks
+            // for a new fit (the canvas view refits right after resizing). A height-only change
+            // (a keyboard on an older Android, a split screen dragged) keeps the framing, as v1.5.
+            if (widthChanged && !userAdjusted) fittedDocVersion = Int.MIN_VALUE
         } else {
             viewWidth = width; viewHeight = height
         }

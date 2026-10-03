@@ -227,4 +227,17 @@ internal object SmokeUi {
         if (title != null) assertTrue("panel \"$t\" shown instead of \"$title\"", t == title)
         assertTrue("panel \"$t\" has no size: ${panel.bounds}", panel.bounds.width > 0f && panel.bounds.height > 0f)
     }
+
+    /**
+     * The Increments sheet (More › Increments…, v1.6) is shown; returns its title. The title is
+     * area G's to choose ("Increments" for the foundation stub, "Increment steps" once G's sheet
+     * lands, so that it never repeats the X / Y pill's "#" label "Increments"): only its start is
+     * checked here.
+     */
+    fun assertIncrementsPanelShown(): String {
+        assertPanelShown()
+        val t = sheetPanel()!!.node.config[BwSheetTitleKey]
+        assertTrue("the Increments sheet, not \"$t\"", t.startsWith("Increment"))
+        return t
+    }
 }
