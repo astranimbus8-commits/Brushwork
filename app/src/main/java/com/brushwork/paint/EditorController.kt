@@ -118,7 +118,8 @@ enum class LayerListKind { ADDED, DUPLICATED, REMOVED, MERGED }
  * added, duplicated (the copy), removed, or merged down (the upper layer, now gone); [source]: the
  * original of a duplicate, the layer merged into; null otherwise. Emitted by `addLayer` /
  * `addLayerWith` (`addVectorLayer`, `addAdjustmentLayer`, `paste`, `importImageAsLayer`...),
- * `addLayerWithContent`, `duplicateLayer`, `deleteLayer` and merge down. Delivered to the
+ * `addLayerWithContent`, `duplicateLayer`, `deleteLayer`, merge down and `ImportLayers.insert`
+ * (each imported layer ADDED). Delivered to the
  * [LayerListListener]s in the same rounds as [EditEvent]s, when the outermost
  * [EditorController.editScope] ends: the operation's step is complete, so a listener that edits
  * folds into it with [EditorController.amendLastStep] (I2). Never for undo / redo.

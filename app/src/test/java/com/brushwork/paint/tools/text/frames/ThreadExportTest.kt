@@ -129,8 +129,11 @@ class ThreadExportTest {
         val target = com.brushwork.paint.exchange.ImportTarget(400, 300, s.doc.dpi, s.doc.colorMode, com.brushwork.paint.exchange.ImportLayers.room(c), c.maxLayers)
         val prepared = com.brushwork.paint.exchange.PayloadImport.prepare(svg.payload()!!, { key -> svg.imageData(key)?.let { com.brushwork.paint.exchange.image.PngDecoder.decode(it) } }, target)
         com.brushwork.paint.exchange.PayloadImport.apply(c, prepared, emptyList())
-        assertEquals("six frames share one story id", 6, c.textThreads.allFrames().count { it.thread.storyId == id })
-        // The next committed edit takes the copies apart: two whole stories, nothing re-flowed into the other.
+        // v1.6 QA: the import itself takes the copies apart (in its step), so no edit ever sees
+        // six frames under one story id (a frame's own edit would flow them as one chain).
+        assertEquals("three frames keep the story id", 3, c.textThreads.allFrames().count { it.thread.storyId == id })
+        assertEquals("already two stories", 2, c.textThreads.stories().size)
+        // The next committed edit keeps them apart: two whole stories, nothing re-flowed into the other.
         val steps = c.undoManager.undoCount
         c.editWholeLayer(s.background, "Fill") { b -> b.eraseColor(0xFFEEEEEE.toInt()) }
         assertEquals(steps + 1, c.undoManager.undoCount)
