@@ -133,11 +133,12 @@ class ThreadRoundTripTest {
                 assertEquals("$format: ${a.name}'s pixels", 0, V15Fixtures.maxDiff(a.bitmap, b.bitmap))
             }
             assertEditable(fresh, ch.storyId, "$format into a new artwork")
-            // The artwork it came from: the copy becomes a second story (a new id) on the next
-            // edit; neither story re-flows into the other.
+            // The artwork it came from: the copy becomes a second story (a new id) in the import's
+            // own step (v16qa-text); the next edit keeps them apart and neither re-flows into the other.
             val c = ch.s.c
             importEditable(c, file)
-            assertEquals("$format: six frames share the id until the next edit", 6, c.textThreads.allFrames().count { it.thread.storyId == ch.storyId })
+            assertEquals("$format: the original's three frames keep the id", 3, c.textThreads.allFrames().count { it.thread.storyId == ch.storyId })
+            assertEquals("$format: already two stories after the import", 2, c.textThreads.stories().size)
             val steps = c.undoManager.undoCount
             c.editWholeLayer(ch.s.background, "Fill") { b -> b.eraseColor(0xFFEEEEEE.toInt()) }
             assertEquals("$format: still one step", steps + 1, c.undoManager.undoCount)
