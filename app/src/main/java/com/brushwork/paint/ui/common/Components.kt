@@ -417,7 +417,9 @@ fun Modifier.checkerboard(cell: Dp = 6.dp): Modifier = this.drawBehind {
     while (y < size.height) {
         var x = if (row % 2 == 0) 0f else n
         while (x < size.width) {
-            drawRect(c, topLeft = Offset(x, y), size = Size(n, n))
+            // The last cells are cut at the edges: nothing is drawn outside the bounds (an
+            // unclipped swatch, e.g. the bottom bar's colour square, would show a ragged rim).
+            drawRect(c, topLeft = Offset(x, y), size = Size(minOf(n, size.width - x), minOf(n, size.height - y)))
             x += 2 * n
         }
         y += n

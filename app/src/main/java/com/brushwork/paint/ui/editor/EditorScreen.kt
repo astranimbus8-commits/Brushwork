@@ -511,9 +511,11 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             TopButton(TopSlot.STABILIZER, "Stabilizer", Icons.Outlined.PanTool, on = stabilizerOn) { openPanel(EditorPanel.STABILIZER) },
             TopButton(TopSlot.GRID, "Grid", ChromeGlyphs.SquareCircle, on = gridOn) { openPanel(EditorPanel.GRID) },
             TopButton(TopSlot.RULER, "Ruler", Icons.Outlined.DesignServices, on = rulerOn) { openPanel(EditorPanel.RULER) },
-            // The menu drops over the canvas: the tool menu and the layer window close first (their
-            // cells and buttons would repeat its entries: "Settings", "Import picture"; I10).
-            TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); closeFloating(); moreOpen = true },
+            // The menu drops over the canvas: the tool menu closes first (its cells would repeat
+            // the menu's "Settings", I10). The layer window stays, as it does for every chrome
+            // button: "Fit to screen" or "Paste" with the layers in view (the window's own "Import
+            // picture" does the same as the menu's, and the open menu takes every touch).
+            TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
         )
         controller.docVersion // size changes (canvas resize) refresh the More menu's header
         val doc = controller.doc

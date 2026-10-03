@@ -159,14 +159,24 @@ internal object UniqueLabels {
             }
             closeMenu()
             assertEquals(1, SmokeUi.windows().size)
-            // Opened over the layer window or the tool menu, the menu closes them first: their
-            // buttons and cells would repeat its entries ("Import picture", "Settings").
+            // Opened over the layer window, the menu leaves it open (like every chrome button):
+            // only "Import picture" is in both (the same action; the open menu takes every touch).
             click("Open layers")
             assertNotNull(s.tagged(ChromeTags.LAYER_WINDOW))
             click("More options")
-            assertNull("the layer window closed", s.tagged(ChromeTags.LAYER_WINDOW))
-            assertUnique("More menu over the editor", Clickables.onScreen(s))
+            val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("the layer window stays")
+            val all = Clickables.onScreen(s)
+            val menu = all.filter { it.window !== s.activity.window.decorView }
+            val editor = all.filter { it.window === s.activity.window.decorView }
+            assertTrue("the menu is open: ${menu.size}", menu.size >= 15)
+            assertUnique("More menu and the chrome around the layer window", menu + editor.filter { !window.contains(it.bounds.center) })
+            // Against the window's controls, known by their own names (rows show values).
+            val windowNames = Clickables.ownLabelsInside(editor.filter { window.contains(it.bounds.center) }, window).flatMap { it.labels }.toSet()
+            val clash = menu.flatMap { it.labels }.filter { it in windowNames && it != "Import picture" }
+            assertTrue("More entries repeating a layer window control: $clash", clash.isEmpty())
             closeMenu()
+            click("Close layers", exact = true)
+            // Opened over the tool menu, the menu closes it first: its cells would repeat "Settings".
             click("Tools (current: Brush)")
             assertNotNull(s.tagged(ChromeTags.TOOL_MENU))
             click("More options")
