@@ -786,6 +786,8 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     label = "Line width", px = tool.lineWidth, onPx = { w -> tool.setLineWidth(w) },
                     unit = s.unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi,
                     minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
+                    // A width is a size (as the Shape tool's stroke width): the Size increment.
+                    incrementKind = IncrementKind.SIZE,
                 )
                 when {
                     tool.isReopened -> Hint("This path keeps its own width")

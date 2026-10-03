@@ -161,6 +161,17 @@ internal object QaCurves {
         settle()
     }
 
+    /** More › Increments…: "Use increments" off; Close. */
+    fun incrementsOff() {
+        click("More options")
+        click("Increments…", exact = true)
+        SmokeUi.assertIncrementsPanelShown()
+        if (switchOn("Use increments")) click("Use increments", exact = true)
+        assertTrue("\"Use increments\" is off", !switchOn("Use increments"))
+        click("Close", exact = true)
+        settle()
+    }
+
     /** Whether the switch row [label] is on (its toggleable state). */
     private fun switchOn(label: String): Boolean {
         var n: SemanticsNode? = SmokeUi.find(label, exact = true)?.node
