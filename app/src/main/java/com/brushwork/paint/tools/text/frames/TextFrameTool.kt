@@ -453,9 +453,9 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     private var portLayer: Layer? = null
 
     /**
-     * The out-port a press on one of the selected frame's handles started ON (within
-     * [PORT_TAP_DP] of its centre), or null: a frame drawn from a port has its top-left handle
-     * exactly there. A tap is then the port's, a drag stays the handle's.
+     * Another frame's out-port a press on one of the selected frame's handles started ON (within
+     * [FramePorts.TAP_DP] of its centre), or null: a frame drawn from a port has its top-left
+     * handle exactly there. A tap is then the port's, a drag stays the handle's.
      */
     private var tapPortLayer: Layer? = null
 
@@ -520,7 +520,8 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
                 }
             }
         }
-        // The out-port the finger is on, if any (the nearest within [PORT_TAP_DP] on each axis).
+        // Another frame's out-port the finger is on, if any (the nearest; see FramePorts.isOn).
+        // The selected frame's own out-port keeps the nearest-wins rule with its handles.
         var onPort: Layer? = null
         var onPortD = Float.MAX_VALUE
         for (f in threads.allFrames()) {
@@ -532,7 +533,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
                 mode = Mode.PORT
                 portLayer = f.layer
             }
-            if (abs(s.x - at.x) <= t.dp(PORT_TAP_DP) && abs(s.y - at.y) <= t.dp(PORT_TAP_DP) && d < onPortD) {
+            if (f.layer !== sel && FramePorts.isOn(t, s, at) && d < onPortD) {
                 onPortD = d
                 onPort = f.layer
             }
@@ -1251,13 +1252,6 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         private const val DRAG_PREVIEW_MS = 48L
         private const val HANDLE_HIT_DP = 24f
         private const val PORT_HIT_DP = 22f
-
-        /**
-         * A press within this of an out-port's centre on each axis is ON the port (its 14 dp
-         * square and a little slack): a tap there is the port's even under a handle. A frame's
-         * own bottom-right handle is 13 dp from its out-port on each axis, so it stays the handle's.
-         */
-        private const val PORT_TAP_DP = 10f
         private const val TOUCH_SLOP_DP = 8f
         private const val HIT_TOLERANCE_DP = 8f
         private const val HIT_CACHE_SIZE = 32

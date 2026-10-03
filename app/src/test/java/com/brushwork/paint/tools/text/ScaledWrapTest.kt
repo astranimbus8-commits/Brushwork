@@ -175,7 +175,7 @@ class ScaledWrapTest {
     }
 
     @Test
-    fun aMeasurementIsOnlyReusedAtTheSamePlaceOfTheSameStory() {
+    fun aScaledMeasurementIsOnlyReusedWithTheSameFactors() {
         val spec = TextSpec(sizePx = 24f, box = TextBoxSpec(width = 240f, minHeight = 200f), letterScale = on)
         // Two stories ending in the same words: the tail is measured with different factors.
         val tail = "the same closing words"
