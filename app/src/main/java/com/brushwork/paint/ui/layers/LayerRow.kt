@@ -273,6 +273,7 @@ internal fun LayerRow(
                 spec = row.maskIsSpec,
                 label = if (editingThis) LayerLabels.editContent(n) else LayerLabels.editMask(n),
                 description = LayerLabels.maskOf(n),
+                specBadge = LayerLabels.specMaskBadge(n),
                 onClick = onMaskSquare,
                 modifier = Modifier.alpha(dim),
             )
@@ -481,17 +482,18 @@ private fun RowThumbnail(
     }
 }
 
-/** The kind badge in the thumbnail's corner (16 dp; v1.5 descriptions). */
+/** The kind badge in the thumbnail's corner (16 dp; the v1.5 kind names with the row's number, [LayerLabels.badge]). */
 @Composable
 private fun BoxScope.KindBadge(row: LayerRowModel) {
     val m = Modifier.align(Alignment.BottomEnd).padding(1.dp)
+    val n = row.number
     val frame = row.frame
     when {
-        frame != null -> FrameBadgeView(frame, m)
-        row.isText -> TextLayerBadge(m)
-        row.isShape -> ShapeLayerBadge(m)
-        row.isVector -> LetterBadge("V", LayerLabels.VECTOR_BADGE, m)
-        row.isAdjustment -> IconBadge(Icons.Filled.Contrast, LayerLabels.ADJUSTMENT_BADGE, m)
+        frame != null -> FrameBadgeView(frame, LayerLabels.frameBadge(n, frame), m)
+        row.isText -> TextLayerBadge(n, m)
+        row.isShape -> ShapeLayerBadge(n, m)
+        row.isVector -> LetterBadge("V", LayerLabels.badge(n, LayerLabels.VECTOR_BADGE), m)
+        row.isAdjustment -> IconBadge(Icons.Filled.Contrast, LayerLabels.badge(n, LayerLabels.ADJUSTMENT_BADGE), m)
     }
 }
 
@@ -517,14 +519,14 @@ private fun LetterBadge(letter: String, description: String, modifier: Modifier)
         Text(letter, color = Color.White, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
     }
 
-/** "T" badge of an editable text layer. */
+/** "T" badge of an editable text layer (row [n]). */
 @Composable
-internal fun TextLayerBadge(modifier: Modifier = Modifier) = LetterBadge("T", LayerLabels.TEXT_BADGE, modifier)
+internal fun TextLayerBadge(n: Int, modifier: Modifier = Modifier) = LetterBadge("T", LayerLabels.badge(n, LayerLabels.TEXT_BADGE), modifier)
 
-/** Badge of editable shape layers (a square and a circle, like a shape tool icon). */
+/** Badge of an editable shape layer (row [n]; a square and a circle, like a shape tool icon). */
 @Composable
-internal fun ShapeLayerBadge(modifier: Modifier = Modifier) =
-    BadgeBox(LayerLabels.SHAPE_BADGE, modifier) {
+internal fun ShapeLayerBadge(n: Int, modifier: Modifier = Modifier) =
+    BadgeBox(LayerLabels.badge(n, LayerLabels.SHAPE_BADGE), modifier) {
         Canvas(Modifier.size(width = 12.dp, height = 10.dp)) {
             val s = 1.2.dp.toPx()
             val h = size.height
@@ -542,8 +544,8 @@ internal fun IconBadge(icon: ImageVector, description: String, modifier: Modifie
 
 /** ⛓ "k/m" of a linked text frame, with a red + while the story is overset. */
 @Composable
-private fun FrameBadgeView(frame: FrameBadge, modifier: Modifier) =
-    BadgeBox(frame.description, modifier) {
+private fun FrameBadgeView(frame: FrameBadge, description: String, modifier: Modifier) =
+    BadgeBox(description, modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Filled.Link, contentDescription = null, tint = Color.White, modifier = Modifier.size(10.dp))
             Text(frame.text, color = Color.White, fontSize = 9.sp, lineHeight = 11.sp, fontWeight = FontWeight.Bold)
@@ -568,7 +570,7 @@ internal fun AlphaLockBadge(tint: Color) {
 /**
  * The mask square right of the thumbnail: 26 dp visual in a 40 dp target; a 2 dp accent border
  * while the mask is edited, a red cross while it is disabled, the editable-mask badge on a spec
- * mask.
+ * mask (described as [specBadge]).
  */
 @Composable
 private fun MaskSquare(
@@ -579,6 +581,7 @@ private fun MaskSquare(
     spec: Boolean,
     label: String,
     description: String,
+    specBadge: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -613,7 +616,7 @@ private fun MaskSquare(
                 }
             }
         }
-        if (spec) IconBadge(EditorIcons.Masks, LayerLabels.SPEC_MASK_BADGE, Modifier.align(Alignment.BottomEnd))
+        if (spec) IconBadge(EditorIcons.Masks, specBadge, Modifier.align(Alignment.BottomEnd))
     }
 }
 

@@ -1,11 +1,22 @@
 package com.brushwork.paint.ui.editor.chrome
 
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.masks.AdjustmentEffects
+import com.brushwork.paint.masks.LinearMask
+import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextBoxSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.ui.layers.FrameBadge
+import com.brushwork.paint.ui.layers.LayerLabels
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -18,9 +29,9 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * I10 (v1.6 §3.7.11): labels are an API, unique among the visible clickables — on the main
- * screen, with the tool menu open, with the layer window open, with a minimized panel's pill
- * beside the X / Y pill, and with the More menu open — at the user's phone size, and on a 360 dp
- * phone ([UniqueLabelsNarrowTest]).
+ * screen, with the tool menu open, with the layer window open (also over two layers of each kind:
+ * their badges name their rows), with a minimized panel's pill beside the X / Y pill, and with the
+ * More menu open — at the user's phone size, and on a 360 dp phone ([UniqueLabelsNarrowTest]).
  *
  * One pair is shared by design and allowed here: with the tool menu open, the top row's "Ruler"
  * circle (the Ruler panel) and the tool menu's "Ruler" cell (the Ruler tool) — I10 keeps both
@@ -64,6 +75,39 @@ internal object UniqueLabels {
         "Close layers", "Add layer", "Duplicate layer", "Delete layer", "Merge down", "More layer actions",
         "Choose blend mode", "Type layer opacity",
     )
+
+    /**
+     * Above the two plain layers: two text layers, two vector layers, two Tone adjustment layers
+     * with editable masks, two frames "1 of 1" of two stories (bottom first, layers 3 to 10).
+     */
+    private fun twoOfEachKind(c: EditorController) {
+        fun text(item: TextItem) {
+            c.selectLayer(c.doc.layers.last())
+            c.addLayer()!!.textData = TextCodec.encode(item)
+        }
+        text(TextItem("One", cx = 100f, cy = 80f))
+        text(TextItem("Two", cx = 100f, cy = 160f))
+        repeat(2) { c.selectLayer(c.doc.layers.last()); c.addVectorLayer()!! }
+        repeat(2) {
+            c.selectLayer(c.doc.layers.last())
+            c.addAdjustmentLayer(
+                AdjustmentEffects.defaultSpec(),
+                MaskSpec(components = listOf(LinearMask(1, x0 = 40f, y0 = 0f, x1 = 360f, y1 = 0f)), nextId = 2),
+            )!!
+        }
+        for (story in 1L..2L) {
+            val words = "Story $story"
+            text(
+                TextItem(
+                    words,
+                    spec = TextSpec(box = TextBoxSpec(width = 120f, minHeight = 40f)),
+                    cx = 200f, cy = 60f * story,
+                    thread = TextThreadSpec(storyId = story, index = 0, story = words, start = 0, end = words.length, rev = 1),
+                ),
+            )
+        }
+        c.notifyLayersChanged()
+    }
 
     /** Back on the More menu's popup window closes it. */
     private fun closeMenu() {
@@ -124,6 +168,49 @@ internal object UniqueLabels {
             assertEquals("the layers slot", 1, layers.count { "Close layers (active layer 2)" in it.labels })
             click("Close layers", exact = true)
             Smoke.assertQuiet(s.c, "labels")
+        }
+        h.section("two layers of each kind in the layer window") {
+            val s = h.editor(setup = ::twoOfEachKind)
+            val layers = s.c.doc.layers
+            assertEquals(
+                "bottom first: 2 plain, 2 text, 2 vector, 2 masked adjustments, 2 frames",
+                listOf("-", "-", "T", "T", "V", "V", "A", "A", "F", "F"),
+                layers.map { l ->
+                    when {
+                        l.isAdjustmentLayer -> "A"
+                        l.isVectorLayer -> "V"
+                        l.textData?.let { TextCodec.decode(it)?.threaded } == true -> "F"
+                        l.isTextLayer -> "T"
+                        else -> "-"
+                    }
+                },
+            )
+            assertTrue("the adjustments' masks are editable (spec) masks", layers.subList(6, 8).all { it.mask != null && it.maskSpec != null })
+            assertEquals("Layer 10: text frame 1 of 1", LayerLabels.frameBadge(10, FrameBadge(0, 1, overset = false)))
+            assertEquals("Editable mask of layer 8", LayerLabels.specMaskBadge(8))
+            // Each pair on screen together (the list opens with the row above the active one
+            // first): every badge names its own row, so no two rows share a label (I10).
+            for ((top, badges) in listOf(
+                10 to listOf(LayerLabels.frameBadge(10, FrameBadge(0, 1, false)), LayerLabels.frameBadge(9, FrameBadge(0, 1, false))),
+                8 to listOf(
+                    LayerLabels.badge(8, LayerLabels.ADJUSTMENT_BADGE), LayerLabels.badge(7, LayerLabels.ADJUSTMENT_BADGE),
+                    LayerLabels.specMaskBadge(8), LayerLabels.specMaskBadge(7),
+                ),
+                6 to listOf(LayerLabels.badge(6, LayerLabels.VECTOR_BADGE), LayerLabels.badge(5, LayerLabels.VECTOR_BADGE)),
+                4 to listOf(LayerLabels.badge(4, LayerLabels.TEXT_BADGE), LayerLabels.badge(3, LayerLabels.TEXT_BADGE)),
+            )) {
+                s.c.selectLayer(layers[top - 1])
+                settle()
+                click("Open layers")
+                val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
+                val items = Clickables.onScreen(s)
+                for (badge in badges) {
+                    assertEquals("\"$badge\" on one row: ${items.map { it.own }}", 1, items.count { badge in it.own })
+                }
+                assertUnique("layer window, layers $top and ${top - 1}", Clickables.ownLabelsInside(items, window))
+                click("Close layers", exact = true)
+            }
+            Smoke.assertQuiet(s.c, "two of each kind")
         }
         h.section("a minimized panel's pill beside the X / Y pill") {
             val s = h.editor()

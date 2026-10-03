@@ -19,6 +19,7 @@ import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.EditorScreen
 import com.brushwork.paint.ui.editor.ToolMenu
+import com.brushwork.paint.ui.layers.LayerLabels
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -168,7 +169,7 @@ class Qa3ChromeNarrowUiRobolectricTest {
         assertEquals(2, c.undoManager.undoCount)
         // The layers window: picking the Background turns vector mode off; the vector layer back on.
         SmokeUi.click("Open layers")
-        assertTrue("vector badge", SmokeUi.has("Vector layer", exact = true))
+        assertTrue("vector badge", SmokeUi.has(LayerLabels.badge(c.doc.indexOf(layer) + 1, LayerLabels.VECTOR_BADGE), exact = true))
         SmokeUi.click("Background", exact = true)
         assertFalse(c.isVectorMode)
         assertFalse("not highlighted on a raster layer", vectorHighlighted(activity))
@@ -224,10 +225,12 @@ class Qa3ChromeNarrowUiRobolectricTest {
         assertNotNull(picture.maskSpec)
         settle()
         // Badges and menus (the window scrolls to the active layer when it opens).
-        fun menuOf(layer: Layer, badge: String): List<String> {
+        // (Each badge names its row: "Layer 3: vector layer", I10.)
+        fun menuOf(layer: Layer, badgeOf: (n: Int) -> String): List<String> {
             c.selectLayer(layer)
             settle()
             SmokeUi.click("Open layers")
+            val badge = badgeOf(c.doc.indexOf(layer) + 1)
             assertTrue("badge \"$badge\" of ${layer.name}", SmokeUi.has(badge, exact = true))
             SmokeUi.click("More layer actions")
             val shown = SmokeUi.shown()
@@ -236,12 +239,12 @@ class Qa3ChromeNarrowUiRobolectricTest {
             SmokeUi.click("Close layers", exact = true)
             return shown
         }
-        val vm = menuOf(vector, "Vector layer")
+        val vm = menuOf(vector) { LayerLabels.badge(it, LayerLabels.VECTOR_BADGE) }
         assertTrue("vector menu: $vm", "Edit objects" in vm && "Rasterize vector layer" in vm && "New vector layer" in vm)
-        val am = menuOf(adjustment!!, "Adjustment layer")
+        val am = menuOf(adjustment!!) { LayerLabels.badge(it, LayerLabels.ADJUSTMENT_BADGE) }
         assertTrue("adjustment menu: $am", "Edit adjustment" in am && "Edit mask" in am && "Apply to layer below" in am && "Use mask as selection" in am)
-        menuOf(picture, "Editable mask")
-        val bm = menuOf(c.doc.layers.first { it.name == "Layer 1" }, "Layer 1")
+        menuOf(picture) { LayerLabels.specMaskBadge(it) }
+        val bm = menuOf(c.doc.layers.first { it.name == "Layer 1" }) { "Layer 1" }
         assertTrue("an empty raster layer converts: $bm", "Convert to vector layer" in bm && "New adjustment layer (Tone)" in bm)
         // "+" adds a vector layer while vector mode is on.
         c.selectLayer(vector)

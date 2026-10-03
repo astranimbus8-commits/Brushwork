@@ -61,7 +61,10 @@ class TextLayerPanelRobolectricTest {
         var open by mutableStateOf(true)
         activity.setContent { BrushworkTheme { if (open) LayersPanel(c, { open = false }, onImportPicture = {}) } }
         SmokeUi.settle()
-        assertTrue("the text layer has a T badge", SmokeUi.has("Text layer", exact = true))
+        // (The badge names its row, I10: "Layer 2: text layer".)
+        val textBadge = LayerLabels.badge(c.doc.indexOf(textLayer) + 1, LayerLabels.TEXT_BADGE)
+        assertEquals("Layer 2: text layer", textBadge)
+        assertTrue("the text layer has a T badge", SmokeUi.has(textBadge, exact = true))
 
         // ⋮ menu -> Edit text: text tool, the text loaded, the editor open.
         SmokeUi.click("More layer actions")
@@ -110,7 +113,7 @@ class TextLayerPanelRobolectricTest {
         c.editWholeLayer(textLayer, "Scribble") { it.setPixel(1, 1, -1) }
         assertNull(textLayer.textData)
         SmokeUi.settle()
-        assertFalse(SmokeUi.has("Text layer", exact = true))
+        assertFalse(SmokeUi.has(textBadge, exact = true))
         Smoke.assertQuiet(c, "rasterized")
 
         // v1.4 shape layers, in this same test: a Compose test needs a sandbox of its own and
@@ -171,7 +174,8 @@ class TextLayerPanelRobolectricTest {
         strip = false
         panel = true
         SmokeUi.settle()
-        assertTrue("the shape layer has a badge", SmokeUi.has("Shape layer", exact = true))
+        val shapeBadge = LayerLabels.badge(c.doc.indexOf(shapeLayer) + 1, LayerLabels.SHAPE_BADGE)
+        assertTrue("the shape layer has a badge \"$shapeBadge\"", SmokeUi.has(shapeBadge, exact = true))
 
         // ⋮ menu -> Edit shape: shape tool, the shape opened.
         SmokeUi.click("More layer actions")
@@ -210,7 +214,7 @@ class TextLayerPanelRobolectricTest {
         c.editWholeLayer(shapeLayer, "Scribble") { it.setPixel(1, 1, -1) }
         assertNull(shapeLayer.shapeData)
         SmokeUi.settle()
-        assertFalse(SmokeUi.has("Shape layer", exact = true))
+        assertFalse(SmokeUi.has(shapeBadge, exact = true))
         Smoke.assertQuiet(c, "shape rasterized")
     }
 }

@@ -245,12 +245,23 @@ object LayerLabels {
             if (alphaLocked) append(", alpha locked")
         }
 
-    // Badges (content descriptions, v1.5 names)
+    // Badges (content descriptions): the v1.5 kind names, spoken with the row's number so that
+    // two layers of one kind (two text layers, two frames "1 of 1" of two stories) never share a
+    // label (I10): "Layer 3: text layer", "Layer 2: text frame 1 of 2", "Editable mask of layer 4".
     const val TEXT_BADGE = "Text layer"
     const val SHAPE_BADGE = "Shape layer"
     const val VECTOR_BADGE = "Vector layer"
     const val ADJUSTMENT_BADGE = "Adjustment layer"
     const val SPEC_MASK_BADGE = "Editable mask"
+
+    /** The kind badge of row [n]: "Layer 3: text layer" for [kind] [TEXT_BADGE]. */
+    fun badge(n: Int, kind: String) = "Layer $n: ${kind.replaceFirstChar { it.lowercase() }}"
+
+    /** The ⛓ badge of row [n]: "Layer 2: text frame 1 of 2" (", more text than fits"). */
+    fun frameBadge(n: Int, frame: FrameBadge) = badge(n, frame.description)
+
+    /** The badge on row [n]'s editable (spec) mask square: "Editable mask of layer 4". */
+    fun specMaskBadge(n: Int) = "$SPEC_MASK_BADGE of layer $n"
 
     // Right strip
     const val CLEAR = "Clear layer"
