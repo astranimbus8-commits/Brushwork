@@ -23,6 +23,7 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
+import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
 
@@ -159,8 +160,12 @@ object PayloadImport {
     /**
      * [content] without objects a damaged or hand-made file could hold that no drawing makes:
      * coordinates that are not finite or lie absurdly far away (the payload's JSON allows NaN).
+     * v1.6: Path-tool control points are reduced to usable numbers as a `.vec` file's are when
+     * read ([VectorCodec.sanitizedSplines]), so save and reload give the imported document back.
      */
-    internal fun sound(content: VectorContent): VectorContent {
+    internal fun sound(content: VectorContent): VectorContent = VectorCodec.sanitizedSplines(soundObjects(content))
+
+    private fun soundObjects(content: VectorContent): VectorContent {
         val ok = content.objects.filter { o ->
             val finite = when (o) {
                 is VStroke -> o.points.x.all { it.isFinite() } && o.points.y.all { it.isFinite() } && o.points.p.all { it.isFinite() } && o.sizeScale.isFinite()

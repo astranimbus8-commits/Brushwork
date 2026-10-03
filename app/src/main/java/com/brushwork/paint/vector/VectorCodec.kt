@@ -113,9 +113,10 @@ object VectorCodec {
      * v1.6: Path-tool control points ([VPath.spline]) reduced to usable numbers
      * ([VSpline.sanitized]); the same instance when every spline already is (a spline that
      * changes no longer matches its Bézier form, so the Path tool's I9 check then treats the
-     * path as a plain Bézier path).
+     * path as a plain Bézier path). Also applied to a Brushwork SVG / PDF payload's vector layers
+     * (`PayloadImport.sound`), so an imported curve is the one a save and reload gives back.
      */
-    private fun sanitizedSplines(c: VectorContent): VectorContent {
+    internal fun sanitizedSplines(c: VectorContent): VectorContent {
         if (c.objects.none { it is VPath && it.spline != null }) return c
         var changed = false
         val objects = c.objects.map { o ->
