@@ -38,9 +38,10 @@ fun FastAdjustPreviewToggle(controller: EditorController) {
 }
 
 /**
- * The same switch for the editor's Settings (E's `EditorSettingsDialog`, which has the
- * preferences but no controller): it saves `AppSettings.fastAdjustPreview`, and the editor's live
- * adjustment takes it over from the next drag.
+ * The same switch in the editor's Settings (`EditorSettingsDialog`, above "Safe compositing"; the
+ * dialog works from the preferences and may have no controller): it saves
+ * `AppSettings.fastAdjustPreview`, and the editor's live adjustment takes it over from the next
+ * drag. The only "Fast adjustment preview" switch besides the Masks tool's.
  */
 @Composable
 fun FastAdjustPreviewToggle(settings: AppSettings) {

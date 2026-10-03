@@ -5,7 +5,6 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
@@ -15,13 +14,17 @@ import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.IncrementsSettingsSection
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToggleRow
+import com.brushwork.paint.ui.mask.FastAdjustPreviewToggle
 
 /**
  * Compose-observable mirror of the editor-related [AppSettings] (which are plain
  * SharedPreferences). Setters write through immediately.
  */
 @Stable
-class EditorPrefs(private val settings: AppSettings) {
+class EditorPrefs(
+    /** The saved settings behind these preferences (for switches that write them directly, like area A's "Fast adjustment preview"). */
+    val settings: AppSettings,
+) {
     private var _twoFingerUndo by mutableStateOf(settings.twoFingerUndo)
     private var _threeFingerRedo by mutableStateOf(settings.threeFingerRedo)
     private var _stylusOnly by mutableStateOf(settings.stylusOnlyDrawing)
@@ -55,15 +58,6 @@ class EditorPrefs(private val settings: AppSettings) {
         get() = _autosave
         set(v) { _autosave = v; settings.autosaveSeconds = v }
 
-    /**
-     * "Fast adjustment preview" (v1.6 §3.1): live adjustment drags draw a proxy and refine. Read
-     * straight from [AppSettings] (the Masks tool's sheet changes it too); the Settings dialog
-     * keeps its own state while it is open.
-     */
-    var fastAdjustPreview: Boolean
-        get() = settings.fastAdjustPreview
-        set(v) { settings.fastAdjustPreview = v }
-
     /** Bumped when [safeCompositing] is set here (the value itself also changes from the Masks tool). */
     private var safeCompositingSets by mutableIntStateOf(0)
 
@@ -90,13 +84,15 @@ class EditorPrefs(private val settings: AppSettings) {
 
 /**
  * Gesture, layout, display, increments and autosave preferences of the editor. [onCanvasChanged]
- * redraws the canvas after a display setting changed. With the editor's [controller] (v1.6) the
- * dialog also offers the Increments section (area G's [IncrementsSettingsSection]).
+ * redraws the canvas after a display setting changed. "Fast adjustment preview" (v1.6 §3.1a) is
+ * area A's [FastAdjustPreviewToggle], the same switch as in the Masks tool's sheet: it shows the
+ * saved setting when the dialog opens and saves a change, which the live adjustment takes over at
+ * the next drag (no redraw: between drags the canvas shows the exact image either way). With the
+ * editor's [controller] (v1.6) the dialog also offers the Increments section (area G's
+ * [IncrementsSettingsSection]).
  */
 @Composable
 fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChanged: () -> Unit = {}, controller: EditorController? = null) {
-    // Read fresh when the dialog opens: the Masks tool's sheet changes the same setting.
-    var fastPreview by remember(prefs) { mutableStateOf(prefs.fastAdjustPreview) }
     BwDialog(title = "Editor settings", onDismiss = onDismiss) {
         SectionHeader("Gestures")
         ToggleRow("Two-finger tap to undo", prefs.twoFingerUndo, { prefs.twoFingerUndo = it })
@@ -121,12 +117,7 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChan
             description = "Mirrors the brush size and opacity rows: their values on the right",
         )
         SectionHeader("Display")
-        ToggleRow(
-            "Fast adjustment preview",
-            fastPreview,
-            { fastPreview = it; prefs.fastAdjustPreview = it; onCanvasChanged() },
-            description = "While you drag an adjustment or its mask, the canvas shows a quick preview and sharpens when you stop",
-        )
+        FastAdjustPreviewToggle(prefs.settings)
         ToggleRow(
             "Safe compositing",
             prefs.safeCompositing,
