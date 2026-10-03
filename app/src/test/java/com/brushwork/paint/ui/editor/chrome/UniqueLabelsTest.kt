@@ -121,14 +121,17 @@ internal object UniqueLabels {
             settle()
             click("More options")
             click("Increments…", exact = true)
-            SmokeUi.assertPanelShown("Increments")
+            // The sheet's title is area G's ("Increments" for the stub, "Increment steps" after G).
+            val title = SmokeUi.assertIncrementsPanelShown()
             click("Minimize", exact = true)
-            assertEquals(listOf("Increments"), SmokeUi.pillTitles())
+            assertEquals(listOf(title), SmokeUi.pillTitles())
             val items = Clickables.onScreen(s)
             assertUnique("pill + X / Y", items)
-            assertTrue("the pill acts as \"Show Increments\"", items.any { "Show Increments" in it.labels })
-            assertTrue("never as the bare title", items.none { "Increments" in it.labels && "Show Increments" in it.labels })
-            click("Close Increments", exact = true)
+            assertTrue("the pill acts as \"Show $title\"", items.any { "Show $title" in it.labels })
+            // The bare title may be a control's label (the pill's "#" cell is "Increments"): the
+            // minimized pill is never known by it alone.
+            assertTrue("never as the bare title", items.none { title in it.labels && "Show $title" in it.labels })
+            click("Close $title", exact = true)
             (s.c.currentTool as TransformTool).discard()
             settle()
         }

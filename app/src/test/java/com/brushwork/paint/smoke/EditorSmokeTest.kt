@@ -253,7 +253,7 @@ class EditorSmokeTest {
             when (entry) {
                 "Settings" -> assertWindowsLaidOut(2)
                 "Canvas…" -> SmokeUi.assertPanelShown("Canvas")
-                else -> SmokeUi.assertPanelShown("Increments")
+                else -> SmokeUi.assertIncrementsPanelShown()
             }
             Smoke.assertQuiet(c, "menu $entry")
             SmokeUi.assertIdle("panel $entry")

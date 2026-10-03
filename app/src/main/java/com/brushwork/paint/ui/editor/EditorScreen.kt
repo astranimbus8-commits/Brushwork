@@ -103,7 +103,6 @@ import com.brushwork.paint.ui.assist.GridPanel
 import com.brushwork.paint.ui.assist.RulerPanel
 import com.brushwork.paint.ui.assist.StabilizerPanel
 import com.brushwork.paint.ui.brush.BrushPanel
-import com.brushwork.paint.ui.brush.BrushPanel
 import com.brushwork.paint.ui.canvas.CanvasAdjustDialog
 import com.brushwork.paint.ui.color.ColorPickerPanel
 import com.brushwork.paint.ui.common.IncrementsSheet

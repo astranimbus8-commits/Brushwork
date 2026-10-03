@@ -280,11 +280,12 @@ class RequestCoverageV16UiTest {
         click("More options")
         assertTrue(has("Increments…", exact = true))
         click("Increments…", exact = true)
-        SmokeUi.assertPanelShown("Increments")
+        val sheet = SmokeUi.assertIncrementsPanelShown()
         assertFalse(c.increments.state.enabled)
         click("Use increments", exact = true)
         assertTrue("switched on", c.increments.state.enabled)
         click("Close", exact = true)
+        assertFalse("\"$sheet\" closed", sheet in SmokeUi.sheetTitles())
         // The More entry shows the state.
         click("More options")
         val entry = Clickables.onScreen(s).single { "Increments…" in it.labels }
@@ -332,7 +333,9 @@ class RequestCoverageV16UiTest {
             settle()
             areaControl("G", "Step for", exact = false)
             closeDialogs()
-            backKey()
+            // Only a popup still up takes the Back key (on the editor's own window Back would leave it).
+            if (SmokeUi.windows().size > 1) backKey()
+            assertEquals("the popup is closed", 1, SmokeUi.windows().size)
         } else {
             areaControl("G", "Step for", exact = false)
         }
