@@ -405,6 +405,8 @@ private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
                 tool.endNumericEdit()
             },
             onDismiss = { typing = false },
+            // The weight's own step: − / + and the slider land on its multiples (as the strip's slider).
+            incrementKey = PATH_WEIGHT_KEY,
         )
     }
 }
@@ -546,6 +548,8 @@ private fun HandlesGroup(tool: CurveTool) {
             suffix = "%",
             onApply = { v -> tool.applyHandleScale(v) },
             onDismiss = { typing = false },
+            // − / + and the slider step by the Scale increment while increments are on (as ‹ ›).
+            incrementKind = IncrementKind.SCALE,
         )
     }
 }
