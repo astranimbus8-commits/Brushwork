@@ -315,4 +315,11 @@ object LayerWindowTags {
     fun thumb(id: Long) = "layers.thumb.$id"
     /** A row's "100%" / "Normal" column. */
     fun values(id: Long) = "layers.values.$id"
+    /** A row's layer number, in the room its badges leave it. */
+    fun number(id: Long) = "layers.number.$id"
+    /** A row's number-line badge: [BADGE_MASK], [BADGE_ALPHA] or [BADGE_LOCK]. */
+    fun badge(id: Long, kind: String) = "layers.badge.$kind.$id"
+    const val BADGE_MASK = "mask"
+    const val BADGE_ALPHA = "alpha"
+    const val BADGE_LOCK = "lock"
 }

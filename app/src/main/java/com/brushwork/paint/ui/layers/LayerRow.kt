@@ -298,39 +298,15 @@ internal fun LayerRow(
             val tall = height.value >= LayerWindowMetrics.TALL_ROW
             // An 80 dp row: the number at ibisPaint's size on a 22 dp line (22 + the 40 dp eye
             // line + the 16 dp name = 78). A short side-by-side row keeps 16 + 40.
-            Row(Modifier.fillMaxWidth().height(if (tall) NUMBER_LINE else 16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    n.toString(),
-                    color = IbisColors.ListText,
-                    fontSize = if (tall) IbisDims.LayerRowNumberText else 12.sp,
-                    lineHeight = if (tall) NUMBER_LINE.value.sp else 14.sp,
-                    fontWeight = if (tall) FontWeight.Normal else FontWeight.SemiBold,
-                    maxLines = 1,
-                )
-                if (!tall) {
+            if (tall) {
+                TallNumberLine(row, n, Modifier.fillMaxWidth().height(NUMBER_LINE).alpha(dim))
+            } else {
+                Row(Modifier.fillMaxWidth().height(16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
+                    Text(n.toString(), color = IbisColors.ListText, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
                     Spacer(Modifier.width(4.dp))
                     RowName(row.name, Modifier.weight(1f, fill = false))
-                }
-                Spacer(Modifier.weight(1f))
-                if (row.editingMask && !row.isAdjustment) {
-                    Text(
-                        "MASK",
-                        color = IbisColors.Accent,
-                        fontSize = 8.sp,
-                        lineHeight = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.border(1.dp, IbisColors.Accent, RoundedCornerShape(2.dp)).padding(horizontal = 2.dp),
-                    )
-                    Spacer(Modifier.width(3.dp))
-                }
-                // (Spoken with the row's values: two locked rows must not share a label, I10.)
-                if (row.alphaLocked) {
-                    AlphaLockBadge(DIM_TEXT)
-                    Spacer(Modifier.width(3.dp))
-                }
-                if (row.locked) {
-                    Icon(Icons.Filled.Lock, contentDescription = null, tint = DIM_TEXT, modifier = Modifier.size(IbisDims.LayerLockIcon))
-                    Spacer(Modifier.width(2.dp))
+                    Spacer(Modifier.weight(1f))
+                    NumberLineBadges(row, mask = row.editingMask && !row.isAdjustment)
                 }
             }
             Row(Modifier.fillMaxWidth().height(IbisDims.LayerEyeTouch), verticalAlignment = Alignment.CenterVertically) {
@@ -383,6 +359,76 @@ private fun RowValues(row: LayerRowModel, modifier: Modifier) {
         }
     }
 }
+
+/**
+ * The number line of an 80 dp row: the number at ibisPaint's size, then the badges at their own
+ * width (a Row measures them before the weighted number), the number fitted down to the room they
+ * leave. The MASK badge gives way first where the line cannot hold it with the number at
+ * [IbisDims.LayerRowTextMin] (a clipped, masked, locked two-digit row on a 360 dp phone): the mask
+ * square beside it already marks the edit target with its accent border, as ibisPaint shows it,
+ * and is spoken "Edit content N".
+ */
+@Composable
+private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
+    val digits = n.toString()
+    BoxWithConstraints(modifier) {
+        val measurer = rememberTextMeasurer(cacheSize = 0)
+        val base = LocalTextStyle.current
+        val density = LocalDensity.current
+        val wantsMask = row.editingMask && !row.isAdjustment
+        val room = constraints.maxWidth
+        val mask = wantsMask && remember(measurer, base, density, digits, room, row.alphaLocked, row.locked) {
+            with(density) {
+                fun width(text: String, style: TextStyle) = measurer.measure(text, base.merge(style), maxLines = 1, softWrap = false).size.width
+                var need = width(digits, TextStyle(fontSize = IbisDims.LayerRowTextMin, fontWeight = FontWeight.Normal)) +
+                    width("MASK", MASK_TEXT) + (MASK_PAD * 2 + BADGE_GAP).roundToPx()
+                if (row.alphaLocked) need += width("α", ALPHA_TEXT) + (ALPHA_LOCK + BADGE_GAP).roundToPx()
+                if (row.locked) need += IbisDims.LayerLockIcon.roundToPx()
+                need <= room
+            }
+        }
+        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
+            BoxWithConstraints(Modifier.weight(1f).fillMaxHeight().testTag(LayerWindowTags.number(row.layer.id)), contentAlignment = Alignment.CenterStart) {
+                // Under the minimum only for a three-digit number with every badge on the
+                // narrowest row: smaller rather than cut.
+                val style = rememberFittedStyle(listOf(digits), constraints, IbisDims.LayerRowNumberText, NUMBER_FLOOR, 0.sp)
+                Text(digits, color = IbisColors.ListText, style = style, fontWeight = FontWeight.Normal, maxLines = 1, softWrap = false)
+            }
+            NumberLineBadges(row, mask)
+        }
+    }
+}
+
+/** The number line's badges: MASK (when [mask]), α + lock, lock. */
+@Composable
+private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
+    if (mask) {
+        Text(
+            "MASK",
+            color = IbisColors.Accent,
+            style = LocalTextStyle.current.merge(MASK_TEXT),
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_MASK)).border(1.dp, IbisColors.Accent, RoundedCornerShape(2.dp)).padding(horizontal = MASK_PAD),
+        )
+        Spacer(Modifier.width(BADGE_GAP))
+    }
+    // (Spoken with the row's values: two locked rows must not share a label, I10.)
+    if (row.alphaLocked) {
+        AlphaLockBadge(DIM_TEXT, LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_ALPHA))
+        Spacer(Modifier.width(BADGE_GAP))
+    }
+    if (row.locked) {
+        Icon(Icons.Filled.Lock, contentDescription = null, tint = DIM_TEXT, modifier = Modifier.size(IbisDims.LayerLockIcon).testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_LOCK)))
+    }
+}
+
+private val MASK_TEXT = TextStyle(fontSize = 8.sp, lineHeight = 10.sp, fontWeight = FontWeight.Bold)
+private val ALPHA_TEXT = TextStyle(fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
+private val MASK_PAD = 2.dp
+private val ALPHA_LOCK = 9.dp
+private val BADGE_GAP = 2.dp
+private val NUMBER_FLOOR = 9.sp
 
 /** The number line of an 80 dp row; the gap (sp) between stacked value lines, and between the Selection row's. */
 private val NUMBER_LINE = 22.dp
@@ -627,13 +673,13 @@ private fun FrameBadgeView(frame: FrameBadge, description: String, modifier: Mod
 
 /** Small "α + lock" icon of alpha-locked layers (spoken with the row's values, [LayerLabels.rowState]). */
 @Composable
-internal fun AlphaLockBadge(tint: Color) {
+internal fun AlphaLockBadge(tint: Color, tag: String? = null) {
     Row(
-        Modifier.clearAndSetSemantics { },
+        Modifier.clearAndSetSemantics { if (tag != null) testTag = tag },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("α", color = tint, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
-        Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(9.dp))
+        Text("α", color = tint, style = LocalTextStyle.current.merge(ALPHA_TEXT))
+        Icon(Icons.Filled.Lock, contentDescription = null, tint = tint, modifier = Modifier.size(ALPHA_LOCK))
     }
 }
 
