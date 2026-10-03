@@ -543,11 +543,13 @@ bottom on the bottom bar; screens under 480 dp tall keep the v1.5 side-by-side l
 a left column with the canvas preview (rendered at most every 500 ms, after the window's first
 frame) over six buttons, the bottom-aligned list with the Selection Layer row and 80 dp rows
 (clip bracket, thumbnail with kind / frame badge, mask square, eye, the number and opacity over
-blend mode at ibisPaint's 18 sp, fitted down to 12 sp on narrow rows, the MASK and lock badges,
-≡ handle; on the narrowest rows MASK gives way to the mask square's accent border), the transparency squares, the 9-icon right strip, the 56 dp blend row and the 48 dp
-opacity row (an adjustment layer's opacity goes through `liveAdjust`; Percent increments). The blend
-row's Clipping / Alpha lock / Lock toggles show icons only (their captions stay the spoken text), and
-the strip's flips use ibisPaint's flip glyphs (`ChromeGlyphs.FlipHorizontal` / `FlipVertical`).
+blend mode at ibisPaint's 18 sp, fitted down to 12 sp on narrow rows (the number to 9 sp only when
+three digits share the narrowest row with every badge), the MASK and lock badges, ≡ handle; on
+the narrowest rows MASK gives way to the mask square's accent border), the transparency squares,
+the 9-icon right strip, the 56 dp blend row and the 48 dp opacity row (an adjustment layer's
+opacity goes through `liveAdjust`; Percent increments). The blend row's Clipping / Alpha lock /
+Lock toggles show icons only (their captions stay the spoken text), and the strip's flips use
+ibisPaint's flip glyphs (`ChromeGlyphs.FlipHorizontal` / `FlipVertical`).
 
 Other packages: `fonts/` (imported fonts: zip/ttf/otf import, name-table parsing, favorites),
 `inpaint/` (content-aware fill: multi-scale PatchMatch completion, used by the selection bar and
