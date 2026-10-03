@@ -14,8 +14,13 @@ import com.brushwork.paint.vector.VSplinePoint
  */
 object SplineEditing {
 
-    /** Where a point is closest to the control polygon: segment [segment] (point i to i + 1; the closing one of a cyclic polygon last), at [t] along it. */
-    data class PolygonHit(val segment: Int, val t: Float, val point: Vec2, val distance: Float)
+    /**
+     * Where a point is closest to the control polygon: segment [segment] (point i to i + 1; the
+     * closing one of a cyclic polygon last), at [t] along it. [interior] is false when the
+     * nearest place is one of the segment's end points (the point lies beyond the segment's
+     * ends, e.g. outside a corner): a point inserted there would sit on an existing one.
+     */
+    data class PolygonHit(val segment: Int, val t: Float, val point: Vec2, val distance: Float, val interior: Boolean = true)
 
     /** The position of control point [i]. */
     fun pos(p: VSplinePoint): Vec2 = Vec2(p.x, p.y)
@@ -53,7 +58,14 @@ object SplineEditing {
             val d = q.distanceTo(p)
             if (best == null || d < best.distance) {
                 val len = a.distanceTo(b)
-                best = PolygonHit(i, if (len > 1e-6f) (a.distanceTo(q) / len).coerceIn(0f, 1f) else 0f, q, d)
+                // The unclamped parameter of the projection: strictly inside the segment or not.
+                val ab = b - a
+                val len2 = ab.lengthSq
+                val raw = if (len2 >= 1e-9f) (p - a).dot(ab) / len2 else 0f
+                best = PolygonHit(
+                    i, if (len > 1e-6f) (a.distanceTo(q) / len).coerceIn(0f, 1f) else 0f, q, d,
+                    interior = len2 >= 1e-9f && raw > 0f && raw < 1f,
+                )
             }
         }
         return best

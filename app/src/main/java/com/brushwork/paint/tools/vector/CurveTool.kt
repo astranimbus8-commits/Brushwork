@@ -266,13 +266,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      * One in-tool undo state: the anchors (Curve, Polyline) or the spline (Path: its anchors are
      * derived again on restore). [back] marks the Curve tool's first step after [toBezier]: its
      * undo hands the path back to the Path tool as it was. [toBezier] marks the Path tool's redo
-     * of that hand-back (redo converts again).
+     * of that hand-back (redo converts again). [look]: the look the path showed then, when it
+     * was not the tool's own ([ownSettings]; a redone quick start shows its look again).
      */
     private class EditState(
         val anchors: List<CurveAnchor>,
         val spline: VSpline?,
         val back: Handoff? = null,
         val toBezier: Boolean = false,
+        val look: CurveSettings? = null,
     )
 
     private val history = ArrayDeque<EditState>()
@@ -364,13 +366,40 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val new = transform(settings).sanitized(fallback = settings)
         if (new == settings) return
         settings = new
-        // While a path object is reopened the strip shows ITS look: only the unit and the nudge
-        // step are the user's own settings then.
-        val user = reopened?.userSettings
+        // While a path object is reopened, or the pending path shows a look of its own (a quick
+        // start's, a path handed over by To Bézier: [ownSettings]), the strip shows THAT look:
+        // only the unit and the nudge step are the user's own settings then.
+        val user = reopened?.userSettings ?: ownSettings
         val toSave = if (user != null) user.copy(unit = new.unit, nudgeStepPx = new.nudgeStepPx) else new
-        reopened?.let { it.userSettings = toSave }
+        val r = reopened
+        if (r != null) r.userSettings = toSave else if (ownSettings != null) ownSettings = toSave
         runCatching { controller.settings.putObject(prefsKey, CurveSettings.serializer(), toSave) }
         changed()
+    }
+
+    /**
+     * The tool's own settings while the pending path shows a look that is not theirs: the
+     * Capsule quick start's (fill, no line) or that of a path handed over by To Bézier (or by
+     * undoing it). They come back when that path ends (✓, ✕, undone away, handed on), so a quick
+     * start or a conversion never changes how the next path of this tool looks; meanwhile the
+     * strip edits the pending path's look ([update] saves only the unit and nudge step), as for a
+     * reopened path object. Null otherwise (and always while a path object is reopened).
+     */
+    private var ownSettings: CurveSettings? = null
+
+    /** The pending path shows [look] (see [ownSettings]); the unit and nudge step stay the user's. */
+    private fun showLook(look: CurveSettings) {
+        if (reopened != null) return
+        val own = ownSettings ?: settings
+        ownSettings = own
+        settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx).sanitized(fallback = own)
+    }
+
+    /** The pending path is gone: the tool's own settings come back (see [ownSettings]). */
+    private fun endLook() {
+        val own = ownSettings ?: return
+        ownSettings = null
+        settings = own.sanitized()
     }
 
     /** Each tool keeps its own options (v1.6: Path's quick starts set fill and stroke without touching Curve's). */
@@ -461,7 +490,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     /** The pending path as an in-tool undo state. */
-    private fun currentState(): EditState = if (isPath) EditState(emptyList(), spline) else EditState(anchors, null)
+    private fun currentState(): EditState {
+        val look = if (ownSettings != null) settings else null
+        return if (isPath) EditState(emptyList(), spline, look = look) else EditState(anchors, null, look = look)
+    }
 
     /** Keeps at most [MAX_HISTORY] states (never dropping the way back to the Path tool: it is the first one). */
     private fun trimHistory() {
@@ -529,6 +561,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     private fun restore(state: EditState) {
+        // A path that showed a look of its own (a redone quick start) shows it again; the tool's
+        // own settings come back when the path is undone away.
+        state.look?.let { if (ownSettings == null) showLook(it) }
         if (isPath) {
             setSplineState(state.spline)
             if (selectedPoint !in 0 until pointCount) selectedPoint = -1
@@ -536,8 +571,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             anchors = state.anchors
             if (selected !in anchors.indices) selected = -1
         }
-        if (anchors.isEmpty()) targetLayer = null
-        else if (targetLayer == null) targetLayer = controller.doc.activeLayer
+        if (anchors.isEmpty()) {
+            targetLayer = null
+            endLook()
+        } else if (targetLayer == null) {
+            targetLayer = controller.doc.activeLayer
+        }
         changed()
     }
 
@@ -622,6 +661,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             // Every point of a reopened path deleted: the path object goes (one undo step).
             if (reopened != null) { commitReopened(); return }
             targetLayer = null
+            endLook()
         }
         changed()
     }
@@ -771,10 +811,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         targetLayer = controller.doc.activeLayer
         setSplineState(VSpline(points, order = 4, endpoint = settings.pathEndpoint, cyclic = true))
         selectedPoint = -1
-        update {
-            val base = it.copy(closed = true, pathOrder = 4)
-            if (shape == PathShape.CAPSULE) base.copy(fill = true, stroke = CurveStroke.NONE) else base
-        }
+        // The Capsule's look (fill on, no line, like the user's Blender example) is this path's
+        // only: the next path looks as the user set the tool up ([ownSettings]). (Cyclic and the
+        // order are the spline's own: the next path's defaults stay as they were too.)
+        if (shape == PathShape.CAPSULE) showLook(settings.copy(fill = true, stroke = CurveStroke.NONE))
         changed()
         return true
     }
@@ -1096,7 +1136,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /**
      * PATH: a new control point under the finger at [pt]: inserted on the control polygon when
-     * the finger is within [IbisDims.PathInsertDistance] of it, else after the selected point
+     * the finger is within [IbisDims.PathInsertDistance] of it between two points, else after the selected point
      * (which then moves on to the new one, as Blender extrudes from the selected end) or at the
      * end. It snaps right away and follows the finger until it lifts.
      */
@@ -1110,7 +1150,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val keepSelecting = selectedPoint in s.points.indices
         val at: Int
         val point: VSplinePoint
-        if (hit != null && hit.distance <= controller.docLength(IbisDims.PathInsertDistance.value)) {
+        // (Only between two points: beyond a segment's end, e.g. just outside a corner, the
+        // nearest place is a point itself, and a point is never doubled there.)
+        if (hit != null && hit.interior && hit.distance <= controller.docLength(IbisDims.PathInsertDistance.value)) {
             at = hit.segment + 1
             val q = snapAnchor(hit.point)
             point = SplineEditing.pointOnPolygon(s, hit, q)
@@ -1267,7 +1309,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             redoCount = redo.size
             historyKey = null
             canUndoStep = history.isNotEmpty()
-            if (anchors.isEmpty() && reopened == null) targetLayer = null
+            if (anchors.isEmpty() && reopened == null) { targetLayer = null; endLook() }
         }
         drag = Drag.NONE
         endSnap()
@@ -1974,6 +2016,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         }
         brushPreview.end()
         brushOverride = null
+        endLook()
         controller.invalidateOverlay()
     }
 
@@ -1999,6 +2042,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             if (ids.isEmpty()) return
             resetPath()
             brushPreview.end()
+            endLook()
             controller.invalidateOverlay()
             return
         }
@@ -2016,6 +2060,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         }
         brushPreview.end()
         brushOverride = null
+        endLook()
         controller.invalidateOverlay()
     }
 
@@ -2115,6 +2160,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         brushPreview.end()
         brushOverride = null
         endReopen()
+        endLook()
     }
 
     override fun onActivate() = ensureObserving()
@@ -2305,6 +2351,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             settings = r.userSettings.sanitized()
         }
         resetPath()
+        // (A look the path showed went along with it: this tool's own settings come back.)
+        endLook()
         brushPreview.end()
         brushOverride = null
         controller.invalidateOverlay()
@@ -2325,14 +2373,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             settings = h.look.copy(unit = settings.unit, nudgeStepPx = settings.nudgeStepPx).sanitized(settings)
             r.session.drawPreview = { canvas -> drawSessionPreview(canvas) }
         } else {
-            // A new path keeps its look: these become this tool's settings.
+            // A new path keeps its look while it is pending; this tool's own settings (what its
+            // next path looks like) are untouched and come back when it ends ([ownSettings]).
             val l = h.look
-            update {
-                it.copy(
+            showLook(
+                settings.copy(
                     closed = l.closed, stroke = l.stroke, plainWidth = l.plainWidth, useBrushSize = l.useBrushSize,
                     fill = l.fill, fillColor = l.fillColor, taper = l.taper, taperPercent = l.taperPercent,
-                )
-            }
+                ),
+            )
         }
         targetLayer = h.targetLayer
         if (isPath) setSplineState(h.spline) else anchors = h.anchors
