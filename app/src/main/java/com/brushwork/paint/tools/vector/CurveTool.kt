@@ -28,6 +28,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ObjectPosition
@@ -1370,9 +1371,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun dragTarget(pt: Vec2): Vec2 {
         val snapped = snapAnchor(pt)
         val step = controller.increments.step(IncrementKind.LENGTH) ?: return snapped
+        // Which axes a guide or the grid placed (asked, not told from the snapped value: a finger
+        // exactly on a grid line or guide is placed too, and keeps that place).
+        val g = controller.grid
+        val grid = g.enabled && g.snap && g.type == GridType.SQUARE && g.spacingPx > 0f
+        val placedX = grid || snap.snapValue(pt.x, SnapAxis.X) != null
+        val placedY = grid || snap.snapValue(pt.y, SnapAxis.Y) != null
         val d = pt - downPoint
-        val x = if (snapped.x != pt.x) snapped.x else dragStartPos.x + IncrementMath.snapDelta(d.x, step)
-        val y = if (snapped.y != pt.y) snapped.y else dragStartPos.y + IncrementMath.snapDelta(d.y, step)
+        val x = if (placedX) snapped.x else dragStartPos.x + IncrementMath.snapDelta(d.x, step)
+        val y = if (placedY) snapped.y else dragStartPos.y + IncrementMath.snapDelta(d.y, step)
         val q = Vec2(x, y)
         snapMoving = q
         controller.increments.readout = "${signed(x - dragStartPos.x)}, ${signed(y - dragStartPos.y)} px"
