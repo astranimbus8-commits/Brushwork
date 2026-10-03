@@ -11,8 +11,9 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * The ibisPaint silhouettes of the main screen that Material has no glyph for (v1.6 §3.7.3,
- * §3.7.5), drawn on a 24-unit grid like Material icons (tinted by the caller).
+ * The ibisPaint silhouettes of the main screen (and of its layer window) that Material has no
+ * glyph for (v1.6 §3.7.3, §3.7.5, §3.7.7), drawn on a 24-unit grid like Material icons (tinted by
+ * the caller).
  */
 internal object ChromeGlyphs {
 
@@ -300,6 +301,34 @@ internal object ChromeGlyphs {
             solid {
                 // The knot, on the loop's lower edge.
                 circle(10.2f, 14.6f, 2.3f)
+            }
+        }
+    }
+
+    /**
+     * The layer window's horizontal flips (canvas and layer): ibisPaint's ▸|◂, two solid
+     * triangles pointing at a thin upright bar from either side.
+     */
+    val FlipHorizontal: ImageVector by lazy {
+        glyph("FlipHorizontal") {
+            solid {
+                // The bar, the glyph's full height.
+                moveTo(11.1f, 2f); lineTo(12.9f, 2f); lineTo(12.9f, 22f); lineTo(11.1f, 22f); close()
+                // ▸ at the left, its tip 1.6 short of the bar.
+                moveTo(3.5f, 6.5f); lineTo(9.5f, 12f); lineTo(3.5f, 17.5f); close()
+                // ◂ at the right.
+                moveTo(20.5f, 6.5f); lineTo(14.5f, 12f); lineTo(20.5f, 17.5f); close()
+            }
+        }
+    }
+
+    /** The vertical flips: [FlipHorizontal] turned 90° (▾ over a level bar over ▴). */
+    val FlipVertical: ImageVector by lazy {
+        glyph("FlipVertical") {
+            solid {
+                moveTo(2f, 11.1f); lineTo(22f, 11.1f); lineTo(22f, 12.9f); lineTo(2f, 12.9f); close()
+                moveTo(6.5f, 3.5f); lineTo(17.5f, 3.5f); lineTo(12f, 9.5f); close()
+                moveTo(6.5f, 20.5f); lineTo(12f, 14.5f); lineTo(17.5f, 20.5f); close()
             }
         }
     }

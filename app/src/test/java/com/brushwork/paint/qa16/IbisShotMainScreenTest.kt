@@ -37,7 +37,7 @@ class IbisShotMainScreenTest {
             val surround = at(4f, st + 120f)
             assertTrue("surround ${IbisShots.hex(surround)}", IbisShots.close(IbisColors.Surround.toArgb(), surround))
             // A top-row circle's fill (Redo is disabled on a fresh document: #B1B1B1; Vector is off: #9A9A9A).
-            val vector = at(24f + 48f * 2 - 12f, st + 24f)
+            val vector = at(24f + 48f * 2 + 8f - 12f, st + 24f) // (+ 8: the gap after Redo, v16 polish)
             assertTrue("Vector circle ${IbisShots.hex(vector)}", IbisShots.close(IbisColors.TopButton.toArgb(), vector))
             // The bottom bar's grey, between slots.
             val bar = at(56f * 4 + 6f, hh - nav - 4f)

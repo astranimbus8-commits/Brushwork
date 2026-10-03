@@ -9,6 +9,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -64,10 +66,16 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTag
+import androidx.compose.ui.text.TextMeasurer
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.masks.AdjustmentEffects
@@ -288,13 +296,15 @@ internal fun LayerRow(
         }
         Column(Modifier.weight(1f).fillMaxHeight().padding(start = 4.dp), verticalArrangement = Arrangement.Center) {
             val tall = height.value >= LayerWindowMetrics.TALL_ROW
-            Row(Modifier.fillMaxWidth().height(16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
+            // An 80 dp row: the number at ibisPaint's size on a 22 dp line (22 + the 40 dp eye
+            // line + the 16 dp name = 78). A short side-by-side row keeps 16 + 40.
+            Row(Modifier.fillMaxWidth().height(if (tall) NUMBER_LINE else 16.dp).alpha(dim), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     n.toString(),
                     color = IbisColors.ListText,
-                    fontSize = 12.sp,
-                    lineHeight = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = if (tall) IbisDims.LayerRowNumberText else 12.sp,
+                    lineHeight = if (tall) NUMBER_LINE.value.sp else 14.sp,
+                    fontWeight = if (tall) FontWeight.Normal else FontWeight.SemiBold,
                     maxLines = 1,
                 )
                 if (!tall) {
@@ -347,7 +357,10 @@ private fun EyeButton(row: LayerRowModel, n: Int, onToggleVisible: () -> Unit) {
 }
 
 /**
- * "100%" over "Normal". Spoken (and found by tests) as ONE description that names the row
+ * "100%" over "Normal", at ibisPaint's size ([IbisDims.LayerRowValueText]) where they fit, one
+ * size for both lines, smaller where the values are narrow (a 360 dp phone, a clipped row, the
+ * side-by-side window), down to [IbisDims.LayerRowTextMin]; a blend mode too long even then
+ * ellipsizes. Spoken (and found by tests) as ONE description that names the row
  * ([LayerLabels.rowState]: "Layer 2: 100%, Normal"), so the rows' values, effect names and lock
  * states never repeat a label of another row or of the blend dropdown (I10).
  */
@@ -355,30 +368,87 @@ private fun EyeButton(row: LayerRowModel, n: Int, onToggleVisible: () -> Unit) {
 private fun RowValues(row: LayerRowModel, modifier: Modifier) {
     val pct = (row.opacity * 100f).roundToInt()
     val state = LayerLabels.rowState(row.number, pct, row.blendMode.label, row.effectName, row.locked, row.alphaLocked)
-    Column(
+    val lines = listOf("$pct%", row.blendMode.label)
+    BoxWithConstraints(
         modifier.clearAndSetSemantics {
             contentDescription = state
             testTag = LayerWindowTags.values(row.layer.id)
         },
-        horizontalAlignment = Alignment.CenterHorizontally,
+        contentAlignment = Alignment.Center,
     ) {
-        Text(
-            "$pct%",
-            color = IbisColors.ListText,
-            fontSize = IbisDims.LayerRowText,
-            lineHeight = 13.sp,
-            maxLines = 1,
-        )
-        Text(
-            row.blendMode.label,
-            color = IbisColors.ListText,
-            fontSize = IbisDims.LayerRowText,
-            lineHeight = 13.sp,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        val style = rememberFittedStyle(lines, constraints, IbisDims.LayerRowValueText, IbisDims.LayerRowTextMin, VALUE_LINE_GAP)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(lines[0], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(lines[1], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
+
+/** The number line of an 80 dp row; the gap (sp) between stacked value lines, and between the Selection row's. */
+private val NUMBER_LINE = 22.dp
+private val VALUE_LINE_GAP = 2.sp
+private val SELECTION_LINE_GAP = 4.sp
+
+/**
+ * The text style at which [lines] fit [constraints] stacked, one line each: see [fitTextStyle].
+ * Measured again only when the lines, the room or the style change.
+ */
+@Composable
+private fun rememberFittedStyle(lines: List<String>, constraints: Constraints, max: TextUnit, min: TextUnit, lineGap: TextUnit): TextStyle {
+    val measurer = rememberTextMeasurer(cacheSize = 0)
+    val base = LocalTextStyle.current
+    return remember(measurer, base, lines, constraints.maxWidth, constraints.maxHeight, max, min, lineGap) {
+        fitTextStyle(measurer, lines, base, constraints.maxWidth, constraints.maxHeight, max, min, lineGap)
+    }
+}
+
+/**
+ * [base] at the largest size from [max] down to [min] (in 0.5 sp steps) at which every one of
+ * [lines] fits [maxWidthPx] on one line and all of them stacked, each line [lineGap] taller than
+ * the size, fit [maxHeightPx]; at [min] when none does (the lines then ellipsize). One size for
+ * all the lines, as ibisPaint sets "100%" over "Normal".
+ */
+internal fun fitTextStyle(
+    measurer: TextMeasurer,
+    lines: List<String>,
+    base: TextStyle,
+    maxWidthPx: Int,
+    maxHeightPx: Int,
+    max: TextUnit,
+    min: TextUnit,
+    lineGap: TextUnit,
+): TextStyle {
+    // Each line exactly its line height (Mode.Tight: a line would otherwise keep at least the
+    // font's full ascent and descent, 1.17 em, and two 18 sp lines would not fit the 40 dp eye
+    // line; the glyphs, caps 0.71 em and descenders 0.21 em, stay well inside 1.11 em).
+    fun style(sp: Float) = base.copy(fontSize = sp.sp, lineHeight = (sp + lineGap.value).sp, lineHeightStyle = EXACT_LINES)
+    /** The widest line and the stacked height at [sp] (px). */
+    fun measure(sp: Float): Pair<Int, Int> {
+        val s = style(sp)
+        var w = 0
+        var h = 0
+        for (l in lines) {
+            val r = measurer.measure(l, s, maxLines = 1, softWrap = false)
+            w = maxOf(w, r.size.width)
+            h += r.size.height
+        }
+        return w to h
+    }
+    fun fits(sp: Float): Boolean = measure(sp).let { (w, h) -> w <= maxWidthPx && h <= maxHeightPx }
+    val top = max.value
+    val bottom = min.value
+    val (w0, h0) = measure(top)
+    if (w0 <= maxWidthPx && h0 <= maxHeightPx) return style(top)
+    // Width and height grow about in step with the size: start near the answer, then settle on it.
+    val ratio = minOf(maxWidthPx.toFloat() / w0.coerceAtLeast(1), maxHeightPx.toFloat() / h0.coerceAtLeast(1))
+    var sp = (kotlin.math.floor(top * ratio / FIT_STEP) * FIT_STEP).coerceIn(bottom, top)
+    while (sp > bottom && !fits(sp)) sp = (sp - FIT_STEP).coerceAtLeast(bottom)
+    while (sp + FIT_STEP < top && fits(sp + FIT_STEP)) sp += FIT_STEP
+    return style(sp)
+}
+
+private const val FIT_STEP = 0.5f
+private val EXACT_LINES = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.Both, LineHeightStyle.Mode.Tight)
 
 @Composable
 private fun RowName(name: String, modifier: Modifier) {
@@ -671,24 +741,15 @@ internal fun SelectionLayerRow(
     ) {
         Spacer(Modifier.width(PLAIN_GUTTER))
         SelectionThumbnail(selection, docAspect, thumbSize)
-        Column(Modifier.weight(1f).padding(start = 6.dp, end = 4.dp)) {
-            Text(
-                LayerLabels.SELECTION_ROW,
-                color = IbisColors.ListText,
-                fontSize = IbisDims.LayerSelectionRowText,
-                lineHeight = 17.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+        // Both lines at ibisPaint's size, one size, smaller where the row is narrow (a 360 dp phone).
+        BoxWithConstraints(Modifier.weight(1f).padding(start = 6.dp, end = 4.dp)) {
             val b = selection?.bounds
-            Text(
-                if (b == null) LayerLabels.NO_SELECTION else "${b.width()} × ${b.height()} px",
-                color = DIM_TEXT,
-                fontSize = IbisDims.LayerRowText,
-                lineHeight = 14.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            val lines = listOf(LayerLabels.SELECTION_ROW, if (b == null) LayerLabels.NO_SELECTION else "${b.width()} × ${b.height()} px")
+            val style = rememberFittedStyle(lines, constraints, IbisDims.LayerSelectionRowText, IbisDims.LayerRowTextMin, SELECTION_LINE_GAP)
+            Column {
+                Text(lines[0], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(lines[1], color = DIM_TEXT, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
     }
 }

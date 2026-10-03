@@ -23,11 +23,15 @@ object IbisDims {
     /** Top row band: y 33, 48 tall, no background. */
     val TopRowHeight: Dp = 48.dp
 
-    /** Top row circles: visual diameter, touch target, pitch and first centre x (centres at 24 + 48·i). */
+    /**
+     * Top row circles: visual diameter, touch target, pitch and first centre x; the gap after Redo
+     * (ibisPaint's: centres 24, 72, then 128 + 48·(i − 2) on the reference phone).
+     */
     val TopCircle: Dp = 40.dp
     val TopCircleTouch: Dp = 48.dp
     val TopPitch: Dp = 48.dp
     val TopFirstCenterX: Dp = 24.dp
+    val TopRedoGap: Dp = 8.dp
 
     /** Narrow screens: pitch = min(48, (width − 8) / 8); circles shrink to at least this, touch stays ≥ [TopNarrowTouchMin]. */
     val TopNarrowCircleMin: Dp = 36.dp
@@ -187,9 +191,18 @@ object IbisDims {
     val LayerMaskSquare: Dp = 26.dp
     val LayerMaskTouch: Dp = 40.dp
 
-    /** Number and name text. */
+    /**
+     * Row text at ibisPaint's sizes (measured on the reference: digit and cap height ≈ 13 dp, about
+     * 18 sp): the layer number of an 80 dp row ([LayerRowNumberText]); "100%" over "Normal"
+     * ([LayerRowValueText], one size for both lines, smaller where the values are narrow, down to
+     * [LayerRowTextMin], then ellipsized); "Selection Layer" over "No Selection"
+     * ([LayerSelectionRowText], likewise). [LayerRowText]: the name.
+     */
     val LayerRowText: TextUnit = 11.sp
-    val LayerSelectionRowText: TextUnit = 14.sp
+    val LayerSelectionRowText: TextUnit = 18.sp
+    val LayerRowNumberText: TextUnit = 18.sp
+    val LayerRowValueText: TextUnit = 18.sp
+    val LayerRowTextMin: TextUnit = 12.sp
 
     /** Eye: 28 visual, 40 touch; lock icons 12; drag handle touch 40 × 80. */
     val LayerEye: Dp = 28.dp
