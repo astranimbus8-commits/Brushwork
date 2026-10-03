@@ -867,6 +867,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
 
     override fun onDeactivate() {
         endSnap()
+        // A gesture cut short by a tool switch never leaves its increments readout behind.
+        clearReadout()
         if (hasPendingWork) {
             if (!commitItem()) discardItem()
             // Switching tools with a text pending: vector mode doesn't flip off. (Not while

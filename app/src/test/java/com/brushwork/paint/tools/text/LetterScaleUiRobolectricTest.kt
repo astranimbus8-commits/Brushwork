@@ -3,12 +3,18 @@ package com.brushwork.paint.tools.text
 import android.graphics.Matrix
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.placement.LETTER_SCALING_LTR_ONLY
 import com.brushwork.paint.ui.placement.LETTER_SCALING_VERTICAL
 import com.brushwork.paint.ui.placement.TextToolOptions
+import com.brushwork.paint.ui.placement.letterAlignLabel
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -62,9 +68,19 @@ class LetterScaleUiRobolectricTest {
         assertEquals("starts near the example", LetterScaleSpec.DEFAULT_ON_PERCENT, on.smallestPercent, 0f)
         assertEquals(LetterScaleAlign.CENTER, on.align)
         assertEquals(LetterScaleCurve.EVEN, on.curve)
+        // I10: the Align chips are told apart from the text's own alignment buttons ("Center";
+        // "Top" for vertical text), which are in the same editor.
+        assertEquals("one \"Center\" button (the text's alignment)", 1, clickablesLabelled("Center"))
+        for (a in LetterScaleAlign.entries) assertEquals(letterAlignLabel(a), 1, clickablesLabelled(letterAlignLabel(a)))
+        tool.toggleVertical()
+        SmokeUi.settle()
+        assertEquals("one \"Top\" button (the columns' alignment)", 1, clickablesLabelled("Top"))
+        assertEquals(1, clickablesLabelled("Center"))
+        tool.toggleVertical()
+        SmokeUi.settle()
         SmokeUi.click("End → beginning", exact = true)
         assertEquals(LetterScaleDirection.END_TO_START, tool.item!!.spec.letterScale.direction)
-        SmokeUi.click("Baseline", exact = true)
+        SmokeUi.click(letterAlignLabel(LetterScaleAlign.BASELINE), exact = true)
         assertEquals(LetterScaleAlign.BASELINE, tool.item!!.spec.letterScale.align)
         SmokeUi.click("Same ratio", exact = true)
         assertEquals(LetterScaleCurve.RATIO, tool.item!!.spec.letterScale.curve)
@@ -89,16 +105,16 @@ class LetterScaleUiRobolectricTest {
         SmokeUi.click("Letter scaling", exact = true)
         assertTrue(tool.lettersSheetOpen)
         SmokeUi.assertWindowsLaidOut(2)
-        SmokeUi.click("Top", exact = true)
+        SmokeUi.click(letterAlignLabel(LetterScaleAlign.TOP), exact = true)
         assertEquals(LetterScaleAlign.TOP, tool.item!!.spec.letterScale.align)
         // Vertical text: Align doesn't apply, letters stay centred on the column.
         tool.toggleVertical()
         SmokeUi.settle()
         assertTrue(SmokeUi.has(LETTER_SCALING_VERTICAL, exact = true))
-        assertFalse("Align is disabled", SmokeUi.isEnabled("Center", exact = true))
+        assertFalse("Align is disabled", SmokeUi.isEnabled(letterAlignLabel(LetterScaleAlign.CENTER), exact = true))
         tool.toggleVertical()
         SmokeUi.settle()
-        assertTrue(SmokeUi.isEnabled("Center", exact = true))
+        assertTrue(SmokeUi.isEnabled(letterAlignLabel(LetterScaleAlign.CENTER), exact = true))
         // A right-to-left text is drawn unscaled, and the sheet says so.
         tool.setText("مرحبا")
         SmokeUi.settle()
@@ -129,5 +145,22 @@ class LetterScaleUiRobolectricTest {
         tool.discard()
         SmokeUi.settle()
         Smoke.assertQuiet(c, "letter scaling")
+    }
+
+    /** Distinct clickables (an element or its clickable ancestor) labelled exactly [label] on screen. */
+    private fun clickablesLabelled(label: String): Int {
+        val roots = RobolectricUi.windowRoots()
+        val seen = HashSet<Int>()
+        for (e in RobolectricUi.elements()) {
+            if (roots.indexOf(e.window) < SmokeUi.baseline || !e.node.layoutInfo.isPlaced) continue
+            val n = e.node
+            val labels = n.config.getOrNull(SemanticsProperties.Text)?.map { it.text }.orEmpty() +
+                n.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+            if (label !in labels) continue
+            var c: SemanticsNode? = n
+            while (c != null && c.config.getOrNull(SemanticsActions.OnClick) == null) c = c.parent
+            if (c != null) seen += c.id
+        }
+        return seen.size
     }
 }

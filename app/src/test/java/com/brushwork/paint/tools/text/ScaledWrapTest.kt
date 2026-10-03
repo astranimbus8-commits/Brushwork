@@ -31,6 +31,8 @@ class ScaledWrapTest {
         textSize = spec.sizePx
         typeface = TextRenderer.typeface(spec)
         letterSpacing = spec.letterSpacing
+        // Scaled letters are measured as they are drawn: one by one, no ligatures.
+        fontFeatureSettings = TextRenderer.SCALED_LETTER_FEATURES
     }
 
     /** Scaled advance width of `text[a, b)` measured independently of the renderer. */

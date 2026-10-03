@@ -11,6 +11,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.model.IncrementKind
@@ -99,6 +102,13 @@ fun TextLetterScaleSection(host: TextEditorHost) {
     ChoiceChips(LetterScaleScope.entries.map { it.label }, ls.scope.ordinal, { i -> set { it.copy(scope = LetterScaleScope.entries[i]) } })
 }
 
+/**
+ * The accessible label of the Align chip [a] (I10): "Letters: Center", "Letters: Baseline",
+ * "Letters: Top". The chips show the design's short words, but the editor also has the text's
+ * own alignment buttons ("Center"; "Top" for vertical text), so the chips are told apart.
+ */
+fun letterAlignLabel(a: LetterScaleAlign): String = "Letters: ${a.label}"
+
 /** Center / Baseline / Top as chips that can be disabled (vertical text). */
 @Composable
 private fun AlignChips(selected: LetterScaleAlign, enabled: Boolean, onSelect: (LetterScaleAlign) -> Unit) {
@@ -107,8 +117,10 @@ private fun AlignChips(selected: LetterScaleAlign, enabled: Boolean, onSelect: (
             FilterChip(
                 selected = enabled && a == selected,
                 onClick = { onSelect(a) },
-                label = { Text(a.label) },
+                // The visible word stays short; the chip's label is unique (see letterAlignLabel).
+                label = { Text(a.label, modifier = Modifier.clearAndSetSemantics {}) },
                 enabled = enabled,
+                modifier = Modifier.semantics { contentDescription = letterAlignLabel(a) },
             )
         }
     }

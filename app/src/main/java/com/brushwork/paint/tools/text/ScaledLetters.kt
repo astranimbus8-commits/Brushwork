@@ -34,6 +34,12 @@ internal class ScaledLetters(
     private val offset: Int,
     private val align: LetterScaleAlign,
     private val capHeight: Float,
+    /**
+     * Lines farther than this (in ems, plus the stroke) outside the canvas clip are not drawn, as
+     * StaticLayout skips the lines outside it: a display tile redraws only the lines it shows.
+     * 0 = draw every line (imported fonts, whose swashes may reach anywhere).
+     */
+    private val cullEms: Float = 0f,
 ) {
     /** How far letter [f]'s baseline moves (negative = up) for [align]. */
     fun shift(f: Float): Float = when (align) {
@@ -45,8 +51,17 @@ internal class ScaledLetters(
     /** Draws the letters of [lines] ([wt]: their measured text, indices as [text]'s) with [paint] (any style). */
     fun draw(canvas: Canvas, lines: List<WrapLine>, wt: WrapText, paint: TextPaint) {
         val base = paint.textSize
+        val clip = Rect()
+        val shown = if (cullEms > 0f && lines.size > 1 && canvas.getClipBounds(clip)) {
+            // Every letter's ink lies within [margin] of its line's box (Center / Top move the
+            // smaller letters up by less than a cap height; accents and descenders stay within an em).
+            val m = cullEms * base + paint.strokeWidth
+            lines.filter { l ->
+                l.baseline + m >= clip.top && l.baseline - m <= clip.bottom && l.x + l.width + m >= clip.left && l.x - m <= clip.right
+            }
+        } else lines
         try {
-            forEachLetter(lines, wt) { s, e, x, y, f ->
+            forEachLetter(shown, wt) { s, e, x, y, f ->
                 paint.textSize = base * f
                 canvas.drawText(text, s, e, x, y, paint)
             }
@@ -105,6 +120,9 @@ internal class ScaledLetters(
     }
 
     companion object {
+        /** The clip margin of built-in fonts' lines, in ems (see [cullEms]). */
+        const val CULL_EMS = 2f
+
         /** Cap height of [paint]'s font at its size (the "H"), or 0.7 em when the font has none. */
         fun capHeight(paint: Paint): Float {
             val r = Rect()
