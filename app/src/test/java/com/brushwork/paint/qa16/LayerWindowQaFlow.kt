@@ -63,6 +63,7 @@ internal class LayerWindowQaFlow(private val s: ChromeScreen, private val tag: S
      * at its centre must land on it, not on another control inside or over it.
      */
     fun press(label: String, exact: Boolean = true, inWindow: Boolean = true) {
+        settleRows()
         val e = SmokeUi.find(label, exact) ?: throw AssertionError("$tag: no \"$label\" on screen: ${SmokeUi.shown().take(120)}")
         val b = e.bounds
         assertTrue("$tag: \"$label\" has a size ($b)", b.width > 0f && b.height > 0f)
@@ -89,8 +90,81 @@ internal class LayerWindowQaFlow(private val s: ChromeScreen, private val tag: S
         assertTrue("$tag: a tap at $what's centre lands on \"${hit?.label()}\" instead (${hit?.boundsInWindow})", hit?.id == target.id)
     }
 
+    /**
+     * Waits (as an eye does) until the rows stop moving: after a layer comes or goes, or moves,
+     * the list animates the rows to their places, and a finger aims at where a row has landed.
+     */
+    fun settleRows() {
+        if (window() == null) return
+        var last: List<Rect>? = null
+        repeat(40) {
+            val now = s.placed().filter { it.node.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("layers.row.") == true }.map { it.bounds }
+            if (now == last) return
+            last = now
+            Smoke.pump(50)
+        }
+        throw AssertionError("$tag: the layer rows never stop moving")
+    }
+
+    /** A finger on [layer]'s ≡ handle dragged [rows] rows down (negative: up), in 16 moves. */
+    fun dragReorder(layer: Layer, rows: Float) {
+        settleRows()
+        val handle = SmokeUi.find(LayerLabels.reorder(n(layer)), exact = true) ?: throw AssertionError("$tag: no ≡ of ${layer.name}")
+        val lw = window() ?: throw AssertionError("$tag: the window is not open")
+        assertTrue("$tag: ≡ of ${layer.name} inside the window", lw.contains(handle.bounds.center))
+        assertLandsOn("≡ of ${layer.name}", handle, handle.bounds.center)
+        val rowH = tagged(LayerWindowTags.row(layer.id)).node.size.height.toFloat()
+        val hb = handle.bounds
+        val t = Smoke.Touch(handle.window)
+        t.send(MotionEvent.ACTION_DOWN, Smoke.P(0, hb.center.x, hb.center.y))
+        for (i in 1..16) {
+            t.idle(16)
+            t.send(MotionEvent.ACTION_MOVE, Smoke.P(0, hb.center.x, hb.center.y + i * rowH * rows / 16))
+        }
+        t.idle(16)
+        t.send(MotionEvent.ACTION_UP, Smoke.P(0, hb.center.x, hb.center.y + rowH * rows))
+        settle()
+    }
+
+    /**
+     * Scrolls the layer list (its scroll action, as a swipe would) until [layer]'s row is whole
+     * inside it; a no-op when it is already.
+     */
+    fun reveal(layer: Layer) {
+        fun row() = s.placed().lastOrNull { it.node.config.getOrNull(SemanticsProperties.TestTag) == LayerWindowTags.row(layer.id) }
+        fun whole(): Boolean {
+            val r = row() ?: return false
+            val list = tagged(LayerWindowTags.ROWS).bounds
+            return r.bounds.height >= r.node.size.height - 1f && r.bounds.top >= list.top - 0.5f && r.bounds.bottom <= list.bottom + 0.5f
+        }
+        var tries = 0
+        settleRows()
+        while (!whole()) {
+            val list = tagged(LayerWindowTags.ROWS)
+            var scroll = list.node.config.getOrNull(SemanticsActions.ScrollBy)?.action
+            if (scroll == null) {
+                // The scrollable may sit inside the tagged list.
+                scroll = s.placed().lastOrNull { e -> e.window === list.window && list.bounds.contains(e.bounds.center) && e.node.config.getOrNull(SemanticsActions.ScrollBy) != null }
+                    ?.node?.config?.getOrNull(SemanticsActions.ScrollBy)?.action
+            }
+            requireNotNull(scroll) { "$tag: ${layer.name}'s row is not whole and the list does not scroll" }
+            // Rows are top first: a layer lower in the stack than the rows shown is further down.
+            val shown = c.doc.layers.filter { l -> s.placed().any { it.node.config.getOrNull(SemanticsProperties.TestTag) == LayerWindowTags.row(l.id) } }
+            val r = row()
+            val down = when {
+                r != null -> r.bounds.center.y > list.bounds.center.y
+                shown.isNotEmpty() -> c.doc.indexOf(layer) < shown.minOf { c.doc.indexOf(it) }
+                else -> true
+            }
+            scroll.invoke(0f, (if (down) 1f else -1f) * 40f * s.density)
+            settle(2)
+            if (++tries > 40) throw AssertionError("$tag: ${layer.name}'s row never scrolled into the list")
+        }
+    }
+
     /** A finger taps [layer]'s row on its thumbnail (where a row is tapped to pick it; the eye sits in the row's middle). */
     fun tapRow(layer: Layer) {
+        reveal(layer)
         val row = SmokeUi.find(LayerLabels.selectRow(n(layer)), exact = true) ?: throw AssertionError("$tag: no row for ${layer.name}")
         val thumb = tagged(LayerWindowTags.thumb(layer.id)).bounds
         assertTrue("$tag: the thumbnail of ${layer.name} is inside the window", window()!!.contains(thumb.center))
@@ -236,6 +310,20 @@ internal class LayerWindowQaFlow(private val s: ChromeScreen, private val tag: S
         assertNotNull(top.mask)
         if (!SmokeUi.has(LayerLabels.CLEAR_MASK, exact = true) && window() == null) open()
         assertTrue("$tag: the strip now clears the mask", SmokeUi.has(LayerLabels.CLEAR_MASK, exact = true))
+        // The row's mask square switches what the brush edits (the mask, the content): no step.
+        run {
+            val steps = steps()
+            val first = !top.editingMask
+            repeat(2) { k ->
+                val toMask = if (k == 0) first else !first
+                press(if (toMask) LayerLabels.editMask(3) else LayerLabels.editContent(3))
+                assertEquals("$tag: the mask square edits the ${if (toMask) "mask" else "content"}", toMask, top.editingMask)
+                assertEquals("$tag: the row says MASK while the mask is edited", toMask, SmokeUi.has("MASK", exact = true))
+                assertTrue("$tag: its label flips", SmokeUi.has(if (toMask) LayerLabels.editContent(3) else LayerLabels.editMask(3), exact = true))
+            }
+            assertEquals("$tag: switching the edit target records nothing", steps, steps())
+            log += "mask square: edit target mask <-> content, no step"
+        }
         undo()
         assertNull(top.mask)
 
@@ -327,21 +415,7 @@ internal class LayerWindowQaFlow(private val s: ChromeScreen, private val tag: S
         // The ≡ handle: the top layer dragged below the other two, one step.
         c.selectLayer(top)
         settle()
-        val handle = SmokeUi.find(LayerLabels.reorder(3), exact = true) ?: throw AssertionError("$tag: no ≡ of layer 3")
-        val lw = window()!!
-        assertTrue("$tag: ≡ inside the window", lw.contains(handle.bounds.center))
-        val rowH = tagged(LayerWindowTags.row(top.id)).bounds.height
-        val hb = handle.bounds
-        oneStep("Reorder (≡ drag)", null) {
-            val t = Smoke.Touch(handle.window)
-            t.send(MotionEvent.ACTION_DOWN, Smoke.P(0, hb.center.x, hb.center.y))
-            for (i in 1..16) {
-                t.idle(16)
-                t.send(MotionEvent.ACTION_MOVE, Smoke.P(0, hb.center.x, hb.center.y + i * rowH * 2.2f / 16))
-            }
-            t.idle(16)
-            t.send(MotionEvent.ACTION_UP, Smoke.P(0, hb.center.x, hb.center.y + rowH * 2.2f))
-        }
+        oneStep("Reorder (≡ drag)", null) { dragReorder(top, 2.2f) }
         assertEquals("$tag: the dragged layer is now at the bottom", listOf(top, bottom, middle), c.doc.layers)
         undo()
         assertEquals(listOf(bottom, middle, top), c.doc.layers)

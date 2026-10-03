@@ -64,6 +64,19 @@ internal object QaDocs {
 internal class LiveCanvas(val s: ChromeScreen) {
     /** The injected clock (ns): frozen unless a test moves it (the finger resting, refinement). */
     var now = 0L
+
+    /**
+     * How far the clock moves per read ([clockRead]; 0 = frozen): a few ms make a refinement
+     * frame's 8 ms budget run out after a tile or two, so a change can be caught half refined.
+     * Keep it 0 during drags (a ticking clock makes live frames look slow and halves the scale).
+     */
+    var tick = 0L
+
+    /** The clock a test installs as `liveAdjust.clock` when it wants [tick]. */
+    fun clockRead(): Long {
+        now += tick
+        return now
+    }
     val c: EditorController get() = s.c
     private var bmp: Bitmap? = null
 
