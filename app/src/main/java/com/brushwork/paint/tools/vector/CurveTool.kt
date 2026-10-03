@@ -36,7 +36,9 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
+import com.brushwork.paint.tools.select.applyPointHits
 import com.brushwork.paint.tools.select.snapPointToObjects
+import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.vector.spline.NurbsGeometry
 import com.brushwork.paint.tools.vector.spline.PathOverlay
@@ -324,7 +326,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private var reopenCandidate: VPath? = null
     /** Which tool reopens [reopenCandidate]: this one, or the kind it switches to (Curve ↔ Path). */
     private var reopenKind = kind
-    /** Where the dragged point was when the drag began (increments step from there, §3.4). */
+    /** Where the dragged point (or tangent handle's end) was when the drag began (increments step from there, §3.4). */
     private var dragStartPos = Vec2.ZERO
 
     private val painter = OverlayPainter()
@@ -1124,6 +1126,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             if (minOf(dOut, dIn) <= tol && minOf(dOut, dIn) < pt.distanceTo(a)) {
                 drag = if (dOut <= dIn) Drag.HANDLE_OUT else Drag.HANDLE_IN
                 dragIndex = sel
+                // (The handle's end: increments step it from there.)
+                dragStartPos = a + if (dOut <= dIn) hOut else hIn
                 // Its own anchor is a target too: the tangent then lies level or upright.
                 beginSnap(except = -1)
                 return
@@ -1285,7 +1289,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 }
                 val (hIn, hOut) = handlesOf(dragIndex)
                 // The handle's end snaps to objects and anchors (never to the grid, as before).
-                val end = snap.snapPointToObjects(pt)
+                val end = handleEnd(pt)
                 var v = end - a.pos
                 snapMoving = end
                 if (v.length < 1e-3f) {
@@ -1373,6 +1377,24 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         snapMoving = q
         controller.increments.readout = "${signed(x - dragStartPos.x)}, ${signed(y - dragStartPos.y)} px"
         return q
+    }
+
+    /**
+     * Where a dragged tangent handle's end goes for the finger at [pt]: snapped to objects and
+     * anchors (never to the grid); while increments are on, an axis no guide placed moves by a
+     * multiple of the Length step from where the end was grabbed (§3.4, as the Shape tool's
+     * handles), and the readout shows the move. Off: exactly v1.5.
+     */
+    private fun handleEnd(pt: Vec2): Vec2 {
+        val step = controller.increments.step(IncrementKind.LENGTH) ?: return snap.snapPointToObjects(pt)
+        val hx = snap.snapValue(pt.x, SnapAxis.X)
+        val hy = snap.snapValue(pt.y, SnapAxis.Y)
+        val snapped = snap.applyPointHits(pt, hx, hy)
+        val d = pt - downPoint
+        val x = if (hx != null) snapped.x else dragStartPos.x + IncrementMath.snapDelta(d.x, step)
+        val y = if (hy != null) snapped.y else dragStartPos.y + IncrementMath.snapDelta(d.y, step)
+        controller.increments.readout = "${signed(x - dragStartPos.x)}, ${signed(y - dragStartPos.y)} px"
+        return Vec2(x, y)
     }
 
     private fun signed(v: Float): String {
