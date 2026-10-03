@@ -223,6 +223,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     var spline by mutableStateOf<VSpline?>(null)
         private set
 
+    /**
+     * PATH: converts the pending spline to its Bézier form, re-converting only the spans an edit
+     * touched (a point drag on a long path converts at most p + 1 spans per move); bit for bit
+     * [SplineBezier.toSubpath], so the anchors and I9 are as a fresh conversion gives.
+     */
+    private val splineBezier = SplineBezier.Incremental()
+
     /** PATH: index of the selected control point or -1 (Compose state). */
     var selectedPoint by mutableIntStateOf(-1)
         private set
@@ -586,7 +593,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun setSplineState(s: VSpline?) {
         val v = s?.takeIf { it.points.isNotEmpty() }
         spline = v
-        anchors = if (v == null) emptyList() else SplineBezier.toSubpath(v).anchors.map { it.toCurveAnchor() }
+        anchors = if (v == null) emptyList() else splineBezier.toSubpath(v).anchors.map { it.toCurveAnchor() }
     }
 
     /**
