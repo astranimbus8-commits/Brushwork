@@ -206,7 +206,6 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // The canvas is only needed from event handlers, so a plain holder (not state) is enough.
     val canvasRef = remember { arrayOfNulls<CanvasView>(1) }
     val closePanel = { panel = null }
-    val closeToolMenu: () -> Unit = remember { { toolMenuOpen = false } }
     // The button of a panel that is already open (minimized to its pill, or covered by a tool's
     // sheet) brings it back on top, as it was. TOOLS opens the tool menu.
     val openPanel = { p: EditorPanel ->
@@ -365,7 +364,11 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // The layer window shows unless a panel is up (a minimized one's pill waits meanwhile), a
     // filter is previewed or the settings dialog is open.
     val layersVisible = layersOpen && session == null && !sheetHost.hasExpanded && panel != EditorPanel.SETTINGS
-    val toolMenuVisible = toolMenuOpen && session == null
+    // A panel shown from outside the menu (an options strip chip opens its tool's sheet, e.g. the
+    // Shape tool's "Settings") closes the menu: it would stay under the panel, and Back would
+    // close it instead of the panel on top. (The menu's own cells close it before they open one.)
+    val toolMenuVisible = toolMenuOpen && session == null && !sheetHost.hasExpanded
+    LaunchedEffect(sheetHost.hasExpanded) { if (sheetHost.hasExpanded) toolMenuOpen = false }
     // Back stops a cancellable operation; otherwise it waits for the operation to finish.
     BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
@@ -841,7 +844,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     CompositionLocalProvider(LocalSheetGroup provides panel) {
         when (panel) {
             // v1.6: the tool menu replaced the Tools sheet (openPanel(TOOLS) opens it).
-            EditorPanel.TOOLS -> LaunchedEffect(Unit) { panel = null; toolMenuOpen = true }
+            EditorPanel.TOOLS -> LaunchedEffect(Unit) { panel = null; openPanel(EditorPanel.TOOLS) }
             EditorPanel.BRUSH -> BrushPanel(controller, closePanel)
             EditorPanel.COLOR -> ColorPickerPanel(controller, closePanel)
             EditorPanel.FILTERS -> FilterBrowser(controller, closePanel)

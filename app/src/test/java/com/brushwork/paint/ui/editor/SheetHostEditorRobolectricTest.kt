@@ -6,6 +6,7 @@ import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
@@ -43,6 +44,7 @@ import org.robolectric.shadows.ShadowLog
  *   (same scroll position);
  * - stacked panels, the minimize button, the panel's own button (also when a tool's sheet covers
  *   the panel), Back;
+ * - a tool's sheet opened from the options strip closes the tool menu (Back then closes the sheet);
  * - the layers window closes on a tap outside it (the tap does nothing else) but not on a pinch
  *   or a stroke, and deletes layers without asking, with Undo in the message.
  *
@@ -165,6 +167,7 @@ class SheetHostEditorRobolectricTest {
         section("the text editor minimizes; its text can be moved and pinched meanwhile") { textEditor() }
         section("a panel's button brings it back on top of a tool's sheet") { panelButtonUnderToolSheet() }
         section("the Layers button makes room; the pill comes back") { layersButtonWithPanel() }
+        section("a tool's sheet from the options strip closes the tool menu; Back closes the sheet") { toolSheetOverToolMenu() }
         section("layers window: tap outside closes, pinch and strokes don't") { layersTapOutside() }
         section("layers are deleted without asking, Undo in the message") { deleteWithoutDialog() }
         dog.interrupt()
@@ -466,6 +469,58 @@ class SheetHostEditorRobolectricTest {
         assertFalse(has("Close layers", exact = true))
         assertFalse(SmokeUi.menuOpen())
         Smoke.assertQuiet(s.c, "layers button")
+    }
+
+    /** The node tagged [tag] is placed on screen. */
+    private fun shown(tag: String): Boolean = RobolectricUi.elements().any {
+        it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == tag
+    }
+
+    /** Clicks the options strip's control showing [label] (the strip scrolls: it may be out of view). */
+    private fun clickInOptionsStrip(label: String) {
+        val strip = RobolectricUi.elements().last {
+            it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == ChromeTags.OPTIONS_STRIP
+        }.node
+        fun find(n: SemanticsNode): SemanticsNode? {
+            if (n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) return n
+            for (child in n.children) find(child)?.let { return it }
+            return null
+        }
+        var n = find(strip) ?: throw AssertionError("no \"$label\" in the options strip")
+        while (n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent ?: throw AssertionError("\"$label\" is not clickable")
+        n.config[SemanticsActions.OnClick].action!!.invoke()
+        settle()
+    }
+
+    private fun toolSheetOverToolMenu() {
+        val s = editor()
+        s.c.selectTool(ToolId.SHAPE)
+        settle()
+        click("Tools (current: Shape)", exact = true)
+        assertTrue("the tool menu is open", shown(ChromeTags.TOOL_MENU))
+        // The Shape tool's own "Settings" chip (on the options strip, beside the open menu).
+        clickInOptionsStrip("Settings")
+        SmokeUi.assertPanelShown("Shape")
+        assertFalse("the tool menu closed: it would stay under the sheet", shown(ChromeTags.TOOL_MENU))
+        // Back closes the sheet on top (not a menu hidden under it), and the menu stays closed.
+        s.pressBack()
+        assertFalse("Back closed the sheet", SmokeUi.menuOpen())
+        assertFalse("the menu doesn't come back", shown(ChromeTags.TOOL_MENU))
+        // The menu still opens over a minimized sheet: the pill waits meanwhile and comes back.
+        clickInOptionsStrip("Settings")
+        click("Minimize", exact = true)
+        assertEquals(listOf("Shape"), pillTitles())
+        click("Tools (current: Shape)", exact = true)
+        assertTrue("the menu opens over the minimized sheet", shown(ChromeTags.TOOL_MENU))
+        assertEquals("the pill waits under the menu", emptyList<String>(), pillTitles())
+        click("Tools (current: Shape)", exact = true)
+        assertFalse(shown(ChromeTags.TOOL_MENU))
+        assertEquals("the pill is back", listOf("Shape"), pillTitles())
+        click("Close Shape", exact = true)
+        assertFalse(SmokeUi.menuOpen())
+        s.c.selectTool(ToolId.BRUSH)
+        settle()
+        Smoke.assertQuiet(s.c, "tool sheet over the tool menu")
     }
 
     // ================================================================== layers window
