@@ -22,7 +22,9 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AspectRatio
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChangeHistory
@@ -36,6 +38,12 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -57,16 +65,35 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.AppSettings
 import com.brushwork.paint.core.Geometry
+import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.vector.HandleSide
+import com.brushwork.paint.tools.vector.spline.SplineEditing
+import com.brushwork.paint.ui.common.stepOnLongPress
+import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.theme.IbisDims
+import com.brushwork.paint.vector.VSpline
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.ln
+import kotlin.math.min
 import com.brushwork.paint.tools.vector.ArrowHeadStyle
 import com.brushwork.paint.tools.vector.ArrowHeads
 import com.brushwork.paint.tools.vector.CornerStyle
@@ -103,18 +130,28 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /*
- * Options strip and sheets of the curve and polyline tools (split out of VectorOptions.kt in v1.5; owned by A4).
+ * Options strip and sheets of the curve, polyline and path tools (split out of VectorOptions.kt
+ * in v1.5; v1.6: the Path tool's strip and the Curve tool's Handles group, area B).
  */
 
-// ====================================================================== curve / polyline tools
+// ====================================================================== curve / polyline / path tools
 
 /**
- * Options strip of the curve and polyline tools: undo last point, closed path, actions for the
- * selected anchor (sharp / smooth / automatic tangent / delete), stroke mode, fill, and the
- * "Numbers" / settings sheets.
+ * Options strip of the curve tools: the Curve and Polyline strip, or the Path tool's
+ * ([PathToolOptions]) for [CurveTool.isPath].
  */
 @Composable
 fun CurveToolOptions(tool: CurveTool) {
+    if (tool.isPath) PathToolOptions(tool) else BezierToolOptions(tool)
+}
+
+/**
+ * Options strip of the curve and polyline tools: undo last point, closed path, actions for the
+ * selected anchor (sharp / smooth / automatic tangent / delete), the Handles group (Curve),
+ * stroke mode, fill, and the "Numbers" / settings sheets.
+ */
+@Composable
+private fun BezierToolOptions(tool: CurveTool) {
     val s = tool.settings
     // Only what the row shows about the selected point: dragging anchors doesn't recompose it.
     val selInfo by remember(tool) {
@@ -124,6 +161,8 @@ fun CurveToolOptions(tool: CurveTool) {
         }
     }
     val anyThickness by remember(tool) { derivedStateOf { !CurveGeometry.isUniformWidth(tool.anchors) } }
+    // (Derived: dragging points doesn't recompose the strip.)
+    val handlesShown by remember(tool) { derivedStateOf { tool.canScaleHandles } }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
@@ -145,7 +184,20 @@ fun CurveToolOptions(tool: CurveTool) {
         ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(sel) }
         ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
     }
+    // v1.6 §3.3: the selected point's handles (all points' with none selected).
+    if (handlesShown) HandlesGroup(tool)
     OptionChip("Closed", s.closed, { set { it.copy(closed = !it.closed) } }, icon = Icons.Filled.Loop)
+    StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
+
+    if (showSettings) CurveSettingsSheet(tool) { showSettings = false; tool.persistBrushSize() }
+    if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
+}
+
+/** Stroke mode, the plain line's width, Fill, Snap to objects, Numbers and Settings (every curve tool). */
+@Composable
+private fun StrokeFillAndSheets(tool: CurveTool, onSettings: () -> Unit, onNumbers: () -> Unit) {
+    val s = tool.settings
+    fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
     DropdownChip(
         label = s.stroke.label,
         options = CurveStroke.entries,
@@ -162,15 +214,343 @@ fun CurveToolOptions(tool: CurveTool) {
         ActionChip(
             Units.format(tool.lineWidth.toDouble(), s.unit, dpi),
             if (linked) Icons.Filled.Brush else Icons.Filled.LineWeight,
-        ) { showSettings = true }
+        ) { onSettings() }
     }
     OptionChip("Fill", s.fill, { set { it.copy(fill = !it.fill) } }, icon = Icons.Filled.FormatColorFill)
     SnapToObjectsChip(tool.controller)
-    ActionChip("Numbers", Icons.Filled.Pin) { showNumbers = true }
-    ActionChip("Settings", Icons.Filled.Tune) { showSettings = true }
+    ActionChip("Numbers", Icons.Filled.Pin) { onNumbers() }
+    ActionChip("Settings", Icons.Filled.Tune) { onSettings() }
+}
+
+// ====================================================================== the Path tool (v1.6, §3.2)
+
+/** What the path options row shows about the selected control point. */
+private data class SelectedPathPoint(val index: Int, val weight: Float, val width: Float)
+
+/**
+ * Options strip of the Path tool (§3.2a, in order): Undo / Redo point, the Order stepper,
+ * Endpoint, Cyclic, the selected point's Weight and Thickness, Delete point / Deselect, stroke,
+ * Fill, Snap, Numbers, Settings, "To Bézier", and while no point exists the "Shapes" quick starts.
+ */
+@Composable
+private fun PathToolOptions(tool: CurveTool) {
+    val selInfo by remember(tool) {
+        derivedStateOf {
+            val i = tool.selectedPoint
+            tool.spline?.points?.getOrNull(i)?.let { SelectedPathPoint(i, it.weight, it.width) }
+        }
+    }
+    val anyThickness by remember(tool) { derivedStateOf { !tool.uniformWidth } }
+    val count by remember(tool) { derivedStateOf { tool.pointCount } }
+    // (Derived: dragging control points doesn't recompose the strip.)
+    val flags by remember(tool) { derivedStateOf { PathFlags(tool.pathOrder, tool.pathEndpoint, tool.pathCyclic) } }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showNumbers by rememberSaveable { mutableStateOf(false) }
+
+    ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
+    ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
+    val f = flags
+    OrderStepper(tool, f.order)
+    // (Endpoint only matters for an open curve: greyed while Cyclic is on.)
+    OptionChip("Endpoint", f.endpoint, { tool.setEndpoint(!f.endpoint) }, enabled = !f.cyclic)
+    OptionChip("Cyclic", f.cyclic, { tool.setCyclic(!f.cyclic) }, icon = Icons.Filled.Loop)
+    val a = selInfo
+    if (a != null) {
+        // A point just got selected: the strip scrolls so its controls start near the left edge
+        // (the whole Weight control, then the Thickness arrows and value). The two together are
+        // wider than a phone: the strip is asked to show their first screen width (a part that
+        // fits, so it lands there exactly), not all of them (it would show the Thickness slider
+        // and push Weight off).
+        val bring = remember { BringIntoViewRequester() }
+        val groupSize = remember { IntArray(2) }
+        val shownWidth = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - POINT_GROUP_MARGIN).toPx() }
+        LaunchedEffect(a.index) {
+            withFrameNanos { }
+            val w = min(groupSize[0].toFloat(), shownWidth)
+            bring.bringIntoView(if (w > 0f) Rect(0f, 0f, w, groupSize[1].toFloat()) else null)
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .bringIntoViewRequester(bring)
+                .onSizeChanged { groupSize[0] = it.width; groupSize[1] = it.height },
+        ) {
+            WeightControl(tool, a.index, a.weight)
+            ThicknessControl(tool, a.index, a.width, bringIntoView = false)
+        }
+        if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
+        ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(a.index) }
+        ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
+    }
+    StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
+    if (count >= 2) ActionChip("To Bézier", Icons.Filled.Gesture) { tool.toBezier() }
+    if (count == 0) ShapesChip(tool)
 
     if (showSettings) CurveSettingsSheet(tool) { showSettings = false; tool.persistBrushSize() }
     if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
+}
+
+/** The Path strip's order, Endpoint and Cyclic (pending path's, else the next path's). */
+private data class PathFlags(val order: Int, val endpoint: Boolean, val cyclic: Boolean)
+
+/** The screen width the strip does not show (its panel's margins, with room to spare). */
+private val POINT_GROUP_MARGIN = 24.dp
+
+/** "Order 4" with ‹ ›: 2–6 (2 is the straight control polygon; the effective order is limited by the points). */
+@Composable
+private fun OrderStepper(tool: CurveTool, order: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+        ToolIconButton(
+            Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Lower order",
+            onClick = { tool.setOrder(order - 1) }, enabled = order > VSpline.MIN_ORDER, size = 40.dp,
+        )
+        Text(
+            "Order $order",
+            style = MaterialTheme.typography.bodyMedium,
+            color = BrushworkColors.OnChrome,
+            maxLines = 1,
+            modifier = Modifier.semantics { contentDescription = "Order $order" },
+        )
+        ToolIconButton(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight, "Higher order",
+            onClick = { tool.setOrder(order + 1) }, enabled = order < VSpline.MAX_ORDER, size = 40.dp,
+        )
+    }
+}
+
+/** The custom increment key of the Weight control (§3.4: a control without a kind). */
+internal const val PATH_WEIGHT_KEY = "path.weight"
+
+/** [w] as the Weight control shows it ("1.00"). */
+internal fun formatWeight(w: Float): String = Units.formatNumber(w.toDouble(), 2)
+
+/** A weight moved one step up / down: by the custom step, else by 0.1 (held to 0.1..10). */
+internal fun stepWeight(w: Float, up: Boolean, step: Float?): Float {
+    val s = step?.takeIf { it.isFinite() && it > 0f } ?: WEIGHT_STEP
+    val next = IncrementMath.snap(w + if (up) s else -s, s)
+    return next.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT)
+}
+
+private const val WEIGHT_STEP = 0.1f
+
+/**
+ * The selected control point's weight (§3.2a): the value (tap to type it; long-press for its
+ * step) and a log slider 0.1–10 (1 in the middle). Higher pulls the curve towards the point. One
+ * in-tool step per drag or typed value.
+ */
+@Composable
+private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
+    var typing by remember { mutableStateOf(false) }
+    val sliding = remember(index) { booleanArrayOf(false) }
+    val step = tool.controller.increments.customStep(PATH_WEIGHT_KEY)
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+        Text("Weight", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim, maxLines = 1)
+        Box(
+            Modifier
+                .heightIn(min = 40.dp)
+                .widthIn(min = 48.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .stepOnLongPress(null, PATH_WEIGHT_KEY)
+                .clickable(onClickLabel = "Type the point weight", role = Role.Button) { typing = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                formatWeight(weight),
+                style = MaterialTheme.typography.bodyMedium,
+                color = BrushworkColors.OnChrome,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(BrushworkColors.ChromeHigh)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                    .semantics { contentDescription = "Point weight ${formatWeight(weight)}" },
+            )
+        }
+        Slider(
+            value = SplineEditing.weightToFraction(weight),
+            onValueChange = { f ->
+                if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
+                var w = SplineEditing.fractionToWeight(f)
+                if (step != null) w = IncrementMath.snapInRange(w.toDouble(), step.toDouble(), VSpline.MIN_WEIGHT.toDouble(), VSpline.MAX_WEIGHT.toDouble()).toFloat()
+                tool.setWeight(index, w)
+            },
+            onValueChangeFinished = {
+                sliding[0] = false
+                tool.endNumericEdit()
+            },
+            colors = SliderDefaults.colors(thumbColor = IbisColors.SplineSelected, activeTrackColor = IbisColors.SplineSelected),
+            modifier = Modifier
+                .width(112.dp)
+                .semantics { contentDescription = "Point weight slider" },
+        )
+    }
+    if (typing) {
+        ValueInputDialog(
+            title = "Point weight",
+            label = "Weight",
+            initial = weight,
+            format = { formatWeight(it) },
+            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) },
+            step = { v, up -> stepWeight(v, up, step) },
+            toFraction = { SplineEditing.weightToFraction(it) },
+            fromFraction = { SplineEditing.fractionToWeight(it) },
+            rangeText = "0.1 – 10",
+            suffix = "",
+            onApply = { v ->
+                tool.setWeight(index, v)
+                tool.endNumericEdit()
+            },
+            onDismiss = { typing = false },
+        )
+    }
+}
+
+/** "Shapes ▾" while the path has no point: the Circle and Capsule quick starts, fitted to the visible canvas. */
+@Composable
+private fun ShapesChip(tool: CurveTool) {
+    var open by remember { mutableStateOf(false) }
+    val view = LocalView.current
+    Box(Modifier.padding(horizontal = 3.dp)) {
+        AssistChip(
+            onClick = { open = true },
+            label = { Text("Shapes", maxLines = 1) },
+            leadingIcon = { Icon(Icons.Filled.Category, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome, trailingIconContentColor = BrushworkColors.OnChromeDim),
+            modifier = Modifier.semantics { contentDescription = "Path shapes" },
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            for (shape in CurveTool.PathShape.entries) {
+                DropdownMenuItem(
+                    text = { Text(shape.label) },
+                    onClick = {
+                        open = false
+                        val root = view.rootView
+                        tool.startShape(shape, tool.shapeArea(root.width, root.height))
+                    },
+                )
+            }
+        }
+    }
+}
+
+// ====================================================================== the Handles group (v1.6, §3.3)
+
+/** Handle scale slider range: 10–400 %, logarithmic. */
+private const val HANDLE_SLIDER_MIN = 0.1f
+private const val HANDLE_SLIDER_MAX = 4f
+
+/** Slider position 0..1 of a handle scale factor (log scale, 100 % at about 62 %). */
+internal fun handleScaleToFraction(k: Float): Float {
+    val v = if (k.isFinite()) k.coerceIn(HANDLE_SLIDER_MIN, HANDLE_SLIDER_MAX) else 1f
+    return (ln(v / HANDLE_SLIDER_MIN) / ln(HANDLE_SLIDER_MAX / HANDLE_SLIDER_MIN)).coerceIn(0f, 1f)
+}
+
+/** The handle scale factor at slider position [f] (see [handleScaleToFraction]), on whole percents. */
+internal fun fractionToHandleScale(f: Float): Float {
+    val x = if (f.isFinite()) f.coerceIn(0f, 1f) else handleScaleToFraction(1f)
+    val k = HANDLE_SLIDER_MIN * exp(x * ln(HANDLE_SLIDER_MAX / HANDLE_SLIDER_MIN))
+    return ((k * 100f).roundToInt() / 100f).coerceIn(HANDLE_SLIDER_MIN, HANDLE_SLIDER_MAX)
+}
+
+/**
+ * The Curve tool's Handles group (§3.3): ⟷, ‹ "Shorter handles", the value (tap: "Type handle
+ * scale"), › "Longer handles", the "Handle scale" mini slider (10–400 %, log), and the chips
+ * Both / In / Out and All points. The value is relative to the lengths when a change began and
+ * goes back to 100 % at rest; ‹ › multiply by 0.9 / 1.1 (or step by the Scale increment) and
+ * repeat while held. One in-tool step per slider drag, held arrow or typed value.
+ */
+@Composable
+private fun HandlesGroup(tool: CurveTool) {
+    var typing by remember { mutableStateOf(false) }
+    val sliding = remember(tool) { booleanArrayOf(false) }
+    val k = tool.handleScale
+    val percent = (k * 100f).roundToInt()
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+        Text(
+            "⟷",
+            style = MaterialTheme.typography.titleMedium,
+            color = BrushworkColors.OnChromeDim,
+            modifier = Modifier.padding(horizontal = 2.dp).semantics { contentDescription = "Handles" },
+        )
+        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", onRelease = { tool.endHandleScale() }) {
+            tool.stepHandleScale(up = false)
+        }
+        Box(
+            Modifier
+                .heightIn(min = 40.dp)
+                .widthIn(min = 52.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .stepOnLongPress(IncrementKind.SCALE)
+                .clickable(onClickLabel = "Type handle scale", role = Role.Button) { typing = true }
+                .semantics { contentDescription = "Type handle scale" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                "$percent %",
+                style = MaterialTheme.typography.bodyMedium,
+                color = BrushworkColors.OnChrome,
+                maxLines = 1,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(BrushworkColors.ChromeHigh)
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+            )
+        }
+        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", onRelease = { tool.endHandleScale() }) {
+            tool.stepHandleScale(up = true)
+        }
+        Slider(
+            value = handleScaleToFraction(k),
+            onValueChange = { f ->
+                // The whole drag is one step, relative to the lengths when it began.
+                if (!sliding[0]) { sliding[0] = true; tool.beginHandleScale() }
+                tool.scaleHandles(tool.steppedHandleScale(fractionToHandleScale(f)))
+            },
+            onValueChangeFinished = {
+                sliding[0] = false
+                tool.endHandleScale()
+            },
+            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+            modifier = Modifier
+                .width(IbisDims.HandleScaleSlider)
+                .semantics { contentDescription = "Handle scale" },
+        )
+        for (side in HandleSide.entries) {
+            HandlesChip(side.label, tool.handleSide == side) { tool.handleSide = side }
+        }
+        HandlesChip("All points", tool.handleAllPoints) { tool.handleAllPoints = !tool.handleAllPoints }
+    }
+    if (typing) {
+        ValueInputDialog(
+            title = "Handle scale",
+            label = "Handles",
+            initial = 100f,
+            format = { Units.formatNumber(it.toDouble(), 0) },
+            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() && it > 0f }?.coerceIn(1f, 10_000f) },
+            step = { v, up -> if (up) v * CurveTool.HANDLE_STEP_UP else v * CurveTool.HANDLE_STEP_DOWN },
+            toFraction = { handleScaleToFraction(it / 100f) },
+            fromFraction = { fractionToHandleScale(it) * 100f },
+            rangeText = "1 – 10000 % of the lengths now",
+            suffix = "%",
+            onApply = { v -> tool.applyHandleScale(v) },
+            onDismiss = { typing = false },
+        )
+    }
+}
+
+/** A chip of the Handles group (its label reads "Handles: …", unique among the strip's controls). */
+@Composable
+private fun HandlesChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, maxLines = 1) },
+        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White),
+        modifier = Modifier
+            .padding(horizontal = 3.dp)
+            .semantics { contentDescription = "Handles: $label" },
+    )
 }
 
 /** What the curve options row shows about the selected anchor. */
@@ -181,22 +561,36 @@ private const val MAX_THICKNESS_PERCENT = 300f
 private const val THICKNESS_STEP = 5f
 
 /** [percent] moved by one step up or down, on the step grid, within 0..300 %. */
-internal fun stepThickness(percent: Float, up: Boolean): Float {
-    val grid = (percent / THICKNESS_STEP).let { if (up) kotlin.math.floor(it + 1e-3f) + 1f else kotlin.math.ceil(it - 1e-3f) - 1f }
-    return (grid * THICKNESS_STEP).coerceIn(0f, MAX_THICKNESS_PERCENT)
+internal fun stepThickness(percent: Float, up: Boolean): Float = stepThickness(percent, up, THICKNESS_STEP)
+
+/** [percent] moved by one [step] up or down, on the step grid, within 0..300 % (v1.6: the Percent increment). */
+internal fun stepThickness(percent: Float, up: Boolean, step: Float): Float {
+    val s = step.takeIf { it.isFinite() && it > 0f } ?: THICKNESS_STEP
+    val grid = (percent / s).let { if (up) kotlin.math.floor(it + 1e-3f) + 1f else kotlin.math.ceil(it - 1e-3f) - 1f }
+    return (grid * s).coerceIn(0f, MAX_THICKNESS_PERCENT)
+}
+
+/** The slider's discrete steps for a [step] grid (0 = continuous when the grid doesn't divide 300 % evenly). */
+private fun thicknessSliderSteps(step: Float): Int {
+    val n = MAX_THICKNESS_PERCENT / step
+    val r = n.roundToInt()
+    return if (abs(n - r) < 1e-3f && r in 1..600) r - 1 else 0
 }
 
 /**
  * The selected point's thickness in the options strip (§4.5): ‹ › steps of 5 % (hold to
  * repeat), the value (tap to type it) and a 0–300 % slider (double-tap it for 100 %). While the
  * slider is dragged the canvas shows a ring of the real line diameter at the point. One undo
- * step per drag, held arrow or typed value.
+ * step per drag, held arrow or typed value. With [bringIntoView] a newly selected point scrolls
+ * the strip so the whole control shows (the Path strip scrolls its point group instead).
  */
 @Composable
-private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
+private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringIntoView: Boolean = true) {
     var typing by remember { mutableStateOf(false) }
     val percent = width * 100f
-    fun current(): Float = (tool.anchors.getOrNull(index)?.width ?: 1f) * 100f
+    // v1.6 §3.4: with increments on, the slider and ‹ › use the Percent step (5 % by default, as before).
+    val step = tool.controller.increments.step(IncrementKind.PERCENT) ?: THICKNESS_STEP
+    fun current(): Float = tool.widthOf(index) * 100f
     fun setPercent(p: Float) = tool.setWidth(index, p / 100f)
     // The value when the first tap of a (possible) double tap on the slider went down.
     val beforeTaps = remember(index) { floatArrayOf(Float.NaN) }
@@ -214,20 +608,23 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
     // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
     // chip in front, or on a narrow phone, its slider would start off the screen).
     val bring = remember { BringIntoViewRequester() }
-    LaunchedEffect(index) {
-        withFrameNanos { }
-        bring.bringIntoView()
+    if (bringIntoView) {
+        LaunchedEffect(index) {
+            withFrameNanos { }
+            bring.bringIntoView()
+        }
     }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.bringIntoViewRequester(bring).padding(horizontal = 2.dp)) {
         Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = false))
+            setPercent(stepThickness(current(), up = false, step))
         }
         Box(
             Modifier
                 .heightIn(min = 40.dp)
                 .widthIn(min = 52.dp)
                 .clip(RoundedCornerShape(8.dp))
+                .stepOnLongPress(IncrementKind.PERCENT)
                 .clickable(onClickLabel = "Type the point thickness", role = Role.Button) { typing = true },
             contentAlignment = Alignment.Center,
         ) {
@@ -244,7 +641,7 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             )
         }
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Thicker point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = true))
+            setPercent(stepThickness(current(), up = true, step))
         }
         Slider(
             value = percent.coerceIn(0f, MAX_THICKNESS_PERCENT),
@@ -252,7 +649,7 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
                 tool.thicknessRing = true
                 // The whole drag is one step, however long the finger rests on the way.
                 if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
-                setPercent((v / THICKNESS_STEP).roundToInt() * THICKNESS_STEP)
+                setPercent(((v / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT))
             },
             onValueChangeFinished = {
                 sliding[0] = false
@@ -260,7 +657,7 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
                 tool.endNumericEdit()
             },
             valueRange = 0f..MAX_THICKNESS_PERCENT,
-            steps = (MAX_THICKNESS_PERCENT / THICKNESS_STEP).toInt() - 1,
+            steps = thicknessSliderSteps(step),
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
                 .width(128.dp)
@@ -277,9 +674,9 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float) {
             initial = percent,
             format = { Units.formatNumber(it.toDouble(), 0) },
             parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(0f, MAX_THICKNESS_PERCENT) },
-            step = { v, up -> stepThickness(v, up) },
+            step = { v, up -> stepThickness(v, up, step) },
             toFraction = { it / MAX_THICKNESS_PERCENT },
-            fromFraction = { f -> ((f * MAX_THICKNESS_PERCENT) / THICKNESS_STEP).roundToInt() * THICKNESS_STEP },
+            fromFraction = { f -> (((f * MAX_THICKNESS_PERCENT) / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT) },
             rangeText = "0 – 300 %",
             suffix = "%",
             onApply = { v ->
@@ -337,7 +734,7 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val dpi = controller.doc.dpi
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
 
-    BwSheet(title = if (tool.polyline) "Polyline" else "Curve", onDismiss = onDismiss) {
+    BwSheet(title = tool.id.label, onDismiss = onDismiss) {
         SectionHeader("Stroke")
         ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i -> set { it.copy(stroke = CurveStroke.entries[i]) } })
         when (s.stroke) {
@@ -386,7 +783,7 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
         SectionHeader("Fill")
         ToggleRow(
             "Fill the path", s.fill, { v -> set { it.copy(fill = v) } },
-            description = if (s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed",
+            description = if (if (tool.isPath) tool.pathCyclic else s.closed) "Fills the inside of the closed path" else "An open path is filled as if it were closed",
         )
         if (s.fill) {
             // A reopened path with a gradient fill (an imported SVG) keeps it until a color is picked.
@@ -395,30 +792,83 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
 
         SectionHeader("Thickness")
         Hint("Select a point to set its thickness (0–300 %). The line blends smoothly from point to point.")
-        if (!CurveGeometry.isUniformWidth(tool.anchors)) {
+        if (!tool.uniformWidth) {
             TextButton(onClick = { tool.resetAllWidths() }) { Text("All points 100 %") }
         }
 
-        SectionHeader("Path")
-        ToggleRow("Closed path", s.closed, { v -> set { it.copy(closed = v) } }, description = "Joins the last point back to the first")
-        if (!tool.polyline) {
-            LabeledSlider(
-                label = "Tension",
-                value = s.tension,
-                onValueChange = { v -> set { it.copy(tension = v) } },
-                valueRange = 0f..1f,
-                valueText = "${(s.tension * 100f).roundToInt()} %",
+        HandleSizeSection(tool)
+
+        if (tool.isPath) {
+            PathSettingsSection(tool)
+        } else {
+            SectionHeader("Path")
+            ToggleRow("Closed path", s.closed, { v -> set { it.copy(closed = v) } }, description = "Joins the last point back to the first")
+            if (!tool.polyline) {
+                LabeledSlider(
+                    label = "Tension",
+                    value = s.tension,
+                    onValueChange = { v -> set { it.copy(tension = v) } },
+                    valueRange = 0f..1f,
+                    valueText = "${(s.tension * 100f).roundToInt()} %",
+                )
+                Hint("0 % is a smooth curve through every point, 100 % straight lines")
+            }
+            Hint(
+                (if (tool.polyline) "Tap to add points, drag any point to move it, long-press a point to select it."
+                else "Tap to add points (on the path to insert one), drag any point to move it, long-press a point for corner / smooth / delete. A selected smooth point shows tangent handles you can drag; the Handles group (or a pinch on the point) scales them.") +
+                    " Undo takes back the last point edit." +
+                    (if (controller.isVectorMode) " On this vector layer, tap the line of a ${if (tool.polyline) "polyline" else "curve"} to edit its points again." else ""),
+                Modifier.padding(top = 8.dp),
             )
-            Hint("0 % is a smooth curve through every point, 100 % straight lines")
         }
-        Hint(
-            (if (tool.polyline) "Tap to add points, drag any point to move it, long-press a point to select it."
-            else "Tap to add points (on the path to insert one), drag any point to move it, long-press a point for corner / smooth / delete. A selected smooth point shows tangent handles you can drag.") +
-                " Undo takes back the last point edit." +
-                (if (controller.isVectorMode) " On this vector layer, tap the line of a ${if (tool.polyline) "polyline" else "curve"} to edit its points again." else ""),
-            Modifier.padding(top = 8.dp),
+    }
+}
+
+/**
+ * "Handle size" (§3.3, app-wide, 75–200 %): how big points and handles are drawn and how far
+ * from them a finger still grabs them, in the Curve, Polyline and Path tools.
+ */
+@Composable
+private fun HandleSizeSection(tool: CurveTool) {
+    var percent by remember(tool) { mutableFloatStateOf(tool.handleSize * 100f) }
+    SectionHeader("Points on screen")
+    LabeledSlider(
+        label = "Handle size",
+        value = percent,
+        onValueChange = { v ->
+            percent = v.roundToInt().toFloat().coerceIn(AppSettings.MIN_CURVE_HANDLE_SCALE * 100f, AppSettings.MAX_CURVE_HANDLE_SCALE * 100f)
+            tool.setHandleSize(percent / 100f)
+        },
+        valueRange = AppSettings.MIN_CURVE_HANDLE_SCALE * 100f..AppSettings.MAX_CURVE_HANDLE_SCALE * 100f,
+        valueText = "${percent.roundToInt()} %",
+        typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),
+    )
+    Hint("Bigger points and handles are easier to grab with a finger")
+}
+
+/** The Path tool's part of its settings sheet: Endpoint, Cyclic and how the gestures work. */
+@Composable
+private fun PathSettingsSection(tool: CurveTool) {
+    val controller = tool.controller
+    SectionHeader("Path")
+    // (Labels other than the strip's chips: both can be on screen at once.)
+    ToggleRow(
+        "Cyclic path", tool.pathCyclic, { v -> tool.setCyclic(v) },
+        description = "Closes the curve smoothly (3 points or more)",
+    )
+    if (!tool.pathCyclic) {
+        ToggleRow(
+            "Touch the end points", tool.pathEndpoint, { v -> tool.setEndpoint(v) },
+            description = if (tool.pathEndpoint) "The curve touches its first and last points" else "The curve starts and ends inside the control polygon",
         )
     }
+    Hint(
+        "Order ${tool.pathOrder}: higher orders make a smoother curve that stays farther from the points (order 2 is the straight control polygon). " +
+            "Tap to add a control point (after the selected one), tap near the dashed polygon to insert one, drag a point to move it, tap a point to select it for its weight and thickness. " +
+            "A higher weight pulls the curve towards its point. \"To Bézier\" turns the path into a Curve-tool path." +
+            (if (controller.isVectorMode) " On this vector layer, tap the line of a path to edit its control points again." else ""),
+        Modifier.padding(top = 8.dp),
+    )
 }
 
 /** Numeric editing of the curve / polyline anchors (hosted by [CurveToolOptions]). */
@@ -426,37 +876,61 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
 private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val s = tool.settings
     val controller = tool.controller
-    val anchors = tool.anchors
-    val sel = tool.selected
+    val count = tool.pointCount
+    val sel = tool.selectedIndex
     val dpi = controller.doc.dpi.toDouble()
     val unit = s.unit
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
-    // Where "Add point" puts the next anchor: starts at the last point (or the canvas center).
-    val start = anchors.lastOrNull()?.pos ?: Vec2(controller.doc.width / 2f, controller.doc.height / 2f)
+    // The points the user edits: the control points (Path) or the anchors.
+    fun posOf(i: Int): Vec2? =
+        if (tool.isPath) tool.spline?.points?.getOrNull(i)?.let { Vec2(it.x, it.y) } else tool.anchors.getOrNull(i)?.pos
+    // Where "Add point" puts the next point: starts at the last point (or the canvas center).
+    val start = posOf(count - 1) ?: Vec2(controller.doc.width / 2f, controller.doc.height / 2f)
     var addX by rememberSaveable { mutableFloatStateOf(start.x) }
     var addY by rememberSaveable { mutableFloatStateOf(start.y) }
     val thicknessSliding = remember { booleanArrayOf(false) }
+    val weightSliding = remember { booleanArrayOf(false) }
 
     BwSheet(
         title = "Numbers",
         onDismiss = onDismiss,
         actions = { UnitSelector(unit, { u -> set { it.copy(unit = u) } }) },
     ) {
-        val a = anchors.getOrNull(sel)
+        val a = posOf(sel)
         if (a != null) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Point ${sel + 1} of ${anchors.size}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
-                ToolIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous point", onClick = { tool.select((sel - 1 + anchors.size) % anchors.size) })
-                ToolIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next point", onClick = { tool.select((sel + 1) % anchors.size) })
+                Text("Point ${sel + 1} of $count", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                ToolIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Previous point", onClick = { tool.select((sel - 1 + count) % count) })
+                ToolIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Next point", onClick = { tool.select((sel + 1) % count) })
             }
             FieldPair(
                 "X", a.x, { x -> tool.moveAnchor(sel, Vec2(x, a.y)) },
                 "Y", a.y, { y -> tool.moveAnchor(sel, Vec2(a.x, y)) },
                 unit, dpi,
             )
+            if (tool.isPath) {
+                NumberField(
+                    label = "Weight",
+                    value = tool.weightOf(sel).toDouble(),
+                    onValueChange = { v ->
+                        // One step per drag, however long the finger rests on the way.
+                        if (!weightSliding[0]) { weightSliding[0] = true; tool.beginNumericEdit() }
+                        tool.setWeight(sel, v.toFloat())
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    decimals = 2,
+                    min = VSpline.MIN_WEIGHT.toDouble(),
+                    max = VSpline.MAX_WEIGHT.toDouble(),
+                    step = 0.1,
+                    logSlider = true,
+                    onValueChangeFinished = { weightSliding[0] = false; tool.endNumericEdit() },
+                    incrementKey = PATH_WEIGHT_KEY,
+                )
+            }
+            val width = tool.widthOf(sel)
             LabeledSlider(
                 label = "Thickness",
-                value = a.width * 100f,
+                value = width * 100f,
                 onValueChange = { v ->
                     // One step per drag, however long the finger rests on the way.
                     if (!thicknessSliding[0]) { thicknessSliding[0] = true; tool.beginNumericEdit() }
@@ -464,13 +938,14 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
                 },
                 valueRange = 0f..300f,
                 steps = 59,
-                valueText = "${(a.width * 100f).roundToInt()} %",
+                valueText = "${(width * 100f).roundToInt()} %",
                 onValueChangeFinished = { thicknessSliding[0] = false; tool.endNumericEdit() },
                 typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),
             )
+            val anchor = if (tool.isPath) null else tool.anchors.getOrNull(sel)
             Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (!tool.polyline) {
-                    ChoiceChips(listOf("Smooth", "Sharp corner"), if (a.sharp) 1 else 0, { i -> tool.setSharp(sel, i == 1) }, Modifier.weight(1f))
+                if (!tool.polyline && anchor != null) {
+                    ChoiceChips(listOf("Smooth", "Sharp corner"), if (anchor.sharp) 1 else 0, { i -> tool.setSharp(sel, i == 1) }, Modifier.weight(1f))
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
@@ -480,12 +955,12 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     Text("Delete", color = BrushworkColors.Danger)
                 }
             }
-            if (!tool.polyline && a.hasCustomTangent) {
+            if (!tool.polyline && anchor != null && anchor.hasCustomTangent) {
                 TextButton(onClick = { tool.resetTangent(sel) }) { Text("Back to the automatic tangent") }
             }
-        } else if (anchors.isNotEmpty()) {
+        } else if (count > 0) {
             Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${anchors.size} point${if (anchors.size == 1) "" else "s"}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                Text("$count point${if (count == 1) "" else "s"}", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
                 TextButton(onClick = { tool.select(0) }) { Text("Edit points") }
             }
             Hint("No point is selected: the arrows move the whole path")
@@ -509,7 +984,7 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
             }
         }
 
-        if (anchors.isNotEmpty()) {
+        if (count > 0) {
             SectionHeader("Nudge")
             NudgeRow(
                 stepPx = s.nudgeStepPx,
