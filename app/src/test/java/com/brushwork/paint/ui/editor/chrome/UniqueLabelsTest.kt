@@ -25,7 +25,8 @@ import org.robolectric.shadows.ShadowLog
  * One pair is shared by design and allowed here: with the tool menu open, the top row's "Ruler"
  * circle (the Ruler panel) and the tool menu's "Ruler" cell (the Ruler tool) — I10 keeps both
  * labels ("Ruler" on the top row, every tool label). The menu is checked with the Brush active
- * (another tool's options strip shows its own chips beside the menu).
+ * (another tool's options strip shows its own chips beside the menu). The More menu opened over
+ * the layer window leaves out its "Import picture" (the window's button is the one).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.editor.chrome.uniquelabelssandbox"])
@@ -157,10 +158,11 @@ internal object UniqueLabels {
                 assertTrue("\"$entry\" in the menu", SmokeUi.has(entry, exact = true))
                 assertTrue("\"$entry\" at most once on screen", popup.count { entry in it.labels } <= 1)
             }
+            assertTrue("\"Import picture\" in the menu without the layer window", SmokeUi.has("Import picture", exact = true))
             closeMenu()
             assertEquals(1, SmokeUi.windows().size)
-            // Opened over the layer window, the menu leaves it open (like every chrome button):
-            // only "Import picture" is in both (the same action; the open menu takes every touch).
+            // Opened over the layer window, the menu leaves it open (like every chrome button)
+            // and leaves out "Import picture": the window's own button is the only one.
             click("Open layers")
             assertNotNull(s.tagged(ChromeTags.LAYER_WINDOW))
             click("More options")
@@ -172,8 +174,11 @@ internal object UniqueLabels {
             assertUnique("More menu and the chrome around the layer window", menu + editor.filter { !window.contains(it.bounds.center) })
             // Against the window's controls, known by their own names (rows show values).
             val windowNames = Clickables.ownLabelsInside(editor.filter { window.contains(it.bounds.center) }, window).flatMap { it.labels }.toSet()
-            val clash = menu.flatMap { it.labels }.filter { it in windowNames && it != "Import picture" }
+            assertTrue("the window's \"Import picture\": $windowNames", "Import picture" in windowNames)
+            assertTrue("not in the menu over it", menu.none { "Import picture" in it.labels })
+            val clash = menu.flatMap { it.labels }.filter { it in windowNames }
             assertTrue("More entries repeating a layer window control: $clash", clash.isEmpty())
+            assertEquals("\"Import picture\" on one control", 1, all.count { "Import picture" in it.labels })
             closeMenu()
             click("Close layers", exact = true)
             // Opened over the tool menu, the menu closes it first: its cells would repeat "Settings".
