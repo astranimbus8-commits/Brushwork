@@ -6,6 +6,8 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.JoinStyle
 import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.tools.vector.ShapeObject
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -136,7 +138,13 @@ data class VPath(
     val fillRule: VFillRule = VFillRule.NONZERO,
     val fill: VPaint? = null,
     val stroke: VStrokeStyle? = null,
-    /** v1.6: the Path tool's control points (see the class docs); null = a plain Bézier path. */
+    /**
+     * v1.6: the Path tool's control points (see the class docs); null = a plain Bézier path.
+     * Null is never written (I8): a plain path encodes exactly as in v1.5, although the codecs
+     * write defaults (`.vec` files, the SVG / PDF payload).
+     */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
     val spline: VSpline? = null,
 ) : VObject() {
     /** Only single-subpath paths can be reopened in the Curve tool. */

@@ -1,0 +1,283 @@
+package com.brushwork.paint.exchange
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.DisplayTiles
+import com.brushwork.paint.exchange.export.ExportOptions
+import com.brushwork.paint.exchange.export.ExportSceneBuilder
+import com.brushwork.paint.exchange.export.PdfPage
+import com.brushwork.paint.exchange.export.PdfWriter
+import com.brushwork.paint.exchange.export.StrokeExport
+import com.brushwork.paint.exchange.export.SvgWriter
+import com.brushwork.paint.exchange.export.TextExportMode
+import com.brushwork.paint.exchange.export.TextSource
+import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.LinearMask
+import com.brushwork.paint.masks.MaskMode
+import com.brushwork.paint.masks.MaskSpec
+import com.brushwork.paint.masks.RadialMask
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.storage.ExportFormat
+import com.brushwork.paint.storage.ImageExport
+import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.TextBoxPreset
+import com.brushwork.paint.tools.text.TextPathMode
+import com.brushwork.paint.tools.text.TextPathSpec
+import com.brushwork.paint.tools.text.TextPathType
+import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.VerticalStyle
+import com.brushwork.paint.tools.vector.CurveStroke
+import com.brushwork.paint.tools.vector.CurveTool
+import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VPaint
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VStrokeStyle
+import com.brushwork.paint.vector.VSubpath
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+
+/**
+ * ONE-OFF generator, run on the v1.5.0 sources (tag v1.5.0, 7771e56) to record what v1.5 writes:
+ * project folders made with the v1.5 tools, and their PNG / SVG / PDF exports. The v1.6 QA
+ * (`qa16/V15*`) opens these folders and compares its own exports with these files.
+ */
+@RunWith(RobolectricTestRunner::class)
+class V15FixtureGenerator {
+    private val app: android.app.Application get() = RuntimeEnvironment.getApplication()
+    private val outRoot = File("C:/Users/USER/Documents/Brushwork/.wt/v16qa-compat/app/build/v15out")
+    private val w = 600
+    private val h = 420
+
+    @Test fun plain() = generate("v15-plain", adjust = false)
+
+    @Test fun adjust() = generate("v15-adjust", adjust = true)
+
+    private fun newDoc(id: String): Document {
+        val doc = Document(id, if (id == "v15-plain") "V15 plain" else "V15 adjust", w, h, 300f)
+        repeat(2) { i ->
+            val bmp = BitmapUtils.createLayerBitmap(w, h)
+            if (i == 0) bmp.eraseColor(-1)
+            doc.layers += Layer(doc.newLayerId(), "Layer ${i + 1}", bmp)
+        }
+        doc.activeLayerIndex = 1
+        return doc
+    }
+
+    private fun generate(id: String, adjust: Boolean) {
+        File(app.filesDir, "projects").deleteRecursively()
+        val doc = newDoc(id)
+        val maker = Smoke.controller(app, doc)
+        build(maker, adjust)
+        assertTrue(Smoke.pumpUntil(30_000) { maker.busyMessage == null && !maker.vectors.isRendering })
+        val dir = File(outRoot, id).apply { deleteRecursively(); mkdirs() }
+        runBlocking { ProjectRepository(app).save(maker.doc, maker.compositor.renderThumbnail(512)) }
+        File(app.filesDir, "projects/$id").copyRecursively(File(dir, "project"), overwrite = true)
+        // Everything below is written from the project as v1.5 loads it (what v1.6 opens).
+        val memoryFlat = maker.compositor.renderFlattened()
+        val c = Smoke.controller(app, runBlocking { ProjectRepository(app).load(id) })
+        assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering })
+        assertTrue("v1.5 reloads its own project pixel for pixel", memoryFlat.sameAs(c.compositor.renderFlattened()))
+        // v1.5's text layer caches against a fresh rendering of their items (as TextTool commits them).
+        val rer = StringBuilder()
+        for (l in c.doc.layers) {
+            val item = l.textData?.let { com.brushwork.paint.tools.text.TextCodec.decode(it) } ?: continue
+            val bmp = BitmapUtils.createLayerBitmap(w, h)
+            com.brushwork.paint.tools.text.TextRenderer.drawItem(Canvas(bmp), item, com.brushwork.paint.tools.text.TextRenderer.prepare(item), null)
+            rer.append("${l.id}\t${l.name}\ttextRerenderEqualsCache=${bmp.sameAs(l.bitmap)}\n")
+        }
+        FileOutputStream(File(dir, "flat.png")).use { ImageExport.encode(c.compositor.renderFlattened(), ExportFormat.PNG, it) }
+        FileOutputStream(File(dir, "flat-white.png")).use { ImageExport.encode(c.compositor.renderFlattened(0xFFFFFFFF.toInt()), ExportFormat.PNG, it) }
+        FileOutputStream(File(dir, "thumb-256.png")).use { ImageExport.encode(c.compositor.renderThumbnail(256), ExportFormat.PNG, it) }
+        // The screen: display tiles at zoom 1 (two columns of 512 px tiles).
+        val tiles = DisplayTiles(w, h)
+        tiles.update(c.compositor, null)
+        val screen = BitmapUtils.createLayerBitmap(w, h)
+        tiles.draw(Canvas(screen), null, smooth = false)
+        FileOutputStream(File(dir, "tiles.png")).use { ImageExport.encode(screen, ExportFormat.PNG, it) }
+        val variants = linkedMapOf(
+            "export.svg" to ExportOptions(com.brushwork.paint.exchange.VectorFormat.SVG),
+            "export-outlines.svg" to ExportOptions(com.brushwork.paint.exchange.VectorFormat.SVG, strokes = StrokeExport.entries.last(), text = TextExportMode.entries.last()),
+            "export-hidden-white.svg" to ExportOptions(com.brushwork.paint.exchange.VectorFormat.SVG, includeHidden = true, whiteBackground = true),
+            "export.pdf" to ExportOptions(com.brushwork.paint.exchange.VectorFormat.PDF),
+            "export-a4-outlines.pdf" to ExportOptions(com.brushwork.paint.exchange.VectorFormat.PDF, page = PdfPage.A4, text = TextExportMode.entries.last(), includeHidden = true),
+        )
+        for ((name, options) in variants) {
+            val scene = runBlocking { ExportSceneBuilder(c, options, TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build() }
+            val out = ByteArrayOutputStream()
+            runBlocking { if (name.endsWith(".svg")) SvgWriter(scene).write(out) else PdfWriter(scene, options.page).write(out) }
+            File(dir, name).writeBytes(out.toByteArray())
+            // Determinism: a second export of the same document writes the same bytes (PDF: but its date and id).
+            val again = ByteArrayOutputStream()
+            val scene2 = runBlocking { ExportSceneBuilder(c, options, TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build() }
+            runBlocking { if (name.endsWith(".svg")) SvgWriter(scene2).write(again) else PdfWriter(scene2, options.page).write(again) }
+            assertTrue("$name is deterministic", normalized(name, out.toByteArray()).contentEquals(normalized(name, again.toByteArray())))
+        }
+        File(dir, "crc.txt").writeText(
+            dir.listFiles()!!.filter { it.isFile && it.name != "crc.txt" && it.name != "layers.txt" }.sortedBy { it.name }.joinToString("\n") { f ->
+                val b = normalized(f.name, f.readBytes())
+                "\"${f.name}\" to (${java.util.zip.CRC32().apply { update(b) }.value}L to ${b.size}),"
+            },
+        )
+        File(dir, "rerender.txt").writeText(rer.toString())
+        File(dir, "layers.txt").writeText(
+            c.doc.layers.joinToString("\n") { l ->
+                "${l.id}\t${l.name}\ttext=${l.textData != null}\tshape=${l.shapeData != null}\tvector=${l.vector != null}\tmaskSpec=${l.maskSpec != null}\tadj=${l.adjustment?.filterId}\tmask=${l.mask != null}\tblend=${l.blendMode}\topacity=${l.opacity}\tvisible=${l.visible}\tclip=${l.clipping}"
+            },
+        )
+        println("V15 fixture $id written to $dir")
+    }
+
+    private fun build(c: EditorController, adjust: Boolean) {
+        // Every kind of layer made with the v1.5 tools (the v1.5 exchange QA's document) ...
+        val kinds = QaExchange.allKinds(c)
+        if (!adjust) {
+            // v15-plain has no adjustment layer (format 1, the v1.4 compositor path).
+            c.deleteLayer(kinds.getValue("tone"))
+            c.selectLayer(kinds.getValue("vector"))
+        }
+        // ... plus the kinds that document lacks.
+        extraText(c)
+        shapeLayer(c)
+        curveDetails(c)
+        if (adjust) adjustments(c)
+    }
+
+    /** Boxed, outlined and turned text; vertical mixed text; letters rotated along a curve. */
+    private fun extraText(c: EditorController) {
+        c.selectTool(ToolId.TEXT)
+        val text = c.tools.getValue(ToolId.TEXT) as TextTool
+        fun newText(x: Float, y: Float, s: String, edit: TextTool.() -> Unit) {
+            text.startTextAt(x, y)
+            text.setText(s)
+            text.updateSpec { it.copy(sizePx = 24f, color = 0xFF103060.toInt(), vertical = false) }
+            text.confirmEditor()
+            text.edit()
+            assertTrue("text \"$s\" committed", text.commitItem())
+            assertTrue(c.activeLayer.isTextLayer)
+        }
+        newText(510f, 330f, "Boxed caption\nover two lines") {
+            updateSpec { it.copy(align = com.brushwork.paint.tools.text.TextAlign.CENTER, letterSpacing = 0.04f, strokeWidthPx = 2f, strokeColor = 0xFFFFCC00.toInt()) }
+            applyBoxPreset(TextBoxPreset.CAPTION)
+            setRotation(-12f)
+        }
+        newText(560f, 140f, "縦書き AB\n12!? テキスト") {
+            toggleVertical()
+            updateSpec { it.copy(verticalStyle = VerticalStyle.MIXED, sizePx = 18f) }
+        }
+        newText(300f, 395f, "Rotated letters along a curve") {
+            updateSpec { it.copy(sizePx = 18f, strokeWidthPx = 1.5f, strokeColor = 0xFFFFFFFF.toInt()) }
+            setPath(TextPathSpec(type = TextPathType.CURVE, mode = TextPathMode.ROTATE, x1 = 160f, y1 = 400f, cx1 = 260f, cy1 = 330f, cx2 = 380f, cy2 = 420f, x2 = 470f, y2 = 360f))
+        }
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    /** A shape in its own editable layer (Shape tool on a pixel layer): a filled, outlined star. */
+    private fun shapeLayer(c: EditorController) {
+        val raster = c.doc.layers.first { it.name == "Raster" }
+        c.selectLayer(raster)
+        c.selectTool(ToolId.SHAPE)
+        val shape = c.tools.getValue(ToolId.SHAPE) as ShapeTool
+        shape.update { it.copy(type = ShapeType.STAR, style = ShapeStyle.STROKE_FILL, fillColor = 0xFF55AAFF.toInt(), useBrushSize = false, strokeWidth = 4f, editable = true) }
+        c.color = 0xFF003366.toInt()
+        QaExchange.drag(c, 490f to 20f, 590f to 110f)
+        shape.commit()
+        assertTrue("a shape layer", c.activeLayer.shapeData != null)
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    /** Curves with handles (smooth and sharp anchors, per-point widths, a fill) and a polyline. */
+    private fun curveDetails(c: EditorController) {
+        val vector = c.doc.layers.first { it.isVectorLayer }
+        val smooth = VPath(
+            0,
+            subpaths = listOf(
+                VSubpath(
+                    listOf(
+                        VAnchor(30f, 380f, outX = 30f, outY = -40f, width = 0.5f),
+                        VAnchor(110f, 360f, inX = -25f, inY = 10f, outX = 25f, outY = -10f, width = 2f),
+                        VAnchor(180f, 400f, sharp = true, inX = -20f, inY = -30f, outX = 10f, outY = -35f, width = 1f),
+                        VAnchor(230f, 350f),
+                    ),
+                    closed = false,
+                ),
+            ),
+            stroke = VStrokeStyle(color = 0xFF006633.toInt(), width = 6f),
+        )
+        val closed = VPath(
+            0,
+            subpaths = listOf(VSubpath(listOf(VAnchor(520f, 200f), VAnchor(580f, 230f), VAnchor(560f, 290f), VAnchor(500f, 270f)), closed = true)),
+            tension = 0.3f,
+            fill = VPaint.Solid(0x8033CC99.toInt()),
+            stroke = VStrokeStyle(color = 0xFF000000.toInt(), width = 1.5f),
+        )
+        c.vectors.addObjects(vector, listOf(smooth, closed), "Add curves")
+        c.selectLayer(vector)
+        c.selectTool(ToolId.POLYLINE)
+        val poly = c.tools.getValue(ToolId.POLYLINE) as CurveTool
+        poly.update { it.copy(stroke = CurveStroke.PLAIN, useBrushSize = false, plainWidth = 3f) }
+        c.color = 0xFF990066.toInt()
+        poly.addAnchor(Vec2(20f, 250f)); poly.addAnchor(Vec2(70f, 230f)); poly.addAnchor(Vec2(60f, 290f)); poly.addAnchor(Vec2(110f, 270f))
+        poly.commit()
+        c.selectTool(ToolId.BRUSH)
+    }
+
+    /** Adjustment layers with mask specs: radial + subtracted linear, a non-normal blend mode, partial opacity, a transparent area below. */
+    private fun adjustments(c: EditorController) {
+        // A hole in the background: the composite below the adjustments is not opaque there.
+        val bg = c.doc.layers.first { it.name == "Background" }
+        c.editWholeLayer(bg, "Hole") { b -> Canvas(b).drawRect(0f, 380f, 120f, 420f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }) }
+        c.selectLayer(c.doc.layers.indexOfFirst { it.name == "Raster" }.let { c.doc.layers[it] })
+        val hue = c.addAdjustmentLayer(
+            AdjustmentSpec(filterId = "adjust.hue_saturation", values = JsonObject(mapOf("hue" to JsonPrimitive(60f), "saturation" to JsonPrimitive(30f), "brightness" to JsonPrimitive(0f), "colorize" to JsonPrimitive(false)))),
+            MaskSpec(
+                components = listOf(
+                    RadialMask(1, cx = 300f, cy = 210f, rx = 220f, ry = 150f, rotationDeg = 20f, feather = 0.6f),
+                    LinearMask(2, mode = MaskMode.SUBTRACT, amount = 0.7f, x0 = 0f, y0 = 0f, x1 = 200f, y1 = 120f),
+                ),
+                nextId = 3,
+            ),
+        )!!
+        c.setLayerProps(hue, hue.props().copy(opacity = 0.8f))
+        val bc = c.addAdjustmentLayer(
+            AdjustmentSpec(filterId = "adjust.brightness_contrast", values = JsonObject(mapOf("brightness" to JsonPrimitive(20f), "contrast" to JsonPrimitive(40f)))),
+            MaskSpec(components = listOf(LinearMask(1, x0 = 600f, y0 = 0f, x1 = 300f, y1 = 0f)), invert = true, density = 0.9f, nextId = 2),
+        )!!
+        c.setLayerProps(bc, bc.props().copy(blendMode = LayerBlendMode.MULTIPLY, opacity = 0.6f))
+        // An adjustment without a mask over everything, at the top.
+        c.selectLayer(c.doc.layers.last())
+        val inv = c.addAdjustmentLayer(AdjustmentSpec(filterId = "adjust.invert", values = JsonObject(mapOf("amount" to JsonPrimitive(35f)))), null)!!
+        c.setLayerProps(inv, inv.props().copy(opacity = 0.5f))
+    }
+}
+
+/** [bytes] of export [name] with a PDF's creation date and file id (time and random) zeroed, same length. */
+internal fun normalized(name: String, bytes: ByteArray): ByteArray {
+    if (!name.endsWith(".pdf")) return bytes
+    var s = String(bytes, Charsets.ISO_8859_1)
+    s = Regex("""/CreationDate \(D:(\d+)""").replace(s) { "/CreationDate (D:" + "0".repeat(it.groupValues[1].length) }
+    s = Regex("""/ID \[<([0-9A-Fa-f]+)> <([0-9A-Fa-f]+)>]""").replace(s) { "/ID [<" + "0".repeat(it.groupValues[1].length) + "> <" + "0".repeat(it.groupValues[2].length) + ">]" }
+    return s.toByteArray(Charsets.ISO_8859_1)
+}
