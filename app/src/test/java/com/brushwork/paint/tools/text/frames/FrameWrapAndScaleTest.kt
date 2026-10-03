@@ -134,7 +134,7 @@ class FrameWrapAndScaleTest {
     }
 
     @Test
-    fun theMeasureCacheFindsTailsByTextOnlyForUnscaledLetters() {
+    fun theMeasureCacheFindsScaledTailsOnlyWithTheSameFactors() {
         val spec = TextSpec(sizePx = 16f, box = TextBoxSpec(width = 200f, minHeight = 60f))
         fun frame(story: String, start: Int, letters: Boolean) = TextItem(
             spec = if (letters) spec.copy(letterScale = LetterScaleSpec(60f)) else spec,
@@ -145,7 +145,10 @@ class FrameWrapAndScaleTest {
         assertNotNull("the same tail of another story", cache.get(frame("Six two three four", 4, false)))
         assertNotNull("the same tail at another start", cache.get(frame("Eleven two three four", 7, false)))
         cache.frameLayout(frame("One two three four", 4, true))
-        assertNull("scaled: another story is another ramp", cache.get(frame("Six two three four", 4, true)))
+        // v1.6 integration (item 8): a scaled tail is found by its text too, but only when its
+        // letters have the same factors (the same letter count before it and in its scope).
+        assertNotNull("scaled: as many letters before the same tail", cache.get(frame("Six two three four", 4, true)))
+        assertNull("scaled: more letters before the same tail are other factors", cache.get(frame("Seven two three four", 6, true)))
         assertNotNull(cache.get(frame("One two three four", 4, true)))
     }
 }

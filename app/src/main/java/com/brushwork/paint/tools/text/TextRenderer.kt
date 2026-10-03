@@ -375,7 +375,7 @@ object TextRenderer {
      * character's advance times its letter's factor, [text] being the ramp's source from
      * [offset] on ([key]: see [WrapText.scaleKey]). Letter spacing is in em, so it scales too.
      */
-    private fun measureFor(text: String, paint: TextPaint, ramp: LetterRampResult?, offset: Int, key: ScaleKey?): WrapText {
+    private fun measureFor(text: String, paint: TextPaint, ramp: LetterRampResult?, offset: Int, key: Any?): WrapText {
         if (ramp == null) return WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
         val f = ramp.factors
         return WrapLayout.measure(text, WrapMeasurer { s, a, b, out ->
@@ -610,7 +610,8 @@ object TextRenderer {
      * v1.6 letter scaling (area C): the measurer's advances are scaled by the ramp over the WHOLE
      * story (a frame's letters continue the ramp of the frames before it: its letter offset is
      * computed from `story[0, start)`, never stored), so the flow and the rendering keep agreeing.
-     * A measurement is reused only for the same story, scale and start ([WrapText.scaleKey]).
+     * A measurement is reused only for the same tail measured with the same factors (see
+     * [canReuseMeasured]): the same characters after other letters are measured again.
      */
     fun frameLayout(item: TextItem, measured: WrapText? = null): TextFrameLayout {
         val spec = item.spec
@@ -624,9 +625,8 @@ object TextRenderer {
         val rest = story.length - start
         val ramp = rampFor(spec, story)
         if (ramp != null) paint.fontFeatureSettings = SCALED_LETTER_FEATURES
-        val key = ramp?.let { ScaleKey(spec.letterScale, story, start) }
-        val wt = measured?.takeIf { it.scaleKey == key && it.text.length == rest && story.regionMatches(start, it.text, 0, rest) }
-            ?: measureFor(story.substring(start), paint, ramp, start, key)
+        val wt = measured?.takeIf { reusable(it, story, start, ramp) }
+            ?: measureFor(story.substring(start), paint, ramp, start, ramp?.let { TailScaleKey.of(it, start) })
         val width = if (ramp != null) scaledWidth(wrap, wt)
         else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
         val height = if (wrap > 0f && spec.box.minHeight > 0f) spec.box.minHeight else Float.POSITIVE_INFINITY
@@ -636,6 +636,26 @@ object TextRenderer {
         else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - (height + 2f * inset) / 2f, item.wrap.gapPx)
         val res = WrapLayout.layoutFrame(wt, width, height, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx)
         return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt, ramp)
+    }
+
+    /**
+     * Whether [frameLayout] of [item] reuses [measured] (v1.6 integration): it is the item's tail
+     * (`story.substring(start)`) measured as `frameLayout` measures it — unscaled when the item's
+     * letters aren't scaled, else with the very factors the item's story gives that tail
+     * ([TailScaleKey]). The paint's look is the caller's to match (as for any reused measurement).
+     */
+    internal fun canReuseMeasured(item: TextItem, measured: WrapText): Boolean {
+        val th = item.thread
+        val story = if (th.isOn) th.story else item.text
+        val start = if (th.isOn) th.start.coerceIn(0, story.length) else 0
+        return reusable(measured, story, start, rampFor(item.spec, story))
+    }
+
+    private fun reusable(m: WrapText, story: String, start: Int, ramp: LetterRampResult?): Boolean {
+        val rest = story.length - start
+        if (m.text.length != rest || !story.regionMatches(start, m.text, 0, rest)) return false
+        val key = m.scaleKey
+        return if (ramp == null) key == null else key is TailScaleKey && key.matches(ramp, start)
     }
 
     /**
