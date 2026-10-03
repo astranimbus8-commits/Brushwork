@@ -71,10 +71,12 @@ internal object QaCurves {
 
     // ------------------------------------------------------------------ strip controls
 
-    /** The (last placed) node described [description] (content description containing it). */
-    fun node(description: String): SemanticsNode = RobolectricUi.elements().last { e ->
+    /** The (last placed) node described [description] (content description containing it), else the one whose text is [description] (a chip). */
+    fun node(description: String): SemanticsNode = RobolectricUi.elements().lastOrNull { e ->
         e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.contains(description) } == true
-    }.node
+    }?.node ?: RobolectricUi.elements().lastOrNull { e ->
+        e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == description } == true
+    }?.node ?: throw AssertionError("nothing described or labelled \"$description\"")
 
     /** Scrolls the (horizontally scrolling) options strip until [description] shows whole. */
     fun scrollStripTo(s: ChromeScreen, description: String) {
@@ -83,8 +85,9 @@ internal object QaCurves {
         var p: SemanticsNode? = node(description)
         while (p != null && p.config.getOrNull(SemanticsActions.ScrollBy) == null) p = p.parent
         val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$description\" is clipped and does not scroll" }
-        // Towards it: from the strip's left half rightwards, else back.
-        val dir = if (node(description).boundsInWindow.left > p!!.boundsInWindow.center.x) 1f else -1f
+        // Towards it: from the strip's left half rightwards, else back (by its unclipped position:
+        // a control scrolled wholly out of the strip has empty visible bounds).
+        val dir = if (node(description).positionInWindow.x > p!!.boundsInWindow.center.x) 1f else -1f
         repeat(40) {
             if (whole()) return
             scroll.invoke(dir * 60f * s.density, 0f)

@@ -954,7 +954,9 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
                     tool.setWidth(sel, v / 100f)
                 },
                 valueRange = 0f..300f,
-                steps = 59,
+                // v1.5's 5 % ticks; with increments on, the Percent step's (as the strip's slider),
+                // so a finer step than 5 % is reachable (the slider then lands on its multiples).
+                steps = thicknessSliderSteps(controller.increments.step(IncrementKind.PERCENT) ?: THICKNESS_STEP),
                 valueText = "${(width * 100f).roundToInt()} %",
                 onValueChangeFinished = { thicknessSliding[0] = false; tool.endNumericEdit() },
                 typing = SliderTyping(scale = 1f, decimals = 0, suffix = "%"),
