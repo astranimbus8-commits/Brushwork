@@ -202,7 +202,8 @@ internal object Shots {
     private val DIR = File("C:\\Users\\USER\\Documents\\Brushwork\\.wt\\_tools\\v16-qa-shots")
 
     fun save(b: Bitmap, name: String): File? {
-        if (!DIR.parentFile!!.isDirectory) return null
+        // On other hosts (CI on Linux) the Windows path has no parent: no renders there.
+        if (DIR.parentFile?.isDirectory != true) return null
         DIR.mkdirs()
         val f = File(DIR, name)
         FileOutputStream(f).use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
