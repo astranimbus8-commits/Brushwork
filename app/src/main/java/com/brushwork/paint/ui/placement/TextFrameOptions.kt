@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.placement
 
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
@@ -11,6 +12,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ContentCut
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.filled.TextRotateVertical
 import androidx.compose.material.icons.filled.TextRotationNone
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -29,10 +32,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -60,6 +68,7 @@ fun TextToolOptions(tool: TextTool) {
                 StripButton(Icons.Filled.Edit, "Edit text") { tool.openEditor() }
                 StripButton(Icons.Filled.Tune, "Numbers") {
                     tool.wrapSheetOpen = false
+                    tool.lettersSheetOpen = false
                     tool.numbersOpen = true
                 }
             }
@@ -71,7 +80,9 @@ fun TextToolOptions(tool: TextTool) {
             selected = tool.isVertical && !onPath,
             enabled = !onPath,
         )
+        // Wrap stays on the first screen of a 360 dp phone; "Letters" follows it.
         WrapChip(tool)
+        LettersChip(tool)
         SnapToObjectsChip(c)
         Spacer(Modifier.width(4.dp))
         Hint(
@@ -90,6 +101,41 @@ fun TextToolOptions(tool: TextTool) {
     if (tool.editorOpen && item != null) TextEditorDialog(tool)
     if (tool.numbersOpen && item != null && !tool.editorOpen) TextNumbersSheet(tool)
     if (tool.wrapSheetOpen && item != null && !tool.editorOpen) TextWrapSheet(tool)
+    // Also over the open editor (stacked on it), so the chip always shows what it opens.
+    if (tool.lettersSheetOpen && item != null) TextLetterScaleSheet(tool)
+}
+
+/**
+ * The "Letters" chip of the text options (v1.6 §3.5a): opens the small "Letter scaling" sheet
+ * (the editor's section) for the pending text, or the active text layer. Highlighted while the
+ * text's letters are scaled. Its accessible label is "Letter scaling" (I10, unique).
+ */
+@Composable
+internal fun LettersChip(tool: TextTool) {
+    val on = tool.item?.spec?.letterScale?.isOn == true
+    val sheets = LocalSheetHost.current
+    TextButton(
+        onClick = {
+            tool.openLettersSheet()
+            // Already open under another sheet (the editor opened over it), or folded into its
+            // pill: brought back on top and shown.
+            if (tool.lettersSheetOpen) sheets?.bringToFront(LettersSheetGroup)
+        },
+        colors = ButtonDefaults.textButtonColors(
+            containerColor = if (on) BrushworkColors.AccentDim else Color.Transparent,
+            contentColor = if (on) Color.White else BrushworkColors.OnChrome,
+        ),
+        // Slim sides (the button keeps its 40 dp minimum height): the whole chip fits on a 392 dp phone's first screen.
+        contentPadding = PaddingValues(horizontal = 8.dp),
+        modifier = Modifier.semantics {
+            contentDescription = "Letter scaling"
+            stateDescription = if (on) "On" else "Off"
+        },
+    ) {
+        Icon(Icons.Filled.FormatSize, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(4.dp))
+        Text("Letters", maxLines = 1)
+    }
 }
 
 /** Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog. */

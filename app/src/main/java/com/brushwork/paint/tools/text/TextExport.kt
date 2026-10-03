@@ -29,8 +29,13 @@ object TextExport {
      *
      * Null for vertical text and text on a path (use [outlines] / [outlineParts]). Empty for an
      * empty text.
+     *
+     * v1.6: null (the FIRST check, before anything is laid out) for text with letter scaling
+     * on: its letters have their own sizes and places, which a run of one font size can't
+     * carry, so exporters use [outlineParts] and the look stays exact.
      */
     fun lines(item: TextItem): List<TextLineRun>? {
+        if (item.spec.letterScale.isOn) return null
         if (item.spec.vertical || item.path.isActive) return null
         val prep = TextRenderer.prepare(item)
         val block = prep.block ?: return null
@@ -93,7 +98,7 @@ object TextExport {
         val block = prep.block
         if (block == null) {
             val paints = prep.paints ?: TextRenderer.pathPaints(spec)
-            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path) ?: return null
+            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path, TextRenderer.pathLetters(item)) ?: return null
             if (stroke != null) out += TextOutlinePart(stroke, spec.strokeColor, TextOutlinePart.Kind.TEXT_OUTLINE)
             out += TextOutlinePart(glyphs, spec.color, TextOutlinePart.Kind.TEXT)
             return out

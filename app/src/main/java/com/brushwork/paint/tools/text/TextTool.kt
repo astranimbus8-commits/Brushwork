@@ -12,11 +12,13 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.RulerHandleSnap
 import com.brushwork.paint.core.LengthUnit
+import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
@@ -125,6 +127,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
 
     /** The outline of the picture a pending text wraps around is drawn (dashed). */
     var showWrapOutline by mutableStateOf(true)
+
+    /** The small "Letter scaling" sheet is showing (v1.6, the options strip's "Letters" chip). */
+    var lettersSheetOpen by mutableStateOf(false)
 
     init {
         // The re-flow listener skips the text open here and tells this tool when its picture changes.
@@ -372,6 +377,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
             // Nothing was placed: the active layer never changed.
             vectorReturn = null
             wrapSheetOpen = false
+            lettersSheetOpen = false
         } else {
             nextSpec = styleToRemember(cur.spec)
         }
@@ -386,6 +392,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         if (item == null) {
             vectorReturn = null
             wrapSheetOpen = false
+            lettersSheetOpen = false
         }
         controller.invalidateOverlay()
     }
@@ -599,6 +606,29 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         }
     }
 
+    // ------------------------------------------------------------------ letter scaling (v1.6 §3.5)
+
+    /**
+     * The "Letters" chip: opens the "Letter scaling" sheet for the pending text; with none, the
+     * active text layer is opened for editing first (a message says what to do otherwise).
+     */
+    fun openLettersSheet() {
+        if (item == null) {
+            val active = controller.activeLayer
+            if (!active.isTextLayer) {
+                controller.toast(LETTERS_NEED_TEXT)
+                return
+            }
+            if (!editLayer(active)) return
+        }
+        // A frame of a linked story switched tools (editLayer's seam): nothing pending here.
+        if (item == null) return
+        numbersOpen = false
+        wrapSheetOpen = false
+        lettersSheetOpen = true
+        controller.invalidateOverlay()
+    }
+
     // ------------------------------------------------------------------ wrap around a picture (v1.5 §4.1)
 
     /** Outlines of layers, shared with the re-flow listener. */
@@ -675,6 +705,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
             return
         }
         numbersOpen = false
+        lettersSheetOpen = false
         if (!cur.wrap.isOn) defaultWrapSource(cur)?.let { setWrapSource(it) }
         wrapSheetOpen = true
         controller.invalidateOverlay()
@@ -822,18 +853,22 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         editorOpen = false
         numbersOpen = false
         wrapSheetOpen = false
+        lettersSheetOpen = false
         editingNew = false
         editorBackup = null
         mode = Mode.NONE
         gestureStart = null
         pinchStart = null
         endSnap()
+        clearReadout()
         endLayerEdit()
         controller.invalidateOverlay()
     }
 
     override fun onDeactivate() {
         endSnap()
+        // A gesture cut short by a tool switch never leaves its increments readout behind.
+        clearReadout()
         if (hasPendingWork) {
             if (!commitItem()) discardItem()
             // Switching tools with a text pending: vector mode doesn't flip off. (Not while
@@ -910,6 +945,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         editorOpen = false
         numbersOpen = false
         wrapSheetOpen = false
+        lettersSheetOpen = false
         editorBackup = null
         // addLayerWithContent applies the color mode and handles a failed layer allocation itself;
         // the catch covers its grayscale/1-bit conversion, which allocates a canvas-sized buffer.
@@ -969,6 +1005,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         editorOpen = false
         numbersOpen = false
         wrapSheetOpen = false
+        lettersSheetOpen = false
         editorBackup = null
         endLayerEdit()
         nextSpec = styleToRemember(cur.spec)
@@ -1231,13 +1268,24 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         when (mode) {
             Mode.MOVE -> {
                 var dx = q.x - downDoc.x; var dy = q.y - downDoc.y
+                var snappedX = false
+                var snappedY = false
                 // The box the finger alone gives snaps (never the last snapped one), so moving
                 // farther than the snap distance lets go of a guide.
                 startBox?.let { b ->
                     val r = snap.snapMove(b.offset(dx, dy))
                     if (r.snappedX) dx += r.dx
                     if (r.snappedY) dy += r.dy
+                    snappedX = r.snappedX
+                    snappedY = r.snappedY
                     snapMoving = if (r.snappedX || r.snappedY) b.offset(dx, dy) else null
+                }
+                // v1.6 increments: an axis no guide holds moves in Length steps from the start.
+                if (increments.step(IncrementKind.LENGTH) != null) {
+                    val stepped = increments.lengthDelta(Vec2(dx, dy))
+                    if (!snappedX) dx = stepped.x
+                    if (!snappedY) dy = stepped.y
+                    showReadout(signedLength(dx) + ", " + signedLength(dy))
                 }
                 val next = translated(start, dx, dy)
                 // Text on a path: offset the measured bounds instead of measuring every frame.
@@ -1246,20 +1294,42 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
             }
             Mode.ROTATE -> {
                 val delta = Math.toDegrees(((q - c).angle - (downDoc - c).angle).toDouble()).toFloat()
-                item = start.copy(rotationDeg = TextItem.snapDegrees(start.rotationDeg + delta))
+                // v1.6 increments: the Angle step replaces the soft 45° detents.
+                item = if (increments.step(IncrementKind.ANGLE) != null) {
+                    val deg = increments.angle(start.rotationDeg + delta)
+                    showReadout(Units.formatNumber(deg.toDouble(), 1) + "°")
+                    start.copy(rotationDeg = deg)
+                } else {
+                    start.copy(rotationDeg = TextItem.snapDegrees(start.rotationDeg + delta))
+                }
             }
             Mode.SCALE -> {
                 val d0 = (downDoc - c).length
                 if (d0 < 1e-3f) return
-                val size = (start.spec.sizePx * (q - c).length / d0).coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)
+                val size = if (increments.step(IncrementKind.SCALE) != null) {
+                    // v1.6 increments: the size changes by Scale steps of the size at the start.
+                    val k = increments.factor((q - c).length / d0)
+                    showReadout(Units.formatNumber(k * 100.0, 0) + " %")
+                    (start.spec.sizePx * k).coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)
+                } else {
+                    (start.spec.sizePx * (q - c).length / d0).coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)
+                }
                 val k = size / start.spec.sizePx
                 item = start.copy(spec = start.spec.scaled(k).copy(sizePx = size))
             }
             Mode.BOX -> item = boxResized(start, q)
             Mode.DEPTH -> item = depthResized(start, q)
             Mode.PATH_HANDLE -> {
-                var at = q + handleGrab
-                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, at)
+                val raw = q + handleGrab
+                var at = raw
+                if (handleSnaps(start.path.type, handleIndex)) at = snapPathHandle(start.path, handleIndex, raw)
+                // v1.6 increments: a point handle moves in Length steps on the axes no guide holds.
+                if (increments.step(IncrementKind.LENGTH) != null && stepsAsPoint(start.path.type, handleIndex)) {
+                    val d = increments.lengthDelta(q - downDoc)
+                    val stepped = downDoc + handleGrab + d
+                    at = Vec2(if (at.x == raw.x) stepped.x else at.x, if (at.y == raw.y) stepped.y else at.y)
+                    showReadout(signedLength(d.x) + ", " + signedLength(d.y))
+                }
                 item = start.copy(path = TextOnPath.moveHandle(start.path, handleIndex, at))
             }
             Mode.NONE, Mode.CREATE -> return
@@ -1282,7 +1352,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         val raw = if (vertical) l.y - boxGrab else l.x - boxGrab
         // The dragged edge (right of horizontal text, bottom of vertical text) snaps.
         val outer = snappedOuter(start, b0, Vec2.ZERO, if (vertical) Vec2(0f, 1f) else Vec2(1f, 0f), raw, inset, min)
-        val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
+        val content = steppedBoxLength(outer - 2f * inset).coerceIn(min, maxBoxPx)
         val ns = if (vertical) spec.copy(box = spec.box.copy(height = content)) else spec.copy(box = spec.box.copy(width = content))
         return anchored(start, b0, start.copy(spec = ns))
     }
@@ -1298,10 +1368,12 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         if (guide == null || content < min || content > maxBoxPx) {
             snap.clearGuides()
             snapMoving = null
+            edgeSnapped = false
             return raw
         }
         snap.showGuidesFor(guide, POINT_GUIDE_EPS)
         snapMoving = guide
+        edgeSnapped = true
         return outer
     }
 
@@ -1327,9 +1399,60 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
             spec.columnsLeftToRight -> snappedOuter(start, b0, Vec2.ZERO, Vec2(1f, 0f), raw, inset, min)
             else -> snappedOuter(start, b0, Vec2(b0.width, 0f), Vec2(-1f, 0f), raw, inset, min)
         }
-        val content = (outer - 2f * inset).coerceIn(min, maxBoxPx)
+        val content = steppedBoxLength(outer - 2f * inset).coerceIn(min, maxBoxPx)
         val ns = if (spec.vertical) spec.copy(box = spec.box.copy(minWidth = content)) else spec.copy(box = spec.box.copy(minHeight = content))
         return anchored(start, b0, start.copy(spec = ns))
+    }
+
+    // ------------------------------------------------------------------ increments (v1.6 §3.4)
+
+    /**
+     * The app's increments (v1.6 §3.4c, hooks of area C): a move steps by the Length step from
+     * the gesture start (per axis, where no guide holds it), the size handle and the pinch by the
+     * Scale step of the size at the start, every turn to a multiple of the Angle step (replacing
+     * the soft 45° detents), a box side to a multiple of the Length step. Object snapping wins
+     * over the step. Off (the default): every gesture is exactly v1.5's. Typed values (the
+     * editor, the numbers sheet) are never stepped.
+     */
+    private val increments get() = controller.increments
+
+    /** Whether the box side being dragged is held by a guide (it is not stepped then). */
+    private var edgeSnapped = false
+
+    /** True while this tool's gesture shows the increments readout. */
+    private var readoutShown = false
+
+    /** A box length (document px) on the Length step, unless a guide holds the dragged side. */
+    private fun steppedBoxLength(v: Float): Float {
+        if (edgeSnapped || increments.step(IncrementKind.LENGTH) == null) return v
+        val stepped = increments.lengthAbs(v)
+        showReadout(Units.format(stepped.toDouble(), positionUnit, doc.dpi.toDouble()))
+        return stepped
+    }
+
+    /** Text path handles that are points (moved by Length steps); not sizes, angles or the text position. */
+    private fun stepsAsPoint(type: TextPathType, index: Int): Boolean = when (type) {
+        TextPathType.NONE -> false
+        TextPathType.LINE -> index in 0..2
+        TextPathType.CIRCLE, TextPathType.RECT -> index == 0
+        TextPathType.CURVE -> index in 0..4
+    }
+
+    /** "+30 px" in the position unit. */
+    private fun signedLength(px: Float): String {
+        val s = Units.format(px.toDouble(), positionUnit, doc.dpi.toDouble())
+        return if (px > 0f) "+$s" else s
+    }
+
+    private fun showReadout(text: String) {
+        increments.readout = text
+        readoutShown = true
+    }
+
+    private fun clearReadout() {
+        if (!readoutShown) return
+        readoutShown = false
+        increments.readout = null
     }
 
     /**
@@ -1366,6 +1489,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         gestureStart = null
         gesturePrepared = null
         endSnap()
+        clearReadout()
         when {
             moved -> {}
             // The editor is open (minimized to its pill while the canvas is used): the text can
@@ -1408,6 +1532,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         gestureStart = null
         gesturePrepared = null
         endSnap()
+        clearReadout()
         controller.invalidateOverlay()
     }
 
@@ -1450,13 +1575,33 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         val start = pinchStart ?: return
         // Placed or removed meanwhile (a chrome button): nothing to pinch any more.
         if (item == null) { pinchStart = null; return }
-        val delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg).takeIf { it.isFinite() } ?: 0f
-        val next = start.pinched(pinchFocus, translation, scale, delta, maxSizePx)
+        var delta = TransformHandles.pinchRotation(start.rotationDeg, rotationDeg).takeIf { it.isFinite() } ?: 0f
+        var scaleK = scale
+        var move = translation
+        // v1.6 increments: the size by Scale steps, the angle to Angle steps, the move by Length steps.
+        if (increments.enabled) {
+            val parts = ArrayList<String>(3)
+            if (increments.step(IncrementKind.SCALE) != null && scale.isFinite() && scale > 0f) {
+                scaleK = increments.factor(scale)
+                parts += Units.formatNumber(scaleK * 100.0, 0) + " %"
+            }
+            if (increments.step(IncrementKind.ANGLE) != null && rotationDeg.isFinite()) {
+                // The Angle step replaces the pinch's 45° detents (a small turn rounds back anyway).
+                val deg = increments.angle(start.rotationDeg + TextItem.normalizeDegrees(rotationDeg))
+                delta = TextItem.normalizeDegrees(deg - start.rotationDeg)
+                parts += Units.formatNumber(deg.toDouble(), 1) + "°"
+            }
+            if (increments.step(IncrementKind.LENGTH) != null && translation.x.isFinite() && translation.y.isFinite()) {
+                move = increments.lengthDelta(translation)
+            }
+            if (parts.isNotEmpty()) showReadout(parts.joinToString("  "))
+        }
+        val next = start.pinched(pinchFocus, move, scaleK, delta, maxSizePx)
         item = if (start.path.isActive) {
             // The same motion as the text: scaled (like its size) and turned about the start
             // focus, then moved with the fingers. Two calls, so the order is unambiguous.
             val k = if (start.spec.sizePx > 0f) next.spec.sizePx / start.spec.sizePx else 1f
-            val tr = Vec2(if (translation.x.isFinite()) translation.x else 0f, if (translation.y.isFinite()) translation.y else 0f)
+            val tr = Vec2(if (move.x.isFinite()) move.x else 0f, if (move.y.isFinite()) move.y else 0f)
             val turned = TextOnPath.transformed(start.path, Vec2.ZERO, k, delta, pinchFocus)
             next.copy(path = if (tr == Vec2.ZERO) turned else TextOnPath.transformed(turned, tr, 1f, 0f, pinchFocus + tr))
         } else next
@@ -1466,6 +1611,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     override fun onTwoFingerEnd(cancelled: Boolean) {
         val start = pinchStart ?: return
         pinchStart = null
+        clearReadout()
         if (cancelled && item != null) item = start
         controller.invalidateOverlay()
     }
@@ -1662,6 +1808,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     companion object {
         /** Shown when vertical text or text on a path is asked to wrap. */
         const val WRAP_HORIZONTAL_ONLY = "Wrap works with horizontal text"
+
+        /** Shown when the "Letters" chip is tapped with no text to scale. */
+        const val LETTERS_NEED_TEXT = "Tap the canvas to add a text, then scale its letters"
 
         /** Shown when the fixed width of a text that wraps around a picture is turned off. */
         const val WRAP_NEEDS_WIDTH = "Text that wraps around a picture needs a fixed width: turn Wrap off first"

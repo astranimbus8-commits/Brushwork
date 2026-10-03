@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderFit
 import com.brushwork.paint.tools.text.PlaceholderKind
@@ -153,6 +154,8 @@ fun TextEditorDialog(host: TextEditorHost) {
                 minPx = TextSpec.MIN_SIZE_PX.toDouble(),
                 maxPx = tool.maxSizePx.toDouble(),
                 modifier = Modifier.weight(1f),
+                // v1.6 §3.4: a font size steps by the Size increment (not the Length one).
+                incrementKind = IncrementKind.SIZE,
             )
             UnitSelector(tool.sizeUnit, { tool.sizeUnit = it }, units = SIZE_UNITS)
         }
@@ -219,6 +222,10 @@ fun TextEditorDialog(host: TextEditorHost) {
             )
         }
 
+        // v1.6 §3.5: letters scaled one by one (also on the options strip's "Letters" chip).
+        SectionHeader("Letter scaling")
+        TextLetterScaleSection(tool)
+
         SectionHeader("Outline")
         val maxOutline = max(1f, spec.sizePx * 0.3f)
         LabeledSlider(
@@ -228,6 +235,7 @@ fun TextEditorDialog(host: TextEditorHost) {
             valueRange = 0f..maxOutline,
             valueText = if (spec.strokeWidthPx <= 0f) "None" else Units.format(spec.strokeWidthPx.toDouble(), LengthUnit.PX, dpi),
             typing = SliderTyping(decimals = 1, suffix = "px"),
+            incrementKind = IncrementKind.SIZE,
         )
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
             ColorSwatch(spec.strokeColor, size = 40.dp, onClick = { colorTarget = ColorTarget.OUTLINE })
@@ -364,6 +372,7 @@ private fun TextBoxSection(tool: TextEditorHost, onPath: Boolean, onPickFill: ()
         valueRange = 0f..max(maxPadding, box.padding),
         valueText = if (box.padding <= 0f) "None" else Units.format(box.padding.toDouble(), LengthUnit.PX, dpi),
         typing = SliderTyping(decimals = 1, suffix = "px"),
+        incrementKind = IncrementKind.LENGTH,
     )
     ToggleRow("Background", box.fill, { on -> tool.updateBox { it.copy(fill = on) } }, description = "Fill the box behind the text")
     if (box.fill) {
@@ -381,6 +390,7 @@ private fun TextBoxSection(tool: TextEditorHost, onPath: Boolean, onPickFill: ()
         valueRange = 0f..max(maxBorder, box.borderWidth),
         valueText = if (box.borderWidth <= 0f) "None" else Units.format(box.borderWidth.toDouble(), LengthUnit.PX, dpi),
         typing = SliderTyping(decimals = 1, suffix = "px"),
+        incrementKind = IncrementKind.SIZE,
     )
     if (box.borderWidth > 0f) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 4.dp)) {
@@ -534,13 +544,19 @@ fun TextNumbersSheet(host: TextEditorHost) {
                 minPx = TextSpec.MIN_SIZE_PX.toDouble(),
                 maxPx = tool.maxSizePx.toDouble(),
                 modifier = Modifier.weight(1f),
+                incrementKind = IncrementKind.SIZE,
             )
             UnitSelector(tool.sizeUnit, { tool.sizeUnit = it }, units = SIZE_UNITS)
         }
-        SectionHeader("Nudge (${Units.formatNumber(unit.defaultStep, unit.decimals)} ${unit.short})")
+        // v1.6 §3.4: with increments on, ‹ › move by the Length step (document px), else by the unit's step.
+        val lengthStep = tool.controller.increments.step(IncrementKind.LENGTH)
+        SectionHeader(
+            if (lengthStep != null) "Nudge (${Units.format(lengthStep.toDouble(), unit, dpi)})"
+            else "Nudge (${Units.formatNumber(unit.defaultStep, unit.decimals)} ${unit.short})"
+        )
         NudgePad(
             onNudge = { dx, dy ->
-                val step = unit.toPx(unit.defaultStep, dpi).toFloat()
+                val step = lengthStep ?: unit.toPx(unit.defaultStep, dpi).toFloat()
                 tool.nudge(dx * step, dy * step)
             },
             modifier = Modifier.fillMaxWidth(),

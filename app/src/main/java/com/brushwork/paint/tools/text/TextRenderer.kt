@@ -206,6 +206,8 @@ class TextFrameLayout internal constructor(
     val contentHeight: Float,
     /** The story measured from [start] (reusable for the same story and look). */
     internal val measured: WrapText,
+    /** v1.6 scaled letters: the ramp over the whole story (null when the letters aren't scaled). */
+    internal val ramp: LetterRampResult? = null,
 ) {
     /** Characters of the story this frame shows. */
     val length: Int get() = end - start
@@ -255,6 +257,12 @@ object TextRenderer {
         strokeCap = Paint.Cap.ROUND
     }
 
+    /**
+     * The letter scaling of [item] along its path (v1.6), or null when its letters are drawn
+     * plain (scaling off, or a script that can't be drawn per cluster: see [scalesLetters]).
+     */
+    internal fun pathLetters(item: TextItem): LetterScaleSpec? = item.spec.letterScale.takeIf { scalesLetters(item.spec, item.text) }
+
     /** Paints for [TextOnPath]: typeface, size, letter spacing and colors of [spec]. */
     fun pathPaints(spec: TextSpec): PathPaints {
         val fill = newPaint(spec).apply {
@@ -275,7 +283,17 @@ object TextRenderer {
     /** Width of [text] on one line (newlines as spaces) with [spec]'s font, size and letter spacing. */
     fun lineWidth(text: String, spec: TextSpec): Float {
         val p = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
-        return p.measureText(text.replace('\n', ' '))
+        if (!scalesLetters(spec, text)) return p.measureText(text.replace('\n', ' '))
+        // v1.6: scaled letters take their scaled advances (each letter as it is drawn alone), on
+        // the one line the path lays out (every break and tab a space, the ramp over that line).
+        val line = TextOnPathEngine.oneLine(text)
+        val ramp = LetterRamp.of(line, spec.letterScale)
+        p.fontFeatureSettings = SCALED_LETTER_FEATURES
+        val adv = FloatArray(line.length)
+        p.getTextWidths(line, 0, line.length, adv)
+        var w = 0.0
+        for (i in adv.indices) if (adv[i].isFinite() && adv[i] > 0f) w += adv[i] * ramp.factors[i]
+        return w.toFloat()
     }
 
     /**
@@ -288,7 +306,7 @@ object TextRenderer {
         return when {
             item.path.isActive -> {
                 val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
-                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path))
+                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path, pathLetters(item)))
                 PreparedText(item.text, item.spec, item.path, null, paints, b)
             }
             item.thread.isOn -> {
@@ -323,8 +341,88 @@ object TextRenderer {
      * [measureInk] = false skips measuring how far an imported font's glyphs reach outside the
      * text area (only the drawing margin depends on it: for fitting text, not for drawing).
      */
-    fun layout(text: String, spec: TextSpec, measureInk: Boolean = true): TextBlock =
-        if (spec.vertical) layoutVertical(text, spec, measureInk) else layoutHorizontal(text, spec, measureInk)
+    fun layout(text: String, spec: TextSpec, measureInk: Boolean = true): TextBlock = when {
+        spec.vertical -> layoutVertical(text, spec, measureInk)
+        // v1.6: scaled letters go through WrapLayout (StaticLayout can't size letters one by one).
+        scalesLetters(spec, text) -> layoutScaled(text, spec, measureInk)
+        else -> layoutHorizontal(text, spec, measureInk)
+    }
+
+    /**
+     * Whether text with [spec] whose letters come from [source] (its text, or a linked story)
+     * is drawn with scaled letters (v1.6 §3.5): scaling on, and a script that can be drawn one
+     * cluster at a time ([LetterRamp.supports]; right-to-left and shaping scripts are drawn
+     * unscaled). Unscaled text keeps the v1.5 paths bit for bit.
+     */
+    internal fun scalesLetters(spec: TextSpec, source: String): Boolean = spec.letterScale.isOn && LetterRamp.supports(source)
+
+    /** The ramp of [source] when [spec] scales its letters (see [scalesLetters]), else null. */
+    private fun rampFor(spec: TextSpec, source: String): LetterRampResult? =
+        if (scalesLetters(spec, source)) LetterRamp.of(source, spec.letterScale) else null
+
+    /**
+     * Font features of scaled letters (v1.6): no ligatures and no contextual alternates. Every
+     * letter is drawn on its own at its own size, so it must also be MEASURED as the glyph it is
+     * drawn as: with ligatures on, "fi" measures as one glyph (the f gets the whole width, the i
+     * none) while the f and the i are drawn apart, and "office" would draw as "of fice" over its
+     * neighbours. Kerning stays on (it only moves letters). Set on the measuring and drawing
+     * paints of scaled text only: unscaled text keeps its v1.5 shaping bit for bit.
+     */
+    internal const val SCALED_LETTER_FEATURES = "'liga' 0, 'clig' 0, 'calt' 0"
+
+    /**
+     * [text] measured for [WrapLayout] with [paint]: plain advances, or (with a [ramp]) each
+     * character's advance times its letter's factor, [text] being the ramp's source from
+     * [offset] on ([key]: see [WrapText.scaleKey]). Letter spacing is in em, so it scales too.
+     */
+    private fun measureFor(text: String, paint: TextPaint, ramp: LetterRampResult?, offset: Int, key: ScaleKey?): WrapText {
+        if (ramp == null) return WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
+        val f = ramp.factors
+        return WrapLayout.measure(text, WrapMeasurer { s, a, b, out ->
+            paint.getTextWidths(s, a, b, out)
+            for (i in 0 until b - a) out[i] *= f[offset + a + i]
+        }, key)
+    }
+
+    /** Text area width of scaled letters: the fixed box (whole pixels, as StaticLayout), else the widest paragraph. */
+    private fun scaledWidth(wrap: Float, wt: WrapText): Float =
+        (if (wrap > 0f) ceil(wrap).toInt() else ceil(WrapLayout.widestParagraph(wt)).toInt() + 1).coerceAtLeast(1).toFloat()
+
+    /**
+     * Horizontal text with scaled letters (v1.6 §3.5c): the advances are scaled per letter and
+     * broken into lines by [WrapLayout] (a fixed box breaks on the scaled advances); the lines
+     * keep the full-size pitch, so the box doesn't jump while the slider moves.
+     */
+    private fun layoutScaled(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
+        if (text.isEmpty()) return layoutHorizontal(text, spec, measureInk)
+        val paint = newPaint(spec).apply {
+            letterSpacing = spec.letterSpacing
+            fontFeatureSettings = SCALED_LETTER_FEATURES
+        }
+        val fmi = paint.fontMetricsInt
+        val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
+        val ramp = LetterRamp.of(text, spec.letterScale)
+        val wt = measureFor(text, paint, ramp, 0, ScaleKey(spec.letterScale, text, 0))
+        val wrap = spec.box.width
+        val width = scaledWidth(wrap, wt)
+        val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
+        val res = WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, WrapSides.LARGEST, spec.align, 0f)
+        val height = max(max(1f, res.height), minHeight)
+        return scaledBlock(spec, text, ramp, 0, paint, wt, res.lines, width, height, measureInk)
+    }
+
+    /** The block of scaled [lines] of [text] ([ramp] from [offset], see [ScaledLetters]). */
+    private fun scaledBlock(
+        spec: TextSpec, text: String, ramp: LetterRampResult, offset: Int, paint: TextPaint, wt: WrapText,
+        lines: List<WrapLine>, width: Float, contentH: Float, measureInk: Boolean,
+    ): TextBlock {
+        // Built-in fonts: a tile redraw draws only the lines near it. Imported fonts may swash anywhere.
+        val cull = if (spec.fontId == null) ScaledLetters.CULL_EMS else 0f
+        val letters = ScaledLetters(text, ramp, offset, spec.letterScale.align, ScaledLetters.capHeight(paint), cull)
+        val overflow = if (measureInk && spec.fontId != null) letters.overflow(lines, wt, paint, width, contentH) else 0f
+        val outline: (Path, TextPaint) -> Unit = { out, p -> letters.outline(out, lines, wt, p) }
+        return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p -> letters.draw(c, lines, wt, p) }
+    }
 
     private fun inkPad(spec: TextSpec) = spec.strokeWidthPx + spec.sizePx * (if (spec.italic || spec.font == TextFont.CURSIVE) 0.5f else 0.3f) + 2f
 
@@ -407,10 +505,15 @@ object TextRenderer {
         val fmi = paint.fontMetricsInt
         val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
         val wrap = spec.box.width
+        // v1.6: scaled letters measure scaled advances (and only reuse a measurement of the same ramp).
+        val ramp = rampFor(spec, text)
+        if (ramp != null) paint.fontFeatureSettings = SCALED_LETTER_FEATURES
+        val key = ramp?.let { ScaleKey(spec.letterScale, text, 0) }
+        val wt = measured?.takeIf { it.text == text && it.scaleKey == key } ?: measureFor(text, paint, ramp, 0, key)
         // StaticLayout's width (whole pixels); without a fixed box, the text's own width.
-        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val width = if (ramp != null) scaledWidth(wrap, wt)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
         val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
-        val wt = measured?.takeIf { it.text == text } ?: WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val inset = spec.box.inset
         val blockW = width + 2f * inset
@@ -450,6 +553,7 @@ object TextRenderer {
         val finalH = max(next, bh)
         val contentH = finalH - 2f * inset
         val lines = res.lines
+        if (ramp != null) return scaledBlock(spec, text, ramp, 0, paint, wt, lines, width, contentH, measureInk) to wt
         val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p ->
             val tmp = Path()
@@ -477,8 +581,11 @@ object TextRenderer {
         val fmi = paint.fontMetricsInt
         val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
         val wrap = spec.box.width
-        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
-        val wt = WrapLayout.measure(text) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
+        val ramp = rampFor(spec, text)
+        if (ramp != null) paint.fontFeatureSettings = SCALED_LETTER_FEATURES
+        val wt = measureFor(text, paint, ramp, 0, ramp?.let { ScaleKey(spec.letterScale, text, 0) })
+        val width = if (ramp != null) scaledWidth(wrap, wt)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val inset = spec.box.inset
         val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - blockHeight / 2f, item.wrap.gapPx)
@@ -498,8 +605,12 @@ object TextRenderer {
      * Any straight horizontal item works: an unthreaded one is a story of its own text starting
      * at 0, in its fixed box (no `minHeight`, or no fixed width: unlimited height, and then the
      * wrap outline is ignored). [measured] (the story measured from the start) is reused when it
-     * is that text. Area C adds letter scaling inside this path (the measurer's advances), so the
-     * flow and the rendering keep agreeing.
+     * is that text.
+     *
+     * v1.6 letter scaling (area C): the measurer's advances are scaled by the ramp over the WHOLE
+     * story (a frame's letters continue the ramp of the frames before it: its letter offset is
+     * computed from `story[0, start)`, never stored), so the flow and the rendering keep agreeing.
+     * A measurement is reused only for the same story, scale and start ([WrapText.scaleKey]).
      */
     fun frameLayout(item: TextItem, measured: WrapText? = null): TextFrameLayout {
         val spec = item.spec
@@ -511,16 +622,20 @@ object TextRenderer {
         val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
         val wrap = spec.box.width
         val rest = story.length - start
-        val wt = measured?.takeIf { it.text.length == rest && story.regionMatches(start, it.text, 0, rest) }
-            ?: WrapLayout.measure(story.substring(start)) { s, a, b, out -> paint.getTextWidths(s, a, b, out) }
-        val width = (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val ramp = rampFor(spec, story)
+        if (ramp != null) paint.fontFeatureSettings = SCALED_LETTER_FEATURES
+        val key = ramp?.let { ScaleKey(spec.letterScale, story, start) }
+        val wt = measured?.takeIf { it.scaleKey == key && it.text.length == rest && story.regionMatches(start, it.text, 0, rest) }
+            ?: measureFor(story.substring(start), paint, ramp, start, key)
+        val width = if (ramp != null) scaledWidth(wrap, wt)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
         val height = if (wrap > 0f && spec.box.minHeight > 0f) spec.box.minHeight else Float.POSITIVE_INFINITY
         val inset = spec.box.inset
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val blocked = if (!item.wrapActive || obstacle.isEmpty || !height.isFinite()) NOTHING_BLOCKED
         else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - (height + 2f * inset) / 2f, item.wrap.gapPx)
         val res = WrapLayout.layoutFrame(wt, width, height, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx)
-        return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt)
+        return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt, ramp)
     }
 
     /**
@@ -550,6 +665,12 @@ object TextRenderer {
         val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
         val contentH = fl.contentHeight
         if (text.isEmpty()) return block(spec, fl.width, max(1f, contentH), 0, paint, wrapLines = emptyList(), glyphs = null) to fl.measured
+        // v1.6: scaled letters continue the story's ramp from this frame's start.
+        val ramp = fl.ramp
+        if (ramp != null) {
+            paint.fontFeatureSettings = SCALED_LETTER_FEATURES
+            return scaledBlock(spec, text, ramp, fl.start, paint, fl.measured, lines, fl.width, max(1f, contentH), measureInk) to fl.measured
+        }
         val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, fl.width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p ->
             val tmp = Path()
@@ -623,12 +744,15 @@ object TextRenderer {
     private fun layoutVertical(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
         val paint = newPaint(spec).apply { textAlign = Paint.Align.CENTER }
         val em = spec.sizePx
+        // v1.6: scaled letters shrink along the column and stay centred on its axis (§3.5a).
+        val ramp = rampFor(spec, text)
         val res = VerticalTextLayout.layout(
             text, em, spec.letterSpacing, spec.lineSpacing, spec.align,
             rotatedAdvance = { paint.measureText(it) },
             style = spec.verticalStyle,
             wrapLength = spec.box.height,
             leftToRight = spec.columnsLeftToRight,
+            factors = ramp?.factors,
         )
         val height = if (res.height > 0f) res.height else em
         // A fixed-size text box: at least this wide; columns start at its right (or left) edge.
@@ -646,6 +770,7 @@ object TextRenderer {
         val punct = VerticalTextLayout.PUNCTUATION_SHIFT * em
         val small = VerticalTextLayout.SMALL_KANA_SHIFT * em
         val overflow = if (measureInk && spec.fontId != null) verticalOverflow(glyphs, paint, baseline, tcyScale, punct, small, shift, width, height) else 0f
+        if (ramp != null) return scaledVerticalBlock(spec, glyphs, paint, baseline, tcyScale, punct, small, shift, width, height, res.columns, overflow)
         // The same placement as the drawing below, as outlines (for export).
         val outline: (Path, TextPaint) -> Unit = { out, centered ->
             // Glyph paths of left-aligned text moved by half their advance: the drawing centers them.
@@ -702,6 +827,89 @@ object TextRenderer {
                 }
             }
             c.restoreToCount(s0)
+        }
+    }
+
+    /**
+     * Vertical text with scaled letters (v1.6 §3.5a): every cell is drawn at `sizePx · scale`,
+     * centred on its column like full-size cells (its baseline offset, punctuation and small-kana
+     * nudges scale with it), placed where [VerticalTextLayout] put it on the scaled advances.
+     * Drawing and outlines place the cells identically.
+     */
+    private fun scaledVerticalBlock(
+        spec: TextSpec, glyphs: List<VerticalGlyph>, paint: TextPaint, baseline: Float, tcyScale: FloatArray,
+        punct: Float, small: Float, shift: Float, width: Float, height: Float, columns: Int, overflow: Float,
+    ): TextBlock {
+        val outline: (Path, TextPaint) -> Unit = { out, centered ->
+            val p = TextPaint(centered).apply { textAlign = Paint.Align.LEFT; style = Paint.Style.FILL }
+            val base = p.textSize
+            val tmp = Path()
+            val m = Matrix()
+            for (i in glyphs.indices) {
+                val g = glyphs[i]
+                val s = g.scale
+                p.textSize = base * s
+                val bl = baseline * s
+                val pu = punct * s
+                val sm = small * s
+                val half = p.measureText(g.text) / 2f
+                tmp.rewind()
+                when (g.kind) {
+                    VerticalGlyphKind.UPRIGHT -> p.getTextPath(g.text, 0, g.text.length, g.cx + shift - half, g.cy + bl, tmp)
+                    VerticalGlyphKind.PUNCTUATION -> p.getTextPath(g.text, 0, g.text.length, g.cx + pu + shift - half, g.cy + bl - pu, tmp)
+                    VerticalGlyphKind.SMALL_KANA -> p.getTextPath(g.text, 0, g.text.length, g.cx + sm + shift - half, g.cy + bl - sm, tmp)
+                    VerticalGlyphKind.ROTATED -> {
+                        p.getTextPath(g.text, 0, g.text.length, -half, bl, tmp)
+                        m.setRotate(90f)
+                        m.postTranslate(g.cx + shift, g.cy)
+                        tmp.transform(m)
+                    }
+                    VerticalGlyphKind.TATE_CHU_YOKO -> {
+                        p.getTextPath(g.text, 0, g.text.length, -half, 0f, tmp)
+                        m.setScale(tcyScale[i], 1f)
+                        m.postTranslate(g.cx + shift, g.cy + bl)
+                        tmp.transform(m)
+                    }
+                }
+                out.addPath(tmp)
+            }
+        }
+        return block(spec, width, height, columns, paint, overflow, outline = outline) { c, p ->
+            val base = p.textSize
+            val s0 = c.save()
+            try {
+                if (shift != 0f) c.translate(shift, 0f)
+                for (i in glyphs.indices) {
+                    val g = glyphs[i]
+                    val s = g.scale
+                    p.textSize = base * s
+                    val bl = baseline * s
+                    val pu = punct * s
+                    val sm = small * s
+                    when (g.kind) {
+                        VerticalGlyphKind.UPRIGHT -> c.drawText(g.text, g.cx, g.cy + bl, p)
+                        VerticalGlyphKind.PUNCTUATION -> c.drawText(g.text, g.cx + pu, g.cy + bl - pu, p)
+                        VerticalGlyphKind.SMALL_KANA -> c.drawText(g.text, g.cx + sm, g.cy + bl - sm, p)
+                        VerticalGlyphKind.ROTATED -> {
+                            val r = c.save()
+                            c.translate(g.cx, g.cy)
+                            c.rotate(90f)
+                            c.drawText(g.text, 0f, bl, p)
+                            c.restoreToCount(r)
+                        }
+                        VerticalGlyphKind.TATE_CHU_YOKO -> {
+                            val r = c.save()
+                            c.translate(g.cx, g.cy + bl)
+                            c.scale(tcyScale[i], 1f)
+                            c.drawText(g.text, 0f, 0f, p)
+                            c.restoreToCount(r)
+                        }
+                    }
+                }
+            } finally {
+                p.textSize = base
+                c.restoreToCount(s0)
+            }
         }
     }
 
@@ -771,7 +979,7 @@ object TextRenderer {
             canvas.restore()
         } else {
             val paints = prepared.paints
-            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path)
+            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path, pathLetters(item))
         }
         if (selection != null) {
             canvas.clipRect(bounds)
