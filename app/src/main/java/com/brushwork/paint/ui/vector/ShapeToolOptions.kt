@@ -32,6 +32,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -283,11 +285,12 @@ private fun StrokeWidthControls(tool: ShapeTool, unit: LengthUnit, onUnit: (Leng
         "Use brush size", s.useBrushSize, { v -> tool.update { it.copy(useBrushSize = v) } },
         description = if (s.useBrushSize) "The width follows the brush size slider" else "The width set here is used",
     )
-    SizeEditor(
+    SteppedLengthEditor(
         label = if (brush) "Stroke width (arrowheads)" else "Stroke width",
         px = tool.strokeWidth, onPx = { tool.setStrokeWidth(it) },
         unit = unit, onUnit = onUnit, dpi = dpi,
         minPx = ShapeSettings.MIN_STROKE, maxPx = ShapeSettings.MAX_STROKE,
+        kind = IncrementKind.SIZE,
         showSlider = showSlider, showUnit = showUnit,
     )
     if (s.useBrushSize) Hint("Same as the brush size: changing it here resizes the brush too")
@@ -333,11 +336,12 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
         SectionHeader("Corners")
         ChoiceChips(CornerStyle.entries.map { it.label }, s.corner.ordinal, { i -> set { it.copy(corner = CornerStyle.entries[i]) } })
         Spacer(Modifier.padding(top = 4.dp))
-        LengthEditor(
+        // v1.6: a length, so its field and slider step by the Length increment.
+        SteppedLengthEditor(
             label = if (s.corner == CornerStyle.ROUND || s.corner == CornerStyle.INVERTED) "Corner radius" else "Corner size",
             px = s.cornerRadius, onPx = { r -> set { it.copy(cornerRadius = r) } },
             unit = s.unit, onUnit = { u -> set { it.copy(unit = u) } }, dpi = dpi,
-            minPx = 0f, maxPx = ShapeSettings.MAX_LENGTH, sliderMin = 1f, sliderMax = 1000f,
+            minPx = 0f, maxPx = ShapeSettings.MAX_LENGTH, kind = IncrementKind.LENGTH, sliderMin = 1f, sliderMax = 1000f,
             showSlider = true, showUnit = !compact, enabled = s.corner != CornerStyle.SHARP,
         )
         if (s.corner != CornerStyle.SHARP) Hint("Limited to half of the shorter edge at each corner")
@@ -444,12 +448,13 @@ private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
 }
 
 /**
- * The stroke width: [LengthEditor] (VectorWidgets) as a SIZE (v1.6 §3.4: stroke widths step by
- * the Size increment, not the Length one): the field and its logarithmic slider land on the Size
- * step's multiples while increments are on (the slider's ends stay reachable).
+ * [LengthEditor] (VectorWidgets) whose logarithmic slider also follows the increments (v1.6
+ * §3.4): the field and the slider land on the multiples of the [kind] step while increments are
+ * on (the slider's ends stay reachable). The stroke width is a SIZE (it steps by the Size
+ * increment, not the Length one); the corner radius a LENGTH.
  */
 @Composable
-private fun SizeEditor(
+private fun SteppedLengthEditor(
     label: String,
     px: Float,
     onPx: (Float) -> Unit,
@@ -458,6 +463,7 @@ private fun SizeEditor(
     dpi: Float,
     minPx: Float,
     maxPx: Float,
+    kind: IncrementKind,
     sliderMin: Float = 0.5f,
     sliderMax: Float = 500f,
     showSlider: Boolean = true,
@@ -477,21 +483,24 @@ private fun SizeEditor(
             enabled = enabled,
             // Its own log slider follows below: no second one in the field.
             adjust = if (showSlider) NumberAdjust.NONE else NumberAdjust.AUTO,
-            incrementKind = IncrementKind.SIZE,
+            incrementKind = kind,
         )
         if (showUnit) UnitSelector(unit, onUnit)
     }
     if (showSlider) {
         val scale = LogScale(sliderMin, sliderMax)
-        val sizeStep = LocalIncrements.current?.step(IncrementKind.SIZE)?.toDouble()
+        // The step in document px (the slider's own unit).
+        val pxStep = LocalIncrements.current?.step(kind)?.toDouble()
         Slider(
             value = scale.toPos(px),
             onValueChange = { pos ->
                 val v = scale.fromPos(pos)
-                onPx(if (sizeStep == null) v else IncrementStepping.snapSlider(v.toDouble(), sizeStep, sliderMin.toDouble(), sliderMax.toDouble()).toFloat())
+                onPx(if (pxStep == null) v else IncrementStepping.snapSlider(v.toDouble(), pxStep, sliderMin.toDouble(), sliderMax.toDouble()).toFloat())
             },
             enabled = enabled,
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+            // For screen readers (the field above carries the same name).
+            modifier = Modifier.semantics { contentDescription = "$label slider" },
         )
     }
 }
