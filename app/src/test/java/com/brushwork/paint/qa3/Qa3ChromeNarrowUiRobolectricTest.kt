@@ -194,11 +194,12 @@ class Qa3ChromeNarrowUiRobolectricTest {
         SmokeUi.assertPanelShown("Tools")
         for (id in ToolMenu.tools) assertTrue("cell ${id.label}", SmokeUi.has(id.label, exact = true))
         val badges = RobolectricUi.elements().count { e ->
-            e.node.layoutInfo.isPlaced && e.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.Text)?.any { it.text == "px" } == true
+            e.node.layoutInfo.isPlaced && e.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == com.brushwork.paint.ui.editor.chrome.PIXEL_ONLY_STATE
         }
         val pixelOnly = ToolMenu.tools.count { it in LayerToolRules.PIXEL_ONLY }
         assertTrue("pixel-only tools exist", pixelOnly > 0)
-        assertEquals("a px badge on each pixel-only cell", pixelOnly, badges)
+        assertEquals("each pixel-only cell is marked", pixelOnly, badges)
+        assertFalse("the px badge is decoration (I10)", SmokeUi.has("px", exact = true))
         SmokeUi.click("Filters", exact = true)
         SmokeUi.assertPanelShown("Filters")
         assertTrue("the vector banner", SmokeUi.has("Applying rasterizes this vector layer"))
@@ -207,7 +208,7 @@ class Qa3ChromeNarrowUiRobolectricTest {
         SmokeUi.click("Vector", exact = true)
         assertFalse(c.isVectorMode)
         SmokeUi.click("Tools (current")
-        assertFalse("no px badges in raster mode", SmokeUi.has("px", exact = true))
+        assertFalse("no pixel-only marks in raster mode", RobolectricUi.elements().any { it.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == com.brushwork.paint.ui.editor.chrome.PIXEL_ONLY_STATE })
         // The tools button closes the menu again.
         SmokeUi.click("Tools (current")
         assertFalse("menu closed", "Tools" in SmokeUi.sheetTitles())

@@ -25,9 +25,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,11 +51,15 @@ import com.brushwork.paint.ui.theme.IbisDims
 /** The title the tool menu carries for tests and accessibility (the v1.5 Tools sheet's title). */
 internal const val TOOL_MENU_TITLE = "Tools"
 
+/** What a screen reader says of a pixel-only tool's cell in vector mode (its "px" badge is decoration, I10). */
+internal const val PIXEL_ONLY_STATE = "Pixel layers only"
+
 /**
  * The ibisPaint tool menu (v1.6 §3.7.6; replaces the v1.5 Tools sheet): a dark translucent panel
  * 150 dp wide of two columns of 75 × 52 dp cells in [ToolMenu] order, scrolling past [maxHeight].
  * The current tool's cell is lighter with an accent glyph; in vector mode the tools that need
- * pixels carry a "px" badge (they stay usable). A tap on a cell acts; the caller closes the menu.
+ * pixels carry a "px" badge (they stay usable; read as [PIXEL_ONLY_STATE], so the badges never
+ * share a label). A tap on a cell acts; the caller closes the menu.
  * The menu is not shown while a filter is previewed, so every cell is always enabled.
  */
 @Composable
@@ -116,7 +122,10 @@ private fun ToolCell(
         Modifier
             .size(IbisDims.ToolCellWidth, IbisDims.ToolCellHeight)
             .background(if (selected) Color.White.copy(alpha = 0.15f) else Color.Transparent)
-            .semantics { this.selected = selected }
+            .semantics {
+                this.selected = selected
+                if (badge != null) stateDescription = PIXEL_ONLY_STATE
+            }
             .clickable(role = Role.Button, onClick = onClick),
     ) {
         Column(
@@ -143,6 +152,7 @@ private fun ToolCell(
                 maxLines = 1,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
+                    .clearAndSetSemantics {}
                     .padding(top = 3.dp, end = 3.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(BrushworkColors.ChromeBorder)

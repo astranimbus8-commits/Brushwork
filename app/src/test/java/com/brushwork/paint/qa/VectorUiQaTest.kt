@@ -2,6 +2,7 @@ package com.brushwork.paint.qa
 
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.smoke.Smoke
@@ -109,8 +110,11 @@ internal object VectorUiFlow {
         // The tools grid marks the pixel-only tools in vector mode; Lasso from it.
         click("Tools (current: Brush)")
         SmokeUi.assertPanelShown("Tools")
-        val badges = SmokeUi.shown().count { it == "px" }
-        assertTrue("px badges: $badges", badges >= 1)
+        val badges = com.brushwork.paint.ui.color.RobolectricUi.elements().count { e ->
+            e.node.layoutInfo.isPlaced && e.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.StateDescription) == com.brushwork.paint.ui.editor.chrome.PIXEL_ONLY_STATE
+        }
+        assertTrue("pixel-only cells: $badges", badges >= 1)
+        assertFalse("the px badge is decoration (I10)", SmokeUi.has("px", exact = true))
         click("Lasso", exact = true)
         assertEquals(ToolId.LASSO, c.activeToolId)
         settle()

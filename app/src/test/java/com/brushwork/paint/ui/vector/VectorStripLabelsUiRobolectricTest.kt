@@ -19,6 +19,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.editor.chrome.Clickables
+import com.brushwork.paint.ui.editor.chrome.PIXEL_ONLY_STATE
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -38,26 +39,24 @@ import org.robolectric.shadows.ShadowLog
  * on a vector layer, with a pending shape and in the Shape tool's Points mode (its Handles
  * group). (The top row's "Ruler" circle and the menu's "Ruler" cell share their label by design,
  * as in [com.brushwork.paint.ui.editor.chrome.UniqueLabelsTest]. On a vector layer the menu's
- * pixel-only cells also share their "px" badge — the tool menu's design, outside these strips —
- * and the audit holds the badge to those cells.)
+ * pixel-only cells show a "px" badge that is decoration: they are read as
+ * [PIXEL_ONLY_STATE], and "px" is no clickable's label.)
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.vector.striplabelssandbox"])
 class VectorStripLabelsUiRobolectricTest {
 
-    /** The tool menu's badge on the pixel-only tools' cells while the layer is a vector one. */
-    private val PX_BADGE = "px"
-
     /**
-     * The "px" badge is shared by the tool menu's pixel-only cells alone (each known by its tool's
-     * name as well), never a strip control's label.
+     * No clickable is known as "px"; the cells marked [PIXEL_ONLY_STATE] are pixel-only tools,
+     * one per such tool at most.
      */
     private fun assertBadgesOnPixelCells(where: String, items: List<Clickables.Item>) {
         val pixelNames = LayerToolRules.PIXEL_ONLY.map { it.label }.toSet()
-        val badged = items.filter { PX_BADGE in it.labels }
-        for (item in badged) assertTrue("$where: \"$PX_BADGE\" on a control that is no pixel-only tool cell: ${item.labels}", item.labels.any { it in pixelNames })
-        assertTrue("$where: ${badged.size} \"$PX_BADGE\" badges for ${pixelNames.size} pixel-only tools", badged.size <= pixelNames.size)
+        val marked = items.filter { it.node.config.getOrNull(SemanticsProperties.StateDescription) == PIXEL_ONLY_STATE }
+        assertTrue("$where: no control is labelled \"px\"", items.none { "px" in it.labels })
+        for (item in marked) assertTrue("$where: a pixel-only mark on a control that is no pixel-only tool cell: ${item.labels}", item.labels.any { it in pixelNames })
+        assertTrue("$where: ${marked.size} pixel-only marks for ${pixelNames.size} pixel-only tools", marked.size <= pixelNames.size)
     }
 
     /** A value a control shows ("100 %", "8.0", "12 px"), not its name (as UniqueLabels). */
@@ -146,11 +145,11 @@ class VectorStripLabelsUiRobolectricTest {
         click("Tools (current: ${id.label})")
         scrollStripTo(s, chip)
         val menu = Clickables.onScreen(s)
-        // On a vector layer the menu's pixel-only cells carry the same "px" badge (area E's design).
-        val shared = if (s.c.isVectorMode) setOf("Ruler", PX_BADGE) else setOf("Ruler")
+        // Only the top-row circle and the menu cell share "Ruler"; the pixel-only cells are marked by state.
+        val shared = setOf("Ruler")
         assertUnique("$where, tool menu open", menu, allowed = shared)
         assertBadgesOnPixelCells("$where, tool menu open", menu)
-        if (s.c.isVectorMode) assertTrue("$where: the menu's pixel-only cells show their badge", menu.any { PX_BADGE in it.labels })
+        if (s.c.isVectorMode) assertTrue("$where: the menu marks its pixel-only cells", menu.any { it.node.config.getOrNull(SemanticsProperties.StateDescription) == PIXEL_ONLY_STATE })
         assertTrue("$where: at most the top-row circle and the tool cell share \"Ruler\"", menu.count { "Ruler" in it.labels } <= 2)
         assertEquals("$where: \"Settings\" is the menu cell alone", 1, menu.count { "Settings" in it.labels })
         assertEquals("$where: the strip's chip shows beside the menu", 1, menu.count { chip in it.labels })
