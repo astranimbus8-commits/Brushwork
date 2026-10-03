@@ -505,7 +505,8 @@ parameters) — use them everywhere.
 Editor layout (`ui/editor`, v1.6 ibisPaint main screen): the canvas is full bleed on the light
 surround (`IbisColors.Surround`; dark status-bar icons, black navigation bar). At the top: the top
 row (`chrome/TopRow`: 8 circles Undo, Redo, Vector, Selection, Stabilizer, Grid, Ruler, More
-options at a 48 dp pitch; under 336 dp Ruler, Grid and Stabilizer fold into the More menu), the
+options at a 48 dp pitch, with an 8 dp gap after Redo where the screen has room — centres 24, 72,
+then 128 + 48·(i − 2); under 336 dp Ruler, Grid and Stabilizer fold into the More menu), the
 floating options strip (`chrome/OptionsStripPanel` around `ToolOptionsBar`, hidden for tools
 without options), the X / Y pill and the selection / object bar under it. At the bottom: the brush
 slider rows (`SliderBar.BrushSliderRows`: [value][−][track][+], relative drag, Size / Percent
@@ -541,9 +542,12 @@ bottom on the bottom bar; screens under 480 dp tall keep the v1.5 side-by-side l
 `LayersPanel` fills (`LayerWindowMetrics`): a 46 dp header (title, "n / max", ✕ "Close layers"),
 a left column with the canvas preview (rendered at most every 500 ms, after the window's first
 frame) over six buttons, the bottom-aligned list with the Selection Layer row and 80 dp rows
-(clip bracket, thumbnail with kind / frame badge, mask square, eye, opacity over blend mode, locks,
-≡ handle), the transparency squares, the 9-icon right strip, the 56 dp blend row and the 48 dp
-opacity row (an adjustment layer's opacity goes through `liveAdjust`; Percent increments).
+(clip bracket, thumbnail with kind / frame badge, mask square, eye, the number and opacity over
+blend mode at ibisPaint's 18 sp, fitted down to 12 sp on narrow rows, the MASK and lock badges,
+≡ handle; on the narrowest rows MASK gives way to the mask square's accent border), the transparency squares, the 9-icon right strip, the 56 dp blend row and the 48 dp
+opacity row (an adjustment layer's opacity goes through `liveAdjust`; Percent increments). The blend
+row's Clipping / Alpha lock / Lock toggles show icons only (their captions stay the spoken text), and
+the strip's flips use ibisPaint's flip glyphs (`ChromeGlyphs.FlipHorizontal` / `FlipVertical`).
 
 Other packages: `fonts/` (imported fonts: zip/ttf/otf import, name-table parsing, favorites),
 `inpaint/` (content-aware fill: multi-scale PatchMatch completion, used by the selection bar and
