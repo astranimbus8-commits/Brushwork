@@ -790,7 +790,8 @@ private fun IbisOpacitySlider(
  * previews through [EditorController.previewLayerProps] at most every [PREVIEW_INTERVAL_MS] (each
  * preview recomposites the canvas, v1.5). An adjustment layer's opacity goes straight to the layer
  * and through `liveAdjust.touch` on every move (its live session draws the proxy, design §3.1 C2;
- * the layer list is refreshed once, at the end), then `liveAdjust.end` refines to exact.
+ * the layer list is refreshed once, at the end), then `liveAdjust.end` refines to exact. A live
+ * edit still waiting for its step (the Adjust sheet's) is recorded when the drag starts.
  */
 private class OpacityPreview(
     private val controller: EditorController,
