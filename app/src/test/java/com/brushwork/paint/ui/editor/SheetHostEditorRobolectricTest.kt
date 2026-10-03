@@ -476,13 +476,14 @@ class SheetHostEditorRobolectricTest {
         it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == tag
     }
 
-    /** Clicks the options strip's control showing [label] (the strip scrolls: it may be out of view). */
+    /** Clicks the options strip's control showing or named [label] (the strip scrolls: it may be out of view). */
     private fun clickInOptionsStrip(label: String) {
         val strip = RobolectricUi.elements().last {
             it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == ChromeTags.OPTIONS_STRIP
         }.node
         fun find(n: SemanticsNode): SemanticsNode? {
             if (n.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true) return n
+            if (n.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it == label } == true) return n
             for (child in n.children) find(child)?.let { return it }
             return null
         }
@@ -498,8 +499,8 @@ class SheetHostEditorRobolectricTest {
         settle()
         click("Tools (current: Shape)", exact = true)
         assertTrue("the tool menu is open", shown(ChromeTags.TOOL_MENU))
-        // The Shape tool's own "Settings" chip (on the options strip, beside the open menu).
-        clickInOptionsStrip("Settings")
+        // The Shape tool's own "Settings" chip, known as "Shape settings" (I10), on the options strip beside the open menu.
+        clickInOptionsStrip("Shape settings")
         SmokeUi.assertPanelShown("Shape")
         assertFalse("the tool menu closed: it would stay under the sheet", shown(ChromeTags.TOOL_MENU))
         // Back closes the sheet on top (not a menu hidden under it), and the menu stays closed.
@@ -507,7 +508,7 @@ class SheetHostEditorRobolectricTest {
         assertFalse("Back closed the sheet", SmokeUi.menuOpen())
         assertFalse("the menu doesn't come back", shown(ChromeTags.TOOL_MENU))
         // The menu still opens over a minimized sheet: the pill waits meanwhile and comes back.
-        clickInOptionsStrip("Settings")
+        clickInOptionsStrip("Shape settings")
         click("Minimize", exact = true)
         assertEquals(listOf("Shape"), pillTitles())
         click("Tools (current: Shape)", exact = true)

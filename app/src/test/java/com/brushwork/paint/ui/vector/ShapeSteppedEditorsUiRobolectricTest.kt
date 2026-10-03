@@ -77,7 +77,7 @@ class ShapeSteppedEditorsUiRobolectricTest {
             }
         }
         SmokeUi.settle()
-        SmokeUi.click("Settings", exact = true)
+        SmokeUi.click("Shape settings", exact = true)
         assertTrue("the settings sheet: ${SmokeUi.shown().take(40)}", SmokeUi.has("Stroke width slider") && SmokeUi.has("Corner radius slider"))
 
         // Off (the default): free, as in v1.5.

@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
+import com.brushwork.paint.vector.VSplinePoint
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorOps
 import java.lang.ref.WeakReference
@@ -50,20 +51,97 @@ object SplineBezier {
     /** The Bézier form of [spline] (see the class docs); [tol] is in document px. */
     fun toSubpath(spline: VSpline, tol: Float = DEFAULT_TOLERANCE): VSubpath {
         val s = spline.sanitized()
+        trivial(s)?.let { return it }
+        val b = NurbsGeometry.basis(s)
+        val out = PieceSink(b.spans.size * 2 + 2)
+        val conv = Converter(s, b, tolerance(tol))
+        for (span in b.spans) conv.span(span, out)
+        return out.toSubpath(NurbsGeometry.isClosed(s))
+    }
+
+    /** The Bézier form of a sanitized spline with no span to convert (fewer than 2 points, or degree 1), else null. */
+    private fun trivial(s: VSpline): VSubpath? {
         val pts = s.points
         val n = pts.size
         if (n == 0) return VSubpath(emptyList())
         if (n == 1) return VSubpath(listOf(VAnchor(pts[0].x, pts[0].y, width = pts[0].width)))
-        val closed = NurbsGeometry.isClosed(s)
         if (min(s.effectiveOrder, n) <= 2) {
             // Degree 1: the control polygon itself, corners at the points.
-            return VSubpath(pts.map { VAnchor(it.x, it.y, sharp = true, width = it.width) }, closed)
+            return VSubpath(pts.map { VAnchor(it.x, it.y, sharp = true, width = it.width) }, NurbsGeometry.isClosed(s))
         }
-        val b = NurbsGeometry.basis(s)
-        val out = PieceSink(b.spans.size * 2 + 2)
-        val conv = Converter(s, b, tol.toDouble().takeIf { it.isFinite() && it > 0.0 } ?: DEFAULT_TOLERANCE.toDouble())
-        for (span in b.spans) conv.span(span, out)
-        return out.toSubpath(closed)
+        return null
+    }
+
+    private fun tolerance(tol: Float): Double = tol.toDouble().takeIf { it.isFinite() && it > 0.0 } ?: DEFAULT_TOLERANCE.toDouble()
+
+    /**
+     * [toSubpath] for a spline edited a little at a time (the Path tool's point drags, weights,
+     * widths): keeps the cubic pieces of each span of the spline it converted last and, for a
+     * spline of the same structure (point count, effective order, closed or not, endpoint), converts
+     * again only the spans whose p + 1 control points changed, reusing the others' pieces. The
+     * result is bit for bit [toSubpath]'s with the same tolerance — a span's pieces depend only on
+     * its control points and on the knots, which the structure fixes — so I9 holds as before; a
+     * change of structure (a point added or deleted, the order, Cyclic, Endpoint) converts it all.
+     * Dragging one point of a long path re-converts at most p + 1 spans instead of all of them.
+     * Not thread-safe: one per tool, used on the main thread.
+     */
+    class Incremental(tol: Float = DEFAULT_TOLERANCE) {
+        private val tolerance = tolerance(tol)
+        /** The sanitized points converted last (a copy), and what the structure gave for them. */
+        private var points: List<VSplinePoint> = emptyList()
+        private var basis: NurbsBasis? = null
+        private var converter: Converter? = null
+        private var endpoint = false
+        /** The pieces of each span of [basis] (in [NurbsBasis.spans] order). */
+        private var pieces: Array<SpanPieces> = emptyArray()
+        private var dirty = BooleanArray(0)
+
+        /** Spans the last [toSubpath] converted (the others' pieces were reused). */
+        var lastConverted: Int = 0
+            private set
+
+        /** Forgets the last spline: the next conversion converts every span. */
+        fun reset() {
+            points = emptyList(); basis = null; converter = null; pieces = emptyArray()
+        }
+
+        /** The Bézier form of [spline], equal to `SplineBezier.toSubpath(spline, tol)`. */
+        fun toSubpath(spline: VSpline): VSubpath {
+            val s = spline.sanitized()
+            trivial(s)?.let { reset(); lastConverted = 0; return it }
+            val pts = s.points
+            val n = pts.size
+            val closed = NurbsGeometry.isClosed(s)
+            val k = s.effectiveOrder.coerceIn(2, n)
+            val old = basis
+            val same = old != null && points.size == n && old.order == k && old.closed == closed && (closed || endpoint == s.endpoint)
+            val b = if (same) old else NurbsGeometry.basis(s)
+            val conv = if (same) converter!!.also { it.s = s } else Converter(s, b, tolerance)
+            if (!same) pieces = Array(b.spans.size) { SpanPieces() }
+            if (dirty.size < n) dirty = BooleanArray(n)
+            for (i in 0 until n) dirty[i] = !same || pts[i] != points[i]
+            val p = b.degree
+            val out = PieceSink(b.spans.size * 2 + 2)
+            var converted = 0
+            for (si in b.spans.indices) {
+                val span = b.spans[si]
+                val sp = pieces[si]
+                var touched = false
+                for (j in 0..p) if (dirty[b.ctrl[span - p + j]]) { touched = true; break }
+                if (touched) {
+                    sp.clear()
+                    conv.span(span, sp)
+                    converted++
+                }
+                sp.replayInto(out)
+            }
+            points = ArrayList(pts)
+            basis = b
+            converter = conv
+            endpoint = s.endpoint
+            lastConverted = converted
+            return out.toSubpath(closed)
+        }
     }
 
     /**
@@ -169,14 +247,47 @@ object SplineBezier {
 
     // ------------------------------------------------------------------ conversion
 
+    /** Where a span's cubic pieces go, in order: start point and width, two handles, end point and width. */
+    private interface PieceOut {
+        fun add(p0x: Double, p0y: Double, p0w: Double, ax: Double, ay: Double, bx: Double, by: Double, p1x: Double, p1y: Double, p1w: Double)
+    }
+
+    /** The pieces of one span as converted (the doubles [Converter] gave, unchanged), to replay into a [PieceSink]. */
+    private class SpanPieces : PieceOut {
+        private var data = DoubleArray(2 * PIECE)
+        private var n = 0
+
+        fun clear() { n = 0 }
+
+        override fun add(p0x: Double, p0y: Double, p0w: Double, ax: Double, ay: Double, bx: Double, by: Double, p1x: Double, p1y: Double, p1w: Double) {
+            if ((n + 1) * PIECE > data.size) data = data.copyOf(data.size * 2)
+            val o = n * PIECE
+            data[o] = p0x; data[o + 1] = p0y; data[o + 2] = p0w
+            data[o + 3] = ax; data[o + 4] = ay; data[o + 5] = bx; data[o + 6] = by
+            data[o + 7] = p1x; data[o + 8] = p1y; data[o + 9] = p1w
+            n++
+        }
+
+        fun replayInto(out: PieceOut) {
+            for (k in 0 until n) {
+                val o = k * PIECE
+                out.add(data[o], data[o + 1], data[o + 2], data[o + 3], data[o + 4], data[o + 5], data[o + 6], data[o + 7], data[o + 8], data[o + 9])
+            }
+        }
+
+        private companion object {
+            const val PIECE = 10
+        }
+    }
+
     /** Collects cubic pieces (start point, two handles, start width) and joins them into anchors. */
-    private class PieceSink(capacity: Int) {
+    private class PieceSink(capacity: Int) : PieceOut {
         /** Per piece: start x, y, width, first handle x, y, second handle x, y. */
         private var data = DoubleArray(max(1, capacity) * STRIDE)
         private var n = 0
         private var endX = 0.0; private var endY = 0.0; private var endW = 1.0
 
-        fun add(p0x: Double, p0y: Double, p0w: Double, ax: Double, ay: Double, bx: Double, by: Double, p1x: Double, p1y: Double, p1w: Double) {
+        override fun add(p0x: Double, p0y: Double, p0w: Double, ax: Double, ay: Double, bx: Double, by: Double, p1x: Double, p1y: Double, p1w: Double) {
             if ((n + 1) * STRIDE > data.size) data = data.copyOf(data.size * 2)
             val o = n * STRIDE
             data[o] = p0x; data[o + 1] = p0y; data[o + 2] = p0w
@@ -223,7 +334,7 @@ object SplineBezier {
     }
 
     /** Converts the spans of one spline (scratch arrays reused across spans). */
-    private class Converter(private val s: VSpline, private val b: NurbsBasis, private val tol: Double) {
+    private class Converter(var s: VSpline, private val b: NurbsBasis, private val tol: Double) {
         private val p = b.degree
         private val dim = NurbsGeometry.DIM
         private val h = DoubleArray((p + 1) * dim)
@@ -234,7 +345,7 @@ object SplineBezier {
         private val v1 = DoubleArray(dim); private val d1 = DoubleArray(dim)
         private val vs = DoubleArray(dim); private val ds = DoubleArray(dim)
 
-        fun span(span: Int, out: PieceSink) {
+        fun span(span: Int, out: PieceOut) {
             NurbsGeometry.spanBezier(s, b, span, h, scratch)
             if (p <= 3 && constantWeight()) exact(out) else {
                 toPowerBasis()
@@ -284,7 +395,7 @@ object SplineBezier {
             return true
         }
 
-        private fun exact(out: PieceSink) {
+        private fun exact(out: PieceOut) {
             val w = h[2]
             fun px(j: Int) = h[j * dim] / w
             fun py(j: Int) = h[j * dim + 1] / w
@@ -306,7 +417,7 @@ object SplineBezier {
          * than the tolerance and the budget allows, the piece that misses most is halved, so the
          * pieces go where the curve actually turns.
          */
-        private fun approximate(out: PieceSink) {
+        private fun approximate(out: PieceOut) {
             count = 0
             fitPiece(0.0, 1.0, 0)
             count = 1

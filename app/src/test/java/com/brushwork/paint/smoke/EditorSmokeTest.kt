@@ -348,7 +348,7 @@ class EditorSmokeTest {
         c.selectTool(ToolId.SHAPE)
         settle()
         val shape = c.tools.getValue(ToolId.SHAPE) as ShapeTool
-        click("Settings", exact = true)
+        click("Shape settings", exact = true)
         assertMenuShown()
         assertTrue(has("Stroke width"))
         closeSheets(activity, reset)
@@ -362,7 +362,7 @@ class EditorSmokeTest {
             settle()
         }
         shape.update { it.copy(type = com.brushwork.paint.tools.vector.ShapeType.ARROW) }
-        click("Settings", exact = true)
+        click("Shape settings", exact = true)
         closeSheets(activity, reset)
         click("Numbers", exact = true)
         closeSheets(activity, reset)
@@ -386,7 +386,7 @@ class EditorSmokeTest {
             curve.select(1)
             settle()
             assertTrue(has("Delete point"))
-            click("Settings", exact = true)
+            click("${id.label} settings", exact = true)
             assertMenuShown()
             closeSheets(activity, reset)
             click("Numbers", exact = true)

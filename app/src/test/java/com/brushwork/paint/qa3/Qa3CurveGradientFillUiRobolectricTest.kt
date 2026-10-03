@@ -69,7 +69,7 @@ class Qa3CurveGradientFillUiRobolectricTest {
             Smoke.pumpUntil { tool.isReopened }
             settle()
             assertTrue("reopened", tool.isReopened)
-            SmokeUi.click("Settings", exact = true)
+            SmokeUi.click("Curve settings", exact = true)
             SmokeUi.assertPanelShown("Curve")
             assertFalse("the fill is not \"the main color\"", SmokeUi.has("Same as the main color", exact = true))
             assertTrue("the sheet says the gradient is kept; shown: ${SmokeUi.shown()}", SmokeUi.has("Gradient (kept)", exact = true))

@@ -162,7 +162,7 @@ class Qa3CurveWidthUiRobolectricTest {
         c.addVectorLayer()!!
         c.brush = c.brush.copy(size = 8f)
         val tool = pendingCurve(c)
-        SmokeUi.click("Settings", exact = true)
+        SmokeUi.click("Curve settings", exact = true)
         SmokeUi.assertPanelShown("Curve")
         assertTrue(SmokeUi.has("Use brush size", exact = true))
         // A width typed while linked resizes the brush.

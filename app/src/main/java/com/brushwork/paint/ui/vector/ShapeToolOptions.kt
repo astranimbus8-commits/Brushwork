@@ -171,7 +171,8 @@ fun ShapeToolOptions(tool: ShapeTool) {
     OptionChip("15°", s.snapAngle, { set { it.copy(snapAngle = !it.snapAngle) } }, icon = Icons.Filled.Straighten)
     SnapToObjectsChip(controller)
     ActionChip("Numbers", Icons.Filled.Pin) { if (tool.ensurePending()) showNumbers = true }
-    ActionChip("Settings", Icons.Filled.Tune) { showSettings = true }
+    // I10: shows "Settings", known as "Shape settings" (the tool menu has a "Settings" cell).
+    ActionChip("Settings", Icons.Filled.Tune, contentDescription = "Shape settings") { showSettings = true }
 
     if (showSettings) ShapeSettingsSheet(tool) { showSettings = false }
     if (showNumbers) ShapeNumbersSheet(tool) { showNumbers = false }
