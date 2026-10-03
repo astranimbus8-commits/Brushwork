@@ -65,9 +65,15 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
 
     // ------------------------------------------------------------------ the frame index
 
-    /** Decoded frames by stored data INSTANCE (undo restores the same instances; nothing to decode again). */
+    /**
+     * Decoded frames by stored data INSTANCE (undo restores the same instances; nothing to decode
+     * again). Least recently used first: every look at the document touches the data its layers
+     * hold now, so what goes first is data no layer holds any more (each can carry a copy of a
+     * story of up to 50,000 characters): at most [STALE_DECODED] of those are kept.
+     */
     private val decoded = object : LinkedHashMap<DataRef, TextItem?>(64, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DataRef, TextItem?>): Boolean = size > DECODE_CACHE_SIZE
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<DataRef, TextItem?>): Boolean =
+            size > c.doc.layers.size + STALE_DECODED
     }
 
     /** A stored text data string compared by identity. */
@@ -441,8 +447,8 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         /** Chain order: by index, then by place in the layer stack (damaged data with equal indices). */
         private val CHAIN_ORDER = Comparator<Frame> { a, b -> a.thread.index.compareTo(b.thread.index) }
 
-        /** Decoded frames kept by data instance. */
-        private const val DECODE_CACHE_SIZE = 256
+        /** Decoded data kept beyond what the layers hold now (undo and redo bring it back). */
+        private const val STALE_DECODED = 32
 
         /** The Text tool's message at the layer limit. */
         const val LAYER_LIMIT = "Layer limit reached (%d) for this canvas size: delete or merge a layer to add text"

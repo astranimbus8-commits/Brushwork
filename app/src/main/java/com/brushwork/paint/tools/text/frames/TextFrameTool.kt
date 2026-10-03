@@ -85,9 +85,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     val selected: Layer?
         get() = selectedState?.takeIf { doc.indexOf(it) >= 0 && threads.isFrame(it) }
 
-    /** The frame whose out-port was tapped (link mode: the next frame or text joins after it), or null. */
-    var linkFrom by mutableStateOf<Layer?>(null)
-        private set
+    private var linkFromState by mutableStateOf<Layer?>(null)
+
+    /**
+     * The frame whose out-port was tapped (link mode: the next frame or text joins after it), or
+     * null. Checked on every read: an undo that takes the loaded frame away ends link mode.
+     */
+    val linkFrom: Layer?
+        get() = linkFromState?.takeIf { doc.indexOf(it) >= 0 && threads.isFrame(it) }
 
     /** Thread lines are shown (the "Threads" chip). */
     var showThreads by mutableStateOf(true)
@@ -104,9 +109,15 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
 
     override val hasPendingWork: Boolean get() = story.isOpen || positionEdit != null
 
-    /** A frame being moved with the X / Y pill: nothing to keep while the edit is untouched. */
+    /**
+     * What undo takes back first: a new frame being typed, a story edited in the open editor, a
+     * frame moved with the X / Y pill. A story editor opened on a frame and left untouched (like
+     * a text layer only tapped in the Text tool) doesn't swallow an undo: it closes and the last
+     * step is undone.
+     */
     override val hasUserChanges: Boolean
-        get() = story.isOpen || positionEdit.let { it != null && it.second != it.first }
+        get() = (story.isOpen && (story.editingNew || story.item != story.opened)) ||
+            positionEdit.let { it != null && it.second != it.first }
 
     // ------------------------------------------------------------------ selection
 
@@ -139,12 +150,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     override fun onActivate() {
         val a = controller.activeLayer
         selectedState = if (threads.isFrame(a)) a else null
-        if (linkFrom?.let { doc.indexOf(it) < 0 || !threads.isFrame(it) } == true) linkFrom = null
+        // A layer operation paused this tool (onDeactivate stops the pulse): a loaded out-port
+        // that is still there keeps pulsing; one that went away ends link mode.
+        if (linkFrom != null) startPulse() else linkFromState = null
         changed()
     }
 
     override fun onSelected() {
-        linkFrom = null
+        linkFromState = null
         stopPulse()
     }
 
@@ -161,6 +174,8 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         stopPulse()
         preview.clear()
         hitTexts.clear()
+        // The editor closes: the measured stories and decoded frames go too (several MB at most).
+        threads.release()
     }
 
     // ------------------------------------------------------------------ pending work (✓ / ✕)
@@ -179,7 +194,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             preview.clear()
             changed()
         }
-        linkFrom = null
+        linkFromState = null
         stopPulse()
     }
 
@@ -213,7 +228,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             return false
         }
         val s = threads.storyOf(frames) ?: return false
-        linkFrom = null
+        linkFromState = null
         storyTarget = l
         storyIdEditing = s.id
         story.open(TextItem(text = s.text, spec = FrameGeometry.withFrameBox(s.spec, item.spec.box), cx = item.cx, cy = item.cy), new = false)
@@ -235,7 +250,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             return
         }
         val template = FrameGeometry.placed(TextItem(spec = specForNewFrame()), r.left, r.top, r.right, r.bottom)
-        linkFrom = null
+        linkFromState = null
         storyTarget = null
         storyIdEditing = 0L
         story.open(template.copy(text = ""), new = true)
@@ -347,7 +362,8 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             val sb = StringBuilder(prefix)
             tokens.forEachIndexed { i, tok -> sb.append(if (i == 0 && (prefix.isEmpty() || prefix.last().isWhitespace())) tok.trimStart() else tok) }
             val full = TextThreadFlow.cap(sb.toString())
-            val items = TextThreadFlow.flow(full, cur.spec, chain, PREVIEW_STORY_ID, 0L, threads.measures)
+            // Not through the measure cache: these trial stories are thrown away.
+            val items = TextThreadFlow.flow(full, cur.spec, chain, PREVIEW_STORY_ID, 0L)
             val last = items.last()
             if (last.thread.overset || last.thread.end < full.length) {
                 val end = last.thread.end
@@ -466,15 +482,24 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val t = controller.viewTransform
         downDoc = Vec2(p.x, p.y)
         val s = t.docToScreen(downDoc)
+        // Link mode (an out-port is loaded): a drag anywhere draws the next frame and a tap joins
+        // the text box under the finger (§3.6a); only the ports stay live (tapping the loaded
+        // one again unloads it).
+        val linking = linkFrom != null
         // The nearest of the selected frame's handles and the frames' out-ports within reach.
         var best = Float.MAX_VALUE
-        val sel = selected?.takeIf { it.visible }
+        val sel = selected?.takeIf { it.visible && !linking }
         val selItem = sel?.let { threads.frameOf(it) }
         if (sel != null && selItem != null) {
             val r = FrameGeometry.outerRect(selItem)
+            // Inside a small frame the handles reach in only a quarter of its side, so the middle
+            // still moves it (a 32 dp frame would otherwise be all handles); outside, the full reach.
+            val inside = r.contains(downDoc.x, downDoc.y)
+            val side = min(r.width(), r.height()) * t.zoom
+            val reach = if (inside) min(t.dp(HANDLE_HIT_DP), side / 4f) else t.dp(HANDLE_HIT_DP)
             for (h in FrameGeometry.Handle.entries) {
                 val d = s.distanceTo(t.docToScreen(h.at(r)))
-                if (d <= t.dp(HANDLE_HIT_DP) && d < best) {
+                if (d <= reach && d < best) {
                     best = d
                     mode = Mode.RESIZE
                     dragHandle = h
@@ -496,7 +521,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             if (mode == Mode.RESIZE) beginSnap()
             return
         }
-        val hit = frameAt(downDoc)
+        val hit = if (linking) null else frameAt(downDoc)
         if (hit != null) {
             mode = Mode.MOVE
             dragLayer = hit.layer
@@ -505,18 +530,30 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             beginSnap()
             return
         }
+        beginDraw()
+    }
+
+    /** A drag from [downDoc] draws a frame (the start corner snaps to guides and the grid). */
+    private fun beginDraw() {
         mode = Mode.DRAW
         snap.begin(includeSelection = true)
         drawStart = if (controller.snapping.enabled || controller.grid.snap) snap.snapPoint(downDoc) else downDoc
     }
 
     override fun onMove(p: ToolPoint) {
-        if (mode == Mode.NONE || mode == Mode.PORT) return
+        if (mode == Mode.NONE) return
         val t = controller.viewTransform
         val q = Vec2(p.x, p.y)
         if (!moved) {
             if (t.docToScreen(q).distanceTo(t.docToScreen(downDoc)) < t.dp(TOUCH_SLOP_DP)) return
             moved = true
+            // An out-port is a tap target: a finger that travels from it draws a frame instead
+            // (the port sits on the canvas next to the frame, where a drag draws; in link mode
+            // that frame is the next one of the story).
+            if (mode == Mode.PORT) {
+                portLayer = null
+                beginDraw()
+            }
         }
         when (mode) {
             Mode.DRAW -> drawRect = drawnRect(q)
@@ -578,22 +615,29 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val inc = controller.increments
         if (h.dx != 0) {
             val hit = snap.snapValue(x, SnapAxis.X)
-            x = if (hit != null) hit.pos else {
-                val fixed = if (h.dx > 0) r0.left else r0.right
-                fixed + h.dx * inc.lengthAbs(abs(x - fixed))
-            }
+            x = hit?.pos ?: steppedFrom(x, if (h.dx > 0) r0.left else r0.right, h.dx)
         }
         if (h.dy != 0) {
             val hit = snap.snapValue(y, SnapAxis.Y)
-            y = if (hit != null) hit.pos else {
-                val fixed = if (h.dy > 0) r0.top else r0.bottom
-                fixed + h.dy * inc.lengthAbs(abs(y - fixed))
-            }
+            y = hit?.pos ?: steppedFrom(y, if (h.dy > 0) r0.top else r0.bottom, h.dy)
         }
+        // A finger past the opposite edge: [FrameGeometry.resized] holds the frame at its least size.
         val r = FrameGeometry.resized(r0, h, Vec2(x, y), min, min)
         snap.showGuidesFor(DocBox(r.left, r.top, r.right, r.bottom))
         inc.readout = if (inc.enabled) "${Units.formatNumber(r.width().toDouble(), 0)} × ${Units.formatNumber(r.height().toDouble(), 0)} px" else null
         return FrameGeometry.placed(start, r.left, r.top, r.right, r.bottom, keepRight = h.dx < 0, keepBottom = h.dy < 0)
+    }
+
+    /**
+     * [v] (an edge the finger drags, on the side [dir] of the edge [fixed] that stays): whole
+     * Length steps from [fixed] while increments are on. Exactly [v] while they are off (I8), and
+     * when the finger is past [fixed] (nothing to step: the frame is at its least size there).
+     */
+    private fun steppedFrom(v: Float, fixed: Float, dir: Int): Float {
+        val inc = controller.increments
+        val d = (v - fixed) * dir
+        if (!inc.enabled || d <= 0f) return v
+        return fixed + dir * inc.lengthAbs(d)
     }
 
     /** The rectangle from the (snapped) start corner to [q]: the corner snaps, else its size steps. */
@@ -601,7 +645,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val inc = controller.increments
         val snapped = if (controller.snapping.enabled || controller.grid.snap) snap.snapPoint(q) else q
         fun axis(v: Float, raw: Float, start: Float): Float =
-            if (v != raw) v else start + Math.signum(raw - start) * inc.lengthAbs(abs(raw - start))
+            if (v != raw || !inc.enabled) v else start + Math.signum(raw - start) * inc.lengthAbs(abs(raw - start))
         val x = axis(snapped.x, q.x, drawStart.x)
         val y = axis(snapped.y, q.y, drawStart.y)
         val r = RectF(min(drawStart.x, x), min(drawStart.y, y), max(drawStart.x, x), max(drawStart.y, y))
@@ -803,13 +847,13 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (!threads.isFrame(l)) return
         if (story.isOpen) return
         select(l)
-        linkFrom = l
+        linkFromState = l
         startPulse()
         changed()
     }
 
     fun cancelLink() {
-        linkFrom = null
+        linkFromState = null
         stopPulse()
         changed()
     }
@@ -1058,6 +1102,12 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     private val pulseRunnable = object : Runnable {
         override fun run() {
             if (!pulseOn) return
+            // Link mode ended without this tool hearing of it (an undo took the loaded frame away).
+            if (linkFrom == null) {
+                pulseOn = false
+                controller.invalidateOverlay()
+                return
+            }
             controller.invalidateOverlay()
             handler.postDelayed(this, PULSE_FRAME_MS)
         }

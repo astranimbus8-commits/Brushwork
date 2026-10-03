@@ -100,35 +100,48 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
         tool.onStoryChanged()
     }
 
+    /**
+     * The placeholder request the editor runs (off the main thread) before [applyPlaceholder].
+     * "Fill the box" fills the whole chain in [applyPlaceholder] ([TextFrameTool.fillChain]), so
+     * the request for it is only a quick stand-in (a short line replacing the text, which always
+     * has an answer): the single-box fill would measure the whole story against the opened
+     * frame alone, and say "no room" for a story that already fills that frame while later
+     * frames are still empty.
+     */
     override fun placeholderRequest(): PlaceholderFit.Request? {
         val cur = itemState ?: return null
-        return PlaceholderFit.Request(cur, placeholderKind, placeholderAmount, placeholderReplace, controller.doc.width, controller.doc.height, maxBoxPx)
+        val fill = placeholderAmount == PlaceholderAmount.FILL
+        return PlaceholderFit.Request(
+            cur, placeholderKind, if (fill) PlaceholderAmount.SHORT else placeholderAmount, fill || placeholderReplace,
+            controller.doc.width, controller.doc.height, maxBoxPx,
+        )
     }
 
     /**
      * Applies a placeholder [edit] computed for [basedOn] (ignored when the story or its look
      * changed meanwhile). "Fill the box" fills the whole CHAIN of frames (as InDesign fills a
      * thread): exactly as much placeholder text as all frames hold, measured with the frames' own
-     * layout. Other amounts insert the text the edit gives.
+     * layout. Other amounts insert the text the edit gives. True when the request is handled
+     * (also when nothing fits: a message says so), false only when the story changed meanwhile.
      */
     override fun applyPlaceholder(basedOn: TextItem, edit: PlaceholderFit.Edit?): Boolean {
         val cur = itemState ?: return false
         if (cur.text != basedOn.text || cur.spec != basedOn.spec) return false
-        if (edit == null) {
-            controller.toast("No room for placeholder text in these frames: make a frame bigger or the text smaller")
-            return false
-        }
         val text = if (placeholderAmount == PlaceholderAmount.FILL) {
             tool.fillChain(cur, placeholderKind, placeholderReplace) ?: run {
-                controller.toast("No room for placeholder text in these frames: make a frame bigger or the text smaller")
-                return false
+                controller.toast(NO_ROOM)
+                return true
             }
         } else {
+            if (edit == null) {
+                controller.toast(NO_ROOM)
+                return true
+            }
             edit.text
         }
         val capped = TextThreadFlow.cap(text)
         // The look may change (never the frame's box size, which belongs to the frame).
-        val spec = FrameGeometry.withFrameBox(edit.spec, cur.spec.box)
+        val spec = edit?.spec?.let { FrameGeometry.withFrameBox(it, cur.spec.box) } ?: cur.spec
         update { it.copy(text = capped, spec = spec) }
         return true
     }
@@ -204,6 +217,10 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
     override fun setSizePx(px: Float) {
         if (!px.isFinite()) return
         updateSpec { it.copy(sizePx = px.coerceIn(TextSpec.MIN_SIZE_PX, maxSizePx)) }
+    }
+
+    private companion object {
+        const val NO_ROOM = "No room for placeholder text in these frames: make a frame bigger or the text smaller"
     }
 
     /** The whole story; longer than [TextThreadSpec.MAX_STORY] characters is cut (with a message). */
