@@ -244,6 +244,7 @@ class LayerWindowActionsRobolectricTest {
         undo()
         oneStep("Lock layer", "Lock layer") { click(LayerLabels.LOCK) }
         assertTrue(layer.locked)
+        assertTrue("the row says so", SmokeUi.has(LayerLabels.rowState(c.doc.indexOf(layer) + 1, 100, "Normal", locked = true), exact = true))
         undo()
         click(LayerLabels.BLEND)
         oneStep("Blend mode", "Blend mode") { click(LayerBlendMode.MULTIPLY.label) }
@@ -287,7 +288,9 @@ class LayerWindowActionsRobolectricTest {
         val adjustment = c.addAdjustmentLayer(AdjustmentEffects.defaultSpec(drawingColor = c.color), null)!!
         SmokeUi.settle()
         assertSame(adjustment, c.activeLayer)
-        assertTrue("its row names the effect", SmokeUi.has(AdjustmentEffects.displayName(adjustment.adjustment!!), exact = true))
+        val effect = AdjustmentEffects.displayName(adjustment.adjustment!!)
+        val adjustmentN = c.doc.indexOf(adjustment) + 1
+        assertTrue("its row names the effect", SmokeUi.has(LayerLabels.rowState(adjustmentN, 100, adjustment.blendMode.label, effect), exact = true))
         assertTrue("the strip applies it to the layer below", SmokeUi.has(LayerLabels.APPLY_BELOW, exact = true))
         val before = steps()
         val touch = SliderTouch(density)

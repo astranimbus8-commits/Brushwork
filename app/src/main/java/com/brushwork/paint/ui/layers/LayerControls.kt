@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.layers
 
+import android.graphics.Rect
 import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -106,6 +107,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
@@ -768,16 +770,20 @@ private class OpacityPreview(
     private var trailing: Job? = null
     private var live = false
 
+    /** Where the adjustment's effect shows (doc px, null = everywhere): all an opacity drag redraws. */
+    private var region: Rect? = null
+
     fun update(value: Float) {
         if (before == null) {
             before = layer.props()
             live = layer.isAdjustmentLayer
+            region = if (live) MaskEdits.effectRegion(controller, layer) else null
             throttle.reset()
         }
         if (live) {
             if (layer.opacity != value) {
                 layer.opacity = value
-                controller.liveAdjust.touch(layer, null)
+                controller.liveAdjust.touch(layer, region?.let(::Rect))
             }
             return
         }
@@ -811,6 +817,7 @@ private class OpacityPreview(
         pending = null
         if (live) controller.liveAdjust.end(layer)
         live = false
+        region = null
         controller.commitLayerProps(layer, b, OPACITY_STEP)
     }
 

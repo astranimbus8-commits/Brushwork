@@ -82,11 +82,56 @@ internal class LayerWindowProbe(private val density: Float) {
         return labels.toSet()
     }
 
+    /**
+     * The strict I10 audit area E's `UniqueLabelsTest` runs over the whole screen: every clickable
+     * is known by ALL its texts, descriptions and click label plus those of its descendants that
+     * are not clickables themselves (what a screen reader reads, and what `SmokeUi.click` finds
+     * it by); no string may belong to two clickables, except values ("100%", "2", "45°").
+     */
+    fun assertUniqueMergedLabels(where: String, area: Rect, window: View? = null) {
+        val byLabel = LinkedHashMap<String, MutableList<String>>()
+        for (e in elements()) {
+            val n = e.node
+            if ((window != null && e.window !== window) || n.config.getOrNull(SemanticsActions.OnClick) == null) continue
+            if (!area.contains(e.bounds.center) || e.bounds.width <= 0f || e.bounds.height <= 0f) continue
+            for (l in n.mergedLabels()) byLabel.getOrPut(l) { mutableListOf() } += "${n.label()} #${n.id}"
+        }
+        val dup = byLabel.filter { (l, on) -> on.size > 1 && !VALUE.matches(l) }
+        assertTrue("$where: strings shared by several clickables: $dup", dup.isEmpty())
+    }
+
     /** Texts of the items of the open dropdown menus (popup windows after the activity's). */
     fun menuItems(activityWindow: View): List<String> =
         elements().filter { it.window !== activityWindow && it.node.isControl() }.map { it.node.label() }
 
     companion object {
+        /** A value a control shows, not its name (E's `UniqueLabelsTest` rule). */
+        private val VALUE = Regex("""^[-+]?[\d.,\s]+(%|px|°| px| %)?$""")
+
+        private fun SemanticsNode.allOwn(): List<String> =
+            texts() + config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
+                listOfNotNull(config.getOrNull(SemanticsActions.OnClick)?.label)
+
+        /**
+         * Own texts, descriptions and click label plus those of non-clickable descendants, as a
+         * screen reader merges them: what a `clearAndSetSemantics` node hides (its children, which
+         * the unmerged tree still lists) is not read.
+         */
+        fun SemanticsNode.mergedLabels(): Set<String> {
+            val out = linkedSetOf<String>()
+            out += allOwn()
+            fun walk(n: SemanticsNode) {
+                if (n.config.isClearingSemantics) return
+                for (child in n.children) {
+                    if (child.config.getOrNull(SemanticsActions.OnClick) != null) continue
+                    out += child.allOwn()
+                    walk(child)
+                }
+            }
+            walk(this)
+            return out.filter { it.isNotBlank() }.toSet()
+        }
+
         /** Back on every popup window shown over [activityWindow] (a dropdown menu dismisses). */
         fun pressBackOnPopups(activityWindow: View) {
             for (w in SmokeUi.windows().filter { it !== activityWindow }.asReversed()) {

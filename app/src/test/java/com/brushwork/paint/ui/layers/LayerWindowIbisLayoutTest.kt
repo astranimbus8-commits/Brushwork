@@ -127,8 +127,20 @@ class LayerWindowIbisLayoutTest {
         probe.assertSize("eye", 40f, 40f, probe.control(LayerLabels.hide(2)))
         probe.assertSize("drag handle", 40f, 80f, probe.control(LayerLabels.reorder(2)))
         probe.assertDp("drag handle at the right end", 0f, rows.right - probe.control(LayerLabels.reorder(2)).right)
-        probe.assertSize("mask square", 40f, 40f, probe.control("Mask of layer 2"))
-        assertTrue("100% over Normal", SmokeUi.has("100%", exact = true) && SmokeUi.has("Normal", exact = true))
+        probe.assertSize("mask square", 40f, 40f, probe.control(LayerLabels.maskOf(2)))
+        // The masked row stacks its eye over its mask square, beside the thumbnail.
+        val eye2 = probe.control(LayerLabels.hide(2))
+        val mask2 = probe.control(LayerLabels.maskOf(2))
+        probe.assertDp("eye over the mask square", 0f, mask2.top - eye2.bottom)
+        probe.assertDp("in one column", 0f, mask2.left - eye2.left)
+        assertTrue("right of the thumbnail", mask2.left >= probe.tagged(LayerWindowTags.thumb(top.id)).right - 1f)
+        // "100%" over "Normal", spoken as one description naming the row.
+        assertTrue("100% over Normal", SmokeUi.has(LayerLabels.rowState(2, 100, "Normal"), exact = true))
+        assertTrue(SmokeUi.has(LayerLabels.rowState(1, 100, "Normal"), exact = true))
+        for (id in listOf(top.id, bottom.id)) {
+            val w = probe.dp(probe.tagged(LayerWindowTags.values(id)).width)
+            assertTrue("room for \"100%\" / \"Normal\": $w dp", w >= 60f)
+        }
         assertTrue(SmokeUi.has("No Selection", exact = true))
 
         // ------------------------------------------------------------ icons and their places
@@ -182,6 +194,9 @@ class LayerWindowIbisLayoutTest {
         val activityWindow = SmokeUi.windows().first()
         probe.assertTouchTargets("382 × 520", window, activityWindow)
         val labels = probe.assertUniqueLabels("382 × 520", window, activityWindow)
+        // E's screen-wide audit: no text or description on two clickables ("Normal" on every row
+        // and on the blend dropdown would be).
+        probe.assertUniqueMergedLabels("382 × 520", window, activityWindow)
         // The ⋮ menu is shown together with the window: none of its entries may repeat a label.
         assertMenuLabelsAreNew(probe, activityWindow, labels, LayerLabels.MORE, "⋮")
         // Its mask page too (the strip's "Layer mask" opens the menu there).
@@ -201,6 +216,7 @@ class LayerWindowIbisLayoutTest {
         assertEquals("rows stay 80 dp", 80f, probe.taggedHeightDp(LayerWindowTags.row(bottom.id)), 1f)
         probe.assertTouchTargets("300 × 436", narrow, activityWindow)
         probe.assertUniqueLabels("300 × 436", narrow, activityWindow)
+        probe.assertUniqueMergedLabels("300 × 436", narrow, activityWindow)
 
         // ------------------------------------------------------------ short and wide: side by side
         size = 380 to 260
@@ -212,6 +228,7 @@ class LayerWindowIbisLayoutTest {
         assertTrue("the list beside the controls", probe.tagged(LayerWindowTags.LIST).right <= controls.left + 1f)
         probe.assertTouchTargets("380 × 260", wide, activityWindow)
         probe.assertUniqueLabels("380 × 260", wide, activityWindow)
+        probe.assertUniqueMergedLabels("380 × 260", wide, activityWindow)
         Smoke.assertQuiet(c, "layout")
     }
 

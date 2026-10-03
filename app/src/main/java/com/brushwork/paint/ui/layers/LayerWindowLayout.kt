@@ -78,12 +78,28 @@ data class LayerWindowMetrics(
         /** Rows at least this tall stack number, eye line and name (80 in ibisPaint). */
         const val TALL_ROW = 72f
 
-        /** Lists narrower than this get the small thumbnail. */
-        const val MIN_LIST_FOR_FULL_THUMB = 170f
+        /**
+         * The room a row keeps beside its thumbnail: the gutter (4, or 10 with the clip
+         * bracket), the 40 dp eye (or the eye stacked over the mask square), at least 44 dp for
+         * "100%" / "Normal" with their pad, the 40 dp ≡. A narrower list shrinks the thumbnail
+         * (62 at ibisPaint's 220 dp list, 48 at a 360 dp phone's 188, at least [SMALL_THUMB])
+         * before it squeezes the values.
+         */
+        const val ROW_ROOM_BESIDE_THUMB = 140f
 
         const val SMALL_THUMB = 44f
         const val SIDE_ROW = 56f
+
+        /**
+         * A side-by-side list at least this wide keeps [SIDE_ROW] rows: a masked row then has its
+         * mask square, eye and values in line (4 + 44 + 40 + 4 + 40 + 48 + 40). A narrower one
+         * gets 80 dp rows, where the eye stacks over the mask square.
+         */
+        const val SIDE_LIST_FOR_SHORT_ROWS = 220f
+
+        /** The side-by-side controls column: half the window, within these bounds. */
         const val CONTROLS_WIDTH = 236f
+        const val CONTROLS_MAX_WIDTH = 280f
         const val COMPACT_PAD = 4f
         const val COMPACT_LEFT = 50f
 
@@ -102,14 +118,21 @@ data class LayerWindowMetrics(
             val strip = IbisDims.LayerStrip.value
             val transparency = IbisDims.TransparencyRow.value
             if ((shortScreen || h < SIDE_BY_SIDE_HEIGHT) && w >= SIDE_BY_SIDE_MIN_WIDTH) {
-                val list = (w - CONTROLS_WIDTH - 3 * COMPACT_PAD).coerceAtLeast(0f)
+                // Half the window for the controls (the blend dropdown then shows "Normal" whole
+                // in a 520 dp landscape window), the rest for the list.
+                val controls = (w / 2f).coerceIn(CONTROLS_WIDTH, CONTROLS_MAX_WIDTH)
+                val list = (w - controls - 3 * COMPACT_PAD).coerceAtLeast(0f)
+                val shortRows = list >= SIDE_LIST_FOR_SHORT_ROWS
                 return LayerWindowMetrics(
                     width = w, height = h, sideBySide = true, compact = true,
                     header = header, main = (h - header).coerceAtLeast(0f), blendRow = blend, opacityRow = opacity, bottomPad = COMPACT_PAD,
                     padStart = COMPACT_PAD, gap1 = COMPACT_PAD, gap2 = 0f, padEnd = COMPACT_PAD,
                     leftColumn = 0f, leftColumns = 0, preview = 0f, buttonsPane = 0f,
-                    list = list, strip = 0f, row = SIDE_ROW, thumb = SMALL_THUMB, transparencyRow = transparency,
-                    controls = CONTROLS_WIDTH,
+                    list = list, strip = 0f,
+                    row = if (shortRows) SIDE_ROW else IbisDims.LayerRow.value,
+                    thumb = if (shortRows) SMALL_THUMB else thumbFor(list),
+                    transparencyRow = transparency,
+                    controls = controls,
                 )
             }
             val main = (h - header - blend - opacity - pad).coerceAtLeast(MIN_MAIN)
@@ -143,7 +166,8 @@ data class LayerWindowMetrics(
             )
         }
 
-        private fun thumbFor(list: Float): Float = if (list >= MIN_LIST_FOR_FULL_THUMB) IbisDims.LayerThumb.value else SMALL_THUMB
+        /** The thumbnail of a list [list] dp wide: 62 while the row keeps [ROW_ROOM_BESIDE_THUMB] beside it, smaller (≥ [SMALL_THUMB]) below. */
+        fun thumbFor(list: Float): Float = (list - ROW_ROOM_BESIDE_THUMB).coerceIn(SMALL_THUMB, IbisDims.LayerThumb.value)
     }
 }
 
@@ -181,7 +205,21 @@ object LayerLabels {
     fun moveDown(n: Int) = "Move layer $n down"
     fun editMask(n: Int) = "Edit mask of layer $n"
     fun editContent(n: Int) = "Edit content of layer $n"
+    fun maskOf(n: Int) = "Mask of layer $n"
     fun transparency(t: TransparencyDisplay) = "Transparency: ${t.label}"
+
+    /**
+     * What a row's values say, as ONE description that names the row (so no two rows, nor a row
+     * and the blend dropdown, share a label; I10): "Layer 2: 100%, Normal", then the adjustment's
+     * effect and the locks ("Layer 3: 60%, Multiply, Tone, locked, alpha locked").
+     */
+    fun rowState(n: Int, percent: Int, blend: String, effect: String? = null, locked: Boolean = false, alphaLocked: Boolean = false): String =
+        buildString {
+            append("Layer ").append(n).append(": ").append(percent).append("%, ").append(blend)
+            if (effect != null) append(", ").append(effect)
+            if (locked) append(", locked")
+            if (alphaLocked) append(", alpha locked")
+        }
 
     // Badges (content descriptions, v1.5 names)
     const val TEXT_BADGE = "Text layer"
@@ -189,8 +227,6 @@ object LayerLabels {
     const val VECTOR_BADGE = "Vector layer"
     const val ADJUSTMENT_BADGE = "Adjustment layer"
     const val SPEC_MASK_BADGE = "Editable mask"
-    const val LOCKED = "Locked"
-    const val ALPHA_LOCKED = "Alpha locked"
 
     // Right strip
     const val CLEAR = "Clear layer"
@@ -240,4 +276,6 @@ object LayerWindowTags {
     const val SELECTION_ROW = "layers.selectionRow"
     fun row(id: Long) = "layers.row.$id"
     fun thumb(id: Long) = "layers.thumb.$id"
+    /** A row's "100%" / "Normal" column. */
+    fun values(id: Long) = "layers.values.$id"
 }

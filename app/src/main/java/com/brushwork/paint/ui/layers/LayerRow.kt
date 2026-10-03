@@ -63,6 +63,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -73,7 +74,6 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
-import com.brushwork.paint.ui.common.checkerboard
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -257,7 +257,12 @@ internal fun LayerRow(
                 modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
             ) { KindBadge(row) }
         }
-        if (row.hasMask) {
+        // A masked row in an 80 dp row stacks its eye over its mask square (one 40 dp column):
+        // side by side they would leave "100%" / "Normal" no room on a 360–392 dp phone, and the
+        // eye would shrink under 40 dp. A shorter row (the side-by-side window) keeps them in line.
+        val stacked = row.hasMask && height >= IbisDims.LayerEyeTouch + IbisDims.LayerMaskTouch
+        val eye = @Composable { EyeButton(row, n, onToggleVisible) }
+        val mask = @Composable {
             val editingThis = row.active && row.editingMask && !row.isAdjustment
             MaskSquare(
                 image = thumbs.mask(row.layer),
@@ -266,10 +271,18 @@ internal fun LayerRow(
                 enabled = row.maskEnabled,
                 spec = row.maskIsSpec,
                 label = if (editingThis) LayerLabels.editContent(n) else LayerLabels.editMask(n),
-                description = "Mask of layer $n",
+                description = LayerLabels.maskOf(n),
                 onClick = onMaskSquare,
                 modifier = Modifier.alpha(dim),
             )
+        }
+        if (stacked) {
+            Column(Modifier.width(IbisDims.LayerEyeTouch).fillMaxHeight(), verticalArrangement = Arrangement.Center) {
+                eye()
+                mask()
+            }
+        } else if (row.hasMask) {
+            mask()
         }
         Column(Modifier.weight(1f).fillMaxHeight().padding(start = 4.dp), verticalArrangement = Arrangement.Center) {
             val tall = height.value >= LayerWindowMetrics.TALL_ROW
@@ -298,45 +311,70 @@ internal fun LayerRow(
                     )
                     Spacer(Modifier.width(3.dp))
                 }
+                // (Spoken with the row's values: two locked rows must not share a label, I10.)
                 if (row.alphaLocked) {
                     AlphaLockBadge(DIM_TEXT)
                     Spacer(Modifier.width(3.dp))
                 }
                 if (row.locked) {
-                    Icon(Icons.Filled.Lock, contentDescription = LayerLabels.LOCKED, tint = DIM_TEXT, modifier = Modifier.size(IbisDims.LayerLockIcon))
+                    Icon(Icons.Filled.Lock, contentDescription = null, tint = DIM_TEXT, modifier = Modifier.size(IbisDims.LayerLockIcon))
                     Spacer(Modifier.width(2.dp))
                 }
             }
             Row(Modifier.fillMaxWidth().height(IbisDims.LayerEyeTouch), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onToggleVisible, modifier = Modifier.size(IbisDims.LayerEyeTouch)) {
-                    Icon(
-                        if (row.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                        contentDescription = if (row.visible) LayerLabels.hide(n) else LayerLabels.show(n),
-                        tint = if (row.visible) EYE_TINT else THUMB_EDGE,
-                        modifier = Modifier.size(IbisDims.LayerEye - 2.dp),
-                    )
-                }
-                Column(Modifier.weight(1f).alpha(dim), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "${(row.opacity * 100f).roundToInt()}%",
-                        color = IbisColors.ListText,
-                        fontSize = IbisDims.LayerRowText,
-                        lineHeight = 13.sp,
-                        maxLines = 1,
-                    )
-                    Text(
-                        row.blendMode.label,
-                        color = IbisColors.ListText,
-                        fontSize = IbisDims.LayerRowText,
-                        lineHeight = 13.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
+                if (!stacked) eye()
+                RowValues(row, Modifier.weight(1f).alpha(dim))
             }
             if (tall) RowName(row.name, Modifier.fillMaxWidth().height(16.dp).alpha(dim))
         }
         DragHandle(n, onMove)
+    }
+}
+
+/** The eye (Ø 28 in a 40 dp target): "Hide layer N" / "Show layer N". */
+@Composable
+private fun EyeButton(row: LayerRowModel, n: Int, onToggleVisible: () -> Unit) {
+    IconButton(onClick = onToggleVisible, modifier = Modifier.size(IbisDims.LayerEyeTouch)) {
+        Icon(
+            if (row.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+            contentDescription = if (row.visible) LayerLabels.hide(n) else LayerLabels.show(n),
+            tint = if (row.visible) EYE_TINT else THUMB_EDGE,
+            modifier = Modifier.size(IbisDims.LayerEye - 2.dp),
+        )
+    }
+}
+
+/**
+ * "100%" over "Normal". Spoken (and found by tests) as ONE description that names the row
+ * ([LayerLabels.rowState]: "Layer 2: 100%, Normal"), so the rows' values, effect names and lock
+ * states never repeat a label of another row or of the blend dropdown (I10).
+ */
+@Composable
+private fun RowValues(row: LayerRowModel, modifier: Modifier) {
+    val pct = (row.opacity * 100f).roundToInt()
+    val state = LayerLabels.rowState(row.number, pct, row.blendMode.label, row.effectName, row.locked, row.alphaLocked)
+    Column(
+        modifier.clearAndSetSemantics {
+            contentDescription = state
+            testTag = LayerWindowTags.values(row.layer.id)
+        },
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            "$pct%",
+            color = IbisColors.ListText,
+            fontSize = IbisDims.LayerRowText,
+            lineHeight = 13.sp,
+            maxLines = 1,
+        )
+        Text(
+            row.blendMode.label,
+            color = IbisColors.ListText,
+            fontSize = IbisDims.LayerRowText,
+            lineHeight = 13.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 
@@ -407,7 +445,8 @@ private fun RowThumbnail(
             Modifier
                 .padding(if (selected) IbisDims.LayerThumbBorder else 1.dp)
                 .aspectRatio(aspect, matchHeightConstraintsFirst = aspect < 1f)
-                .checkerboard(4.dp),
+                // (A checker clamped to the box: whole cells would spill under the picture.)
+                .drawBehind { checker(IbisColors.CheckerLight, IbisColors.CheckerLight2, 4.dp.toPx()) },
             contentAlignment = Alignment.Center,
         ) {
             Image(
@@ -418,6 +457,7 @@ private fun RowThumbnail(
                 modifier = Modifier.fillMaxSize(),
             )
             if (overlayText != null) {
+                // The effect's name is spoken with the row's values (RowValues), not here.
                 Text(
                     overlayText,
                     color = IbisColors.ListText,
@@ -425,7 +465,7 @@ private fun RowThumbnail(
                     lineHeight = 10.sp,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.background(Color(0xCCFFFFFF)).padding(horizontal = 2.dp),
+                    modifier = Modifier.background(Color(0xCCFFFFFF)).padding(horizontal = 2.dp).clearAndSetSemantics { },
                 )
             }
         }
@@ -505,11 +545,11 @@ private fun FrameBadgeView(frame: FrameBadge, modifier: Modifier) =
         }
     }
 
-/** Small "α + lock" icon of alpha-locked layers. */
+/** Small "α + lock" icon of alpha-locked layers (spoken with the row's values, [LayerLabels.rowState]). */
 @Composable
 internal fun AlphaLockBadge(tint: Color) {
     Row(
-        Modifier.clearAndSetSemantics { contentDescription = LayerLabels.ALPHA_LOCKED },
+        Modifier.clearAndSetSemantics { },
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("α", color = tint, fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
@@ -696,6 +736,7 @@ private fun SelectionThumbnail(selection: Selection?, aspect: Float, side: Dp) {
     }
 }
 
+/** The Selection Layer's pink checker, clamped to the box (no cell spills past its edges). */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.pinkChecker(cell: Float) {
     drawRect(Color.White)
     val n = cell.coerceAtLeast(1f)
@@ -704,7 +745,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.pinkChecker(cell: F
     while (y < size.height) {
         var x = if (r % 2 == 0) 0f else n
         while (x < size.width) {
-            drawRect(SELECTION_PINK, topLeft = Offset(x, y), size = Size(n, n))
+            drawRect(SELECTION_PINK, topLeft = Offset(x, y), size = Size(minOf(n, size.width - x), minOf(n, size.height - y)))
             x += 2 * n
         }
         y += n

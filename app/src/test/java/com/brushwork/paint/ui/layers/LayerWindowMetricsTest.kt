@@ -90,12 +90,30 @@ class LayerWindowMetricsTest {
         assertTrue("the list keeps room for its rows: ${m.list}", m.list >= 190f)
         assertDp("the columns add up to the window", 300f, m.padStart + m.leftColumn + m.gap1 + m.list + m.gap2 + m.strip + m.padEnd)
         assertDp("rows stay 80 dp", 80f, m.row)
-        assertDp("the full thumbnail still fits", 62f, m.thumb)
+        assertDp("a slightly smaller thumbnail keeps the values' room", m.list - LayerWindowMetrics.ROW_ROOM_BESIDE_THUMB, m.thumb)
 
         // Narrower still: the small thumbnail.
         val narrow = LayerWindowMetrics.of(250f, 436f)
         assertTrue(narrow.compact)
         assertDp(LayerWindowMetrics.SMALL_THUMB.toString(), LayerWindowMetrics.SMALL_THUMB, narrow.thumb)
+    }
+
+    @Test
+    fun a360DpPhoneShrinksTheThumbnailNotTheValues() {
+        // E sizes the window w − 10 = 350 dp wide on a 360 dp phone: the full layout, a 188 dp list.
+        val m = LayerWindowMetrics.of(350f, 520f)
+        assertFalse(m.compact)
+        assertFalse(m.sideBySide)
+        assertDp("list", 188f, m.list)
+        assertDp("preview kept", 240f, m.preview)
+        assertDp("thumbnail", 48f, m.thumb)
+        assertTrue("room beside the thumbnail for eye, values and ≡", m.list - m.thumb >= LayerWindowMetrics.ROW_ROOM_BESIDE_THUMB - 0.001f)
+        // The thumbnail never grows past ibisPaint's 62 nor shrinks under the small one.
+        for (list in listOf(0f, 100f, 180f, 188f, 198f, 220f, 400f)) {
+            val t = LayerWindowMetrics.thumbFor(list)
+            assertTrue("$list: $t", t in LayerWindowMetrics.SMALL_THUMB..62f)
+        }
+        assertDp("ibisPaint's list", 62f, LayerWindowMetrics.thumbFor(220f))
     }
 
     @Test
@@ -105,10 +123,22 @@ class LayerWindowMetricsTest {
         assertTrue(landscape.sideBySide)
         assertDp("header", 46f, landscape.header)
         assertDp("everything under the header", 284f, landscape.main)
-        assertDp("controls column", LayerWindowMetrics.CONTROLS_WIDTH, landscape.controls)
-        assertDp("the list takes the rest", 520f - LayerWindowMetrics.CONTROLS_WIDTH - 3 * LayerWindowMetrics.COMPACT_PAD, landscape.list)
+        assertDp("controls column: half the window", 260f, landscape.controls)
+        assertDp("the list takes the rest", 520f - 260f - 3 * LayerWindowMetrics.COMPACT_PAD, landscape.list)
+        assertDp("a wide list keeps the short rows", LayerWindowMetrics.SIDE_ROW, landscape.row)
+        assertDp(LayerWindowMetrics.SMALL_THUMB.toString(), LayerWindowMetrics.SMALL_THUMB, landscape.thumb)
         assertFalse(landscape.stripScrolls)
         assertFalse(landscape.buttonsScroll)
+
+        // A smaller landscape phone (640 dp: E gives 416): the controls keep their minimum, and
+        // the narrower list gets 80 dp rows (a masked row stacks its eye over its mask square).
+        val small = LayerWindowMetrics.of(416f, 300f, shortScreen = true)
+        assertTrue(small.sideBySide)
+        assertDp("controls minimum", LayerWindowMetrics.CONTROLS_WIDTH, small.controls)
+        assertDp("list", 416f - LayerWindowMetrics.CONTROLS_WIDTH - 3 * LayerWindowMetrics.COMPACT_PAD, small.list)
+        assertDp("80 dp rows", 80f, small.row)
+        // A very wide one: the controls stop growing.
+        assertDp("controls maximum", LayerWindowMetrics.CONTROLS_MAX_WIDTH, LayerWindowMetrics.of(800f, 300f, shortScreen = true).controls)
 
         // The same window on a tall screen keeps the ibisPaint layout...
         assertFalse(LayerWindowMetrics.of(520f, 330f).sideBySide)
