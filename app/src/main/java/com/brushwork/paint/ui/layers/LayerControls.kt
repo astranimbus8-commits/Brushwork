@@ -651,17 +651,35 @@ internal const val OPACITY_STEP = "Opacity"
 
 /**
  * One "Opacity" step setting [layer]'s opacity to [value] (−/+, a typed value, the slider's
- * accessibility action). An adjustment layer's change also goes through `liveAdjust` (touch, then
- * end at once): the canvas shows it from the proxy and refines tile by tile within the frame
- * budget instead of re-rendering everything synchronously (design §3.1 C2).
+ * accessibility action). An adjustment layer's change takes the path of its drag, in one move:
+ * the opacity is set, `liveAdjust` redraws only where the effect shows (touch, then end at once:
+ * on a large canvas it shows from the proxy and refines tile by tile within the frame budget,
+ * design §3.1 C2), and the step is recorded with `commitLayerProps`. `setLayerProps` would first
+ * mark every display tile dirty, and those outside the effect would render again synchronously.
  */
 internal fun setLayerOpacity(controller: EditorController, layer: Layer, value: Float) {
-    val before = layer.opacity
-    controller.setLayerProps(layer, layer.props().copy(opacity = value.coerceIn(0f, 1f)), OPACITY_STEP)
-    if (layer.isAdjustmentLayer && layer.opacity != before) {
-        controller.liveAdjust.touch(layer, null)
-        controller.liveAdjust.end(layer)
+    val v = value.coerceIn(0f, 1f)
+    if (!layer.isAdjustmentLayer) {
+        controller.setLayerProps(layer, layer.props().copy(opacity = v), OPACITY_STEP)
+        return
     }
+    if (layer.opacity == v) return
+    recordPendingSteps(controller)
+    val before = layer.props()
+    layer.opacity = v
+    controller.liveAdjust.touch(layer, MaskEdits.effectRegion(controller, layer))
+    controller.liveAdjust.end(layer)
+    controller.commitLayerProps(layer, before, OPACITY_STEP)
+}
+
+/**
+ * Records the live edits still waiting for their step (the Adjust sheet's "Edit adjustment",
+ * whose Amount IS an adjustment layer's opacity) BEFORE an opacity change starts, as
+ * `setLayerProps` does: that step then ends at the value the sheet showed, and the opacity step
+ * starts from it (redo of the sheet's step never jumps to the window's value; I2).
+ */
+private fun recordPendingSteps(controller: EditorController) {
+    if (controller.editDepth == 0) controller.flushDeferredSteps()
 }
 
 /** − / +: a 22 dp black disc with a white glyph in a 40 dp target. */
@@ -775,6 +793,7 @@ private class OpacityPreview(
 
     fun update(value: Float) {
         if (before == null) {
+            recordPendingSteps(controller)
             before = layer.props()
             live = layer.isAdjustmentLayer
             region = if (live) MaskEdits.effectRegion(controller, layer) else null

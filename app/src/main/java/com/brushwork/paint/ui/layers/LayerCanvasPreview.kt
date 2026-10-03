@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +26,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.TransparencyDisplay
@@ -34,8 +34,9 @@ import com.brushwork.paint.ui.theme.IbisColors
 import kotlinx.coroutines.delay
 
 /**
- * The left column's preview (design §3.7.7): the flattened canvas fitted on the transparency
- * display the user picked, over [IbisColors.PanelOpaque]. It is rendered after composition (never
+ * The left column's preview (design §3.7.7): the flattened canvas on the transparency display the
+ * user picked, fitted to the pane (as wide as it unless the canvas is very tall) and sitting on
+ * its bottom edge as in ibisPaint, over [IbisColors.PanelOpaque]. It is rendered after composition (never
  * while the window opens), at most once per [CANVAS_PREVIEW_INTERVAL_MS] while the drawing keeps
  * changing, at no more than [MAX_PREVIEW_PX] on its longest side (a 20 MP canvas costs a scaled
  * composite of about 0.7 MP on the main thread, I3), and without tool previews (I7).
@@ -47,7 +48,8 @@ internal fun LayerCanvasPreview(controller: EditorController, display: Transpare
     val editCount = controller.editCount
     val layersVersion = controller.layersVersion
     val docVersion = controller.docVersion
-    BoxWithConstraints(modifier.background(IbisColors.PanelOpaque), contentAlignment = Alignment.Center) {
+    // ibisPaint draws the picture as wide as the pane, flush with its bottom edge (on the buttons).
+    BoxWithConstraints(modifier.background(IbisColors.PanelOpaque), contentAlignment = Alignment.BottomCenter) {
         val density = LocalDensity.current
         val px = with(density) { maxOf(maxWidth, maxHeight).roundToPx() }.coerceIn(16, MAX_PREVIEW_PX)
         var image by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -74,7 +76,7 @@ internal fun LayerCanvasPreview(controller: EditorController, display: Transpare
         val aspect = doc.width.toFloat() / doc.height.coerceAtLeast(1)
         Box(
             Modifier
-                .padding(4.dp)
+                .testTag(LayerWindowTags.PREVIEW_PICTURE)
                 .aspectRatio(aspect.coerceIn(0.01f, 100f), matchHeightConstraintsFirst = aspect < maxWidth / maxHeight.coerceAtLeast(1.dp))
                 .drawBehind { transparencyBacking(display, 5.dp.toPx()) },
         ) {

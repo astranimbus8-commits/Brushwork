@@ -265,6 +265,8 @@ object LayerWindowTags {
     const val MAIN = "layers.main"
     const val LEFT = "layers.left"
     const val PREVIEW = "layers.preview"
+    /** The canvas picture inside the preview pane. */
+    const val PREVIEW_PICTURE = "layers.preview.picture"
     const val BUTTONS = "layers.buttons"
     const val LIST = "layers.list"
     const val ROWS = "layers.rows"
