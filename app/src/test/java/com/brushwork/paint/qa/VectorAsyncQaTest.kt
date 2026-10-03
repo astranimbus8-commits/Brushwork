@@ -5,6 +5,7 @@ import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.vector.VStroke
@@ -59,7 +60,8 @@ class VectorAsyncQaTest {
     /** A new canvas in vector mode, three strokes s1 (y 60), s2 (y 170), s3 (y 260); then ASYNC renders. */
     private fun setup() {
         r = VectorQaRig(480, 320)
-        c.vectors.workerDispatcher = SlowWorker(250)
+        // Long enough that the render is still in flight after the next gesture, also on a slow CI runner.
+        c.vectors.workerDispatcher = SlowWorker(PerfBudget.ms(250.0).toLong())
         c.toggleVectorMode()
         r.checkpoint("Vector on")
         vec = c.activeLayer
