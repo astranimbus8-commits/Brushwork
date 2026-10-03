@@ -562,7 +562,9 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
                 val start = dragStart ?: return
                 if (!canEditFrame(layer)) return
                 dragItem = movedItem(start, q)
-                requestPreview(0L)
+                // A frame that wraps around a picture re-breaks its lines (and the chain re-flows)
+                // as it moves: throttled like a resize. Otherwise only its place changes.
+                requestPreview(if (start.wrapActive) dragPreviewMs else 0L)
             }
             Mode.RESIZE -> {
                 val layer = dragLayer ?: return
