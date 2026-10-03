@@ -1,12 +1,17 @@
 package com.brushwork.paint.tools.text.frames
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
+import com.brushwork.paint.model.GridType
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderKind
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.WrapFixtures
 import com.brushwork.paint.tools.text.frames.FrameFixtures.STORY
 import com.brushwork.paint.tools.text.frames.FrameFixtures.assertWhole
 import com.brushwork.paint.tools.text.frames.FrameFixtures.boxOf
@@ -224,6 +229,63 @@ class FrameGesturesAndSeamsTest {
         assertEquals(big.top - 32f, boxOf(f).top, 0.51f)
     }
 
+    @Test
+    fun aMoveAndAResizeFollowTheGridBeforeTheIncrement() {
+        val s = setup(context)
+        val f = newFrame(s, 20f, 20f, 180f, 120f, text = "On the grid")
+        s.c.updateGrid(s.c.grid.copy(enabled = true, snap = true, type = GridType.SQUARE, spacingPx = 50f))
+        s.c.increments.update { it.copy(enabled = true, lengthPx = 10f) }
+        // The top-left corner (20, 20) travels (37, 41) to (57, 61): the grid corner (50, 50)
+        // wins over the 40 px steps (§3.4: guide, then grid, then increment).
+        drag(s.c, 100f, 70f, 137f, 111f)
+        idle()
+        var b = boxOf(f)
+        assertEquals(50f, b.left, 0.01f)
+        assertEquals(50f, b.top, 0.01f)
+        assertEquals(160f, b.width(), 0.51f)
+        // The right edge dragged to x = 263: the grid line at 250 (steps from the left edge would give 260).
+        drag(s.c, b.right, b.centerY(), 263f, b.centerY())
+        idle()
+        b = boxOf(f)
+        assertEquals(250f, b.right, 0.51f)
+        assertEquals(50f, b.left, 0.01f)
+        assertWhole(s.c, itemOf(f).thread.storyId)
+        // Grid snapping off again: the step applies.
+        s.c.updateGrid(s.c.grid.copy(snap = false))
+        drag(s.c, b.right, b.centerY(), 263f, b.centerY())
+        idle()
+        assertEquals(260f, boxOf(f).right, 0.51f)
+    }
+
+    // ------------------------------------------------------------------ the overlay
+
+    /** True when the tool's overlay has a red ("+", overset) pixel within [r] px of ([x], [y]). */
+    private fun redNear(s: FrameFixtures.Setup, x: Float, y: Float, r: Int = 8): Boolean {
+        val bmp = Bitmap.createBitmap(s.doc.width, s.doc.height, Bitmap.Config.ARGB_8888)
+        s.tool.drawOverlay(Canvas(bmp), s.c.viewTransform)
+        for (py in (y.toInt() - r)..(y.toInt() + r)) for (px in (x.toInt() - r)..(x.toInt() + r)) {
+            if (px !in 0 until bmp.width || py !in 0 until bmp.height) continue
+            val c = bmp.getPixel(px, py)
+            if (Color.alpha(c) > 200 && Color.red(c) > 180 && Color.green(c) < 100 && Color.blue(c) < 100) return true
+        }
+        return false
+    }
+
+    @Test
+    fun anOverflowingFramesOutPortShowsARedPlusUntilTheStoryFits() {
+        val s = setup(context)
+        val f1 = newFrame(s, 20f, 20f, 180f, 120f, text = FrameFixtures.LOREM.take(300))
+        assertTrue(itemOf(f1).thread.overset)
+        val t = s.c.viewTransform
+        val port1 = FramePorts.outPort(t, boxOf(f1))
+        assertTrue("the red + on the out-port", redNear(s, port1.x, port1.y))
+        val f2 = linkFrame(s, f1, 20f, 140f, 370f, 280f)
+        assertFalse("the story fits the two frames", itemOf(f2).thread.overset)
+        assertFalse("no red + once linked", redNear(s, port1.x, port1.y))
+        val port2 = FramePorts.outPort(t, boxOf(f2))
+        assertFalse("nor on the last frame, which holds the rest", redNear(s, port2.x, port2.y))
+    }
+
     // ------------------------------------------------------------------ undo while the story editor is open
 
     @Test
@@ -258,6 +320,31 @@ class FrameGesturesAndSeamsTest {
         s.c.undo()
         assertFalse(s.tool.story.isOpen)
         assertEquals(steps - 1, s.c.undoManager.undoCount)
+    }
+
+    @Test
+    fun editingTheStoryFromAWrappedFrameKeepsItsWrap() {
+        val s = setup(context, 600, 400)
+        WrapFixtures.disc(s.layer2, 340f, 120f, 45f)
+        val f1 = newFrame(s, 20f, 20f, 180f, 220f)
+        val f2 = linkFrame(s, f1, 230f, 20f, 450f, 220f)
+        assertTrue(s.tool.setFrameWrap(f2, s.layer2))
+        val wrap = itemOf(f2).wrap
+        // Tapping the selected (wrapped) frame again opens its story.
+        tap(s.c, 440f, 200f)
+        assertTrue(s.tool.story.isOpen)
+        assertSame(f2, s.tool.storyTarget)
+        val steps = s.c.undoManager.undoCount
+        s.tool.story.setText("New words up front. $STORY")
+        s.tool.story.confirmEditor()
+        idle()
+        assertEquals(steps + 1, s.c.undoManager.undoCount)
+        assertEquals(TextFrameTool.EDIT_LABEL, s.c.undoManager.undoLabel)
+        assertTrue("the frame still wraps around the picture", s.tool.wraps(f2))
+        assertEquals(wrap, itemOf(f2).wrap)
+        assertTrue("its lines keep away from the disc", WrapFixtures.closestInk(f2.bitmap, 340f, 120f) >= 45f)
+        assertFalse("the other frame doesn't wrap", itemOf(f1).wrapActive)
+        assertWhole(s.c, itemOf(f1).thread.storyId)
     }
 
     // ------------------------------------------------------------------ "Fill the box" over a chain

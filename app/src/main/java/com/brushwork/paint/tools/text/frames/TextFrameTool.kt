@@ -13,6 +13,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.PositionedTool
@@ -231,7 +232,9 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         linkFromState = null
         storyTarget = l
         storyIdEditing = s.id
-        story.open(TextItem(text = s.text, spec = FrameGeometry.withFrameBox(s.spec, item.spec.box), cx = item.cx, cy = item.cy), new = false)
+        // The frame's own place, size and wrap around a picture stay as they are (the flow takes
+        // them from this item for the frame it was opened from).
+        story.open(TextItem(text = s.text, spec = FrameGeometry.withFrameBox(s.spec, item.spec.box), cx = item.cx, cy = item.cy, wrap = item.wrap), new = false)
         pendingFlow = null
         changed()
         return true
@@ -588,12 +591,27 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         return false
     }
 
-    /** [start] moved by the finger's travel to [q]: snapped to objects per axis, else to the Length increment. */
+    /**
+     * True when grid snapping applies ([com.brushwork.paint.snap.SnapService.gridPoint]'s rule: a
+     * shown square grid with snapping on).
+     */
+    private val gridSnaps: Boolean
+        get() = controller.grid.let { it.enabled && it.snap && it.type == GridType.SQUARE && it.spacingPx > 0f }
+
+    /**
+     * [start] moved by the finger's travel to [q], per axis (§3.4 precedence): onto an object's
+     * guide, else its top-left corner onto the grid, else in whole Length steps.
+     */
     private fun movedItem(start: TextItem, q: Vec2): TextItem {
-        var dx = q.x - downDoc.x
-        var dy = q.y - downDoc.y
+        val rawDx = q.x - downDoc.x
+        val rawDy = q.y - downDoc.y
+        var dx = rawDx
+        var dy = rawDy
         val inc = controller.increments
         val stepped = inc.lengthDelta(Vec2(dx, dy))
+        val grid = startBox?.takeIf { gridSnaps }?.let { b ->
+            controller.snapping.gridPoint(Vec2(b.left + rawDx, b.top + rawDy)).let { g -> Vec2(g.x - b.left, g.y - b.top) }
+        }
         var snappedX = false
         var snappedY = false
         startBox?.let { b ->
@@ -601,13 +619,16 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             if (r.snappedX) { dx += r.dx; snappedX = true }
             if (r.snappedY) { dy += r.dy; snappedY = true }
         }
-        if (!snappedX) dx = stepped.x
-        if (!snappedY) dy = stepped.y
+        if (!snappedX) dx = grid?.x ?: stepped.x
+        if (!snappedY) dy = grid?.y ?: stepped.y
         inc.readout = if (inc.enabled) "${signed(dx)}, ${signed(dy)} px" else null
         return start.copy(cx = start.cx + dx, cy = start.cy + dy)
     }
 
-    /** [start] with handle [dragHandle] dragged to [q]: the opposite edges stay; edges snap, sizes step. */
+    /**
+     * [start] with handle [dragHandle] dragged to [q]: the opposite edges stay; each dragged edge
+     * goes onto an object's guide, else onto the grid, else whole Length steps from the fixed edge.
+     */
     private fun resizedItem(start: TextItem, q: Vec2, t: ViewTransform): TextItem {
         val h = dragHandle ?: return start
         val r0 = FrameGeometry.outerRect(start)
@@ -615,13 +636,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         var x = q.x
         var y = q.y
         val inc = controller.increments
+        val grid = if (gridSnaps) controller.snapping.gridPoint(q) else null
         if (h.dx != 0) {
             val hit = snap.snapValue(x, SnapAxis.X)
-            x = hit?.pos ?: steppedFrom(x, if (h.dx > 0) r0.left else r0.right, h.dx)
+            x = hit?.pos ?: grid?.x ?: steppedFrom(x, if (h.dx > 0) r0.left else r0.right, h.dx)
         }
         if (h.dy != 0) {
             val hit = snap.snapValue(y, SnapAxis.Y)
-            y = hit?.pos ?: steppedFrom(y, if (h.dy > 0) r0.top else r0.bottom, h.dy)
+            y = hit?.pos ?: grid?.y ?: steppedFrom(y, if (h.dy > 0) r0.top else r0.bottom, h.dy)
         }
         // A finger past the opposite edge: [FrameGeometry.resized] holds the frame at its least size.
         val r = FrameGeometry.resized(r0, h, Vec2(x, y), min, min)

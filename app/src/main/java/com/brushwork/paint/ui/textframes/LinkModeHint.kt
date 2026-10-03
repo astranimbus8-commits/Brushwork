@@ -24,11 +24,13 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 /**
  * The hint chip of link mode (v1.6, §3.6a; area D): an out-port is loaded, so the next frame
  * drawn — or the text box tapped — continues the story. "Cancel link" (or a tap on empty canvas)
- * unloads it.
+ * unloads it. The button comes first: on a 360–392 dp phone the long hint runs past the strip's
+ * edge, and only the hint may be cut.
  */
 @Composable
 fun LinkModeHint(onCancel: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        StripButton(Icons.Filled.Close, "Cancel link", onClick = onCancel)
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -40,7 +42,6 @@ fun LinkModeHint(onCancel: () -> Unit) {
             Spacer(Modifier.width(6.dp))
             Text(LINK_HINT, style = MaterialTheme.typography.bodySmall, color = Color.White, maxLines = 1)
         }
-        StripButton(Icons.Filled.Close, "Cancel link", onClick = onCancel)
     }
 }
 
