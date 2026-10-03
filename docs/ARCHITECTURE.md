@@ -58,6 +58,15 @@ background dispatcher on *copies* of pixels and comes back to the main thread to
   cleared) in the same step.
 - **I10 Labels are an API.** The labels of design §3.7.11 stay on their controls and are unique
   among visible clickables; renaming one is a foundation change that lists the tests to update.
+  Decisions made at integration: the vector strips' chips show "Settings" but are named "Curve
+  settings" / "Polyline settings" / "Path settings" / "Shape settings" (the tool menu's cell is
+  "Settings"); handle-side chips read "In and out" / "In" / "Out" in Curve, Path and Shape; the
+  selection bar's delete item is "Clear"; layer-row badges name their row ("Layer N: text layer",
+  "Layer N: text frame k of m", "Editable mask of layer N"); the tool menu's "px" badge is
+  decoration and its pixel-only cells read "Pixel layers only"; More › "Import picture" is left
+  out while the layer window (which has its own) is shown; the X / Y pill's "Increase X" /
+  "Decrease X" actions replace v1.5's "X plus 1 pixel" arrows. `RepeatIconButton` (−/+ and ‹ ›
+  arrows) has a click action: a screen reader's click is one step, a finger still repeats.
 
 ## v1.6 foundation contracts (frozen APIs the areas build on)
 - **Tools:** `ToolId.PATH` (a third `CurveKind` of `CurveTool`) and `ToolId.TEXT_FRAMES`
@@ -185,8 +194,8 @@ across the chain as one step; `TextThreads` (an edit and layer-list listener) he
 inside the triggering step (delete, merge down, painting, Transform, a v1.5 edit, wrap-source
 changes) with `amendLastStep`, and splits frames that repeat a story id (a Brushwork SVG/PDF
 imported back into its own artwork) into separate stories; undo and redo never re-flow.
-`StoryMeasureCache` reuses measured tails (unscaled by text, scaled by story and start, capped at
-600k characters). `ThreadPreview` previews moves and resizes of several frames through one
+`StoryMeasureCache` reuses a measured tail only when its text is equal and, for scaled letters, its
+slice of the ramp's factors too (capped at 600k characters). `ThreadPreview` previews moves and resizes of several frames through one
 `MultiLayerRenderOverride`. The tool draws frames (the story editor opens through
 `StoryEditorHost`), shows overflow as a red + on the out-port with "+ N characters", links by
 out-port or "Link…", and has Unlink here, Delete frame (the story re-flows in the same step),
@@ -336,8 +345,10 @@ is the tool's state, and its anchors are always derived through `SplineBezier.to
 preview, brush, fill and both commits reuse the Curve pipeline. `NurbsGeometry` has the knots and
 rational de Boor evaluation; `SplineBezier` converts order ≤ 4 with equal weights exactly and
 approximates the rest with cubics within 0.05 px (Hermite plus least squares, ≤ 16 pieces per
-span); `SplineEditing` inserts / deletes / moves points; `SplinePresets` has the Circle and Capsule
-quick starts; `PathOverlay` draws the dashed control polygon. ✓ on a vector layer stores one
+span). While a point is dragged, `SplineBezier.Incremental` re-converts only the spans whose control
+points changed, bit-identical to a fresh conversion (✓ and `matches` convert fresh).
+`SplineEditing` inserts / deletes / moves points; `SplinePresets` has the Circle and Capsule
+quick starts (fitted to the canvas area that shows, `CanvasView.freeArea`); `PathOverlay` draws the dashed control polygon. ✓ on a vector layer stores one
 `VPath` with `spline` and exactly its Bézier form (I9); a tap on a spline path reopens it in Path
 (after `SplineBezier.matches`), a tap on a plain path from Path switches to Curve. "To Bézier"
 hands the path to Curve as one in-tool step with smooth, grabbable anchors. Path keeps its own
@@ -420,7 +431,8 @@ adjustment layers (there are no pixels to apply it to).
   value). Under Robolectric the policy is EXACT (I8); tests opt in with LIVE and an injected clock.
 - `AdjustmentEdit.preview` no longer bumps `layersVersion` on every move (the sheet follows its own
   `version` state). "Fast adjustment preview" (`AppSettings.fastAdjustPreview`, in the Masks
-  Components sheet and in Settings) turns sessions off; it is read at each session start.
+  Components sheet and in Settings › Display; both switches follow the saved value) turns
+  sessions off; it is read at each session start.
 
 ## SVG/PDF exchange (`exchange/`, v1.5)
 Export (overflow menu: Export SVG… / Export PDF…) builds one `ExportScene` from the document and
@@ -470,7 +482,9 @@ the Step popup (`Modifier.stepOnLongPress`, at 85 % of the long-press time; a he
 refuses focus until the finger lifts). Gestures step too — Transform (moves, scales of the
 original with mirrored axes keeping their sign, rotation, pinch, distort), Shape (moves, sizes,
 lines, angles, points, handles), Curve / Path points and handles, Masks handles, Text and frame
-moves — in the order object guide, then grid, then increment, per axis, with the step shown in the
+moves — in the order object guide, then grid, then increment, per axis (the snap session leaves
+the grid out; callers apply `snapping.gridPoint` themselves, the Text tool only while increments are
+on, to keep I8), with the step shown in the
 top info chip (`increments.readout`) while a gesture is stepped. The steps live in the Increments
 sheet ("Increment steps", More › Increments…), in Settings, and behind the X / Y pill's "#" cell.
 
