@@ -191,7 +191,14 @@ class RequestCoverageV16UiTest {
         assertEquals(LiveAdjust.Policy.EXACT, c.liveAdjust.policy)
         tool("Masks")
         assertEquals(ToolId.MASK, c.activeToolId)
-        areaControl("A", "Fast adjustment preview", exact = false)
+        // A radial part on the canvas makes a Tone adjustment layer with a mask (what lagged);
+        // the Masks tool's Components sheet has the switch (area A).
+        click("+ Radial", exact = true)
+        stroke(200f to 150f, 230f to 150f, 260f to 150f)
+        assertTrue("an adjustment layer with a mask", c.activeLayer.isAdjustmentLayer)
+        click("Components (")
+        areaControl("A", "Fast adjustment preview", exact = true)
+        closeDialogs()
         // Settings (More › Settings): the switch, written through to the app settings.
         click("More options")
         click("Settings", exact = true)

@@ -173,7 +173,7 @@ internal object ChromeGlyphs {
                 dashed(9f, 17f, 11f, 17f)
             }
             solid {
-                // Out-port (with its "+") and in-port.
+                // The port where the thread leaves the first frame (InDesign's out-port).
                 moveTo(10f, 9.5f); lineTo(14f, 9.5f); lineTo(14f, 13.5f); lineTo(10f, 13.5f); close()
             }
         }

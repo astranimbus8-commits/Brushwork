@@ -516,7 +516,10 @@ class RequestCoverageV15UiTest {
         val x = slider("X slider").bounds
         val y = slider("Y slider").bounds
         assertTrue("the X / Y menu is below the options: $options / $x", x.top >= options.bottom)
-        assertTrue("Y under X", y.top >= x.bottom - 1f)
+        // v1.5's strip stacks Y under X; v1.6's pill (area G) puts the Y cell right of the X cell.
+        val stacked = y.top >= x.bottom - 1f
+        val sideBySide = y.left >= x.right - 1f && kotlin.math.abs(y.center.y - x.center.y) <= 2f
+        assertTrue("Y under or beside X: $x / $y", stacked || sideBySide)
         assertTrue("the sliders fit the 392 dp screen", x.right <= activity.window.decorView.width + 0.5f)
         val steps = c.undoManager.undoCount
         setSlider("X slider", 300f)
