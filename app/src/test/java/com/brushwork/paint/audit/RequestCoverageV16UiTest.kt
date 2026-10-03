@@ -259,7 +259,9 @@ class RequestCoverageV16UiTest {
         settle()
         if (areaControl("B", "Longer handles")) {
             val before = curve.anchors
-            click("Longer handles", exact = true)
+            // ‹ › are hold-to-repeat arrows (no click action); the "Handle scale" slider (10–400 %,
+            // logarithmic, 100 % at about 0.62) is the accessible way: well above 100 % here.
+            setSlider("Handle scale", 0.85f)
             assertTrue("the handles got longer", curve.anchors != before)
         }
         // "Handle size" on screen is a global setting (Curve settings › Handle size), 75–200 %.
@@ -368,14 +370,30 @@ class RequestCoverageV16UiTest {
         assertTrue("the text editor", text.editorOpen)
         SmokeUi.field("Text").type("ELTON JOHN")
         settle()
-        if (areaControl("C", "Letter scaling", exact = false)) {
-            assertTrue(areaControl("C", "Center", exact = true) && areaControl("C", "Baseline", exact = true) && areaControl("C", "Top", exact = true))
-            areaControl("C", "Beginning → end", exact = true)
-            areaControl("C", "End → beginning", exact = true)
-        }
         click("OK", exact = true)
         settle()
-        if (has("Letters", exact = true)) click("Letters", exact = true).also { closeDialogs() } else areaControl("C", "Letters")
+        // The options strip's "Letters" chip (accessible label "Letter scaling", area C) opens the
+        // letter-scaling controls for the pending text: on with a slider, the direction, and the
+        // Center / Baseline / Top line the letters keep.
+        if (areaControl("C", "Letter scaling")) {
+            click("Letter scaling", exact = true)
+            if (areaControl("C", "Scale letters")) {
+                click("Scale letters", exact = true)
+                assertTrue("letter scaling on", text.item!!.spec.letterScale.isOn)
+                areaControl("C", "Smallest letter")
+                for (label in listOf("Letters: Center", "Letters: Baseline", "Letters: Top")) areaControl("C", label)
+                areaControl("C", com.brushwork.paint.tools.text.LetterScaleDirection.START_TO_END.label)
+                if (areaControl("C", com.brushwork.paint.tools.text.LetterScaleDirection.END_TO_START.label)) {
+                    click(com.brushwork.paint.tools.text.LetterScaleDirection.END_TO_START.label, exact = true)
+                    assertEquals(com.brushwork.paint.tools.text.LetterScaleDirection.END_TO_START, text.item!!.spec.letterScale.direction)
+                }
+                if (has("Letters: Baseline", exact = true)) {
+                    click("Letters: Baseline", exact = true)
+                    assertEquals(com.brushwork.paint.tools.text.LetterScaleAlign.BASELINE, text.item!!.spec.letterScale.align)
+                }
+            }
+            closeDialogs()
+        }
         click("Apply text edit")
         assertTrue("a text layer", c.activeLayer.isTextLayer)
         Smoke.assertQuiet(c, "letter scaling")
@@ -525,7 +543,8 @@ class RequestCoverageV16UiTest {
             val add = s.clickable("Add layer")!!
             assertTrue("+ in the left column: $add", add.right <= lw.left + 8f + 100f + 1f)
             val fx = s.clickable("Filters for this layer")!!
-            assertTrue("FX in the right strip: $fx", fx.left >= lw.right - 40f - 1f)
+            // The 40 dp strip ends at the main block's 6 dp right pad (§3.7.7).
+            assertTrue("FX in the right strip: $fx in $lw", fx.left >= lw.right - 6f - 40f - 1f && fx.right <= lw.right + 0.5f)
         }
         areaControl("F", "Transparency: light checker")
         areaControl("F", "New special layer")

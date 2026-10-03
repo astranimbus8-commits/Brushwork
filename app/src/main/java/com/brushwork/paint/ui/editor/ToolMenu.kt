@@ -17,8 +17,8 @@ sealed interface ToolMenuEntry {
 }
 
 /**
- * The ibisPaint tool menu's cells (v1.6 §3.7.6; area E owns this file and builds the menu that
- * replaces the Tools sheet / [ToolGrid] from it): two columns, row-major, ibisPaint's order first
+ * The ibisPaint tool menu's cells (v1.6 §3.7.6; drawn by `chrome/ToolMenuPanel`, which replaced
+ * the v1.5 Tools sheet and its `ToolGrid`): two columns, row-major, ibisPaint's order first
  * and Brushwork's extra tools after it — 25 cells in 13 rows, every [ToolId] exactly once, plus
  * Filters, Canvas and Settings once each. New tools are appended by the lead.
  */
