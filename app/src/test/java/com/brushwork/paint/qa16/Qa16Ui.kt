@@ -108,6 +108,67 @@ internal class Qa16Ui(val s: ChromeScreen) {
         throw AssertionError("\"$label\" never scrolled into the tool menu")
     }
 
+    /**
+     * Whether the control labelled [label] is wholly visible now: not cut by a scrolling parent
+     * (its visible bounds are its size) and inside the screen, at least [minDp] dp both ways.
+     */
+    fun wholly(label: String, minDp: Float = 40f): Boolean {
+        val n = cell(label) ?: return false
+        val b = n.boundsInWindow
+        val r = s.root
+        return b.width >= n.size.width - 1f && b.height >= n.size.height - 1f &&
+            b.left >= r.left - 0.5f && b.right <= r.right + 0.5f && b.top >= r.top - 0.5f && b.bottom <= r.bottom + 0.5f &&
+            n.size.width >= minDp * s.density - 1f && n.size.height >= minDp * s.density - 1f
+    }
+
+    /**
+     * Brings the control labelled [label] wholly into view the way a finger does: by scrolling the
+     * strip or sheet it sits in (sideways or up and down), 60 dp at a time.
+     */
+    fun reach(label: String, minDp: Float = 40f) {
+        repeat(40) {
+            if (wholly(label, minDp)) return
+            val n = cell(label) ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(60)}")
+            val at = n.positionInWindow
+            val step = 60f * s.density
+            // Sideways: the nearest strip that scrolls sideways; up and down: the nearest sheet that does.
+            val across = scroller(n, SemanticsProperties.HorizontalScrollAxisRange)
+            val down = scroller(n, SemanticsProperties.VerticalScrollAxisRange)
+            val dx = across?.boundsInWindow?.let { v ->
+                when {
+                    at.x + n.size.width > minOf(v.right, s.root.right) -> step
+                    at.x < maxOf(v.left, s.root.left) -> -step
+                    else -> 0f
+                }
+            } ?: 0f
+            val dy = down?.boundsInWindow?.let { v ->
+                when {
+                    at.y + n.size.height > minOf(v.bottom, s.root.bottom) -> step
+                    at.y < maxOf(v.top, s.root.top) -> -step
+                    else -> 0f
+                }
+            } ?: 0f
+            if (dx == 0f && dy == 0f) {
+                throw AssertionError("\"$label\" cannot be brought wholly into view (at least $minDp dp): ${n.boundsInWindow} of ${n.size}, sideways ${across?.boundsInWindow}, down ${down?.boundsInWindow}")
+            }
+            if (dx != 0f) requireNotNull(across!!.config.getOrNull(SemanticsActions.ScrollBy)?.action).invoke(dx, 0f)
+            if (dy != 0f) requireNotNull(down!!.config.getOrNull(SemanticsActions.ScrollBy)?.action).invoke(0f, dy)
+            settle(2)
+        }
+        throw AssertionError("\"$label\" never came wholly into view")
+    }
+
+    /** The nearest ancestor of [n] that scrolls along [axis] (and takes ScrollBy). */
+    private fun scroller(n: SemanticsNode, axis: androidx.compose.ui.semantics.SemanticsPropertyKey<androidx.compose.ui.semantics.ScrollAxisRange>): SemanticsNode? {
+        var p: SemanticsNode? = n.parent
+        while (p != null) {
+            val range = p.config.getOrNull(axis)
+            if (range != null && range.maxValue() > 0f && p.config.getOrNull(SemanticsActions.ScrollBy) != null) return p
+            p = p.parent
+        }
+        return null
+    }
+
     /** The slider whose description contains [name]. */
     fun slider(name: String): RobolectricUi.Element = RobolectricUi.elements().last { e ->
         e.node.layoutInfo.isPlaced && e.node.config.contains(SemanticsActions.SetProgress) &&
