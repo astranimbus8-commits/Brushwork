@@ -69,22 +69,122 @@ internal object ChromeGlyphs {
         }
     }
 
-    /** Slot 6, Grid: ibisPaint's square overlapped by a circle. */
-    val SquareCircle: ImageVector by lazy {
-        glyph("SquareCircle") {
-            stroke {
-                moveTo(3.5f, 9f); lineTo(14.5f, 9f); lineTo(14.5f, 20.5f); lineTo(3.5f, 20.5f); close()
-                circle(15f, 9f, 5.5f)
+    /**
+     * Slot 5, Stabilizer: ibisPaint's pointing hand (the index finger up, the other fingers
+     * folded) with a tap mark at each side of the fingertip.
+     */
+    val TapHand: ImageVector by lazy {
+        glyph("TapHand") {
+            stroke(1.5f) {
+                moveTo(6.5f, 4.5f)
+                arcTo(1.75f, 1.75f, 0f, isMoreThanHalf = false, isPositiveArc = true, 10f, 4.5f)
+                lineTo(10f, 11f)
+                // The folded fingers: two knuckles stepping down to the back of the hand.
+                curveTo(10f, 8.6f, 14.6f, 8.6f, 14.6f, 11f)
+                curveTo(14.6f, 9.2f, 20.5f, 9.2f, 20.5f, 12.8f)
+                lineTo(20.5f, 18f)
+                quadTo(20.5f, 21.5f, 17f, 21.5f)
+                lineTo(9.5f, 21.5f)
+                quadTo(6.5f, 21.5f, 6.5f, 18.5f)
+                close()
+                // Tap marks.
+                moveTo(2.8f, 4.5f); lineTo(4.6f, 4.5f)
+                moveTo(11.9f, 4.5f); lineTo(13.7f, 4.5f)
+            }
+            stroke(1.1f) {
+                circle(1.6f, 4.5f, 0.6f)
+                circle(14.9f, 4.5f, 0.6f)
             }
         }
     }
 
-    /** Bottom slot 6: two stacked layer squares behind the number tile (the tile is drawn by the caller). */
+    /**
+     * Slot 6, Grid: ibisPaint's square (upper left) overlapped by a circle (lower right, in
+     * front: the square's corner is hidden behind it).
+     */
+    val SquareCircle: ImageVector by lazy {
+        glyph("SquareCircle") {
+            stroke(1.5f) {
+                // The circle (15, 15) r 5.5 meets the square's right edge x 14.5 and bottom y 14.5
+                // at 15 − √30 ≈ 9.52.
+                moveTo(14.5f, 9.52f); lineTo(14.5f, 3.5f); lineTo(3.5f, 3.5f); lineTo(3.5f, 14.5f); lineTo(9.52f, 14.5f)
+                circle(15f, 15f, 5.5f)
+            }
+        }
+    }
+
+    /** Slot 7, Ruler: ibisPaint's single diagonal ruler (a long rounded bar with a slot between two holes). */
+    val DiagonalRuler: ImageVector by lazy {
+        glyph("DiagonalRuler") {
+            stroke(1.5f) {
+                // The bar from (5.5, 18.5) to (18.5, 5.5), 5.2 wide, round ends.
+                val h = 2.6f * 0.7071f
+                moveTo(5.5f + h, 18.5f + h); lineTo(18.5f + h, 5.5f + h)
+                arcTo(2.6f, 2.6f, 0f, isMoreThanHalf = false, isPositiveArc = false, 18.5f - h, 5.5f - h)
+                lineTo(5.5f - h, 18.5f - h)
+                arcTo(2.6f, 2.6f, 0f, isMoreThanHalf = false, isPositiveArc = false, 5.5f + h, 18.5f + h)
+                close()
+                moveTo(8.6f, 15.4f); lineTo(15.4f, 8.6f)
+            }
+            stroke(1.2f) {
+                circle(6.6f, 17.4f, 0.9f)
+                circle(17.4f, 6.6f, 0.9f)
+            }
+        }
+    }
+
+    /** Slot 8, More options: ibisPaint's picture (a frame with a white sun and white hills). */
+    val Picture: ImageVector by lazy {
+        glyph("Picture") {
+            stroke(1.5f) {
+                moveTo(3.5f, 3.5f); lineTo(20.5f, 3.5f); lineTo(20.5f, 20.5f); lineTo(3.5f, 20.5f); close()
+            }
+            solid {
+                circle(8.6f, 8.6f, 2.1f)
+                moveTo(5.4f, 12.6f); lineTo(12f, 16.6f); lineTo(18.6f, 11.8f); lineTo(18.6f, 18.6f); lineTo(5.4f, 18.6f); close()
+            }
+        }
+    }
+
+    /**
+     * Bottom slot 6: two stacked layer squares behind the number tile, peeking out at its lower
+     * right as in ibisPaint (the tile, upper left, is drawn by the caller).
+     */
     val StackedSquares: ImageVector by lazy {
         glyph("StackedSquares") {
             stroke(1.6f) {
-                moveTo(8f, 4f); lineTo(21f, 4f); lineTo(21f, 17f)
-                moveTo(5.5f, 6.5f); lineTo(18.5f, 6.5f); lineTo(18.5f, 19.5f)
+                moveTo(18.5f, 5.5f); lineTo(18.5f, 18.5f); lineTo(5.5f, 18.5f)
+                moveTo(21f, 8f); lineTo(21f, 21f); lineTo(8f, 21f)
+            }
+        }
+    }
+
+    /** Bottom slot 5: ibisPaint's thin, long ↓ (hide interface). */
+    val ThinArrowDown: ImageVector by lazy {
+        glyph("ThinArrowDown") {
+            stroke(1.4f) {
+                moveTo(12f, 2.5f); lineTo(12f, 21.5f)
+                moveTo(5.5f, 15f); lineTo(12f, 21.5f); lineTo(18.5f, 15f)
+            }
+        }
+    }
+
+    /** Bottom slot 5 while the interface is hidden: ↑ (show it). */
+    val ThinArrowUp: ImageVector by lazy {
+        glyph("ThinArrowUp") {
+            stroke(1.4f) {
+                moveTo(12f, 21.5f); lineTo(12f, 2.5f)
+                moveTo(5.5f, 9f); lineTo(12f, 2.5f); lineTo(18.5f, 9f)
+            }
+        }
+    }
+
+    /** Bottom slot 7: ibisPaint's thin, long ← (back to the gallery). */
+    val ThinArrowBack: ImageVector by lazy {
+        glyph("ThinArrowBack") {
+            stroke(1.4f) {
+                moveTo(21.5f, 12f); lineTo(2.5f, 12f)
+                moveTo(9f, 5.5f); lineTo(2.5f, 12f); lineTo(9f, 18.5f)
             }
         }
     }

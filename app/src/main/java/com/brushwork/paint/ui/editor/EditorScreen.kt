@@ -50,9 +50,6 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.outlined.DesignServices
-import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material3.Snackbar
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -511,14 +508,14 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 controller.toggleVectorMode()
             },
             TopButton(TopSlot.SELECTION, "Selection", ChromeGlyphs.DashedRect, enabled = docActionsEnabled) { openPanel(EditorPanel.SELECTION) },
-            TopButton(TopSlot.STABILIZER, "Stabilizer", Icons.Outlined.PanTool, on = stabilizerOn) { openPanel(EditorPanel.STABILIZER) },
+            TopButton(TopSlot.STABILIZER, "Stabilizer", ChromeGlyphs.TapHand, on = stabilizerOn) { openPanel(EditorPanel.STABILIZER) },
             TopButton(TopSlot.GRID, "Grid", ChromeGlyphs.SquareCircle, on = gridOn) { openPanel(EditorPanel.GRID) },
-            TopButton(TopSlot.RULER, "Ruler", Icons.Outlined.DesignServices, on = rulerOn) { openPanel(EditorPanel.RULER) },
+            TopButton(TopSlot.RULER, "Ruler", ChromeGlyphs.DiagonalRuler, on = rulerOn) { openPanel(EditorPanel.RULER) },
             // The menu drops over the canvas: the tool menu closes first (its cells would repeat
             // the menu's "Settings", I10). The layer window stays, as it does for every chrome
             // button: "Fit to screen" or "Paste" with the layers in view. Its own "Import picture"
             // button is then the only one: the menu leaves that entry out (moreMenuEntries).
-            TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
+            TopButton(TopSlot.MORE, "More options", ChromeGlyphs.Picture) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
         )
         controller.docVersion // size changes (canvas resize) refresh the More menu's header
         val doc = controller.doc

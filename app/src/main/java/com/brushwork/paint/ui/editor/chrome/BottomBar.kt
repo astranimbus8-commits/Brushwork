@@ -17,10 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.South
-import androidx.compose.material.icons.filled.North
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -137,7 +133,7 @@ internal fun BottomBar(
             }
             // 5: hide / show the interface (the bar itself and any ✓ / ✕ stay).
             Slot(slot, if (interfaceHidden) "Show interface" else "Hide interface", onClick = onToggleInterface) {
-                Icon(if (interfaceHidden) Icons.Filled.North else Icons.Filled.South, null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
+                Icon(if (interfaceHidden) ChromeGlyphs.ThinArrowUp else ChromeGlyphs.ThinArrowDown, null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
             }
             // 6: the layer window.
             Slot(
@@ -154,7 +150,7 @@ internal fun BottomBar(
             }
             // 7: back to the gallery (autosaves).
             Slot(slot, "Back to gallery", onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
+                Icon(ChromeGlyphs.ThinArrowBack, null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph))
             }
         }
     }
@@ -189,15 +185,15 @@ private fun Slot(width: Dp, label: String, open: Boolean = false, state: String?
     }
 }
 
-/** ibisPaint's layers glyph: stacked squares behind a white tile with the active layer's number. */
+/** ibisPaint's layers glyph: a white tile with the active layer's number (upper left, in front) and the stacked squares peeking out at its lower right. */
 @Composable
 private fun LayersGlyph(number: Int) {
     Box(Modifier.size(IbisDims.BottomGlyph + 4.dp)) {
         Icon(ChromeGlyphs.StackedSquares, null, tint = Color.White, modifier = Modifier.size(IbisDims.BottomGlyph + 4.dp))
         Box(
             Modifier
-                .align(Alignment.BottomStart)
-                .offset(x = 1.dp, y = (-1).dp)
+                .align(Alignment.TopStart)
+                .offset(x = 1.dp, y = 1.dp)
                 .size(18.dp)
                 .background(Color.White, RoundedCornerShape(2.dp))
                 .border(1.dp, IbisColors.BottomBar, RoundedCornerShape(2.dp)),
