@@ -9,6 +9,7 @@ import android.graphics.Rect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerPropsAction
@@ -18,6 +19,7 @@ import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeTool
@@ -158,6 +160,30 @@ object LayerOps {
 
     fun flip(c: EditorController, layer: Layer, horizontal: Boolean) =
         guardMemory(c, if (horizontal) "Flip horizontal" else "Flip vertical") { c.flipLayer(layer, horizontal) }
+
+    /**
+     * The left column's canvas flips (v1.6): the whole canvas, as the Canvas panel's "Flip
+     * horizontally / vertically" (in the background behind the busy overlay, one step). False
+     * when another canvas operation is running.
+     */
+    fun flipCanvas(c: EditorController, horizontal: Boolean): Boolean = CanvasOps.applyFlip(c, horizontal)
+
+    /** "Transform layer" (v1.6 strip): [layer] active, then the Transform tool (which lifts it). */
+    fun transform(c: EditorController, layer: Layer) {
+        if (c.activeLayer !== layer) c.selectLayer(layer)
+        c.selectTool(ToolId.TRANSFORM)
+    }
+
+    /**
+     * The transparency squares (v1.6): how the canvas shows transparent areas. A view preference
+     * (`AppSettings`), never part of the document, exports or the compositor (I5); the canvas
+     * redraws at once.
+     */
+    fun setTransparencyDisplay(c: EditorController, display: TransparencyDisplay) {
+        if (c.settings.transparencyDisplay == display) return
+        c.settings.transparencyDisplay = display
+        c.invalidateDoc(null)
+    }
 
     /** Label for the Clear action given the current edit target of [layer]. */
     fun clearLabel(c: EditorController, layer: Layer): String =
@@ -337,8 +363,10 @@ object LayerOps {
 
     /**
      * Edits the text of the text layer [layer] again: switches to the text tool, loads the text
-     * (the layer becomes active) and opens the text editor. False (with a message) when the layer
-     * isn't an editable text layer or can't be changed (locked / hidden).
+     * (the layer becomes active) and opens the text editor. A frame of a linked story (v1.6) opens
+     * in the Text frames tool with its story editor instead ([EditorController.textThreads]).
+     * False (with a message) when the layer isn't an editable text layer or can't be changed
+     * (locked / hidden).
      */
     fun editText(c: EditorController, layer: Layer): Boolean {
         if (!layer.isTextLayer) {
@@ -346,6 +374,8 @@ object LayerOps {
             return false
         }
         if (!c.checkEditable(layer)) return false
+        // Before the Text tool is picked: the frames tool selects the frame and opens its story.
+        if (c.textThreads.isFrame(layer) && c.textThreads.openForEditing(layer, openEditor = true)) return true
         c.selectTool(ToolId.TEXT)
         val tool = c.tools[ToolId.TEXT] as? TextTool ?: return false
         return tool.editLayer(layer, openEditor = true)

@@ -154,6 +154,57 @@ class LayerListMathTest {
     }
 
     @Test
+    fun opacityButtonsMoveOnePercentWithoutIncrements() {
+        // v1.5: from the rounded percentage, 0 and 100 % reachable and never passed.
+        assertEquals(0.38f, LayerListMath.stepOpacity(0.37f, up = true, stepPercent = null), 1e-6f)
+        assertEquals(0.36f, LayerListMath.stepOpacity(0.37f, up = false, stepPercent = null), 1e-6f)
+        assertEquals(0.38f, LayerListMath.stepOpacity(0.374f, up = true, stepPercent = null), 1e-6f)
+        assertEquals(1f, LayerListMath.stepOpacity(1f, up = true, stepPercent = null), 0f)
+        assertEquals(0f, LayerListMath.stepOpacity(0f, up = false, stepPercent = null), 0f)
+        assertEquals(0.99f, LayerListMath.stepOpacity(Float.NaN, up = false, stepPercent = null), 1e-6f)
+        // An unusable step means increments off.
+        assertEquals(0.38f, LayerListMath.stepOpacity(0.37f, up = true, stepPercent = 0f), 1e-6f)
+        assertEquals(0.38f, LayerListMath.stepOpacity(0.37f, up = true, stepPercent = Float.NaN), 1e-6f)
+    }
+
+    @Test
+    fun opacityButtonsGoToTheNextMultipleOfTheStep() {
+        // 37 % with a 5 % step: 40 up, 35 down; from a multiple, one whole step.
+        assertEquals(0.40f, LayerListMath.stepOpacity(0.37f, up = true, stepPercent = 5f), 1e-6f)
+        assertEquals(0.35f, LayerListMath.stepOpacity(0.37f, up = false, stepPercent = 5f), 1e-6f)
+        assertEquals(0.45f, LayerListMath.stepOpacity(0.40f, up = true, stepPercent = 5f), 1e-6f)
+        assertEquals(0.35f, LayerListMath.stepOpacity(0.40f, up = false, stepPercent = 5f), 1e-6f)
+        // The ends stay reachable with a step that doesn't divide 100.
+        assertEquals(0.98f, LayerListMath.stepOpacity(0.96f, up = true, stepPercent = 7f), 1e-6f)
+        assertEquals(1f, LayerListMath.stepOpacity(0.98f, up = true, stepPercent = 7f), 1e-6f)
+        assertEquals(0.98f, LayerListMath.stepOpacity(0.91f, up = true, stepPercent = 7f), 1e-6f)
+        assertEquals(0f, LayerListMath.stepOpacity(0.05f, up = false, stepPercent = 7f), 1e-6f)
+        assertEquals(1f, LayerListMath.stepOpacity(1f, up = true, stepPercent = 10f), 0f)
+        // Float noise right at a multiple counts as on it.
+        assertEquals(0.30f, LayerListMath.stepOpacity(0.25f + 1e-7f, up = true, stepPercent = 5f), 1e-6f)
+        assertEquals(0.20f, LayerListMath.stepOpacity(0.25f - 1e-7f, up = false, stepPercent = 5f), 1e-6f)
+        // Fractional steps.
+        assertEquals(0.025f, LayerListMath.stepOpacity(0f, up = true, stepPercent = 2.5f), 1e-6f)
+    }
+
+    @Test
+    fun frameBadgesCountTheFramesOfEachStory() {
+        fun t(story: Long, index: Int, overset: Boolean = false) =
+            com.brushwork.paint.tools.text.TextThreadSpec(storyId = story, index = index, story = "abc", start = 0, end = 0, overset = overset)
+        val badges = LayerListMath.frameBadges(listOf(t(7, 1, overset = true), null, t(9, 0), t(7, 0), com.brushwork.paint.tools.text.TextThreadSpec()))
+        assertEquals(FrameBadge(index = 1, count = 2, overset = true), badges[0])
+        assertEquals(null, badges[1])
+        assertEquals(FrameBadge(index = 0, count = 1, overset = false), badges[2])
+        assertEquals(FrameBadge(index = 0, count = 2, overset = false), badges[3])
+        assertEquals("an unthreaded spec is no frame", null, badges[4])
+        assertEquals("2/2", badges[0]!!.text)
+        assertEquals("Text frame 2 of 2, more text than fits", badges[0]!!.description)
+        assertEquals("Text frame 1 of 2", badges[3]!!.description)
+        // An index past the frames found (a frame on another document state) is clamped.
+        assertEquals(FrameBadge(index = 0, count = 1, overset = false), LayerListMath.frameBadges(listOf(t(3, 4)))[0])
+    }
+
+    @Test
     fun throttleAllowsAtMostOnePerInterval() {
         val t = PreviewThrottle(33)
         assertTrue(t.offer(1000))
