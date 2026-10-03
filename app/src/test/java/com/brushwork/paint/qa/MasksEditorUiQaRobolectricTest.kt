@@ -419,7 +419,7 @@ class MasksEditorUiQaRobolectricTest {
         // The X / Y strip shows and moves the source (tool state: no undo step).
         val steps = c.undoManager.undoCount
         assertTrue("the strip names the source", has(CloneTool.POSITION_LABEL, exact = true))
-        RobolectricUi.byDescription("X plus 1 pixel").tap()
+        RobolectricUi.byDescription("X slider").node.config[SemanticsActions.CustomActions].single { it.label == "Increase X" }.action.invoke()
         settle()
         assertEquals(src.x + 1f, tool.anchor.source!!.x, 0.01f)
         assertEquals(steps, c.undoManager.undoCount)

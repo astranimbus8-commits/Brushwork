@@ -499,7 +499,7 @@ class RequestCoverageV15UiTest {
         val x = slider("X slider").bounds
         val y = slider("Y slider").bounds
         assertTrue("the X / Y menu is below the options: $options / $x", x.top >= options.bottom)
-        assertTrue("Y under X", y.top >= x.bottom - 1f)
+        assertTrue("Y beside X (v1.6 X / Y pill)", y.left >= x.right - 1f && abs(y.center.y - x.center.y) < 1f)
         assertTrue("the sliders fit the 392 dp screen", x.right <= activity.window.decorView.width + 0.5f)
         val steps = c.undoManager.undoCount
         setSlider("X slider", 300f)
