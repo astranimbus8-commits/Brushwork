@@ -10,7 +10,6 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Colorize
 import androidx.compose.material.icons.filled.FormatColorFill
-import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.OpenWith
@@ -109,6 +108,9 @@ object EditorIcons {
     /** The Text frames tool (v1.6): two text boxes threaded together (InDesign's linked frames). */
     val TextFrames: ImageVector get() = ChromeGlyphs.TextFramesTool
 
+    /** The Lasso tool (v1.6): ibisPaint's rope lasso (a loop, its knot and the rope's end). */
+    val Lasso: ImageVector get() = ChromeGlyphs.Lasso
+
     fun tool(id: ToolId): ImageVector = when (id) {
         ToolId.BRUSH -> Icons.Filled.Brush
         ToolId.ERASER -> Eraser
@@ -117,7 +119,7 @@ object EditorIcons {
         ToolId.FILL -> Icons.Filled.FormatColorFill
         ToolId.EYEDROPPER -> Icons.Filled.Colorize
         ToolId.MAGIC_WAND -> Icons.Filled.AutoFixHigh
-        ToolId.LASSO -> Icons.Filled.Gesture
+        ToolId.LASSO -> Lasso
         ToolId.MARQUEE -> Icons.Filled.HighlightAlt
         ToolId.TRANSFORM -> Icons.Filled.OpenWith
         ToolId.TEXT -> Icons.Filled.TextFields

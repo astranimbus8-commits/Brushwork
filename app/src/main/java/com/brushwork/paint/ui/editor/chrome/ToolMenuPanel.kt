@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AspectRatio
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -32,7 +35,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,7 +111,7 @@ internal fun ToolMenuPanel(
     }
 }
 
-/** One 75 × 52 dp cell: a 28 dp white glyph over an 11 sp white label (up to 2 lines). */
+/** One 75 × 52 dp cell: a 28 dp white glyph over an 11 sp white label on one line (shrunk to fit). */
 @Composable
 private fun ToolCell(
     icon: ImageVector,
@@ -133,14 +135,20 @@ private fun ToolCell(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(icon, contentDescription = null, tint = if (selected) IbisColors.Accent else Color.White, modifier = Modifier.size(IbisDims.ToolCellGlyph))
-            Text(
+            // One line, like ibisPaint: a name too long for the cell ("Frame divider" is ~72 dp at
+            // 11 sp; two lines don't fit under the glyph) is set a little smaller, never cut.
+            BasicText(
                 label,
-                fontSize = IbisDims.ToolCellText,
-                lineHeight = 12.sp,
-                color = Color.White,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+                style = LocalTextStyle.current.copy(
+                    color = Color.White,
+                    fontSize = IbisDims.ToolCellText,
+                    lineHeight = 12.sp,
+                    letterSpacing = 0.sp,
+                    textAlign = TextAlign.Center,
+                ),
+                maxLines = 1,
+                softWrap = false,
+                autoSize = TextAutoSize.StepBased(minFontSize = 8.sp, maxFontSize = IbisDims.ToolCellText, stepSize = 0.25.sp),
             )
         }
         if (badge != null) {

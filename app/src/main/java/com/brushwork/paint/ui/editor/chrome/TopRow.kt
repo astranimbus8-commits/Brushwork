@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +41,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.editor.MenuEntry
@@ -73,6 +76,7 @@ internal fun TopRow(
     moreHeader: String,
     moreEntries: List<MenuEntry>,
     modifier: Modifier = Modifier,
+    moreMaxHeight: Dp = Dp.Infinity,
 ) {
     val bySlot = buttons.associateBy { it.slot }
     Box(modifier.fillMaxWidth().height(IbisDims.TopRowHeight).testTag(ChromeTags.TOP_ROW)) {
@@ -87,7 +91,7 @@ internal fun TopRow(
             MenuEntry(b.label, b.icon, checked = b.on, enabled = b.enabled, onClick = b.onClick)
         }
         val entries = if (folded.isEmpty()) moreEntries else folded + moreEntries.mapIndexed { i, e -> if (i == 0) e.copy(dividerBefore = true) else e }
-        MoreMenu(moreOpen, { onMoreOpenChange(false) }, moreHeader, entries)
+        MoreMenu(moreOpen, { onMoreOpenChange(false) }, moreHeader, entries, moreMaxHeight)
     }
 }
 
@@ -138,17 +142,24 @@ private fun TopCircle(b: TopButton, spec: ChromeLayout.TopRow) {
 /**
  * The More menu (v1.6 §3.7.6): a dark dropdown ([IbisColors.Sheet]) 280 dp wide under the top
  * row's left end, scrolling; the document's name and size head it (moved from the v1.5 top bar).
- * An entry closes the menu and acts.
+ * An entry closes the menu and acts. [maxHeight] (ChromeLayout.moreMenuMaxHeight) keeps it between
+ * the top row and the bottom bar.
  */
 @Composable
-private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, entries: List<MenuEntry>) {
+private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, entries: List<MenuEntry>, maxHeight: Dp) {
+    // Every opening starts at the top (the header, then the first entry), as ibisPaint's menus do;
+    // Material's dropdown would keep the scroll of the last opening (after "Settings" at its end,
+    // the next opening would show the end again, the header scrolled away).
+    val scroll = rememberScrollState()
+    LaunchedEffect(expanded) { if (expanded) scroll.scrollTo(0) }
     DropdownMenu(
         expanded = expanded,
         onDismissRequest = onDismiss,
         offset = DpOffset(IbisDims.OptionsStripSide, 0.dp),
+        scrollState = scroll,
         containerColor = IbisColors.Sheet,
         shape = RoundedCornerShape(IbisDims.OptionsStripRadius),
-        modifier = Modifier.width(IbisDims.MoreMenuWidth),
+        modifier = Modifier.width(IbisDims.MoreMenuWidth).heightIn(max = maxHeight),
     ) {
         Column(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(header, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = BrushworkColors.OnChrome, maxLines = 2, overflow = TextOverflow.Ellipsis)
