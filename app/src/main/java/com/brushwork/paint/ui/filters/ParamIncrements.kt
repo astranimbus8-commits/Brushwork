@@ -3,8 +3,10 @@ package com.brushwork.paint.ui.filters
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.snap.Increments
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.max
 
 /**
  * v1.6 §3.4 increments for a filter parameter slider (a filter session's sheet and the Masks
@@ -45,11 +47,28 @@ internal object ParamIncrements {
      */
     fun nudge(p: FilterParam.Slider, v: Float, direction: Int, inc: Increments?): Float {
         val step = stepOf(p, inc) ?: return SliderFormat.nudge(p, v, direction)
+        val up = direction > 0
         val q = v / step
-        val n = if (direction > 0) floor(q + EPS) + 1f else ceil(q - EPS) - 1f
-        return SliderFormat.snap(p, n * step)
+        var n = if (up) floor(q + EPS) + 1f else ceil(q - EPS) - 1f
+        var target = SliderFormat.snap(p, n * step)
+        // A step that isn't a multiple of the parameter's own resolution (Hue in 7.5° steps, whole
+        // degrees) can round back onto [v]: the press then goes one step further, so it always moves.
+        val end = if (up) p.max else p.min
+        for (i in 0 until MAX_EXTRA_STEPS) {
+            val moved = if (up) target > v + TOL * max(1f, abs(v)) else target < v - TOL * max(1f, abs(v))
+            if (moved || abs(target - end) <= TOL * max(1f, abs(end))) break
+            n += if (up) 1f else -1f
+            target = SliderFormat.snap(p, n * step)
+        }
+        return target
     }
 
     /** Tolerance (in steps) for a value that is already a multiple of the step. */
     private const val EPS = 1e-3f
+
+    /** Relative tolerance of "the value moved". */
+    private const val TOL = 1e-6f
+
+    /** At most this many further steps when rounding to the parameter's resolution undoes one. */
+    private const val MAX_EXTRA_STEPS = 4
 }

@@ -6,10 +6,12 @@ import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.snap.Increments
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import kotlin.math.abs
 
 /**
  * v1.6 §3.4: a filter parameter slider's increment (kind or custom key, the design's inference
@@ -81,5 +83,34 @@ class ParamIncrementsRobolectricTest {
         assertEquals(0.25f, ParamIncrements.stepOf(exposure, on)!!, 0f)
         assertEquals(5f, ParamIncrements.stepOf(amount, on)!!, 0f)
         assertEquals(15f, ParamIncrements.stepOf(hue, on)!!, 0f)
+    }
+
+    @Test
+    fun aStepFinerThanTheParametersResolutionAllowsStillMovesOnEveryPress() {
+        val on = increments(on = true)
+        // Hue shows whole degrees; in 7.5° steps 7.5 rounds to 8, and a press from 8 must not land on 8 again.
+        on.update { it.with(IncrementKind.ANGLE, 7.5f) }
+        assertEquals(8f, ParamIncrements.nudge(hue, 0f, 1, on), 0f)
+        assertEquals(15f, ParamIncrements.nudge(hue, 8f, 1, on), 0f)
+        assertEquals(0f, ParamIncrements.nudge(hue, 8f, -1, on), 0f)
+        for (d in listOf(1, -1)) {
+            var v = if (d > 0) hue.min else hue.max
+            var presses = 0
+            while (abs(v - (if (d > 0) hue.max else hue.min)) > 1e-4f) {
+                val next = ParamIncrements.nudge(hue, v, d, on)
+                assertTrue("Hue from $v by $d moved to $next", if (d > 0) next > v else next < v)
+                v = next
+                assertTrue(++presses < 100)
+            }
+        }
+        // Exposure (0.01 EV resolution) in 0.333 EV steps: 0.333 shows as 0.33, the next press goes on.
+        on.update { it.withCustom("Exposure|EV", 0.333f) }
+        var v = 0f
+        repeat(16) {
+            val next = ParamIncrements.nudge(exposure, v, 1, on)
+            assertTrue("Exposure from $v moved to $next", next > v || abs(next - exposure.max) < 1e-4f)
+            v = next
+        }
+        assertEquals(exposure.max, v, 1e-4f)
     }
 }
