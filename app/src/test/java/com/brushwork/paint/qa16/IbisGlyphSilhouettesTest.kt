@@ -100,3 +100,55 @@ class IbisGlyphSilhouettesTest {
     private fun sample(s: ChromeScreen, shot: Bitmap, x: Float, y: Float): Int =
         IbisShots.at(shot, s.density, x + s.root.left / s.density, y + s.root.top / s.density)
 }
+
+/**
+ * The tool menu's Lasso cell shows ibisPaint's rope lasso (an open loop wider than tall, the knot
+ * on its lower edge, the rope's end hanging at the lower left) instead of Material's "Gesture"
+ * squiggle, which reads as a brush stroke. Sampled on a real Skia render of the open tool menu,
+ * on the 24-unit grid of the cell's 28 dp glyph (IbisDims.ToolCellGlyph), placed right above the
+ * cell's label.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa16.lassoglyphsandbox"])
+class IbisLassoGlyphTest {
+
+    private fun white(c: Int) = Color.red(c) >= 0xE8 && Color.green(c) >= 0xE8 && Color.blue(c) >= 0xE8
+    private fun dark(c: Int) = Color.red(c) <= 0xC0 && Color.green(c) <= 0xC0 && Color.blue(c) <= 0xC0
+
+    @Test
+    fun theLassoCellShowsARopeLasso() {
+        ShadowLog.stream = null
+        SmokeUi.installTestRecomposer()
+        val dog = Smoke.watchdog()
+        val h = ChromeHarness()
+        h.section("lasso glyph") {
+            val s = h.editor(Smoke.document(300, 430, layers = 2, whiteBottom = true))
+            Finger.tap(s, "Tools (current: Brush)")
+            val cell = Finger.control(s, "Lasso") ?: throw AssertionError("no Lasso cell")
+            val label = Finger.element(s, "Lasso") ?: throw AssertionError("no Lasso label")
+            val shot = IbisShots.capture()
+            val k = 28f / 24f
+            val cx = cell.center.x
+            val cy = label.top - 14f
+            val bad = mutableListOf<String>()
+            for ((u, v, ink, what) in listOf(
+                Quad(12.5f, 3f, true, "the loop's top"),
+                Quad(4f, 9f, true, "the loop's left end"),
+                Quad(21f, 9f, true, "the loop's right end"),
+                Quad(10.2f, 14.6f, true, "the knot"),
+                Quad(6.6f, 20.8f, true, "the rope's end"),
+                Quad(12.5f, 9f, false, "inside the loop"),
+                Quad(19f, 19.5f, false, "under the loop at the right"),
+            )) {
+                val c = IbisShots.at(shot, s.density, cx + (u - 12f) * k + s.root.left / s.density, cy + (v - 12f) * k + s.root.top / s.density)
+                if (ink && !white(c)) bad += "$what ($u, $v): ink expected, ${IbisShots.hex(c)}"
+                if (!ink && !dark(c)) bad += "$what ($u, $v): background expected, ${IbisShots.hex(c)}"
+            }
+            assertTrue(bad.joinToString("\n"), bad.isEmpty())
+        }
+        dog.interrupt()
+        h.finish()
+    }
+
+    private data class Quad(val u: Float, val v: Float, val ink: Boolean, val what: String)
+}

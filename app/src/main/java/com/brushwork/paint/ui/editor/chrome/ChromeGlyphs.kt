@@ -279,6 +279,31 @@ internal object ChromeGlyphs {
         }
     }
 
+    /**
+     * Lasso (tool menu): ibisPaint's rope lasso — an open loop wider than tall, the knot on its
+     * lower left, the rope's end hanging from it and hooking right (Material's "Gesture" squiggle
+     * it replaces reads as a stroke, not a selection).
+     */
+    val Lasso: ImageVector by lazy {
+        glyph("Lasso") {
+            stroke(1.7f) {
+                // The loop: an ellipse centred (12.5, 9), 17 × 12.
+                moveTo(4f, 9f)
+                arcTo(8.5f, 6f, 0f, isMoreThanHalf = true, isPositiveArc = true, 21f, 9f)
+                arcTo(8.5f, 6f, 0f, isMoreThanHalf = true, isPositiveArc = true, 4f, 9f)
+                close()
+                // The rope's end: from the knot down to the lower left, then hooking right.
+                moveTo(9.4f, 15.8f)
+                curveTo(8.4f, 18f, 6.2f, 19f, 6.6f, 20.8f)
+                curveTo(7f, 22.2f, 10.5f, 21.4f, 13f, 20f)
+            }
+            solid {
+                // The knot, on the loop's lower edge.
+                circle(10.2f, 14.6f, 2.3f)
+            }
+        }
+    }
+
     private fun PathBuilder.circle(cx: Float, cy: Float, r: Float) {
         moveTo(cx - r, cy)
         arcTo(r, r, 0f, isMoreThanHalf = true, isPositiveArc = true, cx + r, cy)
