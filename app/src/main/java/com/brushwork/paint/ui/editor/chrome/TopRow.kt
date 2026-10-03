@@ -91,6 +91,9 @@ internal fun TopRow(
     }
 }
 
+/** The circles that are on or off (vector mode, the stabilizer, the grid, the ruler). */
+private val STATEFUL_SLOTS = setOf(ChromeLayout.TopSlot.VECTOR, ChromeLayout.TopSlot.STABILIZER, ChromeLayout.TopSlot.GRID, ChromeLayout.TopSlot.RULER)
+
 @Composable
 private fun TopCircle(b: TopButton, spec: ChromeLayout.TopRow) {
     val interaction = remember { MutableInteractionSource() }
@@ -105,7 +108,9 @@ private fun TopCircle(b: TopButton, spec: ChromeLayout.TopRow) {
             .height(IbisDims.TopRowHeight)
             .semantics {
                 contentDescription = b.label
-                if (b.slot != ChromeLayout.TopSlot.UNDO && b.slot != ChromeLayout.TopSlot.REDO && b.slot != ChromeLayout.TopSlot.MORE) {
+                // Only the circles that show a state say it (Selection, like Undo, Redo and More,
+                // just opens something).
+                if (b.slot in STATEFUL_SLOTS) {
                     selected = b.on
                     stateDescription = if (b.on) "On" else "Off"
                 }

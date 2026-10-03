@@ -7,6 +7,8 @@ import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,6 +63,15 @@ internal object UniqueLabels {
         "Close layers", "Add layer", "Duplicate layer", "Delete layer", "Merge down", "More layer actions",
         "Choose blend mode", "Type layer opacity",
     )
+
+    /** Back on the More menu's popup window closes it. */
+    private fun closeMenu() {
+        SmokeUi.windows().last().let { w ->
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+        }
+        settle()
+    }
 
     fun run() {
         ShadowLog.stream = null
@@ -146,12 +157,24 @@ internal object UniqueLabels {
                 assertTrue("\"$entry\" in the menu", SmokeUi.has(entry, exact = true))
                 assertTrue("\"$entry\" at most once on screen", popup.count { entry in it.labels } <= 1)
             }
-            SmokeUi.windows().last().let { w ->
-                w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
-                w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
-            }
-            settle()
+            closeMenu()
             assertEquals(1, SmokeUi.windows().size)
+            // Opened over the layer window or the tool menu, the menu closes them first: their
+            // buttons and cells would repeat its entries ("Import picture", "Settings").
+            click("Open layers")
+            assertNotNull(s.tagged(ChromeTags.LAYER_WINDOW))
+            click("More options")
+            assertNull("the layer window closed", s.tagged(ChromeTags.LAYER_WINDOW))
+            assertUnique("More menu over the editor", Clickables.onScreen(s))
+            closeMenu()
+            click("Tools (current: Brush)")
+            assertNotNull(s.tagged(ChromeTags.TOOL_MENU))
+            click("More options")
+            assertNull("the tool menu closed", s.tagged(ChromeTags.TOOL_MENU))
+            assertUnique("More menu over the editor", Clickables.onScreen(s))
+            closeMenu()
+            assertEquals(1, SmokeUi.windows().size)
+            Smoke.assertQuiet(s.c, "More menu")
         }
         dog.interrupt()
         h.finish()

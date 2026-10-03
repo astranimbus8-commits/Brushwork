@@ -64,6 +64,12 @@ object IbisDims {
     val SizeRowTop: Dp = 701.dp
     val OpacityRowTop: Dp = 741.dp
 
+    /** From this width on (tablets, a phone in landscape) the two slider rows sit side by side in one row (v1.5's rule). */
+    val SliderOneRowWidth: Dp = 560.dp
+
+    /** The gap between the two halves of that one row. */
+    val SliderOneRowGap: Dp = 12.dp
+
     /** Bottom bar: y 781, 50 tall, 7 slots of 56 × 50. */
     val BottomBarTop: Dp = 781.dp
     val BottomBarHeight: Dp = 50.dp

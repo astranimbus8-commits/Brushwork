@@ -457,15 +457,16 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         val topSpec = ChromeLayout.topRow(contentW)
         val pillTop = ChromeLayout.pillTop(statusDp)
         val pillDp = with(density) { pillPx.toDp() }.value
-        val barsShown = session == null
         val selectionBarTop = ChromeLayout.selectionBarTop(statusDp, pillDp)
         val selectionBarDp = with(density) { selectionBarPx.toDp() }.value
         val sessionPanelDp = with(density) { sessionPanelPx.toDp() }.value
         val layerWindow = ChromeLayout.layerWindow(contentW, screenH, statusDp, navDp)
+        // Size over opacity on a phone; side by side in one row on a wide screen.
+        val sliderRows = ChromeLayout.sliderRowCount(contentW)
 
         // ------------------------------------------------------------ canvas (full bleed)
         val fitTopPx = with(density) { ChromeLayout.fitInsetTop(statusDp).dp.toPx() }
-        val fitBottomPx = if (session != null) sessionPanelPx.toFloat() else with(density) { ChromeLayout.fitInsetBottom(navDp).dp.toPx() }
+        val fitBottomPx = if (session != null) sessionPanelPx.toFloat() else with(density) { ChromeLayout.fitInsetBottom(navDp, sliderRows).dp.toPx() }
         val outsideTap = if (layersVisible || toolMenuVisible) closeFloating else null
         key(controller) {
             AndroidView(
@@ -510,7 +511,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             TopButton(TopSlot.STABILIZER, "Stabilizer", Icons.Outlined.PanTool, on = stabilizerOn) { openPanel(EditorPanel.STABILIZER) },
             TopButton(TopSlot.GRID, "Grid", ChromeGlyphs.SquareCircle, on = gridOn) { openPanel(EditorPanel.GRID) },
             TopButton(TopSlot.RULER, "Ruler", Icons.Outlined.DesignServices, on = rulerOn) { openPanel(EditorPanel.RULER) },
-            TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); moreOpen = true },
+            // The menu drops over the canvas: the tool menu and the layer window close first (their
+            // cells and buttons would repeat its entries: "Settings", "Import picture"; I10).
+            TopButton(TopSlot.MORE, "More options", Icons.Outlined.Image) { controller.endCanvasGesture(); closeFloating(); moreOpen = true },
         )
         controller.docVersion // size changes (canvas resize) refresh the More menu's header
         val doc = controller.doc
@@ -617,6 +620,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         onDragChange = { draggingSlider = it },
                         onEditValue = { kind -> controller.endCanvasGesture(); editingValue = kind },
                         modifier = Modifier.windowInsetsPadding(horizontalSafe).testTag(ChromeTags.SLIDER_ROWS),
+                        oneRow = sliderRows == 1,
                     )
                 }
                 Box(Modifier.fillMaxWidth().background(IbisColors.BottomBar).windowInsetsPadding(horizontalSafe)) {
@@ -699,7 +703,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         .windowInsetsPadding(horizontalSafe)
                         .padding(
                             top = (ChromeLayout.topRowBottom(statusDp) + 8f).dp,
-                            bottom = (ChromeLayout.fitInsetBottom(navDp) + 8f).dp,
+                            bottom = (ChromeLayout.fitInsetBottom(navDp, sliderRows) + 8f).dp,
                             end = 8.dp,
                         ),
                 ) {
@@ -721,7 +725,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         }
 
         // ------------------------------------------------------------ ✓ / ✕ (v1.6 §3.7.9)
-        val sliderRowsDp = if (interfaceHidden) 0f else 2 * IbisDims.SliderRowHeight.value
+        val sliderRowsDp = if (interfaceHidden) 0f else sliderRows * IbisDims.SliderRowHeight.value
         val pendingBottom = navDp + IbisDims.BottomBarHeight.value + sliderRowsDp + IbisDims.PendingBarGap.value
         if (pendingWork) {
             when {
@@ -730,7 +734,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     Modifier
                         .align(Alignment.BottomStart)
                         .windowInsetsPadding(horizontalSafe)
-                        .padding(start = 10.dp, bottom = (ChromeLayout.fitInsetBottom(navDp) + 12f).dp)
+                        .padding(start = 10.dp, bottom = (ChromeLayout.fitInsetBottom(navDp, sliderRows) + 12f).dp)
                         .testTag(ChromeTags.PENDING_BAR),
                     vertical = true,
                 )
@@ -792,19 +796,14 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             pillDp > 0f -> pillTop + pillDp + 6f
             else -> pillTop
         }
-        val readout = controller.increments.readout
-        Column(
-            Modifier.align(Alignment.TopCenter).padding(top = chipTop.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // The increments readout of a stepped gesture ("+30 px", "120 %", "45°") comes first.
-            AnimatedVisibility(visible = readout != null, enter = fadeIn(), exit = fadeOut()) { InfoChip(readout ?: "") }
-            AnimatedVisibility(visible = tapVisible && readout == null, enter = fadeIn(), exit = fadeOut()) { InfoChip(tapText) }
-            AnimatedVisibility(visible = gestureVisible && !tapVisible && readout == null, enter = fadeIn(), exit = fadeOut()) {
-                val deg = gestureInfo.rotation.roundToInt()
-                InfoChip(SliderMath.formatZoom(gestureInfo.zoom) + if (deg != 0) "  ·  $deg°" else "")
-            }
-        }
+        FeedbackChips(
+            controller = controller,
+            tapVisible = tapVisible,
+            tapText = { tapText },
+            gestureVisible = gestureVisible,
+            gestureInfo = { gestureInfo },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = chipTop.dp),
+        )
         draggingSlider?.let { kind ->
             SliderPreview(controller, kind, zoom = canvasRef[0]?.zoom ?: 1f, modifier = Modifier.align(Alignment.Center))
         }
@@ -860,6 +859,38 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
 /** Room a minimized panel's pill takes above the bottom items (its 44 dp row and a gap). */
 private const val PILL_ROOM = 52f
+
+/**
+ * The InfoChip slot (v1.6 §3.7.9): the increments readout of a stepped gesture ("+30 px", "120 %",
+ * "45°") first, else the undo / redo feedback, else the zoom / rotation of a pinch. Its own
+ * composable: the readout and the pinch values change during a drag, and reading them here keeps
+ * those changes from recomposing the whole screen (the top row, every tool's options strip…).
+ */
+@Composable
+private fun FeedbackChips(
+    controller: EditorController,
+    tapVisible: Boolean,
+    tapText: () -> String,
+    gestureVisible: Boolean,
+    gestureInfo: () -> ViewGestureInfo,
+    modifier: Modifier,
+) {
+    val readout = controller.increments.readout
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        AnimatedVisibility(visible = readout != null, enter = fadeIn(), exit = fadeOut()) {
+            // Keeps showing the last text while it fades out (a plain holder: no state write here).
+            val last = remember { arrayOf("") }
+            if (readout != null) last[0] = readout
+            InfoChip(readout ?: last[0])
+        }
+        AnimatedVisibility(visible = tapVisible && readout == null, enter = fadeIn(), exit = fadeOut()) { InfoChip(tapText()) }
+        AnimatedVisibility(visible = gestureVisible && !tapVisible && readout == null, enter = fadeIn(), exit = fadeOut()) {
+            val info = gestureInfo()
+            val deg = info.rotation.roundToInt()
+            InfoChip(SliderMath.formatZoom(info.zoom) + if (deg != 0) "  ·  $deg°" else "")
+        }
+    }
+}
 
 /**
  * The More menu's entries (v1.6 §3.7.6; the v1.5 overflow labels unchanged, plus Canvas… and

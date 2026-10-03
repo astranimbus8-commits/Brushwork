@@ -80,15 +80,22 @@ object ChromeLayout {
      */
     fun fitInsetTop(statusDp: Float): Float = optionsStripTop(statusDp) + IbisDims.OptionsStripHeight.value + fitGap
 
-    /** Canvas fit inset at the bottom: the two slider rows, the bottom bar and the navigation bar. */
-    fun fitInsetBottom(navDp: Float): Float = navDp + IbisDims.BottomBarHeight.value + 2 * IbisDims.SliderRowHeight.value
+    /**
+     * How many slider rows the brush sliders take on a screen [widthDp] wide: size over opacity
+     * (2) on a phone, as ibisPaint; side by side in one row (1) from [IbisDims.SliderOneRowWidth]
+     * on (tablets, a phone in landscape: v1.5's rule, which leaves the canvas twice the height there).
+     */
+    fun sliderRowCount(widthDp: Float): Int = if (widthDp >= IbisDims.SliderOneRowWidth.value) 1 else 2
+
+    /** Canvas fit inset at the bottom: the [rows] slider rows, the bottom bar and the navigation bar. */
+    fun fitInsetBottom(navDp: Float, rows: Int = 2): Float = navDp + IbisDims.BottomBarHeight.value + rows * IbisDims.SliderRowHeight.value
 
     /** The top of the bottom bar on a screen [screenHeightDp] tall. */
     fun bottomBarTop(screenHeightDp: Float, navDp: Float): Float = screenHeightDp - navDp - IbisDims.BottomBarHeight.value
 
-    /** The top of the size slider row (the opacity row follows it). */
-    fun sliderRowsTop(screenHeightDp: Float, navDp: Float): Float =
-        bottomBarTop(screenHeightDp, navDp) - 2 * IbisDims.SliderRowHeight.value
+    /** The top of the size slider row (on a phone the opacity row follows it). */
+    fun sliderRowsTop(screenHeightDp: Float, navDp: Float, rows: Int = 2): Float =
+        bottomBarTop(screenHeightDp, navDp) - rows * IbisDims.SliderRowHeight.value
 
     // ------------------------------------------------------------------ bottom bar (§3.7.5)
 

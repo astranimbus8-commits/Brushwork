@@ -33,6 +33,23 @@ class ChromeLayoutTest {
     }
 
     @Test
+    fun wideScreensPutTheSlidersInOneRow() {
+        // Phones (392, 360) keep size over opacity; a phone in landscape and tablets use one row.
+        assertEquals(2, ChromeLayout.sliderRowCount(392f))
+        assertEquals(2, ChromeLayout.sliderRowCount(360f))
+        assertEquals(2, ChromeLayout.sliderRowCount(559f))
+        assertEquals(1, ChromeLayout.sliderRowCount(560f))
+        assertEquals(1, ChromeLayout.sliderRowCount(873f))
+        assertEquals("one row: 40 dp less fit inset", 132f, ChromeLayout.fitInsetBottom(n, rows = 1), 0.01f)
+        assertEquals("its row sits on the bar", 741f, ChromeLayout.sliderRowsTop(h, n, rows = 1), 0.01f)
+        // Each half of the row keeps the phone geometry: value 0–58, − at 73, track from 92, + 17 from its end.
+        val half = SliderRowGeometry((873f - 12f) / 2f, leftHanded = false)
+        assertEquals(73f, half.minusCenter, 0.01f)
+        assertEquals(92f, half.trackStart, 0.01f)
+        assertEquals((873f - 12f) / 2f - 37f, half.trackEnd, 0.01f)
+    }
+
+    @Test
     fun topRowAt392And360() {
         val wide = ChromeLayout.topRow(392f)
         assertEquals(48f, wide.pitch, 0.01f)

@@ -9,6 +9,8 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -83,7 +85,8 @@ enum class SliderKind { SIZE, OPACITY }
  *   are on the value lands on the step's multiples; the range ends stay reachable.
  *
  * [onDragChange] reports the slider under the finger (for the size preview); [leftHanded]
- * mirrors the rows (values on the right).
+ * mirrors the rows (values on the right). [oneRow] puts them side by side in one row (wide
+ * screens: [com.brushwork.paint.ui.editor.chrome.ChromeLayout.sliderRowCount]).
  */
 @Composable
 fun BrushSliderRows(
@@ -92,6 +95,7 @@ fun BrushSliderRows(
     onDragChange: (SliderKind?) -> Unit,
     onEditValue: (SliderKind) -> Unit,
     modifier: Modifier = Modifier,
+    oneRow: Boolean = false,
 ) {
     val toolId = controller.sliderToolId
     val preset = controller.presetFor(toolId) ?: return
@@ -115,8 +119,9 @@ fun BrushSliderRows(
     val name = toolId.label
     val eraser = toolId == ToolId.ERASER
     val color = if (eraser) Color.Black else Color(controller.color).copy(alpha = 1f)
-    Column(modifier.fillMaxWidth()) {
+    val sizeRow: @Composable (Modifier) -> Unit = { m ->
         IbisSliderRow(
+            modifier = m,
             kind = IncrementKind.SIZE,
             label = "$name size",
             typeLabel = "Type ${name.lowercase()} size",
@@ -142,7 +147,10 @@ fun BrushSliderRows(
             leftHanded = leftHanded,
             drawTrack = { left, right, cy, f -> sizeTrack(left, right, cy, f) },
         )
+    }
+    val opacityRow: @Composable (Modifier) -> Unit = { m ->
         IbisSliderRow(
+            modifier = m,
             kind = IncrementKind.PERCENT,
             label = "$name opacity",
             typeLabel = "Type ${name.lowercase()} opacity",
@@ -166,6 +174,19 @@ fun BrushSliderRows(
             leftHanded = leftHanded,
             drawTrack = { left, right, cy, f -> opacityTrack(left, right, cy, f, color) },
         )
+    }
+    if (oneRow) {
+        // The whole row (the gap between the halves too) keeps its touches from the canvas.
+        Row(modifier.fillMaxWidth().blockCanvasTouches()) {
+            sizeRow(Modifier.weight(1f))
+            Spacer(Modifier.width(IbisDims.SliderOneRowGap))
+            opacityRow(Modifier.weight(1f))
+        }
+    } else {
+        Column(modifier.fillMaxWidth()) {
+            sizeRow(Modifier.fillMaxWidth())
+            opacityRow(Modifier.fillMaxWidth())
+        }
     }
 }
 
@@ -200,6 +221,7 @@ internal class SliderRowGeometry(private val width: Float, leftHanded: Boolean) 
 
 @Composable
 private fun IbisSliderRow(
+    modifier: Modifier,
     kind: IncrementKind,
     label: String,
     typeLabel: String,
@@ -217,8 +239,7 @@ private fun IbisSliderRow(
     drawTrack: DrawScope.(left: Float, right: Float, cy: Float, fraction: Float) -> Unit,
 ) {
     BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
+        modifier
             .height(IbisDims.SliderRowHeight)
             // The whole row (gaps included) keeps its touches from the canvas behind it.
             .blockCanvasTouches(),
