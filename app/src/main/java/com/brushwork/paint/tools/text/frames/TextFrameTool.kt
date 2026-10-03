@@ -48,11 +48,12 @@ import kotlin.math.roundToInt
  * - **Overflow:** text that doesn't fit stops at the frame's bottom; the frame's out-port (just
  *   outside its bottom-right corner) shows a red "+", its box turns red and the options strip
  *   reads "+ 132 characters".
- * - **Link:** tap a frame's out-port (or "Link…"): it is loaded. Then drag a new rectangle (a
- *   frame created after it, the story flowing on into it) or tap a standalone horizontal text
- *   box or a one-frame story (it joins after the loaded frame, its text appended to the story
- *   after a paragraph break, in the story's look, keeping its box size); one step "Link frame".
- *   Tapping empty canvas cancels. Thread lines join each out-port to the next in-port.
+ * - **Link:** tap a frame's out-port (or "Link…"): it is loaded. Then drag a new rectangle
+ *   anywhere (a frame created after it, the story flowing on into it) or tap a standalone
+ *   horizontal text box or a one-frame story (it joins after the loaded frame, its text appended
+ *   to the story after a paragraph break, in the story's look, keeping its box size); one step
+ *   "Link frame". Pressing an out-port and dragging does both in one motion. Tapping empty canvas
+ *   cancels. Thread lines join each out-port to the next in-port.
  * - **Select** a frame by tapping it (it becomes the active layer): 8 resize handles, drag inside
  *   to move, the X / Y pill shows and moves its centre. On release the chain re-flows and the
  *   change is one step ("Move frame" / "Resize frame"); while dragging, only the affected frames
@@ -550,11 +551,18 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (!moved) {
             if (t.docToScreen(q).distanceTo(t.docToScreen(downDoc)) < t.dp(TOUCH_SLOP_DP)) return
             moved = true
-            // An out-port is a tap target: a finger that travels from it draws a frame instead
-            // (the port sits on the canvas next to the frame, where a drag draws; in link mode
-            // that frame is the next one of the story).
+            // A finger that presses an out-port (the red "+") and travels draws the NEXT frame of
+            // that story: the tap-then-drag of link mode in one motion. The port's frame is loaded
+            // here without selecting it (selecting would pause this tool mid-gesture); the link
+            // itself selects as usual.
             if (mode == Mode.PORT) {
+                val from = portLayer?.takeIf { doc.indexOf(it) >= 0 && threads.isFrame(it) }
                 portLayer = null
+                if (from != null && linkFromState !== from) {
+                    linkFromState = from
+                    startPulse()
+                    changed()
+                }
                 beginDraw()
             }
         }

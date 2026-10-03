@@ -40,8 +40,9 @@ import org.robolectric.Shadows.shadowOf
  * review of area D):
  * - the Text tool tapping a frame, and the layer window's "Edit text", hand the frame to the Text
  *   frames tool (it is never edited as a plain text, which would lose the story edit on ✓);
- * - in link mode a drag anywhere draws the next frame, also when it starts over another frame or
- *   on an out-port; link mode ends when undo takes the loaded frame away;
+ * - in link mode a drag anywhere draws the next frame, also when it starts over another frame;
+ *   pressing an out-port (the red "+") and dragging draws the next frame in one motion; link mode
+ *   ends when undo takes the loaded frame away;
  * - a resize handle dragged past the opposite edge holds the frame at its least size (with
  *   increments off the edge follows the finger exactly, I8);
  * - the middle of a small frame still moves it;
@@ -141,25 +142,47 @@ class FrameGesturesAndSeamsTest {
     }
 
     @Test
-    fun aFingerTravellingFromAnOutPortDrawsAFrame() {
+    fun pressingAnOutPortAndDraggingDrawsTheNextFrame() {
         val s = setup(context)
+        val t = s.c.viewTransform
         val f1 = newFrame(s, 20f, 20f, 180f, 120f)
-        val port = FramePorts.outPort(s.c.viewTransform, boxOf(f1))
-        // Not in link mode: a new frame of its own (the story editor opens for it).
-        drag(s.c, port.x, port.y, 330f, 260f)
-        assertTrue(s.tool.story.isOpen)
-        assertTrue(s.tool.story.editingNew)
-        s.tool.story.cancelEditor()
-        assertNull(s.tool.linkFrom)
-        // In link mode: the next frame of the story.
-        tapOutPort(s, f1)
+        assertTrue(itemOf(f1).thread.overset)
+        val steps = s.c.undoManager.undoCount
+        // The red "+" pressed and dragged (no tap first): the next frame of the story, one step.
+        val port = FramePorts.outPort(t, boxOf(f1))
+        drag(s.c, port.x, port.y, 330f, 200f)
+        idle()
+        assertFalse("no story editor: the new frame continues the story", s.tool.story.isOpen)
+        assertEquals(steps + 1, s.c.undoManager.undoCount)
+        assertEquals(TextFrameTool.LINK_LABEL, s.c.undoManager.undoLabel)
+        val chain = chainOf(s.c, f1)
+        assertEquals(2, chain.size)
+        val f2 = chain[1]
+        assertSame(f2, s.tool.selected)
+        assertNull("link mode ended", s.tool.linkFrom)
+        assertEquals(port.x, boxOf(f2).left, 0.51f)
+        assertEquals(port.y, boxOf(f2).top, 0.01f)
+        assertWhole(s.c, itemOf(f1).thread.storyId)
+        // Another frame loaded ("Link…"), then a drag from the last frame's port: the port
+        // pressed is the one that continues.
+        s.tool.startLink(f1)
         assertSame(f1, s.tool.linkFrom)
-        drag(s.c, port.x, port.y, 330f, 260f)
+        val port2 = FramePorts.outPort(t, boxOf(f2))
+        drag(s.c, port2.x, port2.y, 390f, 290f)
         idle()
         assertEquals(TextFrameTool.LINK_LABEL, s.c.undoManager.undoLabel)
-        assertEquals(2, chainOf(s.c, f1).size)
+        assertEquals(3, chainOf(s.c, f1).size)
+        assertSame(f2, chainOf(s.c, f1)[1])
+        assertWhole(s.c, itemOf(f1).thread.storyId)
+        // A drag from a port that ends too small draws nothing and leaves that port loaded.
+        val f3 = chainOf(s.c, f1)[2]
+        val port3 = FramePorts.outPort(t, boxOf(f3))
+        val before = s.c.undoManager.undoCount
+        drag(s.c, port3.x, port3.y, port3.x + 15f, port3.y + 15f)
+        assertEquals(before, s.c.undoManager.undoCount)
+        assertSame(f3, s.tool.linkFrom)
+        s.tool.cancelLink()
     }
-
     @Test
     fun linkModeEndsWhenUndoTakesTheLoadedFrameAway() {
         val s = setup(context)
