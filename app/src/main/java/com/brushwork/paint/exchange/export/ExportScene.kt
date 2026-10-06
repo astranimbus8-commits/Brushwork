@@ -90,6 +90,17 @@ class SceneLayer(
     val hidden: Boolean,
     val mask: SceneMask?,
     val items: List<SceneItem>,
+    /**
+     * v1.7 (item 8): a folder's layers, bottom first, drawn as a group inside this one (above
+     * [items], which a folder does not have); empty for every other layer.
+     */
+    val children: List<SceneLayer> = emptyList(),
+    /**
+     * v1.7 (item 8): a folder whose children are composited on their own and then drawn with
+     * [blend] and [opacity] (`FolderSpec.passThrough` off). True for every other layer, whose
+     * group always was isolated.
+     */
+    val isolated: Boolean = true,
 )
 
 /**

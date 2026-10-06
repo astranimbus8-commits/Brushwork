@@ -18,9 +18,9 @@ class TextWrapCodecTest {
             wrap = TextWrapSpec(sourceLayerId = 7, contour = WrapContour.BOX, gapPx = 12.5f, sides = WrapSides.BOTH, polygons = listOf(outline), minRunEm = 2f),
         )
         val json = TextCodec.encode(item)
-        // v1.6: format 4 (letter scaling, linked frames); the wrap data is unchanged.
-        assertEquals(4, TextCodec.VERSION)
-        assertTrue(json, json.contains("\"version\":4"))
+        // v1.6: format 4 (letter scaling, linked frames); v1.7: 5 (kerning); the wrap data is unchanged.
+        assertEquals(5, TextCodec.VERSION)
+        assertTrue(json, json.contains("\"version\":${TextCodec.VERSION}"))
         assertTrue(json.contains("\"wrap\""))
         val back = TextCodec.decode(json)!!
         assertEquals(item, back)

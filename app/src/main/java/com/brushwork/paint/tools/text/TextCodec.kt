@@ -20,12 +20,14 @@ object TextCodec {
      * Current format version (1 = v1.2: box, vertical style, text path; 2 = v1.3: imported fonts
      * `fontId` / `fontName`, box `minHeight` / `minWidth`; 3 = v1.5: `wrap`, text flowing around a
      * picture; 4 = v1.6: `spec.letterScale` (progressive letter scaling) and `thread` (a frame of
-     * a linked story)). Older data reads as is (the new fields take their defaults: version 3
-     * text is unscaled and unthreaded); older apps ignore the new fields and show the committed
-     * pixels until the text is edited there (editing a frame in v1.5 drops its thread, for that
-     * frame only).
+     * a linked story); 5 = v1.7: `kerns` and `spec.fontKerning`, written only when used, so other
+     * text encodes as in v1.6 but for this number). Older data reads as is (the new fields take
+     * their defaults: version 3 text is unscaled and unthreaded, version 4 text unkerned); older
+     * apps ignore the new fields and show the committed pixels until the text is edited there
+     * (editing a frame in v1.5 drops its thread, for that frame only; editing kerned text in v1.6
+     * lays it out without kerns).
      */
-    const val VERSION = 4
+    const val VERSION = 5
 
     private val json = Json {
         ignoreUnknownKeys = true

@@ -3,8 +3,11 @@ package com.brushwork.paint.exchange.export
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.vector.VectorContent
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
@@ -23,7 +26,12 @@ import java.util.zip.Inflater
  */
 @Serializable
 data class BrushworkPayload(
-    val version: Int = Payload.VERSION,
+    /**
+     * The version this payload was read with, or 1 (one without v1.7 data) for a new one. A
+     * payload is always WRITTEN with [Payload.writtenVersion] (from its layers), so a builder that
+     * puts v1.7 data in passes that number to keep the payload equal to its read-back.
+     */
+    val version: Int = 1,
     val width: Int,
     val height: Int,
     val dpi: Float = 350f,
@@ -36,7 +44,12 @@ data class BrushworkPayload(
 
 /** What kind of layer a [PayloadLayer] restores. */
 @Serializable
-enum class PayloadKind { RASTER, VECTOR, TEXT, SHAPE, ADJUSTMENT }
+enum class PayloadKind {
+    RASTER, VECTOR, TEXT, SHAPE, ADJUSTMENT,
+
+    /** v1.7 (item 8): a folder ([PayloadLayer.folder]); an older reader coerces it to an empty [RASTER] layer. */
+    FOLDER,
+}
 
 /** An integer rectangle (document px). */
 @Serializable
@@ -50,6 +63,7 @@ data class PayloadRect(val left: Int, val top: Int, val width: Int, val height: 
  * mask are. A layer without [imageRef] is empty (or, for vector layers, rendered from [vector]).
  * A mask is [maskFill] (opaque gray ARGB) everywhere outside [maskRect].
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class PayloadLayer(
     val id: Long,
@@ -66,11 +80,42 @@ data class PayloadLayer(
     val shapeData: String? = null,
     val maskSpec: MaskSpec? = null,
     val adjustment: AdjustmentSpec? = null,
+    /** v1.7 (I11): the id of the folder this layer is in; 0 = top level. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val parentId: Long = 0L,
+    /** v1.7 (item 8): a [PayloadKind.FOLDER]'s settings (null for every other kind). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val folder: FolderSpec? = null,
+    /** v1.7: a folder's rows are shown in the layer window (view state). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val folderOpen: Boolean = true,
+    /** v1.7 (I14): the layer's live array; its pixels ([imageRef]) are the cache with the copies. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val array: PayloadArray? = null,
 )
+
+/**
+ * v1.7 (item 3, I14): a layer's live array in a payload: [spec] is the `ArrayCodec` spec JSON
+ * (as the `project.json` entry's `array`), [source] the base64 of its source container (as
+ * `array_<id>_r<rev>.bin`, `ArrayCodec.writeSource`).
+ */
+@Serializable
+data class PayloadArray(val spec: String, val source: String)
 
 /** JSON / deflate / base64 forms of a [BrushworkPayload]. Thread-safe. */
 object Payload {
-    const val VERSION = 1
+    /**
+     * 1 = v1.5; 2 = v1.7: the layer tree ([PayloadLayer.parentId], folders) and live arrays,
+     * written only when used. A payload is written with [writtenVersion]: 1 without them, so its
+     * bytes are v1.6's (I13).
+     */
+    const val VERSION = 2
+
+    /**
+     * The version [p] is written with: [VERSION] when a layer uses v1.7 data (a folder, a layer
+     * in one, a live array), else 1 (I13, as `ProjectFormat.writtenVersion`). v1.6 does not check
+     * the number; it reads a folder as an empty raster layer and the folder's layers flat.
+     */
+    fun writtenVersion(p: BrushworkPayload): Int = if (p.layers.any { usesV17(it) }) VERSION else 1
+
+    private fun usesV17(l: PayloadLayer): Boolean =
+        l.kind == PayloadKind.FOLDER || l.folder != null || l.parentId != 0L || !l.folderOpen || l.array != null
 
     /** XML namespace of the payload elements in SVG files. */
     const val SVG_NAMESPACE = "https://brushwork.app/ns/exchange/1"
@@ -88,8 +133,11 @@ object Payload {
         allowSpecialFloatingPointValues = true
     }
 
-    /** UTF-8 JSON of [p]. */
-    fun toJson(p: BrushworkPayload): ByteArray = json.encodeToString(BrushworkPayload.serializer(), p).toByteArray(Charsets.UTF_8)
+    /** UTF-8 JSON of [p], with its [writtenVersion]. */
+    fun toJson(p: BrushworkPayload): ByteArray {
+        val v = writtenVersion(p)
+        return json.encodeToString(BrushworkPayload.serializer(), if (p.version == v) p else p.copy(version = v)).toByteArray(Charsets.UTF_8)
+    }
 
     /** The payload in [bytes] (UTF-8 JSON); throws [IOException] when it can't be read. */
     fun fromJson(bytes: ByteArray): BrushworkPayload = try {

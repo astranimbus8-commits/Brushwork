@@ -115,6 +115,11 @@ data class CurveSettings(
     val pathOrder: Int = VSpline.DEFAULT_ORDER,
     /** Path tool (v1.6): a new open path touches its first and last points (clamped knots). */
     val pathEndpoint: Boolean = true,
+    /**
+     * v1.7 (item 7): the stroke kind "Stroke" and "Both" restore after "Fill" (a preference, not
+     * document data; never [CurveStroke.NONE]).
+     */
+    val lastStroke: CurveStroke = CurveStroke.BRUSH,
 ) {
     /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
     fun sanitized(fallback: CurveSettings = DEFAULT) = copy(
@@ -123,6 +128,7 @@ data class CurveSettings(
         taperPercent = taperPercent.finiteOr(fallback.taperPercent).coerceIn(1f, 50f),
         nudgeStepPx = nudgeStepPx.finiteOr(fallback.nudgeStepPx).coerceIn(0.01f, ShapeSettings.MAX_LENGTH),
         pathOrder = pathOrder.coerceIn(VSpline.MIN_ORDER, VSpline.MAX_ORDER),
+        lastStroke = if (lastStroke == CurveStroke.NONE) CurveStroke.BRUSH else lastStroke,
     )
 
     companion object {

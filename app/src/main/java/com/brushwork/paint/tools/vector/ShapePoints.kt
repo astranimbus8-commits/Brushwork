@@ -2,6 +2,8 @@ package com.brushwork.paint.tools.vector
 
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.Vec2
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlin.math.PI
 import kotlin.math.tan
@@ -29,6 +31,7 @@ import kotlin.math.tan
 data class ShapeHandle(val x: Float, val y: Float)
 
 /** One point of a custom shape, box-local and normalized (see the file comment). */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class ShapePoint(
     val x: Float,
@@ -38,6 +41,12 @@ data class ShapePoint(
     /** Explicit handles (null = automatic for smooth points, none for sharp ones). */
     val handleIn: ShapeHandle? = null,
     val handleOut: ShapeHandle? = null,
+    /**
+     * v1.7 (item 2): this corner's roundness in document px (not normalized); null = the shape's
+     * `cornerRadius`. Never written when null (I13); [ShapeObject.sanitized] keeps it in
+     * 0..`ShapeSettings.MAX_LENGTH` (non-finite = null).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val radius: Float? = null,
 ) {
     val isFinite: Boolean
         get() = x.isFinite() && y.isFinite() &&
@@ -54,6 +63,8 @@ data class ShapeAnchor(
     val smooth: Boolean = false,
     val handleIn: Vec2? = null,
     val handleOut: Vec2? = null,
+    /** v1.7 (item 2): the corner's own roundness in document px ([ShapePoint.radius]); null = the shape's. */
+    val radius: Float? = null,
 ) {
     fun moved(p: Vec2) = copy(pos = p)
     val hasExplicitHandles: Boolean get() = handleIn != null || handleOut != null
@@ -86,6 +97,7 @@ object ShapePoints {
         p.smooth,
         p.handleIn?.let { Vec2(it.x * w, it.y * h) },
         p.handleOut?.let { Vec2(it.x * w, it.y * h) },
+        p.radius,
     )
 
     fun localAnchors(points: List<ShapePoint>, w: Float, h: Float): List<ShapeAnchor> = points.map { toLocal(it, w, h) }
@@ -95,7 +107,7 @@ object ShapePoints {
         val rad = box.rotationDeg * Geometry.DEG
         return points.map { p ->
             val l = toLocal(p, box.w, box.h)
-            ShapeAnchor(box.toDoc(l.pos), l.smooth, l.handleIn?.rotated(rad), l.handleOut?.rotated(rad))
+            ShapeAnchor(box.toDoc(l.pos), l.smooth, l.handleIn?.rotated(rad), l.handleOut?.rotated(rad), l.radius)
         }
     }
 
@@ -107,7 +119,7 @@ object ShapePoints {
         fun handle(v: Vec2?) = v?.rotated(rad)?.let { ShapeHandle(nx(it.x), ny(it.y)) }
         return anchors.map { a ->
             val l = box.toLocal(a.pos)
-            ShapePoint(nx(l.x), ny(l.y), a.smooth, handle(a.handleIn), handle(a.handleOut))
+            ShapePoint(nx(l.x), ny(l.y), a.smooth, handle(a.handleIn), handle(a.handleOut), a.radius)
         }
     }
 
@@ -117,7 +129,7 @@ object ShapePoints {
      */
     fun fit(rotationDeg: Float, anchors: List<ShapeAnchor>, closed: Boolean): Pair<ShapeBox, List<ShapePoint>> {
         val rad = rotationDeg * Geometry.DEG
-        val turned = anchors.map { a -> ShapeAnchor(a.pos.rotated(-rad), a.smooth, a.handleIn?.rotated(-rad), a.handleOut?.rotated(-rad)) }
+        val turned = anchors.map { a -> ShapeAnchor(a.pos.rotated(-rad), a.smooth, a.handleIn?.rotated(-rad), a.handleOut?.rotated(-rad), a.radius) }
         val b = path(turned, closed).bounds(0.05f) ?: Bounds.of(turned.map { it.pos }) ?: Bounds(0f, 0f, 0f, 0f)
         val w = b.width.takeIf { it >= SIZE_EPS } ?: 0f
         val h = b.height.takeIf { it >= SIZE_EPS } ?: 0f
@@ -340,7 +352,7 @@ object ShapePoints {
 
     /** Makes point [i] smooth (automatic tangent) or a sharp corner (straight edges). */
     fun setSmooth(a: List<ShapeAnchor>, i: Int, smooth: Boolean): List<ShapeAnchor> =
-        a.mapIndexed { k, p -> if (k == i) ShapeAnchor(p.pos, smooth) else p }
+        a.mapIndexed { k, p -> if (k == i) ShapeAnchor(p.pos, smooth, radius = p.radius) else p }
 
     /** Drops the explicit handles of point [i] (a smooth point gets its automatic tangent back). */
     fun autoTangent(a: List<ShapeAnchor>, i: Int): List<ShapeAnchor> =

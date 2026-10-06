@@ -20,7 +20,7 @@ class LetterScaleCodecTest {
         )
         val item = TextItem("ELTON JOHN", TextSpec(sizePx = 42f, letterScale = spec), 10f, 20f)
         val json = TextCodec.encode(item)
-        assertTrue(json, json.contains("\"version\":4"))
+        assertTrue(json, json.contains("\"version\":${TextCodec.VERSION}"))
         assertTrue(json, json.contains("\"letterScale\""))
         val back = TextCodec.decode(json)!!
         assertEquals(item, back)

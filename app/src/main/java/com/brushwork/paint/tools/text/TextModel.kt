@@ -2,6 +2,8 @@ package com.brushwork.paint.tools.text
 
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.fonts.FontIds
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
 import kotlin.math.cos
@@ -232,6 +234,7 @@ data class LetterScaleSpec(
  * the font size) and [lineSpacing] a multiplier of the font's line height (vertical text: of the
  * column pitch).
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class TextSpec(
     /** Built-in family; with [fontId] set it is the fallback drawn while that font is missing. */
@@ -265,6 +268,11 @@ data class TextSpec(
     val fontName: String? = null,
     /** v1.6: letters scaled progressively from the beginning to the end (off by default, see [LetterScaleSpec]). */
     val letterScale: LetterScaleSpec = LetterScaleSpec(),
+    /**
+     * v1.7 (item 17): the font's own kerning pairs are applied (as v1.6 always did); off lays the
+     * text out without them. Never written when on (I13).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val fontKerning: Boolean = true,
 ) {
     /** True when the text uses an imported font (which may be missing). */
     val usesImportedFont: Boolean get() = fontId != null
@@ -465,6 +473,49 @@ data class TextThreadSpec(
 }
 
 /**
+ * v1.7 (item 17): extra space after character [index] (UTF-16 index into the text; the story for
+ * a linked frame), in 1/1000 em ([value], negative = tighter). Stored in [TextItem.kerns].
+ */
+@Serializable
+data class TextKern(val index: Int, val value: Int) {
+    companion object {
+        /** The tightest and the widest kern (1/1000 em). */
+        const val MIN_VALUE = -1000
+        const val MAX_VALUE = 1000
+
+        /** Most kerns a text keeps. */
+        const val MAX_COUNT = 10_000
+
+        /**
+         * Usable kerns of a text of [length] UTF-16 chars: indices in `0 until length - 1` (a
+         * kern needs a next character), values clamped to [MIN_VALUE]..[MAX_VALUE], zeros
+         * dropped, one per index (the first one kept), sorted by index, at most [MAX_COUNT]. The
+         * same list when it already is.
+         */
+        fun sanitized(kerns: List<TextKern>, length: Int): List<TextKern> {
+            if (kerns.isEmpty()) return kerns
+            var ok = kerns.size <= MAX_COUNT
+            var last = -1
+            if (ok) for (k in kerns) {
+                if (k.index <= last || k.index >= length - 1 || k.value == 0 || k.value < MIN_VALUE || k.value > MAX_VALUE) { ok = false; break }
+                last = k.index
+            }
+            if (ok) return kerns
+            val seen = HashSet<Int>()
+            val out = ArrayList<TextKern>()
+            for (k in kerns) {
+                if (k.index < 0 || k.index >= length - 1) continue
+                val v = k.value.coerceIn(MIN_VALUE, MAX_VALUE)
+                if (v == 0 || !seen.add(k.index)) continue
+                out += if (v == k.value) k else k.copy(value = v)
+            }
+            out.sortBy { it.index }
+            return if (out.size > MAX_COUNT) out.subList(0, MAX_COUNT).toList() else out
+        }
+    }
+}
+
+/**
  * A placed text object: the block of laid-out text is centered on ([cx], [cy]) in document
  * pixels and rotated by [rotationDeg] (clockwise on screen) around that center. When [path] is
  * active the text follows that shape instead (its geometry is in document pixels); [cx]/[cy]/
@@ -475,6 +526,7 @@ data class TextThreadSpec(
  * is its own slice of the story, so every renderer, hit test, export and v1.5 see an ordinary
  * text; its box is `spec.box.width × spec.box.minHeight` (both > 0), horizontal and straight.
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class TextItem(
     val text: String = "",
@@ -486,6 +538,11 @@ data class TextItem(
     val wrap: TextWrapSpec = TextWrapSpec(),
     /** v1.6: the linked-frames story this text is a frame of (off by default). */
     val thread: TextThreadSpec = TextThreadSpec(),
+    /**
+     * v1.7 (item 17): extra space after single characters (sorted by index, see [TextKern]).
+     * Never written when empty (I13): such text encodes as in v1.6.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val kerns: List<TextKern> = emptyList(),
 ) {
     /** True for a frame of a linked story (v1.6). */
     val threaded: Boolean get() = thread.isOn
@@ -558,18 +615,27 @@ data class TextItem(
      * text is horizontal and straight (not vertical, path type NONE: the path's own settings are
      * kept); a frame without a fixed box (`box.width > 0` and `box.minHeight > 0`) is no frame
      * (its thread is cleared and it keeps its text).
+     *
+     * v1.7: [kerns] are reduced to usable ones ([TextKern.sanitized]) against the text, or the story
+     * of a frame.
      */
     fun sanitized(): TextItem {
         val base = sanitizedNumbers()
         var th = base.thread.sanitized()
         if (th.isOn && (base.spec.box.width <= 0f || base.spec.box.minHeight <= 0f)) th = TextThreadSpec()
-        if (!th.isOn) return if (th === base.thread) base else base.copy(thread = th)
-        return base.copy(
-            text = th.story.substring(th.start, th.end),
-            spec = if (base.spec.vertical) base.spec.copy(vertical = false) else base.spec,
-            path = if (base.path.isActive) base.path.copy(type = TextPathType.NONE) else base.path,
-            thread = th,
-        )
+        val item = if (!th.isOn) {
+            if (th === base.thread) base else base.copy(thread = th)
+        } else {
+            base.copy(
+                text = th.story.substring(th.start, th.end),
+                spec = if (base.spec.vertical) base.spec.copy(vertical = false) else base.spec,
+                path = if (base.path.isActive) base.path.copy(type = TextPathType.NONE) else base.path,
+                thread = th,
+            )
+        }
+        // v1.7: kerns index the story of a frame, the text otherwise.
+        val kerns = TextKern.sanitized(item.kerns, if (th.isOn) th.story.length else item.text.length)
+        return if (kerns === item.kerns) item else item.copy(kerns = kerns)
     }
 
     private fun sanitizedNumbers(): TextItem {

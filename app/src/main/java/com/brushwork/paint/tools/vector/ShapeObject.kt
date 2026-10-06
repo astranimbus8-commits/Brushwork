@@ -66,7 +66,7 @@ data class ShapeObject(
     fun sanitized(): ShapeObject? {
         if (!(cx.isFinite() && cy.isFinite() && w.isFinite() && h.isFinite() && rotation.isFinite())) return null
         val lim = ShapeSettings.MAX_LENGTH
-        val pts = points?.takeIf { list -> list.size >= ShapePoints.minPoints(!type.isLineLike) && list.all { it.isFinite } }
+        val pts = points?.takeIf { list -> list.size >= ShapePoints.minPoints(!type.isLineLike) && list.all { it.isFinite } }?.let { sanitizedRadii(it, lim) }
         return copy(
             cx = cx.coerceIn(-lim, lim),
             cy = cy.coerceIn(-lim, lim),
@@ -85,6 +85,15 @@ data class ShapeObject(
 
     companion object {
         private const val BLACK = 0xFF000000.toInt()
+
+        /**
+         * v1.7 (item 2): [pts] with every corner radius ([ShapePoint.radius]) in 0..[lim] (a
+         * non-finite one becomes null, the shape's own); the same list when all of them are.
+         */
+        private fun sanitizedRadii(pts: List<ShapePoint>, lim: Float): List<ShapePoint> {
+            if (pts.all { p -> p.radius.let { it == null || (it.isFinite() && it in 0f..lim) } }) return pts
+            return pts.map { p -> p.radius?.let { r -> p.copy(radius = if (r.isFinite()) r.coerceIn(0f, lim) else null) } ?: p }
+        }
     }
 }
 
@@ -100,8 +109,8 @@ data class ShapeLayerData(
 
 /** JSON encoding of [ShapeObject]s for shape layers (pure Kotlin). */
 object ShapeCodec {
-    /** Current format version (1 = v1.4). */
-    const val VERSION = 1
+    /** Current format version (1 = v1.4; 2 = v1.7, which adds [ShapePoint.radius]; older readers ignore it). */
+    const val VERSION = 2
 
     private val json = Json {
         ignoreUnknownKeys = true

@@ -47,7 +47,7 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
         text(" width=\"${num(w * 25.4 / dpi)}mm\" height=\"${num(h * 25.4 / dpi)}mm\" viewBox=\"0 0 $w $h\">\n")
         text("<title>${esc(scene.title)}</title>\n")
         scene.payload?.let { p ->
-            text("<metadata id=\"brushwork-data\"><bw:payload version=\"${p.version}\" encoding=\"deflate+base64\">")
+            text("<metadata id=\"brushwork-data\"><bw:payload version=\"${Payload.writtenVersion(p)}\" encoding=\"deflate+base64\">")
             text(Payload.toBase64(p))
             text("</bw:payload>")
             for (img in scene.payloadImages) {
