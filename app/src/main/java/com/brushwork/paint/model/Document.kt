@@ -2,6 +2,7 @@ package com.brushwork.paint.model
 
 import android.graphics.Bitmap
 import android.graphics.Rect
+import com.brushwork.paint.engine.LayerSlot
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.vector.VectorContent
@@ -287,6 +288,32 @@ class Document(
     /** v1.7 (I11, sweep rule L): [layer] is locked: its own lock OR any ancestor folder's. */
     fun effectiveLocked(layer: Layer): Boolean =
         layer.locked || (layer.parentId != Layer.ROOT_ID && LayerTree.lockedByAncestor(layers, indexOf(layer)))
+
+    /**
+     * v1.7 (I11): inserts [layer] at flat index [at] inside folder [parentId] (sets its
+     * `parentId`). The default, the parent of the unit directly below [at], is always valid.
+     * Only `LayerStructure` and the undo actions change the structure (sweep rule S).
+     */
+    fun insertLayer(at: Int, layer: Layer, parentId: Long = parentBelow(at)) {
+        layer.parentId = parentId
+        layers.add(at.coerceIn(0, layers.size), layer)
+    }
+
+    /**
+     * v1.7 (I11): the parent a layer inserted at flat index [at] gets by default: that of the row
+     * directly below (a folder row closes its block, so its own parent), [Layer.ROOT_ID] at the bottom.
+     */
+    fun parentBelow(at: Int): Long =
+        if (at <= 0 || layers.isEmpty()) Layer.ROOT_ID else layers[(at - 1).coerceAtMost(layers.lastIndex)].parentId
+
+    /** v1.7: the order and every parent, by reference (`LayerTreeAction`'s snapshot). */
+    fun slots(): List<LayerSlot> = layers.map { LayerSlot(it, it.parentId) }
+
+    /** v1.7: puts back an order and its parents taken by [slots]. */
+    fun restoreSlots(slots: List<LayerSlot>) {
+        layers.clear()
+        for (s in slots) { s.layer.parentId = s.parentId; layers.add(s.layer) }
+    }
 
     fun indexOf(layer: Layer): Int = layers.indexOfFirst { it === layer }
 

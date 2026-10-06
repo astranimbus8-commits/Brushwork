@@ -5,9 +5,11 @@ import android.graphics.Rect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.Selection
 import kotlin.math.min
 
@@ -76,6 +78,7 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     }
 
     fun clear() {
+        dropped += undoStack.size
         undoStack.forEach { it.dispose() }; undoStack.clear()
         redoStack.forEach { it.dispose() }; redoStack.clear()
         onChanged?.invoke()
@@ -111,8 +114,22 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
         if (trimHolds > 0) return
         while (undoStack.size > 1 && (undoStack.size > maxSteps || totalBytes() > maxBytes)) {
             undoStack.removeFirst().dispose()
+            dropped++
         }
     }
+
+    /**
+     * v1.7 (item 10): how many undo steps were ever dropped from the oldest end (trimmed) or by
+     * [clear]. A history mark compares it to know whether steps it covers are gone.
+     */
+    internal var dropped: Long = 0
+        private set
+
+    /** v1.7: the position (0 = oldest) of [action] on the undo stack, by identity; -1 when absent. */
+    internal fun undoIndexOf(action: UndoAction): Int = undoStack.indexOfLast { it === action }
+
+    /** v1.7: the undo step at [index] (0 = oldest), or null. */
+    internal fun undoAt(index: Int): UndoAction? = undoStack.getOrNull(index)
 }
 
 /** Which bitmap of a layer an edit applies to. */
@@ -379,6 +396,96 @@ class LayerDataAction(
 
     override fun undo(c: EditorController) = set(c, before)
     override fun redo(c: EditorController) = set(c, after)
+}
+
+/** v1.7 (I11): one layer's place in the stack: the layer (by reference) and the folder it is in. */
+data class LayerSlot(val layer: Layer, val parentId: Long)
+
+/**
+ * v1.7 (I11): ONE structural edit of a document that has a folder before or after it (without
+ * folders `LayerStructure` pushes the v1.6 [AddLayerAction] / [RemoveLayerAction] /
+ * [MoveLayerAction]). Holds the whole order with every parent before and after, by reference.
+ * Created applied: `LayerStructure` applies it with [redo].
+ */
+class LayerTreeAction(
+    override val label: String,
+    private val before: List<LayerSlot>,
+    private val after: List<LayerSlot>,
+    private val activeBefore: Layer?,
+    private val activeAfter: Layer?,
+) : UndoAction {
+    /** True while the document shows [after]. */
+    private var applied = true
+
+    /** The document this step was last applied to: [dispose] never recycles a layer it holds. */
+    private var doc: Document? = null
+
+    /** Bitmaps, masks and array source pixels of the layers present in only one list; [Layer.FOLDER_BITMAP] counts 0. */
+    override val byteSize: Long = (only(before, after) + only(after, before)).sumOf { bytesOf(it) }
+
+    override fun undo(c: EditorController) = set(c, before, activeBefore, applied = false)
+    override fun redo(c: EditorController) = set(c, after, activeAfter, applied = true)
+
+    private fun set(c: EditorController, slots: List<LayerSlot>, active: Layer?, applied: Boolean) {
+        c.structural {
+            c.doc.restoreSlots(slots)
+            val i = active?.let { c.doc.indexOf(it) } ?: -1
+            if (i >= 0) c.doc.activeLayerIndex = i
+        }
+        this.applied = applied
+        doc = c.doc
+    }
+
+    /**
+     * Recycles the bitmaps of the layers this step holds alone: while applied, the layers it
+     * removed; while undone (dropped from the redo stack), the layers it added. Never a layer the
+     * document still holds, never [Layer.FOLDER_BITMAP], never array source pixels (shared by
+     * [LayerData] snapshots).
+     */
+    override fun dispose() {
+        val gone = if (applied) only(before, after) else only(after, before)
+        if (gone.isEmpty()) return
+        val live = identitySet(doc?.layers.orEmpty())
+        for (l in gone) if (l !in live) l.recycleBitmaps()
+    }
+
+    private companion object {
+        fun identitySet(layers: Iterable<Layer>): MutableSet<Layer> =
+            java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Layer, Boolean>()).also { s -> layers.forEach { s += it } }
+
+        fun only(a: List<LayerSlot>, b: List<LayerSlot>): List<Layer> {
+            val other = identitySet(b.map { it.layer })
+            return a.map { it.layer }.filter { it !in other }
+        }
+
+        fun bytesOf(l: Layer): Long =
+            (if (l.bitmap === Layer.FOLDER_BITMAP) 0L else l.bitmap.byteCount.toLong()) +
+                (l.mask?.byteCount ?: 0) + (l.array?.pixels?.bytes ?: 0L)
+    }
+}
+
+/**
+ * v1.7 (item 14): the saved-selection list before and after ("Save selection", "Update from
+ * selection", "Rename selection", "Delete saved selection"). Entries are immutable and shared by
+ * reference, so nothing is recycled.
+ */
+class SavedSelectionsAction(
+    private val before: List<SavedSelection>,
+    private val after: List<SavedSelection>,
+    override val label: String,
+) : UndoAction {
+    override val byteSize: Long = run {
+        val seen = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<SavedSelection, Boolean>())
+        (before + after).filter { seen.add(it) }.sumOf { it.bytes }
+    }
+
+    override fun undo(c: EditorController) = set(c, before)
+    override fun redo(c: EditorController) = set(c, after)
+
+    private fun set(c: EditorController, list: List<SavedSelection>) {
+        c.doc.savedSelections = list
+        c.notifyLayersChanged()
+    }
 }
 
 /** Generic action from lambdas, for simple state changes. */
