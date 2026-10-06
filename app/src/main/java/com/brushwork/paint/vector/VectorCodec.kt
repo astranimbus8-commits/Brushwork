@@ -105,9 +105,27 @@ object VectorCodec {
     /**
      * [c] with unique ids (a later duplicate gets a new id) and a `nextId` beyond every id; the
      * same instance when it already is. Ids (or a `nextId`) so large that new ids would overflow
-     * come from a damaged file: the objects are then numbered 1..n again (order kept).
+     * come from a damaged file: the objects are then numbered 1..n again (order kept). v1.7:
+     * strokes' symmetry copies are sanitized too ([sanitizedCopies]).
      */
-    internal fun sanitized(c: VectorContent): VectorContent = sanitizedIds(sanitizedSplines(c))
+    internal fun sanitized(c: VectorContent): VectorContent = sanitizedIds(sanitizedCopies(sanitizedSplines(c)))
+
+    /**
+     * v1.7 (item 18): every stroke's symmetry copies ([VStroke.copies]) reduced to usable maps
+     * ([StrokeCopies.sanitized]: at most [StrokeCopies.MAX], each 9 finite values, invertible);
+     * the same instance when every stroke's already are. Also applied to a payload's vector
+     * layers (`PayloadImport.sound`).
+     */
+    internal fun sanitizedCopies(c: VectorContent): VectorContent {
+        if (c.objects.none { it is VStroke && it.copies.isNotEmpty() }) return c
+        var changed = false
+        val objects = c.objects.map { o ->
+            if (o !is VStroke || o.copies.isEmpty()) return@map o
+            val t = StrokeCopies.sanitized(o.copies)
+            if (t === o.copies) o else { changed = true; o.copy(copies = t) }
+        }
+        return if (changed) c.copy(objects = objects) else c
+    }
 
     /**
      * v1.6: Path-tool control points ([VPath.spline]) reduced to usable numbers

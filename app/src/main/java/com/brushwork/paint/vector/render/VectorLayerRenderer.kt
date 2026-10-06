@@ -188,7 +188,9 @@ object VectorLayerRenderer {
             private fun measure(o: VObject): ObjectCost = when (o) {
                 is VStroke -> {
                     val (u, n) = dabUnits(o.preset.size * o.sizeScale, o.preset.spacing, polylineLength(o.points))
-                    ObjectCost(u, n, fills = false)
+                    // v1.7: every symmetry copy stamps the dabs again.
+                    val k = maxOf(1, o.copies.size)
+                    ObjectCost(u * k, n * k, fills = false)
                 }
                 is VPath -> {
                     val st = o.stroke
@@ -269,7 +271,7 @@ object VectorLayerRenderer {
         val opacity = o.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
         if (opacity <= 0f) return
         if (o is VStroke) {
-            ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut, cut = ctx.cut)
+            ctx.raster.render(canvas, region, o.preset, o.color, o.seed, o.stylus, o.points, o.sizeScale, opacity, o.taperIn, o.taperOut, cut = ctx.cut, copies = o.copies)
             return
         }
         val parts = prepared(o, ctx)

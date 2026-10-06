@@ -56,6 +56,9 @@ import kotlin.math.sqrt
  *   custom points, which are mirrored); otherwise it becomes a path. A brush's tip turns (and
  *   mirrors) with the object ([turnedBrush]): a rotated calligraphy stroke keeps its thick and
  *   thin parts where the rotated pixels have them.
+ * - v1.7: a stroke with symmetry copies ([VStroke.copies]) is the union of its copies
+ *   ([StrokeCopies]) in [bounds], [hit] and [touching]; [transformed] conjugates the copies, so
+ *   they stay attached to the mapped stroke. Without copies every function is v1.6's.
  */
 object VectorOps {
     /** Flattening tolerance of hit tests and footprints (document px). */
@@ -63,7 +66,7 @@ object VectorOps {
 
     /** Everything [o] can paint (document px), including the stroke width / brush radius × sizeScale. */
     fun bounds(o: VObject): RectF = when (o) {
-        is VStroke -> StrokeRaster.strokeBounds(o.preset, o.sizeScale, o.points)
+        is VStroke -> if (o.copies.isEmpty()) StrokeRaster.strokeBounds(o.preset, o.sizeScale, o.points) else StrokeCopies.bounds(o)
         is VPath -> pathBounds(o)
         is VShape -> shapeBounds(o)
     }
@@ -108,7 +111,8 @@ object VectorOps {
                 // A stroke: only the part of its dab chain near the selection is tested, and a
                 // dab centred on a selected pixel touches it at once (a lasso around many
                 // strokes stays quick).
-                val near = if (o is VStroke) StrokeNear.of(StrokeHits.dabs(o), sb) else null
+                // (v1.7: a stroke with symmetry copies is tested by its whole footprint.)
+                val near = if (o is VStroke && o.copies.isEmpty()) StrokeNear.of(StrokeHits.dabs(o), sb) else null
                 if (near != null) {
                     if (near.count == 0) continue
                     if (near.centreSelected(sel)) { out += o.id; continue }
@@ -268,7 +272,8 @@ object VectorOps {
                 val cx = if (b.centerX().isFinite()) b.centerX() else 0f
                 val cy = if (b.centerY().isFinite()) b.centerY() else 0f
                 val s = scaleAt(m, cx, cy)
-                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s, preset = turnedBrush(o.preset, jacobian(m, cx, cy)))
+                // v1.7: the symmetry copies are conjugated (M·Ck·M⁻¹), so they stay attached to the stroke.
+                o.copy(points = o.points.mapped(m), sizeScale = o.sizeScale * s, preset = turnedBrush(o.preset, jacobian(m, cx, cy)), copies = StrokeCopies.conjugated(o.copies, m))
             }
             is VPath -> mapPath(if (projective) ObjectMapping.subdivided(o) else o, m)
             is VShape -> similarityShape(o, m) ?: ObjectMapping.mirroredShape(o, m)
@@ -521,18 +526,22 @@ object VectorOps {
      */
     private fun footprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
         is VStroke -> {
-            // The replayed dabs as a chain of capsules (thin tapered ends, wide pressure swells).
-            val d = StrokeHits.dabs(o)
-            val n = d.size / 3
+            // The replayed dabs as a chain of capsules (thin tapered ends, wide pressure swells);
+            // v1.7: one chain per symmetry copy.
+            val base = StrokeHits.dabs(o)
+            val chains = if (o.copies.isEmpty()) listOf(base) else StrokeCopies.dabChains(o, base)
             val chain: (Canvas, Paint) -> Unit = { c, paint ->
-                paint.style = Paint.Style.FILL
-                for (i in 0 until n) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
-                if (n > 1) {
-                    paint.style = Paint.Style.STROKE
-                    paint.strokeCap = Paint.Cap.ROUND
-                    for (i in 1 until n) {
-                        paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
-                        c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+                for (d in chains) {
+                    val n = d.size / 3
+                    paint.style = Paint.Style.FILL
+                    for (i in 0 until n) c.drawCircle(d[3 * i], d[3 * i + 1], max(0.5f, d[3 * i + 2]), paint)
+                    if (n > 1) {
+                        paint.style = Paint.Style.STROKE
+                        paint.strokeCap = Paint.Cap.ROUND
+                        for (i in 1 until n) {
+                            paint.strokeWidth = max(1f, 2f * min(d[3 * i - 1], d[3 * i + 2]))
+                            c.drawLine(d[3 * i - 3], d[3 * i - 2], d[3 * i], d[3 * i + 1], paint)
+                        }
                     }
                 }
             }

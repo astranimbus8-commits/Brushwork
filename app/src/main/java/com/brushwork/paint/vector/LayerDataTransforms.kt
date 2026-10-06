@@ -23,7 +23,8 @@ import kotlin.math.abs
  * CanvasOps for every layer whose pixels changed; pure and thread-safe (immutable data in, out).
  *
  * - Vector content is mapped object by object ([VectorOps.transformed]: strokes scale their
- *   `sizeScale` by sqrt|det|, shapes stay shapes under similarities and symmetric mirrors).
+ *   `sizeScale` by sqrt|det|, shapes stay shapes under similarities and symmetric mirrors; v1.7:
+ *   a stroke's symmetry copies are conjugated, so they move, turn and mirror with it).
  * - A mask spec is mapped by [MaskSpecs.transformed] (dropped when that can't).
  * - Text and shape layers become raster layers (as in v1.4: their pixels are resampled).
  * - An identity map (color-mode changes) keeps everything: in a grayscale or 1-bit document a

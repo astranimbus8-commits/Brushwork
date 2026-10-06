@@ -1,6 +1,7 @@
 package com.brushwork.paint.vector.geom
 
 import com.brushwork.paint.brush.StrokeRaster
+import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VStroke
 import kotlin.math.hypot
 
@@ -52,9 +53,16 @@ object StrokeHits {
     /**
      * Distance from ([x], [y]) to the painted area of [s] (≤ 0 inside): to the nearest capsule
      * between consecutive dabs (radius blended along it), or to the only dab.
-     * [Float.POSITIVE_INFINITY] without dabs.
+     * [Float.POSITIVE_INFINITY] without dabs. v1.7: the nearest over the stroke's symmetry
+     * copies ([StrokeCopies.dabChains]).
      */
-    fun distance(s: VStroke, x: Float, y: Float): Float = distance(dabs(s), x, y)
+    fun distance(s: VStroke, x: Float, y: Float): Float {
+        val d = dabs(s)
+        if (s.copies.isEmpty()) return distance(d, x, y)
+        var best = Float.POSITIVE_INFINITY
+        for (m in s.copies) best = minOf(best, distance(StrokeCopies.mappedDabs(d, m), x, y))
+        return best
+    }
 
     /** [distance] over a dab chain (x, y, r triples). */
     fun distance(d: FloatArray, x: Float, y: Float): Float {

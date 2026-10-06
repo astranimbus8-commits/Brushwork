@@ -233,7 +233,8 @@ internal class TargetCache {
         bounds[o]?.let { return it }
         if (bounds.size >= MAX) bounds.clear()
         val b = when (o) {
-            is VStroke -> {
+            // v1.7: a stroke with symmetry copies: the box around every copy.
+            is VStroke -> if (o.copies.isNotEmpty()) of(o).let { tg -> floatArrayOf(tg.left, tg.top, tg.right, tg.bottom) } else {
                 val p = o.points
                 var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
                 var r = Float.NEGATIVE_INFINITY; var bt = Float.NEGATIVE_INFINITY

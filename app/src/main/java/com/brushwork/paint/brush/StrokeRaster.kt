@@ -53,6 +53,11 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
      * within it, so the pixels inside [clip] are exactly those of a full render and of the live
      * stroke wherever the clip lies. Null cuts the dabs at [clip] itself: a clip cutting through
      * the stroke can then differ from a full render by one level at a few pixels.
+     *
+     * [copies] (v1.7 item 18, the seam of F1): a vector stroke's symmetry maps (`VStroke.copies`,
+     * row-major 3×3, the identity first). The copy loop that stamps every dab through each map
+     * into the one buffer is H's (`DabMapping`, §3.18); until it lands the stroke is replayed
+     * once, as in v1.6, and an empty list always is.
      */
     fun render(
         canvas: Canvas,
@@ -67,6 +72,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         taperIn: Boolean = true,
         taperOut: Boolean = true,
         cut: Rect? = null,
+        @Suppress("UNUSED_PARAMETER") copies: List<FloatArray> = emptyList(),
     ): Rect {
         val n = points.size
         if (n == 0 || clip.isEmpty) return Rect()

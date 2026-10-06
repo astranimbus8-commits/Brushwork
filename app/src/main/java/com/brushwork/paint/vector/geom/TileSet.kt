@@ -3,6 +3,7 @@ package com.brushwork.paint.vector.geom
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.brush.StrokeRaster
+import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VStroke
 import kotlin.math.ceil
@@ -73,10 +74,15 @@ class TileSet(val docW: Int, val docH: Int, val tile: Int) {
      * [bounds]. The stroke sampler smooths the input into quadratic curves from midpoint to
      * midpoint with the input points as control points (a straight piece from the first point
      * and to the last), each inside the triangle of its control points: those triangles' boxes,
-     * grown by the brush reach, hold everything the stroke paints.
+     * grown by the brush reach, hold everything the stroke paints. v1.7: a stroke with symmetry
+     * copies adds the tiles of each copy ([StrokeCopies.expanded]).
      */
     fun addObject(o: VObject, bounds: RectF) {
         if (bounds.isEmpty) return
+        if (o is VStroke && o.copies.isNotEmpty()) {
+            for (c in StrokeCopies.expanded(o)) addObject(c, StrokeRaster.strokeBounds(c.preset, c.sizeScale, c.points))
+            return
+        }
         val n = (o as? VStroke)?.points?.size ?: 0
         if (o !is VStroke || n < 2) { addRect(bounds); return }
         val xs = o.points.x; val ys = o.points.y

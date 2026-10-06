@@ -161,9 +161,10 @@ object PayloadImport {
      * [content] without objects a damaged or hand-made file could hold that no drawing makes:
      * coordinates that are not finite or lie absurdly far away (the payload's JSON allows NaN).
      * v1.6: Path-tool control points are reduced to usable numbers as a `.vec` file's are when
-     * read ([VectorCodec.sanitizedSplines]), so save and reload give the imported document back.
+     * read ([VectorCodec.sanitizedSplines]), so save and reload give the imported document back;
+     * v1.7: strokes' symmetry copies likewise ([VectorCodec.sanitizedCopies]).
      */
-    internal fun sound(content: VectorContent): VectorContent = VectorCodec.sanitizedSplines(soundObjects(content))
+    internal fun sound(content: VectorContent): VectorContent = VectorCodec.sanitizedSplines(soundObjects(VectorCodec.sanitizedCopies(content)))
 
     private fun soundObjects(content: VectorContent): VectorContent {
         val ok = content.objects.filter { o ->

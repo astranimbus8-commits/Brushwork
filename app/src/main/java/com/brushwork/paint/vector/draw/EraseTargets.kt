@@ -8,6 +8,7 @@ import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
+import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VObject
@@ -27,7 +28,7 @@ internal enum class CutKind {
     STROKE,
     /** A path of one open sub-path with an outline and no fill: its curve is split. */
     OPEN_PATH,
-    /** Closed or filled paths, paths of several sub-paths, shapes and single-point strokes: erased whole. */
+    /** Closed or filled paths, paths of several sub-paths, shapes, single-point strokes and (v1.7) strokes with symmetry copies: erased whole. */
     WHOLE,
 }
 
@@ -114,6 +115,7 @@ internal class EraseTarget private constructor(
         const val MIN_LINE = 0.5f
 
         private fun ofStroke(s: VStroke): EraseTarget {
+            if (s.copies.isNotEmpty()) return ofCopies(s)
             val p = s.points
             val line = FlatLine(p.x, p.y, p.size)
             val k = if (s.sizeScale.isFinite() && s.sizeScale > 0f) s.sizeScale else 1f
@@ -121,6 +123,19 @@ internal class EraseTarget private constructor(
             // A tap (its down and up points at the same place) is a dot.
             val cut = if (p.size >= 2 && EraseMath.lengthBetween(line, 0f, line.uMax) >= MIN_LINE) CutKind.STROKE else CutKind.WHOLE
             return EraseTarget(s, cut, listOf(line), emptyList(), false, strokeRadius(s), half, isLine = true)
+        }
+
+        /**
+         * v1.7 (item 18): a stroke with symmetry copies has one centerline per copy, and the reach
+         * of its largest copy. Its pieces can't be cut per copy, so it goes WHOLE: the partial and
+         * "to intersection" erasers remove all of it at the first touch.
+         */
+        private fun ofCopies(s: VStroke): EraseTarget {
+            val copies = StrokeCopies.expanded(s)
+            val lines = copies.map { FlatLine(it.points.x, it.points.y, it.points.size) }
+            val reach = copies.maxOf { strokeRadius(it) }
+            val half = copies.maxOf { c -> max(0.5f, c.preset.size * (if (c.sizeScale.isFinite() && c.sizeScale > 0f) c.sizeScale else 1f) / 2f) }
+            return EraseTarget(s, CutKind.WHOLE, lines, emptyList(), false, reach, half, isLine = true)
         }
 
         /** The Curve tool's anchors of a sub-path (handles kept when both coordinates are set). */

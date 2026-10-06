@@ -67,7 +67,7 @@ data class VectorContent(
         for (o in objects) {
             b += 96L
             when (o) {
-                is VStroke -> b += o.points.size * 12L
+                is VStroke -> b += o.points.size * 12L + o.copies.size * 52L
                 is VPath -> {
                     for (s in o.subpaths) b += s.anchors.size * 48L
                     o.spline?.let { b += it.points.size * 32L }
@@ -95,6 +95,7 @@ sealed class VObject {
 }
 
 /** A freehand brush stroke: replayed by StrokeRaster with the exact input the live stroke got. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 @SerialName("stroke")
 data class VStroke(
@@ -112,8 +113,41 @@ data class VStroke(
     /** False on ends cut by the partial eraser (they lose their finger taper). */
     val taperIn: Boolean = true,
     val taperOut: Boolean = true,
+    /**
+     * v1.7 (item 18): the symmetry maps at stroke start (row-major 3×3 each, the identity first);
+     * empty = no symmetry. The stroke paints every dab through each map (`DabMapping`: position
+     * mapped, size × √|det J| at the dab, the tip turned and mirrored) into ONE buffer with
+     * [seed]; [StrokeCopies] gives the readers the union over the maps. Sanitized on read
+     * (`VectorCodec`): at most [StrokeCopies.MAX] maps, each finite and invertible. Never written
+     * when empty (I13), and compared by content ([equals]).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val copies: List<FloatArray> = emptyList(),
 ) : VObject() {
     override fun withId(id: Long): VObject = copy(id = id)
+
+    /** As the generated one, but [copies] compared by content (v1.6 strokes, without copies, compare as before). */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is VStroke) return false
+        return id == other.id && opacity.compareTo(other.opacity) == 0 && preset == other.preset && color == other.color &&
+            seed == other.seed && stylus == other.stylus && points == other.points && sizeScale.compareTo(other.sizeScale) == 0 &&
+            taperIn == other.taperIn && taperOut == other.taperOut && StrokeCopies.sameMaps(copies, other.copies)
+    }
+
+    override fun hashCode(): Int {
+        var h = id.hashCode()
+        h = 31 * h + opacity.hashCode()
+        h = 31 * h + preset.hashCode()
+        h = 31 * h + color
+        h = 31 * h + seed.hashCode()
+        h = 31 * h + stylus.hashCode()
+        h = 31 * h + points.hashCode()
+        h = 31 * h + sizeScale.hashCode()
+        h = 31 * h + taperIn.hashCode()
+        h = 31 * h + taperOut.hashCode()
+        for (m in copies) h = 31 * h + m.contentHashCode()
+        return h
+    }
 }
 
 /**
@@ -175,8 +209,20 @@ data class VAnchor(
  * point (rational B-spline weight, 0.1..10, 1 = plain B-spline); [width] is the thickness factor
  * 0..3 (like [VAnchor.width], blended along the curve).
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
-data class VSplinePoint(val x: Float, val y: Float, val weight: Float = 1f, val width: Float = 1f)
+data class VSplinePoint(
+    val x: Float,
+    val y: Float,
+    val weight: Float = 1f,
+    val width: Float = 1f,
+    /**
+     * v1.7 (item 4): a corner; it ends one clamped piece and starts the next (still one
+     * subpath). Cleared on the two ends of an open spline ([VSpline.sanitized]). Never written
+     * when false (I13).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val sharp: Boolean = false,
+)
 
 /**
  * The control points of a Path-tool curve (v1.6, §3.2): a NURBS / B-spline of [order] (2..6;
@@ -215,8 +261,9 @@ data class VSpline(
     /**
      * Usable numbers only (damaged or crafted data): order in [MIN_ORDER]..[MAX_ORDER], points
      * with a non-finite coordinate dropped, weights in [MIN_WEIGHT]..[MAX_WEIGHT] (non-finite = 1),
-     * widths in 0..[MAX_WIDTH] (non-finite = 1), at most [MAX_POINTS] points. This instance when
-     * nothing changes.
+     * widths in 0..[MAX_WIDTH] (non-finite = 1), at most [MAX_POINTS] points. v1.7: the two
+     * ends of an open spline are never [VSplinePoint.sharp] (a corner joins two pieces). This
+     * instance when nothing changes.
      */
     fun sanitized(): VSpline {
         val o = order.coerceIn(MIN_ORDER, MAX_ORDER)
@@ -228,6 +275,10 @@ data class VSpline(
             val wt = if (p.weight.isFinite()) p.weight.coerceIn(MIN_WEIGHT, MAX_WEIGHT) else 1f
             val wd = if (p.width.isFinite()) p.width.coerceIn(0f, MAX_WIDTH) else 1f
             if (wt != p.weight || wd != p.width) { changed = true; out += p.copy(weight = wt, width = wd) } else out += p
+        }
+        if (!cyclic && out.isNotEmpty()) {
+            if (out[0].sharp) { changed = true; out[0] = out[0].copy(sharp = false) }
+            if (out[out.lastIndex].sharp) { changed = true; out[out.lastIndex] = out[out.lastIndex].copy(sharp = false) }
         }
         return if (!changed) this else VSpline(out, o, endpoint, cyclic)
     }
