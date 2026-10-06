@@ -25,10 +25,12 @@ import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.DisplayTiles
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.MoveLayerAction
 import com.brushwork.paint.engine.PixelEditRecorder
@@ -51,6 +53,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.StabilizerSettings
@@ -67,6 +70,7 @@ import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -270,7 +274,23 @@ class EditorController(
             return (budget / per - 3).toInt().coerceIn(2, 100)
         }
 
-    val canAddLayer: Boolean get() = doc.layers.size < maxLayers
+    val canAddLayer: Boolean get() = effectiveLayerCount < maxLayers
+
+    /**
+     * v1.7 (I14): what [maxLayers] counts: the pixel layers (folders count 0) plus the array
+     * sources, `pixelLayerCount + ceil(sum of ArrayPixels bytes / layerBytes)`. [canAddLayer],
+     * [canAddAdjustmentLayer], `ImportLayers`' room check, `ArrayOps` and the layer window's
+     * "n / max" all read it. Without folders and arrays it is `doc.layers.size` (v1.6).
+     */
+    val effectiveLayerCount: Int
+        get() {
+            val per = max(1L, doc.layerBytes)
+            val arrayBytes = doc.layers.sumOf { it.array?.pixels?.bytes ?: 0L }
+            return doc.pixelLayerCount + ((arrayBytes + per - 1) / per).toInt()
+        }
+
+    /** The message shown when a new layer would pass [maxLayers]. */
+    internal fun layerLimitMessage(): String = "Layer limit reached (${maxLayers}) for this canvas size"
 
     fun pushUndo(action: UndoAction) {
         // A pending live edit records its step first (inside an edit scope that was done when
@@ -540,8 +560,37 @@ class EditorController(
     fun structural(block: () -> Unit) {
         block()
         if (doc.layers.isNotEmpty()) doc.activeLayerIndex = doc.activeLayerIndex.coerceIn(0, doc.layers.lastIndex)
+        verifyTree()
         layersVersion++
         invalidateDoc(null)
+    }
+
+    /**
+     * v1.7 safety net (I11): after every [structural] block of a document with a folder (or a
+     * parent), [LayerTree.check] must hold and every folder must keep [Layer.FOLDER_BITMAP]. A
+     * debug build (and the unit tests) throws, so a missed site shows at once; a release build
+     * repairs with [LayerTree.sanitize] and logs, so a project can never become unloadable.
+     */
+    private fun verifyTree() {
+        val layers = doc.layers
+        if (layers.none { it.isFolder || it.parentId != Layer.ROOT_ID }) return
+        val problem = LayerTree.check(layers)
+        val ownBitmap = layers.firstOrNull { it.isFolder && it.bitmap !== Layer.FOLDER_BITMAP }
+        if (problem == null && ownBitmap == null) return
+        val what = problem ?: "$ownBitmap has a bitmap of its own"
+        check(!isDebugBuild) { "Layer structure broken: $what" }
+        android.util.Log.w("EditorController", "Layer structure broken, repaired: $what")
+        if (problem != null) {
+            val active = doc.layers.getOrNull(doc.activeLayerIndex)
+            LayerTree.sanitize(layers)
+            doc.activeLayerIndex = active?.let { doc.indexOf(it) }?.takeIf { it >= 0 } ?: doc.activeLayerIndex.coerceIn(0, layers.lastIndex)
+        }
+    }
+
+    /** True in a debuggable build and under Robolectric (the [verifyTree] safety net throws there). */
+    private val isDebugBuild: Boolean by lazy {
+        (appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0 ||
+            android.os.Build.FINGERPRINT == "robolectric"
     }
 
     /** Called after the document size / all layer bitmaps were replaced. */
@@ -781,10 +830,23 @@ class EditorController(
         return true
     }
 
-    /** False (with a message) when [layer] is locked or hidden (unless [allowHidden]). */
-    private fun checkUsable(layer: Layer, allowHidden: Boolean = false): Boolean {
+    /**
+     * False (with a message) when [layer] is locked or hidden (unless [allowHidden]). v1.7 (I11):
+     * also through a folder: a child of a locked folder is locked ("Folder “X” is locked", X the
+     * nearest locked folder) and a child of a hidden folder hidden ("Folder “X” is hidden"); a
+     * folder itself is refused with "Choose a layer inside the folder to paint" unless
+     * [allowFolder] (only structural operations, the Transform tool's folder lift and the folder
+     * ⋮ actions pass true). Every pixel path that is not a tool (clear, flip, fill, the selection
+     * bar, layer and mask actions) runs this check, so none of them reaches [Layer.FOLDER_BITMAP].
+     */
+    fun checkUsable(layer: Layer = doc.activeLayer, allowFolder: Boolean = false, allowHidden: Boolean = false): Boolean {
+        if (layer.isFolder && !allowFolder) { toast(FolderLabels.PAINT_REFUSAL); return false }
         if (layer.locked) { toast("Layer \"${layer.name}\" is locked"); return false }
-        if (!layer.visible && !allowHidden) { toast("Layer \"${layer.name}\" is hidden"); return false }
+        val ancestors = if (layer.parentId == Layer.ROOT_ID) emptyList() else LayerTree.ancestors(doc.layers, doc.indexOf(layer)).map { doc.layers[it] }
+        ancestors.firstOrNull { it.locked }?.let { toast(FolderLabels.locked(it.name)); return false }
+        if (allowHidden) return true
+        if (!layer.visible) { toast("Layer \"${layer.name}\" is hidden"); return false }
+        ancestors.firstOrNull { !it.visible }?.let { toast(FolderLabels.hidden(it.name)); return false }
         return true
     }
 
@@ -798,8 +860,11 @@ class EditorController(
     }
 
     /** Starts recording a pixel edit on [layer] (see [PixelEditRecorder]). */
-    fun beginEdit(layer: Layer = doc.activeLayer, target: EditTarget = editTargetOf(layer)): PixelEditRecorder =
-        PixelEditRecorder(layer, target)
+    fun beginEdit(layer: Layer = doc.activeLayer, target: EditTarget = editTargetOf(layer)): PixelEditRecorder {
+        // v1.7: the last line of defence (a crash here means a missed guard, see checkUsable).
+        check(!layer.isFolder) { "A folder has no pixels to edit: $layer" }
+        return PixelEditRecorder(layer, target)
+    }
 
     /**
      * A pixel edit of [target] of [layer] makes the matching editable data stale (I1): unless
@@ -963,16 +1028,11 @@ class EditorController(
         // commits first (its own steps and events), and a layer-list listener amends this step.
         return withToolPaused {
             editScope {
-                val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.layers.size + 1}"), bmp)
+                val layer = Layer(doc.newLayerId(), name ?: uniqueLayerName("Layer ${doc.pixelLayerCount + 1}"), bmp)
                 init(layer)
-                val at = (index ?: (doc.activeLayerIndex + 1)).coerceIn(0, doc.layers.size)
-                structural {
-                    doc.layers.add(at, layer)
-                    doc.activeLayerIndex = at
-                }
-                pushUndo(AddLayerAction(layer, at, label))
-                queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, label))
-                layer
+                // v1.7 (rule S): at [index] in the folder of the row below it, else at structure.insertionPoint().
+                val at = index?.let { val i = it.coerceIn(0, doc.layers.size); LayerStructure.Insertion(i, doc.parentBelow(i)) }
+                if (structure.insert(layer, at, label)) layer else { bmp.recycle(); null }
             }
         }
     }
@@ -994,14 +1054,7 @@ class EditorController(
         return withToolPaused {
             editScope {
                 val layer = Layer(doc.newLayerId(), uniqueLayerName(name), bmp).also { it.textData = textData; it.shapeData = shapeData }
-                val at = (doc.activeLayerIndex + 1).coerceIn(0, doc.layers.size)
-                structural {
-                    doc.layers.add(at, layer)
-                    doc.activeLayerIndex = at
-                }
-                pushUndo(AddLayerAction(layer, at, label))
-                queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, label))
-                layer
+                if (structure.insert(layer, null, label)) layer else { bmp.recycle(); null }
             }
         }
     }
@@ -1058,7 +1111,7 @@ class EditorController(
         oomMessage: String,
         allowHidden: Boolean = false,
     ): Boolean = editScope {
-        if (doc.indexOf(layer) < 0 || !checkUsable(layer, allowHidden)) return@editScope false
+        if (doc.indexOf(layer) < 0 || !checkUsable(layer, allowHidden = allowHidden)) return@editScope false
         val before = layer.dataSnapshot()
         if (draw == null) {
             storeData(layer, before, after, label, target)
@@ -1119,71 +1172,26 @@ class EditorController(
     }
 
     fun deleteLayer(layer: Layer = activeLayer) {
-        if (doc.layers.size <= 1) { toast("A drawing needs at least one layer"); return }
+        // v1.7: a folder goes with its whole block (the layer window asks first, see deleteFolder).
+        if (layer.isFolder) { deleteFolder(layer, keepChildren = false); return }
+        if (doc.pixelLayerCount <= 1) { toast(LayerStructure.LAST_LAYER); return }
         if (doc.indexOf(layer) < 0) return
         // Layers are deleted without a confirmation, so pending tool work (a shape, text or
         // transform) is committed first rather than silently thrown away; undo restores both.
-        withToolPaused { editScope { deleteLayerNow(layer) } }
-    }
-
-    /** [deleteLayer] once the tool is paused, inside the step's edit scope (v1.6: emits REMOVED). */
-    private fun deleteLayerNow(layer: Layer) {
-        // Resolve the index after committing: committing text can insert a layer.
-        val idx = doc.indexOf(layer)
-        if (idx < 0 || doc.layers.size <= 1) return
-        structural {
-            doc.layers.removeAt(idx)
-            doc.activeLayerIndex = min((idx - 1).coerceAtLeast(0), doc.layers.lastIndex)
-        }
-        val action = RemoveLayerAction(layer, idx)
-        pushUndo(action)
-        queueLayerList(LayerListEvent(LayerListKind.REMOVED, layer, null, action.label))
+        // Resolve the index after committing (committing text can insert a layer): the structure
+        // does (v1.7 X1; v1.6: emits REMOVED).
+        withToolPaused { structure.delete(layer, keepChildren = false, label = "Delete layer") }
     }
 
     /**
      * Duplicates [layer] above itself. With an active selection only the selected pixels are
      * copied (like "copy selection to new layer"); the layer mask, if any, is copied whole.
+     * v1.7: a folder duplicates its whole block ("Duplicate folder").
      */
     fun duplicateLayer(layer: Layer = activeLayer): Layer? {
-        if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
-        return withToolPaused { editScope { duplicateLayerNow(layer) } }
-    }
-
-    /** [duplicateLayer] once the tool is paused, inside the step's edit scope (v1.6: emits DUPLICATED). */
-    private fun duplicateLayerNow(layer: Layer): Layer? {
-        // Copy after committing pending work so the duplicate includes it.
-        val sel = selection
-        // A vector layer with a selection: the objects it touches, as a vector layer.
-        if (sel != null && layer.isVectorLayer) {
-            VectorLayerOps.duplicateTouched(this, layer, sel)?.let {
-                queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, it, layer, "Duplicate selection"))
-                return it
-            }
-        }
-        val copy = try {
-            val pixels = BitmapUtils.copy(layer.bitmap)
-            if (sel != null) BitmapUtils.maskWith(Canvas(pixels), sel.mask)
-            Layer(doc.newLayerId(), uniqueLayerName("${layer.name} copy"), pixels).also {
-                it.mask = layer.mask?.let { m -> BitmapUtils.copy(m) }
-                // A partial copy is no longer the text / shape / vector object: only whole
-                // copies keep the content data (the mask is copied whole, so its spec stays).
-                val data = layer.dataSnapshot()
-                it.restoreData(if (sel == null) data else data.rasterizedContent())
-            }
-        } catch (e: OutOfMemoryError) {
-            toast("Not enough memory to duplicate this layer"); return null
-        }
-        copy.copyPropsFrom(layer.props().copy(name = copy.name))
-        val at = doc.indexOf(layer) + 1
-        if (at <= 0) return null
-        structural {
-            doc.layers.add(at, copy)
-            doc.activeLayerIndex = at
-        }
-        val label = if (sel != null) "Duplicate selection" else "Duplicate layer"
-        pushUndo(AddLayerAction(copy, at, label))
-        queueLayerList(LayerListEvent(LayerListKind.DUPLICATED, copy, layer, label))
-        return copy
+        if (!canAddLayer) { toast(layerLimitMessage()); return null }
+        // Copy after committing pending work so the duplicate includes it (v1.6: emits DUPLICATED).
+        return withToolPaused { structure.duplicate(layer, if (layer.isFolder) FolderLabels.DUPLICATE else "Duplicate layer") }
     }
 
     // ------------------------------------------------------------------ clipboard
@@ -1201,15 +1209,25 @@ class EditorController(
      */
     fun copySelection(): Boolean {
         val layer = activeLayer
+        // v1.7 (rule C): a folder copies the composite of its children.
+        val source = if (layer.isFolder) folderPixels(layer) ?: return false else layer.bitmap
+        try {
+            return copyFrom(layer, source)
+        } finally {
+            if (source !== layer.bitmap) source.recycle()
+        }
+    }
+
+    private fun copyFrom(layer: Layer, source: Bitmap): Boolean {
         val sel = selection
-        val rect = if (sel != null) Rect(sel.bounds) else contentBounds(layer.bitmap)
+        val rect = if (sel != null) Rect(sel.bounds) else contentBounds(source)
         if (rect == null || rect.isEmpty || !rect.intersect(0, 0, doc.width, doc.height)) {
             toast("Nothing to copy on \"${layer.name}\""); return false
         }
         val out = try {
             BitmapUtils.createLayerBitmap(rect.width(), rect.height()).also { b ->
                 val c = Canvas(b)
-                c.drawBitmap(layer.bitmap, -rect.left.toFloat(), -rect.top.toFloat(), null)
+                c.drawBitmap(source, -rect.left.toFloat(), -rect.top.toFloat(), null)
                 if (sel != null) BitmapUtils.maskWith(c, sel.mask, -rect.left.toFloat(), -rect.top.toFloat())
             }
         } catch (e: OutOfMemoryError) {
@@ -1256,41 +1274,83 @@ class EditorController(
         return if (maxX < 0) null else Rect(minX, minY, maxX + 1, maxY + 1)
     }
 
-    /** Moves [layer] to [toIndex] (0 = bottom). */
+    /**
+     * Moves [layer] to [toIndex] (0 = bottom). v1.7: a folder moves with its block, and the moved
+     * unit takes the parent of the row above it (the drop rule of `LayerStructure.move`).
+     */
     fun moveLayer(layer: Layer, toIndex: Int) {
         val from = doc.indexOf(layer)
         val to = toIndex.coerceIn(0, doc.layers.lastIndex)
         if (from < 0 || from == to) return
-        withToolPaused {
-            val f = doc.indexOf(layer)
-            if (f < 0 || f == to) return@withToolPaused
-            structural {
-                doc.layers.removeAt(f)
-                doc.layers.add(to, layer)
-                doc.activeLayerIndex = to
-            }
-            pushUndo(MoveLayerAction(layer, f, to))
-        }
+        withToolPaused { structure.move(layer, to, null, "Move layer") }
     }
 
-    fun moveLayerUp(layer: Layer = activeLayer) = moveLayer(layer, doc.indexOf(layer) + 1)
-    fun moveLayerDown(layer: Layer = activeLayer) = moveLayer(layer, doc.indexOf(layer) - 1)
+    /**
+     * One unit up at its level (v1.7: over a whole sibling folder; the top child of a folder leaves
+     * it, directly above the folder). Without folders: v1.6's `moveLayer(layer, index + 1)`.
+     */
+    fun moveLayerUp(layer: Layer = activeLayer) {
+        if (!doc.hasFolders) return moveLayer(layer, doc.indexOf(layer) + 1)
+        val layers = doc.layers
+        val i = doc.indexOf(layer)
+        if (i < 0 || i + 1 >= layers.size) return
+        val parent = LayerTree.parentOf(layers, i)
+        if (i + 1 == parent) {
+            // The folder's top child: out, directly above the folder.
+            moveBlock(layer, parent, layers[parent].parentId)
+            return
+        }
+        // The row above is the bottom of the sibling unit above: its own row is the first one at this level.
+        var top = i + 1
+        while (top < layers.lastIndex && layers[top].parentId != layer.parentId) top++
+        moveBlock(layer, top, layer.parentId)
+    }
 
-    /** Merges [layer] into the layer below it. */
+    /**
+     * One unit down at its level (v1.7: under a whole sibling folder; the bottom child of a
+     * folder leaves it, directly below the folder). Without folders: v1.6's `moveLayer(layer, index - 1)`.
+     */
+    fun moveLayerDown(layer: Layer = activeLayer) {
+        if (!doc.hasFolders) return moveLayer(layer, doc.indexOf(layer) - 1)
+        val layers = doc.layers
+        val i = doc.indexOf(layer)
+        if (i < 0) return
+        val b = LayerTree.block(layers, i)
+        val parent = LayerTree.parentOf(layers, i)
+        val parentFirst = if (parent < 0) 0 else LayerTree.block(layers, parent).first
+        if (b.first - 1 < parentFirst) {
+            // The folder's bottom child: out, directly below the folder (the flat order stays).
+            if (parent >= 0) moveBlock(layer, i, layers[parent].parentId)
+            return
+        }
+        // The row below the block is the top of the sibling unit below.
+        val unit = LayerTree.block(layers, b.first - 1)
+        moveBlock(layer, unit.first + (b.last - b.first), layer.parentId)
+    }
+
+    /** Merges [layer] into the layer below it (v1.7: its sibling below; a folder merges as "Merge folder"). */
     fun mergeDown(layer: Layer = activeLayer) {
+        if (layer.isFolder) { mergeFolder(layer); return }
         val idx = doc.indexOf(layer)
-        if (idx <= 0) { toast("There is no layer below to merge into"); return }
+        val lower = siblingBelow(idx)
+        if (lower == null) { toast("There is no layer below to merge into"); return }
+        if (lower.isFolder) { toast(FolderLabels.MERGE_INTO_REFUSAL); return }
         // An adjustment layer has no pixels to receive the merge (its effect on the layers below
         // would be lost); merging one DOWN applies its effect.
-        if (doc.layers[idx - 1].isAdjustmentLayer) { toast("Layers can't be merged into an adjustment layer"); return }
+        if (lower.isAdjustmentLayer) { toast("Layers can't be merged into an adjustment layer"); return }
         withToolPaused { mergeDownNow(layer) }
+    }
+
+    /** The layer directly below the row at [idx] at its own level (v1.6: `layers[idx - 1]`), or null. */
+    private fun siblingBelow(idx: Int): Layer? {
+        if (idx <= 0 || idx > doc.layers.lastIndex) return null
+        return doc.layers[idx - 1].takeIf { it.parentId == doc.layers[idx].parentId }
     }
 
     private fun mergeDownNow(layer: Layer) {
         val idx = doc.indexOf(layer)
-        if (idx <= 0) return
-        val lower = doc.layers[idx - 1]
-        if (lower.isAdjustmentLayer) return
+        val lower = siblingBelow(idx) ?: return
+        if (lower.isAdjustmentLayer || lower.isFolder) return
         editScope { mergeDownInto(layer, idx, lower) }
     }
 
@@ -1339,6 +1399,208 @@ class EditorController(
         queueEdit(EditEvent(lower, EditTarget.CONTENT, null, "Merge down"))
         // v1.6: the upper layer left the stack (a linked text frame heals).
         queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
+    }
+
+    // ------------------------------------------------------------------ layer tree (v1.7, item 8)
+
+    /**
+     * v1.7 (I11, X1): the only code that changes the layer structure (sweep rule S). Areas that
+     * add layers ("Array N", "Pathfinder N", "Layer from folder") call `structure.insert`; every
+     * call is one step.
+     */
+    internal val structure: LayerStructure = LayerStructure(this)
+
+    private val folderCount: Int get() = doc.layers.count { it.isFolder }
+
+    /** "Folder N", unused. */
+    private fun newFolderName(): String = uniqueLayerName("Folder ${folderCount + 1}")
+
+    /** "New folder": an empty, open folder directly above the active layer at its level; it becomes active. One step. */
+    fun addFolder(): Layer? {
+        if (folderCount >= LayerTree.MAX_FOLDERS) { toast(FolderLabels.COUNT_LIMIT); return null }
+        return withToolPaused {
+            editScope {
+                val folder = Layer.newFolder(doc.newLayerId(), newFolderName())
+                if (structure.insert(folder, structure.above(activeLayer), FolderLabels.NEW)) folder else null
+            }
+        }
+    }
+
+    /**
+     * "Put in new folder": a new folder directly above [layer] (its block) at its level, with
+     * [layer] moved in as its only child; [layer] stays active. One step.
+     */
+    fun putInNewFolder(layer: Layer = activeLayer): Layer? {
+        if (doc.indexOf(layer) < 0) return null
+        if (folderCount >= LayerTree.MAX_FOLDERS) { toast(FolderLabels.COUNT_LIMIT); return null }
+        return withToolPaused {
+            editScope {
+                val idx = doc.indexOf(layer)
+                if (idx < 0) return@editScope null
+                val folder = Layer.newFolder(doc.newLayerId(), newFolderName())
+                val base = LayerTree.inserted(doc.layers, idx + 1, listOf(folder), layer.parentId)
+                val parents = base.parents.copyOf().also { it[idx] = folder.id }
+                if (structure.apply(FolderLabels.PUT_IN_NEW, LayerTree.Plan(base.order, parents, idx))) folder else null
+            }
+        }
+    }
+
+    /**
+     * Swipe right, "Move into folder above": [layer] (its block) becomes the bottom child of the
+     * sibling folder directly above it. One "Move into folder" step; false when there is no such
+     * folder, or with "Folders can be nested 8 deep" when the nesting would get too deep.
+     */
+    fun putIntoFolderAbove(layer: Layer): Boolean = withToolPaused {
+        editScope {
+            val i = doc.indexOf(layer)
+            if (i < 0) return@editScope false
+            val plan = LayerTree.putIntoFolderAbove(doc.layers, i)
+            if (plan == null) {
+                if (siblingFolderAbove(i) != null) toast(FolderLabels.DEPTH_LIMIT)
+                return@editScope false
+            }
+            structure.apply(MOVE_INTO_FOLDER_LABEL, plan)
+        }
+    }
+
+    /** The sibling unit directly above the row at [i] when it is a folder whose block starts right above [i]. */
+    private fun siblingFolderAbove(i: Int): Layer? {
+        val layers = doc.layers
+        val pid = layers[i].parentId
+        var j = i + 1
+        while (j < layers.size && layers[j].parentId != pid) {
+            if (layers[j].id == pid) return null
+            j++
+        }
+        return layers.getOrNull(j)?.takeIf { it.isFolder && LayerTree.block(layers, j).first == i + 1 }
+    }
+
+    /** Swipe left, "Move out of folder": a folder's BOTTOM child leaves it and sits directly below the folder's block. One step. */
+    fun takeOutOfFolder(layer: Layer): Boolean = withToolPaused {
+        editScope {
+            val i = doc.indexOf(layer)
+            if (i < 0) return@editScope false
+            val plan = LayerTree.takeOutOfFolder(doc.layers, i) ?: return@editScope false
+            structure.apply(FolderLabels.MOVE_OUT, plan)
+        }
+    }
+
+    /**
+     * The long-press drag, across folders: [layer]'s block moves so that its top lands at flat
+     * index [toIndex], in folder [newParent] (null: the drop rule of §3.8, see
+     * `LayerStructure.move`). One "Move layer" step.
+     */
+    fun moveBlock(layer: Layer, toIndex: Int, newParent: Long?): Boolean =
+        withToolPaused { structure.move(layer, toIndex, newParent, "Move layer") }
+
+    /** Opens or closes [folder]'s rows in the layer window: view state, no step; marks the document changed (saved with it). */
+    fun setFolderOpen(folder: Layer, open: Boolean) {
+        if (!folder.isFolder || folder.folderOpen == open) return
+        folder.folderOpen = open
+        editCount++
+        doc.touch()
+        layersVersion++
+    }
+
+    /** "Pass through" on or off for [folder]: one `LayerDataAction` step (the spec rides `LayerData`). */
+    fun setFolderPassThrough(folder: Layer, on: Boolean) {
+        editScope {
+            val spec = folder.folder ?: return@editScope
+            if (spec.passThrough == on || doc.indexOf(folder) < 0) return@editScope
+            val before = folder.dataSnapshot()
+            val after = before.copy(folder = spec.copy(passThrough = on))
+            folder.restoreData(after)
+            folder.markChanged()
+            pushUndo(LayerDataAction(FolderLabels.PASS_THROUGH, folder, before, after, doc.bounds))
+            notifyLayersChanged()
+            invalidateDoc(null)
+        }
+    }
+
+    /**
+     * "Merge folder": one raster layer at the folder's place from the composite of its children
+     * (`FolderComposite.renderBlock`), carrying the folder's name, opacity, blend (a pass-through
+     * folder merges as Normal), eye, lock and clipping; the block goes. ONE `LayerTreeAction`
+     * step; the merged layer becomes active. MERGED events (source = the new layer) for every
+     * layer that left.
+     */
+    fun mergeFolder(folder: Layer): Boolean {
+        if (!folder.isFolder || doc.indexOf(folder) < 0) return false
+        return withToolPaused {
+            editScope {
+                val f = doc.indexOf(folder)
+                if (f < 0) return@editScope false
+                val block = LayerTree.block(doc.layers, f)
+                val members = doc.layers.subList(block.first, f + 1).toList()
+                // A block without pixel layers turns into one more pixel layer.
+                if (members.all { it.isFolder } && !canAddLayer) { toast(layerLimitMessage()); return@editScope false }
+                val pixels = folderPixels(folder) ?: return@editScope false
+                val merged = Layer(doc.newLayerId(), folder.name, pixels)
+                val props = folder.props()
+                merged.copyPropsFrom(if (folder.folder?.passThrough == true) props.copy(blendMode = LayerBlendMode.NORMAL) else props)
+                val order = ArrayList<Layer>(doc.layers.size)
+                val parents = ArrayList<Long>(doc.layers.size)
+                for ((i, l) in doc.layers.withIndex()) {
+                    if (i == block.first) { order += merged; parents += folder.parentId }
+                    if (i in block) continue
+                    order += l
+                    parents += l.parentId
+                }
+                if (!structure.apply(FolderLabels.MERGE, LayerTree.Plan(order, parents.toLongArray(), block.first))) {
+                    pixels.recycle()
+                    return@editScope false
+                }
+                for (l in members) queueLayerList(LayerListEvent(LayerListKind.MERGED, l, merged, FolderLabels.MERGE))
+                true
+            }
+        }
+    }
+
+    /**
+     * "Layer from folder": a new raster layer directly above [folder] at its level with the
+     * composite of its children (the folder's opacity and blend carried, Normal for pass-through);
+     * the folder is kept. One step; the new layer becomes active.
+     */
+    fun layerFromFolder(folder: Layer): Layer? {
+        if (!folder.isFolder || doc.indexOf(folder) < 0) return null
+        if (!canAddLayer) { toast(layerLimitMessage()); return null }
+        return withToolPaused {
+            editScope {
+                if (doc.indexOf(folder) < 0) return@editScope null
+                val pixels = folderPixels(folder) ?: return@editScope null
+                val layer = Layer(doc.newLayerId(), uniqueLayerName(folder.name), pixels)
+                val props = folder.props()
+                layer.copyPropsFrom(
+                    props.copy(
+                        name = layer.name, visible = true, clipping = false, locked = false, alphaLocked = false,
+                        blendMode = if (folder.folder?.passThrough == true) LayerBlendMode.NORMAL else props.blendMode,
+                    )
+                )
+                if (structure.insert(layer, structure.above(folder), FolderLabels.FROM_FOLDER)) layer else { pixels.recycle(); null }
+            }
+        }
+    }
+
+    /** The composite of [folder]'s children as new pixels in the document's color mode; null (with a message) without memory. */
+    private fun folderPixels(folder: Layer): Bitmap? = try {
+        FolderComposite.renderBlock(doc, folder).also { b ->
+            if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(b, doc.bounds, doc.colorMode)
+        }
+    } catch (e: OutOfMemoryError) {
+        toast("Not enough memory for this folder")
+        null
+    }
+
+    /** "Ungroup folder": the children move to the folder's level and the folder goes. One step. */
+    fun ungroupFolder(folder: Layer): Boolean {
+        if (!folder.isFolder || doc.indexOf(folder) < 0) return false
+        return withToolPaused { structure.delete(folder, keepChildren = true, label = FolderLabels.UNGROUP) }
+    }
+
+    /** "Delete all" ([keepChildren] false: the folder and its block) or "Folder only" (ungroup and delete). One step. */
+    fun deleteFolder(folder: Layer, keepChildren: Boolean) {
+        if (!folder.isFolder || doc.indexOf(folder) < 0) return
+        withToolPaused { structure.delete(folder, keepChildren, DELETE_FOLDER_LABEL) }
     }
 
     /** Mirrors a layer (pixels and mask). Self-inverse, so undo just flips again. */
@@ -1520,7 +1782,10 @@ class EditorController(
         }
         setLayerProps(layer, layer.props().copy(clipping = !layer.clipping), "Clipping")
     }
-    fun toggleAlphaLock(layer: Layer) = setLayerProps(layer, layer.props().copy(alphaLocked = !layer.alphaLocked), "Lock alpha")
+    fun toggleAlphaLock(layer: Layer) {
+        if (layer.isFolder) { toast(FolderLabels.NO_ALPHA_LOCK); return }
+        setLayerProps(layer, layer.props().copy(alphaLocked = !layer.alphaLocked), "Lock alpha")
+    }
     fun toggleLock(layer: Layer) = setLayerProps(layer, layer.props().copy(locked = !layer.locked), "Lock layer")
     fun renameLayer(layer: Layer, name: String) = setLayerProps(layer, layer.props().copy(name = name.ifBlank { layer.name }), "Rename layer")
     fun setBlendMode(layer: Layer, mode: LayerBlendMode) = setLayerProps(layer, layer.props().copy(blendMode = mode), "Blend mode")
@@ -1584,6 +1849,7 @@ class EditorController(
     // ------------------------------------------------------------------ masks
 
     fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
+        if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
         if (layer.mask != null) return
         val mask = BitmapUtils.createMaskBitmap(doc.width, doc.height, if (fromSelection) 0xFF000000.toInt() else -1)
         val sel = selection
@@ -1711,6 +1977,8 @@ class EditorController(
         // An adjustment layer's effect is edited with the Masks tool (vector layers are
         // allowed: applying the filter turns them into raster layers, undoably). Refused before
         // anything else happens, so the tool stays as it was.
+        // v1.7: a folder has no pixels to filter.
+        if (activeLayer.isFolder) { toast(FolderLabels.PAINT_REFUSAL); return }
         if (activeLayer.isAdjustmentLayer) { toast(ADJUSTMENT_FILTER_MESSAGE); return }
         filterSession?.cancel()
         // A vector edit still rendering and the object edits waiting for it land first (v1.5),
@@ -1826,7 +2094,7 @@ class EditorController(
             return
         }
         val left = vectorLeftLayer?.takeIf {
-            layer === vectorLeftTo && doc.indexOf(it) >= 0 && it.isVectorLayer && it.visible && !it.locked
+            layer === vectorLeftTo && doc.indexOf(it) >= 0 && it.isVectorLayer && doc.effectiveVisible(it) && !doc.effectiveLocked(it)
         }
         vectorLeftLayer = null
         vectorLeftTo = null
@@ -1839,8 +2107,8 @@ class EditorController(
         val above = doc.layers.getOrNull(idx + 1)
         val ok = when {
             // (A hidden layer can't be edited: a new vector layer goes above it instead.)
-            layer.visible && isEmptyPlainLayer(layer) -> convertToVectorLayer(layer)
-            above != null && above.isVectorLayer && above.visible && !above.locked -> { selectLayer(above); true }
+            doc.effectiveVisible(layer) && isEmptyPlainLayer(layer) -> convertToVectorLayer(layer)
+            above != null && above.isVectorLayer && doc.effectiveVisible(above) && !doc.effectiveLocked(above) -> { selectLayer(above); true }
             else -> addVectorLayer() != null
         }
         if (!ok) return
@@ -1861,7 +2129,7 @@ class EditorController(
     }
 
     /** A layer the Vector button can go back to (not vector, not an adjustment layer). */
-    private fun isRasterLayer(l: Layer): Boolean = !l.isVectorLayer && !l.isAdjustmentLayer
+    private fun isRasterLayer(l: Layer): Boolean = !l.isVectorLayer && !l.isAdjustmentLayer && !l.isFolder
 
     /** The nearest raster layer below [from], else above, or null. */
     private fun nearestRasterLayer(from: Layer): Layer? {
@@ -1876,7 +2144,7 @@ class EditorController(
      * kind, not locked (it can become a vector layer in place).
      */
     fun isEmptyPlainLayer(layer: Layer): Boolean =
-        !layer.locked && layer.mask == null && layer.dataSnapshot().isEmpty && contentBounds(layer.bitmap) == null
+        !layer.isFolder && !doc.effectiveLocked(layer) && layer.mask == null && layer.dataSnapshot().isEmpty && contentBounds(layer.bitmap) == null
 
     /**
      * Adds an empty vector layer above the active one ("Vector N" unless [name]) as one undo step
@@ -1916,7 +2184,7 @@ class EditorController(
     // ------------------------------------------------------------------ adjustment layers & editable masks (v1.5, §4.3)
 
     /** An adjustment layer needs two layer slots (its bitmap and its mask). */
-    val canAddAdjustmentLayer: Boolean get() = doc.layers.size + 2 <= maxLayers
+    val canAddAdjustmentLayer: Boolean get() = effectiveLayerCount + 2 <= maxLayers
 
     /**
      * Adds an adjustment layer with effect [spec] above the active layer (named after the effect:
@@ -2004,6 +2272,10 @@ class EditorController(
 
         /** Rounds of edit-event delivery (listeners reacting to listeners) before the rest is dropped. */
         private const val MAX_EDIT_ROUNDS = 4
+
+        /** v1.7 history labels (§4.8) of the folder operations whose menu text differs. */
+        const val MOVE_INTO_FOLDER_LABEL = "Move into folder"
+        const val DELETE_FOLDER_LABEL = "Delete folder"
 
         /** Shown when a filter is started on an adjustment layer. */
         const val ADJUSTMENT_FILTER_MESSAGE = "Adjustment layers have no pixels — edit the effect in Masks"

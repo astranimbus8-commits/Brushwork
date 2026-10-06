@@ -8,7 +8,6 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.TipCache
-import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerDataAction
@@ -142,11 +141,8 @@ object VectorLayerOps {
             return null
         }
         copy.copyPropsFrom(layer.props().copy(name = copy.name))
-        c.structural {
-            c.doc.layers.add(at, copy)
-            c.doc.activeLayerIndex = at
-        }
-        c.pushUndo(AddLayerAction(copy, at, "Duplicate selection"))
+        // v1.7 (rule S): directly above the layer at its level; the caller reports it as DUPLICATED.
+        if (!c.structure.place(copy, c.structure.above(layer), "Duplicate selection")) { copy.recycleBitmaps(); return null }
         if (ids.isEmpty()) c.toast("The selection touches no objects of \"${layer.name}\"")
         return copy
     }

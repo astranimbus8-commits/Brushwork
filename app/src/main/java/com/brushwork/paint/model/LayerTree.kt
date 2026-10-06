@@ -203,6 +203,11 @@ object LayerTree {
     /** null = I11 holds, else what is wrong. */
     fun check(layers: List<Layer>): String? = check(layers, LongArray(layers.size) { layers[it].parentId })
 
+    /** v1.7 (F2): [check] for the result of [plan] before it is applied (`LayerStructure.apply`). */
+    fun check(plan: Plan): String? =
+        if (plan.parents.size != plan.order.size) "the plan has ${plan.parents.size} parents for ${plan.order.size} layers"
+        else check(plan.order, plan.parents)
+
     /**
      * [check] for [layers] with the parents [parents] (a [Plan] before it is applied).
      * [duplicates] false skips the duplicate-id test ([sanitize] does not repair ids).

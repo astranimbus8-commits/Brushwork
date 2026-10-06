@@ -139,6 +139,20 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         }
         val bounds = RectF(clip ?: doc.bounds)
         val override = if (useOverrides) overrideProvider() else null
+        // v1.7 (I11): a document with a folder is drawn level by level (area A's FolderComposite);
+        // without one, the v1.6 loop below runs unchanged (I5).
+        if (doc.hasFolders) {
+            FolderComposite.draw(this, doc, canvas, bounds, override, target, layerRange)
+            return
+        }
+        drawFlat(canvas, layers, from, until, bounds, override, target)
+    }
+
+    /**
+     * The v1.6 loop over [layers] (none of them a folder) from [from] until [until]: clipping
+     * groups and adjustment layers as in [drawDocument]. v1.7: also used by [FolderComposite].
+     */
+    internal fun drawFlat(canvas: Canvas, layers: List<Layer>, from: Int, until: Int, bounds: RectF, override: LayerRenderOverride?, target: CompositeTarget?) {
         var i = from
         while (i < until) {
             val base = layers[i]

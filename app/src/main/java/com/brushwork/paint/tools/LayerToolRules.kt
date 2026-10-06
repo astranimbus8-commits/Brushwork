@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools
 
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.ui.common.FolderLabels
 
 /**
  * Which tools can start a gesture on which kind of layer (v1.5, frozen). The controller asks
@@ -14,6 +15,17 @@ object LayerToolRules {
     /** Tools that paint into the active layer (or its mask) with the brush engine. */
     private val PAINTING: Set<ToolId> = setOf(ToolId.BRUSH, ToolId.ERASER)
 
+    /**
+     * v1.7 (I11): the tools that write into the active layer itself, refused on a folder with
+     * "Choose a layer inside the folder to paint" (ARRAY joins them when area E adds it). The
+     * others work on a folder: Transform moves its block, the selections and samplers read the
+     * composite (rule C), Text, Text frames and Shape add a new layer.
+     */
+    val FOLDER_REFUSED: Set<ToolId> = setOf(
+        ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR, ToolId.FILL, ToolId.CLONE, ToolId.REMOVE,
+        ToolId.FRAME_DIVIDER, ToolId.MASK, ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH,
+    )
+
     /** Message for tools refused on adjustment layers. */
     const val ADJUSTMENT_MESSAGE = "Adjustment layers have no pixels — use the Masks tool"
 
@@ -22,6 +34,7 @@ object LayerToolRules {
 
     /**
      * Null when [id] may start a gesture on [layer]; otherwise the message to show.
+     *  - Folder + [FOLDER_REFUSED] -> FolderLabels.PAINT_REFUSAL (v1.7).
      *  - Vector layer + [PIXEL_ONLY] -> "<Tool> works on pixels — tap Vector to switch, or Rasterize this layer".
      *  - Adjustment layer + a painting tool (brush / eraser) without a mask -> [ADJUSTMENT_MESSAGE]
      *    (with a mask they paint the mask).
@@ -29,6 +42,7 @@ object LayerToolRules {
      *    mask -> [ADJUSTMENT_MESSAGE].
      */
     fun refusal(id: ToolId, layer: Layer): String? {
+        if (layer.isFolder && id in FOLDER_REFUSED) return FolderLabels.PAINT_REFUSAL
         if (layer.isVectorLayer && id in PIXEL_ONLY) return pixelOnlyMessage(id)
         if (layer.isAdjustmentLayer) {
             val hasMask = layer.mask != null
