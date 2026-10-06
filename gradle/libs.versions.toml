@@ -14,6 +14,7 @@ litert = "1.4.2"
 junit = "4.13.2"
 robolectric = "4.17"
 androidxTestCore = "1.7.0"
+graphicsPath = "1.0.1"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -35,6 +36,7 @@ kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutine
 kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutines" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerializationJson" }
 androidx-exifinterface = { module = "androidx.exifinterface:exifinterface", version.ref = "exifinterface" }
+androidx-graphics-path = { module = "androidx.graphics:graphics-path", version.ref = "graphicsPath" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 mlkit-subject-segmentation = { module = "com.google.android.gms:play-services-mlkit-subject-segmentation", version.ref = "mlkitSubjectSegmentation" }
 litert = { module = "com.google.ai.edge.litert:litert", version.ref = "litert" }

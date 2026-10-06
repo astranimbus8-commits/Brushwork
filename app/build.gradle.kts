@@ -80,6 +80,10 @@ android {
                 // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
                 // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
                 it.forkEvery = 40
+                // v1.7: the platform android.graphics.PathIterator (Pathfinder's reader on API 34,
+                // the SDK Robolectric runs) allocates through ShadowVMRuntime.newNonMovableArray,
+                // which reads a DirectByteBuffer's address by reflection.
+                it.jvmArgs("--add-opens=java.base/java.nio=ALL-UNNAMED")
             }
         }
     }
@@ -122,6 +126,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.androidx.exifinterface)
+    // v1.7: Path.op results are read back with androidx.graphics.path.PathIterator (Pathfinder); the
+    // version Compose already resolves.
+    implementation(libs.androidx.graphics.path)
     implementation(libs.zxing.core)
     implementation(libs.mlkit.subject.segmentation)
     implementation(libs.litert)
