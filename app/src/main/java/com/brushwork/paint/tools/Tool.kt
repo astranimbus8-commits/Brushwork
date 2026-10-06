@@ -137,6 +137,19 @@ abstract class Tool(val controller: EditorController) {
     /** True when [redoStep] would do something (Compose state; enables the Redo button). */
     open val canRedoStep: Boolean get() = false
 
+    /**
+     * v1.7 (item 10): an opaque token for the tool's own in-tool history (the pending steps that
+     * [undoStep] takes back before the document history). null = none. `EditorController.uiMark`
+     * stores it so a history tap over the UI can take back what its first finger changed.
+     */
+    open fun historyMark(): Any? = null
+
+    /**
+     * v1.7 (item 10): drops every in-tool step pushed after [mark] (from [historyMark]); they are
+     * NOT moved to the tool's redo. The default keeps every v1.6 tool unchanged.
+     */
+    open fun rollbackHistory(mark: Any?) {}
+
     // ------------------------------------------------------------------ two-finger gestures
 
     /**
