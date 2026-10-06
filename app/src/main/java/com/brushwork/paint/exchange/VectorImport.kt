@@ -22,6 +22,7 @@ import com.brushwork.paint.exchange.svg.SvgToVector
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextCodec
@@ -193,7 +194,7 @@ object VectorImport {
             }
         } catch (e: Throwable) {
             // Out of memory or stopped: nothing half made stays allocated.
-            layers.forEach { it.bitmap.recycle() }
+            layers.forEach { it.bitmap.recycleUnlessShared() }
             throw e
         }
         val texts = ArrayList<SvgText>()

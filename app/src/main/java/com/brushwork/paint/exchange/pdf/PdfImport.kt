@@ -13,6 +13,7 @@ import com.brushwork.paint.exchange.ImportTarget
 import com.brushwork.paint.exchange.NewLayer
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.recycleUnlessShared
 import java.util.concurrent.CancellationException
 import kotlin.math.max
 import kotlin.math.min
@@ -79,7 +80,7 @@ object PdfImport {
                 out += NewLayer("Page ${index + 1}", bmp)
             }
         } catch (e: Throwable) {
-            out.forEach { it.bitmap.recycle() }
+            out.forEach { it.bitmap.recycleUnlessShared() }
             throw e
         }
         return out

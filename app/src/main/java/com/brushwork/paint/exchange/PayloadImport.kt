@@ -18,8 +18,11 @@ import com.brushwork.paint.exchange.image.ArgbImage
 import com.brushwork.paint.exchange.svg.Affine
 import com.brushwork.paint.masks.MaskSpecs
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.model.LayerTree
+import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
@@ -36,6 +39,9 @@ import com.brushwork.paint.vector.VectorOps
  * Vector layers are rendered again from their objects (their pixels are not stored).
  */
 object PayloadImport {
+    /** v1.7: a payload-v2 folder entry. */
+    private val PayloadLayer.isFolder: Boolean get() = kind == PayloadKind.FOLDER || folder != null
+
     const val LABEL = "Import Brushwork layers"
 
     /** The pictures a payload refers to (by key). */
@@ -57,6 +63,14 @@ object PayloadImport {
         val fits = fitting(p.layers, target.room)
         if (p.layers.size > fits.size) dropped["layers (layer limit)"] = p.layers.size - fits.size
         for (pl in fits) {
+            // v1.7 (payload v2): a folder carries no pixels (Layer.FOLDER_BITMAP) and no data.
+            if (pl.isFolder) {
+                out += NewLayer(
+                    pl.props.name, Layer.FOLDER_BITMAP, pl.props, sourceId = pl.id,
+                    folder = pl.folder ?: FolderSpec(), parentSourceId = pl.parentId, folderOpen = pl.folderOpen,
+                )
+                continue
+            }
             var bmp: Bitmap? = null
             try {
                 var vector: VectorContent? = null
@@ -91,10 +105,10 @@ object PayloadImport {
                     maskSpec = if (mask != null) spec else null,
                     adjustment = pl.adjustment,
                 )
-                out += NewLayer(pl.props.name, bmp, pl.props, data, mask, sourceId = pl.id)
+                out += NewLayer(pl.props.name, bmp, pl.props, data, mask, sourceId = pl.id, parentSourceId = pl.parentId)
             } catch (e: Throwable) {
                 bmp?.recycle()
-                out.forEach { it.bitmap.recycle(); it.mask?.recycle() }
+                out.forEach { it.bitmap.recycleUnlessShared(); it.mask?.recycle() }
                 throw e
             }
         }
@@ -117,16 +131,28 @@ object PayloadImport {
         try {
             val doc = Document("picture", "picture", target.width, target.height, p.dpi)
             doc.colorMode = target.colorMode
+            // v1.7 (I11): the payload's tree (parents moved to the new ids), repaired like a load.
+            val ids = HashMap<Long, Long>()
             for (n in prepared.layers) {
-                doc.layers += Layer(doc.newLayerId(), n.name, n.bitmap).also { l ->
-                    n.props?.let { l.copyPropsFrom(it) }
-                    l.mask = n.mask
-                    l.restoreData(n.data)
+                val l = if (n.folder != null) {
+                    Layer.newFolder(doc.newLayerId(), n.name, n.folder).also { f -> n.props?.let { f.copyPropsFrom(it) } }
+                } else {
+                    Layer(doc.newLayerId(), n.name, n.bitmap).also { l ->
+                        n.props?.let { l.copyPropsFrom(it) }
+                        l.mask = n.mask
+                        l.restoreData(n.data)
+                    }
                 }
+                if (n.sourceId != 0L) ids[n.sourceId] = l.id
+                doc.layers += l
+            }
+            if (prepared.layers.any { it.inTree }) {
+                prepared.layers.forEachIndexed { i, n -> doc.layers[i].parentId = ids[n.parentSourceId] ?: Layer.ROOT_ID }
+                LayerTree.sanitize(doc.layers)
             }
             return Compositor(doc) { null }.renderFlattened()
         } finally {
-            prepared.layers.forEach { it.bitmap.recycle(); it.mask?.recycle() }
+            prepared.layers.forEach { it.bitmap.recycleUnlessShared(); it.mask?.recycle() }
         }
     }
 
@@ -149,10 +175,15 @@ object PayloadImport {
         var left = room
         val out = ArrayList<PayloadLayer>()
         for (pl in layers) {
-            val needed = if (pl.kind == PayloadKind.ADJUSTMENT || pl.adjustment != null) 2 else 1
+            // v1.7: a folder needs no slot (it has no pixels).
+            val needed = when {
+                pl.isFolder -> 0
+                pl.kind == PayloadKind.ADJUSTMENT || pl.adjustment != null -> 2
+                else -> 1
+            }
             if (needed > left) break
             out += pl
-            left--
+            if (needed > 0) left--
         }
         return out
     }

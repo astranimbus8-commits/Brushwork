@@ -57,6 +57,17 @@ internal class LayerStructure(private val c: EditorController) {
 
     /** [insert] without the layer-list event (callers that report the layer otherwise, e.g. as DUPLICATED). */
     fun place(layer: Layer, at: Insertion?, label: String): Boolean {
+        val action = placed(layer, at, label) ?: return false
+        c.pushUndo(action)
+        return true
+    }
+
+    /**
+     * [place] without pushing: the insert is applied and its action returned for the caller to
+     * record inside its own step (the selection bar's "Cut to new layer" joins it to the pixel
+     * edit, as v1.6 did). Null (with the message) when refused.
+     */
+    fun placed(layer: Layer, at: Insertion?, label: String): UndoAction? {
         val ins = at ?: insertionPoint()
         val pos = ins.index.coerceIn(0, doc.layers.size)
         if (!layer.isFolder && ins.parentId == Layer.ROOT_ID && !doc.hasFolders) {
@@ -65,11 +76,10 @@ internal class LayerStructure(private val c: EditorController) {
                 doc.insertLayer(pos, layer, Layer.ROOT_ID)
                 doc.activeLayerIndex = pos
             }
-            c.pushUndo(AddLayerAction(layer, pos, label))
-            return true
+            return AddLayerAction(layer, pos, label)
         }
-        if (layer.isFolder && folderCount() >= LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return false }
-        return apply(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))
+        if (layer.isFolder && folderCount() >= LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return null }
+        return applied(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))
     }
 
     /**
@@ -77,23 +87,29 @@ internal class LayerStructure(private val c: EditorController) {
      * deep, too many folders: with their message) or changes nothing.
      */
     fun apply(label: String, plan: LayerTree.Plan): Boolean {
+        val action = applied(label, plan) ?: return false
+        c.pushUndo(action)
+        return true
+    }
+
+    /** [apply] without pushing: the applied [LayerTreeAction], or null. */
+    private fun applied(label: String, plan: LayerTree.Plan): UndoAction? {
         LayerTree.check(plan)?.let { problem ->
             when {
                 plan.order.count { it.isFolder } > LayerTree.MAX_FOLDERS -> c.toast(FolderLabels.COUNT_LIMIT)
                 "deep" in problem -> c.toast(FolderLabels.DEPTH_LIMIT)
                 else -> Log.w(TAG, "Refused \"$label\": $problem")
             }
-            return false
+            return null
         }
         val before = doc.slots()
         val after = plan.order.mapIndexed { i, l -> LayerSlot(l, plan.parents[i]) }
         val activeBefore = doc.layers.getOrNull(doc.activeLayerIndex)
         val activeAfter = plan.order.getOrNull(plan.active)
-        if (before == after && activeBefore === activeAfter) return false
+        if (before == after && activeBefore === activeAfter) return null
         val action = LayerTreeAction(label, before, after, activeBefore, activeAfter)
         action.redo(c)
-        c.pushUndo(action)
-        return true
+        return action
     }
 
     /**

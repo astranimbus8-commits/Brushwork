@@ -10,7 +10,6 @@ import android.graphics.Shader
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.ColorUtils
-import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
@@ -261,12 +260,13 @@ object SelectionEdits {
         }
         ColorModeOps.constrain(src.bitmap, sel.bounds, doc.colorMode)
         val layer = Layer(doc.newLayerId(), uniqueLayerName(controller, "${src.name} cut"), bmp)
-        val at = doc.indexOf(src) + 1
-        controller.structural {
-            doc.layers.add(at, layer)
-            doc.activeLayerIndex = at
+        // v1.7 (rule S): directly above the source at its level, through LayerStructure (without
+        // folders: the v1.6 AddLayerAction).
+        val add = controller.structure.placed(layer, controller.structure.above(src), "Cut to new layer") ?: run {
+            rec.abort()
+            bmp.recycle()
+            return null
         }
-        val add = AddLayerAction(layer, at, "Cut to new layer")
         // One step with the new layer; like any pixel edit it turns an editable (text, shape,
         // vector) source into a raster layer in that step (I1).
         if (!controller.commitEdit(rec, "Cut to new layer", listOf(add))) controller.pushUndo(add)

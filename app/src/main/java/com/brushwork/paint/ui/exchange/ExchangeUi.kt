@@ -48,6 +48,7 @@ import com.brushwork.paint.exchange.svg.SvgDocument
 import com.brushwork.paint.exchange.svg.SvgFormatException
 import com.brushwork.paint.exchange.svg.SvgParser
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.Dispatchers
@@ -444,7 +445,7 @@ class ExchangeUiState(
     private suspend fun stopIfCancelled(layers: List<com.brushwork.paint.exchange.NewLayer>) {
         if (coroutineContext.isActive) return
         layers.forEach { l ->
-            l.bitmap.recycle()
+            l.bitmap.recycleUnlessShared()
             l.mask?.recycle()
         }
         coroutineContext.ensureActive()
