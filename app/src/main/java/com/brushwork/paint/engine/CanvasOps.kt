@@ -95,7 +95,7 @@ class CanvasSnapshot(
     companion object {
         fun of(doc: Document) = CanvasSnapshot(
             doc.width, doc.height, doc.dpi, doc.colorMode,
-            doc.pixelLayers.map { LayerSnapshot(it, it.bitmap, it.mask, it.visible) }.toList(),
+            doc.pixelLayers.map { LayerSnapshot(it, it.bitmap, it.mask, doc.effectiveVisible(it)) }.toList(),
             doc.savedSelections,
         )
     }

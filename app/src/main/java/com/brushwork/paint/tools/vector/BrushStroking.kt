@@ -530,7 +530,7 @@ internal class BrushStrokePreview(
         val layer = key.layer
         // The painting tool would refuse with a message on every replay: no preview instead
         // (committing still reports it).
-        if (layer.locked || !layer.visible) { cancelLive(); refusedKey = key; return }
+        if (controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) { cancelLive(); refusedKey = key; return }
         input.clear()
         req.points(input)
         if (input.size < 2) { cancelLive(); return }
@@ -789,7 +789,7 @@ internal class SpecOverlay {
         asNewLayer: Boolean = false,
         ignoreSelection: Boolean = false,
     ) {
-        if (specs.isEmpty() || (!asNewLayer && !layer.visible)) return
+        if (specs.isEmpty() || (!asNewLayer && !controller.doc.effectiveVisible(layer))) return
         val doc = controller.doc
         val maskMode = !asNewLayer && controller.editTargetOf(layer) == EditTarget.MASK
         clip.set(0, 0, doc.width, doc.height)

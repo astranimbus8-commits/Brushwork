@@ -19,10 +19,12 @@ import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.vector.VectorLayerOps
 
 /**
@@ -39,9 +41,13 @@ import com.brushwork.paint.vector.VectorLayerOps
  */
 object LayerOps {
 
-    /** False (with a message) when [layer] is locked. */
+    /** False (with a message) when [layer] is locked (v1.7, rule L: or is in a locked folder). */
     fun ensureUnlocked(c: EditorController, layer: Layer): Boolean {
         if (layer.locked) { c.toast("Layer \"${layer.name}\" is locked"); return false }
+        if (layer.parentId != Layer.ROOT_ID) {
+            val layers = c.doc.layers
+            LayerTree.ancestors(layers, c.doc.indexOf(layer)).firstOrNull { layers[it].locked }?.let { c.toast(FolderLabels.locked(layers[it].name)); return false }
+        }
         return true
     }
 
@@ -302,6 +308,8 @@ object LayerOps {
      * actually shows.
      */
     fun addMask(c: EditorController, layer: Layer, fromSelection: Boolean) {
+        // v1.7: a folder has no mask (yet); this path would otherwise give it one.
+        if (layer.isFolder) { c.toast(FolderLabels.NO_MASK); return }
         if (layer.mask != null || !ensureUnlocked(c, layer)) return
         commitPendingWork(c)
         val useSelection = fromSelection && c.selection != null

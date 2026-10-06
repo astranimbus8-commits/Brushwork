@@ -91,7 +91,7 @@ fun TextWrapSheet(tool: TextTool) {
         }
         for (layer in sources) {
             SourceRow(
-                label = layer.name + if (!layer.visible) " (hidden)" else "",
+                label = layer.name + if (!c.doc.effectiveVisible(layer)) " (hidden)" else "",
                 selected = wrap.isOn && layer.id == wrap.sourceLayerId,
                 image = thumbs.content(layer),
                 aspect = aspect,

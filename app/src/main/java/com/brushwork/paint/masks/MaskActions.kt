@@ -92,9 +92,8 @@ object MaskEdits {
     /** False (with a message) when [layer] is gone, locked or hidden. */
     fun usable(c: EditorController, layer: Layer): Boolean {
         if (c.doc.indexOf(layer) < 0) return false
-        if (layer.locked) { c.toast("Layer \"${layer.name}\" is locked"); return false }
-        if (!layer.visible) { c.toast("Layer \"${layer.name}\" is hidden"); return false }
-        return true
+        // v1.7 (rule L): its own lock and eye, then its folders' (the same messages).
+        return c.checkUsable(layer)
     }
 
     /**

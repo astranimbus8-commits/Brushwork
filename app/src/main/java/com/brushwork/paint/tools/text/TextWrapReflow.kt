@@ -62,7 +62,7 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
             val item = itemOf(layer, data) ?: continue
             if (!item.wrapActive || item.wrap.sourceLayerId != source.id) continue
             // A locked text stays as it is (locked = no edits); a hidden one follows its picture.
-            if (layer === open || layer.locked) continue
+            if (layer === open || doc.effectiveLocked(layer)) continue
             reflow(layer, item, source)
         }
         if (decoded.size > (alive?.size ?: 0) + CACHE_SLACK) decoded.keys.retainAll(alive ?: emptySet())

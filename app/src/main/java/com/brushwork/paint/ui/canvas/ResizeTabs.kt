@@ -93,7 +93,8 @@ internal fun ColumnScope.ResizeImageTab(
 
     val newW = CanvasAdjustMath.toPixels(wPx)
     val newH = CanvasAdjustMath.toPixels(hPx)
-    val layerCount = doc.layers.size
+    // v1.7 (rule P): a folder has no bitmap to resample.
+    val layerCount = doc.pixelLayerCount
     val maskCount = doc.layers.count { it.mask != null }
     val bitmaps = layerCount + maskCount
     val error = CanvasOps.validateSize(newW, newH, bitmaps, budget)
@@ -231,7 +232,7 @@ internal fun ColumnScope.CanvasSizeTab(
     val edges = CanvasAdjustMath.edges(curW, curH, newW, newH, ox, oy)
     val grows = edges.any { it > 0 }
     val shrinks = edges.any { it < 0 }
-    val bitmaps = doc.layers.size + doc.layers.count { it.mask != null }
+    val bitmaps = doc.pixelLayerCount + doc.layers.count { it.mask != null }
     val error = CanvasOps.validateSize(newW, newH, bitmaps, budget)
     val shownFill = ColorModeOps.displayColor(fillColor, doc.colorMode)
 

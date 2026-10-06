@@ -108,7 +108,7 @@ private class StrokeCapture(private val c: EditorController, private val info: S
         // (The layer stopped being a vector layer meanwhile: a normal stroke.)
         if (!layer.isVectorLayer) return commitPixels()
         // Pixels and data must change together: a layer that can't take the data gets neither.
-        if (layer.locked || !layer.visible) return false
+        if (c.doc.effectiveLocked(layer) || !c.doc.effectiveVisible(layer)) return false
         val stroke = VStroke(
             id = 0,
             preset = info.preset,

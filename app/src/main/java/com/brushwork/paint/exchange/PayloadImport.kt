@@ -115,7 +115,8 @@ object PayloadImport {
         if (missing > 0) dropped["missing pictures"] = missing
         if (damaged > 0) dropped["damaged objects"] = damaged
         if (rasterized > 0) dropped["text and shape layers (kept as pixels: other canvas size)"] = rasterized
-        val outcome = ImportOutcome(layers = out.size, dropped = dropped)
+        // v1.7 (rule P): folders aren't counted as imported layers.
+        val outcome = ImportOutcome(layers = out.count { it.folder == null }, dropped = dropped)
         return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
     }
 
@@ -164,7 +165,7 @@ object PayloadImport {
     fun apply(c: EditorController, prepared: Prepared, replace: List<Layer> = emptyList(), colorMode: ColorMode? = null): ImportOutcome {
         val created = ImportLayers.insert(c, prepared.layers, LABEL, replace, colorMode)
         created.getOrNull(prepared.activeIndex)?.let { c.selectLayer(it) }
-        return ImportOutcome(layers = created.size, dropped = prepared.outcome.dropped)
+        return ImportOutcome(layers = created.count { !it.isFolder }, dropped = prepared.outcome.dropped)
     }
 
     /**

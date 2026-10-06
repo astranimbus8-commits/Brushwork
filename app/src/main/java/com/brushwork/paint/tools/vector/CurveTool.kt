@@ -1503,7 +1503,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun reopenablePathAt(p: Vec2): Pair<VPath, CurveKind>? {
         if (opening) return null
         val layer = controller.doc.activeLayer
-        if (!vectorTarget(layer) || layer.locked || !layer.visible) return null
+        if (!vectorTarget(layer) || controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) return null
         val tol = controller.docLength(PATH_HIT_DP)
         val hit = controller.vectors.hitTest(layer, p, tol) as? VPath ?: return null
         if (!hit.isCurveEditable || hit.subpaths[0].anchors.size < 2) return null

@@ -76,7 +76,7 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         if (c == null) {
             // A held brush that rests on an empty spot just keeps its color (the preview showed it).
             if (!hold) {
-                val where = if (settings.source == SampleSource.LAYER) "on this layer" else "on the canvas"
+                val where = if (layerSource) "on this layer" else "on the canvas"
                 controller.toast("Nothing to pick here: the area is transparent $where")
             }
             return
@@ -104,6 +104,12 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
      * Averaged color around document position (x, y) as opaque ARGB, or null when every sampled
      * pixel is transparent (or the point is outside the canvas).
      */
+    /**
+     * Samples the active layer's own pixels ("This layer"). v1.7 (rule C): a folder has none, so
+     * with a folder active the eyedropper reads the composite, as "Sample all layers" does.
+     */
+    private val layerSource: Boolean get() = settings.source == SampleSource.LAYER && !controller.activeLayer.isFolder
+
     fun sample(x: Float, y: Float): Int? {
         val doc = controller.doc
         if (!x.isFinite() || !y.isFinite()) return null
@@ -113,7 +119,7 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         val r = Rect(ix - half, iy - half, ix + half + 1, iy + half + 1)
         if (!r.intersect(0, 0, doc.width, doc.height)) return null
         val w = r.width(); val h = r.height()
-        if (settings.source == SampleSource.LAYER) {
+        if (layerSource) {
             controller.activeLayer.bitmap.getPixels(pixels, 0, w, r.left, r.top, w, h)
         } else {
             // Outside a gesture nothing guarantees the cached patch is current.

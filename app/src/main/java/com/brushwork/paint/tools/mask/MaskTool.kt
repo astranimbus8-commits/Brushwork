@@ -895,7 +895,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val c = selected ?: return false
         val layer = editLayer ?: return false
         if (spec == null) return false
-        if (layer.locked || !layer.visible) return false
+        if (controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) return false
         val t = controller.viewTransform
         val accepted = if (c is LinearMask) {
             val len = Vec2(c.x1 - c.x0, c.y1 - c.y0).length
@@ -964,7 +964,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         override fun setPosition(x: Float?, y: Float?) {
             val c = selected ?: return
             val layer = editLayer ?: return
-            if (layer.locked || !layer.visible) return
+            if (controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) return
             val started = stripBase ?: run {
                 val s = spec ?: return
                 val sc = s.components.firstOrNull { it.id == c.id } ?: return

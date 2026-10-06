@@ -12,6 +12,7 @@ import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
 import kotlinx.coroutines.CancellationException
@@ -106,10 +107,12 @@ internal object SelectionMasks {
 internal object PixelSnapshot {
     /**
      * An immutable copy to analyse off the main thread: the flattened canvas, or [layerBitmap].
+     * v1.7 (rule C): a folder's shared bitmap is never copied; with a folder active the magic
+     * wand and object select read the composite, as "Sample all layers" does.
      * MUST be called on the main thread; the caller recycles the result.
      */
     fun take(controller: EditorController, source: SampleSource, layerBitmap: Bitmap): Bitmap =
-        if (source == SampleSource.CANVAS) controller.compositor.renderFlattened()
+        if (source == SampleSource.CANVAS || layerBitmap === Layer.FOLDER_BITMAP) controller.compositor.renderFlattened()
         else layerBitmap.copy(Bitmap.Config.ARGB_8888, false)
 
     /**

@@ -24,13 +24,19 @@ object AdjustmentHistogram {
         val tmp = Document("histogram", "histogram", c.doc.width, c.doc.height)
         for (i in 0 until idx) {
             val l = c.doc.layers[i]
+            // v1.7 (rule P, site 24): folders are skipped and their layers measured flat (a
+            // child of a hidden folder hidden); inside an isolated folder this approximates
+            // what the effect works on.
+            if (l.isFolder) continue
             tmp.layers += Layer(-1L - i, l.name, l.bitmap).also { v ->
                 v.copyPropsFrom(l.props())
                 v.mask = l.mask
                 v.maskSpec = l.maskSpec
                 v.adjustment = l.adjustment
+                if (l.parentId != Layer.ROOT_ID) v.visible = c.doc.effectiveVisible(l)
             }
         }
+        if (tmp.layers.isEmpty()) return null
         var thumb: Bitmap? = null
         var mask: Bitmap? = null
         return try {

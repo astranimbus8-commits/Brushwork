@@ -52,9 +52,9 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
             c.layersVersion
             val layers = c.doc.layers
             val out = ArrayList<String>()
-            if (pdf && layers.any { it.visible && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
-            if (layers.any { it.visible && it.isAdjustmentLayer }) out += "Layers below an adjustment layer are exported as one picture"
-            if (layers.any { it.visible && it.clipping }) out += "Clipping groups are exported as pictures"
+            if (pdf && layers.any { !it.isFolder && c.doc.effectiveVisible(it) && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
+            if (layers.any { it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Layers below an adjustment layer are exported as one picture"
+            if (layers.any { it.clipping && !it.isFolder && c.doc.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
             out
         }
     }

@@ -459,7 +459,7 @@ internal class PreviewHost(private val controller: EditorController) {
         if (controller.viewTransform.zoom >= PIXELATED_ZOOM) return false
         val doc = controller.doc
         val index = doc.indexOf(layer)
-        if (index < 0 || !layer.visible || layer.opacity < 1f) return false
+        if (index < 0 || !doc.effectiveVisible(layer) || layer.opacity < 1f) return false
         if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping || (layer.alphaLocked && !asNewLayer)) return false
         if (layer.mask != null && layer.maskEnabled) return false
         if ((!asNewLayer && controller.editTargetOf(layer) != EditTarget.CONTENT) || doc.colorMode == ColorMode.MONOCHROME) return false

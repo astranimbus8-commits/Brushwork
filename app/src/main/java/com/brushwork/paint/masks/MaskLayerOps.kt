@@ -44,12 +44,12 @@ object MaskLayerOps {
         if (layer.mask == null) { c.toast("\"${layer.name}\" has no mask"); return false }
         val target = if (layer.isAdjustmentLayer) {
             val idx = c.doc.indexOf(layer)
-            (idx - 1 downTo 0).map { c.doc.layers[it] }.firstOrNull { it.visible && !it.isAdjustmentLayer }
+            (idx - 1 downTo 0).map { c.doc.layers[it] }.firstOrNull { !it.isFolder && c.doc.effectiveVisible(it) && !it.isAdjustmentLayer }
         } else layer
         if (target == null) { c.toast("There is no layer below to apply a filter to"); return false }
         // Said now, not after the filter was picked (the filter would be refused then, leaving
         // the selection and another active layer behind).
-        if (target.locked) { c.toast("Layer \"${target.name}\" is locked: unlock it to apply a filter through the mask"); return false }
+        if (c.doc.effectiveLocked(target)) { c.toast("Layer \"${target.name}\" is locked: unlock it to apply a filter through the mask"); return false }
         c.selectionFromMask(layer)
         if (c.selection == null) return false
         c.selectLayer(target)

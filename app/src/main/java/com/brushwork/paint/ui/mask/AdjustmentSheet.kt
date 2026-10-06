@@ -89,7 +89,7 @@ private fun AdjustmentBody(c: EditorController, layer: Layer, edit: AdjustmentEd
     if (edit.version < 0 || c.layersVersion < 0) return
     val spec = layer.adjustment ?: return
     val filter = AdjustmentEffects.filterOf(spec)
-    val enabled = !layer.locked
+    val enabled = !c.doc.effectiveLocked(layer)
     if (!enabled) {
         Text(
             "\"${layer.name}\" is locked: unlock it in the layers window to change its effect.",

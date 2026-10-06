@@ -327,7 +327,7 @@ class LiveAdjust(private val c: EditorController) {
     // ------------------------------------------------------------------ frames
 
     private fun canRun(layer: Layer): Boolean =
-        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && layer.visible && c.doc.indexOf(layer) >= 0 &&
+        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && c.doc.effectiveVisible(layer) && c.doc.indexOf(layer) >= 0 &&
             // v1.7: the live proxies split the flat stack; a document with folders adjusts at full
             // resolution until area A makes them tree-aware.
             !c.doc.hasFolders

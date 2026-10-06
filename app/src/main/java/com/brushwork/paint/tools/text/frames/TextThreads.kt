@@ -200,7 +200,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
             var id = newStoryId()
             while (!ids.add(id)) id = newStoryId()
             for (f in chain) {
-                if (f.layer.locked) continue
+                if (c.doc.effectiveLocked(f.layer)) continue
                 writes += FrameWrite(f.layer, f.item, f.item.copy(thread = f.thread.copy(storyId = id)))
             }
         }
@@ -223,7 +223,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         for ((k, f) in frames.withIndex()) {
             val th = f.thread
             if (k > 0 && th.index <= frames[k - 1].thread.index) return false
-            if (f.layer.locked) continue
+            if (c.doc.effectiveLocked(f.layer)) continue
             if (th.story !== s.text && th.story != s.text) return false
             val expected = if (k == 0) 0 else frames[k - 1].thread.end
             if (th.start != expected) return false
@@ -239,7 +239,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
     private fun heal(storyId: Long): Boolean {
         val frames = framesOf(storyId)
         val s = storyOf(frames) ?: return false
-        val chain = frames.map { FlowFrame(it.layer, it.item, pinned = it.layer.locked) }
+        val chain = frames.map { FlowFrame(it.layer, it.item, pinned = c.doc.effectiveLocked(it.layer)) }
         return reflow(s, chain)
     }
 
@@ -320,7 +320,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         val frames = framesOf(storyId)
         val s = storyOf(frames) ?: return false
         val chain = frames.map { f ->
-            if (f.layer.locked) FlowFrame(f.layer, f.item, pinned = true) else FlowFrame(f.layer, refreshedWrap(f.item))
+            if (c.doc.effectiveLocked(f.layer)) FlowFrame(f.layer, f.item, pinned = true) else FlowFrame(f.layer, refreshedWrap(f.item))
         }
         val changed = reflow(s, chain)
         seen = signatures(stories())
@@ -389,7 +389,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
             val old = olds[k]
             if (old == items[k]) continue
             // A locked frame can't change (its rev included, I9): the edit is refused.
-            if (layer != null && layer.locked) {
+            if (layer != null && c.doc.effectiveLocked(layer)) {
                 c.toast(lockedMessage(k))
                 return null
             }
@@ -398,7 +398,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         if (writes.isEmpty() && extra.isEmpty()) return chain.map { it.layer ?: return null }
         for (x in extra) {
             val l = x.layer
-            if (l != null && l.locked) {
+            if (l != null && c.doc.effectiveLocked(l)) {
                 c.toast(lockedMessage(before.indexOfFirst { it.layer === l }.coerceAtLeast(0)))
                 return null
             }

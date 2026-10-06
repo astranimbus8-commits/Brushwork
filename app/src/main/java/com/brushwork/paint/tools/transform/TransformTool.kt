@@ -206,8 +206,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val mask = layer.editingMask && layer.mask != null
             return when {
                 isPreparing -> "Preparing…"
-                layer.locked -> "The layer is locked"
-                !layer.visible -> "The layer is hidden"
+                controller.doc.effectiveLocked(layer) -> "The layer is locked"
+                !controller.doc.effectiveVisible(layer) -> "The layer is hidden"
                 !mask && layer.alphaLocked -> "Transparency is locked on this layer"
                 controller.selection != null -> "Touch the canvas to transform the selection"
                 mask -> "Touch the canvas to transform the layer mask"
@@ -1258,7 +1258,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     private fun deleteLifted(s: Session): Boolean {
         val layer = s.layer
-        if (layer.locked) {
+        if (controller.doc.effectiveLocked(layer)) {
             controller.toast("Layer \"${layer.name}\" is locked")
             return false
         }
@@ -1300,7 +1300,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (idx < 0) return placed
         if (!placed) {
             // Nothing was drawn (e.g. the picture lies off the canvas): the empty layer just goes.
-            if (!layer.locked) removePlacementLayer(layer, s.placementLabel)
+            if (!controller.doc.effectiveLocked(layer)) removePlacementLayer(layer, s.placementLabel)
             return doc.indexOf(layer) < 0
         }
         controller.structural {
@@ -1452,7 +1452,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val layer = controller.activeLayer
         if (report) {
             if (!controller.checkEditable(layer)) return null
-        } else if (layer.locked || !layer.visible) {
+        } else if (controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) {
             return null
         }
         val target = controller.editTargetOf(layer)
@@ -1524,7 +1524,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val st = transformState ?: run { endSession(s); return false }
         // The layer/bitmap went away underneath us (deleted, canvas resized...): nothing to bake.
         if (!isValid(s)) { cancelSession(s); return false }
-        if (s.layer.locked) {
+        if (controller.doc.effectiveLocked(s.layer)) {
             controller.toast("Layer \"${s.layer.name}\" is locked, so the transform was not applied")
             cancelSession(s)
             return false

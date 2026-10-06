@@ -19,6 +19,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextExport
 import com.brushwork.paint.tools.text.TextFont
@@ -144,7 +145,13 @@ class ExportSceneBuilder(
         val ownImage = HashMap<Layer, SceneImage>()
         val ownMask = HashMap<Layer, SceneImage>()
 
-        val topAdjustment = layers.indexOfLast { it.isAdjustmentLayer && it.visible && it.opacity > 0f }
+        // v1.7 (rule L): a layer is shown when its own eye AND every ancestor folder's are on
+        // (read on this snapshot of the list; top-level layers: their own eye, as in v1.6).
+        fun shown(index: Int): Boolean {
+            val l = layers[index]
+            return l.visible && (l.parentId == Layer.ROOT_ID || LayerTree.shownByAncestors(layers, index))
+        }
+        val topAdjustment = layers.indices.lastOrNull { layers[it].isAdjustmentLayer && shown(it) && layers[it].opacity > 0f } ?: -1
         var i = 0
         if (topAdjustment >= 0) {
             val upTo = layers.subList(0, topAdjustment + 1).toList()
@@ -158,11 +165,15 @@ class ExportSceneBuilder(
         while (i < layers.size) {
             coroutineContext.ensureActive()
             val base = layers[i]
+            // v1.7 (rule P): a folder has no pixels; its layers export flat (A exports groups).
+            if (base.isFolder) { i++; continue }
+            val baseIndex = i
             var j = i + 1
-            while (j < layers.size && layers[j].clipping && !layers[j].isAdjustmentLayer) j++
-            val clips = layers.subList(i + 1, j).filter { it.visible && it.opacity > 0f }
+            // A clipping run stays on its base's level and stops at a folder.
+            while (j < layers.size && layers[j].clipping && !layers[j].isAdjustmentLayer && !layers[j].isFolder && layers[j].parentId == base.parentId) j++
+            val clips = (i + 1 until j).filter { shown(it) && layers[it].opacity > 0f }.map { layers[it] }
             i = j
-            val hidden = !base.visible
+            val hidden = !shown(baseIndex)
             if (hidden && !options.includeHidden) continue
             if (base.isAdjustmentLayer) continue // hidden adjustment above the merged part: nothing to draw
             if (clips.isNotEmpty()) {
@@ -180,7 +191,7 @@ class ExportSceneBuilder(
             plans += Plan(key("layer"), base.name, base.opacity, base.blend(), hidden, mask, content)
             yield()
         }
-        if (options.format == VectorFormat.PDF && layers.any { it.visible && it.blendMode == LayerBlendMode.ADD }) {
+        if (options.format == VectorFormat.PDF && layers.indices.any { !layers[it].isFolder && shown(it) && layers[it].blendMode == LayerBlendMode.ADD }) {
             notes += "Add (Glow) is exported as Screen in PDF"
         }
 
@@ -421,12 +432,18 @@ class ExportSceneBuilder(
         val w = doc.width
         val h = doc.height
         val dpi = doc.dpi
+        val ids = layers.mapTo(HashSet()) { it.id }
         val views = layers.mapIndexed { idx, l ->
             Layer(l.id, l.name, l.bitmap).also { v ->
                 v.copyPropsFrom(l.props())
                 v.mask = l.mask
                 v.adjustment = l.adjustment
                 v.maskSpec = l.maskSpec
+                // v1.7 (I11, site 23): the tree as far as it is in the list (a folder outside
+                // it: top level), so the temporary document composites folders like the canvas.
+                v.folder = l.folder
+                v.folderOpen = l.folderOpen
+                v.parentId = if (l.parentId in ids) l.parentId else Layer.ROOT_ID
                 // A hidden group (exported with "Include hidden layers") still shows its content:
                 // the exported group is the one hidden.
                 if (opaqueBase && idx == 0) { v.opacity = 1f; v.blendMode = LayerBlendMode.NORMAL; v.clipping = false; v.visible = true }
@@ -596,6 +613,7 @@ class ExportSceneBuilder(
         extra: MutableList<SceneImage>,
     ): PayloadLayer {
         val kind = when {
+            layer.isFolder -> PayloadKind.FOLDER
             layer.isAdjustmentLayer -> PayloadKind.ADJUSTMENT
             layer.isVectorLayer -> PayloadKind.VECTOR
             layer.textData != null -> PayloadKind.TEXT
@@ -605,7 +623,8 @@ class ExportSceneBuilder(
         // Pixels: what the file already holds, else a picture for the payload only. Vector
         // layers are rendered again from their objects; adjustment layers have none.
         var image: SceneImage? = null
-        if (kind != PayloadKind.VECTOR && kind != PayloadKind.ADJUSTMENT) {
+        // v1.7 (rule P): a folder has no pixels of its own.
+        if (kind != PayloadKind.VECTOR && kind != PayloadKind.ADJUSTMENT && kind != PayloadKind.FOLDER) {
             image = ownImage[layer] ?: layerImage(layer, "pimg")?.also { extra += it }
         }
         var maskImage: SceneImage? = null
@@ -632,6 +651,10 @@ class ExportSceneBuilder(
             shapeData = data.shape,
             maskSpec = data.maskSpec,
             adjustment = data.adjustment,
+            // v1.7 (I11): the tree (every layer is written, so the ids resolve on import).
+            parentId = layer.parentId,
+            folder = layer.folder,
+            folderOpen = layer.folderOpen,
         )
     }
 

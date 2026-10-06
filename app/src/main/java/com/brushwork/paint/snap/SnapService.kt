@@ -91,7 +91,7 @@ class SnapService(private val controller: EditorController) {
 
     /** Layers whose content can be snapped to: visible, not fully transparent, not in [exclude]. */
     fun candidateLayers(exclude: Collection<Layer> = emptyList()): List<Layer> =
-        controller.doc.layers.filter { l -> l.visible && l.opacity > 0f && exclude.none { it === l } }
+        controller.doc.layers.filter { l -> !l.isFolder && controller.doc.effectiveVisible(l) && l.opacity > 0f && exclude.none { it === l } }
 
     /**
      * Starts finding the bounds and lines of the layers that can be snapped to (except

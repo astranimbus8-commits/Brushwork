@@ -1675,7 +1675,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * then be covered (a hidden active layer always uses the overlay: inside it, it would not show).
      */
     private fun newLayerPreviewInOverlay(layer: Layer): Boolean {
-        if (!layer.visible) return true
+        if (!controller.doc.effectiveVisible(layer)) return true
         if (isPlain(layer)) return false
         val layers = controller.doc.layers
         val index = controller.doc.indexOf(layer)
@@ -1696,7 +1696,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * shows it as it is.
      */
     private fun liveBrushForNewLayer(layer: Layer): Boolean =
-        layer.visible && !layer.locked && !layer.alphaLocked && controller.editTargetOf(layer) == EditTarget.CONTENT && isPlain(layer)
+        controller.doc.effectiveVisible(layer) && !controller.doc.effectiveLocked(layer) && !layer.alphaLocked && controller.editTargetOf(layer) == EditTarget.CONTENT && isPlain(layer)
 
     /**
      * The preview while a shape layer is edited: the layer's pixels are hidden and the edited
@@ -1744,7 +1744,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (controller.viewTransform.zoom >= OVERLAY_MAX_ZOOM) return false
         val doc = controller.doc
         val index = doc.indexOf(layer)
-        if (index < 0 || !layer.visible || layer.opacity < 1f) return false
+        if (index < 0 || !doc.effectiveVisible(layer) || layer.opacity < 1f) return false
         if (layer.blendMode != LayerBlendMode.NORMAL || layer.clipping) return false
         if (layer.mask != null && layer.maskEnabled) return false
         if (doc.colorMode == ColorMode.MONOCHROME || controller.selection != null) return false
@@ -1910,7 +1910,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * watercolor tool that moves pixels).
      */
     private fun liveBrushOnVector(layer: Layer): Boolean {
-        if (layer !== controller.doc.activeLayer || !layer.visible || layer.locked) return false
+        if (layer !== controller.doc.activeLayer || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
         if (controller.editTargetOf(layer) != EditTarget.CONTENT) return false
         return !brushMovesPixels()
     }
@@ -1941,7 +1941,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      */
     private fun openShapeObjectAt(p: Vec2, skip: Long?): Boolean {
         val layer = controller.doc.activeLayer
-        if (!isVectorTarget(layer) || !layer.visible || layer.locked) return false
+        if (!isVectorTarget(layer) || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
         val content = layer.vector ?: return false
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         for (i in content.objects.indices.reversed()) {
@@ -2329,7 +2329,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val tol = controller.docLength(HIT_TOLERANCE_DP)
         val active = doc.activeLayer
         fun hits(l: Layer): Boolean {
-            if (l === skip || !l.isShapeLayer || !l.visible || l.locked) return false
+            if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
             val o = decoded(l) ?: return false
             return ShapeOutlines.hits(o, p, tol)
         }

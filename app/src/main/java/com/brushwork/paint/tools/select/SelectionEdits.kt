@@ -13,6 +13,8 @@ import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.FolderComposite
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
@@ -94,7 +96,8 @@ object SelectionEdits {
     /** Selects the active layer's opaque pixels (alpha = selection strength), combined by [mode]. */
     fun selectLayerOpacity(controller: EditorController, mode: SelectionMode) {
         val alpha = try {
-            alphaMask(controller.activeLayer.bitmap)
+            // v1.7 (rule C): a folder selects the opacity of its layers' composite.
+            withPixelsOf(controller, controller.activeLayer) { alphaMask(it) }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to select the layer")
             return
@@ -210,7 +213,8 @@ object SelectionEdits {
         val src = controller.activeLayer
         controller.currentTool.onDeactivate()
         val layer = try {
-            controller.addLayerWithContent("${src.name} copy", "Copy to new layer") { c -> drawSelected(c, src.bitmap, sel) }
+            // v1.7 (rule C): from a folder, the selected part of its layers' composite.
+            withPixelsOf(controller, src) { px -> controller.addLayerWithContent("${src.name} copy", "Copy to new layer") { c -> drawSelected(c, px, sel) } }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for another layer")
             null
@@ -278,6 +282,23 @@ object SelectionEdits {
      * paint, so "src then mask with DST_IN" would be a no-op; painting the source (as a shader)
      * through the mask gives the masked pixels instead.
      */
+    /**
+     * [block] on [layer]'s pixels. v1.7 (rule C): a folder has none of its own, so [block] gets
+     * the composite of its layers (`FolderComposite.renderBlock`, in the document's color mode),
+     * freed afterwards.
+     */
+    private inline fun <T> withPixelsOf(controller: EditorController, layer: Layer, block: (Bitmap) -> T): T {
+        if (!layer.isFolder) return block(layer.bitmap)
+        val doc = controller.doc
+        val composite = FolderComposite.renderBlock(doc, layer)
+        try {
+            if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(composite, doc.bounds, doc.colorMode)
+            return block(composite)
+        } finally {
+            composite.recycle()
+        }
+    }
+
     private fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
         val paint = Paint().apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
         c.save()

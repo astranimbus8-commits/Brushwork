@@ -45,7 +45,7 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
 
     /** Shows [spec] / [opacity] / [name] now (no step yet). */
     fun preview(spec: AdjustmentSpec? = layer.adjustment, opacity: Float = layer.opacity, name: String = layer.name) {
-        if (c.doc.indexOf(layer) < 0 || layer.locked) return
+        if (c.doc.indexOf(layer) < 0 || c.doc.effectiveLocked(layer)) return
         val o = if (opacity.isFinite()) opacity.coerceIn(0f, 1f) else layer.opacity
         if (spec == layer.adjustment && o == layer.opacity && name == layer.name) return
         if (!registered) {

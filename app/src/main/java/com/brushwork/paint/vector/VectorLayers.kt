@@ -1097,12 +1097,11 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     // ------------------------------------------------------------------ helpers
 
-    /** False (with the controller's message) when [layer] is locked or hidden. */
-    private fun usable(layer: Layer): Boolean {
-        if (layer.locked) { c.toast("Layer \"${layer.name}\" is locked"); return false }
-        if (!layer.visible) { c.toast("Layer \"${layer.name}\" is hidden"); return false }
-        return true
-    }
+    /**
+     * False (with the controller's message) when [layer] is locked or hidden. v1.7 (rule L): its
+     * own lock and eye, then its folders' (the same messages).
+     */
+    private fun usable(layer: Layer): Boolean = c.checkUsable(layer)
 
     private fun roundOut(r: RectF): Rect =
         if (r.isEmpty) Rect() else Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt())

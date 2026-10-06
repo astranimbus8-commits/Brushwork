@@ -464,7 +464,7 @@ class ExchangeUiState(
         val layers = controller.doc.layers
         val out = ArrayList<Layer>()
         for (l in layers) {
-            val plain = l.mask == null && l.dataSnapshot().isEmpty && !l.locked
+            val plain = !l.isFolder && l.mask == null && l.dataSnapshot().isEmpty && !controller.doc.effectiveLocked(l)
             if (!plain) continue
             if (controller.isEmptyPlainLayer(l)) out += l
             else if (includeBackground && l === layers.first()) out += l

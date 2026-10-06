@@ -325,7 +325,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         val active = doc.activeLayer
         val box = RectF()
         fun hits(l: Layer): Boolean {
-            if (!l.isTextLayer || !l.visible || l.locked) return false
+            if (!l.isTextLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
             controller.textThreads.frameOf(l)?.let { frame ->
                 FrameGeometry.outerRect(frame, box)
                 return p.x >= box.left - tol && p.x <= box.right + tol && p.y >= box.top - tol && p.y <= box.bottom + tol
@@ -652,9 +652,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
 
     /**
      * Layers the current text can wrap around, top first: every layer but text layers,
-     * adjustment layers and the text's own layer. A picture may be above or below the text.
+     * adjustment layers and the text's own layer (v1.7: and folders, which have no pixels). A
+     * picture may be above or below the text.
      */
-    fun wrapSources(): List<Layer> = doc.layers.asReversed().filter { it !== editingLayer && !it.isTextLayer && !it.isAdjustmentLayer }
+    fun wrapSources(): List<Layer> = doc.layers.asReversed().filter { it !== editingLayer && !it.isTextLayer && !it.isAdjustmentLayer && !it.isFolder }
 
     /** The layer the current text wraps around (null when wrap is off or that layer was deleted). */
     fun wrapSourceLayer(): Layer? {
@@ -687,7 +688,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         if (!box.intersect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())) return null
         val area = box.width() * box.height()
         for (l in wrapSources()) {
-            if (!l.visible) continue
+            if (!doc.effectiveVisible(l)) continue
             val b = contours.outline(l)?.bounds ?: continue
             val inter = RectF(b)
             if (!inter.intersect(box)) continue
