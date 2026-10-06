@@ -93,22 +93,19 @@ object ArrayCodec {
 
     /** Writes [source] as a container to [out] (left open). Blocking: call on IO. */
     fun writeSource(out: OutputStream, source: ArraySourceBlob) {
+        if (source is ArraySourceBlob.Pixels) {
+            val p = source.pixels
+            val bmp = p.bitmap
+            val length = LayerCodec.byteLength(bmp.width, bmp.height)
+            val bytes = ByteArray(length)
+            LayerCodec.copyPixels(bmp, bytes)
+            writePixels(out, bmp.width, bmp.height, p.left, p.top, bytes, length)
+            return
+        }
         val data = DataOutputStream(out)
-        data.write(MAGIC.toByteArray(Charsets.US_ASCII))
-        data.writeByte(VERSION)
+        writeHeader(data)
         when (source) {
-            is ArraySourceBlob.Pixels -> {
-                data.writeByte(KIND_PIXELS)
-                val p = source.pixels
-                data.writeInt(p.left)
-                data.writeInt(p.top)
-                data.flush()
-                val bmp = p.bitmap
-                val length = LayerCodec.byteLength(bmp.width, bmp.height)
-                val bytes = ByteArray(length)
-                LayerCodec.copyPixels(bmp, bytes)
-                LayerCodec.writeTo(out, bmp.width, bmp.height, bytes, length)
-            }
+            is ArraySourceBlob.Pixels -> Unit // above
             is ArraySourceBlob.Vector -> {
                 data.writeByte(KIND_VECTOR)
                 data.write(VectorCodec.encode(source.content))
@@ -117,6 +114,27 @@ object ArrayCodec {
             is ArraySourceBlob.Shape -> writeJson(data, KIND_SHAPE, source.shapeData)
         }
         data.flush()
+    }
+
+    /**
+     * A PIXELS container from pixels already copied out of the source bitmap ([data], `width ×
+     * height × 4` bytes as `LayerCodec.copyPixels` gives them): the repository copies on the main
+     * thread and compresses on IO, as for layer pixels. Blocking: call on IO.
+     */
+    internal fun writePixels(out: OutputStream, width: Int, height: Int, left: Int, top: Int, data: ByteArray, length: Int) {
+        val header = DataOutputStream(out)
+        writeHeader(header)
+        header.writeByte(KIND_PIXELS)
+        header.writeInt(left)
+        header.writeInt(top)
+        header.flush()
+        LayerCodec.writeTo(out, width, height, data, length)
+        out.flush()
+    }
+
+    private fun writeHeader(data: DataOutputStream) {
+        data.write(MAGIC.toByteArray(Charsets.US_ASCII))
+        data.writeByte(VERSION)
     }
 
     private fun writeJson(data: DataOutputStream, kind: Int, text: String) {

@@ -7,17 +7,8 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
 import com.brushwork.paint.ImageImport
-import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
-import com.brushwork.paint.filters.FilterRegistry
-import com.brushwork.paint.masks.AdjustmentCodec
-import com.brushwork.paint.masks.MaskCodec
 import com.brushwork.paint.model.Document
-import com.brushwork.paint.model.Layer
-import com.brushwork.paint.model.LayerProps
-import com.brushwork.paint.tools.text.TextCodec
-import com.brushwork.paint.vector.CorruptVectorException
-import com.brushwork.paint.vector.VectorCodec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -100,7 +91,7 @@ class ProjectRepository(private val context: Context) {
                 width = dto.width,
                 height = dto.height,
                 dpi = dto.dpi,
-                layerCount = dto.layers.size,
+                layerCount = dto.layers.count { it.folder == null },
                 modifiedAt = dto.modifiedAt,
                 thumbnail = File(dir, ProjectFormat.THUMB_FILE).takeIf { it.isFile },
             )
@@ -260,109 +251,13 @@ class ProjectRepository(private val context: Context) {
         doc.grid = dto.grid
         doc.ruler = dto.ruler
 
-        val scratch = ByteArray(LayerCodec.byteLength(w, h))
-        val allocated = ArrayList<Bitmap>()
-        try {
-            for (entry in dto.layers) {
-                val bitmap = BitmapUtils.createLayerBitmap(w, h).also { allocated += it }
-                readPixels(dir, entry.contentFileName, bitmap, scratch, "Layer \"${entry.props.name}\"")
-                val layer = Layer(entry.id, entry.props.name, bitmap)
-                layer.copyPropsFrom(sanitized(entry.props))
-                layer.textData = entry.textData
-                layer.shapeData = entry.shapeData
-                if (entry.hasMask) {
-                    val mask = BitmapUtils.createLayerBitmap(w, h).also { allocated += it }
-                    readPixels(dir, entry.maskFileName, mask, scratch, "The mask of layer \"${entry.props.name}\"")
-                    layer.mask = mask
-                }
-                readEditableData(dir, entry, layer, doc.loadWarnings)
-                doc.layers += layer
-                doc.ensureNextLayerIdAbove(entry.id)
-            }
-        } catch (e: Throwable) {
-            allocated.forEach { it.recycle() }
-            throw e
-        }
-        sanitizeAdjustmentClipping(doc.layers)
-        reserveWrapSourceIds(doc)
+        // Layer entries and saved selections: LayerEntries (v1.7 X3; load order in §4.3).
+        LayerEntries.readLayers(dir, dto, doc)
+        LayerEntries.readSelections(dir, dto, doc)
+        doc.symmetry = dto.symmetry.sanitized()
         doc.activeLayerIndex = dto.activeLayerIndex.coerceIn(0, doc.layers.lastIndex)
         for (layer in doc.layers) layer.savedVersion = layer.contentVersion
         return doc
-    }
-
-    /**
-     * The v1.5 editable data of [entry] (vector content, mask spec, adjustment). Data that can't
-     * be read affects only its own layer: it loads without it (its pixels are intact; an
-     * adjustment layer becomes a plain empty layer) and a message goes to [warnings].
-     */
-    private fun readEditableData(dir: File, entry: LayerEntryDto, layer: Layer, warnings: MutableList<String>) {
-        val name = entry.props.name
-        entry.vectorFile?.let { file ->
-            layer.vector = try {
-                if (!ProjectFormat.isVectorFile(file)) throw CorruptVectorException("invalid file name")
-                VectorCodec.decode(File(dir, file).readBytes())
-            } catch (e: Exception) {
-                Log.w(TAG, "vector data of layer $name unreadable", e)
-                warnings += "The vector objects of \"$name\" could not be read: it opened as a regular layer."
-                null
-            }
-        }
-        entry.maskSpec?.let { s ->
-            val spec = MaskCodec.decode(s)
-            if (spec != null && layer.mask != null) layer.maskSpec = spec
-            else warnings += "The editable mask of \"$name\" could not be read: it opened as a painted mask."
-        }
-        entry.adjustment?.let { s ->
-            val spec = AdjustmentCodec.decode(s)
-            when {
-                spec == null -> warnings += "The effect of adjustment layer \"$name\" could not be read: it has no effect now."
-                else -> {
-                    layer.adjustment = spec
-                    // Kept (an update may know it) and drawn as pass-through meanwhile.
-                    if (FilterRegistry.byId(spec.filterId) == null) warnings += "Adjustment layer \"$name\" uses an unknown effect: it shows no effect."
-                }
-            }
-        }
-    }
-
-    /**
-     * A text wrapped around a picture that was deleted keeps that picture's layer id (v1.5 §4.1:
-     * it keeps its outline, and its sheet says the layer is gone). Ids are only made unique above
-     * the layers that were saved, so a new layer could take the deleted picture's id and the text
-     * would follow that layer: the ids such texts name are reserved as well.
-     */
-    private fun reserveWrapSourceIds(doc: Document) {
-        for (layer in doc.layers) {
-            val source = TextCodec.wrapSourceId(layer.textData)
-            if (source in 1..MAX_RESERVED_LAYER_ID) doc.ensureNextLayerIdAbove(source)
-        }
-    }
-
-    /**
-     * Adjustment layers are never part of a clipping group: a clipping flag on one, or on the
-     * layer right above one, is cleared (the compositor already ignores them).
-     */
-    private fun sanitizeAdjustmentClipping(layers: List<Layer>) {
-        for (i in layers.indices) {
-            val l = layers[i]
-            if (!l.clipping) continue
-            if (l.isAdjustmentLayer || (i > 0 && layers[i - 1].isAdjustmentLayer)) l.clipping = false
-        }
-    }
-
-    /** Layer properties with a usable opacity (a damaged or hand-edited file may hold NaN). */
-    private fun sanitized(props: LayerProps): LayerProps {
-        val o = props.opacity
-        return if (o.isFinite() && o in 0f..1f) props else props.copy(opacity = if (o.isNaN()) 1f else o.coerceIn(0f, 1f))
-    }
-
-    private fun readPixels(dir: File, fileName: String, into: Bitmap, scratch: ByteArray, what: String) {
-        if (!ProjectFormat.isPixelFile(fileName)) throw CorruptProjectException("$what refers to an invalid file")
-        try {
-            LayerCodec.readInto(File(dir, fileName), into, scratch)
-        } catch (e: CorruptProjectException) {
-            throw CorruptProjectException("$what is damaged or missing (${e.message})", e)
-        }
     }
 
     /**
@@ -383,11 +278,9 @@ class ProjectRepository(private val context: Context) {
             // From here on we are on the caller's (main) thread except inside withContext(IO).
             val w = doc.width
             val h = doc.height
-            val length = LayerCodec.byteLength(w, h)
-            val sizeChanged = previous == null || previous.width != w || previous.height != h
-            val previousEntries = previous?.layers?.associateBy { it.id }.orEmpty()
             val revision = (previous?.revision ?: 0L) + 1
             val layers = doc.layers.toList()
+            val selections = doc.savedSelections
             val meta = ProjectFileDto(
                 formatVersion = ProjectFormat.writtenVersion(layers),
                 id = id,
@@ -402,63 +295,17 @@ class ProjectRepository(private val context: Context) {
                 grid = doc.grid,
                 ruler = doc.ruler,
                 revision = revision,
+                symmetry = doc.symmetry,
+                nextSelectionId = doc.nextSelectionId,
             )
+            // Layer entries: LayerEntries.Writer (v1.7 X3). Null = the document was resized
+            // while we were writing: the next save retries.
+            val writer = LayerEntries.Writer(dir, doc, revision, existing, previous)
             val entries = ArrayList<LayerEntryDto>(layers.size)
-            val savedVersions = ArrayList<Pair<Layer, Long>>()
-            var scratch: ByteArray? = null
-            for (layer in layers) {
-                val mask = layer.mask
-                val props = layer.props()
-                val prev = previousEntries[layer.id]
-                val vector = layer.vector
-                // Specs are small: stored inside project.json (a damaged one only affects its layer).
-                val maskSpecText = if (mask != null) layer.maskSpec?.let { MaskCodec.encode(it) } else null
-                val adjustmentText = layer.adjustment?.let { AdjustmentCodec.encode(it) }
-                val prevVector = prev?.vectorFile
-                if (prev != null && !sizeChanged &&
-                    layer.contentVersion == layer.savedVersion &&
-                    prev.hasMask == (mask != null) &&
-                    prev.contentFileName in existing &&
-                    (mask == null || prev.maskFileName in existing) &&
-                    (vector == null || (prevVector != null && prevVector in existing))
-                ) {
-                    entries += LayerEntryDto(
-                        layer.id, props.name, props, mask != null, prev.contentFileName, if (mask != null) prev.maskFileName else null,
-                        layer.textData, layer.shapeData, if (vector != null) prevVector else null, maskSpecText, adjustmentText,
-                    )
-                    continue
-                }
-                // The document may have been resized while we were writing: the next save retries.
-                if (!fits(doc, w, h, layer.bitmap)) return@withLock
-                val version = layer.contentVersion
-                val buffer = scratch ?: ByteArray(length).also { scratch = it }
-                val contentName = ProjectFormat.layerFile(layer.id, revision)
-                LayerCodec.copyPixels(layer.bitmap, buffer)
-                withContext(Dispatchers.IO) { LayerCodec.write(File(dir, contentName), w, h, buffer, length) }
-                var maskName: String? = null
-                if (mask != null) {
-                    if (!fits(doc, w, h, mask)) return@withLock
-                    maskName = ProjectFormat.maskFile(layer.id, revision)
-                    LayerCodec.copyPixels(mask, buffer)
-                    withContext(Dispatchers.IO) { LayerCodec.write(File(dir, maskName), w, h, buffer, length) }
-                }
-                // The vector content is immutable: encoded off the main thread, written atomically.
-                var vectorName: String? = null
-                if (vector != null) {
-                    val name = ProjectFormat.vectorFile(layer.id, revision)
-                    val bytes = withContext(Dispatchers.Default) { VectorCodec.encode(vector) }
-                    withContext(Dispatchers.IO) { ProjectFormat.writeAtomically(File(dir, name)) { it.write(bytes) } }
-                    vectorName = name
-                }
-                entries += LayerEntryDto(
-                    layer.id, props.name, props, mask != null, contentName, maskName,
-                    layer.textData, layer.shapeData, vectorName, maskSpecText, adjustmentText,
-                )
-                savedVersions += layer to version
-            }
-            @Suppress("UNUSED_VALUE")
-            scratch = null // let the (possibly large) buffer be collected before the slower steps
-            val dto = meta.copy(layers = entries)
+            for (layer in layers) entries += writer.entryFor(layer) ?: return@withLock
+            writer.release() // let the (possibly large) buffer be collected before the slower steps
+            val selectionEntries = LayerEntries.writeSelections(dir, selections, existing, previous)
+            val dto = meta.copy(layers = entries, selections = selectionEntries)
             withContext(Dispatchers.IO) {
                 ProjectFormat.write(dir, dto)
                 ProjectFormat.deleteUnreferenced(dir, dto)
@@ -473,13 +320,10 @@ class ProjectRepository(private val context: Context) {
                 }
             }
             // Only now is the new content referenced by project.json.
-            for ((layer, version) in savedVersions) layer.savedVersion = version
+            for ((layer, version) in writer.savedVersions) layer.savedVersion = version
         }
         notifyChanged()
     }
-
-    private fun fits(doc: Document, w: Int, h: Int, bitmap: Bitmap): Boolean =
-        doc.width == w && doc.height == h && !bitmap.isRecycled && bitmap.width == w && bitmap.height == h
 
     // ------------------------------------------------------------------ manage
 
@@ -505,7 +349,7 @@ class ProjectRepository(private val context: Context) {
                 try {
                     if (!staging.mkdirs()) throw IOException("Could not create the copy")
                     for (name in ProjectFormat.referencedFiles(dto)) {
-                        if (!ProjectFormat.isPixelFile(name) && !ProjectFormat.isVectorFile(name)) throw CorruptProjectException("The artwork refers to an invalid file")
+                        if (!ProjectFormat.isDataFile(name)) throw CorruptProjectException("The artwork refers to an invalid file")
                         File(src, name).copyTo(File(staging, name), overwrite = true)
                     }
                     File(src, ProjectFormat.THUMB_FILE).takeIf { it.isFile }?.copyTo(File(staging, ProjectFormat.THUMB_FILE), overwrite = true)
@@ -571,7 +415,7 @@ class ProjectRepository(private val context: Context) {
             try {
                 Compositor(doc) { null }.renderFlattened() to doc.name
             } finally {
-                for (layer in doc.layers) { layer.bitmap.recycle(); layer.mask?.recycle() }
+                for (layer in doc.layers) { layer.recycleBitmaps(); layer.array?.pixels?.bitmap?.recycle() }
             }
         }
     }
@@ -648,9 +492,6 @@ class ProjectRepository(private val context: Context) {
         const val MAX_SIDE = CanvasLimits.MAX_SIDE
         private const val MAX_NAME = 100
         private const val DUP_PREFIX = ".dup-"
-
-        /** Wrap source ids above this are not reserved (damaged data must not exhaust the id range). */
-        private const val MAX_RESERVED_LAYER_ID = Int.MAX_VALUE.toLong()
 
         /** Size of the stored thumbnail (longest side [ProjectFormat.THUMB_SIZE]), like `Compositor.renderThumbnail`. */
         internal fun thumbnailSize(w: Int, h: Int): Pair<Int, Int> {

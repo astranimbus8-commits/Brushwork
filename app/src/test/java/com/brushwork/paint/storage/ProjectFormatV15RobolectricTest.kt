@@ -129,10 +129,11 @@ class ProjectFormatV15RobolectricTest {
         assertEquals(1, projectJson(id).getValue("formatVersion").jsonPrimitive.int)
         // Newer than this version: refused with the existing message.
         val f = File(dirOf(id), ProjectFormat.PROJECT_FILE)
-        f.writeText(f.readText().replace("\"formatVersion\": 1", "\"formatVersion\": 3").replace("\"formatVersion\":1", "\"formatVersion\":3"))
+        val newer = ProjectFormat.VERSION + 1
+        f.writeText(f.readText().replace("\"formatVersion\": 1", "\"formatVersion\": $newer").replace("\"formatVersion\":1", "\"formatVersion\":$newer"))
         try {
             repo.load(id)
-            fail("a format 3 project was opened")
+            fail("a project of a newer format was opened")
         } catch (e: IOException) {
             assertTrue(e.message!!.contains("newer version"))
         }
