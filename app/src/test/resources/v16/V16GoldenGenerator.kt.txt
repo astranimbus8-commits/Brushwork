@@ -1,0 +1,98 @@
+package com.brushwork.paint.qa17
+
+import android.graphics.Matrix
+import com.brushwork.paint.qa16.V15Fixtures
+import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.LetterScaleSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.frames.FrameFixtures
+import com.brushwork.paint.tools.text.frames.FrameFixtures.linkFrame
+import com.brushwork.paint.tools.text.frames.FrameFixtures.newFrame
+import com.brushwork.paint.tools.text.frames.TextFrameTool
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapePoints
+import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tap
+import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tool
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VectorContent
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.File
+
+/**
+ * Made the I13 goldens of v1.7 (`src/test/resources/v16/`), run ONCE on the v1.6 sources
+ * (`c72ea66`, before any v1.7 change) and kept here as text so it never runs again: the two v1.5
+ * projects of `qa16/v15` loaded by v1.6, every text and shape re-encoded by v1.6's codecs, plus
+ * the v1.6 data (two linked text frames, a letter-scaled text, a Path-tool curve and a shape with
+ * its own points), saved by v1.6's `ProjectRepository`. Its `project.json` and vector files are
+ * what v1.6 writes for content that uses no v1.7 feature; `I13GoldensRobolectricTest` checks that
+ * v1.7 re-encodes them byte for byte.
+ */
+@RunWith(RobolectricTestRunner::class)
+class V16GoldenGenerator {
+    private val app get() = RuntimeEnvironment.getApplication()
+
+    @Test
+    fun generate() {
+        val out = File("build/v16-goldens").apply { deleteRecursively(); mkdirs() }
+        for ((id, name) in listOf(V15Fixtures.PLAIN to "plain", V15Fixtures.ADJUST to "adjust")) {
+            V15Fixtures.install(app, id)
+            val repo = ProjectRepository(app)
+            val doc = runBlocking { repo.load(id) }
+            val c = Smoke.controller(app, doc)
+            c.viewTransform.set(Matrix())
+            c.snapping.enabled = false
+            assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering })
+            // Every text and shape in v1.6's encoding; one shape with its own points.
+            for (layer in doc.layers) {
+                layer.textData = layer.textData?.let { TextCodec.encode(TextCodec.decode(it)!!) }
+                layer.shapeData = layer.shapeData?.let { s ->
+                    val shape = ShapeCodec.decode(s)!!
+                    val pts = ShapePoints.fromRegular(shape.type, shape.outlineParams).mapIndexed { i, p -> if (i == 1) p.copy(smooth = true) else p }
+                    ShapeCodec.encode(shape.copy(points = pts))
+                }
+            }
+            // Two linked text frames.
+            val background = doc.layers[0]
+            c.selectLayer(background)
+            c.selectTool(ToolId.TEXT_FRAMES)
+            val frames = c.tools.getValue(ToolId.TEXT_FRAMES) as TextFrameTool
+            frames.storyPreviewMs = 0L
+            frames.dragPreviewMs = 0L
+            val s = FrameFixtures.Setup(c, background, background, frames)
+            val f1 = newFrame(s, 20f, 300f, 180f, 400f)
+            linkFrame(s, f1, 220f, 300f, 380f, 400f)
+            // A letter-scaled text.
+            c.selectLayer(background)
+            c.selectTool(ToolId.TEXT)
+            val text = c.tools.getValue(ToolId.TEXT) as TextTool
+            text.startTextAt(480f, 360f)
+            text.setText("ELTON JOHN")
+            text.setSizePx(30f)
+            text.updateSpec { it.copy(letterScale = LetterScaleSpec(smallestPercent = 50f)) }
+            text.commit()
+            // A Path-tool curve on a new vector layer.
+            c.addVectorLayer()
+            assertTrue(c.activeLayer.isVectorLayer)
+            val path = c.tool(ToolId.PATH)
+            for ((x, y) in listOf(40f to 280f, 120f to 230f, 220f to 290f, 330f to 240f, 420f to 300f)) c.tap(x, y)
+            path.commit()
+            assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering })
+            assertTrue("a Path curve", (c.activeLayer.vector ?: VectorContent.EMPTY).objects.filterIsInstance<VPath>().single().spline != null)
+            runBlocking { repo.save(doc, null) }
+            val dir = File(app.filesDir, "projects/$id")
+            val target = File(out, name).apply { mkdirs() }
+            File(dir, ProjectFormat.PROJECT_FILE).copyTo(File(out, "project-$name.json"), overwrite = true)
+            dir.listFiles()!!.filter { ProjectFormat.isVectorFile(it.name) }.forEach { it.copyTo(File(target, it.name), overwrite = true) }
+            println("[v16-goldens] $id -> ${File(out, "project-$name.json").absolutePath}")
+        }
+    }
+}
