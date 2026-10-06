@@ -14,6 +14,7 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.util.zip.Deflater
@@ -126,22 +127,33 @@ internal object LayerCodec {
     }
 
     private fun writeStream(file: File, width: Int, height: Int, length: Int, body: (OutputStream) -> Unit) {
-        ProjectFormat.writeAtomically(file) { out ->
-            val header = DataOutputStream(out)
-            header.writeInt(MAGIC)
-            header.writeInt(VERSION)
-            header.writeInt(width)
-            header.writeInt(height)
-            header.writeInt(length)
-            header.flush()
-            val deflater = Deflater(Deflater.BEST_SPEED)
-            try {
-                val zip = DeflaterOutputStream(out, deflater, IO_BUFFER)
-                body(zip)
-                zip.finish()
-            } finally {
-                deflater.end()
-            }
+        ProjectFormat.writeAtomically(file) { out -> writeBody(out, width, height, length, body) }
+    }
+
+    /**
+     * v1.7: the bytes of a pixel file (header and compressed pixels) written to [out], which is
+     * left open; the array container (`ArrayCodec`, PIXELS) embeds them. Blocking: call on IO.
+     */
+    fun writeTo(out: OutputStream, width: Int, height: Int, data: ByteArray, length: Int = byteLength(width, height)) {
+        require(length == byteLength(width, height) && data.size >= length)
+        writeBody(out, width, height, length) { it.write(data, 0, length) }
+    }
+
+    private fun writeBody(out: OutputStream, width: Int, height: Int, length: Int, body: (OutputStream) -> Unit) {
+        val header = DataOutputStream(out)
+        header.writeInt(MAGIC)
+        header.writeInt(VERSION)
+        header.writeInt(width)
+        header.writeInt(height)
+        header.writeInt(length)
+        header.flush()
+        val deflater = Deflater(Deflater.BEST_SPEED)
+        try {
+            val zip = DeflaterOutputStream(out, deflater, IO_BUFFER)
+            body(zip)
+            zip.finish()
+        } finally {
+            deflater.end()
         }
     }
 
@@ -157,30 +169,11 @@ internal object LayerCodec {
         try {
             FileInputStream(file).use { fis ->
                 val input = BufferedInputStream(fis, IO_BUFFER)
-                val header = DataInputStream(input)
-                if (header.readInt() != MAGIC) throw CorruptProjectException("${file.name} is not a layer file")
-                val version = header.readInt()
-                if (version !in 1..VERSION) throw CorruptProjectException("${file.name} has unsupported version $version")
-                val w = header.readInt()
-                val h = header.readInt()
-                val len = header.readInt()
+                val (w, h, len) = readHeader(DataInputStream(input), file.name)
                 if (w != width || h != height || len != length) {
                     throw CorruptProjectException("${file.name} is ${w}x$h, expected ${width}x$height")
                 }
-                val inflater = Inflater()
-                try {
-                    val zip = InflaterInputStream(input, inflater, IO_BUFFER)
-                    var off = 0
-                    while (off < length) {
-                        val n = zip.read(dst, off, length - off)
-                        if (n < 0) throw CorruptProjectException("${file.name} is truncated")
-                        off += n
-                    }
-                    // Reading past the end makes zlib verify the stream's checksum.
-                    if (zip.read() != -1) throw CorruptProjectException("${file.name} has trailing data")
-                } finally {
-                    inflater.end()
-                }
+                inflateInto(input, file.name, dst, length)
             }
         } catch (e: CorruptProjectException) {
             throw e
@@ -188,6 +181,69 @@ internal object LayerCodec {
             throw CorruptProjectException("${file.name} is truncated", e)
         } catch (e: ZipException) {
             throw CorruptProjectException("${file.name} is damaged", e)
+        }
+    }
+
+    /**
+     * v1.7: the pixels of a pixel file embedded at the end of [input] (see [writeTo]) as a new
+     * bitmap the caller owns, at most [maxWidth] × [maxHeight]. [name] names the data in errors.
+     * Throws [CorruptProjectException] when it is truncated, damaged (the zlib checksum), inflates
+     * to more bytes than its header says or is too large. Bytes after the compressed stream are
+     * not read. Blocking: call on IO.
+     */
+    fun readBitmap(input: InputStream, name: String, maxWidth: Int, maxHeight: Int): Bitmap {
+        try {
+            val buffered = BufferedInputStream(input, IO_BUFFER)
+            val (w, h, len) = readHeader(DataInputStream(buffered), name)
+            if (w <= 0 || h <= 0 || w > maxWidth || h > maxHeight || len.toLong() != w.toLong() * h * 4) {
+                throw CorruptProjectException("$name is ${w}x$h, larger than ${maxWidth}x$maxHeight or inconsistent")
+            }
+            val dst = ByteArray(len)
+            inflateInto(buffered, name, dst, len)
+            val bitmap = BitmapUtils.createLayerBitmap(w, h)
+            try {
+                check(bitmap.byteCount == len) { "Unexpected bitmap format ${bitmap.config}" }
+                bitmap.copyPixelsFromBuffer(ByteBuffer.wrap(dst, 0, len))
+            } catch (e: Throwable) {
+                bitmap.recycle()
+                throw e
+            }
+            return bitmap
+        } catch (e: CorruptProjectException) {
+            throw e
+        } catch (e: EOFException) {
+            throw CorruptProjectException("$name is truncated", e)
+        } catch (e: ZipException) {
+            throw CorruptProjectException("$name is damaged", e)
+        }
+    }
+
+    /** Reads and checks the magic and version; returns (width, height, byte length). */
+    private fun readHeader(header: DataInputStream, name: String): Triple<Int, Int, Int> {
+        if (header.readInt() != MAGIC) throw CorruptProjectException("$name is not a layer file")
+        val version = header.readInt()
+        if (version !in 1..VERSION) throw CorruptProjectException("$name has unsupported version $version")
+        val w = header.readInt()
+        val h = header.readInt()
+        val len = header.readInt()
+        return Triple(w, h, len)
+    }
+
+    /** Inflates exactly [length] bytes into [dst] and checks that the stream ends there. */
+    private fun inflateInto(input: InputStream, name: String, dst: ByteArray, length: Int) {
+        val inflater = Inflater()
+        try {
+            val zip = InflaterInputStream(input, inflater, IO_BUFFER)
+            var off = 0
+            while (off < length) {
+                val n = zip.read(dst, off, length - off)
+                if (n < 0) throw CorruptProjectException("$name is truncated")
+                off += n
+            }
+            // Reading past the end makes zlib verify the stream's checksum.
+            if (zip.read() != -1) throw CorruptProjectException("$name has trailing data")
+        } finally {
+            inflater.end()
         }
     }
 

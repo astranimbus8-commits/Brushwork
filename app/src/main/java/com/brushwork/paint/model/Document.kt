@@ -102,11 +102,34 @@ class Layer(
 
     val isAdjustmentLayer: Boolean get() = adjustment != null
 
-    /** True for layers that keep an editable object (text, shape or vector content) besides their pixels. */
-    val hasEditableData: Boolean get() = textData != null || shapeData != null || vector != null
+    /**
+     * v1.7 (I11): the folder this layer is in; [ROOT_ID] = top level. Structural:
+     * `LayerTreeAction` captures it, [LayerData] does not.
+     */
+    var parentId: Long = ROOT_ID
+
+    /**
+     * v1.7: non-null for a FOLDER. A folder's [bitmap] is [FOLDER_BITMAP]; it has no mask. Rides
+     * [LayerData].
+     */
+    var folder: FolderSpec? = null
+
+    /** v1.7: the folder's rows are shown in the layer window. View state: persisted, never an undo step. */
+    var folderOpen: Boolean = true
+
+    /** v1.7 (I14): the live array; [bitmap] is its cache. Rides [LayerData]. */
+    var array: LayerArray? = null
+
+    val isFolder: Boolean get() = folder != null
+
+    /**
+     * True for layers that keep an editable object (text, shape or vector content, or since v1.7
+     * a live array) besides their pixels.
+     */
+    val hasEditableData: Boolean get() = textData != null || shapeData != null || vector != null || array != null
 
     /** Every editable-data field as one immutable snapshot. */
-    fun dataSnapshot(): LayerData = LayerData(textData, shapeData, vector, maskSpec, adjustment)
+    fun dataSnapshot(): LayerData = LayerData(textData, shapeData, vector, maskSpec, adjustment, folder, array)
 
     /** Sets every editable-data field from [d] (pixels are not touched). */
     fun restoreData(d: LayerData) {
@@ -115,7 +138,12 @@ class Layer(
         vector = d.vector
         maskSpec = d.maskSpec
         adjustment = d.adjustment
+        folder = d.folder
+        array = d.array
     }
+
+    /** v1.7: recycles this layer's bitmap and mask, but never [FOLDER_BITMAP]. */
+    fun recycleBitmaps() { bitmap.recycleUnlessShared(); mask?.recycle() }
 
     /** Incremented on every pixel change (content or mask). Used for thumbnails and dirty saving. */
     var contentVersion: Long = 0
@@ -136,10 +164,32 @@ class Layer(
 
     fun props(): LayerProps = LayerProps(name, opacity, blendMode, visible, clipping, alphaLocked, locked, maskEnabled)
 
-    /** The bitmap that painting tools should currently modify (mask when editing it). */
-    val paintTarget: Bitmap get() = if (editingMask) mask ?: bitmap else bitmap
+    /**
+     * The bitmap that painting tools should currently modify (mask when editing it). Never a
+     * folder's (v1.7): callers are refused earlier (`checkUsable`), so this is the last line of
+     * defence.
+     */
+    val paintTarget: Bitmap get() {
+        check(!isFolder) { "A folder has no pixels to paint: $this" }
+        return if (editingMask) mask ?: bitmap else bitmap
+    }
 
     override fun toString(): String = "Layer($id '$name')"
+
+    companion object {
+        /** v1.7: the parent id of a top-level layer. Layer ids start at 1 (`Document.newLayerId`), so 0 is never a layer. */
+        const val ROOT_ID = 0L
+
+        /**
+         * The one immutable 1×1 bitmap all folders share: drawing into it throws (V9). Never
+         * recycled: see [recycleBitmaps] and [recycleUnlessShared].
+         */
+        val FOLDER_BITMAP: Bitmap by lazy { Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).copy(Bitmap.Config.ARGB_8888, false) }
+
+        /** v1.7: a new (empty, open) folder; it owns no layers until some are put into it. */
+        fun newFolder(id: Long, name: String, spec: FolderSpec = FolderSpec()): Layer =
+            Layer(id, name, FOLDER_BITMAP).apply { folder = spec }
+    }
 }
 
 /** Snapshot of the editable, non-pixel properties of a layer (used by undo + persistence). */
@@ -179,6 +229,12 @@ class Document(
     var grid: GridSettings = GridSettings()
     var ruler: RulerSettings = RulerSettings()
 
+    /** v1.7 (item 14): saved selections, newest first; immutable entries, replaced as a whole (`SavedSelectionsAction`). */
+    var savedSelections: List<SavedSelection> = emptyList()
+
+    /** v1.7 (item 18): drawing aid like [ruler]; persisted, not undoable. */
+    var symmetry: SymmetrySettings = SymmetrySettings()
+
     /**
      * Problems found while loading that did not stop the project from opening (a layer's vector
      * or mask data could not be read, an unknown adjustment effect...). The editor shows them
@@ -197,6 +253,40 @@ class Document(
 
     /** Used by persistence so ids stay unique after loading. */
     fun ensureNextLayerIdAbove(id: Long) { if (nextLayerId <= id) nextLayerId = id + 1 }
+
+    /**
+     * v1.7: the id the next saved selection gets. Persisted (`project.json` `nextSelectionId`),
+     * because saved-selection ids are never reused within a document, even after the newest one
+     * is deleted and the project saved.
+     */
+    var nextSelectionId: Long = 1
+        private set
+
+    /** Saved-selection ids are never reused within a document. */
+    fun newSelectionId(): Long = nextSelectionId++
+
+    /** Used by persistence: the next saved-selection id is above [id] (and at least 1). */
+    fun ensureNextSelectionIdAbove(id: Long) { if (nextSelectionId <= id) nextSelectionId = id + 1 }
+
+    /** v1.7: true when any layer is a folder. O(n), never cached. */
+    val hasFolders: Boolean get() = layers.any { it.isFolder }
+
+    /** v1.7: the layers with pixels (folders excluded); what `maxLayers` counts (plus array sources, §4.4). */
+    val pixelLayerCount: Int get() = layers.count { !it.isFolder }
+
+    /** v1.7: every layer except folders, bottom first. */
+    val pixelLayers: Sequence<Layer> get() = layers.asSequence().filter { !it.isFolder }
+
+    /**
+     * v1.7 (I11, sweep rule L): [layer] is shown: its own eye AND every ancestor folder's. Gates
+     * (tools, snapping, hit tests, export) read this, never `layer.visible` alone.
+     */
+    fun effectiveVisible(layer: Layer): Boolean =
+        layer.visible && (layer.parentId == Layer.ROOT_ID || LayerTree.shownByAncestors(layers, indexOf(layer)))
+
+    /** v1.7 (I11, sweep rule L): [layer] is locked: its own lock OR any ancestor folder's. */
+    fun effectiveLocked(layer: Layer): Boolean =
+        layer.locked || (layer.parentId != Layer.ROOT_ID && LayerTree.lockedByAncestor(layers, indexOf(layer)))
 
     fun indexOf(layer: Layer): Int = layers.indexOfFirst { it === layer }
 

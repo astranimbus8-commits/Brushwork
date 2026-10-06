@@ -2,6 +2,7 @@ package com.brushwork.paint.model
 
 import com.brushwork.paint.core.LengthUnit
 import kotlinx.serialization.Serializable
+import kotlin.math.abs
 
 @Serializable
 enum class GridType(val label: String) {
@@ -72,6 +73,87 @@ data class RulerSettings(
     /** Step for nudge arrow buttons, in [unit]. */
     val nudgeStep: Float = 1f,
 )
+
+/** v1.7 (item 18): the symmetry rulers, as ibisPaint lists them. [label] is the type chip's text (I10). */
+@Serializable
+enum class SymmetryType(val label: String) {
+    OFF("Off"),
+    MIRROR("Mirror ruler"),
+    KALEIDOSCOPE("Kaleidoscope ruler"),
+    ROTATION("Rotation ruler"),
+    ARRAY("Array ruler"),
+    PERSPECTIVE_ARRAY("Perspective array ruler"),
+}
+
+/**
+ * v1.7 (item 18): the document's symmetry, a drawing aid like [RulerSettings]: persisted in
+ * `project.json` (omitted at its default), never an undo step. Positions and lengths are DOCUMENT
+ * PIXELS. The maps themselves are `assist/SymmetryMaps` (area H).
+ */
+@Serializable
+data class SymmetrySettings(
+    val type: SymmetryType = SymmetryType.OFF,
+    /** -1 = the canvas centre (as [RulerSettings]). */
+    val centerX: Float = -1f,
+    val centerY: Float = -1f,
+    /** The mirror axis, the first kaleidoscope axis, the array grid's angle. */
+    val angleDeg: Float = 90f,
+    /** Kaleidoscope and rotation: [MIN_DIVISIONS]..[MAX_DIVISIONS]. */
+    val divisions: Int = 6,
+    /** The array cell, px. */
+    val spacingX: Float = 300f,
+    val spacingY: Float = 300f,
+    /** Perspective array: one cell's corners TL, TR, BR, BL (8 floats); empty = the default cell. */
+    val quad: List<Float> = emptyList(),
+) {
+    /**
+     * Usable values only (damaged or crafted data): divisions in [MIN_DIVISIONS]..[MAX_DIVISIONS];
+     * a non-finite or far-away centre is "not placed" (-1); a non-finite angle takes the default;
+     * spacings finite and in [MIN_SPACING]..[MAX_SPACING] (else the default); [quad] exactly 8
+     * finite numbers forming a strictly convex quad, else empty (the default). This instance when
+     * it already is.
+     */
+    fun sanitized(): SymmetrySettings {
+        fun coord(v: Float) = if (v.isFinite() && abs(v) <= MAX_COORD) v else -1f
+        fun spacing(v: Float, default: Float) = if (v.isFinite()) v.coerceIn(MIN_SPACING, MAX_SPACING) else default
+        val n = SymmetrySettings(
+            type = type,
+            centerX = coord(centerX),
+            centerY = coord(centerY),
+            angleDeg = if (angleDeg.isFinite()) angleDeg else DEFAULT.angleDeg,
+            divisions = divisions.coerceIn(MIN_DIVISIONS, MAX_DIVISIONS),
+            spacingX = spacing(spacingX, DEFAULT.spacingX),
+            spacingY = spacing(spacingY, DEFAULT.spacingY),
+            quad = if (quad.isEmpty() || isConvexQuad(quad)) quad else emptyList(),
+        )
+        return if (n == this) this else n
+    }
+
+    companion object {
+        private val DEFAULT = SymmetrySettings()
+        const val MIN_DIVISIONS = 2
+        const val MAX_DIVISIONS = 32
+        const val MIN_SPACING = 1f
+        const val MAX_SPACING = 100_000f
+        /** Coordinates far beyond any canvas are damaged data. */
+        const val MAX_COORD = 1_000_000f
+
+        /** True for 8 finite numbers (TL, TR, BR, BL) forming a strictly convex quad, either winding. */
+        fun isConvexQuad(q: List<Float>): Boolean {
+            if (q.size != 8 || q.any { !it.isFinite() || abs(it) > MAX_COORD }) return false
+            var sign = 0
+            for (i in 0 until 4) {
+                val ax = q[2 * i]; val ay = q[2 * i + 1]
+                val bx = q[2 * ((i + 1) % 4)]; val by = q[2 * ((i + 1) % 4) + 1]
+                val cx = q[2 * ((i + 2) % 4)]; val cy = q[2 * ((i + 2) % 4) + 1]
+                val cross = (bx - ax).toDouble() * (cy - by) - (by - ay).toDouble() * (cx - bx)
+                val s = if (cross > 1e-6) 1 else if (cross < -1e-6) -1 else return false
+                if (sign == 0) sign = s else if (s != sign) return false
+            }
+            return true
+        }
+    }
+}
 
 @Serializable
 enum class StabilizerMode(val label: String) {
