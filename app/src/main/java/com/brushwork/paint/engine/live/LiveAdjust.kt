@@ -327,10 +327,13 @@ class LiveAdjust(private val c: EditorController) {
     // ------------------------------------------------------------------ frames
 
     private fun canRun(layer: Layer): Boolean =
-        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && layer.visible && c.doc.indexOf(layer) >= 0
+        policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && layer.visible && c.doc.indexOf(layer) >= 0 &&
+            // v1.7: the live proxies split the flat stack; a document with folders adjusts at full
+            // resolution until area A makes them tree-aware.
+            !c.doc.hasFolders
 
     private fun valid(s: Session): Boolean =
-        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 &&
+        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 && !c.doc.hasFolders &&
             s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
 
     /** Session tiles that are dirty and intersect [visible] (null: anywhere), in index order. */

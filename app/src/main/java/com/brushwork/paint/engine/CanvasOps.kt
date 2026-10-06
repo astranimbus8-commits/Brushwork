@@ -18,7 +18,10 @@ import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.RulerSettings
+import com.brushwork.paint.model.SavedSelection
+import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.select.SavedSelectionOps
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.geom.ObjectIndex
@@ -43,6 +46,10 @@ enum class Resample(val label: String, val description: String) {
 /**
  * Immutable view of the document taken on the main thread. Background work reads only this
  * (source bitmaps are never mutated), so the live document stays consistent.
+ *
+ * v1.7 (X6): [layers] are the PIXEL layers only (folders have no bitmaps and are never mapped);
+ * [savedSelections] are the document's saved selections, mapped along by
+ * `SavedSelectionOps.mappedForCanvas` (item 14).
  */
 class CanvasSnapshot(
     val width: Int,
@@ -50,6 +57,7 @@ class CanvasSnapshot(
     val dpi: Float,
     val colorMode: ColorMode,
     val layers: List<LayerSnapshot>,
+    val savedSelections: List<SavedSelection> = emptyList(),
 ) {
     class LayerSnapshot(
         val layer: Layer,
@@ -73,19 +81,22 @@ class CanvasSnapshot(
      * this snapshot was taken from (so a result computed from it can be applied).
      */
     fun matches(doc: Document): Boolean {
-        if (doc.width != width || doc.height != height || doc.layers.size != layers.size) return false
+        if (doc.width != width || doc.height != height || doc.pixelLayerCount != layers.size) return false
         if (doc.dpi != dpi || doc.colorMode != colorMode) return false
-        return layers.indices.all { i ->
-            val l = doc.layers[i]
-            val s = layers[i]
-            l === s.layer && l.bitmap === s.bitmap && l.mask === s.mask && l.contentVersion == s.contentVersion
+        var i = 0
+        for (l in doc.layers) {
+            if (l.isFolder) continue
+            val s = layers[i++]
+            if (!(l === s.layer && l.bitmap === s.bitmap && l.mask === s.mask && l.contentVersion == s.contentVersion)) return false
         }
+        return true
     }
 
     companion object {
         fun of(doc: Document) = CanvasSnapshot(
             doc.width, doc.height, doc.dpi, doc.colorMode,
-            doc.layers.map { LayerSnapshot(it, it.bitmap, it.mask, it.visible) },
+            doc.pixelLayers.map { LayerSnapshot(it, it.bitmap, it.mask, it.visible) }.toList(),
+            doc.savedSelections,
         )
     }
 }
@@ -116,9 +127,10 @@ class CanvasResult(
         fun recycleCreated(layers: List<LayerResult>, snapshot: CanvasSnapshot) {
             val source = java.util.Collections.newSetFromMap(java.util.IdentityHashMap<Bitmap, Boolean>())
             snapshot.layers.forEach { source += it.bitmap; it.mask?.let { m -> source += m } }
+            // (Rule B: never the folders' shared bitmap.)
             for (l in layers) {
-                if (l.bitmap !in source) l.bitmap.recycle()
-                l.mask?.let { if (it !in source) it.recycle() }
+                if (l.bitmap !in source) l.bitmap.recycleUnlessShared()
+                l.mask?.let { if (it !in source) it.recycleUnlessShared() }
             }
         }
     }
@@ -419,9 +431,16 @@ object CanvasOps {
      * Applies [result] (computed from [snap]) to the controller's document as ONE undo step:
      * a [DocumentBitmapsAction] (wrapped so the ruler/grid follow the artwork, the selection comes
      * back on undo and the active tool is reset around the swap), or a small metadata action when
-     * no bitmaps changed.
+     * no bitmaps changed. [savedAfter]: the saved selections after the operation (v1.7, item 14;
+     * mapped in the background by [run]).
      */
-    fun commit(c: EditorController, label: String, snap: CanvasSnapshot, result: CanvasResult): UndoAction {
+    fun commit(
+        c: EditorController,
+        label: String,
+        snap: CanvasSnapshot,
+        result: CanvasResult,
+        savedAfter: List<SavedSelection> = SavedSelectionOps.mappedForCanvas(snap.savedSelections, result, snap.width, snap.height),
+    ): UndoAction {
         val action: UndoAction = if (result.layers.isEmpty()) {
             require(result.width == snap.width && result.height == snap.height) { "Size changes need new bitmaps" }
             MetadataAction(label, snap.dpi, result.dpi, snap.colorMode, result.colorMode)
@@ -454,6 +473,7 @@ object CanvasOps {
             CanvasChangeAction(
                 inner, result.geometry, snap.width, snap.height, result.width, result.height,
                 selectionBefore = c.selection, bytesBefore = bytesBefore, bytesAfter = bytesAfter,
+                savedBefore = c.doc.savedSelections, savedAfter = savedAfter,
             )
         }
         action.redo(c)
@@ -480,6 +500,7 @@ object CanvasOps {
         val stop = AtomicBoolean(false)
         c.runBusy(label, onCancel = { stop.set(true) }) {
             var committed = false
+            var saved = snap.savedSelections
             try {
                 val result = withContext(Dispatchers.Default) {
                     val context = coroutineContext
@@ -491,6 +512,13 @@ object CanvasOps {
                         if (pct != lastPosted) {
                             lastPosted = pct
                             c.scope.launch { if (c.busyMessage == label) c.busyProgress = p.coerceIn(0f, 1f) }
+                        }
+                    }.also { r ->
+                        // v1.7 (item 14): the saved selections follow the artwork, after the layers.
+                        saved = try {
+                            SavedSelectionOps.mappedForCanvas(snap.savedSelections, r, snap.width, snap.height)
+                        } catch (t: Throwable) {
+                            r.recycle(snap); throw t
                         }
                     }
                 }
@@ -505,7 +533,8 @@ object CanvasOps {
                     }
                     else -> {
                         // The action's redo reactivates the tool after swapping the bitmaps.
-                        commit(c, label, snap, result)
+                        // (A list changed meanwhile is mapped now, on the main thread.)
+                        commit(c, label, snap, result, if (c.doc.savedSelections === snap.savedSelections) saved else SavedSelectionOps.mappedForCanvas(c.doc.savedSelections, result, snap.width, snap.height))
                         committed = true
                     }
                 }
@@ -889,13 +918,20 @@ object CanvasOps {
         private val selectionBefore: Selection?,
         private val bytesBefore: Long,
         private val bytesAfter: Long,
+        /** v1.7 (item 14): the saved selections before and after (the same list when unchanged). */
+        private val savedBefore: List<SavedSelection> = emptyList(),
+        private val savedAfter: List<SavedSelection> = savedBefore,
     ) : UndoAction {
         override val label: String get() = inner.label
 
         private var applied = false
 
         override val byteSize: Long
-            get() = if (applied) bytesBefore + (selectionBefore?.mask?.byteCount ?: 0) else bytesAfter
+            get() = if (applied) bytesBefore + (selectionBefore?.mask?.byteCount ?: 0) + savedBytes(savedBefore) else bytesAfter + savedBytes(savedAfter)
+
+        /** The packed bytes only [list] holds (entries shared by both lists count for neither). */
+        private fun savedBytes(list: List<SavedSelection>): Long =
+            if (savedBefore === savedAfter) 0L else list.filter { e -> (if (list === savedBefore) savedAfter else savedBefore).none { it === e } }.sumOf { it.bytes }
 
         private val keepsGeometry = geometry.isIdentity && oldWidth == newWidth && oldHeight == newHeight
 
@@ -918,6 +954,7 @@ object CanvasOps {
             gridBefore = grid; gridAfter = g
             setGuides(c, r, g)
             if (keepsGeometry && sel != null) c.setSelection(sel, recordUndo = false)
+            setSaved(c, savedAfter)
             c.currentTool.onActivate()
         }
 
@@ -933,7 +970,14 @@ object CanvasOps {
             val g = gridBefore?.takeIf { grid == gridAfter } ?: inverse.mapGrid(grid)
             setGuides(c, r, g)
             c.setSelection(selectionBefore, recordUndo = false)
+            setSaved(c, savedBefore)
             c.currentTool.onActivate()
+        }
+
+        private fun setSaved(c: EditorController, list: List<SavedSelection>) {
+            if (c.doc.savedSelections === list) return
+            c.doc.savedSelections = list
+            c.notifyLayersChanged()
         }
 
         private fun setGuides(c: EditorController, r: RulerSettings, g: GridSettings) {
