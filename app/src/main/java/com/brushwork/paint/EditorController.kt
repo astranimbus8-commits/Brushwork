@@ -13,11 +13,13 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.brushwork.paint.array.ArrayOps
 import com.brushwork.paint.assist.GridRenderer
 import com.brushwork.paint.assist.RulerRenderer
 import com.brushwork.paint.assist.StrokeAssist
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
+import com.brushwork.paint.brush.BrushPresetStore
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.BitmapUtils
@@ -35,6 +37,7 @@ import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.MoveLayerAction
 import com.brushwork.paint.engine.PixelEditRecorder
 import com.brushwork.paint.engine.RemoveLayerAction
+import com.brushwork.paint.engine.SavedSelectionsAction
 import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.engine.UndoManager
@@ -55,8 +58,11 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.RulerSettings
+import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.model.StabilizerSettings
+import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.snap.Increments
 import com.brushwork.paint.snap.SnapService
 import com.brushwork.paint.snap.SnapSession
@@ -71,6 +77,7 @@ import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -78,7 +85,9 @@ import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.max
 import kotlin.math.min
 
@@ -134,6 +143,30 @@ data class LayerListEvent(val kind: LayerListKind, val layer: Layer, val source:
 fun interface LayerListListener {
     fun onLayerList(e: LayerListEvent)
 }
+
+/**
+ * v1.7 (item 10): a point in the undo history ([EditorController.undoMarker]);
+ * [EditorController.rollbackTo] takes back every step pushed after it. [depth] = the number of
+ * undo steps when it was taken, [top] = the newest of them (by identity; null with an empty
+ * history), [dropped] = `UndoManager.dropped` then (a mark of an empty history holds only while
+ * no step has been dropped since).
+ */
+class UndoMarker internal constructor(internal val depth: Int, internal val top: UndoAction?, internal val dropped: Long = 0)
+
+/**
+ * v1.7 (item 10): what a history tap over the UI puts back ([EditorController.uiMark],
+ * [EditorController.restoreUiMark]): the undo history ([marker]), the settings journal position,
+ * the live preset of every brush-engine tool (compared by reference), the colour, and the active
+ * tool's own in-tool history ([toolMark] of [tool]).
+ */
+class UiMark internal constructor(
+    val marker: UndoMarker,
+    internal val settingsJournal: Int,
+    internal val presets: Map<ToolId, BrushPreset>,
+    internal val color: Int,
+    internal val tool: Tool,
+    internal val toolMark: Any?,
+)
 
 /**
  * Central editor state + operations. One instance per open document; lives in a ViewModel.
@@ -481,6 +514,106 @@ class EditorController(
      * The caller must already have reverted its effect (e.g. a discarded picture placement).
      */
     fun dropLastUndo(): UndoAction? = undoManager.popLast()
+
+    // ------------------------------------------------------------------ history marks (v1.7, item 10)
+
+    /**
+     * The current point of the undo history. A pending live edit records its step first (it
+     * belongs before the mark).
+     */
+    fun undoMarker(): UndoMarker {
+        if (editDepth == 0) flushDeferredSteps()
+        val um = undoManager
+        return UndoMarker(um.undoCount, um.undoAt(um.undoCount - 1), um.dropped)
+    }
+
+    /**
+     * Undoes and DROPS every step pushed after [marker]: nothing goes to redo and the redo stack
+     * is untouched. Vector work still on its way and a pending live edit land first (they are
+     * after the mark). False when the history no longer holds the marker (its newest step was
+     * trimmed, cleared or folded into a later step).
+     */
+    fun rollbackTo(marker: UndoMarker): Boolean = rollbackSteps(marker) >= 0
+
+    /** [rollbackTo]: the number of steps taken back, or -1 when the history no longer holds [marker]. */
+    private fun rollbackSteps(marker: UndoMarker): Int {
+        if (editDepth == 0) flushDeferredSteps()
+        settleVectorWork()
+        val um = undoManager
+        val top = marker.top
+        val keep = if (top == null) {
+            if (um.dropped != marker.dropped) return -1
+            0
+        } else {
+            val i = um.undoIndexOf(top)
+            if (i < 0) return -1
+            i + 1
+        }
+        if (um.undoCount <= keep) return 0
+        var count = 0
+        inHistoryDo {
+            val steps = um.takeSince(keep)
+            count = steps.size
+            for (a in steps.asReversed()) a.undo(this)
+            // Undone and never redone: released like a step leaving the redo stack.
+            for (a in steps) a.dispose()
+            true
+        }
+        editCount++
+        doc.touch()
+        invalidateOverlay()
+        return count
+    }
+
+    /**
+     * Opens a UI mark ([UiMark]): the history is not trimmed and the `AppSettings` journal
+     * records while at least one mark is open. Close it with [releaseUiMark].
+     */
+    fun uiMark(): UiMark {
+        val marker = undoMarker()
+        undoManager.holdTrim()
+        settings.openJournal()
+        val presets = LinkedHashMap<ToolId, BrushPreset>()
+        for (id in PAINT_TOOLS) presetFor(id)?.let { presets[id] = it }
+        val tool = currentTool
+        return UiMark(marker, settings.journalPosition(), presets, color, tool, tool.historyMark())
+    }
+
+    /**
+     * Puts back what changed since [m]: if the active tool is still `m.tool`, its in-tool steps
+     * first (`rollbackHistory`, which [undo] would otherwise step through first); then the undo
+     * history ([rollbackTo]); the settings journal; every live preset changed through
+     * [updatePreset] (put back and persisted as the side slider's step end does); the colour.
+     * True when anything changed. Does not close the mark.
+     */
+    fun restoreUiMark(m: UiMark): Boolean {
+        var changed = false
+        val tool = currentTool
+        if (tool === m.tool && tool.historyMark() != m.toolMark) {
+            tool.rollbackHistory(m.toolMark)
+            invalidateOverlay()
+            changed = true
+        }
+        if (rollbackSteps(m.marker) > 0) changed = true
+        if (settings.rollbackJournal(m.settingsJournal)) changed = true
+        for ((id, preset) in m.presets) {
+            if (presetFor(id) === preset) continue
+            updatePreset(id, preset)
+            BrushPresetStore.get(appContext).persist(this, id)
+            changed = true
+        }
+        if (color != m.color) {
+            color = m.color
+            changed = true
+        }
+        return changed
+    }
+
+    /** Closes [m] (every gesture end and every cancel): trimming resumes; with no mark open the journal is emptied. */
+    fun releaseUiMark(m: UiMark) {
+        undoManager.releaseTrim()
+        settings.closeJournal()
+    }
 
     fun undo() {
         val session = filterSession
@@ -1971,6 +2104,156 @@ class EditorController(
         setSelection(s?.inverted() ?: Selection.all(doc.width, doc.height), label = "Invert selection")
     }
 
+    // ------------------------------------------------------------------ saved selections (v1.7, item 14)
+
+    /** Ids and names taken by saves still compressing (two quick saves never share one). */
+    private val pendingSavedIds = HashSet<Long>()
+    private val pendingSavedNames = HashSet<String>()
+
+    /**
+     * "Save selection": the active selection is compressed on `Dispatchers.Default`, then added
+     * to `doc.savedSelections` (oldest first; the rows list them newest first) as "Selection N"
+     * with one `SavedSelectionsAction` step on the main thread. False (with the message) without
+     * a selection or at a limit (32 entries, 32 MB packed).
+     */
+    fun saveSelection(): Boolean {
+        val sel = selection?.takeUnless { it.isEmpty } ?: return false
+        val list = doc.savedSelections
+        if (list.size + pendingSavedIds.size >= SavedSelection.MAX) { toast(SavedSelectionLabels.LIMIT); return false }
+        if (list.sumOf { it.bytes } >= SavedSelection.MAX_TOTAL_BYTES) { toast(SavedSelectionLabels.FULL); return false }
+        var id = (list.maxOfOrNull { it.id } ?: 0L) + 1
+        while (id in pendingSavedIds) id++
+        val names = list.mapTo(HashSet()) { it.name } + pendingSavedNames
+        var n = list.size + pendingSavedIds.size + 1
+        while ("Selection $n" in names) n++
+        val name = "Selection $n"
+        pendingSavedIds += id
+        pendingSavedNames += name
+        scope.launch {
+            try {
+                val saved = packSelection(id, name, sel, revision = 1) ?: return@launch
+                val now = doc.savedSelections
+                when {
+                    now.size >= SavedSelection.MAX -> toast(SavedSelectionLabels.LIMIT)
+                    now.sumOf { it.bytes } + saved.bytes > SavedSelection.MAX_TOTAL_BYTES -> toast(SavedSelectionLabels.FULL)
+                    else -> setSavedSelections(now + saved, SavedSelectionLabels.SAVE)
+                }
+            } finally {
+                pendingSavedIds -= id
+                pendingSavedNames -= name
+            }
+        }
+        return true
+    }
+
+    /**
+     * "Update from selection": saved selection [id] takes the active selection (same name, the
+     * revision + 1), compressed in the background; one "Update saved selection" step. False
+     * without a selection or such an entry.
+     */
+    fun updateSavedSelection(id: Long): Boolean {
+        val sel = selection?.takeUnless { it.isEmpty } ?: return false
+        val old = doc.savedSelections.firstOrNull { it.id == id } ?: return false
+        scope.launch {
+            val saved = packSelection(id, old.name, sel, old.revision + 1) ?: return@launch
+            val now = doc.savedSelections
+            val i = now.indexOfFirst { it.id == id }
+            if (i < 0) return@launch
+            if (now.sumOf { it.bytes } - now[i].bytes + saved.bytes > SavedSelection.MAX_TOTAL_BYTES) {
+                toast(SavedSelectionLabels.FULL); return@launch
+            }
+            // The entry keeps its current name (a rename may have happened meanwhile).
+            val entry = if (now[i].name == saved.name) saved else SavedSelection(id, now[i].name, saved.bounds, saved.packed, saved.revision)
+            setSavedSelections(now.toMutableList().also { it[i] = entry }, UPDATE_SAVED_SELECTION_LABEL)
+        }
+        return true
+    }
+
+    /** "Rename selection": one "Rename saved selection" step; a blank or unchanged name does nothing. */
+    fun renameSavedSelection(id: Long, name: String) {
+        val trimmed = name.trim()
+        val list = doc.savedSelections
+        val i = list.indexOfFirst { it.id == id }
+        if (i < 0 || trimmed.isEmpty() || list[i].name == trimmed) return
+        setSavedSelections(list.toMutableList().also { it[i] = list[i].renamed(trimmed) }, RENAME_SAVED_SELECTION_LABEL)
+    }
+
+    /** "Delete saved selection": one step. */
+    fun deleteSavedSelection(id: Long) {
+        val list = doc.savedSelections
+        if (list.none { it.id == id }) return
+        setSavedSelections(list.filter { it.id != id }, SavedSelectionLabels.DELETE)
+    }
+
+    /**
+     * "Load selection" ([SelectionMode.REPLACE]) and "Add to / Subtract from / Intersect with
+     * selection": saved selection [id] is inflated in the background, then combined with the
+     * active selection (`Selection.combine`) as the usual `SelectionAction` step.
+     */
+    fun loadSavedSelection(id: Long, mode: SelectionMode) {
+        val saved = doc.savedSelections.firstOrNull { it.id == id } ?: return
+        val w = doc.width
+        val h = doc.height
+        scope.launch {
+            val loaded = try {
+                withContext(Dispatchers.Default) { saved.toSelection(w, h) }
+            } catch (e: OutOfMemoryError) {
+                toast("Not enough memory to load this selection"); return@launch
+            }
+            if (doc.width != w || doc.height != h) return@launch
+            val base = selection
+            val label = when (mode) {
+                SelectionMode.REPLACE -> SavedSelectionLabels.LOAD
+                SelectionMode.ADD -> SavedSelectionLabels.ADD
+                SelectionMode.SUBTRACT -> SavedSelectionLabels.SUBTRACT
+                SelectionMode.INTERSECT -> SavedSelectionLabels.INTERSECT
+            }
+            val result = when {
+                base == null -> if (mode == SelectionMode.REPLACE || mode == SelectionMode.ADD) loaded else return@launch
+                else -> base.combine(loaded, mode)
+            }
+            setSelection(result, label = label)
+        }
+    }
+
+    /** [sel] packed as a saved selection on `Dispatchers.Default`; null (with a message) when empty or without memory. */
+    private suspend fun packSelection(id: Long, name: String, sel: Selection, revision: Long): SavedSelection? = try {
+        withContext(Dispatchers.Default) { SavedSelection.of(id, name, sel, revision) }
+    } catch (e: OutOfMemoryError) {
+        toast("Not enough memory to save this selection"); null
+    }
+
+    /** Sets `doc.savedSelections` to [after] as one `SavedSelectionsAction` step [label]. */
+    private fun setSavedSelections(after: List<SavedSelection>, label: String) {
+        val before = doc.savedSelections
+        val action = SavedSelectionsAction(before, after, label)
+        action.redo(this)
+        pushUndo(action)
+    }
+
+    // ------------------------------------------------------------------ symmetry (v1.7, item 18)
+
+    /** The symmetry drawing aid (saved with the project; area H's tool and guides read it). */
+    var symmetry by mutableStateOf(doc.symmetry)
+        private set
+
+    /** Sets the symmetry aid: not undoable; saved with the project; redraws the overlay. */
+    fun updateSymmetry(s: SymmetrySettings) {
+        if (s == symmetry) return
+        symmetry = s
+        doc.symmetry = s
+        editCount++
+        doc.touch()
+        invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ arrays (v1.7, item 3): entry points into area E's ArrayOps
+
+    fun arrayFromSelection(): Boolean = ArrayOps.fromSelection(this)
+    fun arrayFromObjects(objectIds: Set<Long>): Boolean = ArrayOps.fromObjects(this, objectIds)
+    /** The layer ⋮ "Array…". */
+    fun arrayWholeLayer(layer: Layer): Boolean = ArrayOps.fromLayer(this, layer)
+
     // ------------------------------------------------------------------ filters
 
     fun startFilter(filter: Filter) {
@@ -2276,6 +2559,8 @@ class EditorController(
         /** v1.7 history labels (§4.8) of the folder operations whose menu text differs. */
         const val MOVE_INTO_FOLDER_LABEL = "Move into folder"
         const val DELETE_FOLDER_LABEL = "Delete folder"
+        const val UPDATE_SAVED_SELECTION_LABEL = "Update saved selection"
+        const val RENAME_SAVED_SELECTION_LABEL = "Rename saved selection"
 
         /** Shown when a filter is started on an adjustment layer. */
         const val ADJUSTMENT_FILTER_MESSAGE = "Adjustment layers have no pixels — edit the effect in Masks"
