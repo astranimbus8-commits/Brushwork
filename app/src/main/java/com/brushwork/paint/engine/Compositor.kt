@@ -106,9 +106,15 @@ class CompositeTarget(
 class Compositor(private val doc: Document, private val overrideProvider: () -> LayerRenderOverride?) {
 
     private val maskPaint = BitmapUtils.newMaskApplyPaint()
-    private val dstInPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    internal val dstInPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
     private val plainPaint = Paint(Paint.FILTER_BITMAP_FLAG)
-    private val adjustmentScratch = AdjustmentScratch()
+    internal val adjustmentScratch = AdjustmentScratch()
+
+    /**
+     * v1.7: the tile-sized scratch bitmaps [FolderComposite] composites isolated folders in
+     * (pooled, used on the drawing thread like [adjustmentScratch]).
+     */
+    internal val folderScratch = FolderScratchPool()
 
     /**
      * Draws all visible layers into [canvas] (document coordinates). [clip] limits work to a
@@ -122,6 +128,9 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * first index is 0 or an adjustment layer's index, its last + 1 is the layer count or an
      * adjustment layer's index (empty ranges at such a boundary are fine). `[0, k)` then `[k, n)`
      * onto the same target equals the full draw. Anything else throws [IllegalArgumentException].
+     * v1.7: with folders, a range may cut only through folders that draw their children straight
+     * onto the canvas (pass-through at 100 %, not a clip base, not clipped; hidden ones draw
+     * nothing); cutting through an isolated folder throws [IllegalArgumentException] too.
      */
     fun drawDocument(canvas: Canvas, clip: Rect?, useOverrides: Boolean = true, target: CompositeTarget?, layerRange: IntRange? = null) {
         val layers = doc.layers
@@ -197,7 +206,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * override of [layer] (exactly the v1.5 rule: I5 goldens), a view of a
      * [MultiLayerRenderOverride] drawing [layer] when [layer] is one of its layers, else null.
      */
-    private fun overrideFor(layer: Layer, override: LayerRenderOverride?): LayerRenderOverride? {
+    internal fun overrideFor(layer: Layer, override: LayerRenderOverride?): LayerRenderOverride? {
         if (override == null) return null
         if (override is MultiLayerRenderOverride) {
             if (layer !== override.layer && layer !in override.layers) return null
@@ -206,7 +215,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return if (override.layer === layer) override else null
     }
 
-    private fun drawGroup(canvas: Canvas, base: Layer, clips: List<Layer>, bounds: RectF, override: LayerRenderOverride?) {
+    internal fun drawGroup(canvas: Canvas, base: Layer, clips: List<Layer>, bounds: RectF, override: LayerRenderOverride?) {
         val groupPaint = BlendModes.paint(base.blendMode, base.opacity)
         if (clips.isEmpty()) {
             drawLayer(canvas, base, groupPaint, bounds, override)
@@ -227,7 +236,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
     }
 
     /** Draws one layer (content + mask) with [paint] (null = plain source-over). */
-    private fun drawLayer(canvas: Canvas, layer: Layer, paint: Paint?, bounds: RectF, override: LayerRenderOverride?) {
+    internal fun drawLayer(canvas: Canvas, layer: Layer, paint: Paint?, bounds: RectF, override: LayerRenderOverride?) {
         val ov = overrideFor(layer, override)
         val mask = if (layer.maskEnabled) layer.mask else null
         if (ov == null && mask == null) {
@@ -259,8 +268,11 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return out
     }
 
-    /** True when a visible adjustment layer can change the composite (see [renderFlattened]). */
-    private fun hasLiveAdjustment(): Boolean = doc.layers.any { it.isAdjustmentLayer && it.visible && it.opacity > 0f }
+    /**
+     * True when a visible adjustment layer can change the composite (see [renderFlattened]).
+     * v1.7: one inside a hidden folder cannot (`effectiveVisible` is the own eye at the top level).
+     */
+    private fun hasLiveAdjustment(): Boolean = doc.layers.any { it.isAdjustmentLayer && doc.effectiveVisible(it) && it.opacity > 0f }
 
     /** Flattened image scaled to fit in [maxSize] x [maxSize]. */
     fun renderThumbnail(maxSize: Int, background: Int? = null): Bitmap {
