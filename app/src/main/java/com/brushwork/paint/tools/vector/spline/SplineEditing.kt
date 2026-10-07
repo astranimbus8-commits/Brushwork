@@ -141,14 +141,14 @@ object SplineEditing {
     private fun replaced(s: VSpline, i: Int, p: VSplinePoint): VSpline =
         s.copy(points = s.points.toMutableList().also { it[i] = p })
 
-    /** A point within the [VSpline] limits (finite position, weight and width in range). */
+    /** A point within the [VSpline] limits (finite position, weight and width in range; v1.7: [VSplinePoint.sharp] kept). */
     fun clean(p: VSplinePoint): VSplinePoint {
         val lim = VSpline.MAX_COORD
         val x = if (p.x.isFinite()) p.x.coerceIn(-lim, lim) else 0f
         val y = if (p.y.isFinite()) p.y.coerceIn(-lim, lim) else 0f
         val wt = if (p.weight.isFinite()) p.weight.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) else 1f
         val wd = if (p.width.isFinite()) p.width.coerceIn(0f, VSpline.MAX_WIDTH) else 1f
-        return if (x == p.x && y == p.y && wt == p.weight && wd == p.width) p else VSplinePoint(x, y, wt, wd)
+        return if (x == p.x && y == p.y && wt == p.weight && wd == p.width) p else p.copy(x = x, y = y, weight = wt, width = wd)
     }
 
     // ------------------------------------------------------------------ the Weight slider (log scale)

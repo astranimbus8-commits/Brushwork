@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.vector.spline
 
 import com.brushwork.paint.vector.VSpline
+import com.brushwork.paint.vector.VSplinePoint
 
 /*
  * NURBS / B-spline geometry of the Path tool (v1.6 §3.2c; pure Kotlin, doubles, JVM-tested).
@@ -14,6 +15,11 @@ import com.brushwork.paint.vector.VSpline
  *    points, so the curve closes with full continuity (C^(p−1)) at the seam.
  * Weights make it rational: points are lifted to homogeneous coordinates (x·w, y·w, w) and the
  * thickness factor rides along as width·w, so it is blended with the same rational basis.
+ *
+ * v1.7 (item 4): a sharp control point ([VSplinePoint.sharp]) is a corner. [NurbsGeometry.pieces]
+ * splits the spline there into independently clamped pieces, each converted on its own (the
+ * curve passes exactly through the corner, at its exact thickness); `SplineBezier` joins them
+ * into one subpath. A spline without sharp points is one piece, the spline itself.
  */
 
 /** The knot vector and the unrolled control polygon of a spline (see the file docs). */
@@ -47,6 +53,69 @@ object NurbsGeometry {
 
     /** True when the spline is drawn closed (cyclic with at least 3 points). */
     fun isClosed(s: VSpline): Boolean = s.cyclic && s.points.size >= 3
+
+    /**
+     * v1.7 (item 4): the indices of [s]'s corners, ascending: its [VSplinePoint.sharp] points that
+     * are interior. On a closed spline ([isClosed]) every point is interior; on an open one the
+     * two ends never are (their flag is ignored, whether or not [s] was sanitized).
+     */
+    internal fun cornerIndices(s: VSpline): IntArray {
+        val pts = s.points
+        val n = pts.size
+        val closed = isClosed(s)
+        val from = if (closed) 0 else 1
+        val until = if (closed) n else n - 1
+        var count = 0
+        for (i in from until until) if (pts[i].sharp) count++
+        if (count == 0) return EMPTY
+        val out = IntArray(count)
+        var k = 0
+        for (i in from until until) if (pts[i].sharp) out[k++] = i
+        return out
+    }
+
+    private val EMPTY = IntArray(0)
+
+    /**
+     * v1.7 (item 4): [s] split at its interior sharp points ([cornerIndices]) into independently
+     * clamped pieces, in curve order. Each piece is an open spline (`cyclic = false`) with
+     * `endpoint = true` (so it starts and ends exactly on its first and last points, the corners)
+     * and order `min(order, count)` of its own point count: two adjacent sharp points give a
+     * 2-point piece of order 2, a straight segment. The pieces share their corners (a corner ends
+     * one piece and starts the next) and keep the spline's own point instances, flags included.
+     * - A closed spline is rotated so its first sharp point leads, and that point is repeated at
+     *   the end: its last piece ends where its first one starts.
+     * - Without an interior sharp point: `listOf(s)`, the very instance, which converts exactly
+     *   as in v1.6.
+     * - An open spline's Endpoint setting then applies to no piece: every piece is clamped, so the
+     *   curve also reaches the spline's two ends.
+     */
+    fun pieces(s: VSpline): List<VSpline> {
+        val corners = cornerIndices(s)
+        if (corners.isEmpty()) return listOf(s)
+        val pts = s.points
+        val n = pts.size
+        val out = ArrayList<VSpline>(corners.size + 1)
+        if (isClosed(s)) {
+            for (k in corners.indices) {
+                val a = corners[k]
+                val b = if (k + 1 < corners.size) corners[k + 1] else corners[0] + n
+                out += piece(s, List(b - a + 1) { pts[(a + it) % n] })
+            }
+        } else {
+            var a = 0
+            for (c in corners) {
+                out += piece(s, pts.subList(a, c + 1).toList())
+                a = c
+            }
+            out += piece(s, pts.subList(a, n).toList())
+        }
+        return out
+    }
+
+    /** One clamped piece of [s] through [points] (see [pieces]). */
+    private fun piece(s: VSpline, points: List<VSplinePoint>): VSpline =
+        VSpline(points, order = minOf(s.order, points.size), endpoint = true, cyclic = false)
 
     /**
      * The knots and unrolled control polygon of [s] (expected sanitized, at least 2 points).
@@ -91,12 +160,16 @@ object NurbsGeometry {
      * The homogeneous Bézier control points (degree p, [DIM] doubles each, p + 1 of them) of the
      * span starting at knot index [span]: the polynomial pieces of the lifted curve, by
      * blossoming (Boehm's knot insertion to full multiplicity, done per span). [out] must hold
-     * (p + 1)·[DIM] doubles; [scratch] (p + 1)·[DIM].
+     * (p + 1)·[DIM] doubles; [scratch] (p + 1)·[DIM]. v1.7: [from] and [to] (within the span)
+     * give the Bézier of that part of the span instead (the same polynomial, cut exactly).
      */
-    fun spanBezier(s: VSpline, b: NurbsBasis, span: Int, out: DoubleArray, scratch: DoubleArray) {
+    fun spanBezier(
+        s: VSpline, b: NurbsBasis, span: Int, out: DoubleArray, scratch: DoubleArray,
+        from: Double = b.knots[span], to: Double = b.knots[span + 1],
+    ) {
         val p = b.degree
-        val a = b.knots[span]
-        val c = b.knots[span + 1]
+        val a = from
+        val c = to
         for (m in 0..p) {
             // blossom(a × (p − m), c × m)
             for (j in 0..p) lift(s, b.ctrl[span - p + j], scratch, j * DIM)

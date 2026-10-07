@@ -31,6 +31,15 @@ import kotlin.math.min
  * them exactly and can grab them (V7); open ends are smooth too, with the unused handle mirrored.
  * Each anchor's thickness is the spline's blend of the control widths at that parameter (the
  * Curve tool's smoothstep blend runs between anchors as usual).
+ *
+ * v1.7 (item 4): a spline with interior sharp points is converted piece by piece
+ * ([NurbsGeometry.pieces]: independently clamped pieces, a 2-point piece being a straight
+ * segment) and the pieces are joined into ONE subpath (I9 unchanged). Each join is one
+ * `VAnchor(sharp = true)` exactly at the corner's control point, with its thickness, and broken
+ * tangents: its in handle ends the piece before, its out handle starts the piece after. A closed
+ * spline's first corner is its anchor 0 (with fewer than 3 spans in all, its spans are cut into
+ * equal parts so the subpath has the 3 anchors a closed curve needs). A spline without sharp
+ * points converts exactly as in v1.6.
  */
 object SplineBezier {
     /** Largest distance between a converted piece and the spline (document px). */
@@ -52,12 +61,44 @@ object SplineBezier {
     fun toSubpath(spline: VSpline, tol: Float = DEFAULT_TOLERANCE): VSubpath {
         val s = spline.sanitized()
         trivial(s)?.let { return it }
+        val parts = NurbsGeometry.pieces(s)
+        if (parts.size > 1 || parts[0] !== s) return joined(s, parts, tolerance(tol))
         val b = NurbsGeometry.basis(s)
         val out = PieceSink(b.spans.size * 2 + 2)
         val conv = Converter(s, b, tolerance(tol))
         for (span in b.spans) conv.span(span, out)
         return out.toSubpath(NurbsGeometry.isClosed(s))
     }
+
+    /**
+     * v1.7 (item 4): the Bézier form of the sanitized [s] from its pieces [parts] (more than the
+     * spline itself, [NurbsGeometry.pieces]): each piece converted as a spline of its own, joined
+     * at the corners (see the class docs).
+     */
+    private fun joined(s: VSpline, parts: List<VSpline>, tol: Double): VSubpath {
+        val closed = NurbsGeometry.isClosed(s)
+        val bases = Array(parts.size) { NurbsGeometry.basis(parts[it]) }
+        var spanCount = 0
+        for (b in bases) spanCount += b.spans.size
+        val cuts = cutsFor(closed, spanCount)
+        val out = PieceSink(spanCount * cuts * 2 + 2)
+        val converters = Converters(tol)
+        for ((k, part) in parts.withIndex()) {
+            if (k > 0 || closed) out.corner(part.points[0])
+            val b = bases[k]
+            val conv = converters.get(part, b)
+            for (span in b.spans) conv.span(span, out, cuts)
+        }
+        return out.toSubpath(closed)
+    }
+
+    /**
+     * v1.7 (item 4): the equal parts each span is cut into. A closed subpath needs 3 anchors to
+     * close (CurveGeometry), which a closed spline with one or two corners and only [spans] = 1
+     * or 2 spans in all would not give: its spans are then cut (exactly, widths included). 1 in
+     * every other case, and always without corners (a closed spline has at least 3 spans).
+     */
+    private fun cutsFor(closed: Boolean, spans: Int): Int = if (closed && spans in 1..2) (3 + spans - 1) / spans else 1
 
     /** The Bézier form of a sanitized spline with no span to convert (fewer than 2 points, or degree 1), else null. */
     private fun trivial(s: VSpline): VSubpath? {
@@ -83,18 +124,30 @@ object SplineBezier {
      * its control points and on the knots, which the structure fixes — so I9 holds as before; a
      * change of structure (a point added or deleted, the order, Cyclic, Endpoint) converts it all.
      * Dragging one point of a long path re-converts at most p + 1 spans instead of all of them.
+     * v1.7 (item 4): with corners the structure also includes the corners (a point made sharp or
+     * smooth converts it all) and the spans are those of every piece ([NurbsGeometry.pieces]).
      * Not thread-safe: one per tool, used on the main thread.
      */
     class Incremental(tol: Float = DEFAULT_TOLERANCE) {
         private val tolerance = tolerance(tol)
-        /** The sanitized points converted last (a copy), and what the structure gave for them. */
+        /** The sanitized points converted last (a copy), and the structure they were converted with. */
         private var points: List<VSplinePoint> = emptyList()
-        private var basis: NurbsBasis? = null
-        private var converter: Converter? = null
+        private var closed = false
         private var endpoint = false
-        /** The pieces of each span of [basis] (in [NurbsBasis.spans] order). */
-        private var pieces: Array<SpanPieces> = emptyArray()
+        /** Without corners the effective order (as in v1.6); with corners the spline's order. */
+        private var order = 0
+        private var corners = IntArray(0)
+        /** One [Part] per piece of that spline (the spline itself without corners); empty when nothing is kept. */
+        private var parts: Array<Part> = emptyArray()
+        private val converters = Converters(tolerance)
         private var dirty = BooleanArray(0)
+
+        /**
+         * A piece of the spline: the index of its first point in the spline ([start]; the piece's
+         * point i is the spline's point (start + i) mod n), its knots, and the pieces of each span
+         * of [basis] (in [NurbsBasis.spans] order).
+         */
+        private class Part(val start: Int, val basis: NurbsBasis, val spans: Array<SpanPieces>)
 
         /** Spans the last [toSubpath] converted (the others' pieces were reused). */
         var lastConverted: Int = 0
@@ -102,7 +155,7 @@ object SplineBezier {
 
         /** Forgets the last spline: the next conversion converts every span. */
         fun reset() {
-            points = emptyList(); basis = null; converter = null; pieces = emptyArray()
+            points = emptyList(); parts = emptyArray(); corners = IntArray(0)
         }
 
         /** The Bézier form of [spline], equal to `SplineBezier.toSubpath(spline, tol)`. */
@@ -112,33 +165,55 @@ object SplineBezier {
             val pts = s.points
             val n = pts.size
             val closed = NurbsGeometry.isClosed(s)
-            val k = s.effectiveOrder.coerceIn(2, n)
-            val old = basis
-            val same = old != null && points.size == n && old.order == k && old.closed == closed && (closed || endpoint == s.endpoint)
-            val b = if (same) old else NurbsGeometry.basis(s)
-            val conv = if (same) converter!!.also { it.s = s } else Converter(s, b, tolerance)
-            if (!same) pieces = Array(b.spans.size) { SpanPieces() }
+            val corners = NurbsGeometry.cornerIndices(s)
+            val order = if (corners.isEmpty()) s.effectiveOrder.coerceIn(2, n) else s.order
+            val same = parts.isNotEmpty() && points.size == n && this.order == order && this.closed == closed &&
+                corners.contentEquals(this.corners) && (closed || corners.isNotEmpty() || endpoint == s.endpoint)
+            val pieces = NurbsGeometry.pieces(s)
+            if (!same) {
+                parts = Array(pieces.size) { k ->
+                    val b = NurbsGeometry.basis(pieces[k])
+                    val start = when {
+                        corners.isEmpty() -> 0
+                        closed -> corners[k]
+                        k == 0 -> 0
+                        else -> corners[k - 1]
+                    }
+                    Part(start, b, Array(b.spans.size) { SpanPieces() })
+                }
+            }
             if (dirty.size < n) dirty = BooleanArray(n)
             for (i in 0 until n) dirty[i] = !same || pts[i] != points[i]
-            val p = b.degree
-            val out = PieceSink(b.spans.size * 2 + 2)
+            var spanCount = 0
+            for (part in parts) spanCount += part.basis.spans.size
+            val cuts = cutsFor(closed, spanCount)
+            val out = PieceSink(spanCount * cuts * 2 + 2)
             var converted = 0
-            for (si in b.spans.indices) {
-                val span = b.spans[si]
-                val sp = pieces[si]
-                var touched = false
-                for (j in 0..p) if (dirty[b.ctrl[span - p + j]]) { touched = true; break }
-                if (touched) {
-                    sp.clear()
-                    conv.span(span, sp)
-                    converted++
+            for (k in parts.indices) {
+                val part = parts[k]
+                val b = part.basis
+                val p = b.degree
+                if (corners.isNotEmpty() && (k > 0 || closed)) out.corner(pts[part.start])
+                var conv: Converter? = null
+                for (si in b.spans.indices) {
+                    val span = b.spans[si]
+                    val sp = part.spans[si]
+                    var touched = false
+                    for (j in 0..p) if (dirty[(part.start + b.ctrl[span - p + j]) % n]) { touched = true; break }
+                    if (touched) {
+                        sp.clear()
+                        val c = conv ?: converters.get(pieces[k], b).also { conv = it }
+                        c.span(span, sp, cuts)
+                        converted++
+                    }
+                    sp.replayInto(out)
                 }
-                sp.replayInto(out)
             }
             points = ArrayList(pts)
-            basis = b
-            converter = conv
+            this.closed = closed
             endpoint = s.endpoint
+            this.order = order
+            this.corners = corners
             lastConverted = converted
             return out.toSubpath(closed)
         }
@@ -280,17 +355,41 @@ object SplineBezier {
         }
     }
 
-    /** Collects cubic pieces (start point, two handles, start width) and joins them into anchors. */
+    /**
+     * Collects cubic pieces (start point, two handles, start width) and joins them into anchors.
+     * v1.7 (item 4): a piece added after [corner] starts at a corner (a sharp anchor).
+     */
     private class PieceSink(capacity: Int) : PieceOut {
         /** Per piece: start x, y, width, first handle x, y, second handle x, y. */
         private var data = DoubleArray(max(1, capacity) * STRIDE)
         private var n = 0
         private var endX = 0.0; private var endY = 0.0; private var endW = 1.0
+        /** Per piece: its start is a corner (grown on the first corner only). */
+        private var sharp = BooleanArray(0)
+        private var cornerPending = false
+        private var cornerX = 0.0; private var cornerY = 0.0; private var cornerW = 1.0
+
+        /**
+         * v1.7 (item 4): the next piece starts at the corner [p] (a sharp control point the curve
+         * passes through): its anchor is sharp, exactly at [p] with [p]'s width (not the piece's
+         * computed start, which may differ in the last bits); its handles stay the pieces' own.
+         */
+        fun corner(p: VSplinePoint) {
+            cornerPending = true
+            cornerX = p.x.toDouble(); cornerY = p.y.toDouble(); cornerW = p.width.toDouble()
+        }
 
         override fun add(p0x: Double, p0y: Double, p0w: Double, ax: Double, ay: Double, bx: Double, by: Double, p1x: Double, p1y: Double, p1w: Double) {
             if ((n + 1) * STRIDE > data.size) data = data.copyOf(data.size * 2)
             val o = n * STRIDE
-            data[o] = p0x; data[o + 1] = p0y; data[o + 2] = p0w
+            if (cornerPending) {
+                cornerPending = false
+                if (sharp.size <= n) sharp = sharp.copyOf(max(n + 1, data.size / STRIDE))
+                sharp[n] = true
+                data[o] = cornerX; data[o + 1] = cornerY; data[o + 2] = cornerW
+            } else {
+                data[o] = p0x; data[o + 1] = p0y; data[o + 2] = p0w
+            }
             data[o + 3] = ax; data[o + 4] = ay; data[o + 5] = bx; data[o + 6] = by
             n++
             endX = p1x; endY = p1y; endW = p1w
@@ -320,7 +419,7 @@ object SplineBezier {
                 if (!hasOut) { outX = -inX; outY = -inY }
                 if (prev < 0) { inX = -outX; inY = -outY }
                 anchors += VAnchor(
-                    px.toFloat(), py.toFloat(), sharp = false,
+                    px.toFloat(), py.toFloat(), sharp = i < sharp.size && sharp[i],
                     inX = inX.toFloat(), inY = inY.toFloat(), outX = outX.toFloat(), outY = outY.toFloat(),
                     width = pw.toFloat().coerceIn(0f, VSpline.MAX_WIDTH),
                 )
@@ -333,8 +432,25 @@ object SplineBezier {
         }
     }
 
-    /** Converts the spans of one spline (scratch arrays reused across spans). */
-    private class Converter(var s: VSpline, private val b: NurbsBasis, private val tol: Double) {
+    /** One [Converter] per degree, reused across the pieces of a spline (v1.7, item 4). */
+    private class Converters(private val tol: Double) {
+        private val byDegree = arrayOfNulls<Converter>(VSpline.MAX_ORDER)
+
+        /** A converter of [b]'s degree, set to [s] and [b]. */
+        fun get(s: VSpline, b: NurbsBasis): Converter {
+            val c = byDegree[b.degree] ?: return Converter(s, b, tol).also { byDegree[b.degree] = it }
+            c.s = s
+            c.b = b
+            return c
+        }
+    }
+
+    /**
+     * Converts the spans of one spline (scratch arrays reused across spans). [s] and [b] may be
+     * replaced by another spline and basis of the same degree: a span's pieces depend only on
+     * them, never on what was converted before.
+     */
+    private class Converter(var s: VSpline, var b: NurbsBasis, private val tol: Double) {
         private val p = b.degree
         private val dim = NurbsGeometry.DIM
         private val h = DoubleArray((p + 1) * dim)
@@ -345,12 +461,44 @@ object SplineBezier {
         private val v1 = DoubleArray(dim); private val d1 = DoubleArray(dim)
         private val vs = DoubleArray(dim); private val ds = DoubleArray(dim)
 
-        fun span(span: Int, out: PieceOut) {
-            NurbsGeometry.spanBezier(s, b, span, h, scratch)
-            if (p <= 3 && constantWeight()) exact(out) else {
+        /** Converts span [span] (a knot index) into [out]; v1.7: cut into [cuts] equal parts first (see [cutsFor]). */
+        fun span(span: Int, out: PieceOut, cuts: Int = 1) {
+            if (cuts <= 1) {
+                NurbsGeometry.spanBezier(s, b, span, h, scratch)
+                convert(out)
+                return
+            }
+            val a = b.knots[span]
+            val c = b.knots[span + 1]
+            for (j in 0 until cuts) {
+                val to = if (j == cuts - 1) c else a + (c - a) * (j + 1) / cuts
+                NurbsGeometry.spanBezier(s, b, span, h, scratch, a + (c - a) * j / cuts, to)
+                convert(out)
+            }
+        }
+
+        /** The Bézier in [h] as cubic pieces into [out]. */
+        private fun convert(out: PieceOut) {
+            if (p == 1) line(out)
+            else if (p <= 3 && constantWeight()) exact(out) else {
                 toPowerBasis()
                 approximate(out)
             }
+        }
+
+        /**
+         * v1.7 (item 4): degree 1, only a 2-point piece between corners (a whole spline of degree
+         * 1 never gets here): the straight segment, its handles at the thirds (whatever the
+         * weights, which only change how the width is blended along it).
+         */
+        private fun line(out: PieceOut) {
+            val x0 = h[0] / h[2]; val y0 = h[1] / h[2]; val w0 = h[3] / h[2]
+            val x1 = h[dim] / h[dim + 2]; val y1 = h[dim + 1] / h[dim + 2]; val w1 = h[dim + 3] / h[dim + 2]
+            out.add(
+                x0, y0, w0,
+                x0 + (x1 - x0) / 3.0, y0 + (y1 - y0) / 3.0, x1 + (x0 - x1) / 3.0, y1 + (y0 - y1) / 3.0,
+                x1, y1, w1,
+            )
         }
 
         /** [h] (Bernstein, degree [p]) in the power basis: c_k = C(p, k) Σ_{i ≤ k} (−1)^(k−i) C(k, i) b_i. */
