@@ -242,9 +242,11 @@ class SymmetryStrokeRobolectricTest {
         for (id in listOf("chalk", "pencil", "spray")) {
             val c = setup(vector = true)
             c.brush = BrushLibrary.byId(id) ?: continue
+            // The ruler is on but every copy is culled: the stroke has no copies (none are written, I13).
+            c.updateSymmetry(noCopies)
             c.draw(wave(40f, 100f, len = 200f))
             val s = c.layer.vector!!.objects.single() as VStroke
-            assertTrue(s.copies.isEmpty())
+            assertTrue("$id: no copies", s.copies.isEmpty())
             fun replay(copies: List<FloatArray>): IntArray {
                 val b = BitmapUtils.createLayerBitmap(w, h)
                 StrokeRaster().render(Canvas(b), Rect(0, 0, w, h), s.preset, s.color, s.seed, s.stylus, s.points, copies = copies)

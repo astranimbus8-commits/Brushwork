@@ -17,9 +17,9 @@ import kotlin.math.sin
  * copy k (0 until [copies]) is `maps[k + 1]`. A copy of a resolved dab has
  *
  * - its centre mapped (by the homography for the perspective array);
- * - its diameter × √|det J| at the dab's centre (J the map's Jacobian there, exactly
- *   `StrokeCopies.scaleAt`, so the vector readers' bounds and hit tests agree), drawn at 1 px with
- *   proportionally less alpha below 1 px like `StrokeDynamics.resolve`;
+ * - its diameter × √|det J| at the dab's centre (J the map's Jacobian there:
+ *   `StrokeCopies.scaleAt`, so the vector readers' bounds and hit tests agree; within 1e-5 of 1
+ *   it is 1), drawn at 1 px with proportionally less alpha below 1 px like `StrokeDynamics.resolve`;
  * - its tip turned: the angle of J·(cos θ, sin θ) (θ the dab's rotation; for a pixel tip the
  *   brush angle baked into the tip, so the copy gets a brush turned the same way); a radial tip
  *   ([isRadial]: a disc at any angle) keeps θ, which draws the same disc faster;

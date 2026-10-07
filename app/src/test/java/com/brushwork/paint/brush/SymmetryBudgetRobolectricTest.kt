@@ -28,13 +28,12 @@ import kotlin.math.sin
 
 /**
  * v1.7 (item 18, §6.3): the symmetry frame budgets, measured on the JVM (Robolectric NATIVE) as
- * the brush's work per frame of a finger stroke (two touch events, 24 px of travel, every copy's
- * dabs stamped into the one buffer; the median frame after a warm-up stroke). Mirror with a
- * 100 px brush stays within its 16 ms here too. The many-copy budgets (32 copies of a 50 px
- * brush ≤ 33 ms, 64 copies of a 64 px brush ≤ 16 ms) are pure dab drawing, which this JVM's
- * raster does several times slower than the phone's: here each copy must cost no more than one
- * more dab of the same stroke (the copies add no work of their own); the T606's times are a
- * device check.
+ * the brush's stroke work per frame of a finger stroke (two touch events, 24 px of travel, every
+ * copy's dabs stamped into the one buffer; the median frame after a warm-up stroke). The
+ * composite of the stroke onto the screen is not included. Mirror with a 100 px brush ≤ 16 ms
+ * and 32 copies of a 50 px brush ≤ 33 ms are asserted, and that each copy costs no more than one
+ * more dab of the stroke. 64 copies of a 64 px brush (≤ 16 ms in §6.3) don't fit that budget
+ * here: only the copies' own work is guarded (a known gap; the T606's times are device checks).
  */
 @RunWith(RobolectricTestRunner::class)
 class SymmetryBudgetRobolectricTest {
@@ -95,24 +94,30 @@ class SymmetryBudgetRobolectricTest {
     }
 
     private fun report(what: String, frame: Pair<Double, Double>, budgetMs: Double) =
-        println("v17 H symmetry budget: $what: median ${"%.2f".format(frame.first)} ms, worst ${"%.2f".format(frame.second)} ms per frame (T606 budget $budgetMs ms)")
+        println(
+            "v17 H symmetry budget: $what: median ${"%.2f".format(frame.first)} ms, worst ${"%.2f".format(frame.second)} ms " +
+                "per frame (§6.3 budget $budgetMs ms: ${"%.2f".format(frame.first / budgetMs)} × the budget)",
+        )
 
     @Test
     fun theSymmetryFramesStayWithinTheirBudgets() {
         val mirror = frames(SymmetrySettings(SymmetryType.MIRROR), 2, 100f)
         report("Mirror, 100 px brush", mirror, 16.0)
         assertTrue("Mirror, 100 px brush: median frame ${mirror.first} ms", mirror.first <= PerfBudget.ms(16.0))
-        val many = listOf(
-            Triple("32 copies of a 50 px brush", SymmetrySettings(SymmetryType.ROTATION, divisions = 32), 50f) to (32 to 33.0),
-            Triple("64 copies of a 64 px brush", SymmetrySettings(SymmetryType.KALEIDOSCOPE, divisions = 32), 64f) to (64 to 16.0),
-        )
-        for ((case, maps) in many) {
-            val (what, s, px) = case
-            val plain = frames(SymmetrySettings(), 0, px)
-            val sym = frames(s, maps.first, px)
-            report("$what (no symmetry: ${"%.2f".format(plain.first)} ms)", sym, maps.second)
-            // Each copy costs what one more dab of the stroke costs, no more.
-            assertTrue("$what: ${sym.first} ms vs ${maps.first} × ${plain.first} ms", sym.first <= 1.5 * maps.first * plain.first + PerfBudget.ms(1.0))
-        }
+
+        val plain50 = frames(SymmetrySettings(), 0, 50f)
+        val rotation = frames(SymmetrySettings(SymmetryType.ROTATION, divisions = 32), 32, 50f)
+        report("32 copies of a 50 px brush (no symmetry: ${"%.2f".format(plain50.first)} ms)", rotation, 33.0)
+        assertTrue("32 copies of a 50 px brush: median frame ${rotation.first} ms", rotation.first <= PerfBudget.ms(33.0))
+        // Each copy costs what one more dab of the stroke costs, no more.
+        assertTrue("32 copies: ${rotation.first} ms vs 32 × ${plain50.first} ms", rotation.first <= 1.5 * 32 * plain50.first + PerfBudget.ms(1.0))
+
+        // §6.3 allows 16 ms; this takes about 57 ms on the development desktop, all of it dab
+        // drawing (64 × the plain stroke's frame): a known gap, so only the copies' own work is
+        // guarded here, and the T606 time is a device check.
+        val plain64 = frames(SymmetrySettings(), 0, 64f)
+        val kaleidoscope = frames(SymmetrySettings(SymmetryType.KALEIDOSCOPE, divisions = 32), 64, 64f)
+        report("64 copies of a 64 px brush (no symmetry: ${"%.2f".format(plain64.first)} ms)", kaleidoscope, 16.0)
+        assertTrue("64 copies: ${kaleidoscope.first} ms vs 64 × ${plain64.first} ms", kaleidoscope.first <= 1.5 * 64 * plain64.first + PerfBudget.ms(1.0))
     }
 }
