@@ -93,6 +93,15 @@ data class LayerWindowMetrics(
         const val ROW_ROOM_BESIDE_THUMB = 140f
 
         const val SMALL_THUMB = 44f
+
+        /**
+         * v1.7: the smallest thumbnail of a row inside folders ([thumbAt]). The Array badge and the
+         * kind badge (16 dp each, in opposite corners) overlap there by 2 dp on a layer that has both.
+         */
+        const val DEEP_THUMB = 32f
+
+        /** v1.7: the smallest thumbnail of a folder row inside folders: its open / close target. */
+        const val FOLDER_THUMB_MIN = 40f
         const val SIDE_ROW = 56f
 
         /**
@@ -196,12 +205,15 @@ data class LayerWindowMetrics(
 
     /**
      * v1.7 (§3.8): the thumbnail of a row [depth] folders deep. Its indent comes out of the
-     * thumbnail first (down to [SMALL_THUMB]) so the name, the values and every badge keep their
-     * room at 392 dp: [thumb] at the top level, and wherever the list is wide enough.
+     * thumbnail first so the name, the values and every badge keep their room at 392 dp: down to
+     * [DEEP_THUMB] (a row four deep in ibisPaint's 220 dp list then has the room a top-level row
+     * has on a 360 dp phone), a [folder]'s down to [FOLDER_THUMB_MIN] (its thumbnail opens and
+     * closes it, a 40 dp target). [thumb] at the top level, and wherever the list is wide enough.
      */
-    fun thumbAt(depth: Int): Float {
+    fun thumbAt(depth: Int, folder: Boolean = false): Float {
         if (depth <= 0) return thumb
-        return (list - ROW_ROOM_BESIDE_THUMB - LayerTreeRows.indent(depth)).coerceIn(SMALL_THUMB, maxOf(thumb, SMALL_THUMB))
+        val floor = if (folder) FOLDER_THUMB_MIN else DEEP_THUMB
+        return (list - ROW_ROOM_BESIDE_THUMB - LayerTreeRows.indent(depth)).coerceIn(floor, maxOf(thumb, floor))
     }
 }
 

@@ -197,10 +197,17 @@ class LayerTreeRowsRobolectricTest {
         // ibisPaint's 382 dp window (a 392 dp phone): a 220 dp list, 62 dp thumbnails.
         val m = LayerWindowMetrics.of(382f, 520f)
         assertEquals(62f, m.thumbAt(0), 0f)
-        assertEquals("220 − 140 − 48", LayerWindowMetrics.SMALL_THUMB, m.thumbAt(4), 0f)
+        assertEquals("220 − 140 − 48 = 32", LayerWindowMetrics.DEEP_THUMB, m.thumbAt(4), 0f)
         assertEquals(m.thumbAt(4), m.thumbAt(8), 0f)
         assertEquals("220 − 140 − 12 = 68: the full thumbnail", 62f, m.thumbAt(1), 0f)
         assertEquals("220 − 140 − 24", 56f, m.thumbAt(2), 0f)
+        assertEquals("220 − 140 − 36", 44f, m.thumbAt(3), 0f)
+        // A folder's thumbnail opens and closes it: never under a 40 dp target.
+        assertEquals(LayerWindowMetrics.FOLDER_THUMB_MIN, m.thumbAt(4, folder = true), 0f)
+        assertEquals(56f, m.thumbAt(2, folder = true), 0f)
+        // A 360 dp phone's 188 dp list: deep rows at the smallest thumbnail.
+        val narrow = LayerWindowMetrics.of(350f, 520f)
+        assertEquals(LayerWindowMetrics.DEEP_THUMB, narrow.thumbAt(2), 0f)
         // A wide window keeps the full thumbnail at every depth.
         val wide = LayerWindowMetrics.of(600f, 700f)
         assertEquals(wide.thumb, wide.thumbAt(4), 0f)
