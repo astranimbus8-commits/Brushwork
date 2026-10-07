@@ -121,7 +121,7 @@ object TextExport {
         val block = prep.block
         if (block == null) {
             val paints = prep.paints ?: TextRenderer.pathPaints(spec)
-            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path, TextRenderer.pathLetters(item)) ?: return null
+            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path, TextRenderer.pathLetters(item), item.kerns) ?: return null
             if (stroke != null) out += TextOutlinePart(stroke, spec.strokeColor, TextOutlinePart.Kind.TEXT_OUTLINE)
             out += TextOutlinePart(glyphs, spec.color, TextOutlinePart.Kind.TEXT)
             return out

@@ -172,7 +172,7 @@ class TextTransformsTest {
     }
 
     @Test
-    fun aMappedTextOf2000CharactersRendersWithinBudget() {
+    fun aMappedTextRendersWithinBudget() {
         val text = buildString { while (length < 2000) append(words).append(' ') }.take(2000)
         val big = boxed.copy(text = text, spec = boxed.spec.copy(sizePx = 12f, box = boxed.spec.box.copy(width = 700f)))
         val data = TextCodec.encode(big)
@@ -192,5 +192,22 @@ class TextTransformsTest {
         val ms = times[2]
         println("[perf] TextTransforms 2000 chars: map + layout + draw ${"%.2f".format(ms)} ms")
         assertTrue("map + render $ms ms", ms < PerfBudget.ms(150.0))
+
+        // A typical text (the boxed caption): within the commit budget.
+        val small = TextCodec.encode(boxed)
+        fun commitSmall(): Long {
+            val t0 = System.nanoTime()
+            val item = requireNotNull(TextCodec.decode(TextTransforms.mapped(small, m)))
+            val prep = TextRenderer.prepare(item)
+            val block = requireNotNull(prep.block)
+            val bmp = Bitmap.createBitmap(block.width.toInt() + 1, block.height.toInt() + 1, Bitmap.Config.ARGB_8888)
+            TextRenderer.drawItem(Canvas(bmp), item.copy(cx = block.width / 2f, cy = block.height / 2f, rotationDeg = 0f), prep, null)
+            bmp.recycle()
+            return System.nanoTime() - t0
+        }
+        repeat(2) { commitSmall() }
+        val typical = List(5) { commitSmall() / 1e6 }.sorted()[2]
+        println("[perf] TextTransforms typical: map + layout + draw ${"%.2f".format(typical)} ms")
+        assertTrue("typical map + render $typical ms", typical < PerfBudget.ms(120.0))
     }
 }

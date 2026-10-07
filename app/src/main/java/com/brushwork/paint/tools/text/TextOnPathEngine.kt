@@ -59,7 +59,12 @@ internal class PathTextLayout(
     private val paint: Paint,
     /** v1.6: the letters have their own sizes (each cluster is outlined and drawn on its own). */
     val lettersScaled: Boolean = false,
+    /** v1.7 (item 17): manual kerns move the clusters after their gaps (each is outlined and drawn on its own). */
+    val kerned: Boolean = false,
 ) {
+    /** Each cluster is outlined and drawn on its own, at its own place (scaled letters, kerns). */
+    val perCluster: Boolean get() = lettersScaled || kerned
+
     /**
      * Flattened glyph outlines (closed polygons, x, y pairs, baseline 0) and for each contour the
      * index of the cluster it belongs to (the one its middle falls in).
@@ -72,8 +77,8 @@ internal class PathTextLayout(
     fun outline(): Outline {
         outline?.let { return it }
         val path = Path()
-        if (lettersScaled) {
-            // v1.6 scaled letters: every cluster at its own size and baseline shift.
+        if (perCluster) {
+            // v1.6 scaled letters, v1.7 kerns: every cluster at its own place, size and baseline shift.
             val piece = Path()
             val base = paint.textSize
             try {
@@ -141,11 +146,11 @@ internal class PathTextLayout(
 
     /** Draws cluster [c] with [paint] so that its baseline center lands on the canvas origin. */
     fun drawCluster(canvas: Canvas, c: PathCluster, paint: Paint) {
-        if (!lettersScaled) {
+        if (!perCluster) {
             canvas.drawTextRun(line, c.start, c.end, c.contextStart, c.contextEnd, -c.advance / 2f, 0f, c.rtl, paint)
             return
         }
-        // v1.6 scaled letter: at its size, its baseline shifted (the paint is given back as it was).
+        // v1.6 scaled letter, v1.7 kerned cluster: at its size, its baseline shifted (the paint is given back as it was).
         val base = paint.textSize
         paint.textSize = base * c.scale
         try {
@@ -200,8 +205,8 @@ internal object TextOnPathEngine {
         }
     }
 
-    /** v1.6: [letters] = the letter scaling the layout has (null = none). */
-    private data class LayoutKey(val text: String, val paint: PaintKey, val letters: LetterScaleSpec?)
+    /** v1.6: [letters] = the letter scaling the layout has (null = none). v1.7: [kerns] = its manual kerns. */
+    private data class LayoutKey(val text: String, val paint: PaintKey, val letters: LetterScaleSpec?, val kerns: List<TextKern>)
 
     /** [layout] is compared by identity (a new layout is a new text or font). */
     private data class ResultKey(val layout: PathTextLayout, val spec: TextPathSpec)
@@ -235,24 +240,25 @@ internal object TextOnPathEngine {
     /**
      * The layout of [text] with [paint] (cached), null when there is nothing to draw. [letters]
      * (v1.6): the letters are scaled (the caller has checked the script can be; null = plain).
+     * [kerns] (v1.7, item 17): [text]'s manual kerns ([TextItem.kerns]; see [buildLayout]).
      */
     @Synchronized
-    fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null): PathTextLayout? {
+    fun layout(text: String, paint: Paint, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): PathTextLayout? {
         val scale = letters?.takeIf { it.isOn }
-        val key = LayoutKey(text, PaintKey.of(paint), scale)
+        val key = LayoutKey(text, PaintKey.of(paint), scale, kerns)
         layouts[key]?.let { return it.layout }
         val line = oneLine(text)
-        val l = if (line.isBlank()) null else buildLayout(line, paint, scale)
+        val l = if (line.isBlank()) null else buildLayout(line, paint, scale, text, kerns)
         layouts[key] = LayoutEntry(l)
         return l
     }
     /** Layout and placement of [text] along [spec] (cached for the last two inputs); null when nothing is drawn. */
     @Synchronized
-    fun result(text: String, paint: Paint, requested: TextPathSpec, letters: LetterScaleSpec? = null): Pair<PathTextLayout, PathTextResult>? {
+    fun result(text: String, paint: Paint, requested: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): Pair<PathTextLayout, PathTextResult>? {
         if (!requested.isActive) return null
         // Numbers out of any sensible range (a corrupt file, a runaway pinch) are fixed first.
         val spec = TextPathGeometry.sanitized(requested)
-        val layout = layout(text, paint, letters) ?: return null
+        val layout = layout(text, paint, letters, kerns) ?: return null
         val key = ResultKey(layout, spec)
         results[key]?.let { return layout to it }
         val guide = guideFor(spec) ?: return null
@@ -358,8 +364,8 @@ internal object TextOnPathEngine {
     // ------------------------------------------------------------------ drawing
 
     /** Draws [text] along [spec]; returns the drawn bounds (empty when nothing was drawn). */
-    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF {
-        val (layout, res) = result(text, fill, spec, letters) ?: return RectF()
+    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF {
+        val (layout, res) = result(text, fill, spec, letters, kerns) ?: return RectF()
         val fillAlign = fill.textAlign
         val strokeAlign = stroke?.textAlign
         fill.textAlign = Paint.Align.LEFT
@@ -418,8 +424,8 @@ internal object TextOnPathEngine {
      * [stroke], the area the outline stroke covers (second; null without one). Color emoji have
      * no outline. Null when nothing is drawn.
      */
-    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): Pair<Path, Path?>? {
-        val (layout, res) = result(text, fill, spec, letters) ?: return null
+    fun outlines(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): Pair<Path, Path?>? {
+        val (layout, res) = result(text, fill, spec, letters, kerns) ?: return null
         val glyphs = Path()
         val outlined = Path()
         val tmp = Path()
@@ -430,7 +436,7 @@ internal object TextOnPathEngine {
         for (pl in res.placements) {
             val c = pl.cluster
             tmp.rewind()
-            if (layout.lettersScaled) {
+            if (layout.perCluster) {
                 // v1.6: at the cluster's own size and baseline shift, as drawCluster draws it.
                 val base = p.textSize
                 p.textSize = base * c.scale
@@ -455,8 +461,8 @@ internal object TextOnPathEngine {
     }
 
     /** Bounds of what [draw] paints. */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF {
-        val (_, res) = result(text, fill, spec, letters) ?: return RectF()
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF {
+        val (_, res) = result(text, fill, spec, letters, kerns) ?: return RectF()
         return bounds(res, spec, fill, stroke)
     }
 
@@ -490,7 +496,19 @@ internal object TextOnPathEngine {
 
     private class Run(val start: Int, val limit: Int, val rtl: Boolean)
 
-    private fun buildLayout(line: String, source: Paint, letters: LetterScaleSpec? = null): PathTextLayout {
+    /**
+     * The layout of [line] ([text] on one line, [oneLine]) with [source]'s text settings.
+     * [letters] (v1.6): the letters are scaled ([buildScaled]).
+     *
+     * v1.7 manual kerns ([kerns], item 17): [text]'s kerns that apply ([TextKerns.advancesPx]: not
+     * at a line break, between two clusters, in a paragraph that can be drawn one cluster at a
+     * time) move the clusters after their gaps, on a line that is one left-to-right run of
+     * characters drawn one cluster at a time ([LetterRamp.supports]); the line is then laid out
+     * like scaled letters ([buildScaled], every factor 1 without letter scaling). A line holding
+     * right-to-left or shaped text keeps its shaping and ignores kerns, and so does a line whose
+     * kerns all fall where none applies: it is laid out exactly as without them.
+     */
+    private fun buildLayout(line: String, source: Paint, letters: LetterScaleSpec? = null, text: String = line, kerns: List<TextKern> = emptyList()): PathTextLayout {
         val p = Paint(source).apply {
             textAlign = Paint.Align.LEFT
             style = Paint.Style.FILL
@@ -524,8 +542,14 @@ internal object TextOnPathEngine {
             Bidi.reorderVisually(levels, 0, order, 0, count)
             order.map { o -> val i = o as Int; Run(bidi.getRunStart(i), bidi.getRunLimit(i), bidi.getRunLevel(i) % 2 == 1) }
         }
-        // v1.6 scaled letters (left-to-right text only: the caller checked the script).
-        if (letters != null && runs.size == 1 && !runs[0].rtl) return buildScaled(line, p, letters, cuts, capHeight)
+        if (runs.size == 1 && !runs[0].rtl) {
+            // v1.6 scaled letters (left-to-right text only: the caller checked the script).
+            val ramp = letters?.let { LetterRamp.of(line, it) }
+            // v1.7 manual kerns (the line's indices are the text's: line breaks became spaces).
+            val kernPx = if (kerns.isEmpty() || text.length != len || !LetterRamp.supports(line)) null
+            else TextKerns.advancesPx(text, kerns, 0, p.textSize, ramp?.factors)
+            if (ramp != null || kernPx != null) return buildScaled(line, p, letters, ramp, kernPx, cuts, capHeight)
+        }
 
         val clusters = ArrayList<PathCluster>()
         val tmp = Path()
@@ -558,10 +582,22 @@ internal object TextOnPathEngine {
      * advance times `f(k)` ([LetterRamp]), is drawn at `size · f(k)` and, for Center / Top, moved
      * off the path along its normal (layout y, negative = up: `−capH·(1 − f)/2` / `−capH·(1 − f)`),
      * so the bent outline and the rotated letters both follow it. [capHeight] is at full size.
+     * [ramp] is [letters]' ramp of [line] (both null: letters at full size).
+     *
+     * v1.7 [kernPx] (manual kerns, [TextKerns.advancesPx] of the line, already scaled with the
+     * letter before each gap): the extra space after each character, added after its cluster, so
+     * every cluster after a kerned gap moves along the path by it (null: none).
      */
-    private fun buildScaled(line: String, p: Paint, letters: LetterScaleSpec, cuts: List<Int>, capHeight: Float): PathTextLayout {
+    private fun buildScaled(
+        line: String,
+        p: Paint,
+        letters: LetterScaleSpec?,
+        ramp: LetterRampResult?,
+        kernPx: FloatArray?,
+        cuts: List<Int>,
+        capHeight: Float,
+    ): PathTextLayout {
         val len = line.length
-        val ramp = LetterRamp.of(line, letters)
         val bounds = ArrayList<Int>(cuts.size + 2)
         bounds += 0
         for (c in cuts) if (c in 1 until len) bounds += c
@@ -579,12 +615,12 @@ internal object TextOnPathEngine {
             for (i in 0 until bounds.size - 1) {
                 val cs = bounds[i]
                 val ce = bounds[i + 1]
-                val f = ramp.factors[cs]
+                val f = ramp?.factors?.get(cs) ?: 1f
                 val w = (adv[i + 1] - adv[i]) * f
-                val dy = when (letters.align) {
+                val dy = when (letters?.align) {
                     LetterScaleAlign.CENTER -> -capHeight * (1f - f) / 2f
                     LetterScaleAlign.TOP -> -capHeight * (1f - f)
-                    LetterScaleAlign.BASELINE -> 0f
+                    LetterScaleAlign.BASELINE, null -> 0f
                 }
                 val blank = (cs until ce).all { Character.isWhitespace(line[it]) || Character.isSpaceChar(line[it]) }
                 p.textSize = base * f
@@ -593,11 +629,13 @@ internal object TextOnPathEngine {
                 val ink = RectF(rect).apply { offset(0f, dy) }
                 clusters += PathCluster(cs, ce, cs, ce, false, x, x + w, blank, rigid, ink, f, dy)
                 x += w
+                // v1.7: the kerns of the gaps in and after the cluster (only the last can have one).
+                if (kernPx != null) for (j in cs until ce) x += kernPx[j]
             }
         } finally {
             p.textSize = base
         }
-        return PathTextLayout(line, x, capHeight, clusters, p, lettersScaled = true)
+        return PathTextLayout(line, x, capHeight, clusters, p, lettersScaled = ramp != null, kerned = kernPx != null)
     }
 
     private fun hasNonLatin(s: String, start: Int, end: Int): Boolean = (start until end).any { s[it].code >= 0x2000 }

@@ -37,9 +37,6 @@ internal const val KERNING_UNIT = "/1000 em"
 /** The Kerning row's caption while the cursor names no gap (at an end of the text, one letter selected). */
 internal const val KERNING_HINT = "Put the cursor between two letters, or select letters"
 
-/** The Kerning row's caption on text along a shape (kerning applies to straight text). */
-internal const val KERNING_PATH_REFUSAL = "Kerning works on straight text"
-
 /** The description of the "Font kerning" switch. */
 internal const val FONT_KERNING_NOTE = "The font's own spacing of letter pairs such as AV and To"
 
@@ -59,8 +56,8 @@ private val KerningFieldWidth = 40.dp + 72.dp + 40.dp
  *   is at, or every gap inside its selection ([TextKerns.gaps]; [selection] is the text field's).
  *   The caption names the letters ("Between “A” and “V”"); a selection whose gaps differ shows
  *   "Mixed" (typing a number sets them all, −/+ move each by 10). Disabled, saying why, on
- *   vertical text, on text along a shape, and where the cursor names no gap. Only for hosts that
- *   edit kerns ([KerningEditor]).
+ *   vertical text and where the cursor names no gap; text along a shape is kerned along it.
+ *   Only for hosts that edit kerns ([KerningEditor]).
  * - "Font kerning": the font's own pair kerning (on by default; off sets the letters by their
  *   plain advances, and the text exports as outlines).
  */
@@ -72,11 +69,9 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
     if (kerning != null) {
         val text = item.text
         val gaps = TextKerns.gaps(selection.start, selection.end, text.length)
-        val refusal = when {
-            spec.vertical -> KerningLabels.VERTICAL_REFUSAL
-            item.path.isActive -> KERNING_PATH_REFUSAL
-            else -> null
-        }
+        // Text along a shape is kerned along it (TextOnPath, which ignores "vertical"); vertical
+        // text is not kerned.
+        val refusal = if (spec.vertical && !item.path.isActive) KerningLabels.VERTICAL_REFUSAL else null
         val active = if (refusal == null) gaps else null
         val common = active?.let { TextKerns.commonValue(item.kerns, it) }
         val mixed = active != null && common == null

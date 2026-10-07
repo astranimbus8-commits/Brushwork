@@ -455,13 +455,16 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /** v1.7: the text with its kerns following their characters ([TextKerns.edited]). */
     override fun setText(text: String, cursor: Int) = update { it.copy(text = text, kerns = TextKerns.edited(it.kerns, it.text, text, cursor)) }
 
-    /** v1.7: kerns of [gaps] in the current text (horizontal text only; see [KerningEditor.setKerns]). */
+    /**
+     * v1.7: kerns of [gaps] in the current text (horizontal text and text on a path, which is
+     * never set vertically; see [KerningEditor.setKerns]).
+     */
     override fun setKerns(gaps: IntRange, value: Int) = update {
-        if (it.spec.vertical) it else it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
+        if (it.spec.vertical && !it.path.isActive) it else it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
     override fun nudgeKerns(gaps: IntRange, delta: Int) = update {
-        if (it.spec.vertical) it else it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
+        if (it.spec.vertical && !it.path.isActive) it else it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
     }
 
     override fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }

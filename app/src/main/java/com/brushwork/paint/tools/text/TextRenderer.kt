@@ -311,7 +311,7 @@ object TextRenderer {
         return when {
             item.path.isActive -> {
                 val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
-                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path, pathLetters(item)))
+                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns))
                 PreparedText(item.text, item.spec, item.path, null, paints, b, kerns = item.kerns)
             }
             item.thread.isOn -> {
@@ -1140,7 +1140,7 @@ object TextRenderer {
             canvas.restore()
         } else {
             val paints = prepared.paints
-            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path, pathLetters(item))
+            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns)
         }
         if (selection != null) {
             canvas.clipRect(bounds)

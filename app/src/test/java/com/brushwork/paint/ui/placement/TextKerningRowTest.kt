@@ -11,6 +11,9 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextKern
+import com.brushwork.paint.tools.text.TextKerns
+import com.brushwork.paint.tools.text.TextPathSpec
+import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.KerningLabels
@@ -31,8 +34,9 @@ import kotlin.math.abs
  * v1.7 §3.17d (item 17, area D): the text editor's Kerning row and "Font kerning" switch, on a
  * 392 dp phone. The row sits under "Letter spacing"; the text field's cursor or selection names
  * the gaps it edits, its caption names the letters, a selection of differing gaps shows "Mixed"
- * (−/+ move each gap, a typed number sets them all, also after leaving the text field), and
- * vertical text disables it saying why. Controls are found by their labels and the row's tag.
+ * (−/+ move each gap, a typed number sets them all, also after leaving the text field),
+ * vertical text disables it saying why, and text along a shape is kerned along it. Controls are
+ * found by their labels and the row's tag.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.placement.kerningrowsandbox"])
@@ -121,6 +125,18 @@ class TextKerningRowTest {
         assertTrue(SmokeUi.has(KerningLabels.VERTICAL_REFUSAL, exact = true))
         assertFalse(SmokeUi.isEnabled(increase))
         assertTrue("its kerns are kept", tool.item!!.kerns.isNotEmpty())
+
+        // Text along a shape is kerned along it: the row works again.
+        tool.updateSpec { it.copy(vertical = false) }
+        tool.setPath(TextPathSpec(type = TextPathType.CIRCLE, cx = 200f, cy = 200f, radius = 90f))
+        SmokeUi.settle()
+        assertTrue(tool.item!!.path.isActive)
+        select(2, 2)
+        assertFalse(SmokeUi.has(KerningLabels.VERTICAL_REFUSAL, exact = true))
+        assertTrue(SmokeUi.isEnabled(increase))
+        val before = TextKerns.valueAt(tool.item!!.kerns, 1)
+        SmokeUi.click(increase)
+        assertEquals(before + KERNING_STEP, TextKerns.valueAt(tool.item!!.kerns, 1))
     }
 
     /** Focuses the text field and selects [start, end) in it (a cursor when equal). */

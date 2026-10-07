@@ -34,13 +34,25 @@ object TextOnPath {
      * v1.6: [letters] scales the letters progressively (per-cluster size and advance; Center and
      * Top move the smaller letters along the path's normal). The caller checks the script can be
      * drawn per cluster (`LetterRamp.supports`); null = plain letters.
+     *
+     * v1.7: [kerns] ([TextItem.kerns], indices of [text]) move the letters after their gaps
+     * along the path, by `value / 1000` em (scaled with the letter before the gap). They apply
+     * on a left-to-right line drawn one cluster at a time (as scaled letters are, so without
+     * ligatures); a text holding right-to-left or shaped script ignores them.
      */
-    fun draw(canvas: Canvas, text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF =
-        TextOnPathEngine.draw(canvas, text, fill, stroke, spec, letters)
+    fun draw(
+        canvas: Canvas,
+        text: String,
+        fill: Paint,
+        stroke: Paint?,
+        spec: TextPathSpec,
+        letters: LetterScaleSpec? = null,
+        kerns: List<TextKern> = emptyList(),
+    ): RectF = TextOnPathEngine.draw(canvas, text, fill, stroke, spec, letters, kerns)
 
     /** Bounds [draw] would cover (for hit testing and invalidation). */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null): RectF =
-        TextOnPathEngine.bounds(text, fill, stroke, spec, letters)
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF =
+        TextOnPathEngine.bounds(text, fill, stroke, spec, letters, kerns)
 
     /**
      * The guide path (thin line shown while editing): the shape itself, plus the control arms of
