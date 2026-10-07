@@ -1630,6 +1630,29 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         return reopened != null || opening
     }
 
+    /**
+     * v1.7 (item 6, §3.6; area B): switches to the Path tool on the layer [layerId] and opens its
+     * path object [objectId] there ([reopen]) with the control points [select] selected; the
+     * Shape tool's "Turn into path" hands a converted shape over this way. Called on any kind's
+     * instance, the Path tool's does it. Nothing happens without such a layer; when the object
+     * can't be opened (not a spline path that passes I9, a locked or hidden layer...), the Path
+     * tool is still active on the layer. A pending path of the Path tool is applied first.
+     *
+     * Foundation stub: opens the object with no selection ([select] is ignored) until area B
+     * implements it.
+     */
+    @Suppress("UNUSED_PARAMETER")
+    fun openPath(layerId: Long, objectId: Long, select: IntArray) {
+        val tool = controller.tools[ToolId.PATH] as? CurveTool ?: return
+        val layer = controller.doc.layerById(layerId) ?: return
+        controller.selectLayer(layer)
+        controller.selectTool(ToolId.PATH)
+        if (controller.currentTool !== tool || controller.doc.activeLayer !== layer) return
+        if (tool.hasPendingWork) tool.commit()
+        val path = layer.vector?.byId(objectId) as? VPath ?: return
+        tool.reopen(path)
+    }
+
     private fun open(session: VectorEditSession, layer: Layer, path: VPath) {
         val st = path.stroke
         val user = settings
