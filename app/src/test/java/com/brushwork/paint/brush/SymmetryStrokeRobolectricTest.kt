@@ -334,6 +334,67 @@ class SymmetryStrokeRobolectricTest {
         }
     }
 
+    /**
+     * A tapered finger stroke (G-pen) is redrawn at its end when the finger lifts: each copy's end
+     * on its own (BrushTool.retaperCopies), the copies that cross it included, so the live stroke
+     * still equals its redraw, for short strokes (every dab changes) and long ones (the ends do).
+     */
+    @Test
+    fun aTaperedSymmetricStrokeRedrawsAsDrawn() {
+        val cases = listOf(
+            SymmetrySettings(SymmetryType.ROTATION, divisions = 6),
+            SymmetrySettings(SymmetryType.MIRROR, angleDeg = 60f),
+            SymmetrySettings(SymmetryType.ARRAY, spacingX = 70f, spacingY = 60f),
+            SymmetrySettings(SymmetryType.KALEIDOSCOPE, divisions = 9),
+        )
+        for (s in cases) for ((len, size) in listOf(50f to 12f, 220f to 18f)) {
+            val c = setup(vector = true)
+            c.brush = BrushLibrary.byId("gpen")!!.copy(size = size)
+            c.updateSymmetry(s)
+            val pts = line(40f, 50f, 40f + len, 50f + len * 0.3f, n = 40)
+            c.draw(pts)
+            val where = "${s.type}, $len px"
+            val stroke = c.layer.vector!!.objects.single() as VStroke
+            assertTrue("$where: copies", stroke.copies.size >= 2)
+            val live = pixels(c.layer.bitmap)
+            val redraw = render(c.layer.vector!!)
+            var worst = 0
+            var bad = 0
+            for (i in live.indices) {
+                val d = maxChannelDiff(live[i], redraw[i])
+                worst = max(worst, d)
+                if (d > 1) bad++
+            }
+            assertTrue("$where: painted", live.count { it != 0 } > 400)
+            assertEquals("$where: the redraw equals the live stroke (±1; worst $worst)", 0, bad)
+        }
+    }
+
+    /**
+     * Lifting the finger redraws each copy's tapered end, not the whole stroke with its copies
+     * (one region around the copies would span them all): the dab work of the lift stays a
+     * fraction of the stroke's.
+     */
+    @Test
+    fun liftingTheFingerRedrawsOnlyTheCopiesEnds() {
+        val c = setup()
+        c.brush = BrushLibrary.byId("gpen")!!.copy(size = 10f)
+        // A half turn about the centre: the copy runs from (290, 210) back to (30, 180).
+        c.updateSymmetry(SymmetrySettings(SymmetryType.ROTATION, divisions = 2))
+        val tool = c.tools.getValue(ToolId.BRUSH) as BrushTool
+        val pts = line(30f, 30f, 290f, 60f, n = 60)
+        val w0 = tool.dabWork
+        c.pointerDown(pts.first())
+        for (p in pts.subList(1, pts.size - 1)) c.pointerMove(p)
+        val w1 = tool.dabWork
+        c.pointerUp(pts.last())
+        val stroke = w1 - w0
+        val lift = tool.dabWork - w1
+        assertEquals(1, c.undoManager.undoCount)
+        assertTrue("the copy is painted", alpha(c.layer.bitmap.getPixel(160, 165)) > 0 || alpha(c.layer.bitmap.getPixel(160, 195)) > 0)
+        assertTrue("the lift redraws the ends ($lift of $stroke)", lift > 0.0 && lift < stroke * 0.5)
+    }
+
     @Test
     fun aPartialEraserPassAcrossOneCopyRemovesTheWholeStrokeInOneStep() {
         val c = setup(vector = true)

@@ -434,6 +434,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val mapping: DabMapping? = DabMapping.of(copies, res.stamper)
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
         private val copyTiles: BooleanArray? = mapping?.let { BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) }
+        /**
+         * Where the stroke's own dabs ([ownReach]) and each copy's dabs ([copyReach]) were drawn
+         * (unclipped bounds): the end taper redraws each copy's end on its own ([retaperCopies]).
+         */
+        private val ownReach = Rect()
+        private val copyReach: Array<Rect>? = mapping?.let { m -> Array(m.copies) { Rect() } }
         /** Union of all dab bounds, clipped to the document. */
         private val bounds = Rect()
         /** Paints the coverage with pixels from elsewhere (clone stamp); fixed for the stroke. */
@@ -509,30 +515,43 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (replaces) res.stamper.measure(preset, dab) else res.stamper.stamp(canvas, preset, dab, draft = drafting)
             dabs += dab
             addBounds(dab)
-            if (mapping != null) stampCopies(mapping, dab, null)
+            if (mapping != null) {
+                if (dab.hasBounds) ownReach.union(dab.left, dab.top, dab.right, dab.bottom)
+                stampCopies(mapping, dab, null)
+            }
         }
 
         /**
          * Stamps the symmetry copies of resolved [dab] after it, in map order (as `StrokeRaster`
          * replays them), each one that lands on the document; only those reaching [within] when
-         * it is given (a redraw clipped to it).
+         * it is given (a redraw clipped to it), and only the copies k with [near]`[k]` when given
+         * (the others don't reach it).
          */
-        private fun stampCopies(m: DabMapping, dab: Dab, within: Rect?) {
+        private fun stampCopies(m: DabMapping, dab: Dab, within: Rect?, near: BooleanArray? = null) {
+            val reach = copyReach
             for (k in 0 until m.copies) {
+                if (near != null && !near[k]) continue
                 val c = m.place(k, preset, dab) ?: continue
                 if (!c.hasBounds || c.right <= 0 || c.bottom <= 0 || c.left >= docW || c.top >= docH) continue
                 if (within != null && !within.intersects(c.left, c.top, c.right, c.bottom)) continue
                 m.stamp(canvas, k, c)
                 addBounds(c)
                 markCopyTiles(c)
+                reach?.get(k)?.union(c.left, c.top, c.right, c.bottom)
             }
         }
 
-        /** Unions the bounds of [dab]'s copies (as they are resolved now) into [region]. */
-        private fun copyBounds(m: DabMapping, dab: Dab, region: Rect) {
+        /**
+         * Unions the bounds of [dab]'s copies (as they are resolved now) into [regions] (copy k
+         * into `regions[k + 1]`) and into [copyReach].
+         */
+        private fun copyRegions(m: DabMapping, dab: Dab, regions: Array<Rect>) {
+            val reach = copyReach
             for (k in 0 until m.copies) {
                 val c = m.place(k, preset, dab) ?: continue
-                if (c.hasBounds) region.union(c.left, c.top, c.right, c.bottom)
+                if (!c.hasBounds) continue
+                regions[k + 1].union(c.left, c.top, c.right, c.bottom)
+                reach?.get(k)?.union(c.left, c.top, c.right, c.bottom)
             }
         }
 
@@ -855,9 +874,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          */
         private fun retaper() {
             if (!dynamics.hasTaper || dabs.isEmpty()) return
+            mapping?.let { retaperCopies(it); return }
             val total = sampler.length
             val region = Rect()
-            val m = mapping
             for (dab in dabs) {
                 val d = dab.diameter
                 val a = dab.alpha
@@ -866,16 +885,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 dynamics.resolve(dab, total)
                 if (dab.diameter == d && dab.alpha == a && dab.cx == x && dab.cy == y) continue
                 if (dab.hasBounds) region.union(dab.left, dab.top, dab.right, dab.bottom)
-                if (m != null) {
-                    // Where the copies were (resolved as before) and where they go now.
-                    val nd = dab.diameter; val na = dab.alpha; val nx = dab.cx; val ny = dab.cy
-                    dab.cx = x; dab.cy = y; dab.diameter = d; dab.alpha = a
-                    copyBounds(m, dab, region)
-                    dab.cx = nx; dab.cy = ny; dab.diameter = nd; dab.alpha = na
-                }
                 res.stamper.measure(preset, dab)
                 if (dab.hasBounds) region.union(dab.left, dab.top, dab.right, dab.bottom)
-                if (m != null) copyBounds(m, dab, region)
             }
             if (region.isEmpty || !region.intersect(0, 0, docW, docH)) return
             canvas.save()
@@ -883,10 +894,89 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             for (dab in dabs) {
                 if (region.intersects(dab.left, dab.top, dab.right, dab.bottom)) res.stamper.stamp(canvas, preset, dab)
-                if (m != null) stampCopies(m, dab, region)
             }
             canvas.restore()
             bounds.union(region)
+        }
+
+        /**
+         * [retaper] for a symmetric stroke (v1.7 item 18). What changes is the end (and for a
+         * short stroke the start) of the stroke, so of each copy too, wherever it lies: each one's
+         * region ([disjoint]: overlapping ones merged) is cleared and redrawn on its own, from
+         * every dab and copy that reaches it, in the stroke's order (dab, then its copies), so
+         * where copies meet a region still gets them all. One region around them all would span
+         * the copies' bounding box (often most of the canvas) and redraw the whole stroke, every
+         * copy of it, when the finger lifts.
+         */
+        private fun retaperCopies(m: DabMapping) {
+            val total = sampler.length
+            val n = m.copies
+            // [0]: the stroke's own; [k + 1]: copy k's.
+            val regions = Array(n + 1) { Rect() }
+            for (dab in dabs) {
+                val d = dab.diameter
+                val a = dab.alpha
+                val x = dab.cx
+                val y = dab.cy
+                dynamics.resolve(dab, total)
+                if (dab.diameter == d && dab.alpha == a && dab.cx == x && dab.cy == y) continue
+                if (dab.hasBounds) regions[0].union(dab.left, dab.top, dab.right, dab.bottom)
+                // Where the copies were (resolved as before) and where they go now.
+                val nd = dab.diameter; val na = dab.alpha; val nx = dab.cx; val ny = dab.cy
+                dab.cx = x; dab.cy = y; dab.diameter = d; dab.alpha = a
+                copyRegions(m, dab, regions)
+                dab.cx = nx; dab.cy = ny; dab.diameter = nd; dab.alpha = na
+                res.stamper.measure(preset, dab)
+                if (dab.hasBounds) {
+                    regions[0].union(dab.left, dab.top, dab.right, dab.bottom)
+                    ownReach.union(dab.left, dab.top, dab.right, dab.bottom)
+                }
+                copyRegions(m, dab, regions)
+            }
+            val reach = copyReach!!
+            val near = BooleanArray(n)
+            for (region in disjoint(regions)) {
+                val own = Rect.intersects(ownReach, region)
+                for (k in 0 until n) near[k] = Rect.intersects(reach[k], region)
+                canvas.save()
+                canvas.clipRect(region)
+                canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+                for (dab in dabs) {
+                    if (own && region.intersects(dab.left, dab.top, dab.right, dab.bottom)) res.stamper.stamp(canvas, preset, dab)
+                    stampCopies(m, dab, region, near)
+                }
+                canvas.restore()
+                bounds.union(region)
+            }
+        }
+
+        /**
+         * [regions] within the document, those that overlap merged into their bounding box until
+         * none do: no pixel is redrawn twice, and where the copies' ends crowd together (around a
+         * kaleidoscope's centre) they are redrawn once, as one region.
+         */
+        private fun disjoint(regions: Array<Rect>): List<Rect> {
+            val out = ArrayList<Rect>()
+            for (r in regions) if (!r.isEmpty && r.intersect(0, 0, docW, docH)) out += Rect(r)
+            var merged = true
+            while (merged) {
+                merged = false
+                var i = 0
+                while (i < out.size) {
+                    var j = i + 1
+                    while (j < out.size) {
+                        if (Rect.intersects(out[i], out[j])) {
+                            out[i].union(out[j])
+                            out.removeAt(j)
+                            merged = true
+                        } else {
+                            j++
+                        }
+                    }
+                    i++
+                }
+            }
+            return out
         }
 
         override fun complete() {
