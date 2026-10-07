@@ -4,8 +4,13 @@ import android.graphics.Paint
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
@@ -15,10 +20,13 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.PathfinderLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.ui.editor.chrome.ChromeTags
+import com.brushwork.paint.ui.editor.chrome.OptionsStripPanel
 import com.brushwork.paint.ui.theme.BrushworkTheme
-import com.brushwork.paint.ui.tools.ToolOptionsBar
+import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
@@ -31,10 +39,11 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * v1.7 (§3.20, area G): the Pathfinder options strip at the user's phone width. The hint comes
- * first and is on screen without scrolling; the ten operations are 56 dp buttons, each announced
- * by its unique description (I10) under its short visible name, disabled
- * until 2 objects are picked; "Select all objects" picks them and the count shows; "Unite shapes"
+ * v1.7 (§3.20, area G): the Pathfinder options in the editor's own options strip (44 dp tall) at
+ * the user's phone width. The hint comes first and is on screen without scrolling; the ten
+ * operations are buttons at least 56 dp wide and as tall as the strip, their icon and short
+ * visible name inside it, each announced by its unique description (I10), disabled until 2
+ * objects are picked; "Select all objects" picks them and the count shows; "Unite shapes"
  * combines them into "Pathfinder 1" as one step, and the hint is back.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -45,6 +54,12 @@ class PathfinderOptionsUiRobolectricTest {
         c.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(o)) { canvas ->
             canvas.drawRect(l, t, r, b, Paint().apply { this.color = color })
         }!!
+    }
+
+    /** [e]'s whole box in the window (not clipped by the scrolling strip). */
+    private fun box(e: RobolectricUi.Element): Rect {
+        val p = e.node.positionInWindow
+        return Rect(p.x, p.y, p.x + e.node.size.width, p.y + e.node.size.height)
     }
 
     @Test
@@ -59,26 +74,39 @@ class PathfinderOptionsUiRobolectricTest {
         c.selectTool(ToolId.PATHFINDER)
         val tool = c.currentTool as PathfinderTool
         tool.computeDispatcher = Dispatchers.Unconfined
-        activity.setContent { BrushworkTheme { Box(Modifier.fillMaxWidth()) { ToolOptionsBar(c) } } }
+        // Hosted as the editor hosts it (EditorScreen): the strip panel, full width less its sides.
+        activity.setContent {
+            BrushworkTheme {
+                Box(Modifier.fillMaxSize()) {
+                    OptionsStripPanel(c, Modifier.fillMaxWidth().padding(horizontal = IbisDims.OptionsStripSide))
+                }
+            }
+        }
         SmokeUi.settle()
+        val strip = box(RobolectricUi.elements().last { it.node.config.getOrNull(SemanticsProperties.TestTag) == ChromeTags.OPTIONS_STRIP })
+        assertEquals("the strip", IbisDims.OptionsStripHeight.value, strip.height / density, 0.5f)
 
         // The hint first, on a 392 dp screen without scrolling.
         val hint = SmokeUi.find(PathfinderLabels.HINT, exact = true) ?: throw AssertionError("no hint; shown: ${SmokeUi.shown()}")
         assertTrue("the hint is on screen", hint.bounds.right <= 392f * density + 1f && hint.bounds.left >= 0f)
         assertTrue(SmokeUi.has(PathfinderLabels.SELECT_ALL, exact = true))
 
-        // Ten 56 dp buttons, announced by their unique descriptions, disabled without picks.
+        // Ten buttons at least 56 dp wide, as tall as the strip, announced by their unique
+        // descriptions, disabled without picks; their short names show inside them.
         val descriptions = PathfinderOp.entries.map { it.description }
         assertEquals(10, descriptions.toSet().size)
         assertEquals(PathfinderLabels.OUTLINE, PathfinderOp.OUTLINE.description)
         for (op in PathfinderOp.entries) {
             val e = SmokeUi.find(op.description, exact = true) ?: throw AssertionError("no ${op.description}")
-            assertEquals("${op.description}: 56 dp tall", 56f, e.node.size.height / density, 1f)
-            assertTrue("${op.description}: at least 56 dp wide", e.node.size.width / density >= 55.5f)
+            val b = box(e)
+            assertEquals("${op.description}: as tall as the strip", IbisDims.OptionsStripHeight.value, b.height / density, 1f)
+            assertTrue("${op.description}: inside the strip, top to bottom", b.top >= strip.top - 1f && b.bottom <= strip.bottom + 1f)
+            assertTrue("${op.description}: at least 56 dp wide", b.width / density >= 55.5f)
             assertFalse("${op.description}: needs 2 objects", SmokeUi.isEnabled(op.description))
+            val name = SmokeUi.find(op.label, exact = true) ?: throw AssertionError("no visible name ${op.label}")
+            val n = box(name)
+            assertTrue("${op.label}: the name inside its button ($n in $b)", n.top >= b.top - 1f && n.bottom <= b.bottom + 1f && n.left >= b.left - 1f && n.right <= b.right + 1f)
         }
-        // The short names show (the buttons replace their children's semantics with the description).
-        for (op in PathfinderOp.entries) assertTrue(op.label, SmokeUi.has(op.label, exact = true))
 
         // Select all: the count, and the operations come alive.
         SmokeUi.click(PathfinderLabels.SELECT_ALL, exact = true)

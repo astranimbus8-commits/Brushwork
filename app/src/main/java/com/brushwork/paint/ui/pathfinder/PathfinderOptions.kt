@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.ui.common.PathfinderLabels
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.vector.ActionChip
 import com.brushwork.paint.vector.pathfinder.PathfinderOp
 
@@ -50,7 +51,8 @@ import com.brushwork.paint.vector.pathfinder.PathfinderOp
  * tool's options; the options bar scrolls it sideways. First what to do next, so a narrow phone
  * shows it without scrolling: the hint "Tap shapes or paths to combine them" (also after a tap
  * on nothing), else how many objects are picked, or "Working…" with a spinner. Then "Select all
- * objects" and the ten operations as 56 dp icon-and-label buttons, the shape modes first: each
+ * objects" and the ten operations as 56 dp wide icon-and-label buttons (as tall as the 44 dp
+ * strip), the shape modes first: each
  * shows its short name ("Unite") and is announced by its unique description ("Unite shapes",
  * I10); they need 2 or more picked objects.
  */
@@ -81,7 +83,11 @@ fun PathfinderOptions(tool: PathfinderTool) {
 /** At least this many objects for an operation. */
 private const val MIN_OPERANDS = 2
 
-/** One operation: its icon over its short name, announced by its description. */
+/**
+ * One operation: its icon over its short name, announced by its description. At least
+ * [OP_BUTTON_WIDTH] wide and as tall as the options strip ([IbisDims.OptionsStripHeight]: the
+ * strip is the only host and clips to it), with the icon and a fixed line height that fit in it.
+ */
 @Composable
 private fun OpButton(op: PathfinderOp, enabled: Boolean, onClick: () -> Unit) {
     val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.5f)
@@ -89,18 +95,21 @@ private fun OpButton(op: PathfinderOp, enabled: Boolean, onClick: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = Modifier
-            .widthIn(min = 56.dp)
-            .height(56.dp)
+            .widthIn(min = OP_BUTTON_WIDTH)
+            .height(IbisDims.OptionsStripHeight)
             .clip(RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             // The short visible name is not announced: the unique description is (I10).
             .clearAndSetSemantics { contentDescription = op.description }
             .padding(horizontal = 4.dp),
     ) {
-        Icon(iconOf(op), contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
-        Text(op.label, color = tint, fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
+        Icon(iconOf(op), contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
+        Text(op.label, color = tint, fontSize = 11.sp, lineHeight = 13.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Visible)
     }
 }
+
+/** An operation button's least width: the design's 56 dp buttons (their height is the strip's 44 dp). */
+private val OP_BUTTON_WIDTH = 56.dp
 
 private fun iconOf(op: PathfinderOp): ImageVector = when (op) {
     PathfinderOp.UNITE -> Icons.Outlined.JoinFull

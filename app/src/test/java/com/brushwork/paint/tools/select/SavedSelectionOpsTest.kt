@@ -161,6 +161,19 @@ class SavedSelectionOpsTest {
         assertEquals(0, small[0].toInt())
     }
 
+    /** The old document's border pixels reach the new border: a whole-canvas selection stays whole (no darker frame). */
+    @Test
+    fun resizeImageKeepsAWholeCanvasSelectionWhole() {
+        val snap = snapshot(rect(Rect(0, 0, w, h)))
+        for ((nw, nh) in listOf(80 to 60, 57 to 41, 20 to 15)) {
+            val m = SavedSelectionOps.mappedForCanvas(snap.savedSelections, CanvasOps.resizeImage(snap, nw, nh, Resample.BILINEAR), w, h).single()
+            assertEquals("$nw × $nh: the whole canvas", Rect(0, 0, nw, nh), m.bounds)
+            val cov = coverage(m, nw, nh)
+            val partial = cov.indices.filter { (cov[it].toInt() and 0xFF) != 255 }
+            assertTrue("$nw × $nh: every pixel fully selected, not ${partial.take(4).map { "(${it % nw}, ${it / nw})" }}", partial.isEmpty())
+        }
+    }
+
     @Test
     fun theMappingIsDeterministic() {
         val snap = snapshot(disc(20f, 15f, 9.6f), rect(Rect(0, 0, w, h)))

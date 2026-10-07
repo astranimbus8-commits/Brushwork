@@ -35,6 +35,8 @@ object SavedSelectionOps {
      * clipped to the new canvas ([CanvasResult.width] × [CanvasResult.height]):
      * - flips, quarter turns and whole-pixel moves (crop, canvas size) move the coverage exactly;
      * - a scale (Resize image) samples it bilinearly, several samples per pixel when it shrinks;
+     *   the old document's edge pixels reach its border (as the layers' own resampling does), so
+     *   a selection that touches the border still fully covers the new border;
      * - the new bounds are the tight bounds of what is left; an entry cropped to nothing is
      *   dropped.
      *
@@ -53,21 +55,24 @@ object SavedSelectionOps {
         var changed = false
         val out = ArrayList<SavedSelection>(list.size)
         for (e in list) {
-            val m = mapped(e, g, w, h)
+            val m = mapped(e, g, w, h, oldWidth, oldHeight)
             if (m !== e) changed = true
             if (m != null) out += m
         }
         return if (changed) out else list
     }
 
-    /** [e] mapped by [g] onto a [w] × [h] canvas; [e] itself when unchanged; null when nothing is left. */
-    internal fun mapped(e: SavedSelection, g: CanvasGeometry, w: Int, h: Int): SavedSelection? {
+    /**
+     * [e] (on an [oldWidth] × [oldHeight] document) mapped by [g] onto a [w] × [h] canvas; [e]
+     * itself when unchanged; null when nothing is left.
+     */
+    internal fun mapped(e: SavedSelection, g: CanvasGeometry, w: Int, h: Int, oldWidth: Int, oldHeight: Int): SavedSelection? {
         val b = e.bounds
         if (b.isEmpty) return null
         if (g.isIdentity && b.left >= 0 && b.top >= 0 && b.right <= w && b.bottom <= h) return e
         val target = mappedBounds(b, g, w, h) ?: return null
         val src = rows(e)
-        val sampler = Sampler(src, b, g)
+        val sampler = Sampler(src, b, g, oldWidth, oldHeight)
         val line = ByteArray(target.width())
         // Pass 1: the tight bounds of the mapped coverage (nothing stored).
         var minX = Int.MAX_VALUE; var minY = Int.MAX_VALUE; var maxX = -1; var maxY = -1
@@ -128,9 +133,10 @@ object SavedSelectionOps {
     /**
      * Reads the coverage of a mapped entry: each new pixel's centre goes back through the inverse
      * geometry. Exact maps take the one source pixel there; scales average [n] × [n] bilinear
-     * samples (n > 1 only when the map shrinks).
+     * samples (n > 1 only when the map shrinks). A sample in the outer half pixel of the old
+     * [oldW] × [oldH] document reads its edge pixel, not a blend with the nothing beyond it.
      */
-    private class Sampler(private val src: ByteArray, private val b: Rect, g: CanvasGeometry) {
+    private class Sampler(private val src: ByteArray, private val b: Rect, g: CanvasGeometry, private val oldW: Int, private val oldH: Int) {
         private val inv = g.inverse()
         private val exact = isExact(g)
         private val sw = b.width()
@@ -158,12 +164,16 @@ object SavedSelectionOps {
                     val py = y + (j + 0.5) * step
                     for (k in 0 until n) {
                         val px = x0 + i + (k + 0.5) * step
-                        sum += bilinear(inv.mapX(px, py), inv.mapY(px, py))
+                        sum += bilinear(clamp(inv.mapX(px, py), oldW), clamp(inv.mapY(px, py), oldH))
                     }
                 }
                 out[i] = (sum / (n * n)).roundToInt().coerceIn(0, 255).toByte()
             }
         }
+
+        /** [v] inside the old document's [size] moved onto its edge pixels' centres; outside it, as it is. */
+        private fun clamp(v: Double, size: Int): Double =
+            if (v < 0.0 || v > size) v else v.coerceIn(0.5, max(0.5, size - 0.5))
 
         /** The coverage (0..255) at document point ([x], [y]), interpolated between pixel centres. */
         private fun bilinear(x: Double, y: Double): Double {

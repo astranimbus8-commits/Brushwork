@@ -254,6 +254,9 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
      */
     fun apply(op: PathfinderOp) {
         if (busy) return
+        // An earlier edit still rendering in the background lands first: the snapshots below
+        // must be of the content the user sees, or the result would be landed over that edit.
+        controller.vectors.flushPending()
         val ops = operands
         if (ops.size < 2) return
         val oneLayer = ops.all { it.objectId != null } && ops.all { it.layer === ops[0].layer }
@@ -318,6 +321,8 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
     private fun finish(op: PathfinderOp, taken: List<Taken>, oneLayer: Boolean, result: PathfinderResult) {
         // The user moved on to another tool: the result is not wanted any more.
         if (controller.currentTool !== this) return
+        // An edit made meanwhile that still renders lands now, so the check below sees it.
+        controller.vectors.flushPending()
         if (!taken.all(::unchanged)) { controller.toast(CHANGED); return }
         when (result) {
             PathfinderResult.TooMany -> controller.toast(PathfinderLabels.TOO_MANY)
@@ -339,13 +344,15 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
     /** All operands are objects of one vector layer: the results take the anchor's place there (one step). */
     private fun landInLayer(op: PathfinderOp, taken: List<Taken>, results: List<VPath>): Boolean {
         val layer = taken[0].pick.layer
-        val content = layer.vector ?: return false
         val anchor = (if (op == PathfinderOp.MINUS_FRONT) taken.first() else taken.last()).pick.objectId ?: return false
         val others = taken.mapNotNull { it.pick.objectId }.filter { it != anchor }.toSet()
-        val after = content.replaced(mapOf(anchor to results)).without(others)
         val label = op.historyLabel
         var ok = false
-        controller.groupUndo(label) { controller.vectors.update(layer, after, label) { ok = it } }
+        controller.groupUndo(label) {
+            // Read inside the step: whatever the step lets land first is in the content replaced.
+            val content = layer.vector ?: return@groupUndo
+            controller.vectors.update(layer, content.replaced(mapOf(anchor to results)).without(others), label) { ok = it }
+        }
         return ok
     }
 
@@ -358,7 +365,9 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
     private fun landInNewLayer(op: PathfinderOp, taken: List<Taken>, results: List<VPath>): Boolean {
         val c = controller
         val doc = c.doc
-        if (!c.canAddLayer) { c.toast(c.layerLimitMessage()); return false }
+        val shapeLayers = taken.filter { it.pick.objectId == null }.map { it.pick.layer }
+        // The operand shape layers go: only the layers the document ends with count.
+        if (!roomForResult(c.effectiveLayerCount, shapeLayers.size, c.maxLayers)) { c.toast(c.layerLimitMessage()); return false }
         val bitmap = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height)
         } catch (e: OutOfMemoryError) {
@@ -367,13 +376,13 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
         val top = taken.maxBy { doc.indexOf(it.pick.layer) }.pick.layer
         val layer = Layer(doc.newLayerId(), PathfinderLabels.resultLayer(nextNumber()), bitmap).also { it.vector = VectorContent.EMPTY }
         val removals = taken.filter { it.pick.objectId != null }.groupBy({ it.pick.layer }, { it.pick.objectId!! })
-        val shapeLayers = taken.filter { it.pick.objectId == null }.map { it.pick.layer }
         val label = op.historyLabel
         var ok = false
         c.groupUndo(label) {
             val mark = c.undoManager.undoCount
             ok = run {
-                if (!c.structure.insert(layer, c.structure.above(top), label)) return@run false
+                // Refused before anything was recorded: the new bitmap belongs to no one.
+                if (!c.structure.insert(layer, c.structure.above(top), label)) { bitmap.recycle(); return@run false }
                 if (c.vectors.addObjects(layer, results, label).size != results.size) return@run false
                 for ((l, ids) in removals) {
                     val content = l.vector ?: return@run false
@@ -476,6 +485,15 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
 
         /** The strip's count of picked operands. */
         fun picked(n: Int) = if (n == 1) "1 object" else "$n objects"
+
+        /**
+         * Whether a new result layer fits the layer limit: the document ends with one layer more
+         * than its [effectiveLayers] less the [removedShapeLayers] operand shape layers deleted
+         * (vector layers stay, even when emptied), and that must not pass [maxLayers]. So two
+         * shape layers combine even when the document is at its limit.
+         */
+        internal fun roomForResult(effectiveLayers: Int, removedShapeLayers: Int, maxLayers: Int): Boolean =
+            effectiveLayers + 1 - removedShapeLayers <= maxLayers
 
         private const val ACCENT = 0xFF4DA3FF.toInt()
         private const val SHADOW = 0x99000000.toInt()

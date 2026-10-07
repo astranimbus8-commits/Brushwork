@@ -24,6 +24,7 @@ import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
 import com.brushwork.paint.vector.VSplinePoint
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.pathfinder.PathConvert
 import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import kotlinx.coroutines.CoroutineDispatcher
@@ -34,6 +35,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -410,6 +412,99 @@ class PathfinderToolRobolectricTest {
         c.selectTool(ToolId.PATHFINDER)
         assertEquals(0, t.count)
         Smoke.assertQuiet(c, "picking")
+    }
+
+    /**
+     * An edit still rendering in the background (the app renders big edits that way) lands before
+     * the operation reads its operands, so the result is of what the user sees and the edit is
+     * not lost under it.
+     */
+    @Test
+    fun anEditStillRenderingLandsFirstAndIsKept() {
+        val c = controller()
+        val (v, ids) = vectorLayer(c, box(20f, 20f, 100f, 100f, red), box(70f, 20f, 150f, 100f, blue))
+        val t = tool(c)
+        tap(c, 40f, 60f)
+        tap(c, 140f, 60f)
+        assertEquals(2, t.count)
+        // B moves right, clear of A: its render is still running when Unite is tapped.
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        val before = v.vector!!
+        val moved = before.replaced(mapOf(ids[1] to listOf(box(110f, 20f, 190f, 100f, blue))))
+        c.vectors.update(v, moved, "Move")
+        assertSame("not landed yet", before, v.vector)
+        val steps = c.undoManager.undoCount
+        t.apply(PathfinderOp.UNITE)
+        assertTrue(Smoke.pumpUntil { !t.busy && !c.vectors.isRendering && c.busyMessage == null })
+        assertEquals("the move, then Unite", steps + 2, c.undoManager.undoCount)
+        assertEquals(HistoryLabels.pathfinder("Unite"), c.undoManager.undoLabel)
+        val u = v.vector!!.objects.single() as VPath
+        assertArea("Unite of A and the moved B: two squares", 2 * 80f * 80f, u)
+        assertEquals("in the moved B's place", listOf(ids[1]), v.vector!!.objects.map { it.id })
+        c.undo()
+        assertEquals("one undo: the moved B is back", moved, v.vector)
+        c.undo()
+        assertEquals(before, v.vector)
+        Smoke.assertQuiet(c, "pending render")
+    }
+
+    /**
+     * At the layer limit, operands that include shape layers still combine (the shape layers go,
+     * so the document ends with fewer layers); objects of two vector layers need a layer more and
+     * are refused with the limit's message.
+     */
+    @Test
+    fun theLayerLimitCountsTheShapeLayersThatGo() {
+        assertTrue(PathfinderTool.roomForResult(effectiveLayers = 2, removedShapeLayers = 2, maxLayers = 2))
+        assertTrue(PathfinderTool.roomForResult(effectiveLayers = 2, removedShapeLayers = 1, maxLayers = 2))
+        assertFalse(PathfinderTool.roomForResult(effectiveLayers = 2, removedShapeLayers = 0, maxLayers = 2))
+        assertTrue(PathfinderTool.roomForResult(effectiveLayers = 1, removedShapeLayers = 0, maxLayers = 2))
+
+        val app = RuntimeEnvironment.getApplication()
+        val max = Smoke.controller(app, Smoke.document(300, 200, layers = 1)).maxLayers
+        assumeTrue("room for the setup ($max)", max >= 6)
+        // max − 4 layers, two vector layers and two shape layers: the document is at its limit.
+        val c = Smoke.controller(app, Smoke.document(300, 200, layers = max - 4))
+        val (v1, _) = vectorLayer(c, box(20f, 20f, 100f, 100f, red))
+        val (v2, _) = vectorLayer(c, box(70f, 20f, 150f, 100f, blue))
+        val a = shapeLayer(c, "A", 170f, 20f, 240f, 90f, green)
+        val b = shapeLayer(c, "B", 200f, 20f, 280f, 90f, red)
+        assertEquals(max, c.effectiveLayerCount)
+        assertFalse(c.canAddLayer)
+        val t = tool(c)
+
+        // Two vector layers' objects: a new layer would pass the limit.
+        tap(c, 30f, 60f)
+        tap(c, 140f, 60f)
+        assertEquals(listOf(v1, v2), t.operands.map { it.layer })
+        val steps = c.undoManager.undoCount
+        c.message = null
+        t.apply(PathfinderOp.UNITE)
+        assertEquals(c.layerLimitMessage(), c.message)
+        assertEquals("no step", steps, c.undoManager.undoCount)
+        assertEquals("the picks stay", 2, t.count)
+
+        // Two shape layers: they go, so the result fits.
+        t.clearPicks()
+        tap(c, 180f, 50f)
+        tap(c, 270f, 50f)
+        assertEquals(listOf(a, b), t.operands.map { it.layer })
+        t.apply(PathfinderOp.UNITE)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(max - 1, c.effectiveLayerCount)
+        assertEquals(-1, c.doc.indexOf(a))
+        assertNotNull(c.doc.layers.singleOrNull { it.name == PathfinderLabels.resultLayer(1) })
+        c.undo()
+        assertEquals(max, c.effectiveLayerCount)
+
+        // A shape layer and a path: as many layers as before.
+        tap(c, 180f, 50f)
+        tap(c, 30f, 60f)
+        t.apply(PathfinderOp.UNITE)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(max, c.effectiveLayerCount)
+        assertTrue(v1.vector!!.objects.isEmpty())
+        Smoke.assertQuiet(c, "layer limit")
     }
 
     /** Holds what is dispatched to it until [release]. */
