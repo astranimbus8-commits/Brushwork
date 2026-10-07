@@ -119,10 +119,11 @@ object SymmetryHandles {
 
     /**
      * [s] with handle [h] moved to ([x], [y]) (document px): the centre, the angle (snapped),
-     * an array spacing (and, for "Spacing X", the grid's angle), or a perspective corner (kept
-     * only while the cell stays convex). Spacings stay within the settings' limits.
+     * an array spacing (and, for "Spacing X", the grid's angle), or a perspective corner; null
+     * when the corner would make the cell concave (the caller keeps the last valid cell). Spacings
+     * stay within the settings' limits.
      */
-    fun moved(s: SymmetrySettings, docW: Int, docH: Int, h: SymmetryHandle, x: Float, y: Float): SymmetrySettings {
+    fun moved(s: SymmetrySettings, docW: Int, docH: Int, h: SymmetryHandle, x: Float, y: Float): SymmetrySettings? {
         val c = SymmetryMaps.center(s, docW, docH)
         return when (h) {
             SymmetryHandle.CENTER -> s.copy(centerX = x, centerY = y)
@@ -144,7 +145,7 @@ object SymmetryHandles {
                 val q = SymmetryMaps.quad(s, docW, docH).toMutableList()
                 q[2 * h.corner] = x
                 q[2 * h.corner + 1] = y
-                if (SymmetrySettings.isConvexQuad(q)) s.copy(quad = q) else s
+                if (SymmetrySettings.isConvexQuad(q)) s.copy(quad = q) else null
             }
         }
     }

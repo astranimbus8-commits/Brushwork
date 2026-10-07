@@ -93,7 +93,7 @@ class SymmetryTool(controller: EditorController) : Tool(controller) {
         // A handle follows the finger by how far it moved (not to the finger itself, which is
         // rarely on the handle's centre).
         val next = if (h == null) SymmetryHandles.translated(s, d.width, d.height, dx, dy)
-        else SymmetryHandles.moved(s, d.width, d.height, h, handleX + dx, handleY + dy)
+        else SymmetryHandles.moved(s, d.width, d.height, h, handleX + dx, handleY + dy) ?: return
         controller.updateSymmetry(next.sanitized())
     }
 
