@@ -7,6 +7,12 @@ import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.vector.CurveTool
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.SavedSelectionLabels
+import com.brushwork.paint.ui.common.TransformLabels17
 
 /**
  * Feedback text for undo/redo, computed BEFORE calling [EditorController.undo]/[EditorController.redo]
@@ -92,4 +98,59 @@ internal object HistoryLabels {
         ToolId.SHAPE -> "last shape edit"
         else -> "last ${id.label.lowercase()} step"
     }
+
+    // ------------------------------------------------------------------ v1.7 step names (I10)
+    // The names of v1.7's undo steps ("Undo: <name>"), pre-declared by the foundation (design
+    // §4.8) so every area labels its steps with these constants and the names stay an API.
+
+    const val NEW_FOLDER = FolderLabels.NEW
+    const val PUT_IN_NEW_FOLDER = FolderLabels.PUT_IN_NEW
+    const val MOVE_INTO_FOLDER = EditorController.MOVE_INTO_FOLDER_LABEL
+    const val MOVE_OUT_OF_FOLDER = FolderLabels.MOVE_OUT
+    const val MOVE_LAYER = "Move layer"
+    const val MERGE_FOLDER = FolderLabels.MERGE
+    const val LAYER_FROM_FOLDER = FolderLabels.FROM_FOLDER
+    const val UNGROUP_FOLDER = FolderLabels.UNGROUP
+    const val DELETE_FOLDER = EditorController.DELETE_FOLDER_LABEL
+    const val DUPLICATE_FOLDER = FolderLabels.DUPLICATE
+    const val PASS_THROUGH = FolderLabels.PASS_THROUGH
+    const val ARRAY = ArrayLabels.BUTTON
+    const val EDIT_ARRAY = ArrayLabels.EDIT
+    const val APPLY_ARRAY = ArrayLabels.APPLY
+    const val REMOVE_ARRAY = ArrayLabels.REMOVE
+    const val EDIT_SOURCE = ArrayLabels.EDIT_SOURCE
+    const val FINISH_SOURCE = ArrayLabels.FINISH_SOURCE
+    const val TURN_INTO_PATH = PointLabels.TO_PATH
+    const val SAVE_SELECTION = SavedSelectionLabels.SAVE
+    const val UPDATE_SAVED_SELECTION = EditorController.UPDATE_SAVED_SELECTION_LABEL
+    const val RENAME_SAVED_SELECTION = EditorController.RENAME_SAVED_SELECTION_LABEL
+    const val DELETE_SAVED_SELECTION = SavedSelectionLabels.DELETE
+    const val FREE_DEFORM = TransformLabels17.FREE_DEFORM
+    /** The pill's Scale row (one step per committed scale). */
+    const val SCALE = "Scale"
+
+    /** The pill's trash cell with every point (or no point) selected: "Delete <kind>" ([PillLabels.deleteObject]). */
+    const val DELETE_SHAPE = "Delete shape"
+    const val DELETE_TEXT = "Delete text"
+    const val DELETE_CURVE = "Delete curve"
+    const val DELETE_POLYLINE = "Delete polyline"
+    const val DELETE_PATH = "Delete path"
+
+    /** Pathfinder's ten operations (design §3.20), in its row's order; each step is "Pathfinder: <op>" ([pathfinder]). */
+    val PATHFINDER_OPS: List<String> = listOf(
+        "Unite", "Minus front", "Minus back", "Intersect", "Exclude",
+        "Divide", "Trim", "Merge", "Crop", "Outline",
+    )
+
+    /** The undo step of Pathfinder's [op] (one of [PATHFINDER_OPS]): "Pathfinder: Unite". */
+    fun pathfinder(op: String): String = "Pathfinder: $op"
+
+    /** Every v1.7 step name above, the ten Pathfinder steps included. */
+    val V17: List<String> = listOf(
+        NEW_FOLDER, PUT_IN_NEW_FOLDER, MOVE_INTO_FOLDER, MOVE_OUT_OF_FOLDER, MOVE_LAYER, MERGE_FOLDER,
+        LAYER_FROM_FOLDER, UNGROUP_FOLDER, DELETE_FOLDER, DUPLICATE_FOLDER, PASS_THROUGH,
+        ARRAY, EDIT_ARRAY, APPLY_ARRAY, REMOVE_ARRAY, EDIT_SOURCE, FINISH_SOURCE, TURN_INTO_PATH,
+        SAVE_SELECTION, UPDATE_SAVED_SELECTION, RENAME_SAVED_SELECTION, DELETE_SAVED_SELECTION, FREE_DEFORM,
+        DELETE_SHAPE, DELETE_TEXT, DELETE_CURVE, DELETE_POLYLINE, DELETE_PATH, SCALE,
+    ) + PATHFINDER_OPS.map(::pathfinder)
 }
