@@ -371,6 +371,39 @@ class SymmetryStrokeRobolectricTest {
     }
 
     /**
+     * The layer is redrawn in tiles: each tile places only the copies that can reach it
+     * (StrokeRaster's per-copy reach), and the tiles together are the one full redraw.
+     */
+    @Test
+    fun aSymmetricStrokeRedrawnTileByTileIsTheFullRedraw() {
+        for (s in listOf(
+            SymmetrySettings(SymmetryType.ROTATION, divisions = 12),
+            SymmetrySettings(SymmetryType.KALEIDOSCOPE, divisions = 10),
+            SymmetrySettings(SymmetryType.ARRAY, spacingX = 70f, spacingY = 60f, angleDeg = 100f),
+            SymmetrySettings(SymmetryType.PERSPECTIVE_ARRAY),
+        )) {
+            val c = setup(vector = true)
+            c.brush = BrushLibrary.defaultBrush.copy(size = 14f)
+            c.updateSymmetry(s)
+            c.draw(wave(150f, 150f, len = 40f, amp = 8f))
+            val content = c.layer.vector!!
+            val full = render(content)
+            val b = BitmapUtils.createLayerBitmap(w, h)
+            val canvas = Canvas(b)
+            val tips = TipCache()
+            for (y in 0 until h step 48) for (x in 0 until w step 64) {
+                val tile = Rect(x, y, minOf(w, x + 64), minOf(h, y + 48))
+                canvas.save()
+                canvas.clipRect(tile)
+                VectorLayerRenderer.render(canvas, content, tile, tips = tips, document = Rect(0, 0, w, h))
+                canvas.restore()
+            }
+            assertTrue("${s.type}: painted", full.count { it != 0 } > 400)
+            assertArrayEquals("${s.type}: the tiles are the full redraw", full, pixels(b))
+        }
+    }
+
+    /**
      * Lifting the finger redraws each copy's tapered end, not the whole stroke with its copies
      * (one region around the copies would span them all): the dab work of the lift stays a
      * fraction of the stroke's.

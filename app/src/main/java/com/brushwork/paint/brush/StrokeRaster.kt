@@ -94,7 +94,8 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         if (mapping == null) {
             if (!RectF.intersects(reach, RectF(clip))) return Rect()
         } else {
-            val all = copiesReach(p, reach, copies)
+            if (near.size < mapping.copies) near = BooleanArray(mapping.copies)
+            val all = copiesReach(p, reach, copies, RectF(clip))
             if (all != null && !RectF.intersects(all, RectF(clip))) return Rect()
         }
 
@@ -203,6 +204,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     /** Unions into [area] the parts within [bound] of [dab]'s copies that reach [clip] (as for the dab itself). */
     private fun copiesArea(m: DabMapping, p: BrushPreset, dab: Dab, clip: Rect, bound: Rect, area: Rect, tmp: Rect) {
         for (k in 0 until m.copies) {
+            if (!near[k]) continue
             val c = m.place(k, p, dab) ?: continue
             if (!c.hasBounds) continue
             tmp.set(c.left, c.top, c.right, c.bottom)
@@ -213,6 +215,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     /** Stamps [dab]'s copies that reach [clip] and [area], in map order. */
     private fun stampCopies(canvas: Canvas, m: DabMapping, p: BrushPreset, dab: Dab, clip: Rect, area: Rect, tmp: Rect) {
         for (k in 0 until m.copies) {
+            if (!near[k]) continue
             val c = m.place(k, p, dab) ?: continue
             if (!c.hasBounds) continue
             tmp.set(c.left, c.top, c.right, c.bottom)
@@ -221,31 +224,40 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     }
 
     /**
+     * Copy k of the stroke being rendered can reach the clip ([copiesReach]); copies that can't
+     * are never placed (a tile of a layer meets a few of a stroke's many copies).
+     */
+    private var near = BooleanArray(0)
+
+    /**
      * Everything the copies of a stroke reaching [own] (its own [bounds]) can paint: each map's
      * image of that box grown by the dab reach × the largest √|det J| at its corners (where a
      * perspective map's scale peaks). Null when a map takes part of the box over its horizon (no
-     * cheap reject then).
+     * cheap reject then). Sets [near] for each copy (maps after the identity): whether its part
+     * meets [clip] (all of them when null is returned).
      */
-    private fun copiesReach(p: BrushPreset, own: RectF, copies: List<FloatArray>): RectF? {
+    private fun copiesReach(p: BrushPreset, own: RectF, copies: List<FloatArray>, clip: RectF): RectF? {
+        near.fill(true)
         if (own.isEmpty) return own
         val e = reach(p, 1f)
         val out = RectF()
         val xs = floatArrayOf(own.left, own.right, own.right, own.left)
         val ys = floatArrayOf(own.top, own.top, own.bottom, own.bottom)
-        for (m in copies) {
+        for ((k, m) in copies.withIndex()) {
             var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
             var r = Float.NEGATIVE_INFINITY; var b = Float.NEGATIVE_INFINITY
             var s = 0f
             for (i in 0 until 4) {
                 val w = m[6] * xs[i] + m[7] * ys[i] + m[8]
-                if (!(w > 0f)) return null
+                if (!(w > 0f)) { near.fill(true); return null }
                 val x = (m[0] * xs[i] + m[1] * ys[i] + m[2]) / w
                 val y = (m[3] * xs[i] + m[4] * ys[i] + m[5]) / w
-                if (!x.isFinite() || !y.isFinite()) return null
+                if (!x.isFinite() || !y.isFinite()) { near.fill(true); return null }
                 l = min(l, x); r = max(r, x); t = min(t, y); b = max(b, y)
                 s = max(s, StrokeCopies.scaleAt(m, xs[i], ys[i]))
             }
             val g = e * s
+            if (k > 0 && k - 1 < near.size) near[k - 1] = clip.intersects(l - g, t - g, r + g, b + g)
             if (out.isEmpty) out.set(l - g, t - g, r + g, b + g) else out.union(l - g, t - g, r + g, b + g)
         }
         return out
