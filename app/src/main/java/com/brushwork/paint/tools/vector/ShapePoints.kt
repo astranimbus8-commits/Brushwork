@@ -237,6 +237,9 @@ object ShapePoints {
      */
     fun outline(a: List<ShapeAnchor>, closed: Boolean, corner: CornerStyle, radius: Float): VectorPath {
         val n = a.size
+        // v1.7 (item 2): points with a roundness of their own. Without one, the v1.6 outline
+        // below, bit for bit.
+        if (a.any { it.radius != null }) return outlineEach(a, closed, corner, radius)
         if (!closed || n < MIN_CLOSED || corner == CornerStyle.SHARP || radius <= 0f) return path(a, closed)
         val segs = List(n) { segment(a, it, true) }
         val straight = BooleanArray(n) { isStraight(segs[it]) }
@@ -268,6 +271,80 @@ object ShapePoints {
             val seg = segs[i]
             ops += if (straight[i]) PathOp.LineTo(c?.a ?: verts[j]) else PathOp.CubicTo(seg[1], seg[2], seg[3])
             if (c != null) ShapeGeometry.appendCorner(c, corner, ops)
+        }
+        ops += PathOp.Close
+        return VectorPath(ops)
+    }
+
+    /**
+     * v1.7 (item 2): the corner treatment of point [p] on a shape whose corners are [corner]: a
+     * point with its own radius above 0 on a shape with sharp corners is rounded; otherwise the
+     * shape's style applies, at the point's own size ([cornerRadiusOf]).
+     */
+    fun cornerStyleOf(p: ShapeAnchor, corner: CornerStyle): CornerStyle =
+        if (corner == CornerStyle.SHARP && (p.radius ?: 0f) > 0f) CornerStyle.ROUND else corner
+
+    /** v1.7 (item 2): the roundness of point [p] in document px: its own, else the shape's [radius]. */
+    fun cornerRadiusOf(p: ShapeAnchor, radius: Float): Float = p.radius?.takeIf { it.isFinite() } ?: radius
+
+    /**
+     * v1.7 (item 2): which points of [a] are corners that can be rounded: on a closed outline of
+     * at least [MIN_CLOSED] points, a point between two straight sides that is not in the middle
+     * of a straight run (see [outline]). Everything is false on an open outline.
+     */
+    fun roundable(a: List<ShapeAnchor>, closed: Boolean): BooleanArray {
+        val n = a.size
+        if (!closed || n < MIN_CLOSED) return BooleanArray(n)
+        val straight = BooleanArray(n) { isStraight(segment(a, it, true)) }
+        val through = throughPoints(a.map { it.pos }, straight)
+        return BooleanArray(n) { i -> straight[i] && straight[(i - 1 + n) % n] && !through[i] }
+    }
+
+    /** The points of a closed outline in the middle of a straight run (see [outline]). */
+    private fun throughPoints(verts: List<Vec2>, straight: BooleanArray): BooleanArray {
+        val n = verts.size
+        return BooleanArray(n) { i -> straight[i] && straight[(i - 1 + n) % n] && passesThrough(verts[(i - 1 + n) % n], verts[i], verts[(i + 1) % n]) }
+    }
+
+    /**
+     * v1.7 (item 2): [outline] when some point has a radius of its own: each corner between two
+     * straight sides gets [cornerStyleOf] at [cornerRadiusOf] (its cut limited to half the
+     * shorter adjacent run, so neighbouring arcs never cross); the rest as in [outline].
+     */
+    private fun outlineEach(a: List<ShapeAnchor>, closed: Boolean, corner: CornerStyle, radius: Float): VectorPath {
+        val n = a.size
+        if (!closed || n < MIN_CLOSED) return path(a, closed)
+        val styles = List(n) { cornerStyleOf(a[it], corner) }
+        val radii = FloatArray(n) { cornerRadiusOf(a[it], radius) }
+        if ((0 until n).none { styles[it] != CornerStyle.SHARP && radii[it] > 0f }) return path(a, closed)
+        val segs = List(n) { segment(a, it, true) }
+        val straight = BooleanArray(n) { isStraight(segs[it]) }
+        val verts = a.map { it.pos }
+        val through = throughPoints(verts, straight)
+        val keep = (0 until n).filter { !through[it] }
+        if (keep.size < MIN_CLOSED) return path(a, closed)
+        if (straight.all { it }) return ShapeGeometry.cornerPath(keep.map { verts[it] }, keep.map { styles[it] }, FloatArray(keep.size) { radii[keep[it]] })
+        val m = keep.size
+        val corners = arrayOfNulls<ShapeGeometry.Corner>(n)
+        for (k in 0 until m) {
+            val i = keep[k]
+            if (!straight[i] || !straight[(i - 1 + n) % n] || styles[i] == CornerStyle.SHARP) continue
+            val prev = verts[keep[(k - 1 + m) % m]]
+            val next = verts[keep[(k + 1) % m]]
+            val v = verts[i]
+            val cut = minOf(radii[i], minOf(v.distanceTo(prev), v.distanceTo(next)) / 2f)
+            corners[i] = ShapeGeometry.corner(v, prev, next, cut)
+        }
+        val ops = ArrayList<PathOp>(n * 4 + 2)
+        val first = keep[0]
+        ops += PathOp.MoveTo(corners[first]?.b ?: verts[first])
+        for (k in 0 until m) {
+            val i = keep[k]
+            val j = keep[(k + 1) % m]
+            val c = corners[j]
+            val seg = segs[i]
+            ops += if (straight[i]) PathOp.LineTo(c?.a ?: verts[j]) else PathOp.CubicTo(seg[1], seg[2], seg[3])
+            if (c != null) ShapeGeometry.appendCorner(c, styles[j], ops)
         }
         ops += PathOp.Close
         return VectorPath(ops)

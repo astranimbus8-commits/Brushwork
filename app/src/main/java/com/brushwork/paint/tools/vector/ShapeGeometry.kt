@@ -210,6 +210,36 @@ object ShapeGeometry {
     }
 
     /**
+     * v1.7 (item 2): [cornerPath] with each vertex's own treatment: vertex i gets [styles] i at
+     * the radius [radii] i (a SHARP style or a radius of 0 leaves it a corner). Each cut is
+     * clamped to half the shorter adjacent edge, as in [cornerCuts], so neighbouring treatments
+     * never cross. With one style and one radius for every vertex it draws what [cornerPath] draws.
+     */
+    fun cornerPath(v: List<Vec2>, styles: List<CornerStyle>, radii: FloatArray): VectorPath {
+        val n = v.size
+        if (n < 3) return VectorPath.polygon(v)
+        val ops = ArrayList<PathOp>(n * 4 + 2)
+        for (i in 0 until n) {
+            val p = v[i]
+            val prev = v[(i - 1 + n) % n]
+            val next = v[(i + 1) % n]
+            val style = styles[i]
+            val c = if (style == CornerStyle.SHARP) null else {
+                val r = radii[i].takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+                corner(p, prev, next, min(r, min(p.distanceTo(prev), p.distanceTo(next)) / 2f))
+            }
+            if (c == null) {
+                ops += if (i == 0) PathOp.MoveTo(p) else PathOp.LineTo(p)
+                continue
+            }
+            ops += if (i == 0) PathOp.MoveTo(c.a) else PathOp.LineTo(c.a)
+            appendCorner(c, style, ops)
+        }
+        ops += PathOp.Close
+        return VectorPath(ops)
+    }
+
+    /**
      * One treated corner at vertex [p]: the cut points [a] (towards the previous vertex) and [b]
      * (towards the next one), [d] from [p], the unit directions [uA] / [uB] of the two edges and
      * the angle [theta] between them.
