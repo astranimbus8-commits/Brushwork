@@ -42,9 +42,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v1.6 §3.2(d): the Path tool end to end. Taps add control points (after the selected one, or
- * on the dashed control polygon), Order / Endpoint / Cyclic and the quick starts are in-tool
- * steps with undo and redo, ✓ adds ONE `VPath` whose subpaths are exactly its spline's Bézier
+ * v1.6 §3.2(d): the Path tool end to end. Taps add control points (after the selected one;
+ * before it when it is the first point of an open path; or on the dashed control polygon),
+ * Order / Endpoint / Cyclic and the quick starts are in-tool steps with undo and redo, ✓ adds ONE `VPath` whose subpaths are exactly its spline's Bézier
  * form (I9) as the step "Path", a tap reopens it ("Edit path"; ✕ restores the layer exactly),
  * Curve / Polyline and Path hand paths to each other on a tap, and a raster layer gets pixels.
  */
@@ -195,15 +195,16 @@ class PathToolRobolectricTest {
         c.tap(200f, 158f)
         assertEquals(listOf(50f, 200f, 350f), tool.spline!!.points.map { it.x })
         assertEquals("on the polygon", 150f, tool.spline!!.points[1].y, 1e-3f)
-        // Tap a point to select it; a tap elsewhere then adds right after it and selects that.
+        // Tap a point to select it; a tap elsewhere then adds next to it and selects that: the
+        // first point of an open path extends it from its start (v1.7, item 19).
         c.tap(50f, 150f)
         assertEquals(0, tool.selectedPoint)
         c.tap(80f, 40f)
-        assertEquals(listOf(50f, 80f, 200f, 350f), tool.spline!!.points.map { it.x })
-        assertEquals(1, tool.selectedPoint)
+        assertEquals(listOf(80f, 50f, 200f, 350f), tool.spline!!.points.map { it.x })
+        assertEquals(0, tool.selectedPoint)
         c.tap(120f, 30f)
-        assertEquals(listOf(50f, 80f, 120f, 200f, 350f), tool.spline!!.points.map { it.x })
-        assertEquals(2, tool.selectedPoint)
+        assertEquals(listOf(120f, 80f, 50f, 200f, 350f), tool.spline!!.points.map { it.x })
+        assertEquals(0, tool.selectedPoint)
         // Tapping the selected point again deselects it; the next one goes to the end.
         c.tap(120f, 30f)
         assertEquals(-1, tool.selectedPoint)

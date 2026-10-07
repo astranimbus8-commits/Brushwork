@@ -172,7 +172,8 @@ data class CurveSettings(
  *   points, order, endpoint, cyclic, per-point weight and thickness; [spline]); its [anchors]
  *   are always DERIVED through [SplineBezier.toSubpath], so the preview, brush stroke, fill,
  *   raster and vector commits are the Curve pipeline's. Tap empty canvas to add a control point
- *   (after the selected one, which then moves on to the new point; else at the end), tap near
+ *   (after the selected one, which then moves on to the new point; v1.7: before it when it is
+ *   the first point of an open path; else at the end), tap near
  *   the dashed control polygon to insert one there, drag a point to move it, tap a point to
  *   select it ([selectedPoint]). On a vector layer ✓ adds a [VPath] with its spline ("Path");
  *   a tap on a spline path that passes the I9 check ([SplineBezier.matches]) reopens it ("Edit
@@ -607,24 +608,32 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /**
      * Appends an anchor at [p] and selects it (numeric entry). Returns false when the active
-     * layer can't be edited.
+     * layer can't be edited. PATH: after the selected control point (v1.7, item 19: before it
+     * when it is the first point of an open path of at least 2 points), with its thickness.
      */
     fun addAnchor(p: Vec2): Boolean {
         if (!p.x.isFinite() || !p.y.isFinite()) return false
         if (anchors.isEmpty() && !controller.checkEditable()) return false
         val lim = ShapeSettings.MAX_LENGTH
         if (isPath) {
-            // A control point at the end (or after the selected one), selected.
-            val s = spline
-            if (s != null && s.points.size >= VSpline.MAX_POINTS) {
+            // A control point at the end (or next to the selected one), selected.
+            val s = spline ?: newSpline()
+            if (s.points.size >= VSpline.MAX_POINTS) {
                 controller.toast(TOO_MANY_POINTS)
                 return false
             }
             pushHistory()
             if (targetLayer == null) targetLayer = controller.doc.activeLayer
-            val at = if (s != null && selectedPoint in s.points.indices) selectedPoint + 1 else s?.points?.size ?: 0
-            val width = s?.points?.getOrNull(at - 1)?.width ?: 1f
-            setSplineState(SplineEditing.inserted(s ?: newSpline(), at, VSplinePoint(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), width = width)))
+            val keepSelecting = selectedPoint in s.points.indices
+            val at = when {
+                // v1.7 (item 19): the first point of an open path extends it from its start.
+                keepSelecting && selectedPoint == 0 && !s.cyclic && s.points.size >= 2 -> 0
+                keepSelecting -> selectedPoint + 1
+                else -> s.points.size
+            }
+            // The selected point's thickness (else the last one's).
+            val width = (if (keepSelecting) s.points[selectedPoint] else s.points.lastOrNull())?.width ?: 1f
+            setSplineState(SplineEditing.inserted(s, at, VSplinePoint(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), width = width)))
             selectedPoint = at
             changed()
             return true
@@ -1184,8 +1193,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /**
      * PATH: a new control point under the finger at [pt]: inserted on the control polygon when
      * the finger is within [IbisDims.PathInsertDistance] of it between two points, else after the selected point
-     * (which then moves on to the new one, as Blender extrudes from the selected end) or at the
-     * end. It snaps right away and follows the finger until it lifts.
+     * (which then moves on to the new one, as Blender extrudes from the selected end; v1.7, item
+     * 19: before it when it is the first point of an open path of at least 2 points) or at the
+     * end, with the selected point's thickness. It snaps right away and follows the finger until
+     * it lifts.
      */
     private fun newPointAt(pt: Vec2) {
         val s0 = spline
@@ -1208,9 +1219,16 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             val q = snapAnchor(hit.point)
             point = SplineEditing.pointOnPolygon(s, hit, q)
         } else {
-            at = if (keepSelecting) selectedPoint + 1 else s.points.size
+            at = when {
+                // v1.7 (item 19): the first point of an open path extends it from its start.
+                keepSelecting && selectedPoint == 0 && !s.cyclic && s.points.size >= 2 -> 0
+                keepSelecting -> selectedPoint + 1
+                else -> s.points.size
+            }
             val q = snapAnchor(pt)
-            point = VSplinePoint(q.x, q.y, width = s.points.getOrNull(at - 1)?.width ?: s.points.lastOrNull()?.width ?: 1f)
+            // The selected point's thickness (else the last one's).
+            val width = (if (keepSelecting) s.points[selectedPoint] else s.points.lastOrNull())?.width ?: 1f
+            point = VSplinePoint(q.x, q.y, width = width)
         }
         if (targetLayer == null) targetLayer = controller.doc.activeLayer
         setSplineState(SplineEditing.inserted(s, at, point))
