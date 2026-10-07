@@ -18,11 +18,14 @@ import com.brushwork.paint.brush.StrokeHook
 import com.brushwork.paint.brush.StrokeInfo
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerArray
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.transform.ObjectLiftProvider
@@ -85,6 +88,13 @@ import kotlin.math.sqrt
  *
  * **Pure moves** ([ShiftHint]): a whole-pixel translation of objects that no other object
  * touches shifts their cache pixels instead of re-rendering them (see [update]).
+ *
+ * **Live arrays** (v1.7, I14): on a layer with a [LayerArray] every diff and render uses the
+ * EXPANDED content ([ArrayDraw.effectiveVector]: the copies, then the source objects), so
+ * [ContentDiff] gives the copies' tiles too; the layer's DATA stays the source objects. A live
+ * stroke's [appendData] re-renders the copies in the same step, and [updateArray] changes the
+ * array itself. Without an array the expanded content is the content (the same instance): every
+ * render is exactly v1.6's.
  */
 class VectorLayers internal constructor(private val c: EditorController) {
 
@@ -129,6 +139,14 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val current = layer.vector ?: return emptyList()
         if (!usable(layer)) return emptyList()
         val (content, ids) = current.plus(objects)
+        if (layer.array != null) {
+            // v1.7 (I14): the new objects' copies sit under the source, not on top of the cache:
+            // the changed tiles of the expanded content are re-rendered ([update]).
+            var applied = false
+            updateInternal(layer, content, label, null, null, null, { applied = it }, 0)
+            val rendering = pending?.let { it.layer === layer && it.after === content } == true
+            return if ((applied && layer.vector === content) || rendering) ids else emptyList()
+        }
         val added = content.objects.subList(content.objects.size - objects.size, content.objects.size).toList()
         val tiles = TileSet(c.doc.width, c.doc.height, VectorLayerRenderer.TILE)
         val index = ObjectIndex.of(content)
@@ -140,7 +158,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             return ids
         }
         val ok = timed(addedContent, rects) {
-            applyRender(layer, content, label, rects) { canvas ->
+            applyRender(layer, content, label, rects, null) { canvas ->
                 for (r in rects) {
                     canvas.save()
                     canvas.clipRect(r)
@@ -163,6 +181,17 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val before = layer.dataSnapshot()
         val current = before.vector ?: return emptyList()
         val (content, ids) = current.plus(objects)
+        val array = before.array
+        if (array != null) {
+            // v1.7 (I14): the live pixels are the new objects at identity, on top (where the
+            // source's new objects are in the expanded content). Their copies, and every copy
+            // when the source's bounds moved, are rendered here, in the same step.
+            val after = view(content, array)
+            val live = view(current, array).let { e -> e.copy(objects = e.objects + content.objects.takeLast(objects.size)) }
+            val rects = ContentDiff.changedTiles(live, after, c.doc.width, c.doc.height, VectorLayerRenderer.TILE).rects()
+            applyRender(layer, content, label, rects, null, renderInto(after, rects))
+            return if (layer.vector === content) ids else emptyList()
+        }
         c.setLayerData(layer, before.copy(vector = content), label)
         // Refused (locked or hidden layer): nothing was added.
         return if (layer.vector === content) ids else emptyList()
@@ -201,9 +230,31 @@ class VectorLayers internal constructor(private val c: EditorController) {
     ) = updateInternal(layer, after, label, dirty, shift, null, onDone, 0)
 
     /**
+     * v1.7 (item 3, I14): sets [layer]'s live array to [array] (null removes it), and its content
+     * to [after] when given, re-rendering the tiles where the expanded content
+     * ([ArrayDraw.effectiveVector]) changed: the old and the new copies' rectangles. Data and
+     * pixels change together, as ONE step [label]; sync or async and re-based like [update]
+     * ([onDone] as there). For area E's `ArrayOps` on vector layers.
+     */
+    fun updateArray(layer: Layer, array: LayerArray?, label: String, after: VectorContent? = null, onDone: (applied: Boolean) -> Unit = {}) {
+        val content = after ?: layer.vector
+        if (content == null) { onDone(false); return }
+        updateInternal(layer, content, label, null, null, null, onDone, 0, ArrayChange(array))
+    }
+
+    /** v1.7: the array an edit sets ([ArrayChange.array]; null = removed). No change = the layer's array is kept. */
+    internal class ArrayChange(val array: LayerArray?)
+
+    /**
      * [update] for an edit session's commit: [beforeApply] runs right before the pixels change
      * (sync: before the render; async: when the patch is applied, so the session's preview stays
      * up meanwhile), or before [onDone] when nothing is applied.
+     *
+     * v1.7 (I14): the before and after content are diffed and rendered EXPANDED
+     * ([ArrayDraw.effectiveVector] under the layer's array, and under [newArray]'s when given:
+     * the array is then changed in the same step). On an arrayed layer [dirty] only adds tiles
+     * (it covers the source, not the copies) and [shift] is ignored (moving cache pixels would
+     * leave the copies behind).
      */
     internal fun updateInternal(
         layer: Layer,
@@ -214,6 +265,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         beforeApply: (() -> Unit)?,
         onDone: (Boolean) -> Unit,
         attempt: Int,
+        newArray: ArrayChange? = null,
     ) {
         fun done(ok: Boolean) { beforeApply?.invoke(); onDone(ok) }
         val callerBase = layer.vector
@@ -230,27 +282,41 @@ class VectorLayers internal constructor(private val c: EditorController) {
             }
         }
         val base = layer.vector ?: run { done(false); return }
+        val arrayBefore = layer.array
+        val arrayAfter = if (newArray != null) newArray.array else arrayBefore
         // Nothing changes (also an equal copy): no re-render and no step.
-        if (target === base || target == base) { done(true); return }
+        if ((target === base || target == base) && arrayAfter == arrayBefore) { done(true); return }
         if (!usable(layer)) { done(false); return }
-        if (shift != null && dirty == null && tryShift(layer, base, target, label, shift, beforeApply)) {
+        val arrayed = arrayBefore != null || arrayAfter != null
+        if (!arrayed && shift != null && dirty == null && tryShift(layer, base, target, label, shift, beforeApply)) {
             onDone(layer.vector === target)
             return
         }
-        val tiles = if (dirty != null) {
+        // What the cache shows before and after (the content itself without an array).
+        val baseView = view(base, arrayBefore)
+        val targetView = view(target, arrayAfter)
+        val tiles = if (dirty != null && !arrayed) {
             TileSet(c.doc.width, c.doc.height, VectorLayerRenderer.TILE).also { s -> dirty.forEach { s.addRect(it) } }
         } else {
-            ContentDiff.changedTiles(base, target, c.doc.width, c.doc.height, VectorLayerRenderer.TILE)
+            ContentDiff.changedTiles(baseView, targetView, c.doc.width, c.doc.height, VectorLayerRenderer.TILE).also { s -> dirty?.forEach { s.addRect(it) } }
         }
         val rects = tiles.rects()
-        if (rects.isNotEmpty() && attempt < MAX_ATTEMPTS && goAsync(VectorLayerRenderer.estimateUnits(target, rects))) {
-            schedule(layer, base, target, label, rects, null, beforeApply, onDone, attempt)
+        if (rects.isNotEmpty() && attempt < MAX_ATTEMPTS && goAsync(VectorLayerRenderer.estimateUnits(targetView, rects))) {
+            schedule(layer, base, target, label, rects, null, beforeApply, onDone, attempt, targetView, newArray)
             return
         }
         beforeApply?.invoke()
-        val ok = timed(target, rects) { applyRender(layer, target, label, rects, renderInto(target, rects)) }
-        onDone(ok && layer.vector === target)
+        val ok = timed(targetView, rects) { applyRender(layer, target, label, rects, newArray, renderInto(targetView, rects)) }
+        onDone(ok && layer.vector === target && (newArray == null || layer.array == newArray.array))
     }
+
+    /**
+     * v1.7 (I14): what a vector layer's cache shows for [content] under [array]:
+     * [ArrayDraw.effectiveVector] (the copies, then the source objects), or [content] itself, the
+     * same instance, without an array (so every v1.6 diff and render is unchanged).
+     */
+    private fun view(content: VectorContent, array: LayerArray?): VectorContent =
+        if (array == null) content else ArrayDraw.effectiveVector(LayerData(vector = content, array = array)) ?: content
 
     /** A pure whole-pixel translation of the objects [ids] by ([dx], [dy]) document px. */
     data class ShiftHint(val ids: Set<Long>, val dx: Int, val dy: Int)
@@ -409,7 +475,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         if (content == null || c.doc.indexOf(layer) < 0 || ids.isEmpty()) { onReady(null); return }
         val present = ids.filterTo(LinkedHashSet()) { content.byId(it) != null }
         if (present.isEmpty() || !usable(layer)) { onReady(null); return }
-        val plan = planEdit(content, present)
+        val plan = planEdit(content, present, layer.array)
         val units = editUnits(plan)
         if ((plan.all && plan.overflowBands.isEmpty()) || !goAsyncUnits(units)) {
             val parts = try {
@@ -484,10 +550,16 @@ class VectorLayers internal constructor(private val c: EditorController) {
 
     private fun recycle(vararg b: Bitmap?) { for (x in b) if (x != null && !x.isRecycled) x.recycle() }
 
-    private fun planEdit(content: VectorContent, present: Set<Long>): EditPlan {
+    /**
+     * v1.7 (I14): on an arrayed layer ([array] non-null) the cache also shows the copies, so a
+     * lift is never "every object" (a copy of the cache would carry the copies along), and the
+     * hole is the EXPANDED content without the edited source objects: their copies stay in place
+     * in the preview until the commit re-renders them.
+     */
+    private fun planEdit(content: VectorContent, present: Set<Long>, array: LayerArray?): EditPlan {
         val index = ObjectIndex.of(content)
         val edited = content.objects.filter { it.id in present }
-        val all = present.size == content.objects.size
+        val all = present.size == content.objects.size && array == null
         val docW = c.doc.width
         val docH = c.doc.height
         // The edited objects' box, kept within a document's size around the canvas.
@@ -518,7 +590,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
             !b.isEmpty && !(b.left >= 0f && b.top >= 0f && b.right <= docW && b.bottom <= docH)
         }
         return EditPlan(
-            present, edited, content.without(present), all, floatingRect, holeRect, fScale, hScale,
+            present, edited, view(content, array).without(present), all, floatingRect, holeRect, fScale, hScale,
             overflow = VectorContent(objects = overflow),
             overflowBands = if (overflow.isEmpty()) emptyList() else outside(floatingRect, docRect),
             // On the canvas, dabs are cut at the document exactly as in the cache; past it they
@@ -703,6 +775,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         renderCache.clear()
         // Process-wide caches keyed by objects of this document.
         ObjectIndex.clearCache()
+        ArrayDraw.clearCaches()
         StrokeHits.clear()
         VectorLayerRenderer.clearCaches()
         // Whoever waits hears it once, after the service is quiet (a callback that starts more
@@ -743,7 +816,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
         val beforeApply: (() -> Unit)?,
         val onDone: (Boolean) -> Unit,
         val attempt: Int,
+        /** v1.7 (I14): what is rendered: [after] expanded under the array ([after] itself without one). */
+        val render: VectorContent,
+        /** v1.7: the array the edit sets (null = the layer's is kept). */
+        val newArray: ArrayChange?,
     ) {
+        /** v1.7: the layer's array when the render started (another array makes the render stale). */
+        val arrayBefore: LayerArray? = layer.array
         val contentVersion = layer.contentVersion
         val bitmap: Bitmap = layer.bitmap
         var job: Deferred<List<Bitmap>>? = null
@@ -826,6 +905,8 @@ class VectorLayers internal constructor(private val c: EditorController) {
         beforeApply: (() -> Unit)?,
         onDone: (Boolean) -> Unit = {},
         attempt: Int = 0,
+        render: VectorContent = after,
+        newArray: ArrayChange? = null,
     ) {
         val pieces = split(rects)
         val copies = if (added != null) {
@@ -839,12 +920,12 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 return
             }
         } else null
-        val p = Pending(layer, base, after, label, pieces, added, copies, beforeApply, onDone, attempt)
+        val p = Pending(layer, base, after, label, pieces, added, copies, beforeApply, onDone, attempt, render, newArray)
         pending = p
         updateRendering()
         c.addDeferredStep(deferredStep)
         val doc = docBounds()
-        val units = VectorLayerRenderer.estimateUnits(added?.let { VectorContent(objects = it) } ?: after, rects)
+        val units = VectorLayerRenderer.estimateUnits(added?.let { VectorContent(objects = it) } ?: render, rects)
         val total = pieces.size
         p.job = c.scope.async(worker.dispatcher) {
             val ctx = coroutineContext
@@ -862,7 +943,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
                     if (copies == null) out += b
                     val cv = Canvas(b)
                     cv.translate(-r.left.toFloat(), -r.top.toFloat())
-                    val content = added?.let { VectorContent(objects = it) } ?: after
+                    val content = added?.let { VectorContent(objects = it) } ?: render
                     val finished = VectorLayerRenderer.renderWith(cv, content, r, emptySet(), worker.tips, doc, worker.cache) { done, n ->
                         progress((k + done.toFloat() / max(1, n)) / total)
                         ctx.isActive
@@ -912,21 +993,22 @@ class VectorLayers internal constructor(private val c: EditorController) {
                 return
             }
             val layer = p.layer
-            val fresh = c.doc.indexOf(layer) >= 0 && layer.vector === p.base && layer.contentVersion == p.contentVersion && layer.bitmap === p.bitmap
+            val fresh = c.doc.indexOf(layer) >= 0 && layer.vector === p.base && layer.contentVersion == p.contentVersion && layer.bitmap === p.bitmap &&
+                layer.array === p.arrayBefore
             if (!fresh) {
                 // The layer changed meanwhile: the edit is re-based onto what it holds now.
                 val now = layer.vector
                 if (now == null || c.doc.indexOf(layer) < 0) { p.beforeApply?.invoke(); p.onDone(false); return }
                 val target = ContentDiff.merge3(p.base, p.after, now)
-                updateInternal(layer, target, p.label, null, null, p.beforeApply, p.onDone, p.attempt + 1)
+                updateInternal(layer, target, p.label, null, null, p.beforeApply, p.onDone, p.attempt + 1, p.newArray)
                 return
             }
             p.beforeApply?.invoke()
             val src = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
-            val ok = applyRender(layer, p.after, p.label, p.pieces) { canvas ->
+            val ok = applyRender(layer, p.after, p.label, p.pieces, p.newArray) { canvas ->
                 for ((k, r) in p.pieces.withIndex()) canvas.drawBitmap(pieces[k], r.left.toFloat(), r.top.toFloat(), src)
             }
-            p.onDone(ok && layer.vector === p.after)
+            p.onDone(ok && layer.vector === p.after && (p.newArray == null || layer.array == p.newArray.array))
         } finally {
             pieces?.forEach { if (!it.isRecycled) it.recycle() }
             p.copies?.forEach { if (!it.isRecycled) it.recycle() }
@@ -969,12 +1051,13 @@ class VectorLayers internal constructor(private val c: EditorController) {
      * Changes [layer]'s content to [after] and lets [paint] change its pixels within [touch]
      * (document px; snapshotted for undo first), as ONE step [label] (I1, I2): the tiles plus a
      * [LayerDataAction]. Without any area on the canvas, a data-only step. False when the layer
-     * is gone, locked or hidden, or memory ran out (nothing changes then).
+     * is gone, locked or hidden, or memory ran out (nothing changes then). v1.7: [newArray]
+     * changes the layer's array in the same step (null = the array is kept).
      */
-    private fun applyRender(layer: Layer, after: VectorContent, label: String, touch: List<Rect>, paint: (Canvas) -> Unit): Boolean = c.editScope {
+    private fun applyRender(layer: Layer, after: VectorContent, label: String, touch: List<Rect>, newArray: ArrayChange?, paint: (Canvas) -> Unit): Boolean = c.editScope {
         if (c.doc.indexOf(layer) < 0 || !usable(layer)) return@editScope false
         val before = layer.dataSnapshot()
-        val data = before.copy(vector = after)
+        val data = before.copy(vector = after, array = if (newArray != null) newArray.array else before.array)
         val doc = docBounds()
         val rects = touch.mapNotNull { r -> Rect(r).takeIf { it.intersect(doc) } }
         if (rects.isEmpty()) {
@@ -1068,7 +1151,7 @@ class VectorLayers internal constructor(private val c: EditorController) {
         beforeApply?.invoke()
         shiftCount++
         try {
-            applyRender(layer, target, label, touch) { canvas ->
+            applyRender(layer, target, label, touch, null) { canvas ->
                 for (r in touch) {
                     canvas.save()
                     canvas.clipRect(r)

@@ -58,8 +58,9 @@ object LayerDataTransforms {
      * A null CIRCLE centre or TRANSFORM pivot follows the source's bounds, which is not where the
      * old placement maps to under a flip or a turn: unless [m] only moves, it is set from the
      * content's paint bounds (`ObjectIndex.unionBounds`, what the array is measured from) first.
+     * Also used by `EditorController.flipLayer` (v1.7).
      */
-    private fun mappedArray(array: LayerArray, content: VectorContent, m: FloatArray): LayerArray {
+    internal fun mappedArray(array: LayerArray, content: VectorContent, m: FloatArray): LayerArray {
         var spec = array.spec
         val moveOnly = m[0] == 1f && m[1] == 0f && m[3] == 0f && m[4] == 1f && m[6] == 0f && m[7] == 0f && m[8] == 1f
         if (!moveOnly) {

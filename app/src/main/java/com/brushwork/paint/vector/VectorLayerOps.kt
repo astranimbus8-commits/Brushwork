@@ -8,6 +8,7 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditEvent
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.TipCache
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerDataAction
@@ -15,6 +16,7 @@ import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.select.MarchingSquares
 import com.brushwork.paint.vector.geom.ObjectIndex
@@ -38,7 +40,8 @@ object VectorLayerOps {
         if (!layer.isVectorLayer || c.doc.indexOf(layer) < 0) return false
         c.vectors.flushPending()
         val before = layer.dataSnapshot()
-        c.setLayerData(layer, before.copy(vector = null), "Rasterize vector layer")
+        // v1.7 (I14): a live array goes with its source objects (the pixels keep the copies).
+        c.setLayerData(layer, before.copy(vector = null, array = null), "Rasterize vector layer")
         if (!layer.isVectorLayer) c.toast("\"${layer.name}\" is now a regular layer (undo to get its objects back)")
         // Refused (locked / hidden): the controller said why; handled either way.
         return true
@@ -51,11 +54,13 @@ object VectorLayerOps {
      * 100 % without mask (its opacity and mask would apply to the merged objects too). The merged
      * pixels are [upper]'s cache drawn over [lower]'s (one SRC_OVER per pixel: equal to a fresh
      * render of the merged content within one level where upper objects overlap each other).
-     * One step "Merge down"; false = the raster merge.
+     * One step "Merge down"; false = the raster merge. v1.7 (I14): false when either layer has a
+     * live array (the lower array would repeat the upper objects; the raster merge bakes it).
      */
     fun mergeVector(c: EditorController, upper: Layer, lower: Layer): Boolean {
         val uc = upper.vector ?: return false
         val lc = lower.vector ?: return false
+        if (upper.array != null || lower.array != null) return false
         if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.mask != null || upper.maskSpec != null ||
             upper.clipping || upper.adjustment != null) return false
         if (lower.opacity < 1f || lower.mask != null || lower.maskSpec != null || lower.adjustment != null) return false
@@ -126,9 +131,16 @@ object VectorLayerOps {
         val subset = VectorContent(version = content.version, objects = content.objects.filter { it.id in ids }, nextId = content.nextId)
         val w = c.doc.width
         val h = c.doc.height
+        val array = layer.array
         val copy = try {
             val pixels = if (ids.size == content.objects.size) {
                 BitmapUtils.copy(layer.bitmap)
+            } else if (array != null) {
+                // v1.7 (I14): the copy keeps the array, measured from its own objects: its cache
+                // is their expanded rendering, drawn whole (the source cache shows other copies).
+                BitmapUtils.createLayerBitmap(w, h).also { b ->
+                    if (ids.isNotEmpty()) drawWhole(b, ArrayDraw.effectiveVector(LayerData(vector = subset, array = array)) ?: subset, w, h, c.doc.colorMode)
+                }
             } else {
                 BitmapUtils.createLayerBitmap(w, h).also { b -> if (ids.isNotEmpty()) drawSubset(b, layer, content, subset, ids, w, h, c.doc.colorMode) }
             }
@@ -179,6 +191,18 @@ object VectorLayerOps {
         tips.clear()
         // The cache is already held to the document's color mode; rendered tiles are held now.
         if (mode != ColorMode.RGB) for (rect in render.rects()) ColorModeOps.constrain(target, rect, mode)
+    }
+
+    /** Draws the rendering of [content] on the whole of [target] (document px, empty), held to [mode]. */
+    private fun drawWhole(target: Bitmap, content: VectorContent, w: Int, h: Int, mode: ColorMode) {
+        val doc = Rect(0, 0, w, h)
+        val tips = TipCache(8L shl 20)
+        try {
+            VectorLayerRenderer.render(Canvas(target), content, doc, tips = tips, document = doc)
+        } finally {
+            tips.clear()
+        }
+        if (mode != ColorMode.RGB) ColorModeOps.constrain(target, doc, mode)
     }
 
     /**

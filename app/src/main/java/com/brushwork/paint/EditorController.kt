@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -23,6 +24,7 @@ import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushPresetStore
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.AddLayerAction
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.CompositeAction
@@ -77,6 +79,7 @@ import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.vector.LayerDataTransforms
@@ -1029,6 +1032,11 @@ class EditorController(
 
     /** Shows what a data change from [before] to [after] made uneditable; returns a step label for it. */
     private fun rasterizeMessage(layer: Layer, before: LayerData, after: LayerData): String {
+        // v1.7 (I14): a pixel edit bakes a live array in the same step.
+        if (before.array != null && after.array == null) {
+            toast(ArrayLabels.APPLIED)
+            return ArrayLabels.APPLY
+        }
         val kind = when {
             before.text != null && after.text == null -> "text"
             before.shape != null && after.shape == null -> "shape"
@@ -1190,7 +1198,9 @@ class EditorController(
         if (!canAddLayer) { toast("Layer limit reached (${maxLayers}) for this canvas size"); return null }
         val bmp = try {
             BitmapUtils.createLayerBitmap(doc.width, doc.height).also { b ->
-                draw(Canvas(b))
+                // v1.7 (I14): the array seam; a new layer has no array yet (ArrayOps adds one
+                // through updateLayerData), so [draw] runs once, as in v1.6.
+                ArrayDraw.drawWithArray(Canvas(b), null, RectF(), draw)
                 if (doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(b, doc.bounds, doc.colorMode)
             }
         } catch (e: OutOfMemoryError) {
@@ -1235,6 +1245,13 @@ class EditorController(
      * locked or hidden (adjustment layers are accepted: their data can always change); with
      * [allowHidden] a hidden layer is updated too (an edit that follows another layer's, e.g. a
      * re-flow of wrapped text, not a tool's).
+     *
+     * v1.7 (I14): when the before or the [after] data has a live array (CONTENT only), the area
+     * is `dirty ∪ ArrayDraw.cacheBounds(before) ∪ ArrayDraw.cacheBounds(after)` (grown by 1 px),
+     * so copies that move with a changed source leave no stale pixels. For a text or shape
+     * source [draw] paints the source alone and is repeated per copy
+     * ([ArrayDraw.drawWithArray]); for a vector array [draw] renders `ArrayDraw.effectiveVector`
+     * and for a raster array it is [ArrayDraw.drawPixels]: the whole cache, drawn as given.
      */
     internal fun updateLayerData(
         layer: Layer,
@@ -1264,6 +1281,12 @@ class EditorController(
         }
         val bmp = (if (target == EditTarget.MASK) layer.mask else layer.bitmap) ?: return@editScope false
         val area = Rect(dirty ?: doc.bounds)
+        // v1.7 (I14): [dirty] covers the source only; the copies of a live array are cleared
+        // and redrawn too, where they were and where they go (both measured from the data).
+        val arrayed = target == EditTarget.CONTENT && (before.array != null || after.array != null)
+        if (arrayed) for (d in listOf(before, after)) ArrayDraw.cacheBounds(d)?.let { b ->
+            if (!b.isEmpty) area.union(Rect().also { r -> b.roundOut(r); r.inset(-1, -1) })
+        }
         if (!area.intersect(0, 0, doc.width, doc.height)) area.set(0, 0, 0, 0)
         val rec = beginEdit(layer, target).also { it.preserveData = true }
         try {
@@ -1273,7 +1296,14 @@ class EditorController(
             c.save()
             c.clipRect(area)
             c.drawColor(0, PorterDuff.Mode.CLEAR)
-            draw(c)
+            // A text or shape source is repeated per copy here; a vector array's [draw] renders
+            // ArrayDraw.effectiveVector and a raster array's ArrayDraw.drawPixels (the whole cache).
+            val a = after.array
+            if (arrayed && a != null && a.pixels == null && after.vector == null) {
+                ArrayDraw.drawWithArray(c, a, ArrayDraw.sourceBounds(after) ?: RectF(), draw)
+            } else {
+                draw(c)
+            }
             c.restore()
         } catch (e: OutOfMemoryError) {
             rec.abort()
@@ -1755,7 +1785,9 @@ class EditorController(
             // A vector edit still rendering lands first: the flip mirrors its result.
             vectors.flushPending()
             val content = layer.vector
-            if (content != null && !LayerDataTransforms.turnsExactly(content, 0, mirror = true)) flipVectorLayerNow(layer, horizontal, content)
+            // v1.7 (I14): what the cache shows decides (a live array's copies carry turned brushes).
+            val shown = content?.let { ArrayDraw.effectiveVector(LayerData(vector = it, array = layer.array)) }
+            if (content != null && shown != null && !LayerDataTransforms.turnsExactly(shown, 0, mirror = true)) flipVectorLayerNow(layer, horizontal, content)
             else flipLayerNow(layer, horizontal)
         }
     }
@@ -1770,8 +1802,11 @@ class EditorController(
     private fun flipVectorLayerNow(layer: Layer, horizontal: Boolean, content: VectorContent) {
         val label = flipLabel(horizontal)
         val mirrored = VectorLayerOps.flipped(content, doc.width, doc.height, horizontal) ?: return flipLayerNow(layer, horizontal)
+        // v1.7 (I14): a live array's spec is mirrored with its objects, in the same step.
+        val array = layer.array
+        val newArray = array?.let { a -> VectorLayers.ArrayChange(LayerDataTransforms.mappedArray(a, content, flipValues(horizontal))) }
         val mask = if (layer.mask != null) flipMaskAction(layer, horizontal, label) else null
-        if (mirrored == content) {
+        if (mirrored == content && (newArray == null || newArray.array == array)) {
             // The drawing mirrors into itself: its pixels already are its rendering.
             if (mask != null) editScope {
                 mask.redo(this)
@@ -1782,7 +1817,8 @@ class EditorController(
             return
         }
         if (mask == null) {
-            vectors.update(layer, mirrored, label)
+            if (newArray == null) vectors.update(layer, mirrored, label)
+            else vectors.updateInternal(layer, mirrored, label, null, null, null, {}, 0, newArray)
             return
         }
         // The mask bitmap flips right before the new pixels are drawn (the step's edit event sees
@@ -1815,10 +1851,17 @@ class EditorController(
                 }
             },
             attempt = 0,
+            newArray = newArray,
         )
     }
 
     private fun flipLabel(horizontal: Boolean) = if (horizontal) "Flip layer horizontally" else "Flip layer vertically"
+
+    /** Flip layer's mirror (old -> new document px) as 3x3 row-major values. */
+    private fun flipValues(horizontal: Boolean): FloatArray {
+        val m = Matrix().apply { if (horizontal) setScale(-1f, 1f, doc.width / 2f, 0f) else setScale(1f, -1f, 0f, doc.height / 2f) }
+        return FloatArray(9).also { m.getValues(it) }
+    }
 
     /** [layer]'s mask bitmap and spec mirrored (an undo action: undo flips back, redo flips again). */
     private fun flipMaskAction(layer: Layer, horizontal: Boolean, label: String): FlipMaskAction {
@@ -1883,6 +1926,8 @@ class EditorController(
             shape = null,
             vector = before.vector?.let { VectorLayerOps.flipped(it, doc.width, doc.height, horizontal) },
             maskSpec = before.maskSpec?.let { MaskSpecs.transformed(it, m) },
+            // v1.7 (I14): a vector array's spec is mirrored with its objects; any other is baked.
+            array = before.array?.let { a -> before.vector?.let { v -> LayerDataTransforms.mappedArray(a, v, flipValues(horizontal)) } },
         )
         val dataAction = if (after != before) {
             layer.restoreData(after)

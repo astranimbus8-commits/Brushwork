@@ -215,11 +215,13 @@ object CanvasOps {
         val constrain = snap.colorMode == ColorMode.MONOCHROME && resample != Resample.NEAREST
         val geometry = CanvasGeometry.scale(newWidth.toDouble() / snap.width, newHeight.toDouble() / snap.height)
         // Vector layers are re-rendered from their (scaled) objects: crisp at any size, and
-        // editable masks from their scaled specs (v1.5).
+        // editable masks from their scaled specs (v1.5). v1.7 (I14): every vector re-render and
+        // exactness check here uses ArrayDraw.effectiveVector (a live array's copies included,
+        // placed by the mapped spec).
         val layers = mapLayers(
             snap, progress,
             data = { l -> mappedData(l, geometry, newWidth, newHeight) },
-            content = { _, d, sub -> d?.vector?.let { v -> renderVector(v, newWidth, newHeight, snap.colorMode, sub) } },
+            content = { _, d, sub -> d?.let { ArrayDraw.effectiveVector(it) }?.let { v -> renderVector(v, newWidth, newHeight, snap.colorMode, sub) } },
             maskOf = { _, d, sub -> specMask(d, newWidth, newHeight, sub) },
         ) { src, isMask, sub ->
             if (constrain && !isMask) {
@@ -258,13 +260,13 @@ object CanvasOps {
             data = { l ->
                 val d = mappedData(l, geometry, newWidth, newHeight)
                 // A filled bottom layer gets pixels its objects don't make: it becomes a raster layer.
-                if (fill != null && l.bitmap === bottomBitmap && d.vector != null) d.copy(vector = null) else d
+                if (fill != null && l.bitmap === bottomBitmap && d.vector != null) d.copy(vector = null, array = null) else d
             },
             content = { l, d, sub ->
                 // Objects reaching past the old edges into the new canvas, or paper grain moved
                 // off its document grid, are drawn again; otherwise the cache moves exactly.
-                val v = d?.vector
-                val old = l.vector
+                val v = d?.let { ArrayDraw.effectiveVector(it) }
+                val old = ArrayDraw.effectiveVector(l.data)
                 if (v != null && old != null && (exposesObjects(old, snap.width, snap.height, newWidth, newHeight, offsetX, offsetY) ||
                         !LayerDataTransforms.shiftsExactly(old, offsetX, offsetY))) {
                     renderVector(v, newWidth, newHeight, snap.colorMode, sub)
@@ -325,8 +327,8 @@ object CanvasOps {
             snap, progress,
             data = { l -> mappedData(l, geometry, w, h) },
             content = { l, d, sub ->
-                val v = d?.vector
-                val old = l.vector
+                val v = d?.let { ArrayDraw.effectiveVector(it) }
+                val old = ArrayDraw.effectiveVector(l.data)
                 if (v != null && old != null && !LayerDataTransforms.turnsExactly(old, rotation.quarterTurnsCw, mirror = false)) {
                     renderVector(v, w, h, snap.colorMode, sub)
                 } else null
@@ -344,8 +346,8 @@ object CanvasOps {
             snap, progress,
             data = { l -> mappedData(l, geometry, snap.width, snap.height) },
             content = { l, d, sub ->
-                val v = d?.vector
-                val old = l.vector
+                val v = d?.let { ArrayDraw.effectiveVector(it) }
+                val old = ArrayDraw.effectiveVector(l.data)
                 if (v != null && old != null && !LayerDataTransforms.turnsExactly(old, 0, mirror = true)) {
                     renderVector(v, snap.width, snap.height, snap.colorMode, sub)
                 } else null
@@ -397,7 +399,7 @@ object CanvasOps {
             val layers = mapLayers(
                 snap, progress, transformMasks = false,
                 data = { l -> l.data },
-                content = { l, d, sub -> d?.vector?.let { v -> renderVector(v, snap.width, snap.height, mode, sub) } ?: l.bitmap },
+                content = { l, d, sub -> d?.let { ArrayDraw.effectiveVector(it) }?.let { v -> renderVector(v, snap.width, snap.height, mode, sub) } ?: l.bitmap },
             ) { src, _, _ -> src }
             return CanvasResult(snap.width, snap.height, snap.dpi, mode, layers, CanvasGeometry.IDENTITY)
         }
