@@ -40,6 +40,7 @@ import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.SelectionEdits
+import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.layers.LayerOps
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -524,6 +525,29 @@ class FolderAuditTest {
         // "New folder" goes directly above the active row at its level, even an open folder.
         assertEquals(5 to "root", landing(nested().also { c -> c.selectLayer(c.byName("F1")) }) { c -> c.addFolder() })
         assertEquals(2 to "F1", landing(nested().also { c -> c.selectLayer(c.byName("A")) }) { c -> c.addFolder() })
+    }
+
+    @Test
+    fun aDiscardedPasteIntoAnOpenFolderLeavesNoTrace() {
+        val c = nested()
+        c.selectLayer(c.byName("A"))
+        c.setSelection(rectSelection(Rect(5, 5, 50, 40)), label = "Select")
+        assertTrue(c.copySelection())
+        val f1 = c.byName("F1")
+        c.selectLayer(f1)
+        val before = picture(c)
+        val steps = c.undoManager.undoCount
+        val pasted = c.paste()
+        assertNotNull(pasted)
+        assertEquals("the paste goes into the open folder", f1.id, pasted!!.parentId)
+        // The placement is discarded before anything was drawn: its empty layer goes with its step.
+        settled("discard") { (c.currentTool as TransformTool).discard() }
+        assertEquals("the empty layer is gone", -1, c.doc.indexOf(pasted))
+        assertEquals("no step is left", steps, c.undoManager.undoCount)
+        assertFalse("nothing to redo", c.undoManager.canRedo)
+        assertEquals(before, picture(c))
+        assertSame("the folder is active again", f1, c.activeLayer)
+        assertFoldersIntact(c, "discarded paste")
     }
 
     @Test

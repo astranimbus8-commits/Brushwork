@@ -26,6 +26,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.LayerTreeAction
 import com.brushwork.paint.engine.RemoveLayerAction
 import com.brushwork.paint.engine.SelectionAction
 import com.brushwork.paint.engine.UndoAction
@@ -1624,9 +1625,17 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         val doc = controller.doc
         val idx = doc.indexOf(layer)
         if (idx < 0 || doc.pixelLayerCount <= 1) return
-        controller.structural {
-            doc.layers.removeAt(idx)
-            doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)
+        // v1.7 (I11): with a folder the add step is a LayerTreeAction; undoing it puts back the
+        // order, the parents and the row that was active (an open folder, when the layer went
+        // in as its top child).
+        val add = controller.undoManager.undoAt(controller.undoManager.undoCount - 1)
+        if (add is LayerTreeAction) {
+            add.undo(controller)
+        } else {
+            controller.structural {
+                doc.layers.removeAt(idx)
+                doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)
+            }
         }
         controller.dropLastUndo()
         // An empty step pushed and dropped again: counts as an edit, leaves no history. (The push
