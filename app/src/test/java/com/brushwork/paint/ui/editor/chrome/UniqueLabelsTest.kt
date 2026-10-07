@@ -18,6 +18,9 @@ import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.layers.FrameBadge
 import com.brushwork.paint.ui.layers.LayerLabels
 import org.junit.Assert.assertEquals
@@ -35,6 +38,8 @@ import org.robolectric.shadows.ShadowLog
  * screen, with the tool menu open, with the layer window open (also over two layers of each kind:
  * their badges name their rows), with a minimized panel's pill beside the X / Y pill, and with the
  * More menu open — at the user's phone size, and on a 360 dp phone ([UniqueLabelsNarrowTest]).
+ * v1.7 F5 (design §4.8) adds the screens where the foundation puts new strings: the selection bar
+ * with a selection, the tool menu's three new cells, the Ruler panel and the layer ⋮.
  *
  * One pair is shared by design and allowed here: with the tool menu open, the top row's "Ruler"
  * circle (the Ruler panel) and the tool menu's "Ruler" cell (the Ruler tool) — I10 keeps both
@@ -180,6 +185,20 @@ internal object UniqueLabels {
             for (label in listOf("Filters", "Canvas", "Settings", "Path", "Text frames")) {
                 assertEquals("\"$label\" once with the menu open", 1, menu.count { label in it.labels })
             }
+            // v1.7 (§4.8): the three new cells sit in the last rows, below the menu's fold on a
+            // phone: scrolled to its end, the menu is still unique and shows each once ("Path"
+            // above is matched whole: "Pathfinder" contains it).
+            val scroller = s.placed().map { it.node }.lastOrNull { n ->
+                n.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.VerticalScrollAxisRange) != null &&
+                    generateSequence(n) { it.parent }.any { it.config.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.TestTag) == ChromeTags.TOOL_MENU }
+            }
+            scroller?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsActions.ScrollBy)?.action?.invoke(0f, 10_000f)
+            settle()
+            val menuEnd = Clickables.onScreen(s)
+            assertUnique("tool menu scrolled to its end", menuEnd, allowed = setOf("Ruler"))
+            for (label in listOf("Array", "Pathfinder", "Symmetry")) {
+                assertEquals("\"$label\" once at the menu's end: ${menuEnd.map { it.labels }}", 1, menuEnd.count { label in it.labels })
+            }
             click("Tools (current: Brush)")
 
             click("Open layers")
@@ -270,6 +289,52 @@ internal object UniqueLabels {
             click("Close $title", exact = true)
             (s.c.currentTool as TransformTool).discard()
             settle()
+        }
+        h.section("v1.7: the selection bar with a selection") {
+            val s = h.editor()
+            s.c.selectAll()
+            settle()
+            val items = Clickables.onScreen(s)
+            assertUnique("selection bar", items)
+            // The two v1.7 buttons sit after More (the bar scrolls to them on a phone): in the bar,
+            // each known by its own description ("Array" and "Save" are only their visible texts).
+            for (label in listOf(ArrayLabels.FROM_SELECTION, SavedSelectionLabels.SAVE)) {
+                assertTrue("\"$label\" in the selection bar", SmokeUi.has(label, exact = true))
+                assertTrue("\"$label\" at most once on screen", items.count { label in it.labels } <= 1)
+            }
+            assertTrue("\"Selection menu\" on one control", items.count { "Selection menu" in it.labels } == 1)
+            Smoke.assertQuiet(s.c, "selection bar")
+        }
+        h.section("v1.7: the Ruler panel") {
+            val s = h.editor()
+            click("Ruler", exact = true)
+            assertTrue("the Ruler panel: ${SmokeUi.shown()}", SmokeUi.has("Use ruler", exact = true))
+            // (Two v1.6 controls show the length unit "px": a value they show, like "100%", not a name.)
+            assertUnique("Ruler panel open", Clickables.onScreen(s), allowed = setOf("px"))
+            Smoke.assertQuiet(s.c, "Ruler panel")
+        }
+        h.section("v1.7: the layer ⋮") {
+            val s = h.editor()
+            click("Open layers")
+            click("More layer actions", exact = true)
+            val window = s.tagged(ChromeTags.LAYER_WINDOW) ?: throw AssertionError("no layer window")
+            val decor = s.activity.window.decorView
+            val whole = walkMenu(s) { all ->
+                val menu = all.filter { it.window !== decor }
+                assertUnique("layer ⋮", menu)
+                // Against the window's controls, known by their own names (rows show values).
+                val windowNames = Clickables.ownLabelsInside(all.filter { it.window === decor && window.contains(it.bounds.center) }, window)
+                    .flatMap { it.labels }.toSet()
+                val clash = menu.flatMap { it.labels }.filter { it in windowNames }
+                assertTrue("layer ⋮ entries repeating a layer window control: $clash", clash.isEmpty())
+            }
+            assertUnique("the whole layer ⋮", whole.values.toList())
+            for (entry in listOf(FolderLabels.PUT_IN_NEW, ArrayLabels.OPEN)) {
+                assertEquals("\"$entry\" once in the layer ⋮: ${whole.values.map { it.labels }}", 1, whole.values.count { entry in it.labels })
+            }
+            closeMenu()
+            click("Close layers", exact = true)
+            Smoke.assertQuiet(s.c, "layer ⋮")
         }
         h.section("the More menu") {
             val s = h.editor()
