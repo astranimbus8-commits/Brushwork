@@ -37,9 +37,11 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.CreateNewFolder
 import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flip
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -108,6 +110,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.array.ArrayOps
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.IncrementKind
@@ -115,7 +118,10 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.TransparencyDisplay
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ColorSwatch
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.EditorPanel
@@ -351,6 +357,8 @@ private fun SpecialLayerMenu(env: LayerWindowEnv, anchor: SpecialMenuAnchor) {
     DropdownMenu(expanded = ui.special == anchor, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
         MenuItem(LayerLabels.NEW_VECTOR, EditorIcons.Vector, enabled = env.canAddLayer) { close(); c.fromPanel { LayerOps.addVectorLayer(c) } }
         MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { close(); c.fromPanel { LayerOps.addAdjustmentLayer(c) } }
+        // v1.7 (item 17): an empty folder above the active layer (the controller refuses past the folder limit).
+        MenuItem(FolderLabels.NEW, Icons.Filled.CreateNewFolder) { close(); c.fromPanel { c.addFolder() } }
     }
 }
 
@@ -399,6 +407,17 @@ private fun LayerMenu(env: LayerWindowEnv) {
             }
             MenuItem(LayerLabels.NEW_VECTOR, EditorIcons.Vector, enabled = env.canAddLayer) { act { LayerOps.addVectorLayer(c) } }
             MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { act { LayerOps.addAdjustmentLayer(c) } }
+            // v1.7 (item 17): the layer into a new folder at its place.
+            MenuItem(FolderLabels.PUT_IN_NEW, Icons.Filled.Folder) { act { c.putInNewFolder(layer) } }
+            HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            // v1.7 (item 2): a live array on the whole layer ("Array…"), or the three array actions.
+            if (row.hasArray) {
+                MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.selectLayer(layer); c.selectTool(ToolId.ARRAY) } }
+                MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
+                MenuItem(ArrayLabels.REMOVE, Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
+            } else {
+                MenuItem(ArrayLabels.OPEN, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
+            }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
             MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)

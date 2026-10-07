@@ -22,8 +22,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
@@ -83,6 +85,9 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -123,6 +128,10 @@ internal data class LayerRowModel(
     val frame: FrameBadge? = null,
     /** v1.6: the effect of an adjustment layer ("Tone"), or null. */
     val effectName: String? = null,
+    /** v1.7: the layer carries a live array (the "Array" badge and the ⋮ array items). */
+    val hasArray: Boolean = false,
+    /** v1.7: the array is in "Edit source pixels" mode (the badge reads "Array: editing source"). */
+    val arrayEditingSource: Boolean = false,
 ) {
     /** An editable text layer (its text can be edited again with the text tool). */
     val isText: Boolean get() = kind == LayerKindBadge.TEXT
@@ -179,6 +188,8 @@ internal data class LayerRowModel(
                     number = topFirst.size - i,
                     frame = badges[i],
                     effectName = adjustment?.let { AdjustmentEffects.displayName(it) },
+                    hasArray = l.array != null,
+                    arrayEditingSource = l.array?.spec?.editingSource == true,
                 )
             }
         }
@@ -264,7 +275,10 @@ internal fun LayerRow(
                 selected = row.active && !row.editingMask,
                 overlayText = row.effectName,
                 modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
-            ) { KindBadge(row) }
+            ) {
+                KindBadge(row)
+                if (row.hasArray) ArrayBadge(row)
+            }
         }
         // A masked row in an 80 dp row stacks its eye over its mask square (one 40 dp column):
         // side by side they would leave "100%" / "Normal" no room on a 360–392 dp phone, and the
@@ -613,6 +627,18 @@ private fun BoxScope.KindBadge(row: LayerRowModel) {
     }
 }
 
+/**
+ * v1.7: the "Array" badge in the thumbnail's top-left corner (the kind badge keeps the bottom-right
+ * one), spoken "Layer n: array", or "Layer n: array: editing source" in "Edit source pixels" mode.
+ */
+@Composable
+private fun BoxScope.ArrayBadge(row: LayerRowModel) {
+    val description = LayerLabels.badge(row.number, if (row.arrayEditingSource) ArrayLabels.EDITING_BADGE else ArrayLabels.BUTTON)
+    BadgeBox(description, Modifier.align(Alignment.TopStart).padding(1.dp)) {
+        Icon(EditorIcons.tool(ToolId.ARRAY), contentDescription = null, tint = Color.White, modifier = Modifier.size(11.dp))
+    }
+}
+
 private val BADGE_SHAPE = RoundedCornerShape(3.dp)
 
 @Composable
@@ -766,6 +792,10 @@ private fun ClipBracket(clip: ClipInfo, modifier: Modifier) {
  * The "Selection Layer" row at the top of the list (ibisPaint): a pink checker thumbnail with the
  * selected area and its bounds, "Selection Layer" over "No Selection" or "W × H px". A tap opens
  * the Selection panel ([onOpen]).
+ *
+ * v1.7 (item 14): the "Add selection layer" button on the thumbnail's corner saves the selection
+ * ([onAdd]: `EditorController.saveSelection`); disabled without a selection. It sits on the
+ * thumbnail so the two lines keep their room (ibisPaint's 18 sp).
  */
 @Composable
 internal fun SelectionLayerRow(
@@ -775,6 +805,7 @@ internal fun SelectionLayerRow(
     thumbSize: Dp,
     onOpen: () -> Unit,
     modifier: Modifier = Modifier,
+    onAdd: (() -> Unit)? = null,
 ) {
     Row(
         modifier
@@ -786,7 +817,12 @@ internal fun SelectionLayerRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Spacer(Modifier.width(PLAIN_GUTTER))
-        SelectionThumbnail(selection, docAspect, thumbSize)
+        Box {
+            SelectionThumbnail(selection, docAspect, thumbSize)
+            if (onAdd != null) {
+                AddSelectionLayerButton(enabled = selection?.isEmpty == false, onClick = onAdd, modifier = Modifier.align(Alignment.BottomEnd))
+            }
+        }
         // Both lines at ibisPaint's size, one size, smaller where the row is narrow (a 360 dp phone).
         BoxWithConstraints(Modifier.weight(1f).padding(start = 6.dp, end = 4.dp)) {
             val b = selection?.bounds
@@ -799,6 +835,25 @@ internal fun SelectionLayerRow(
         }
     }
 }
+
+/** "Add selection layer": an accent "+" disc in a 40 dp target on the Selection row's thumbnail. */
+@Composable
+private fun AddSelectionLayerButton(enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onClick, enabled = enabled, modifier = modifier.size(IbisDims.LayerEyeTouch)) {
+        Box(
+            Modifier
+                .size(ADD_DISC)
+                .clip(CircleShape)
+                .background(if (enabled) IbisColors.Accent else THUMB_EDGE)
+                .border(1.dp, Color.White, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = SavedSelectionLabels.ADD_LAYER, tint = Color.White, modifier = Modifier.size(ADD_DISC - 6.dp))
+        }
+    }
+}
+
+private val ADD_DISC = 22.dp
 
 @Composable
 private fun SelectionThumbnail(selection: Selection?, aspect: Float, side: Dp) {

@@ -332,7 +332,8 @@ private fun WindowHeader(layerCount: Int, maxLayers: Int, canAddLayer: Boolean, 
 }
 
 /**
- * The bottom-aligned list: the Selection Layer row (item 0), then the layer rows top first; the
+ * The bottom-aligned list: the Selection Layer row (item 0) and the saved selections (item 1, one
+ * item for all of them; [HEADER_ITEMS]), then the layer rows top first; the
  * filler above few rows is [IbisColors.PanelOpaque]. Rows drag from their ≡ handle at once, or
  * after a long press anywhere else; a long press released in place opens the layer's ⋮ menu.
  */
@@ -351,10 +352,11 @@ private fun LayerList(
 ) {
     val doc = controller.doc
     val activeDisplay = rows.indexOfFirst { it.active }
-    // Item 0 is the Selection Layer row.
-    val activeItem = activeDisplay + 1
-    // Open with the active layer in view, one row of context above it.
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = (activeItem - 1).coerceAtLeast(0))
+    // Items 0 and 1 are the headers: the Selection Layer row and the saved selections (v1.7).
+    val activeItem = activeDisplay + HEADER_ITEMS
+    // Open with the active layer in view, one row of context above it (the headers from the top
+    // when the active layer is the top one).
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = contextItem(activeDisplay))
     val haptics = LocalHapticFeedback.current
     val reorder = rememberReorderState(
         listState = listState,
@@ -364,11 +366,11 @@ private fun LayerList(
             dragOrder.value = doc.layers.asReversed().toList()
         },
         // Read/write the state directly: several moves can arrive between recompositions.
-        onMove = { from, to -> dragOrder.value?.let { dragOrder.value = LayerListMath.moved(it, from - 1, to - 1) } },
+        onMove = { from, to -> dragOrder.value?.let { dragOrder.value = LayerListMath.moved(it, from - HEADER_ITEMS, to - HEADER_ITEMS) } },
         onDrop = { index ->
             val order = dragOrder.value
             dragOrder.value = null
-            val at = index - 1
+            val at = index - HEADER_ITEMS
             if (at >= 0 && order != null && at < order.size) {
                 val layer = order[at]
                 // moveLayer makes the moved layer active without the tool lifecycle; selecting it
@@ -380,7 +382,8 @@ private fun LayerList(
                 }
             }
         },
-        isReorderable = { it >= 1 },
+        // Neither header (SELECTION_ROW_KEY, SAVED_SELECTIONS_KEY) is dragged or dropped on.
+        isReorderable = { isLayerItem(it) },
     )
 
     // Keep the active layer in view when it changes (added, duplicated, moved with the buttons).
@@ -389,13 +392,13 @@ private fun LayerList(
         val info = listState.layoutInfo
         val item = info.visibleItemsInfo.firstOrNull { it.index == activeItem }
         val fullyVisible = item != null && item.offset >= info.viewportStartOffset && item.offset + item.size <= info.viewportEndOffset
-        if (!fullyVisible) listState.animateScrollToItem((activeItem - 1).coerceAtLeast(0))
+        if (!fullyVisible) listState.animateScrollToItem(contextItem(activeDisplay))
     }
 
     val longPressStart by rememberUpdatedState { _: Int -> haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
     val longPress by rememberUpdatedState { index: Int ->
         // A long press released in place: that layer's ⋮ menu.
-        rows.getOrNull(index - 1)?.layer?.let { layer ->
+        rows.getOrNull(index - HEADER_ITEMS)?.layer?.let { layer ->
             controller.fromPanel { if (controller.activeLayer !== layer) controller.selectLayer(layer) }
             ui.menu.show(mask = false)
         }
@@ -421,11 +424,17 @@ private fun LayerList(
                 height = rowHeight,
                 thumbSize = thumbSize,
                 onOpen = { controller.fromPanel { onOpenPanel(EditorPanel.SELECTION) } },
+                onAdd = { controller.fromPanel { controller.saveSelection() } },
                 modifier = Modifier.testTag(LayerWindowTags.SELECTION_ROW),
             )
         }
+        // v1.7 (item 14): the saved selections, ONE item whatever their number (area G's rows;
+        // empty when none are saved), so the header count stays HEADER_ITEMS.
+        item(key = SAVED_SELECTIONS_KEY) {
+            SavedSelectionRows(controller)
+        }
         itemsIndexed(rows, key = { _, r -> r.layer.id }) { index, row ->
-            val itemIndex = index + 1
+            val itemIndex = index + HEADER_ITEMS
             val dragging = itemIndex == reorder.draggingIndex
             val itemModifier = when {
                 dragging -> Modifier.zIndex(1f).graphicsLayer { translationY = reorder.draggingOffset }
@@ -471,6 +480,26 @@ private fun editAction(c: EditorController, row: LayerRowModel): (() -> Unit)? {
 }
 
 private const val SELECTION_ROW_KEY = "selection-layer"
+
+/** v1.7 (item 14): the key of the saved selections' item, right under the Selection Layer row. */
+private const val SAVED_SELECTIONS_KEY = "saved-selections"
+
+/**
+ * The list's header items before the first layer row: the Selection Layer row
+ * ([SELECTION_ROW_KEY]) and the saved selections ([SAVED_SELECTIONS_KEY]). Every row offset in
+ * the list goes through it (v1.7, §3.14).
+ */
+private const val HEADER_ITEMS = 2
+
+/** True for a layer row's item index (the headers are never dragged, nor dropped on). */
+internal fun isLayerItem(index: Int): Boolean = index >= HEADER_ITEMS
+
+/**
+ * The item the list scrolls to so that display row [activeDisplay] shows with one row of context
+ * above it: the row above, or the first header when it is the top row (or none is active).
+ */
+internal fun contextItem(activeDisplay: Int): Int =
+    if (activeDisplay <= 0) 0 else activeDisplay + HEADER_ITEMS - 1
 
 @Composable
 private fun RenameDialog(initial: String, onRename: (String) -> Unit, onDismiss: () -> Unit) {
