@@ -30,6 +30,7 @@ import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
 import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.geom.ObjectMapping
+import com.brushwork.paint.vector.geom.ShapeAffine
 import com.brushwork.paint.vector.geom.StrokeHits
 import java.nio.ByteBuffer
 import kotlin.math.abs
@@ -258,9 +259,12 @@ object VectorOps {
      * [o] mapped by [m] (3x3 row-major; may be a homography). Strokes map their points and scale
      * `sizeScale` by sqrt|det| (at the bounds centre); a VShape stays a VShape under similarities
      * (and under reflections when it mirrors into itself, see [ObjectMapping.mirroredShape]),
-     * otherwise it becomes a VPath. Exact for affine maps (gradients included); a homography
-     * first splits every curved segment into [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps
-     * anchors and handles. A non-finite matrix returns [o].
+     * and v1.7 (F4) under every other affine map too ([ShapeAffine.mapped]: a regular type under
+     * a skew becomes a point shape); only a homography turns it into a VPath. Similarities and
+     * mirrors keep their v1.6 results (they are tried first). Exact for affine maps (gradients
+     * included); a homography first splits every curved segment into
+     * [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles. A non-finite matrix
+     * returns [o].
      */
     fun transformed(o: VObject, m: FloatArray): VObject {
         if (m.size < 9 || m.any { !it.isFinite() }) return o
@@ -277,6 +281,7 @@ object VectorOps {
             }
             is VPath -> mapPath(if (projective) ObjectMapping.subdivided(o) else o, m)
             is VShape -> similarityShape(o, m) ?: ObjectMapping.mirroredShape(o, m)
+                ?: ShapeAffine.mapped(o.shape, m)?.let { o.copy(shape = it) }
                 ?: mergePaths(o, toPaths(o)).let { p -> mapPath(if (projective) ObjectMapping.subdivided(p) else p, m) }
         }
     }
@@ -644,7 +649,8 @@ object VectorOps {
         return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke, spline = spline)
     }
 
-    private fun scaledBrush(b: BrushPreset, s: Float): BrushPreset =
+    /** [b] with its size and tapers scaled by [s] (the same instance at 1). */
+    internal fun scaledBrush(b: BrushPreset, s: Float): BrushPreset =
         if (s == 1f) b else b.copy(size = b.size * s, taperStart = b.taperStart * s, taperEnd = b.taperEnd * s)
 
     /**
@@ -724,6 +730,8 @@ object VectorOps {
             cx = center.x, cy = center.y, w = o.w * scale, h = o.h * scale, rotation = rot,
             strokeWidth = o.strokeWidth * scale, cornerRadius = o.cornerRadius * scale,
             brushPreset = o.brushPreset?.let { turnedBrush(scaledBrush(it, scale), floatArrayOf(a, b, c, d)) },
+            // v1.7: each point's own radius scales too (unchanged when none has one).
+            points = ShapeAffine.scaledRadii(o.points, scale),
         )
         return s.copy(shape = shape)
     }

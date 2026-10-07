@@ -18,6 +18,7 @@ import com.brushwork.paint.tools.vector.JoinStyle
 import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapePoint
 import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
@@ -365,7 +366,15 @@ class VectorOpsRobolectricTest {
             // mirror, shapes that mirror into themselves stay shapes; see VectorA1GeometryTest.)
             for ((name, s) in allShapes(ShapeStyle.FILL).filter { !it.second.shape.type.isLineLike }) {
                 val t = VectorOps.transformed(s, mv)
-                if (m === stretch) assertTrue("$name becomes a path", t is VPath)
+                // v1.7 (F4, ShapeAffine): an affine stretch keeps a shape a shape (a point shape for
+                // the regular types under the skew; an ellipse stays an ellipse).
+                if (m === stretch) {
+                    assertTrue("$name stays a shape", t is VShape)
+                    val type = s.shape.type
+                    if (type == ShapeType.RECTANGLE || type == ShapeType.POLYGON || type == ShapeType.STAR) {
+                        assertTrue("$name becomes a point shape", ShapeOutlines.isCustom((t as VShape).shape))
+                    }
+                }
                 val score = iou(draw(s, m), draw(t))
                 assertTrue("$name: IoU $score", score >= 0.98)
             }
@@ -373,7 +382,7 @@ class VectorOpsRobolectricTest {
             for ((name, s) in allShapes()) {
                 val any = VectorOps.transformed(s, mv)
                 if (any is VShape) {
-                    assertTrue("$name stays a shape only under the mirror", m === mirror)
+                    // v1.7 (F4): every affine keeps the shape (v1.6: only the mirror did).
                     assertEquals(name, 6f * sqrt(det), any.shape.strokeWidth, 1e-3f)
                     continue
                 }
@@ -385,12 +394,12 @@ class VectorOpsRobolectricTest {
                 if (!s.shape.type.isLineLike) assertEquals(name, VPaint.Solid(s.shape.fillColor), t.fill)
                 if (s.shape.type == ShapeType.ARROW) assertEquals("$name heads", VPaint.Solid(s.shape.strokeColor), t.fill)
             }
-            // A brush outline stays a brush outline with the brush scaled.
+            // A brush outline stays a brush outline with the brush scaled (v1.7: on the shape it stays).
             if (m === stretch) {
-                val b = VectorOps.transformed(shape(ShapeType.ELLIPSE, strokeWith = ShapeStroke.BRUSH), mv) as VPath
-                assertEquals(VStrokeKind.BRUSH, b.stroke!!.kind)
-                assertEquals(10f * sqrt(det), b.stroke!!.brush!!.size, 1e-3f)
-                assertEquals(9L, b.stroke!!.seed)
+                val b = VectorOps.transformed(shape(ShapeType.ELLIPSE, strokeWith = ShapeStroke.BRUSH), mv) as VShape
+                assertEquals(ShapeStroke.BRUSH, b.shape.strokeWith)
+                assertEquals(10f * sqrt(det), b.shape.brushPreset!!.size, 1e-3f)
+                assertEquals(9L, b.seed)
             }
         }
         // A homography maps the anchors themselves.

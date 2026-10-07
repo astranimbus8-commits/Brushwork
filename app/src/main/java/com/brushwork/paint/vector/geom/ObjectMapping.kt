@@ -148,8 +148,8 @@ object ObjectMapping {
         )
         val candidates = ArrayList<com.brushwork.paint.tools.vector.ShapeObject>(3)
         if (o.points != null) {
-            // Custom points: mirror them across the box's vertical axis.
-            val pts = o.points.map { p ->
+            // Custom points: mirror them across the box's vertical axis (v1.7: their own radii scaled).
+            val pts = ShapeAffine.scaledRadii(o.points, scale)!!.map { p ->
                 p.copy(x = -p.x, handleIn = p.handleIn?.let { ShapeHandle(-it.x, it.y) }, handleOut = p.handleOut?.let { ShapeHandle(-it.x, it.y) })
             }
             candidates += base.copy(rotation = norm(phi - o.rotation + 180f), points = pts)
