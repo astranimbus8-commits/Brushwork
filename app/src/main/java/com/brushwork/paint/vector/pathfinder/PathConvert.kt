@@ -306,22 +306,23 @@ object PathConvert {
         }
     }
 
+    /**
+     * API 34+: the platform's iterator, read with `next(points, 0)` only. A conic's weight is the
+     * 7th float (`points[6]`, where `next()` takes its `conicWeight` from). Never `peek()`: after
+     * `hasNext()` (which reads the next segment ahead) it answers the segment after that one, so
+     * a conic-and-peek reader takes the move before a conic for the conic.
+     */
     @RequiresApi(34)
     private object PlatformReader {
         fun read(path: Path, b: ContourBuilder) {
             val it = path.pathIterator
             val pts = FloatArray(8)
             while (it.hasNext()) {
-                if (it.peek() == android.graphics.PathIterator.VERB_CONIC) {
-                    val s = it.next()
-                    val p = s.points
-                    b.conic(p[2], p[3], p[4], p[5], s.conicWeight)
-                    continue
-                }
                 when (it.next(pts, 0)) {
                     android.graphics.PathIterator.VERB_MOVE -> b.move(pts[0], pts[1])
                     android.graphics.PathIterator.VERB_LINE -> b.line(pts[2], pts[3])
                     android.graphics.PathIterator.VERB_QUAD -> b.quad(pts[2], pts[3], pts[4], pts[5])
+                    android.graphics.PathIterator.VERB_CONIC -> b.conic(pts[2], pts[3], pts[4], pts[5], pts[6])
                     android.graphics.PathIterator.VERB_CUBIC -> b.cubic(pts[2], pts[3], pts[4], pts[5], pts[6], pts[7])
                     android.graphics.PathIterator.VERB_CLOSE -> b.close()
                     else -> return
