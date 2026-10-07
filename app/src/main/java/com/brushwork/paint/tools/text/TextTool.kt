@@ -7,6 +7,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
@@ -15,13 +16,20 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectDeletion
+import com.brushwork.paint.tools.ObjectPosition
+import com.brushwork.paint.tools.ObjectScale
+import com.brushwork.paint.tools.PillPositionTool
 import com.brushwork.paint.tools.PinchTargeting
+import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -34,6 +42,8 @@ import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
 import com.brushwork.paint.tools.transform.TransformHandles
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.editor.HistoryLabels
 import kotlin.math.abs
 import kotlin.math.max
 
@@ -70,7 +80,7 @@ import kotlin.math.max
  * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
  * isn't snapped.
  */
-class TextTool(controller: EditorController) : Tool(controller), TextEditorHost, KerningEditor {
+class TextTool(controller: EditorController) : Tool(controller), TextEditorHost, KerningEditor, PillPositionTool, ScaledTool, DeletingTool {
     override val id = ToolId.TEXT
 
     // v1.6 TextEditorHost capability flags: the Text tool offers everything.
@@ -84,6 +94,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     private var itemState by mutableStateOf<TextItem?>(null)
 
+    /** Font size of the open text when it was opened or placed: the pill's 100 % (0 while none is open). */
+    private var scaleRefPx by mutableFloatStateOf(0f)
+
     /**
      * The text object being placed or edited, null when there is none. While a text layer is
      * edited, every change also redraws that layer's in-place preview (see [LayerPreview]).
@@ -91,6 +104,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     override var item: TextItem?
         get() = itemState
         private set(value) {
+            // v1.7 (item 9): the pill's Scale is relative to the text as it was opened.
+            if (value == null) scaleRefPx = 0f else if (itemState == null) scaleRefPx = value.spec.sizePx
             itemState = value
             if (layerPreview != null) refreshLayerPreview()
         }
@@ -203,6 +218,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         rememberVectorLayer()
         endLayerEdit()
         item = TextItem("", specForNewText(), x.coerceIn(0f, doc.width.toFloat()), y.coerceIn(0f, doc.height.toFloat()))
+        scaleRefPx = item!!.spec.sizePx
         editorBackup = null
         editingNew = true
         editorOpen = true
@@ -247,6 +263,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         layerPreview = LayerPreview(layer).also { controller.renderOverride = it }
         loadedInk?.let { controller.tiles.invalidate(it) }
         item = loaded
+        scaleRefPx = loaded.spec.sizePx
         // A wrapped text whose picture changed while it couldn't follow (it was locked, or the
         // picture's mask was switched on or off): shown, and on ✓ committed, around the picture
         // as it is now. (Unchanged: nothing is pending, a tap records no step.)
@@ -393,6 +410,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             lettersSheetOpen = false
         } else {
             nextSpec = styleToRemember(cur.spec)
+            // v1.7 (item 9): a new text is placed as the editor leaves it (the pill's 100 %).
+            if (editingLayer == null) scaleRefPx = cur.spec.sizePx
         }
         controller.invalidateOverlay()
     }
@@ -888,6 +907,120 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         endSnap()
         clearReadout()
         endLayerEdit()
+        controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ v1.7: the pill and history taps
+
+    /**
+     * v1.7 (items 1, 9): the X / Y pill's one source, the open text's centre ([anchorOf], as the
+     * v1.6 strip showed it); hidden while no text is open. Moves are part of the pending text.
+     */
+    override val pillPosition: ObjectPosition = object : ObjectPosition {
+        override val position: Vec2? get() = item?.let { anchorOf(it) }
+        override val label: String get() = CENTER_LABEL
+        override fun setPosition(x: Float?, y: Float?) {
+            if (item == null) return
+            x?.takeIf { it.isFinite() }?.let { setCenterX(it) }
+            y?.takeIf { it.isFinite() }?.let { setCenterY(it) }
+        }
+    }
+
+    override val pillUnit: LengthUnit get() = positionUnit
+
+    private val textScale = object : ObjectScale {
+        override val scalePercent: Vec2?
+            get() {
+                val cur = item ?: return null
+                val ref = scaleRefPx
+                if (!(ref > 0f)) return null
+                val p = 100f * cur.spec.sizePx / ref
+                return Vec2(p, p)
+            }
+
+        /** Text scales as a whole: no Scale Y, proportions kept. */
+        override val uniformOnly: Boolean get() = true
+
+        override fun setScale(xPercent: Float?, yPercent: Float?) {
+            val p = (xPercent ?: yPercent)?.takeIf { it.isFinite() && it > 0f } ?: return
+            scaleTo(p)
+        }
+    }
+
+    /**
+     * v1.7 (item 9): the pill's Scale row while a text is open: uniform, in % of the text as it
+     * was opened or placed (100 % = its font size then), about its centre, part of the pending
+     * text like a pinch.
+     */
+    override val objectScale: ObjectScale? get() = if (item != null) textScale else null
+
+    /**
+     * Scales the open text to [percent] % of its size when opened ([scaleRefPx]) about its centre
+     * ([anchorOf]): the whole look (size, outline, box) as the pinch does, and its path.
+     */
+    fun scaleTo(percent: Float) = update { cur ->
+        val ref = scaleRefPx
+        if (!(ref > 0f) || !(cur.spec.sizePx > 0f) || !percent.isFinite() || percent <= 0f) return@update cur
+        val k = ref * percent / 100f / cur.spec.sizePx
+        if (!k.isFinite() || k <= 0f || k == 1f) return@update cur
+        val focus = anchorOf(cur)
+        val next = cur.pinched(focus, Vec2.ZERO, k, 0f, maxSizePx)
+        if (!cur.path.isActive) return@update next
+        val applied = next.spec.sizePx / cur.spec.sizePx
+        next.copy(path = TextOnPath.transformed(cur.path, Vec2.ZERO, applied, 0f, focus))
+    }
+
+    private val textDeletion = object : ObjectDeletion {
+        override val deleteLabel: String? get() = if (item != null) PillLabels.deleteObject(DELETE_KIND) else null
+        override fun delete() {
+            deleteObject()
+        }
+    }
+
+    /** v1.7 (item 13): the pill's trash cell, "Delete text", while a text is open. */
+    override val objectDeletion: ObjectDeletion? get() = if (item != null) textDeletion else null
+
+    /**
+     * The pill's trash cell (item 13), without a confirmation: a text never committed is dropped
+     * (as ✕); an opened text layer is deleted with its pending changes as ONE step ("Delete
+     * text", undo brings the layer back as it was) and the session ends. The last layer of the
+     * drawing stays (the layer window's message). True when something was deleted.
+     */
+    fun deleteObject(): Boolean {
+        if (item == null) return false
+        val layer = editingLayer?.takeIf { doc.indexOf(it) >= 0 }
+        if (layer == null) {
+            discard()
+            return true
+        }
+        if (doc.pixelLayerCount <= 1) {
+            controller.toast(LayerStructure.LAST_LAYER)
+            return false
+        }
+        if (!controller.checkEditable(layer)) return false
+        discardItem()
+        val deleted = controller.structure.delete(layer, keepChildren = false, label = HistoryLabels.DELETE_TEXT)
+        returnToVectorLayer()
+        controller.invalidateOverlay()
+        return deleted
+    }
+
+    /** The open text as it is now: its pending changes are this tool's in-tool history (item 10). */
+    private data class TextMark(val item: TextItem, val layer: Layer?)
+
+    /** v1.7 (item 10): the open text and its layer, null while none is open. */
+    override fun historyMark(): Any? = item?.let { TextMark(it, editingLayer) }
+
+    /**
+     * v1.7 (item 10): puts the open text back as it was at [mark] (a history tap over the UI takes
+     * back what its first finger changed: a slider, a chip). Nothing when another text (or none)
+     * is open now.
+     */
+    override fun rollbackHistory(mark: Any?) {
+        val m = mark as? TextMark ?: return
+        val cur = item ?: return
+        if (editingLayer !== m.layer || cur == m.item) return
+        item = m.item
         controller.invalidateOverlay()
     }
 
@@ -1857,6 +1990,12 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
         /** Shown when the fixed width of a text that wraps around a picture is turned off. */
         const val WRAP_NEEDS_WIDTH = "Text that wraps around a picture needs a fixed width: turn Wrap off first"
+
+        /** What the pill's position is (v1.7; the v1.6 strip's word). */
+        const val CENTER_LABEL = "Center"
+
+        /** The pill's trash cell deletes a "text" ([PillLabels.deleteObject]). */
+        private const val DELETE_KIND = "text"
 
         /** A layer whose content covers this much of the text box is never the default picture (a background). */
         private const val WRAP_DEFAULT_MAX_COVER = 0.9f
