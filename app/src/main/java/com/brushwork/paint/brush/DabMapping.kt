@@ -1,12 +1,15 @@
 package com.brushwork.paint.brush
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.sin
@@ -31,8 +34,14 @@ import kotlin.math.sin
  * copies in this order, through one instance each, so a vector stroke re-renders like it was
  * drawn. [stamper] measures and draws the dabs (its tips are shared). Not thread-safe (one per
  * stroke / replay).
+ *
+ * With many copies ([PHASE_MIN_MAPS] maps or more; §6.3 budgets 64 copies of a 64 px brush), an
+ * unturned anti-aliased copy under an affine map is drawn from [PhaseTips]: its tip shifted to the
+ * nearest quarter pixel, copied at a whole-pixel position. That is about ten times cheaper than
+ * DabStamper's sub-pixel draw and lands within 1/8 px of it. The dab itself, and every copy of a
+ * stroke with fewer maps (a mirror, a few turns), is drawn exactly as before.
  */
-class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
+class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper, phaseTips: PhaseTips? = null) {
     private val copyMaps: Array<CopyMap> = Array(max(0, maps.size - 1)) { CopyMap(maps[it + 1]) }
 
     /** Copies besides the stroke itself (the maps without the identity). */
@@ -47,6 +56,11 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     /** Whether the last preset placed ([radialPreset]) has a radial tip ([isRadial]). */
     private var radialPreset: BrushPreset? = null
     private var radial = false
+
+    /** Copies drawn from shifted tips (many copies only), and whether the last placed one is. */
+    private val phases: PhaseTips? = if (maps.size >= PHASE_MIN_MAPS) phaseTips ?: PhaseTips() else null
+    private var placedTip: Tip? = null
+    private var placedPhase = false
 
     /** Draws mirrored textured tips (DabStamper's anti-aliased path with the tip flipped). */
     private val matrix = Matrix()
@@ -67,9 +81,10 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
         }
         if (!c.mapInto(dab, placed, preset.antiAlias, keepRotation = radial)) return null
         val p = if (preset.antiAlias) preset else c.turnedPreset(preset)
-        stamper.measure(p, placed)
+        placedTip = stamper.measure(p, placed)
         placedPreset = p
         placedMirrored = c.lastMirrored && preset.antiAlias && TipShapes.isTextured(preset.tip)
+        placedPhase = phases != null && c.affine && preset.antiAlias && !placedMirrored && (placed.rotation == 0f || radial)
         placedCopy = k
         return placed
     }
@@ -79,6 +94,8 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
         val p = placedPreset ?: return
         if (placedCopy != k || mapped !== placed) return
         if (!placedMirrored) {
+            val tip = placedTip
+            if (placedPhase && tip != null && phases!!.stamp(canvas, tip, mapped)) return
             stamper.stamp(canvas, p, mapped)
             return
         }
@@ -110,7 +127,8 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     /** One map, with what is fixed for an affine map worked out once. */
     private class CopyMap(map: FloatArray) {
         private val m = map.copyOf()
-        private val affine = m[6] == 0f && m[7] == 0f
+        /** No perspective: all the copies of a dab get one scale (a rigid map keeps its diameter). */
+        val affine = m[6] == 0f && m[7] == 0f
         /**
          * √|det J| of an affine map (the same everywhere); exactly 1 for a rigid map (a mirror,
          * a turn, a shift), whose float rounding would otherwise make every copy a hair smaller
@@ -226,9 +244,96 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
         }
     }
 
+    /**
+     * The anti-aliased tip of the copies' dabs at their scale, pre-shifted by quarter pixels in x
+     * and y (each of the [STEPS]² shifts drawn when first needed, by DabStamper's own bilinear
+     * draw at that shift): a copy is then this bitmap copied at a whole-pixel position with the
+     * dab's alpha (Skia's plain pixel copy), within 1/8 px of its exact place. Copies wider than
+     * [MAX_PX] keep the exact draw (their shifts would take too much memory). One tip and scale
+     * at a time: a stroke's copies share both (an affine map scales every copy of a dab alike),
+     * and so do most of its dabs. Mappings used one after another on one thread may share one
+     * (`StrokeRaster` replays stroke after stroke with the same tips); a mapping makes its own
+     * otherwise. Not thread-safe.
+     */
+    class PhaseTips {
+        private var tip: Tip? = null
+        private var scale = Float.NaN
+        private val shifted = arrayOfNulls<Bitmap>(STEPS * STEPS)
+        private val drawn = BooleanArray(STEPS * STEPS)
+        private val renderCanvas = Canvas()
+        private val renderMatrix = Matrix()
+        // DabStamper's anti-aliased, filtered paint (opaque: the copy brings the dab's alpha).
+        private val renderPaint = Paint().apply { isFilterBitmap = true }
+        private val copyPaint = Paint().apply { isAntiAlias = false; isFilterBitmap = false }
+        private var copyAlpha = -1
+
+        /** Draws [dab] (measured with [tip]) into [canvas]; false when it needs the exact draw. */
+        fun stamp(canvas: Canvas, tip: Tip, dab: Dab): Boolean {
+            val s = dab.diameter / tip.diameter
+            if (!(tip.size * s <= MAX_PX)) return false
+            val alpha = (dab.alpha * 255f + 0.5f).toInt()
+            if (alpha <= 0) return true
+            if (tip !== this.tip || s != scale || tip.bitmap.isRecycled) {
+                this.tip = tip
+                scale = s
+                drawn.fill(false)
+            }
+            // The tip's top left corner (DabStamper: translate(-half) · scale(s) · translate(centre))
+            // to the nearest 1/STEPS px.
+            val half = tip.size / 2f
+            val qx = floor((dab.cx - half * s) * STEPS + 0.5f).toInt()
+            val qy = floor((dab.cy - half * s) * STEPS + 0.5f).toInt()
+            val px = Math.floorMod(qx, STEPS)
+            val py = Math.floorMod(qy, STEPS)
+            val i = py * STEPS + px
+            val bmp = if (drawn[i]) shifted[i]!! else render(i, tip, s, half, px, py)
+            val a = alpha.coerceAtMost(255)
+            if (a != copyAlpha) {
+                copyPaint.alpha = a
+                copyAlpha = a
+            }
+            canvas.drawBitmap(bmp, Math.floorDiv(qx, STEPS).toFloat(), Math.floorDiv(qy, STEPS).toFloat(), copyPaint)
+            return true
+        }
+
+        private fun render(i: Int, tip: Tip, s: Float, half: Float, px: Int, py: Int): Bitmap {
+            val side = ceil(tip.size * max(s, 1f)).toInt() + 1
+            var b = shifted[i]
+            if (b == null || b.isRecycled || b.width != side) {
+                b?.recycle()
+                b = Bitmap.createBitmap(side, side, Bitmap.Config.ALPHA_8)
+                shifted[i] = b
+            } else {
+                b.eraseColor(0)
+            }
+            renderMatrix.setTranslate(-half, -half)
+            renderMatrix.postScale(s, s)
+            renderMatrix.postTranslate(half * s + px / STEPS.toFloat(), half * s + py / STEPS.toFloat())
+            renderCanvas.setBitmap(b)
+            renderCanvas.drawBitmap(tip.bitmap, renderMatrix, renderPaint)
+            renderCanvas.setBitmap(null)
+            drawn[i] = true
+            return b
+        }
+
+        companion object {
+            /** Shifts per pixel (quarter pixels: a copy lands at most 1/8 px from its place). */
+            const val STEPS = 4
+            /** Widest copy drawn this way (px): its 16 shifts take at most about 1 MB. */
+            const val MAX_PX = 256f
+        }
+    }
+
     companion object {
+        /**
+         * Maps from which copies are drawn from [PhaseTips]. With fewer (a mirror, a few turns)
+         * every copy is drawn exactly: they don't cost enough to need it.
+         */
+        internal const val PHASE_MIN_MAPS = 16
+
         /** The mapping of [maps] (a stroke's copies), or null when there are none (fewer than 2 maps). */
-        fun of(maps: List<FloatArray>, stamper: DabStamper): DabMapping? = if (maps.size < 2) null else DabMapping(maps, stamper)
+        fun of(maps: List<FloatArray>, stamper: DabStamper, phaseTips: PhaseTips? = null): DabMapping? =
+            if (maps.size < 2) null else DabMapping(maps, stamper, phaseTips)
 
         private val RADIAL_TIPS = setOf(
             BrushTip.ROUND_HARD, BrushTip.ROUND_SOFT, BrushTip.AIRBRUSH, BrushTip.CALLIGRAPHY,

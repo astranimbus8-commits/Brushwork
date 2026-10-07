@@ -37,6 +37,8 @@ import kotlin.math.min
  */
 class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
     private val stamper = DabStamper(tips)
+    // v1.7 (item 18): the shifted tips of many copies, kept from one symmetric stroke to the next.
+    private val phaseTips = DabMapping.PhaseTips()
     private val painter = CoveragePainter()
     private val dabs = ArrayList<Dab>()
     private var buffer: Bitmap? = null
@@ -88,7 +90,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         if (!painter.isVisible(style)) return Rect()
         // Cheap reject: nothing the stroke can paint reaches the clip.
         val reach = bounds(p, 1f, points)
-        val mapping = DabMapping.of(copies, stamper)
+        val mapping = DabMapping.of(copies, stamper, phaseTips)
         if (mapping == null) {
             if (!RectF.intersects(reach, RectF(clip))) return Rect()
         } else {

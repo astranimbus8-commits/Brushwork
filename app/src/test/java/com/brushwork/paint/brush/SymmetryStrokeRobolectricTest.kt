@@ -300,6 +300,9 @@ class SymmetryStrokeRobolectricTest {
             Triple(SymmetrySettings(SymmetryType.ROTATION, divisions = 5, centerX = 150f, centerY = 125f), "pencil", 5),
             Triple(SymmetrySettings(SymmetryType.ARRAY, spacingX = 110f, spacingY = 90f, angleDeg = 100f), "softround", -1),
             Triple(SymmetrySettings(SymmetryType.PERSPECTIVE_ARRAY), "pen", -1),
+            // Many copies: drawn from DabMapping's shifted tips, live and redrawn alike.
+            Triple(SymmetrySettings(SymmetryType.ROTATION, divisions = 24), "pen", 24),
+            Triple(SymmetrySettings(SymmetryType.KALEIDOSCOPE, divisions = 10), "softround", 20),
         )
         for ((s, id, expected) in cases) {
             val c = setup(vector = true)
