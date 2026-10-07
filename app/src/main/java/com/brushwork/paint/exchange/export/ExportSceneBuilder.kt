@@ -13,6 +13,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.image.ArgbImage
 import com.brushwork.paint.model.ColorMode
@@ -90,7 +91,10 @@ interface TextSource {
  *   picture, z-order kept); text layers real text (SVG) or outlines of every painted part
  *   (A7's [TextExport]; PDF always), their pixels only when some letters have no outlines
  *   (color emoji); layer masks luminance masks;
- * - the payload lists every layer (hidden ones too) with its data and where its pixels are.
+ * - the payload lists every layer (hidden ones too) with its data and where its pixels are;
+ * - v1.7 (item 8): folders are groups of their layers ([SceneLayer.children]), isolated or
+ *   not as the canvas composites them; the adjustment and clipping rules apply per level and per
+ *   isolated folder ([Planner]).
  *
  * Runs on the main thread (one layer at a time, yielding between layers: it only takes
  * references to immutable data and decides what goes where); converting vector objects runs on
@@ -123,6 +127,10 @@ class ExportSceneBuilder(
         val hidden: Boolean,
         val mask: SceneMask?,
         val content: Content,
+        /** v1.7 (item 8): a folder's layers, bottom first ([SceneLayer.children]). */
+        val children: List<Plan> = emptyList(),
+        /** v1.7 (item 8): false for a folder its children blend through ([SceneLayer.isolated]). */
+        val isolated: Boolean = true,
     )
 
     private sealed class Content {
@@ -140,10 +148,11 @@ class ExportSceneBuilder(
         docWidth = w
         docHeight = h
         docMode = doc.colorMode
-        val plans = ArrayList<Plan>()
         // Pixels of each layer as written into the file (the payload points at them).
         val ownImage = HashMap<Layer, SceneImage>()
         val ownMask = HashMap<Layer, SceneImage>()
+        // v1.7 (item 8): the tree, level by level, as the compositor draws it.
+        val plans = Planner(layers, ownImage, ownMask).context(-1, layers.indices)
 
         // v1.7 (rule L): a layer is shown when its own eye AND every ancestor folder's are on
         // (read on this snapshot of the list; top-level layers: their own eye, as in v1.6).
@@ -151,47 +160,8 @@ class ExportSceneBuilder(
             val l = layers[index]
             return l.visible && (l.parentId == Layer.ROOT_ID || LayerTree.shownByAncestors(layers, index))
         }
-        val topAdjustment = layers.indices.lastOrNull { layers[it].isAdjustmentLayer && shown(it) && layers[it].opacity > 0f } ?: -1
-        var i = 0
-        if (topAdjustment >= 0) {
-            val upTo = layers.subList(0, topAdjustment + 1).toList()
-            plans += Plan(
-                key("layer"), "${layers[topAdjustment].name} (merged with the layers below)", 1f, LayerBlendMode.NORMAL, false, null,
-                Content.Picture(compositeImage(upTo, Rect(0, 0, w, h), opaqueBase = false)),
-            )
-            notes += "Layers below an adjustment layer are exported as one picture"
-            i = topAdjustment + 1
-        }
-        while (i < layers.size) {
-            coroutineContext.ensureActive()
-            val base = layers[i]
-            // v1.7 (rule P): a folder has no pixels; its layers export flat (A exports groups).
-            if (base.isFolder) { i++; continue }
-            val baseIndex = i
-            var j = i + 1
-            // A clipping run stays on its base's level and stops at a folder.
-            while (j < layers.size && layers[j].clipping && !layers[j].isAdjustmentLayer && !layers[j].isFolder && layers[j].parentId == base.parentId) j++
-            val clips = (i + 1 until j).filter { shown(it) && layers[it].opacity > 0f }.map { layers[it] }
-            i = j
-            val hidden = !shown(baseIndex)
-            if (hidden && !options.includeHidden) continue
-            if (base.isAdjustmentLayer) continue // hidden adjustment above the merged part: nothing to draw
-            if (clips.isNotEmpty()) {
-                val bounds = contentBounds(base) ?: continue
-                plans += Plan(
-                    key("layer"), base.name, base.opacity, base.blend(), hidden, null,
-                    Content.Picture(compositeImage(listOf(base) + clips, bounds, opaqueBase = true)),
-                )
-                notes += "Clipping groups are exported as pictures"
-                yield()
-                continue
-            }
-            val mask = layerMask(base)?.also { m -> m.image?.let { ownMask[base] = it } }
-            val content = contentOf(base, ownImage)
-            plans += Plan(key("layer"), base.name, base.opacity, base.blend(), hidden, mask, content)
-            yield()
-        }
-        if (options.format == VectorFormat.PDF && layers.indices.any { !layers[it].isFolder && shown(it) && layers[it].blendMode == LayerBlendMode.ADD }) {
+        // A pass-through folder's own blend mode is not used.
+        if (options.format == VectorFormat.PDF && layers.indices.any { shown(it) && layers[it].blendMode == LayerBlendMode.ADD && layers[it].folder?.passThrough != true }) {
             notes += "Add (Glow) is exported as Screen in PDF"
         }
 
@@ -212,19 +182,7 @@ class ExportSceneBuilder(
         }
 
         // Vector objects become items off the main thread (immutable data only).
-        val sceneLayers = withContext(renderDispatcher) {
-            plans.map { p ->
-                coroutineContext.ensureActive()
-                val items = when (val ct = p.content) {
-                    is Content.Picture -> listOfNotNull(ct.image?.let { SceneItem.Image(it) })
-                    is Content.Items -> ct.items
-                    is Content.Objects -> objectItems(ct.objects)
-                }
-                // A grayscale or 1-bit document's colors, as its pixels show them.
-                val shown = if (docMode == ColorMode.RGB) items else items.map { constrained(it, docMode) }
-                SceneLayer(p.key, p.name, p.opacity, p.blend, p.hidden, p.mask, shown)
-            }.filter { it.items.isNotEmpty() }
-        }
+        val sceneLayers = withContext(renderDispatcher) { plans.mapNotNull { sceneLayer(it) } }
         return ExportScene(
             w, h, doc.dpi, doc.name,
             if (options.whiteBackground) 0xFFFFFFFF.toInt() else null,
@@ -232,7 +190,167 @@ class ExportSceneBuilder(
         )
     }
 
-    private fun Layer.blend(): LayerBlendMode = blendMode
+    /**
+     * [p] as a scene layer with its children (null when it draws nothing: no item, and no child
+     * that draws something; an empty folder is left out). Off the main thread.
+     */
+    private suspend fun sceneLayer(p: Plan): SceneLayer? {
+        coroutineContext.ensureActive()
+        val items = when (val ct = p.content) {
+            is Content.Picture -> listOfNotNull(ct.image?.let { SceneItem.Image(it) })
+            is Content.Items -> ct.items
+            is Content.Objects -> objectItems(ct.objects)
+        }
+        // A grayscale or 1-bit document's colors, as its pixels show them.
+        val shown = if (docMode == ColorMode.RGB) items else items.map { constrained(it, docMode) }
+        val children = p.children.mapNotNull { sceneLayer(it) }
+        if (shown.isEmpty() && children.isEmpty()) return null
+        return SceneLayer(p.key, p.name, p.opacity, p.blend, p.hidden, p.mask, shown, children, p.isolated)
+    }
+
+    /**
+     * v1.7 (item 8, §3.8): what the layer tree becomes, decided the way [FolderComposite] draws it.
+     *
+     * - A **context** is the top level or a folder composited on its own (pass-through off, below
+     *   100 %, a clip base or clipped): an adjustment layer reads the composite below it up to its
+     *   context's edge. Everything of a context from its bottom up to its topmost shown adjustment
+     *   layer becomes one picture; the layers above it stay separate (the folders drawing their
+     *   children as is around that adjustment layer stay groups of what is left of them).
+     * - On each level the units (a layer, or a folder with everything in it) form the
+     *   compositor's groups: a base with visible units clipping onto it becomes one picture with
+     *   the base's opacity and blend mode; an adjustment layer above the merged part draws nothing.
+     * - A folder becomes a group of its children: **isolated** with its own blend mode and
+     *   opacity (SVG `isolation:isolate`, a PDF transparency group), or, pass-through at 100 %, a
+     *   plain group its children blend through. Formats have no pass-through with an opacity: such
+     *   a folder is an isolated Normal group at its opacity (exact when its children blend
+     *   normally, else an approximation with a note).
+     * - A layer's own eye makes it hidden; a hidden folder hides its children with it.
+     */
+    private inner class Planner(
+        private val layers: List<Layer>,
+        private val ownImage: MutableMap<Layer, SceneImage>,
+        private val ownMask: MutableMap<Layer, SceneImage>,
+    ) {
+        /** True when the folder at [f] composites its children on their own (see the class docs). */
+        fun isolatedForExport(f: Int): Boolean {
+            val l = layers[f]
+            return l.folder?.passThrough != true || l.opacity < 1f ||
+                FolderComposite.isClipped(layers, f) || FolderComposite.isClipBase(layers, f)
+        }
+
+        /** The flat index of the context the layer at [index] is in (its nearest isolated folder); -1 = the top level. */
+        fun contextOf(index: Int): Int = LayerTree.ancestors(layers, index).firstOrNull { isolatedForExport(it) } ?: -1
+
+        /** The layers of the context [ctx] (a folder's flat index, -1 = the top level) whose inside is [range]. */
+        suspend fun context(ctx: Int, range: IntRange): List<Plan> {
+            // Shown within the context: its own eye and those of the folders between it and the context.
+            fun shownIn(index: Int): Boolean =
+                layers[index].visible && LayerTree.ancestors(layers, index).takeWhile { it != ctx }.all { layers[it].visible }
+            val top = range.reversed().firstOrNull {
+                layers[it].isAdjustmentLayer && layers[it].opacity > 0f && shownIn(it) && contextOf(it) == ctx
+            } ?: -1
+            val plans = ArrayList<Plan>()
+            if (top >= 0) {
+                // With the folders it is in (drawn as is), nearest first: a clipping layer at the
+                // bottom of one of them stays unclipped, as on the canvas.
+                val around = LayerTree.ancestors(layers, top).takeWhile { it != ctx }.map { layers[it] }
+                plans += Plan(
+                    key("layer"), "${layers[top].name} (merged with the layers below)", 1f, LayerBlendMode.NORMAL, false, null,
+                    Content.Picture(compositeImage(layers.subList(range.first, top + 1) + around, Rect(0, 0, docWidth, docHeight), base = null)),
+                )
+                notes += "Layers below an adjustment layer are exported as one picture"
+            }
+            plans += level(if (ctx < 0) Layer.ROOT_ID else layers[ctx].id, range, top)
+            return plans
+        }
+
+        /**
+         * The level whose parent is [parentId], [range] = its folder's inside: its units bottom
+         * first in the compositor's groups, everything at or below [cut] (the merged part) left out.
+         */
+        suspend fun level(parentId: Long, range: IntRange, cut: Int): List<Plan> {
+            val units = LayerTree.units(layers, range, parentId)
+            val plans = ArrayList<Plan>()
+            var i = 0
+            while (i < units.size) {
+                coroutineContext.ensureActive()
+                val baseUnit = units[i]
+                val base = layers[baseUnit.last]
+                var j = i + 1
+                if (!base.isAdjustmentLayer) while (j < units.size && clips(layers[units[j].last])) j++
+                val clipUnits = units.subList(i + 1, j)
+                i = j
+                val hi = clipUnits.lastOrNull()?.last ?: baseUnit.last
+                if (hi <= cut) continue
+                if (cut >= baseUnit.first) {
+                    // The merged part ends inside this folder, which draws its children as is.
+                    check(clipUnits.isEmpty() && base.isFolder && !isolatedForExport(baseUnit.last)) { "the merged part cuts through $base" }
+                    plans += Plan(
+                        key("layer"), base.name, 1f, LayerBlendMode.NORMAL, !base.visible, null, Content.Items(emptyList()),
+                        level(base.id, inside(baseUnit), cut), isolated = false,
+                    )
+                    continue
+                }
+                val hidden = !base.visible
+                if (hidden && !options.includeHidden) continue
+                if (base.isAdjustmentLayer) continue // above the merged part: hidden or at 0 %, nothing to draw
+                val clips = clipUnits.filter { layers[it.last].visible && layers[it.last].opacity > 0f }
+                if (clips.isNotEmpty()) {
+                    val bounds = unitBounds(baseUnit) ?: continue
+                    val members = (listOf(baseUnit) + clips).flatMap { u -> u.map { layers[it] } }
+                    plans += Plan(
+                        key("layer"), base.name, base.opacity, base.blendMode, hidden, null,
+                        Content.Picture(compositeImage(members, bounds, base = base)),
+                    )
+                    notes += "Clipping groups are exported as pictures"
+                    yield()
+                    continue
+                }
+                if (base.isFolder) {
+                    plans += folderPlan(baseUnit, hidden)
+                    continue
+                }
+                val mask = layerMask(base)?.also { m -> m.image?.let { ownMask[base] = it } }
+                val content = contentOf(base, ownImage)
+                plans += Plan(key("layer"), base.name, base.opacity, base.blendMode, hidden, mask, content)
+                yield()
+            }
+            return plans
+        }
+
+        /** The folder unit [u] (a lone folder, or a clip base whose clipping units are hidden) as a group. */
+        private suspend fun folderPlan(u: IntRange, hidden: Boolean): Plan {
+            val f = u.last
+            val folder = layers[f]
+            val passThrough = folder.folder?.passThrough == true
+            val clipBase = FolderComposite.isClipBase(layers, f)
+            val isolated = isolatedForExport(f)
+            val children = if (isolated) context(f, inside(u)) else level(folder.id, inside(u), -1)
+            if (passThrough && !clipBase && folder.opacity > 0f && folder.opacity < 1f && children.isNotEmpty()) {
+                notes += "Pass-through folders below 100 % are exported as isolated groups"
+            }
+            val blend = if (passThrough && !clipBase) LayerBlendMode.NORMAL else folder.blendMode
+            return Plan(key("layer"), folder.name, folder.opacity, blend, hidden, null, Content.Items(emptyList()), children, isolated)
+        }
+
+        /** True when [l] clips onto the unit below it (an adjustment layer never does). */
+        private fun clips(l: Layer): Boolean = l.clipping && !l.isAdjustmentLayer
+
+        /** The folder unit [u]'s inside (its block without the folder). */
+        private fun inside(u: IntRange): IntRange = u.first until u.last
+
+        /** Where the unit [u] has pixels: a layer's content, a folder's layers' content (null: none). */
+        private fun unitBounds(u: IntRange): Rect? {
+            var out: Rect? = null
+            for (k in u) {
+                val l = layers[k]
+                if (l.isFolder || l.isAdjustmentLayer) continue
+                val r = contentBounds(l) ?: continue
+                out = out?.apply { union(r) } ?: Rect(r)
+            }
+            return out
+        }
+    }
 
     /** [item] with its colors in [mode] (pictures are already constrained pixels). */
     private fun constrained(item: SceneItem, mode: ColorMode): SceneItem {
@@ -424,16 +542,17 @@ class ExportSceneBuilder(
 
     /**
      * The composite of [layers] within [r] as a picture: a temporary document with views of them
-     * (the first one at full opacity and normal blending when [opaqueBase]: a clipping group's
-     * own opacity and blend mode go on the exported group).
+     * ([base], a clipping group's base, shown at full opacity and normal blending: the group's
+     * own opacity and blend mode go on the exported group). [layers] is a valid tree in flat
+     * order: every folder in it has its layers in it, right below it.
      */
-    private fun compositeImage(layers: List<Layer>, r: Rect, opaqueBase: Boolean): SceneImage {
+    private fun compositeImage(layers: List<Layer>, r: Rect, base: Layer?): SceneImage {
         val rect = Rect(r)
         val w = doc.width
         val h = doc.height
         val dpi = doc.dpi
         val ids = layers.mapTo(HashSet()) { it.id }
-        val views = layers.mapIndexed { idx, l ->
+        val views = layers.map { l ->
             Layer(l.id, l.name, l.bitmap).also { v ->
                 v.copyPropsFrom(l.props())
                 v.mask = l.mask
@@ -446,7 +565,7 @@ class ExportSceneBuilder(
                 v.parentId = if (l.parentId in ids) l.parentId else Layer.ROOT_ID
                 // A hidden group (exported with "Include hidden layers") still shows its content:
                 // the exported group is the one hidden.
-                if (opaqueBase && idx == 0) { v.opacity = 1f; v.blendMode = LayerBlendMode.NORMAL; v.clipping = false; v.visible = true }
+                if (l === base) { v.opacity = 1f; v.blendMode = LayerBlendMode.NORMAL; v.clipping = false; v.visible = true }
             }
         }
         return SceneImage(key("img"), rect.left, rect.top, rect.width(), rect.height(), false) {

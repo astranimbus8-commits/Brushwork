@@ -91,16 +91,39 @@ object FolderComposite {
         for (a in LayerTree.ancestors(layers, index)) {
             val f = layers[a]
             if (f.folder?.passThrough != true || !f.visible || f.opacity < 1f) return false
-            val pid = f.parentId
-            // Clipped: it clips and the sibling unit below it (whose top sits right below its block) is no adjustment.
-            val below = LayerTree.block(layers, a).first - 1
-            if (f.clipping && below >= 0 && layers[below].parentId == pid && !layers[below].isAdjustmentLayer) return false
-            // A clip base: the top of the sibling unit above it (the first layer above with the same parent) clips.
-            var j = a + 1
-            while (j < layers.size && layers[j].parentId != pid && layers[j].id != pid) j++
-            if (j < layers.size && layers[j].parentId == pid && layers[j].clipping && !layers[j].isAdjustmentLayer) return false
+            if (isClipped(layers, a) || isClipBase(layers, a)) return false
         }
         return true
+    }
+
+    /**
+     * True when the unit whose top is [index] (a layer, or a folder) is clipped, as [draw] groups
+     * its level: it clips, it is no adjustment layer, and the top of the sibling unit directly
+     * below it (which sits right below its block) is no adjustment layer either. The bottom unit
+     * of a level has no sibling below: it draws unclipped. Eyes are not read (a hidden unit still
+     * belongs to its group).
+     */
+    fun isClipped(layers: List<Layer>, index: Int): Boolean {
+        val l = layers[index]
+        if (!l.clipping || l.isAdjustmentLayer) return false
+        val below = LayerTree.block(layers, index).first - 1
+        return below >= 0 && layers[below].parentId == l.parentId && !layers[below].isAdjustmentLayer
+    }
+
+    /**
+     * True when the unit whose top is [index] is the base of a clipping group, as [draw] groups
+     * its level: it is neither clipped nor an adjustment layer, and the sibling unit directly
+     * above it (whose top is the first layer above with the same parent) clips. Eyes are not
+     * read: a base whose clipping units are all hidden is still drawn as a group (a folder base:
+     * isolated, with its own blend mode and opacity).
+     */
+    fun isClipBase(layers: List<Layer>, index: Int): Boolean {
+        val l = layers[index]
+        if (l.isAdjustmentLayer || isClipped(layers, index)) return false
+        val pid = l.parentId
+        var j = index + 1
+        while (j < layers.size && layers[j].parentId != pid && layers[j].id != pid) j++
+        return j < layers.size && layers[j].parentId == pid && layers[j].clipping && !layers[j].isAdjustmentLayer
     }
 
     /**

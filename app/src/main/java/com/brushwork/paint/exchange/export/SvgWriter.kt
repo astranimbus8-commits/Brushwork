@@ -22,7 +22,8 @@ import kotlin.math.roundToLong
 /**
  * Writes an [ExportScene] as SVG 1.1 (v1.5 §4.10): the document size in mm from its DPI with a
  * `viewBox` in document px; each layer an Inkscape layer group (`inkscape:groupmode="layer"`,
- * label, `opacity`, `mix-blend-mode` — Add is `plus-lighter` — and `isolation:isolate`); masks as
+ * label, `opacity`, `mix-blend-mode` — Add is `plus-lighter` — and `isolation:isolate`; v1.7: a
+ * folder's layers nested in its group, a pass-through folder a plain group); masks as
  * luminance `<mask>`s over the whole document; pictures as PNG data URIs (streamed base64);
  * paths with solid or gradient fills and plain strokes; text as `<text>` / `<tspan>`; the
  * Brushwork payload in `<metadata>`. Pure Kotlin.
@@ -79,12 +80,17 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
             text("</mask></defs>\n")
         }
         val style = StringBuilder()
-        val opacity = layer.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
-        if (opacity < 1f) style.append("opacity:").append(num(opacity)).append(';')
-        blendCss(layer.blend)?.let { style.append("mix-blend-mode:").append(it).append(';') }
-        style.append("isolation:isolate")
-        if (layer.hidden) style.append(";display:none")
-        text("<g id=\"${esc(layer.key)}\" inkscape:groupmode=\"layer\" inkscape:label=\"${esc(layer.name)}\" style=\"$style\"")
+        if (layer.isolated) {
+            val opacity = layer.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
+            if (opacity < 1f) style.append("opacity:").append(num(opacity)).append(';')
+            blendCss(layer.blend)?.let { style.append("mix-blend-mode:").append(it).append(';') }
+            style.append("isolation:isolate")
+        }
+        // v1.7 (item 8): a pass-through folder is a plain group (no opacity, blend mode or
+        // isolation: its layers blend with what is below it, as on the canvas).
+        if (layer.hidden) style.append(if (style.isEmpty()) "display:none" else ";display:none")
+        text("<g id=\"${esc(layer.key)}\" inkscape:groupmode=\"layer\" inkscape:label=\"${esc(layer.name)}\"")
+        if (style.isNotEmpty()) text(" style=\"$style\"")
         if (mask != null) text(" mask=\"url(#${esc(mask.key)})\"")
         text(">\n")
         for (item in layer.items) {
@@ -94,6 +100,11 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
                 is SceneItem.Shape -> shape(item)
                 is SceneItem.Text -> text(item)
             }
+        }
+        // v1.7 (item 8): a folder's layers, nested (Inkscape sublayers).
+        for (child in layer.children) {
+            coroutineContext.ensureActive()
+            layer(child)
         }
         text("</g>\n")
     }
@@ -118,7 +129,7 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
             b64.close()
         } finally {
             imagesDone++
-            onProgress((imagesDone.toFloat() / max(1, scene.imageCount)).coerceIn(0f, 1f))
+            onProgress((imagesDone.toFloat() / max(1, scene.treeImageCount)).coerceIn(0f, 1f))
         }
     }
 

@@ -32,7 +32,9 @@ import kotlin.math.min
  *   document's DPI or fitted on A4 / Letter;
  * - every layer is a transparency-group Form XObject drawn with an ExtGState (`/ca`, `/BM`; Add is
  *   written as Screen) and, for a mask, a luminosity `/SMask`; every layer is an optional content
- *   group (layers panel in Acrobat), hidden layers start OFF;
+ *   group (layers panel in Acrobat), hidden layers start OFF; v1.7: a folder's layers are nested
+ *   in its group (a transparency group of them, or drawn straight through for a pass-through
+ *   folder), nested in `/Order` too;
  * - pictures are `/FlateDecode` RGB images (PNG predictors) with a DeviceGray `/SMask`;
  * - paths are `m l c h` filled (`f` / `f*`) and stroked (`S`); gradients are axial / radial shadings
  *   with stitched exponential functions (stop opacity through a luminosity soft mask);
@@ -85,32 +87,7 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
         scene.background?.let { bg ->
             content.append(rgb(bg)).append(" rg 0 0 ").append(scene.width).append(' ').append(scene.height).append(" re f\n")
         }
-        val ocgs = ArrayList<Pair<Int, SceneLayer>>()
-        for (layer in scene.layers) {
-            coroutineContext.ensureActive()
-            val form = writeLayerForm(layer, cancelled) ?: continue
-            val ocg = file.obj(PdfDict().apply {
-                this["Type"] = "/OCG"
-                this["Name"] = Pdf.text(layer.name)
-            }.toString())
-            ocgs += ocg to layer
-            val gs = PdfDict().apply {
-                this["Type"] = "/ExtGState"
-                val a = Pdf.num(layer.opacity.coerceIn(0f, 1f))
-                this["ca"] = a
-                this["CA"] = a
-                this["BM"] = blendName(layer.blend)
-            }
-            layer.mask?.let { m -> gs["SMask"] = PdfDict().apply {
-                this["Type"] = "/Mask"
-                this["S"] = "/Luminosity"
-                this["G"] = Pdf.ref(writeMaskForm(m, cancelled))
-            } }
-            val gsName = pageRes.gs(gs.toString())
-            val formName = pageRes.xobject(form)
-            val ocName = pageRes.property(ocg)
-            content.append("/OC ").append(ocName).append(" BDC q ").append(gsName).append(" gs ").append(formName).append(" Do Q EMC\n")
-        }
+        val ocgs = placeAll(scene.layers, pageRes, content, cancelled)
         content.append("Q\n")
 
         // Pictures only the payload uses (raster layers merged into a flattened picture...).
@@ -162,11 +139,14 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
             this["Type"] = "/Catalog"
             this["Pages"] = Pdf.ref(pages)
             if (ocgs.isNotEmpty()) {
-                val all = ocgs.joinToString(" ", "[", "]") { Pdf.ref(it.first) }
-                // Top layer first, as layer panels list them.
-                val order = ocgs.asReversed().joinToString(" ", "[", "]") { Pdf.ref(it.first) }
-                val on = ocgs.filter { !it.second.hidden }.joinToString(" ", "[", "]") { Pdf.ref(it.first) }
-                val off = ocgs.filter { it.second.hidden }.joinToString(" ", "[", "]") { Pdf.ref(it.first) }
+                val flat = ArrayList<OcNode>()
+                fun collect(nodes: List<OcNode>) { for (n in nodes) { flat += n; collect(n.children) } }
+                collect(ocgs)
+                val all = flat.joinToString(" ", "[", "]") { Pdf.ref(it.num) }
+                // Top layer first, as layer panels list them; a folder's layers in an array after it.
+                val order = order(ocgs)
+                val on = flat.filter { !it.layer.hidden }.joinToString(" ", "[", "]") { Pdf.ref(it.num) }
+                val off = flat.filter { it.layer.hidden }.joinToString(" ", "[", "]") { Pdf.ref(it.num) }
                 this["OCProperties"] = "<</OCGs $all /D <</Name ${Pdf.text("Layers")} /Order $order /ON $on /OFF $off>>>>"
                 this["PageMode"] = "/UseOC"
             }
@@ -183,6 +163,85 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
     }
 
     // ------------------------------------------------------------------ layers
+
+    /** The optional content group [num] written for [layer], with its children's groups (bottom first). */
+    private class OcNode(val num: Int, val layer: SceneLayer, val children: List<OcNode>)
+
+    /** `/Order` of [nodes]: top first, a folder's layers in an array right after it. */
+    private fun order(nodes: List<OcNode>): String = nodes.asReversed().joinToString(" ", "[", "]") { n ->
+        if (n.children.isEmpty()) Pdf.ref(n.num) else Pdf.ref(n.num) + " " + order(n.children)
+    }
+
+    /** Draws [layers] bottom first into [content] (whose resources are [res]); their groups. */
+    private suspend fun placeAll(layers: List<SceneLayer>, res: Resources, content: StringBuilder, cancelled: () -> Boolean): List<OcNode> {
+        val out = ArrayList<OcNode>()
+        for (layer in layers) {
+            coroutineContext.ensureActive()
+            place(layer, res, content, cancelled)?.let { out += it }
+        }
+        return out
+    }
+
+    /**
+     * Draws [layer] into [content] (whose resources are [res]) inside its optional content group;
+     * null (nothing written) when it draws nothing:
+     *
+     * - a layer: its transparency-group form, with an ExtGState for its opacity, blend mode and mask;
+     * - v1.7 (item 8), an isolated folder: one transparency-group form holding its layers (each
+     *   inside its own group, nested optional content: shown only while every group around it is
+     *   on), drawn like a layer;
+     * - a pass-through folder: its layers drawn straight into [content], so they blend with what
+     *   is below the folder (its own opacity, blend mode and mask are not used: it has none).
+     */
+    private suspend fun place(layer: SceneLayer, res: Resources, content: StringBuilder, cancelled: () -> Boolean): OcNode? {
+        if (layer.children.isEmpty()) {
+            val form = writeLayerForm(layer, cancelled) ?: return null
+            val ocg = ocg(layer)
+            draw(layer, form, ocg, res, content, cancelled)
+            return OcNode(ocg, layer, emptyList())
+        }
+        val innerRes = if (layer.isolated) Resources() else res
+        val inner = StringBuilder()
+        // Items under the layers (a folder has none).
+        writeLayerForm(layer, cancelled)?.let { inner.append("q ").append(innerRes.xobject(it)).append(" Do Q\n") }
+        val children = placeAll(layer.children, innerRes, inner, cancelled)
+        if (inner.isEmpty()) return null
+        if (!layer.isolated) {
+            val ocg = ocg(layer)
+            content.append("/OC ").append(res.property(ocg)).append(" BDC\n").append(inner).append("EMC\n")
+            return OcNode(ocg, layer, children)
+        }
+        val form = form(inner, innerRes, gray = false)
+        val ocg = ocg(layer)
+        draw(layer, form, ocg, res, content, cancelled)
+        return OcNode(ocg, layer, children)
+    }
+
+    /** A new optional content group named like [layer]. */
+    private fun ocg(layer: SceneLayer): Int = file.obj(PdfDict().apply {
+        this["Type"] = "/OCG"
+        this["Name"] = Pdf.text(layer.name)
+    }.toString())
+
+    /** `/OC … BDC q gs form Do Q EMC`: [form] drawn with [layer]'s opacity, blend mode and mask. */
+    private suspend fun draw(layer: SceneLayer, form: Int, ocg: Int, res: Resources, content: StringBuilder, cancelled: () -> Boolean) {
+        val gs = PdfDict().apply {
+            this["Type"] = "/ExtGState"
+            val a = Pdf.num(layer.opacity.coerceIn(0f, 1f))
+            this["ca"] = a
+            this["CA"] = a
+            this["BM"] = blendName(layer.blend)
+        }
+        layer.mask?.let { m -> gs["SMask"] = PdfDict().apply {
+            this["Type"] = "/Mask"
+            this["S"] = "/Luminosity"
+            this["G"] = Pdf.ref(writeMaskForm(m, cancelled))
+        } }
+        val gsName = res.gs(gs.toString())
+        val formName = res.xobject(form)
+        val ocName = res.property(ocg)
+        content.append("/OC ").append(ocName).append(" BDC q ").append(gsName).append(" gs ").append(formName).append(" Do Q EMC\n")
+    }
 
     /** The layer's content as a transparency-group form (null when it draws nothing). */
     private suspend fun writeLayerForm(layer: SceneLayer, cancelled: () -> Boolean): Int? {
@@ -296,7 +355,7 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
             return num
         } finally {
             imagesDone++
-            onProgress((imagesDone.toFloat() / max(1, scene.imageCount)).coerceIn(0f, 1f))
+            onProgress((imagesDone.toFloat() / max(1, scene.treeImageCount)).coerceIn(0f, 1f))
         }
     }
 

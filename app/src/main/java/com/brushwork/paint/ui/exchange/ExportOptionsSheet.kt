@@ -52,9 +52,11 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
             c.layersVersion
             val layers = c.doc.layers
             val out = ArrayList<String>()
-            if (pdf && layers.any { !it.isFolder && c.doc.effectiveVisible(it) && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
+            if (pdf && layers.any { it.folder?.passThrough != true && c.doc.effectiveVisible(it) && it.blendMode == LayerBlendMode.ADD }) out += "Add (Glow) is exported as Screen in PDF"
             if (layers.any { it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Layers below an adjustment layer are exported as one picture"
-            if (layers.any { it.clipping && !it.isFolder && c.doc.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
+            // v1.7 (item 8): a folder clips (and is clipped) like a layer.
+            if (layers.any { it.clipping && !it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
+            if (layers.any { it.folder?.passThrough == true && it.opacity > 0f && it.opacity < 1f && c.doc.effectiveVisible(it) }) out += "Pass-through folders below 100 % are exported as isolated groups"
             out
         }
     }
