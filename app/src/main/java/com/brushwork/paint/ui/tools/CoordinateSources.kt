@@ -3,6 +3,7 @@ package com.brushwork.paint.ui.tools
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.tools.ObjectPosition
+import com.brushwork.paint.tools.PillPositionTool
 import com.brushwork.paint.tools.PositionedTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.text.TextTool
@@ -24,8 +25,13 @@ class CoordinateSource(
     val unit: () -> LengthUnit,
 )
 
-/** The strip's source for [tool], or null when the tool places nothing the strip can move. */
+/**
+ * The strip's source for [tool], or null when the tool places nothing the strip can move.
+ * v1.7 (§4.6): a [PillPositionTool] is routed FIRST, generically by interface, so an implementer
+ * never edits this file (once a tool implements it, its v1.6 adapter below is no longer reached).
+ */
 fun coordinateSourceOf(tool: Tool): CoordinateSource? = when (tool) {
+    is PillPositionTool -> CoordinateSource(tool.pillPosition) { tool.pillUnit }
     is TransformTool -> CoordinateSource(TransformPosition(tool)) { tool.unit }
     is ShapeTool -> CoordinateSource(ShapePosition(tool)) { tool.settings.unit }
     is TextTool -> CoordinateSource(TextPosition(tool)) { tool.positionUnit }

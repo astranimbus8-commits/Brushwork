@@ -17,13 +17,14 @@ object LayerToolRules {
 
     /**
      * v1.7 (I11): the tools that write into the active layer itself, refused on a folder with
-     * "Choose a layer inside the folder to paint" (ARRAY joins them when area E adds it). The
+     * "Choose a layer inside the folder to paint" (Array too: a folder can't be arrayed). The
      * others work on a folder: Transform moves its block, the selections and samplers read the
-     * composite (rule C), Text, Text frames and Shape add a new layer.
+     * composite (rule C), Text, Text frames and Shape add a new layer, Symmetry and the Ruler are
+     * drawing aids, and Pathfinder picks its operands itself.
      */
     val FOLDER_REFUSED: Set<ToolId> = setOf(
         ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR, ToolId.FILL, ToolId.CLONE, ToolId.REMOVE,
-        ToolId.FRAME_DIVIDER, ToolId.MASK, ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH,
+        ToolId.FRAME_DIVIDER, ToolId.MASK, ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH, ToolId.ARRAY,
     )
 
     /** Message for tools refused on adjustment layers. */

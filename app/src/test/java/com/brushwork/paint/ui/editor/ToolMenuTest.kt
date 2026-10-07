@@ -20,8 +20,8 @@ class ToolMenuTest {
         for (cell in listOf(ToolMenuEntry.Filters, ToolMenuEntry.Canvas, ToolMenuEntry.Settings)) {
             assertEquals("$cell once", 1, ToolMenu.entries.count { it == cell })
         }
-        assertEquals("25 cells", 25, ToolMenu.entries.size)
-        assertEquals("13 rows of two", 13, (ToolMenu.entries.size + ToolMenu.COLUMNS - 1) / ToolMenu.COLUMNS)
+        assertEquals("28 cells", 28, ToolMenu.entries.size)
+        assertEquals("14 rows of two", 14, (ToolMenu.entries.size + ToolMenu.COLUMNS - 1) / ToolMenu.COLUMNS)
         // Pixel-only tools are all in the menu (they carry a "px" badge in vector mode).
         assertTrue(ToolMenu.tools.containsAll(LayerToolRules.PIXEL_ONLY))
     }
@@ -46,6 +46,11 @@ class ToolMenuTest {
         // Path beside Text frames (row 9), then Brushwork's other tools; Ruler last.
         assertEquals(ToolMenuEntry.Tool(ToolId.PATH), e[16])
         assertEquals(ToolMenuEntry.Tool(ToolId.TEXT_FRAMES), e[17])
+        // v1.7: Array, Pathfinder and Symmetry before Ruler, which stays last at [27].
+        assertEquals(ToolMenuEntry.Tool(ToolId.ARRAY), e[24])
+        assertEquals(ToolMenuEntry.Tool(ToolId.PATHFINDER), e[25])
+        assertEquals(ToolMenuEntry.Tool(ToolId.SYMMETRY), e[26])
+        assertEquals(ToolMenuEntry.Tool(ToolId.RULER), e[27])
         assertEquals(ToolMenuEntry.Tool(ToolId.RULER), e.last())
     }
 
@@ -59,7 +64,11 @@ class ToolMenuTest {
         // v1.6: Path and Text frames follow Masks.
         assertEquals(ToolId.MASK.ordinal + 1, ToolId.PATH.ordinal)
         assertEquals(ToolId.PATH.ordinal + 1, ToolId.TEXT_FRAMES.ordinal)
-        assertEquals(ToolId.TEXT_FRAMES, ToolId.entries.last())
+        // v1.7: Array, Symmetry and Pathfinder follow Text frames, in that order.
+        assertEquals(ToolId.TEXT_FRAMES.ordinal + 1, ToolId.ARRAY.ordinal)
+        assertEquals(ToolId.ARRAY.ordinal + 1, ToolId.SYMMETRY.ordinal)
+        assertEquals(ToolId.SYMMETRY.ordinal + 1, ToolId.PATHFINDER.ordinal)
+        assertEquals(ToolId.PATHFINDER, ToolId.entries.last())
         assertEquals("Path", ToolId.PATH.label)
         assertEquals("Text frames", ToolId.TEXT_FRAMES.label)
     }

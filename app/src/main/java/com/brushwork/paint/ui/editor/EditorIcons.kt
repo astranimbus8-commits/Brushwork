@@ -9,15 +9,18 @@ import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Colorize
+import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.Gradient
 import androidx.compose.material.icons.filled.HighlightAlt
+import androidx.compose.material.icons.filled.JoinFull
 import androidx.compose.material.icons.filled.OpenWith
 import androidx.compose.material.icons.filled.Polyline
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.automirrored.filled.ViewQuilt
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
@@ -134,5 +137,8 @@ object EditorIcons {
         ToolId.MASK -> Masks
         ToolId.PATH -> Path
         ToolId.TEXT_FRAMES -> TextFrames
+        ToolId.ARRAY -> Icons.Filled.ViewModule
+        ToolId.SYMMETRY -> Icons.Filled.Flip
+        ToolId.PATHFINDER -> Icons.Filled.JoinFull
     }
 }

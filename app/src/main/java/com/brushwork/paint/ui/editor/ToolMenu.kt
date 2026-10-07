@@ -19,8 +19,9 @@ sealed interface ToolMenuEntry {
 /**
  * The ibisPaint tool menu's cells (v1.6 §3.7.6; drawn by `chrome/ToolMenuPanel`, which replaced
  * the v1.5 Tools sheet and its `ToolGrid`): two columns, row-major, ibisPaint's order first
- * and Brushwork's extra tools after it — 25 cells in 13 rows, every [ToolId] exactly once, plus
- * Filters, Canvas and Settings once each. New tools are appended by the lead.
+ * and Brushwork's extra tools after it — 28 cells in 14 rows (v1.7), every [ToolId] exactly once,
+ * plus Filters, Canvas and Settings once each, Ruler last. New tools go before Ruler (every
+ * earlier cell keeps its index; Canvas stays at [14]).
  */
 object ToolMenu {
     private fun t(id: ToolId) = ToolMenuEntry.Tool(id)
@@ -38,7 +39,9 @@ object ToolMenu {
         t(ToolId.POLYLINE), t(ToolId.SHAPE),
         t(ToolId.MARQUEE), t(ToolId.OBJECT_SELECT),
         t(ToolId.MASK), t(ToolId.REMOVE),
-        t(ToolId.RULER),
+        // v1.7: Array, Pathfinder and Symmetry (beside Ruler, its fellow drawing aid) before Ruler.
+        t(ToolId.ARRAY), t(ToolId.PATHFINDER),
+        t(ToolId.SYMMETRY), t(ToolId.RULER),
     )
 
     /** Cells per row. */

@@ -37,6 +37,15 @@ enum class ToolId(val label: String) {
     PATH("Path"),
     /** Linked text frames (v1.6): text that doesn't fit one frame flows on into the next (InDesign threading). */
     TEXT_FRAMES("Text frames"),
+    /**
+     * A live, Blender-like array of the active layer's content (v1.7 item 3; area E): Line,
+     * Circle, Curve or Transform copies that stay editable until applied.
+     */
+    ARRAY("Array"),
+    /** ibisPaint's symmetry rulers (v1.7 item 18; area H): mirror, kaleidoscope, rotation, array, perspective array. */
+    SYMMETRY("Symmetry"),
+    /** Illustrator's Pathfinder (v1.7 item 20; area G): unite, minus front, intersect... of shapes and paths. */
+    PATHFINDER("Pathfinder"),
 }
 
 /**

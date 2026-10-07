@@ -17,6 +17,7 @@ import com.brushwork.paint.array.ArrayOps
 import com.brushwork.paint.assist.GridRenderer
 import com.brushwork.paint.assist.RulerRenderer
 import com.brushwork.paint.assist.StrokeAssist
+import com.brushwork.paint.assist.SymmetryGuides
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushPresetStore
@@ -935,6 +936,8 @@ class EditorController(
         val t = viewTransform
         if (grid.enabled) GridRenderer.draw(canvas, t, doc, grid)
         if (ruler.enabled || activeToolId == ToolId.RULER) RulerRenderer.draw(canvas, t, doc, ruler, activeToolId == ToolId.RULER)
+        // v1.7 (item 18): the symmetry guides (area H decides when they show; the stub draws nothing).
+        SymmetryGuides.draw(canvas, t, doc, activeToolId == ToolId.SYMMETRY)
         if (!hideSelectionOutline) selection?.let { SelectionOutline.draw(canvas, t, it, antsPhase) }
         vectors.drawOverlay(canvas, t)
         currentTool.drawOverlay(canvas, t)

@@ -26,23 +26,28 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.RulerTool
 import com.brushwork.paint.brush.BrushTool
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.mask.MaskTool
+import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.FillTool
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.select.MagicWandTool
 import com.brushwork.paint.tools.select.MarqueeTool
+import com.brushwork.paint.tools.symmetry.SymmetryTool
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.ui.array.ArrayToolOptions
 import com.brushwork.paint.ui.assist.RulerToolOptions
 import com.brushwork.paint.ui.brush.BrushToolOptions
 import com.brushwork.paint.ui.clone.CloneToolOptions
 import com.brushwork.paint.ui.mask.MaskToolOptions
+import com.brushwork.paint.ui.pathfinder.PathfinderOptions
 import com.brushwork.paint.ui.placement.FrameDividerOptions
 import com.brushwork.paint.ui.placement.TextToolOptions
 import com.brushwork.paint.ui.placement.TransformToolOptions
@@ -51,6 +56,7 @@ import com.brushwork.paint.ui.selection.FillOptions
 import com.brushwork.paint.ui.selection.LassoOptions
 import com.brushwork.paint.ui.selection.MagicWandOptions
 import com.brushwork.paint.ui.selection.MarqueeOptions
+import com.brushwork.paint.ui.symmetry.SymmetryOptions
 import com.brushwork.paint.ui.textframes.TextFrameToolOptions
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.vector.CurveToolOptions
@@ -114,6 +120,10 @@ fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier, 
             // v1.6 (pre-registered by the foundation; area D fills it). The Path tool is a
             // CurveTool: its options branch on CurveTool.kind inside CurveToolOptions (area B).
             is TextFrameTool -> TextFrameToolOptions(tool)
+            // v1.7 (pre-registered by the foundation; areas E, H and G fill them).
+            is ArrayTool -> ArrayToolOptions(tool)
+            is SymmetryTool -> SymmetryOptions(tool)
+            is PathfinderTool -> PathfinderOptions(tool)
         }
     }
 }
