@@ -44,6 +44,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
     private val store = BrushPresetStore.get(controller.appContext)
     private val res = StrokeResources.of(controller)
+    /**
+     * v1.7 (item 18): the shifted tips many symmetry copies are drawn from, kept from one stroke
+     * to the next (the next stroke with the same brush and size draws them without rendering;
+     * at most 16 ALPHA_8 bitmaps of 257 px a side, about 1 MB, and only once such a stroke ran).
+     */
+    private val phaseTips = DabMapping.PhaseTips()
     private var stroke: Stroke? = null
     private var strokeCounter = 0L
 
@@ -431,7 +437,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          * overlapping copies never darken each other). The copies are derived from the dabs
          * whenever they are drawn; [copyTiles] remembers the [COMMIT_TILE]s they reached.
          */
-        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper)
+        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper, phaseTips)
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
         private val copyTiles: BooleanArray? = mapping?.let { BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) }
         /**
@@ -1107,7 +1113,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          * v1.7 (item 18): the symmetry copies are independent sub-strokes, one painter each (its
          * own smudge transport / paint load), fed the mapped dabs right after the stroke's own.
          */
-        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper)
+        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper, phaseTips)
         private val copyPainters: Array<DirectPainter> = Array(mapping?.copies ?: 0) { newPainter(maskTarget) }
         private val copyDab = Dab(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0, 0f)
         /** Dabs held back until the end taper is known (only with a finger end taper). */
