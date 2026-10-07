@@ -21,7 +21,8 @@ import kotlin.math.sin
  *   `StrokeCopies.scaleAt`, so the vector readers' bounds and hit tests agree), drawn at 1 px with
  *   proportionally less alpha below 1 px like `StrokeDynamics.resolve`;
  * - its tip turned: the angle of J·(cos θ, sin θ) (θ the dab's rotation; for a pixel tip the
- *   brush angle baked into the tip, so the copy gets a brush turned the same way);
+ *   brush angle baked into the tip, so the copy gets a brush turned the same way); a radial tip
+ *   ([isRadial]: a disc at any angle) keeps θ, which draws the same disc faster;
  * - its tip mirrored when det J < 0: textured anti-aliased tips (pencil, chalk, spray) are drawn
  *   flipped; every other tip is symmetric about its own axis, so turning it is the mirror image;
  * - the same alpha, variant and distance.
@@ -43,6 +44,10 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     private var placedMirrored = false
     private var placedCopy = -1
 
+    /** Whether the last preset placed ([radialPreset]) has a radial tip ([isRadial]). */
+    private var radialPreset: BrushPreset? = null
+    private var radial = false
+
     /** Draws mirrored textured tips (DabStamper's anti-aliased path with the tip flipped). */
     private val matrix = Matrix()
     private val paint = Paint().apply { isFilterBitmap = true }
@@ -56,7 +61,11 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     fun place(k: Int, preset: BrushPreset, dab: Dab): Dab? {
         placedCopy = -1
         val c = copyMaps[k]
-        if (!c.mapInto(dab, placed, preset.antiAlias)) return null
+        if (preset !== radialPreset) {
+            radialPreset = preset
+            radial = isRadial(preset)
+        }
+        if (!c.mapInto(dab, placed, preset.antiAlias, keepRotation = radial)) return null
         val p = if (preset.antiAlias) preset else c.turnedPreset(preset)
         stamper.measure(p, placed)
         placedPreset = p
@@ -102,8 +111,12 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     private class CopyMap(map: FloatArray) {
         private val m = map.copyOf()
         private val affine = m[6] == 0f && m[7] == 0f
-        /** √|det J| of an affine map (the same everywhere). */
-        private val affineScale = if (affine) StrokeCopies.scaleAt(m, 0f, 0f) else 1f
+        /**
+         * √|det J| of an affine map (the same everywhere); exactly 1 for a rigid map (a mirror,
+         * a turn, a shift), whose float rounding would otherwise make every copy a hair smaller
+         * than its dab and miss the stamper's last-tip cache.
+         */
+        private val affineScale = if (affine) StrokeCopies.scaleAt(m, 0f, 0f).let { if (abs(it - 1f) <= 1e-5f) 1f else it } else 1f
         /** The map reverses orientation (det < 0 where it is in front of the horizon). */
         private val reverses: Boolean = det(m) < 0.0
 
@@ -124,7 +137,7 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
         private var turnAtX = 0f
         private var turnAtY = 0f
 
-        fun mapInto(dab: Dab, out: Dab, antiAlias: Boolean): Boolean {
+        fun mapInto(dab: Dab, out: Dab, antiAlias: Boolean, keepRotation: Boolean = false): Boolean {
             val x = dab.cx
             val y = dab.cy
             val w = m[6] * x + m[7] * y + m[8]
@@ -139,7 +152,7 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
                 if (antiAlias) a *= max(d, 0f)
                 d = 1f
             }
-            val rot = turn(dab.rotation, x, y)
+            val rot = if (keepRotation) dab.rotation else turn(dab.rotation, x, y)
             out.reuse(qx, qy, dab.pressure, dab.distance, dab.scatterX, dab.scatterY, rot, dab.variant, dab.jitter)
             out.cx = qx
             out.cy = qy
@@ -216,5 +229,20 @@ class DabMapping(maps: List<FloatArray>, private val stamper: DabStamper) {
     companion object {
         /** The mapping of [maps] (a stroke's copies), or null when there are none (fewer than 2 maps). */
         fun of(maps: List<FloatArray>, stamper: DabStamper): DabMapping? = if (maps.size < 2) null else DabMapping(maps, stamper)
+
+        private val RADIAL_TIPS = setOf(
+            BrushTip.ROUND_HARD, BrushTip.ROUND_SOFT, BrushTip.AIRBRUSH, BrushTip.CALLIGRAPHY,
+            BrushTip.WATERCOLOR, BrushTip.SMUDGE, BrushTip.BLUR,
+        )
+
+        /**
+         * True when [preset]'s tip is a disc at any rotation: an anti-aliased round tip at full
+         * roundness (as `TipCache` quantizes it). Its copies keep the dab's rotation instead of
+         * turning it (a turned disc is the same disc), so an unturned dab keeps `DabStamper`'s
+         * unrotated path, about 1.4× cheaper than a turned one: what many copies cost (§6.3).
+         */
+        internal fun isRadial(preset: BrushPreset): Boolean =
+            preset.antiAlias && preset.tip in RADIAL_TIPS &&
+                (preset.roundness.coerceIn(BrushLimits.MIN_ROUNDNESS, 1f) * 40f).roundToInt() == 40
     }
 }

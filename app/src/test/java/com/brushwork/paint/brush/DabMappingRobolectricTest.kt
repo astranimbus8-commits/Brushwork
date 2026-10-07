@@ -35,12 +35,19 @@ class DabMappingRobolectricTest {
         val m = DabMapping(listOf(SymmetryMaps.identity(), mirror, floatArrayOf(2f, 0f, 5f, 0f, 2f, 7f, 0f, 0f, 1f)), stamper)
         assertEquals(2, m.copies)
         val pen = BrushLibrary.defaultBrush
-        val c = m.place(0, pen, dab(10f, 20f, 8f, 30f))!!
+        val oval = pen.copy(roundness = 0.5f)
+        val c = m.place(0, oval, dab(10f, 20f, 8f, 30f))!!
         assertEquals(54f, c.cx, 1e-4f)
         assertEquals(20f, c.cy, 1e-4f)
         assertEquals(8f, c.diameter, 1e-6f)
         assertEquals("the mirror turns 30° to 150°", 150f, c.rotation, 1e-3f)
         assertTrue("measured", c.hasBounds)
+        // A disc looks the same at any angle: its copies keep the dab's rotation (the cheaper path).
+        assertTrue(DabMapping.isRadial(pen) && !DabMapping.isRadial(oval) && !DabMapping.isRadial(BrushLibrary.byId("chalk")!!))
+        assertEquals(30f, m.place(0, pen, dab(10f, 20f, 8f, 30f))!!.rotation, 0f)
+        // A rigid map's copy is exactly the dab's size (no float noise from the turn).
+        val turned = DabMapping(listOf(SymmetryMaps.identity(), SymmetryMaps.rotation(32f, 32f, 360.0 / 7)), stamper)
+        assertEquals(8f, turned.place(0, pen, dab(10f, 20f, 8f, 0f))!!.diameter, 0f)
         val s = m.place(1, pen, dab(10f, 20f, 8f, 0f))!!
         assertEquals(25f, s.cx, 1e-4f)
         assertEquals(47f, s.cy, 1e-4f)
