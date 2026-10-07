@@ -278,11 +278,6 @@ object SelectionEdits {
     }
 
     /**
-     * Draws [src] × selection coverage into [c]. Skia draws an ALPHA_8 bitmap as COVERAGE of the
-     * paint, so "src then mask with DST_IN" would be a no-op; painting the source (as a shader)
-     * through the mask gives the masked pixels instead.
-     */
-    /**
      * [block] on [layer]'s pixels. v1.7 (rule C): a folder has none of its own, so [block] gets
      * the composite of its layers (`FolderComposite.renderBlock`, in the document's color mode),
      * freed afterwards.
@@ -299,6 +294,11 @@ object SelectionEdits {
         }
     }
 
+    /**
+     * Draws [src] × selection coverage into [c]. Skia draws an ALPHA_8 bitmap as COVERAGE of the
+     * paint, so "src then mask with DST_IN" would be a no-op; painting the source (as a shader)
+     * through the mask gives the masked pixels instead.
+     */
     private fun drawSelected(c: Canvas, src: Bitmap, sel: Selection) {
         val paint = Paint().apply { shader = BitmapShader(src, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP) }
         c.save()

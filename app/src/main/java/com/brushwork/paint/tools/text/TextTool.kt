@@ -419,7 +419,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     private fun deleteEmptiedLayer(): Boolean {
         val layer = editingLayer ?: return true
         if (doc.indexOf(layer) < 0) { discardItem(); return true }
-        if (doc.layers.size <= 1) {
+        if (doc.pixelLayerCount <= 1) {
             discardItem()
             controller.toast("The text is empty, but a drawing needs at least one layer: the old text was kept")
             return true

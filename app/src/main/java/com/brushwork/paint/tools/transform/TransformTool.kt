@@ -1288,7 +1288,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun deletePlacement(s: Session): Boolean {
         val doc = controller.doc
         val layer = s.layer
-        if (doc.layers.size <= 1) {
+        if (doc.pixelLayerCount <= 1) {
             // Its layer is the only one left (the others were deleted meanwhile) and a drawing
             // needs one: just drop the picture.
             cancelSession(s)
@@ -1607,7 +1607,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         // A transform started meanwhile: deleteLayer() would discard it, so leave the layer.
         if (doc.indexOf(layer) < 0 || session != null) return
         // It is the only layer left (the others were deleted meanwhile): a drawing needs one.
-        if (doc.layers.size <= 1) return
+        if (doc.pixelLayerCount <= 1) return
         // Nothing was recorded since the layer was added: it goes without a trace. Otherwise it
         // is deleted as a regular step.
         if (isFreshImportLayer(layer, label)) dropFreshLayer(layer)
@@ -1623,7 +1623,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun dropFreshLayer(layer: Layer) {
         val doc = controller.doc
         val idx = doc.indexOf(layer)
-        if (idx < 0 || doc.layers.size <= 1) return
+        if (idx < 0 || doc.pixelLayerCount <= 1) return
         controller.structural {
             doc.layers.removeAt(idx)
             doc.activeLayerIndex = (idx - 1).coerceIn(0, doc.layers.lastIndex)

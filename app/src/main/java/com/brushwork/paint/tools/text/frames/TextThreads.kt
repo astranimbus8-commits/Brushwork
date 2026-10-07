@@ -404,7 +404,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
             }
         }
         val news = chain.count { it.layer == null }
-        if (c.doc.layers.size + news > c.maxLayers) {
+        if (c.effectiveLayerCount + news > c.maxLayers) {
             c.toast(LAYER_LIMIT.format(c.maxLayers))
             return null
         }

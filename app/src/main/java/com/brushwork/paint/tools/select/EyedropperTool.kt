@@ -101,15 +101,15 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
     }
 
     /**
-     * Averaged color around document position (x, y) as opaque ARGB, or null when every sampled
-     * pixel is transparent (or the point is outside the canvas).
-     */
-    /**
      * Samples the active layer's own pixels ("This layer"). v1.7 (rule C): a folder has none, so
      * with a folder active the eyedropper reads the composite, as "Sample all layers" does.
      */
     private val layerSource: Boolean get() = settings.source == SampleSource.LAYER && !controller.activeLayer.isFolder
 
+    /**
+     * Averaged color around document position (x, y) as opaque ARGB, or null when every sampled
+     * pixel is transparent (or the point is outside the canvas).
+     */
     fun sample(x: Float, y: Float): Int? {
         val doc = controller.doc
         if (!x.isFinite() || !y.isFinite()) return null
