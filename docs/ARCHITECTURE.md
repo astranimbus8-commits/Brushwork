@@ -68,6 +68,34 @@ background dispatcher on *copies* of pixels and comes back to the main thread to
   "Decrease X" actions replace v1.5's "X plus 1 pixel" arrows. `RepeatIconButton` (−/+ and ‹ ›
   arrows) has a click action: a screen reader's click is one step, a finger still repeats.
 
+## Invariants (v1.7)
+I1–I10 from `docs/ARCHITECTURE.md` stay as they are (I1 data and cache change together; I2 one action = one step; I3 main thread; I4 compatibility; I5 compositor goldens; I6 one owner per file; I7 previews are views; I8 defaults keep the previous behaviour; I9 spline subpaths equal `SplineBezier.toSubpath`; I10 labels are an API). v1.7 adds four. The designs numbered them differently; this is the mapping: risk's I15 (expressions) folds into I13, risk's I16 (layer-count budget) into I14, contracts' I14 (live modifiers) into I14.
+
+- **I11 Layer tree.**
+  - `doc.layers` stays the COMPLETE flat list in render order, bottom first. A folder is a `Layer` with `folder != null`; every layer's `parentId` is `Layer.ROOT_ID` (0) or the id of a folder.
+  - Block rule: a folder at flat index `f` with `d` descendants owns exactly `[f − d, f − 1]`, directly below it. Depth ≤ `LayerTree.MAX_DEPTH` (8); folders ≤ `LayerTree.MAX_FOLDERS` (64).
+  - Only `engine/LayerStructure.kt` (frozen) changes the structure of a document that has folders: every insert and remove, including those of `ImportLayers`, `SelectionEdits`, `VectorLayerOps` and Pathfinder, goes through `LayerStructure.insert`/`delete`/`move`. `structural {}` validates after every block (debug: throw; release: repair and log).
+  - A child of a locked folder is locked, and a child of a hidden folder is hidden: every gate reads `doc.effectiveLocked(layer)` / `doc.effectiveVisible(layer)`, never `layer.locked` / `layer.visible` alone (sweep rule L, §4.4). Only tree walkers (compositor, export, live adjust) read a layer's own flags, because they apply the ancestors themselves.
+  - A folder is never a pixel target: `checkUsable` and `startFilter` refuse it with "Choose a layer inside the folder to paint" before anything is recorded; `beginEdit`/`paintTarget` assert it.
+  - **A document without folders is v1.6 bit for bit:** the same undo actions, compositor path, goldens, `project.json` bytes and `formatVersion`.
+  - Creating a folder never changes the picture; moving layers into a pass-through folder at 100 % never changes it either (unless the move splits a clipping group).
+  - Every folder's `bitmap` is `Layer.FOLDER_BITMAP`; nothing ever allocates pixels for a folder, and nothing ever recycles that bitmap (every recycle loop over layers uses `Layer.recycleBitmaps()`, which skips it; sweep rule B, §4.4).
+- **I12 Points.**
+  - Every point editor (Curve, Polyline, Path, Shape Points, the Free deform mesh) holds its selection as a `PointSelection`.
+  - With exactly one point selected and "Select several" off, every gesture and control behaves as in v1.6; the existing tool tests stay green without edits beyond the item-19 test.
+  - A gesture, typed value or slider drag on N points is ONE in-tool step. Differing values show "Mixed".
+- **I13 Numbers and persisted defaults.**
+  - Every typed number goes through `core/Expressions.kt` (via `Units.parse`, `NumberSliderMath.parseTyped` or `SliderMath.parseValue`; plain numbers take the v1.6 code through `Expressions.isPlainNumber`, everything else `Expressions.evaluate`, and text that is neither a plain number nor a valid expression falls back to the site's v1.6 code). A string keeps its v1.6 value unless it is a valid expression that is not a plain number: `parseTyped` filtered "100/2" to 1002 in v1.6 and now reads 50, while "1 000" and "12mm" still read 1000 and 12. A leading `+` or `-` is still a sign.
+  - A LEADING relative operator (`*`, `/`, `×`, `÷`, `x`) applies to the value the field shows. The fields resolve it before their `parse` runs (`Expressions.resolveRelative`, §4.5), so the many `parse = { Units.parse(it) … }` lambdas of the tool options need no change.
+  - Every new field in a persisted class (`project.json` DTOs, ShapeCodec, TextCodec, VectorCodec, Payload, `ExportScene` is not persisted) carries `@EncodeDefault(EncodeDefault.Mode.NEVER)` and a default that reproduces v1.6. Content that uses no v1.7 feature re-encodes byte for byte, except the codec `version` numbers inside `shapeData` / `textData`. Two goldens captured from `c72ea66` before F1 (`app/src/test/resources/v16/project-plain.json`, `project-adjust.json`) enforce it.
+  - The one exception: a field of a class that exists only in format-3 content (`FolderSpec`) is encoded ALWAYS (`@EncodeDefault(EncodeDefault.Mode.ALWAYS)`). v1.6 never reads such a class, and an explicit value means a later change of its default can never silently change files already saved.
+- **I14 Live arrays and one format predicate.**
+  - A layer's array is DATA (`LayerData.array`); the layer's bitmap is its cache (I1). Every cache writer of a data layer draws through `ArrayDraw` (foundation), so the copies are never left out of a re-render. Copy 0 is the identity, so an array of count 1 changes nothing on screen.
+  - Every cache writer also REDRAWS where the copies are: the area it clears is the caller's dirty rectangle united with `ArrayDraw.cacheBounds(before)` and `ArrayDraw.cacheBounds(after)`, both computed from the `LayerData` (never from the layer before `restoreData`). Vector layers diff and render their EXPANDED content (`ArrayDraw.effectiveVector`), and a live vector stroke appended to an arrayed layer re-renders the copies' rectangles in the same step (§4.5).
+  - A raster pixel edit of an arrayed layer bakes it in the SAME step: `LayerData.rasterizedContent()` drops `array` with the other data, as it drops vector data today. The one exception is a raster array in "Edit source pixels" mode (`ArraySpec.editingSource`, §3.3): its cache is the source alone, pixel edits change the source, and "Finish source edit" takes the layer's pixels as the new source and re-renders the copies.
+  - `ProjectFormat.writtenVersion(layers) = when { any folder -> 3; any adjustment layer -> 2; else -> 1 }`. Arrays, saved selections, symmetry, sharp points, per-point radii and kerning never raise it.
+  - Budget: folders, arrays and saved selections never allocate a document-size ARGB bitmap except where §3 says so, and each such allocation is counted by `doc.effectiveLayerCount` against `maxLayers`.
+
 ## v1.6 foundation contracts (frozen APIs the areas build on)
 - **Tools:** `ToolId.PATH` (a third `CurveKind` of `CurveTool`) and `ToolId.TEXT_FRAMES`
   (`tools/text/frames/TextFrameTool`), appended after `MASK`. `ui/editor/ToolMenu` lists the
