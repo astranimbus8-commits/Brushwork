@@ -18,6 +18,7 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
@@ -131,9 +132,10 @@ class VectorTipTurnRobolectricTest {
         // Mirrored (a rectangle mirrors into a shape): the nib mirrors too.
         val mirroredShape = VectorOps.transformed(shape, floatArrayOf(-1f, 0f, 200f, 0f, 1f, 0f, 0f, 0f, 1f)) as VShape
         assertEquals(135f, mirroredShape.shape.brushPreset!!.angle, 1e-3f)
-        // Sheared into a path: its brush outline turns along.
-        val sheared = VectorOps.transformed(shape, floatArrayOf(0f, -1f, 160f, 1f, 0.5f, 0f, 0f, 0f, 1f)) as VPath
-        assertTrue(abs(sheared.stroke!!.brush!!.angle - 45f) > 1f)
+        // Sheared (v1.7, design §4.5: an affine map keeps the shape, a rectangle under a skew becomes a point shape): its brush outline turns along.
+        val sheared = VectorOps.transformed(shape, floatArrayOf(0f, -1f, 160f, 1f, 0.5f, 0f, 0f, 0f, 1f)) as VShape
+        assertTrue(ShapeOutlines.isCustom(sheared.shape))
+        assertTrue(abs(sheared.shape.brushPreset!!.angle - 45f) > 1f)
     }
 
     @Test
