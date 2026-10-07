@@ -107,7 +107,7 @@ internal fun SelectionActionBar(
             }
             BarItem(Icons.Outlined.MoreHoriz, "More", "Selection menu", onClick = onMore)
             if (hasSelection) {
-                // v1.7 (items 2 and 14), after More so the eight v1.6 items keep their places.
+                // v1.7 (items 3 and 14), after More so the eight v1.6 items keep their places.
                 BarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_SELECTION) {
                     controller.endCanvasGesture(); controller.arrayFromSelection()
                 }

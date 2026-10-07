@@ -138,7 +138,7 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier) {
                 ObjectBarItem(Icons.Outlined.Deselect, "Deselect", "Deselect the objects", itemWidth) {
                     run { ObjectActions.deselect(controller) }
                 }
-                // v1.7 (item 2): after Deselect, so the nine v1.6 buttons keep their places and
+                // v1.7 (item 3): after Deselect, so the nine v1.6 buttons keep their places and
                 // sizes (the bar scrolls sideways to it on a 392 dp phone).
                 ObjectBarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS, itemWidth) {
                     run { controller.arrayFromObjects(v.selectedIds.toSet()) }

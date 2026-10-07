@@ -357,7 +357,7 @@ private fun SpecialLayerMenu(env: LayerWindowEnv, anchor: SpecialMenuAnchor) {
     DropdownMenu(expanded = ui.special == anchor, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
         MenuItem(LayerLabels.NEW_VECTOR, EditorIcons.Vector, enabled = env.canAddLayer) { close(); c.fromPanel { LayerOps.addVectorLayer(c) } }
         MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { close(); c.fromPanel { LayerOps.addAdjustmentLayer(c) } }
-        // v1.7 (item 17): an empty folder above the active layer (the controller refuses past the folder limit).
+        // v1.7 (item 8): an empty folder above the active layer (the controller refuses past the folder limit).
         MenuItem(FolderLabels.NEW, Icons.Filled.CreateNewFolder) { close(); c.fromPanel { c.addFolder() } }
     }
 }
@@ -407,10 +407,10 @@ private fun LayerMenu(env: LayerWindowEnv) {
             }
             MenuItem(LayerLabels.NEW_VECTOR, EditorIcons.Vector, enabled = env.canAddLayer) { act { LayerOps.addVectorLayer(c) } }
             MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { act { LayerOps.addAdjustmentLayer(c) } }
-            // v1.7 (item 17): the layer into a new folder at its place.
+            // v1.7 (item 8): the layer into a new folder at its place.
             MenuItem(FolderLabels.PUT_IN_NEW, Icons.Filled.Folder) { act { c.putInNewFolder(layer) } }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            // v1.7 (item 2): a live array on the whole layer ("Array…"), or the three array actions.
+            // v1.7 (item 3): a live array on the whole layer ("Array…"), or the three array actions.
             if (row.hasArray) {
                 MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.selectLayer(layer); c.selectTool(ToolId.ARRAY) } }
                 MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
