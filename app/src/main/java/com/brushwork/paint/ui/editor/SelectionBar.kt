@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoFixHigh
+import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ContentCut
@@ -41,7 +42,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.remove.ContentAwareFillJob
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -49,7 +53,8 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 /**
  * Floating actions for the current selection (whatever made it: marquee, lasso, magic wand,
  * smart select...): copy, cut, paste, deselect, delete the selected pixels, content-aware fill
- * (opens its options), invert and the full selection menu ([onMore]). With no selection but
+ * (opens its options), invert and the full selection menu ([onMore]); v1.7 adds "Array" (an array
+ * from the selection) and "Save" (a saved selection) after it. With no selection but
  * something copied, it offers Paste only, and
  * [onHide] (non-null then) hides it until something new is copied.
  */
@@ -101,6 +106,15 @@ internal fun SelectionActionBar(
                 BarItem(Icons.Outlined.InvertColors, "Invert", "Invert the selection") { controller.endCanvasGesture(); controller.invertSelection() }
             }
             BarItem(Icons.Outlined.MoreHoriz, "More", "Selection menu", onClick = onMore)
+            if (hasSelection) {
+                // v1.7 (items 2 and 14), after More so the eight v1.6 items keep their places.
+                BarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_SELECTION) {
+                    controller.endCanvasGesture(); controller.arrayFromSelection()
+                }
+                BarItem(Icons.Outlined.BookmarkAdd, SavedSelectionLabels.SAVE_BUTTON, SavedSelectionLabels.SAVE) {
+                    controller.endCanvasGesture(); controller.saveSelection()
+                }
+            }
             if (onHide != null) BarItem(Icons.Outlined.Close, "Hide", "Hide the paste bar", onClick = onHide)
         }
     }

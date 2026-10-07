@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.endCanvasGesture
@@ -67,7 +68,8 @@ import com.brushwork.paint.vector.select.ObjectEdits
  * `controller.vectors.selectedIds` is not empty. Every edit is one undo step
  * ([ObjectActions]); Recolor paints lines and fills with the main color, a long press only the
  * lines. All nine buttons fit a 392 dp phone (about 41 dp each, finger-sized); on a narrower
- * screen they keep 40 dp and the bar scrolls sideways.
+ * screen they keep 40 dp and the bar scrolls sideways. v1.7 adds "Array" (an array from the
+ * selected objects) after Deselect, scrolled into view.
  *
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
  * worked on are not acted on).
@@ -135,6 +137,11 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier) {
                 }
                 ObjectBarItem(Icons.Outlined.Deselect, "Deselect", "Deselect the objects", itemWidth) {
                     run { ObjectActions.deselect(controller) }
+                }
+                // v1.7 (item 2): after Deselect, so the nine v1.6 buttons keep their places and
+                // sizes (the bar scrolls sideways to it on a 392 dp phone).
+                ObjectBarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS, itemWidth) {
+                    run { controller.arrayFromObjects(v.selectedIds.toSet()) }
                 }
             }
         }
@@ -210,7 +217,7 @@ private fun ObjectBarItem(
 private val LABEL_SP = 10.sp
 private val MIN_LABEL_SP = 7.5.sp
 
-/** Buttons in the bar. */
+/** Buttons sized to fit the bar (the v1.6 nine; v1.7's "Array" after them scrolls into view). */
 private const val ITEMS = 9
 
 /** The selection bar's button size, used when there is room. */
