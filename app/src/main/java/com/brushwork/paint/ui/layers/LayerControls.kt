@@ -9,6 +9,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitHorizontalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -42,6 +43,7 @@ import androidx.compose.material.icons.filled.DriveFileRenameOutline
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.InvertColors
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -175,7 +177,12 @@ internal class LayerWindowUi {
     var special by mutableStateOf<SpecialMenuAnchor?>(null)
 }
 
-/** What the window's buttons act on: the active layer's row and the host's callbacks. */
+/**
+ * What the window's buttons act on: the active layer's row and the host's callbacks.
+ * v1.7: [canDelete] (a folder, or not the last pixel layer; v1.6: more than one layer) and
+ * [onMergeFolder] ("Merge folder" on a folder row: the host asks first when the picture would
+ * change).
+ */
 internal class LayerWindowEnv(
     val controller: EditorController,
     val row: LayerRowModel,
@@ -189,6 +196,8 @@ internal class LayerWindowEnv(
     val onDelete: () -> Unit,
     val onRename: () -> Unit,
     val onOpenPanel: (EditorPanel) -> Unit,
+    val canDelete: Boolean = layerCount > 1,
+    val onMergeFolder: () -> Unit = {},
 ) {
     val layer: Layer get() = row.layer
 }
@@ -242,8 +251,9 @@ internal fun leftActions(env: LayerWindowEnv): List<WindowAction> {
 
 /**
  * The right strip's nine icons, top to bottom (design §3.7.7): clear, layer mask, transform, the
- * layer flips, merge down (an adjustment layer: apply to the layer below), delete, filters for
- * this layer and ⋮ (the v1.5 layer menu).
+ * layer flips, merge down (an adjustment layer: apply to the layer below; v1.7, a folder: "Merge
+ * folder", which the ⋮ menu then leaves out), delete (a folder with layers inside asks first),
+ * filters for this layer and ⋮ (the v1.5 layer menu).
  */
 internal fun stripActions(env: LayerWindowEnv): List<WindowAction> {
     val c = env.controller
@@ -262,12 +272,17 @@ internal fun stripActions(env: LayerWindowEnv): List<WindowAction> {
         WindowAction(LayerLabels.FLIP_H, true, iconGlyph(ChromeGlyphs.FlipHorizontal)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = true) } },
         WindowAction(LayerLabels.FLIP_V, true, iconGlyph(ChromeGlyphs.FlipVertical)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = false) } },
         WindowAction(
-            if (row.isAdjustment) LayerLabels.APPLY_BELOW else LayerLabels.MERGE,
-            // v1.7: a layer below at the same level (a folder's bottom child has none); v1.6: docIndex > 0.
-            env.docIndex > 0 && LayerOps.canMergeDown(c, layer),
+            when {
+                row.isFolder -> FolderLabels.MERGE
+                row.isAdjustment -> LayerLabels.APPLY_BELOW
+                else -> LayerLabels.MERGE
+            },
+            // v1.7: a folder merges by itself (even the bottom one); a layer needs one below at
+            // its level (a folder's bottom child has none). v1.6: docIndex > 0.
+            (row.isFolder || env.docIndex > 0) && LayerOps.canMergeDown(c, layer),
             iconGlyph(Icons.Filled.VerticalAlignBottom),
-        ) { c.fromPanel { LayerOps.mergeDown(c, layer) } },
-        WindowAction(LayerLabels.DELETE, env.layerCount > 1, iconGlyph(Icons.Outlined.Delete)) { c.fromPanel(env.onDelete) },
+        ) { c.fromPanel { if (row.isFolder) env.onMergeFolder() else LayerOps.mergeDown(c, layer) } },
+        WindowAction(LayerLabels.DELETE, env.canDelete, iconGlyph(Icons.Outlined.Delete)) { c.fromPanel(env.onDelete) },
         WindowAction(LayerLabels.FILTERS, true, { tint -> Text("FX", color = tint, fontSize = 15.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold) }) {
             c.fromPanel { env.onOpenPanel(EditorPanel.FILTERS) }
         },
@@ -367,8 +382,14 @@ private fun SpecialLayerMenu(env: LayerWindowEnv, anchor: SpecialMenuAnchor) {
  * The ⋮ menu: the v1.5 layer menu (edit text / shape / objects / adjustment / mask, rename, move,
  * convert / rasterize, new vector / adjustment layer, the mask page, flips, clear, fill). Entries
  * the window shows as buttons at the same time are left out here (Import picture, Apply to layer
- * below) or renamed (the mask page is "Mask actions"; "Layer mask" is the strip's), so no label
- * repeats (I10).
+ * below, v1.7's "Merge folder") or renamed (the mask page is "Mask actions"; "Layer mask" is the
+ * strip's), so no label repeats (I10).
+ *
+ * v1.7 (item 8, design §3.8): on a folder, its own section first ("Rename folder", "Duplicate
+ * folder", "Layer from folder", "Ungroup folder"); the pixel entries (convert, the array, flips,
+ * clear, fill) are left out, as a folder has no pixels, and the mask page shows "Add mask"
+ * disabled with "Folders have no mask yet". With folders in the picture, "Move into folder
+ * above" and "Move out of folder" are the swipes' accessible equivalents.
  */
 @Composable
 private fun LayerMenu(env: LayerWindowEnv) {
@@ -384,6 +405,13 @@ private fun LayerMenu(env: LayerWindowEnv) {
     val canConvert = remember(menu.open, row.contentVersion, row.kind) { menu.open && LayerOps.canConvertToVector(c, layer) }
     DropdownMenu(expanded = menu.open, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
         if (!menu.maskPage) {
+            if (row.isFolder) {
+                MenuItem(FolderLabels.RENAME, Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
+                MenuItem(FolderLabels.DUPLICATE, Icons.Outlined.LibraryAdd, enabled = env.canAddLayer) { act { LayerOps.duplicate(c, layer) } }
+                MenuItem(FolderLabels.FROM_FOLDER, Icons.Filled.Image, enabled = env.canAddLayer) { act { LayerOps.layerFromFolder(c, layer) } }
+                MenuItem(FolderLabels.UNGROUP, Icons.Filled.FolderOpen) { act { LayerOps.ungroupFolder(c, layer) } }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            }
             if (row.isText) {
                 MenuItem("Edit text", Icons.Filled.TextFields) { act { LayerOps.editText(c, layer) } }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)
@@ -410,20 +438,30 @@ private fun LayerMenu(env: LayerWindowEnv) {
             MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { act { LayerOps.addAdjustmentLayer(c) } }
             // v1.7 (item 8): the layer into a new folder at its place.
             MenuItem(FolderLabels.PUT_IN_NEW, Icons.Filled.Folder) { act { c.putInNewFolder(layer) } }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            // v1.7 (item 3): a live array on the whole layer ("Array…"), or the three array actions.
-            if (row.hasArray) {
-                MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.selectLayer(layer); c.selectTool(ToolId.ARRAY) } }
-                MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
-                MenuItem(ArrayLabels.REMOVE, Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
-            } else {
-                MenuItem(ArrayLabels.OPEN, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
+            // v1.7 (item 8): the swipes' accessible equivalents, while the picture has folders.
+            val tree = remember(row, docIndex, c.layersVersion, c.editCount) { FolderMoves.of(c.doc.layers, docIndex) }
+            if (tree.shown) {
+                MenuItem(FolderLabels.MOVE_IN, Icons.Filled.SubdirectoryArrowRight, enabled = tree.canMoveIn) { act { c.putIntoFolderAbove(layer) } }
+                MenuItem(FolderLabels.MOVE_OUT, Icons.AutoMirrored.Filled.ArrowBack, enabled = tree.canMoveOut) { act { c.takeOutOfFolder(layer) } }
             }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            // v1.7 (item 3): a live array on the whole layer ("Array…"), or the three array actions.
+            // A folder is never arrayed (the Array tool refuses it too).
+            if (!row.isFolder) {
+                if (row.hasArray) {
+                    MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.selectLayer(layer); c.selectTool(ToolId.ARRAY) } }
+                    MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
+                    MenuItem(ArrayLabels.REMOVE, Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
+                } else {
+                    MenuItem(ArrayLabels.OPEN, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
+                }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem("Rename…", Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            }
             MenuItem("Move layer up", Icons.Filled.ArrowUpward, enabled = docIndex < env.layerCount - 1) { act { c.moveLayerUp(layer) } }
-            MenuItem("Move layer down", Icons.Filled.ArrowDownward, enabled = docIndex > 0) { act { c.moveLayerDown(layer) } }
+            // A folder moves with its block: down while anything is below the block.
+            MenuItem("Move layer down", Icons.Filled.ArrowDownward, enabled = tree.blockStart > 0) { act { c.moveLayerDown(layer) } }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
             DropdownMenuItem(
                 text = { Text(if (row.hasMask) LayerLabels.MASK_ACTIONS else "${LayerLabels.MASK_ACTIONS} (no mask)") },
@@ -431,15 +469,29 @@ private fun LayerMenu(env: LayerWindowEnv) {
                 leadingIcon = { Icon(Icons.Filled.Contrast, contentDescription = null) },
                 trailingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = null) },
             )
+            if (!row.isFolder) {
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem("Flip horizontal", Icons.Filled.Flip) { act { LayerOps.flip(c, layer, horizontal = true) } }
+                MenuItem("Flip vertical", Icons.Filled.Flip, iconRotation = 90f) { act { LayerOps.flip(c, layer, horizontal = false) } }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+                MenuItem(LayerOps.clearLabel(c, layer), Icons.Filled.LayersClear) { act { LayerOps.clear(c, layer) } }
+                DropdownMenuItem(
+                    text = { Text(LayerOps.fillLabel(c, layer)) },
+                    onClick = { act { LayerOps.fill(c, layer) } },
+                    leadingIcon = { ColorSwatch(c.color, size = 22.dp) },
+                )
+            }
+        } else if (row.isFolder) {
+            // v1.7 (§7): a folder has no mask yet; the entries stay, disabled, with the reason.
+            MenuItem("Back", Icons.AutoMirrored.Filled.ArrowBack) { menu.maskPage = false }
             HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            MenuItem("Flip horizontal", Icons.Filled.Flip) { act { LayerOps.flip(c, layer, horizontal = true) } }
-            MenuItem("Flip vertical", Icons.Filled.Flip, iconRotation = 90f) { act { LayerOps.flip(c, layer, horizontal = false) } }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            MenuItem(LayerOps.clearLabel(c, layer), Icons.Filled.LayersClear) { act { LayerOps.clear(c, layer) } }
-            DropdownMenuItem(
-                text = { Text(LayerOps.fillLabel(c, layer)) },
-                onClick = { act { LayerOps.fill(c, layer) } },
-                leadingIcon = { ColorSwatch(c.color, size = 22.dp) },
+            MenuItem("Add gradient mask…", EditorIcons.Masks, enabled = false) {}
+            MenuItem("Add mask", Icons.Filled.Add, enabled = false) {}
+            Text(
+                FolderLabels.NO_MASK,
+                color = BrushworkColors.OnChromeDim,
+                fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
             )
         } else {
             MenuItem("Back", Icons.AutoMirrored.Filled.ArrowBack) { menu.maskPage = false }
@@ -497,10 +549,17 @@ private fun MenuItem(text: String, icon: ImageVector, enabled: Boolean = true, i
  * each, icons only as ibisPaint's; their v1.5 captions are still said), then the white "Normal ˄"
  * dropdown ("Choose blend mode").
  * [wrap]: the dropdown on a line of its own under the toggles ([LayerWindowMetrics.blendWraps]).
+ * [isBottom]: v1.7, no unit below at the row's level (v1.6: the bottom layer).
+ *
+ * v1.7 (item 8): on a folder the list starts with "Pass through" (checked while it is on; a
+ * mode picked then turns it off in the same step, [LayerOps.setBlendMode]), and alpha lock is
+ * disabled with "Alpha lock works on layers".
  */
 @Composable
 internal fun BlendRow(controller: EditorController, row: LayerRowModel, isBottom: Boolean, modifier: Modifier = Modifier, wrap: Boolean = false) {
-    val onSelect = { m: LayerBlendMode -> controller.fromPanel { controller.setBlendMode(row.layer, m) } }
+    val onSelect = { m: LayerBlendMode -> controller.fromPanel { LayerOps.setBlendMode(controller, row.layer, m) } }
+    val onPassThrough = { controller.fromPanel { LayerOps.setPassThrough(controller, row.layer) } }
+    val passThrough = if (row.isFolder) row.passThrough else null
     if (wrap) {
         // A narrow controls column (a small side-by-side window): the dropdown gets its own line,
         // so "Normal" stays whole instead of "N…".
@@ -508,14 +567,14 @@ internal fun BlendRow(controller: EditorController, row: LayerRowModel, isBottom
             Row(Modifier.fillMaxWidth().height(IbisDims.BlendRow), verticalAlignment = Alignment.CenterVertically) {
                 BlendToggles(controller, row, isBottom)
             }
-            BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.fillMaxWidth())
+            BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.fillMaxWidth(), passThrough = passThrough, onPassThrough = onPassThrough)
         }
         return
     }
     Row(modifier.fillMaxWidth().background(IbisColors.PanelStrip).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         BlendToggles(controller, row, isBottom)
         Spacer(Modifier.width(6.dp))
-        BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.weight(1f))
+        BlendModeDropdown(mode = row.blendMode, onSelect = onSelect, modifier = Modifier.weight(1f), passThrough = passThrough, onPassThrough = onPassThrough)
         Spacer(Modifier.width(4.dp))
     }
 }
@@ -532,11 +591,15 @@ private fun BlendToggles(controller: EditorController, row: LayerRowModel, isBot
         enabled = !isBottom || row.clipping,
         onToggle = { controller.fromPanel { controller.toggleClipping(layer) } },
     ) { tint -> Icon(Icons.Filled.SubdirectoryArrowRight, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp).rotate(90f)) }
+    // v1.7: a folder has no pixels to lock; the toggle is disabled and says why (a tap shows it too).
+    val alphaLock = { controller.fromPanel { controller.toggleAlphaLock(layer) } }
     BlendToggle(
         description = LayerLabels.ALPHA_LOCK,
-        caption = LayerLabels.ALPHA_LOCK_CAPTION,
-        checked = row.alphaLocked,
-        onToggle = { controller.fromPanel { controller.toggleAlphaLock(layer) } },
+        caption = if (row.isFolder) FolderLabels.NO_ALPHA_LOCK else LayerLabels.ALPHA_LOCK_CAPTION,
+        checked = row.alphaLocked && !row.isFolder,
+        onToggle = alphaLock,
+        enabled = !row.isFolder,
+        onDisabledTap = if (row.isFolder) alphaLock else null,
     ) { tint ->
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("α", color = tint, fontSize = 15.sp, lineHeight = 16.sp, fontWeight = FontWeight.Bold)
@@ -554,7 +617,8 @@ private fun BlendToggles(controller: EditorController, row: LayerRowModel, isBot
 /**
  * A blend-row toggle: its glyph alone, centred in a 48 dp cell (ibisPaint shows no caption),
  * accent while on. The [caption] is no longer drawn but is still said, as the toggle's own text,
- * with its [description] (I10: the toggles keep the strings they are known by).
+ * with its [description] (I10: the toggles keep the strings they are known by). A disabled
+ * toggle runs [onDisabledTap] on a tap (v1.7: the reason it is disabled).
  */
 @Composable
 private fun BlendToggle(
@@ -563,12 +627,14 @@ private fun BlendToggle(
     checked: Boolean,
     onToggle: () -> Unit,
     enabled: Boolean = true,
+    onDisabledTap: (() -> Unit)? = null,
     glyph: @Composable (tint: Color) -> Unit,
 ) {
     val tint = when {
         !enabled -> Color.White.copy(alpha = 0.3f)
         else -> Color.White
     }
+    val disabledTap by rememberUpdatedState(onDisabledTap)
     Box(
         Modifier
             .size(width = IbisDims.BlendToggle, height = 48.dp)
@@ -578,6 +644,10 @@ private fun BlendToggle(
                 if (description != null) contentDescription = description
                 text = AnnotatedString(caption)
             }
+            .then(
+                if (!enabled && onDisabledTap != null) Modifier.pointerInput(Unit) { detectTapGestures { disabledTap?.invoke() } }
+                else Modifier
+            )
             .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() }),
         contentAlignment = Alignment.Center,
     ) {
@@ -585,10 +655,22 @@ private fun BlendToggle(
     }
 }
 
-/** The white rounded "Normal ˄" dropdown (36 dp tall in a 40 dp target) listing every [LayerBlendMode]. */
+/**
+ * The white rounded "Normal ˄" dropdown (36 dp tall in a 40 dp target) listing every [LayerBlendMode].
+ * [passThrough]: null for a layer; for a folder whether "Pass through" is on: the list then starts
+ * with it ([onPassThrough]), and while it is on it is the current entry (any mode can be picked,
+ * the folder's own included).
+ */
 @Composable
-private fun BlendModeDropdown(mode: LayerBlendMode, onSelect: (LayerBlendMode) -> Unit, modifier: Modifier = Modifier) {
+private fun BlendModeDropdown(
+    mode: LayerBlendMode,
+    onSelect: (LayerBlendMode) -> Unit,
+    modifier: Modifier = Modifier,
+    passThrough: Boolean? = null,
+    onPassThrough: () -> Unit = {},
+) {
     var open by remember { mutableStateOf(false) }
+    val through = passThrough == true
     Box(modifier) {
         Box(
             Modifier
@@ -606,23 +688,37 @@ private fun BlendModeDropdown(mode: LayerBlendMode, onSelect: (LayerBlendMode) -
                     .padding(start = 10.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(mode.label, color = IbisColors.ListText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(
+                    if (through) FolderLabels.PASS_THROUGH else mode.label,
+                    color = IbisColors.ListText, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                )
                 Icon(Icons.Filled.KeyboardArrowUp, contentDescription = LayerLabels.BLEND, tint = IbisColors.ListText)
             }
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BrushworkColors.ChromeHigh) {
+            if (passThrough != null) {
+                BlendEntry(FolderLabels.PASS_THROUGH, current = through) { open = false; if (!through) onPassThrough() }
+                HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            }
             LayerBlendMode.entries.forEach { m ->
-                DropdownMenuItem(
-                    text = { Text(m.label) },
-                    onClick = { open = false; if (m != mode) onSelect(m) },
-                    leadingIcon = {
-                        if (m == mode) Icon(Icons.Filled.Check, contentDescription = "Current", tint = BrushworkColors.Accent)
-                        else Spacer(Modifier.size(24.dp))
-                    },
-                )
+                val current = !through && m == mode
+                BlendEntry(m.label, current) { open = false; if (!current) onSelect(m) }
             }
         }
     }
+}
+
+/** One entry of the blend list, a check before the [current] one. */
+@Composable
+private fun BlendEntry(label: String, current: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(label) },
+        onClick = onClick,
+        leadingIcon = {
+            if (current) Icon(Icons.Filled.Check, contentDescription = "Current", tint = BrushworkColors.Accent)
+            else Spacer(Modifier.size(24.dp))
+        },
+    )
 }
 
 // ====================================================================== opacity row

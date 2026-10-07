@@ -24,11 +24,13 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -63,9 +65,11 @@ import androidx.compose.ui.zIndex
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.editor.EditorPanel
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.ValueInputDialog
@@ -93,7 +97,8 @@ import kotlin.math.roundToInt
  *
  * [onDismiss] closes it (its ✕ button). [onImportPicture] asks the host to pick an image to add
  * as a layer; the window calls [onDismiss] right before it, so the placement is visible once the
- * picture arrives. Delete removes the active layer at once, without asking (undo brings it back);
+ * picture arrives. Delete removes the active layer at once, without asking (undo brings it back;
+ * v1.7: a folder with layers inside asks "Delete all" or "Folder only" first);
  * [onLayerDeleted] then gets the removed layer, e.g. to offer Undo in a snackbar. [onOpenPanel]
  * asks the host to open one of its panels (the Selection Layer row: Selection; the strip's FX:
  * Filters).
@@ -153,6 +158,9 @@ fun LayersPanel(
 
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
     var opacityId by rememberSaveable { mutableStateOf<Long?>(null) }
+    // v1.7 (item 8): the folder whose delete or merge is being asked about.
+    var deleteFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var mergeFolderId by rememberSaveable { mutableStateOf<Long?>(null) }
     val ui = remember { LayerWindowUi() }
     // A view preference (AppSettings is not observable): mirrored here for the squares.
     var transparency by remember { mutableStateOf(controller.settings.transparencyDisplay) }
@@ -172,15 +180,30 @@ fun LayersPanel(
         ui = ui,
         onDismiss = onDismiss,
         onImportPicture = onImportPicture,
-        // No confirmation: undo (or the snackbar's Undo) brings the layer back.
+        // No confirmation: undo (or the snackbar's Undo) brings the layer back. v1.7: a folder
+        // with layers inside asks "Delete all" or "Folder only" first.
         onDelete = {
-            val count = controller.doc.layers.size
-            controller.deleteLayer(active)
-            if (controller.doc.layers.size < count) onLayerDeleted(active)
+            if (active.isFolder && LayerTree.descendantCount(controller.doc.layers, controller.doc.indexOf(active)) > 0) {
+                deleteFolderId = active.id
+            } else {
+                deleteNow(controller, active, onLayerDeleted) { controller.deleteLayer(active) }
+            }
         },
         onRename = { renameId = active.id },
         onOpenPanel = onOpenPanel,
+        // v1.7: a folder can always go ("Folder only" keeps its layers); the last pixel layer can't.
+        canDelete = active.isFolder || doc.pixelLayerCount > 1,
+        onMergeFolder = {
+            // Pending tool work lands first; the guards speak before any question is asked.
+            LayerOps.commitPendingWork(controller)
+            if (LayerOps.canMergeFolder(controller, active)) {
+                if (LayerOps.mergeChangesPicture(controller.doc.layers, controller.doc.indexOf(active))) mergeFolderId = active.id
+                else LayerOps.mergeFolder(controller, active)
+            }
+        },
     )
+    // v1.7: the clipping toggle has nothing to clip to at the bottom of the row's level.
+    val isBottom = LayerTreeRows.isBottomOfLevel(doc.layers, activeDocIndex)
     val docAspect = doc.width.toFloat() / doc.height.coerceAtLeast(1)
     val screenHeightDp = LocalConfiguration.current.screenHeightDp
 
@@ -230,7 +253,7 @@ fun LayersPanel(
                                 .testTag(LayerWindowTags.CONTROLS)
                                 .verticalScroll(rememberScrollState()),
                         ) {
-                            BlendRow(controller, activeRow, isBottom = activeDocIndex == 0, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND), wrap = m.blendWraps)
+                            BlendRow(controller, activeRow, isBottom = isBottom, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND), wrap = m.blendWraps)
                             OpacityRow(controller, active, activeRow.opacity, onType = { opacityId = active.id }, Modifier.height(m.opacityRow.dp).testTag(LayerWindowTags.OPACITY))
                             ActionGrid(leftActions(env) + stripActions(env), perRow = m.gridColumns, Modifier.fillMaxWidth())
                         }
@@ -277,7 +300,7 @@ fun LayersPanel(
                                 .then(if (m.stripScrolls) Modifier.verticalScroll(rememberScrollState()) else Modifier),
                         ) { RightStrip(stripActions(env), Modifier.fillMaxWidth()) }
                     }
-                    BlendRow(controller, activeRow, isBottom = activeDocIndex == 0, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND))
+                    BlendRow(controller, activeRow, isBottom = isBottom, Modifier.height(m.blendRow.dp).testTag(LayerWindowTags.BLEND))
                     OpacityRow(controller, active, activeRow.opacity, onType = { opacityId = active.id }, Modifier.height(m.opacityRow.dp).testTag(LayerWindowTags.OPACITY))
                     Spacer(Modifier.height(m.bottomPad.dp))
                 }
@@ -289,10 +312,34 @@ fun LayersPanel(
     LaunchedEffect(layersVersion, editCount) {
         renameId?.let { if (doc.layerById(it) == null) renameId = null }
         opacityId?.let { if (doc.layerById(it) == null) opacityId = null }
+        deleteFolderId?.let { if (doc.layerById(it)?.isFolder != true) deleteFolderId = null }
+        mergeFolderId?.let { if (doc.layerById(it)?.isFolder != true) mergeFolderId = null }
+    }
+
+    deleteFolderId?.let(doc::layerById)?.takeIf { it.isFolder }?.let { folder ->
+        val n = LayerTree.descendantCount(doc.layers, doc.indexOf(folder))
+        DeleteFolderDialog(
+            layers = n,
+            onDelete = { keepChildren ->
+                deleteFolderId = null
+                controller.fromPanel { deleteNow(controller, folder, onLayerDeleted) { controller.deleteFolder(folder, keepChildren) } }
+            },
+            onDismiss = { deleteFolderId = null },
+        )
+    }
+
+    mergeFolderId?.let(doc::layerById)?.takeIf { it.isFolder }?.let { folder ->
+        BwDialog(
+            title = FolderLabels.MERGE_BLEND_WARNING,
+            onDismiss = { mergeFolderId = null },
+            confirmText = MERGE_CONFIRM,
+            onConfirm = { mergeFolderId = null; controller.fromPanel { LayerOps.mergeFolder(controller, folder) } },
+        ) {}
     }
 
     renameId?.let(doc::layerById)?.let { layer ->
         RenameDialog(
+            title = if (layer.isFolder) FolderLabels.RENAME else "Rename layer",
             initial = layer.name,
             onRename = { name -> renameId = null; if (name != layer.name) controller.renameLayer(layer, name) },
             onDismiss = { renameId = null },
@@ -552,14 +599,47 @@ internal fun isLayerItem(index: Int): Boolean = index >= HEADER_ITEMS
 internal fun contextItem(activeDisplay: Int): Int =
     if (activeDisplay <= 0) 0 else activeDisplay + HEADER_ITEMS - 1
 
+/**
+ * Deletes [layer] with [delete] and reports it to [onLayerDeleted] when it went (the snackbar's
+ * Undo): the layer count dropped.
+ */
+private inline fun deleteNow(controller: EditorController, layer: Layer, onLayerDeleted: (Layer) -> Unit, delete: () -> Unit) {
+    val count = controller.doc.layers.size
+    delete()
+    if (controller.doc.layers.size < count) onLayerDeleted(layer)
+}
+
+/** The merge confirmation's button ("Merge folder" is the strip's: I10). */
+private const val MERGE_CONFIRM = "Merge"
+
+/**
+ * v1.7 (item 8): "Delete folder and its N layers?" with "Delete all" (the folder and every layer
+ * in it), "Folder only" (its layers move to its level) and Cancel. A tap outside cancels.
+ */
 @Composable
-private fun RenameDialog(initial: String, onRename: (String) -> Unit, onDismiss: () -> Unit) {
+private fun DeleteFolderDialog(layers: Int, onDelete: (keepChildren: Boolean) -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(FolderLabels.deleteAsk(layers)) },
+        confirmButton = {
+            Row {
+                TextButton(onClick = { onDelete(true) }) { Text(FolderLabels.FOLDER_ONLY) }
+                TextButton(onClick = { onDelete(false) }) { Text(FolderLabels.DELETE_ALL) }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        containerColor = BrushworkColors.ChromeHigh,
+    )
+}
+
+@Composable
+private fun RenameDialog(title: String, initial: String, onRename: (String) -> Unit, onDismiss: () -> Unit) {
     var value by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(initial, selection = TextRange(0, initial.length)))
     }
     val focus = remember { FocusRequester() }
     val confirm = { onRename(value.text.trim().ifEmpty { initial }) }
-    BwDialog(title = "Rename layer", onDismiss = onDismiss, confirmText = "Rename", onConfirm = confirm) {
+    BwDialog(title = title, onDismiss = onDismiss, confirmText = "Rename", onConfirm = confirm) {
         OutlinedTextField(
             value = value,
             onValueChange = { if (it.text.length <= MAX_NAME_LENGTH) value = it },

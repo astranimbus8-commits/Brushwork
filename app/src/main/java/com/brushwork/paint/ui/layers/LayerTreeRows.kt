@@ -19,6 +19,33 @@ internal data class DraggedUnit(val id: Long, val size: Int) {
 }
 
 /**
+ * v1.7 (item 8): what the ⋮ menu offers to move the row at a flat index in the tree: [shown]
+ * while the picture has folders, "Move into folder above" when the sibling unit directly above
+ * is a folder ([canMoveIn]; the controller refuses past depth 8 with its message), "Move out of
+ * folder" for a folder's bottom child ([canMoveOut]). [blockStart]: the bottom of the row's
+ * block ("Move layer down" while anything is below it; without folders, the row's own index).
+ */
+internal class FolderMoves(val shown: Boolean, val canMoveIn: Boolean, val canMoveOut: Boolean, val blockStart: Int) {
+    companion object {
+        val NONE = FolderMoves(shown = false, canMoveIn = false, canMoveOut = false, blockStart = 0)
+
+        /** The moves of the row at [index] of [layers] (bottom first). */
+        fun of(layers: List<Layer>, index: Int): FolderMoves {
+            if (index !in layers.indices) return NONE
+            val blockStart = LayerTree.block(layers, index).first
+            if (layers.none { it.isFolder }) return FolderMoves(shown = false, canMoveIn = false, canMoveOut = false, blockStart = blockStart)
+            val above = LayerTreeRows.siblingAbove(layers, index)
+            return FolderMoves(
+                shown = true,
+                canMoveIn = above >= 0 && layers[above].isFolder,
+                canMoveOut = LayerTree.takeOutOfFolder(layers, index) != null,
+                blockStart = blockStart,
+            )
+        }
+    }
+}
+
+/**
  * v1.7 (item 8, design §3.8): how the layer window shows the layer tree. Pure (reads ids,
  * parents, the folder fields and the clipping flags; never a bitmap), main thread.
  *
@@ -110,6 +137,16 @@ internal object LayerTreeRows {
             continuesAbove = continuesAbove,
             lowestInGroup = !ownRows && !FolderComposite.isClipped(layers, below),
         )
+    }
+
+    /**
+     * No unit below the row at [i] at its level (the blend row's clipping toggle: nothing to clip
+     * to). Without folders this is v1.6's `i == 0`.
+     */
+    fun isBottomOfLevel(layers: List<Layer>, i: Int): Boolean {
+        if (i !in layers.indices) return true
+        val below = LayerTree.block(layers, i).first - 1
+        return below < 0 || layers[below].parentId != layers[i].parentId
     }
 
     /** The flat index of the top of the sibling unit directly above [i] (its block), or -1. */

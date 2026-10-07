@@ -12,6 +12,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.MaskChangeAction
 import com.brushwork.paint.engine.UndoAction
@@ -19,6 +20,7 @@ import com.brushwork.paint.masks.AdjustmentLayerOps
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskLayerOps
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
@@ -82,9 +84,12 @@ object LayerOps {
 
     fun addAdjustmentLayer(c: EditorController) = guardMemory(c, "New adjustment layer") { AdjustmentLayerOps.createDefault(c) }
 
-    /** An empty raster layer or a shape layer can become a vector layer (checks pixels: call on demand). */
+    /**
+     * An empty raster layer or a shape layer can become a vector layer (checks pixels: call on
+     * demand). Never a folder: its bitmap is the shared `FOLDER_BITMAP`, which is not read.
+     */
     fun canConvertToVector(c: EditorController, layer: Layer): Boolean =
-        !layer.isVectorLayer && !layer.isAdjustmentLayer && (layer.isShapeLayer || c.isEmptyPlainLayer(layer))
+        !layer.isFolder && !layer.isVectorLayer && !layer.isAdjustmentLayer && (layer.isShapeLayer || c.isEmptyPlainLayer(layer))
 
     fun convertToVector(c: EditorController, layer: Layer) {
         commitPendingWork(c)
@@ -151,9 +156,9 @@ object LayerOps {
         // First: committing may insert a layer, which would change the layer below.
         commitPendingWork(c)
         // v1.7 (§4.4): merging a folder down is "Merge folder" (refused, as any merge, when the
-        // folder is locked or hidden, itself or through its folders).
+        // folder or a layer in it is locked, or the folder is hidden).
         if (layer.isFolder) {
-            if (c.checkUsable(layer, allowFolder = true)) guardMemory(c, FolderLabels.MERGE) { c.mergeDown(layer) }
+            mergeFolder(c, layer)
             return
         }
         val idx = c.doc.indexOf(layer)
@@ -182,6 +187,109 @@ object LayerOps {
             if (sameGroup) layer.clipping = true
         }
     }
+
+    // ------------------------------------------------------------------ v1.7: folders (item 8)
+
+    /**
+     * "Merge folder" (the strip's merge button and merge down on a folder): one raster layer at
+     * the folder's place ([EditorController.mergeFolder], one step). The controller merges
+     * without checks; the guards are here, as for merge down: refused (with the v1.6 message, no
+     * step) when the folder is hidden or locked, itself or through its folders, or when a layer
+     * or folder inside it is locked (its content would go). Hidden layers inside are dropped, as
+     * the composite leaves them out (undo brings them back).
+     */
+    fun mergeFolder(c: EditorController, folder: Layer) {
+        if (!folder.isFolder) return
+        commitPendingWork(c)
+        if (!canMergeFolder(c, folder)) return
+        guardMemory(c, FolderLabels.MERGE) { c.mergeFolder(folder) }
+    }
+
+    /** The guards of [mergeFolder], with their message: false when it is refused. */
+    fun canMergeFolder(c: EditorController, folder: Layer): Boolean {
+        if (!folder.isFolder || !c.checkUsable(folder, allowFolder = true)) return false
+        val layers = c.doc.layers
+        val f = c.doc.indexOf(folder)
+        if (f < 0) return false
+        for (i in LayerTree.block(layers, f)) {
+            val l = layers[i]
+            if (i == f || !l.locked) continue
+            c.toast(if (l.isFolder) FolderLabels.locked(l.name) else "Layer \"${l.name}\" is locked")
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Whether "Merge folder" changes the picture of the folder at flat index [index] of [layers]
+     * (bottom first), so the window asks first ("Blending with layers below the folder will
+     * change"). Only a pass-through folder can: it merges as an isolated Normal layer, so what
+     * inside it blended with the layers below the folder now blends with transparency. That is a
+     * shown adjustment layer, or a shown unit with a blend other than Normal (a clip group by its
+     * base's blend), reached through pass-through folders drawn straight onto the canvas (an
+     * isolated folder inside counts by its own blend). Opacity alone never changes it:
+     * o·(C over B) + (1 − o)·B = o·C + (1 − o·αC)·B for Normal content. A clipped pass-through
+     * folder is composited isolated already; a pass-through clip base draws its group with its
+     * stored blend, which the merged layer loses (Normal).
+     */
+    fun mergeChangesPicture(layers: List<Layer>, index: Int): Boolean {
+        val f = layers.getOrNull(index) ?: return false
+        if (f.folder?.passThrough != true || FolderComposite.isClipped(layers, index)) return false
+        if (FolderComposite.isClipBase(layers, index)) return f.blendMode != LayerBlendMode.NORMAL
+        return blendsWithBackdrop(layers, index)
+    }
+
+    private fun blendsWithBackdrop(layers: List<Layer>, folderIndex: Int): Boolean {
+        for (i in LayerTree.children(layers, folderIndex)) {
+            val l = layers[i]
+            // A clipped unit blends inside its group; the group blends with its base's mode.
+            if (!l.visible || l.opacity <= 0f || FolderComposite.isClipped(layers, i)) continue
+            if (l.isAdjustmentLayer) return true
+            if (l.folder?.passThrough == true && !FolderComposite.isClipBase(layers, i)) {
+                if (blendsWithBackdrop(layers, i)) return true
+                continue
+            }
+            if (l.blendMode != LayerBlendMode.NORMAL) return true
+        }
+        return false
+    }
+
+    /** "Layer from folder": the folder's composite as a new layer above it (one step). */
+    fun layerFromFolder(c: EditorController, folder: Layer) {
+        if (!folder.isFolder) return
+        commitPendingWork(c)
+        guardMemory(c, FolderLabels.FROM_FOLDER) { c.layerFromFolder(folder) }
+    }
+
+    /** "Ungroup folder": its children move to its level and the folder goes (one step). */
+    fun ungroupFolder(c: EditorController, folder: Layer) {
+        if (!folder.isFolder) return
+        commitPendingWork(c)
+        c.ungroupFolder(folder)
+    }
+
+    /**
+     * The blend list's pick [mode] for [layer]. On a pass-through folder it also turns pass
+     * through off, as ONE "Blend mode" step (the two actions grouped); else as v1.6.
+     */
+    fun setBlendMode(c: EditorController, layer: Layer, mode: LayerBlendMode) {
+        if (layer.folder?.passThrough != true) {
+            c.setBlendMode(layer, mode)
+            return
+        }
+        c.groupUndo(BLEND_STEP) {
+            c.setFolderPassThrough(layer, false)
+            if (layer.blendMode != mode) c.setBlendMode(layer, mode)
+        }
+    }
+
+    /** The blend list's "Pass through" on a folder (one "Pass through" step; its blend is kept for later). */
+    fun setPassThrough(c: EditorController, folder: Layer) {
+        if (folder.folder?.passThrough == false) c.setFolderPassThrough(folder, true)
+    }
+
+    /** Undo label of a blend change ([EditorController.setBlendMode]'s, v1.5). */
+    const val BLEND_STEP = "Blend mode"
 
     fun flip(c: EditorController, layer: Layer, horizontal: Boolean) =
         guardMemory(c, if (horizontal) "Flip horizontal" else "Flip vertical") { c.flipLayer(layer, horizontal) }
