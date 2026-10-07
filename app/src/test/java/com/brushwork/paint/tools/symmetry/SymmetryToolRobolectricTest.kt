@@ -28,8 +28,9 @@ import org.robolectric.RuntimeEnvironment
  * turns the mirror on and, like the stub, leaves no step, pixel, structure change or pending work
  * (its drags change only the document's symmetry, never undoably); its handles move the centre,
  * turn the axis (snapping to 15°), set the array spacings and reshape the perspective cell (kept
- * convex); a tap moves nothing and a cancelled drag restores the ruler. The guides draw nothing
- * while symmetry is off and the ruler's lines and handles while it is on.
+ * convex); a tap moves nothing and a cancelled drag restores the ruler. The guides show while
+ * symmetry is on under the tools that repeat their strokes (not the fill), with their handles
+ * under the Symmetry tool, and nothing while symmetry is off.
  */
 @RunWith(RobolectricTestRunner::class)
 class SymmetryToolRobolectricTest {
@@ -131,26 +132,32 @@ class SymmetryToolRobolectricTest {
     }
 
     @Test
-    fun theGuidesDrawNothingWhenOffAndTheRulerWhenOn() {
+    fun theGuidesShowWithTheToolsThatRepeatAndTheHandlesWithTheSymmetryTool() {
         val c = controller()
-        val size = c.doc.width to c.doc.height
-        fun drawn(editing: Boolean): Int {
-            val b = Bitmap.createBitmap(size.first, size.second, Bitmap.Config.ARGB_8888)
-            SymmetryGuides.draw(Canvas(b), c.viewTransform, c.doc, editing)
+        fun drawn(tool: ToolId): Int {
+            c.selectTool(tool)
+            val b = Bitmap.createBitmap(c.doc.width, c.doc.height, Bitmap.Config.ARGB_8888)
+            c.drawOverlays(Canvas(b), 0f)
             val px = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
             return px.count { it != 0 }
         }
-        assertEquals("off: nothing, editing or not", 0, drawn(true) + drawn(false))
+        // Off: nothing (picking the Symmetry tool would turn the mirror on).
+        for (tool in listOf(ToolId.BRUSH, ToolId.ERASER, ToolId.FILL)) assertEquals("off: $tool", 0, drawn(tool))
+        val bmp = Bitmap.createBitmap(10, 10, Bitmap.Config.ARGB_8888)
+        SymmetryGuides.drawGuides(Canvas(bmp), c.viewTransform, c.doc)
+        assertTrue(IntArray(100).also { bmp.getPixels(it, 0, 10, 0, 0, 10, 10) }.all { it == 0 })
         for (type in SymmetryType.entries.filter { it != SymmetryType.OFF }) {
             c.updateSymmetry(SymmetrySettings(type, spacingX = 90f, spacingY = 70f))
-            val plain = drawn(false)
-            val editing = drawn(true)
-            assertTrue("$type: guides ($plain)", plain > 100)
-            assertTrue("$type: handles while editing ($editing vs $plain)", editing > plain)
+            val brush = drawn(ToolId.BRUSH)
+            assertTrue("$type: guides with the brush ($brush)", brush > 100)
+            assertEquals("$type: the same with the smudge", brush, drawn(ToolId.SMUDGE))
+            assertEquals("$type: none with the fill (it doesn't repeat)", 0, drawn(ToolId.FILL))
+            val editing = drawn(ToolId.SYMMETRY)
+            assertTrue("$type: handles with the Symmetry tool ($editing vs $brush)", editing > brush)
         }
         // A mirror whose axis is off the canvas draws no line over it.
         c.updateSymmetry(SymmetrySettings(SymmetryType.MIRROR, centerX = -500f, centerY = 100f))
-        assertEquals(0, drawn(false))
+        assertEquals(0, drawn(ToolId.BRUSH))
         assertNull(SymmetryHandles.hit(SymmetrySettings(), 100, 100, 50f, 50f, 1f))
         assertFalse(SymmetryHandles.insideQuad(SymmetrySettings(SymmetryType.PERSPECTIVE_ARRAY), 400, 300, 5f, 5f))
     }

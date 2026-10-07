@@ -21,11 +21,11 @@ import kotlin.math.sin
 
 /**
  * The symmetry rulers' guides and handles (v1.7 item 18, §3.18; area H): thin dashed lines in
- * the theme accent over the canvas while symmetry is on, with the [SymmetryHandles.HANDLE_DP]
- * handles while the Symmetry tool is active ([editing]). The controller's overlay pass calls
- * [draw] right after the ruler (`EditorController.drawOverlays`); there is no global hook (V30).
- * The guides show under every tool while symmetry is on (the overlay call doesn't say which tool
- * is active), as ibisPaint shows its rulers.
+ * the theme accent over the canvas while symmetry is on and a tool that replicates its strokes
+ * is active (brush, eraser, smudge, blur: they call [drawGuides] from their overlay), and with
+ * the [SymmetryHandles.HANDLE_DP] handles while the Symmetry tool is (the controller's overlay
+ * pass calls [draw] right after the ruler, `EditorController.drawOverlays`; there is no global
+ * hook, V30). Other tools (fill, shapes, text, selections…) show no guides: they don't repeat.
  *
  * - Mirror: the axis. Kaleidoscope n: the n mirror axes. Rotation n: the n spokes.
  * - Array: the grid's lines (every k-th one when they would crowd closer than
@@ -65,8 +65,22 @@ object SymmetryGuides {
     private var perspectiveKey: Triple<SymmetrySettings, Int, Int>? = null
     private var perspectiveEdges = FloatArray(0)
 
-    /** Draws `doc.symmetry`'s guides in screen space; [t] maps document -> screen. */
+    /**
+     * The controller's overlay pass (`EditorController.drawOverlays`, every frame): `doc.symmetry`
+     * with its handles while the Symmetry tool is active ([editing]), else nothing. The tools that
+     * replicate their strokes draw the guides themselves ([drawGuides]). [t] maps document -> screen.
+     */
     fun draw(canvas: Canvas, t: ViewTransform, doc: Document, editing: Boolean) {
+        if (editing) render(canvas, t, doc, editing = true)
+    }
+
+    /**
+     * `doc.symmetry`'s guides alone (no handles), as the brush, eraser, smudge and blur draw them
+     * while they replicate their strokes (`BrushTool.drawOverlay`).
+     */
+    fun drawGuides(canvas: Canvas, t: ViewTransform, doc: Document) = render(canvas, t, doc, editing = false)
+
+    private fun render(canvas: Canvas, t: ViewTransform, doc: Document, editing: Boolean) {
         val s = doc.symmetry.sanitized()
         if (s.type == SymmetryType.OFF) return
         t.matrix.getValues(values)

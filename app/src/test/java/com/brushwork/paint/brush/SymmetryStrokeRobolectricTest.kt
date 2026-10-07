@@ -357,5 +357,14 @@ class SymmetryStrokeRobolectricTest {
         c.message = null
         c.draw(line(20f, 210f, 60f, 210f, n = 6))
         assertEquals(null, c.message)
+        // Nor does it show the guides, which the brush shows on the same layer.
+        fun overlay(): Int {
+            val b = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            c.drawOverlays(Canvas(b), 0f)
+            return pixels(b).count { it != 0 }
+        }
+        assertEquals(0, overlay())
+        c.selectTool(ToolId.BRUSH)
+        assertTrue(overlay() > 100)
     }
 }

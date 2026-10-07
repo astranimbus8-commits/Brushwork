@@ -9,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.assist.SymmetryGuides
 import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
@@ -226,9 +227,20 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         StrokeResources.releaseFor(controller)
     }
 
-    /** A recorded stroke's own feedback (e.g. what the vector eraser will remove). */
+    /**
+     * The symmetry guides while this tool replicates its strokes (v1.7 item 18: not for the
+     * clone stamp, nor the vector-layer eraser, which removes whole objects), then a recorded
+     * stroke's own feedback (e.g. what the vector eraser will remove).
+     */
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        if (replicates()) SymmetryGuides.drawGuides(canvas, t, controller.doc)
         stroke?.recorder?.drawOverlay(canvas, t)
+    }
+
+    private fun replicates(): Boolean {
+        if (id !in REPLICATED || coverageSource != null || controller.symmetry.type == SymmetryType.OFF) return false
+        val layer = controller.activeLayer
+        return !(id == ToolId.ERASER && layer.isVectorLayer && controller.editTargetOf(layer) != EditTarget.MASK)
     }
 
     // ------------------------------------------------------------------ strokes
