@@ -371,6 +371,42 @@ class FolderCompositeTest {
         }
     }
 
+    @Test
+    fun drawnAsIsFollowsTheCompositorsGroups() {
+        val doc = Document("f", "f", w, h)
+        val bottom = disc(doc, "bottom", 0xFF102030.toInt(), 10f, 10f, 5f)
+        val child = disc(doc, "child", 0xFF405060.toInt(), 20f, 20f, 5f)
+        val f = wrap(folder(doc, "F"), child)
+        val inG = disc(doc, "in G", 0xFF708090.toInt(), 30f, 30f, 5f)
+        val g = wrap(folder(doc, "G"), inG)
+        doc.layers += listOf(bottom, child, f, inG, g)
+        assertNull(LayerTree.check(doc.layers))
+        val ci = doc.indexOf(child)
+        assertTrue(FolderComposite.drawnAsIs(doc.layers, doc.indexOf(bottom)))
+        assertTrue(FolderComposite.drawnAsIs(doc.layers, ci))
+        for (change in listOf<() -> Unit>({ f.folder = FolderSpec(passThrough = false) }, { f.visible = false }, { f.opacity = 0.99f })) {
+            change()
+            assertFalse(FolderComposite.drawnAsIs(doc.layers, ci))
+            f.folder = FolderSpec(); f.visible = true; f.opacity = 1f
+        }
+        // Clipped onto the layer below: not as is; at the bottom of its level it is a lone base.
+        f.clipping = true
+        assertFalse(FolderComposite.drawnAsIs(doc.layers, ci))
+        bottom.adjustment = AdjustmentSpec(filterId = "adjust.invert")
+        assertTrue("above an adjustment layer a clipping unit is a base", FolderComposite.drawnAsIs(doc.layers, ci))
+        bottom.adjustment = null
+        f.clipping = false
+        // The sibling FOLDER above clips onto it: a clip base. (LayerTree.showsAsIs reads `index + 1`,
+        // G's child, and misses it.)
+        g.clipping = true
+        assertFalse(FolderComposite.drawnAsIs(doc.layers, ci))
+        g.clipping = false
+        assertTrue(FolderComposite.drawnAsIs(doc.layers, ci))
+        // A clipping layer inside G does not make F a clip base.
+        inG.clipping = true
+        assertTrue(FolderComposite.drawnAsIs(doc.layers, ci))
+    }
+
     // ------------------------------------------------------------------ tiles
 
     @Test

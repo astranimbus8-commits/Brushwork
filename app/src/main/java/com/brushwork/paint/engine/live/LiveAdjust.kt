@@ -14,6 +14,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.DisplayTiles
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.model.Layer
 import kotlin.math.hypot
 import kotlin.math.min
@@ -328,13 +329,23 @@ class LiveAdjust(private val c: EditorController) {
 
     private fun canRun(layer: Layer): Boolean =
         policy == Policy.LIVE && fastPreview && layer.isAdjustmentLayer && c.doc.effectiveVisible(layer) && c.doc.indexOf(layer) >= 0 &&
-            // v1.7: the live proxies split the flat stack; a document with folders adjusts at full
-            // resolution until area A makes them tree-aware.
-            !c.doc.hasFolders
+            splitsAsIs(layer)
 
     private fun valid(s: Session): Boolean =
-        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 && !c.doc.hasFolders &&
+        policy == Policy.LIVE && fastPreview && s.tiles === c.tiles && s.layer.isAdjustmentLayer && c.doc.indexOf(s.layer) >= 0 && splitsAsIs(s.layer) &&
             s.tiles.docWidth == c.doc.width && s.tiles.docHeight == c.doc.height
+
+    /**
+     * v1.7 (§3.8 c): the proxies split the flat stack at [layer] (below-cache `[0, k)`, then
+     * `[k, n)`), which draws the same picture only when every folder [layer] is in draws its
+     * children straight onto the canvas (pass-through, visible, 100 %, neither a clip base nor
+     * clipped: [FolderComposite.drawnAsIs], true at the top level). Otherwise the exact mode runs.
+     */
+    private fun splitsAsIs(layer: Layer): Boolean {
+        if (layer.parentId == Layer.ROOT_ID) return true
+        val i = c.doc.indexOf(layer)
+        return i >= 0 && FolderComposite.drawnAsIs(c.doc.layers, i)
+    }
 
     /** Session tiles that are dirty and intersect [visible] (null: anywhere), in index order. */
     private fun pendingTiles(s: Session, visible: Rect?): IntArray {

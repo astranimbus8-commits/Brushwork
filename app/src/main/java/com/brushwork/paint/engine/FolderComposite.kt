@@ -77,6 +77,33 @@ object FolderComposite {
     }
 
     /**
+     * True when every folder the layer at [index] is in draws its children straight onto the
+     * canvas: pass-through, visible, at 100 %, neither a clip base (the sibling unit directly
+     * above it clips) nor clipped (it clips onto the sibling unit below it), exactly as [draw]
+     * decides. True at the top level. Then a layer range may start or end at [index] (a live
+     * adjustment's below-cache), and the composite below the layer is the plain stack below it.
+     *
+     * The compositor's own rule: `LayerTree.showsAsIs` reads the layer at `index + 1` as the
+     * sibling above, which is the bottom child of a sibling FOLDER above, not that folder.
+     */
+    fun drawnAsIs(layers: List<Layer>, index: Int): Boolean {
+        if (index !in layers.indices || layers[index].parentId == Layer.ROOT_ID) return true
+        for (a in LayerTree.ancestors(layers, index)) {
+            val f = layers[a]
+            if (f.folder?.passThrough != true || !f.visible || f.opacity < 1f) return false
+            val pid = f.parentId
+            // Clipped: it clips and the sibling unit below it (whose top sits right below its block) is no adjustment.
+            val below = LayerTree.block(layers, a).first - 1
+            if (f.clipping && below >= 0 && layers[below].parentId == pid && !layers[below].isAdjustmentLayer) return false
+            // A clip base: the top of the sibling unit above it (the first layer above with the same parent) clips.
+            var j = a + 1
+            while (j < layers.size && layers[j].parentId != pid && layers[j].id != pid) j++
+            if (j < layers.size && layers[j].parentId == pid && layers[j].clipping && !layers[j].isAdjustmentLayer) return false
+        }
+        return true
+    }
+
+    /**
      * The composite of [folder]'s children (all levels; the folder's own opacity, blend and eye
      * not applied: its children are composited isolated, onto transparency) as a new
      * document-sized bitmap the caller owns ("Merge folder", "Layer from folder", the folder

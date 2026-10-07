@@ -20,9 +20,11 @@ import com.brushwork.paint.model.Layer
  * What the composite below a live adjustment layer depends on (§3.1 C2), checked every frame
  * against a proxy tile's below-cache: for every layer below its identity, bitmap, mask, content
  * version, visibility, opacity, blend mode, clipping, mask switch and data (an adjustment below
- * changes its spec without a content version until its step is recorded); the split index, the
- * document's color mode and the safe-compositing switch. The proxy scale and tile are fixed per
- * [ProxyTiles] instance. A render override drawing a layer below changes what it draws without
+ * changes its spec without a content version until its step is recorded), and since v1.7 its
+ * folder state (a folder, pass-through) and parent (a move into or out of a folder changes only
+ * `parentId`); the split index, the document's color mode and the safe-compositing switch. The
+ * folders the adjustment layer is in lie above the split: the session runs only while they draw
+ * their children as is (`LiveAdjust`). The proxy scale and tile are fixed per [ProxyTiles] instance. A render override drawing a layer below changes what it draws without
  * changing anything here: the cache is then never trusted ([matches] is false). Main thread.
  */
 internal class BelowKey {
@@ -43,7 +45,7 @@ internal class BelowKey {
             val r = i * REFS
             if (refs[r] !== l || refs[r + 1] !== l.bitmap || refs[r + 2] !== l.mask || refs[r + 3] !== l.adjustment || refs[r + 4] !== l.maskSpec) return false
             val n = i * NUMS
-            if (nums[n] != l.contentVersion || nums[n + 1] != packed(l)) return false
+            if (nums[n] != l.contentVersion || nums[n + 1] != packed(l) || nums[n + 2] != l.parentId) return false
         }
         return true
     }
@@ -60,6 +62,7 @@ internal class BelowKey {
             val n = i * NUMS
             nums[n] = l.contentVersion
             nums[n + 1] = packed(l)
+            nums[n + 2] = l.parentId
         }
         this.split = split
         colorMode = doc.colorMode
@@ -78,12 +81,15 @@ internal class BelowKey {
         if (l.visible) flags = flags or 1L
         if (l.clipping) flags = flags or 2L
         if (l.maskEnabled) flags = flags or 4L
+        // v1.7: a folder's own state (its opacity, blend and eye are packed like a layer's).
+        if (l.isFolder) flags = flags or 8L
+        if (l.folder?.passThrough == true) flags = flags or 16L
         return (java.lang.Float.floatToRawIntBits(l.opacity).toLong() shl 32) or (l.blendMode.ordinal.toLong() shl 8) or flags
     }
 
     companion object {
         private const val REFS = 5
-        private const val NUMS = 2
+        private const val NUMS = 3
 
         /** True when [override] draws a layer of [0, split) (what it draws may change at any time). */
         fun overrideBelow(doc: Document, split: Int, override: LayerRenderOverride?): Boolean {
