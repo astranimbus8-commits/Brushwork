@@ -568,7 +568,7 @@ internal object TextOnPathEngine {
         bounds += len
         // Measured as the letters are drawn, each on its own: no ligature ("fi" would give its
         // whole width to the f and draw the i over the next letter), kerning kept.
-        val measure = Paint(p).apply { fontFeatureSettings = TextRenderer.SCALED_LETTER_FEATURES }
+        val measure = Paint(p).apply { fontFeatureSettings = TextRenderer.scaledFeatures(TextRenderer.usesFontKerning(p)) }
         val adv = FloatArray(bounds.size) { i -> measure.getRunAdvance(line, 0, len, 0, len, false, bounds[i]) }
         val base = p.textSize
         val rect = Rect()

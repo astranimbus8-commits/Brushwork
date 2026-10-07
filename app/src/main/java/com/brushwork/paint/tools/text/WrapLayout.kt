@@ -102,8 +102,17 @@ class WrapText internal constructor(
      * smaller or larger depending on the letters before it.
      */
     internal val scaleKey: Any? = null,
+    /**
+     * v1.7 manual kerning (item 17): the extra advance after each character that [prefix]
+     * includes ([TextKerns.advancesPx]), null when none. A measurement is reused only for the
+     * same kerns ([sameKerns]).
+     */
+    internal val kernPx: FloatArray? = null,
 ) {
     val paragraphCount: Int get() = paragraphs.size / 2
+
+    /** Whether this was measured with exactly the kerns [px] (see [kernPx]). */
+    internal fun sameKerns(px: FloatArray?): Boolean = if (kernPx == null) px == null else px != null && kernPx.contentEquals(px)
 
     /** Advance width of text[a, b). */
     fun width(a: Int, b: Int): Float = (prefix[b] - prefix[a]).toFloat()
@@ -119,8 +128,15 @@ object WrapLayout {
     /** Measures [text] once (advances per paragraph, break opportunities). */
     fun measure(text: String, measurer: WrapMeasurer): WrapText = measure(text, measurer, null)
 
-    /** [measure] of advances scaled for [scaleKey] (v1.6 letter scaling; see [WrapText.scaleKey]). */
-    internal fun measure(text: String, measurer: WrapMeasurer, scaleKey: Any?): WrapText {
+    /**
+     * [measure] of advances scaled for [scaleKey] (v1.6 letter scaling; see [WrapText.scaleKey]).
+     *
+     * v1.7 [kernPx]: extra advance after each character of [text] (manual kerning), added after
+     * the character's own advance, negative values included (a kern may tighten a pair; an
+     * advance itself is never below 0). A kern before a line's end counts in that line's width,
+     * so a line ending in a tightened gap is a little narrower, as in InDesign.
+     */
+    internal fun measure(text: String, measurer: WrapMeasurer, scaleKey: Any?, kernPx: FloatArray? = null): WrapText {
         val n = text.length
         val prefix = DoubleArray(n + 1)
         val paras = ArrayList<Int>()
@@ -139,6 +155,14 @@ object WrapLayout {
                     val a = buf[i]
                     prefix[ps + i + 1] = prefix[ps + i] + if (a.isFinite() && a > 0f) a.toDouble() else 0.0
                 }
+                if (kernPx != null) {
+                    // Every later prefix moves by the kerns before it (one pass, cumulative).
+                    var add = 0.0
+                    for (i in 0 until len) {
+                        add += kernPx[ps + i]
+                        prefix[ps + i + 1] += add
+                    }
+                }
             }
             // The line break itself has no width.
             if (pe < n) prefix[pe + 1] = prefix[pe]
@@ -148,7 +172,7 @@ object WrapLayout {
             if (pe >= n) break
             ps = pe + 1
         }
-        return WrapText(text, prefix, paras.toIntArray(), breaks.toTypedArray(), scaleKey)
+        return WrapText(text, prefix, paras.toIntArray(), breaks.toTypedArray(), scaleKey, kernPx)
     }
 
     /**
