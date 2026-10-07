@@ -19,8 +19,11 @@ import com.brushwork.paint.vector.VStroke
  *
  * - the brush draws exactly as on a raster layer (same live stroke, stabilizer, ruler); on lift
  *   the stroke is kept as a `VStroke` with every point it was fed: the live pixels ARE the cache
- *   (kept with `keepLayerData`), the object is appended as data, ONE undo step;
- * - the eraser removes objects or parts of them ([VectorEraserRecorder]);
+ *   (kept with `keepLayerData`), the object is appended as data, ONE undo step; with symmetry
+ *   (v1.7 item 18) the copies are not objects of their own: the stroke keeps their maps
+ *   (`VStroke.copies`, from [StrokeInfo.copies]);
+ * - the eraser removes objects or parts of them ([VectorEraserRecorder]); symmetry doesn't
+ *   apply to it (BrushTool paints no copies for a recorder that replaces the stroke);
  * - tips that move pixels (watercolor, smudge, blur) are refused, and so is a brush on an
  *   alpha-locked vector layer (its live stroke would be clipped to the painted pixels, which a
  *   replay can't reproduce);
@@ -116,6 +119,9 @@ private class StrokeCapture(private val c: EditorController, private val info: S
             seed = info.seed,
             stylus = info.isStylus,
             points = PackedPoints(xs.copyOf(n), ys.copyOf(n), ps.copyOf(n)),
+            // v1.7 (item 18): a symmetric stroke is ONE object with its copies' maps (replayed
+            // by StrokeRaster into one buffer, like the live stroke painted them).
+            copies = info.copies,
         )
         var ok = false
         c.groupUndo(label) {

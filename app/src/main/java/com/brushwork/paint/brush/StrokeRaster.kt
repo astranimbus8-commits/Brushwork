@@ -6,6 +6,7 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.core.PackedPoints
+import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -55,9 +56,10 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
      * the stroke can then differ from a full render by one level at a few pixels.
      *
      * [copies] (v1.7 item 18, the seam of F1): a vector stroke's symmetry maps (`VStroke.copies`,
-     * row-major 3×3, the identity first). The copy loop that stamps every dab through each map
-     * into the one buffer is H's (`DabMapping`, §3.18); until it lands the stroke is replayed
-     * once, as in v1.6, and an empty list always is.
+     * row-major 3×3, the identity first). Every dab is stamped, then each of its copies through
+     * [DabMapping] in map order, into the ONE buffer, exactly as the live stroke did (so
+     * overlapping copies don't darken each other and the replay equals the live stroke); an empty
+     * list (or the identity alone) replays the v1.6 stroke unchanged.
      */
     fun render(
         canvas: Canvas,
@@ -72,7 +74,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         taperIn: Boolean = true,
         taperOut: Boolean = true,
         cut: Rect? = null,
-        @Suppress("UNUSED_PARAMETER") copies: List<FloatArray> = emptyList(),
+        copies: List<FloatArray> = emptyList(),
     ): Rect {
         val n = points.size
         if (n == 0 || clip.isEmpty) return Rect()
@@ -86,7 +88,13 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         if (!painter.isVisible(style)) return Rect()
         // Cheap reject: nothing the stroke can paint reaches the clip.
         val reach = bounds(p, 1f, points)
-        if (!RectF.intersects(reach, RectF(clip))) return Rect()
+        val mapping = DabMapping.of(copies, stamper)
+        if (mapping == null) {
+            if (!RectF.intersects(reach, RectF(clip))) return Rect()
+        } else {
+            val all = copiesReach(p, reach, copies)
+            if (all != null && !RectF.intersects(all, RectF(clip))) return Rect()
+        }
 
         val dynamics = StrokeDynamics(p, stylus, seed)
         lastLength = collectDabs(dynamics, p, stylus, points, dabs)
@@ -102,6 +110,7 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
         for (dab in dabs) {
             dynamics.resolve(dab, total)
             stamper.measure(p, dab)
+            if (mapping != null) copiesArea(mapping, p, dab, clip, bound, area, tmp)
             if (!dab.hasBounds) continue
             tmp.set(dab.left, dab.top, dab.right, dab.bottom)
             if (Rect.intersects(clip, tmp) && tmp.intersect(bound)) area.union(tmp)
@@ -124,6 +133,15 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
             // Within [area] only where [cut] ends (no dab reaching the clip extends past it otherwise).
             cc.clipRect(area)
             for (dab in dabs) {
+                if (mapping != null) {
+                    // The live stroke's order: the dab, then each of its copies.
+                    if (dab.hasBounds) {
+                        tmp.set(dab.left, dab.top, dab.right, dab.bottom)
+                        if (Rect.intersects(clip, tmp) && Rect.intersects(area, tmp)) stamper.stamp(cc, p, dab)
+                    }
+                    stampCopies(cc, mapping, p, dab, clip, area, tmp)
+                    continue
+                }
                 if (!dab.hasBounds) continue
                 tmp.set(dab.left, dab.top, dab.right, dab.bottom)
                 if (Rect.intersects(clip, tmp) && Rect.intersects(area, tmp)) stamper.stamp(cc, p, dab)
@@ -140,7 +158,8 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
                 // tile ([COMPOSITE_TILE] squares on the buffer's grid, only where dabs landed),
                 // like the live commit, so that layer stays tile-sized however large the stroke.
                 // Unscaled, clipped composites of the same coverage give the same pixels.
-                val tiles = touchedTiles(region, left, top, w, h)
+                // (Copies aren't listed: a symmetric stroke composites every square of its region.)
+                val tiles = if (mapping == null) touchedTiles(region, left, top, w, h) else allTiles(w, h)
                 val cols = (w + COMPOSITE_TILE - 1) / COMPOSITE_TILE
                 val t = Rect()
                 for (i in tiles.indices) {
@@ -174,6 +193,60 @@ class StrokeRaster(private val tips: TipCache = TipCache(8L shl 20)) {
             }
         }
         return hit
+    }
+
+    private fun allTiles(w: Int, h: Int): BooleanArray =
+        BooleanArray(((w + COMPOSITE_TILE - 1) / COMPOSITE_TILE) * ((h + COMPOSITE_TILE - 1) / COMPOSITE_TILE)) { true }
+
+    /** Unions into [area] the parts within [bound] of [dab]'s copies that reach [clip] (as for the dab itself). */
+    private fun copiesArea(m: DabMapping, p: BrushPreset, dab: Dab, clip: Rect, bound: Rect, area: Rect, tmp: Rect) {
+        for (k in 0 until m.copies) {
+            val c = m.place(k, p, dab) ?: continue
+            if (!c.hasBounds) continue
+            tmp.set(c.left, c.top, c.right, c.bottom)
+            if (Rect.intersects(clip, tmp) && tmp.intersect(bound)) area.union(tmp)
+        }
+    }
+
+    /** Stamps [dab]'s copies that reach [clip] and [area], in map order. */
+    private fun stampCopies(canvas: Canvas, m: DabMapping, p: BrushPreset, dab: Dab, clip: Rect, area: Rect, tmp: Rect) {
+        for (k in 0 until m.copies) {
+            val c = m.place(k, p, dab) ?: continue
+            if (!c.hasBounds) continue
+            tmp.set(c.left, c.top, c.right, c.bottom)
+            if (Rect.intersects(clip, tmp) && Rect.intersects(area, tmp)) m.stamp(canvas, k, c)
+        }
+    }
+
+    /**
+     * Everything the copies of a stroke reaching [own] (its own [bounds]) can paint: each map's
+     * image of that box grown by the dab reach × the largest √|det J| at its corners (where a
+     * perspective map's scale peaks). Null when a map takes part of the box over its horizon (no
+     * cheap reject then).
+     */
+    private fun copiesReach(p: BrushPreset, own: RectF, copies: List<FloatArray>): RectF? {
+        if (own.isEmpty) return own
+        val e = reach(p, 1f)
+        val out = RectF()
+        val xs = floatArrayOf(own.left, own.right, own.right, own.left)
+        val ys = floatArrayOf(own.top, own.top, own.bottom, own.bottom)
+        for (m in copies) {
+            var l = Float.POSITIVE_INFINITY; var t = Float.POSITIVE_INFINITY
+            var r = Float.NEGATIVE_INFINITY; var b = Float.NEGATIVE_INFINITY
+            var s = 0f
+            for (i in 0 until 4) {
+                val w = m[6] * xs[i] + m[7] * ys[i] + m[8]
+                if (!(w > 0f)) return null
+                val x = (m[0] * xs[i] + m[1] * ys[i] + m[2]) / w
+                val y = (m[3] * xs[i] + m[4] * ys[i] + m[5]) / w
+                if (!x.isFinite() || !y.isFinite()) return null
+                l = min(l, x); r = max(r, x); t = min(t, y); b = max(b, y)
+                s = max(s, StrokeCopies.scaleAt(m, xs[i], ys[i]))
+            }
+            val g = e * s
+            if (out.isEmpty) out.set(l - g, t - g, r + g, b + g) else out.union(l - g, t - g, r + g, b + g)
+        }
+        return out
     }
 
     /** Everything the stroke can paint (document px). */
