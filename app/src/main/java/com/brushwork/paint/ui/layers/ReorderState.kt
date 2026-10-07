@@ -237,6 +237,35 @@ fun rememberReorderState(
 private const val MAX_FRAME_S = 0.05f
 
 /**
+ * v1.7 (§3.8, ibisPaint's swipes on the reorder handle): what a move of the ≡ handle starts,
+ * from its travel since the touch went down. With swipes on, a horizontal travel of [SWIPE_DP]
+ * before [SWIPE_VERTICAL_DP] of vertical travel is a swipe (right: into the folder above; left:
+ * out of the folder); otherwise a vertical travel of [SWIPE_VERTICAL_DP] (at least the touch
+ * slop) starts the reorder. With swipes off (a document without folders) the handle is v1.6's:
+ * the reorder starts after the touch slop.
+ */
+internal object HandleGesture {
+    enum class Intent { UNDECIDED, REORDER, SWIPE_RIGHT, SWIPE_LEFT }
+
+    /** The horizontal travel of a swipe (dp). */
+    const val SWIPE_DP = 24f
+
+    /** The vertical travel that makes the handle's move a reorder when swipes are on (dp). */
+    const val SWIPE_VERTICAL_DP = 12f
+
+    /**
+     * The intent of a travel of ([dx], [dy]) px; [swipePx] and [verticalPx] are [SWIPE_DP] and
+     * [SWIPE_VERTICAL_DP] in pixels, [slopPx] the touch slop.
+     */
+    fun intent(dx: Float, dy: Float, swipes: Boolean, swipePx: Float, verticalPx: Float, slopPx: Float): Intent {
+        if (!swipes) return if (abs(dy) > slopPx) Intent.REORDER else Intent.UNDECIDED
+        if (abs(dy) >= maxOf(verticalPx, slopPx)) return Intent.REORDER
+        if (abs(dx) >= swipePx) return if (dx > 0f) Intent.SWIPE_RIGHT else Intent.SWIPE_LEFT
+        return Intent.UNDECIDED
+    }
+}
+
+/**
  * Attach to the LazyColumn. Two ways to drag a row:
  * - from its ≡ handle (the rightmost [handleWidth] of the list): at once, after the touch slop;
  * - from anywhere else: long-press, then move (v1.5).
@@ -245,21 +274,32 @@ private const val MAX_FRAME_S = 0.05f
  * opens the layer's ⋮ menu); [onLongPressStart] runs when the long press is recognised (haptics).
  * Every move of a drag is consumed from the first one, so the list's own scrolling and the rows'
  * taps give way.
+ *
+ * v1.7 (§3.8): while [swipes] is true (read when the handle is touched), a horizontal swipe on
+ * the handle is [onSwipe] of that item (right: true) instead of a drag ([HandleGesture]); the
+ * rest of that gesture is consumed.
  */
 fun Modifier.reorderContainer(
     state: ReorderState,
     handleWidth: Dp = 0.dp,
     onLongPressStart: (index: Int) -> Unit = {},
     onLongPress: (index: Int) -> Unit = {},
+    swipes: () -> Boolean = { false },
+    onSwipe: (index: Int, right: Boolean) -> Unit = { _, _ -> },
 ): Modifier = pointerInput(state, handleWidth) {
     val handlePx = handleWidth.toPx()
+    val swipePx = HandleGesture.SWIPE_DP.dp.toPx()
+    val verticalPx = HandleGesture.SWIPE_VERTICAL_DP.dp.toPx()
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false)
         val item = state.itemAt(down.position.y)
         if (item != null && handlePx > 0f && down.position.x >= size.width - handlePx && state.isReorderable(item.index)) {
-            // The ≡ handle: drag at once.
+            // The ≡ handle: drag at once (or, with folders, swipe).
+            val swipeable = swipes()
             var started = false
+            var swiped = false
             var travel = 0f
+            var travelX = 0f
             var commit = false
             try {
                 while (true) {
@@ -267,20 +307,27 @@ fun Modifier.reorderContainer(
                     val change = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (change.changedToUpIgnoreConsumed()) {
                         commit = started
-                        if (started) change.consume()
+                        if (started || swiped) change.consume()
                         break
                     }
-                    if (!started && change.isConsumed) break // the list took it (a fast fling)
-                    val dy = change.positionChange().y
+                    if (!started && !swiped && change.isConsumed) break // the list took it (a fast fling)
+                    val delta = change.positionChange()
                     change.consume()
+                    if (swiped) continue
                     if (started) {
-                        state.drag(dy)
+                        state.drag(delta.y)
                     } else {
-                        travel += dy
-                        if (abs(travel) > viewConfiguration.touchSlop) {
-                            started = state.startAt(item.index)
-                            if (!started) break
-                            state.drag(travel)
+                        travel += delta.y
+                        travelX += delta.x
+                        when (HandleGesture.intent(travelX, travel, swipeable, swipePx, verticalPx, viewConfiguration.touchSlop)) {
+                            HandleGesture.Intent.UNDECIDED -> Unit
+                            HandleGesture.Intent.REORDER -> {
+                                started = state.startAt(item.index)
+                                if (!started) break
+                                state.drag(travel)
+                            }
+                            HandleGesture.Intent.SWIPE_RIGHT -> { swiped = true; onSwipe(item.index, true) }
+                            HandleGesture.Intent.SWIPE_LEFT -> { swiped = true; onSwipe(item.index, false) }
                         }
                     }
                 }

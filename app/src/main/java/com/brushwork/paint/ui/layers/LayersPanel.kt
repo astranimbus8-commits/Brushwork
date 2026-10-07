@@ -439,6 +439,17 @@ private fun LayerList(
             ui.menu.show(mask = false)
         }
     }
+    // v1.7 (§3.8): a swipe on a row's ≡ handle moves it into the folder above (right) or out of
+    // its folder (left); parents only, the flat order and the picture stay (I11). Only documents
+    // with folders swipe, so the v1.6 handle is unchanged otherwise.
+    val swipe by rememberUpdatedState { index: Int, right: Boolean ->
+        rows.getOrNull(index - HEADER_ITEMS)?.layer?.let { layer ->
+            controller.fromPanel {
+                val moved = if (right) controller.putIntoFolderAbove(layer) else controller.takeOutOfFolder(layer)
+                if (moved) haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            }
+        }
+    }
     val rowHeight = metrics.row.dp
     val thumbSize = metrics.thumb.dp
     LazyColumn(
@@ -451,6 +462,8 @@ private fun LayerList(
                 handleWidth = IbisDims.LayerDragHandleWidth,
                 onLongPressStart = { longPressStart(it) },
                 onLongPress = { longPress(it) },
+                swipes = { doc.hasFolders },
+                onSwipe = { index, right -> swipe(index, right) },
             ),
     ) {
         item(key = SELECTION_ROW_KEY) {
