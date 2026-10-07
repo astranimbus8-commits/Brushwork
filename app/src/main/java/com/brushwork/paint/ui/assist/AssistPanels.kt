@@ -65,6 +65,7 @@ import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
+import com.brushwork.paint.ui.symmetry.SymmetryRulerSection
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.abs
 import kotlin.math.pow
@@ -75,6 +76,8 @@ import kotlin.math.roundToInt
 /**
  * Numeric ruler editor: type, snap mode, exact position/size in any unit, nudge arrows.
  * Every edit is applied live through controller.updateRuler (not undoable, like on canvas).
+ * v1.7 (item 18): the five symmetry rulers follow ([SymmetryRulerSection]), as ibisPaint lists
+ * them with the rulers.
  */
 @Composable
 fun RulerPanel(controller: EditorController, onDismiss: () -> Unit) {
@@ -82,6 +85,10 @@ fun RulerPanel(controller: EditorController, onDismiss: () -> Unit) {
         RulerControls(controller, onEditOnCanvas = {
             onDismiss()
             controller.selectTool(ToolId.RULER)
+        })
+        SymmetryRulerSection(controller, onEditOnCanvas = {
+            onDismiss()
+            controller.selectTool(ToolId.SYMMETRY)
         })
     }
 }
