@@ -240,7 +240,10 @@ internal fun SheetHandle() {
     )
 }
 
-/** Standard dialog with confirm/dismiss buttons. */
+/**
+ * Standard dialog with confirm/dismiss buttons. v1.7 (§3.15): [confirmEnabled] false disables
+ * the confirm button (a typed expression with an error).
+ */
 @Composable
 fun BwDialog(
     title: String,
@@ -248,13 +251,14 @@ fun BwDialog(
     confirmText: String = "OK",
     onConfirm: (() -> Unit)? = null,
     dismissText: String = "Cancel",
+    confirmEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), content = content) },
-        confirmButton = { if (onConfirm != null) TextButton(onClick = onConfirm) { Text(confirmText) } },
+        confirmButton = { if (onConfirm != null) TextButton(onClick = onConfirm, enabled = confirmEnabled) { Text(confirmText) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(if (onConfirm == null) "Close" else dismissText) } },
         containerColor = BrushworkColors.ChromeHigh,
     )

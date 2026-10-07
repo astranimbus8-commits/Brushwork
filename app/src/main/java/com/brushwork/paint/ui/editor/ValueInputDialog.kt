@@ -36,6 +36,11 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.ExpressionReadout
+import com.brushwork.paint.ui.common.OperatorKeys
+import com.brushwork.paint.ui.common.OperatorText
+import com.brushwork.paint.ui.common.Readout
+import com.brushwork.paint.ui.common.ReadoutText
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.RepeatIconButton
@@ -58,6 +63,12 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * opacity held as 0..1 shows, and [parse] reads, percents). With [onApplyText] the dialog hands
  * the valid text over as typed (not resolved) instead of calling [onApply]: a field showing
  * "Mixed" applies a relative value to each of its values (`MixedEdit.typed`).
+ *
+ * v1.7 (item 15's UI, area I): the operator keys ([OperatorKeys]) sit under the field, and the
+ * live readout under it shows what the text gives ("= 150 px", the value [parse] reads, in
+ * [suffix]) or the expression's error ("Can't divide by 0"); OK and Done do nothing while there
+ * is an error. [relativeReadout] false shows no value for relative text (only its error): a
+ * dialog whose [onApplyText] applies relative text to several values ("Mixed") can't show one.
  */
 @Composable
 fun ValueInputDialog(
@@ -77,6 +88,7 @@ fun ValueInputDialog(
     incrementKey: String? = null,
     incrementScale: Float = 1f,
     onApplyText: ((String) -> Unit)? = null,
+    relativeReadout: Boolean = onApplyText == null,
 ) {
     fun selectedAll(s: String) = TextFieldValue(s, selection = TextRange(0, s.length))
     // The value relative text applies to: the number shown when the dialog opened.
@@ -115,9 +127,16 @@ fun ValueInputDialog(
         return IncrementStepping.snapSlider(v.toDouble(), incStep, minOf(a, b), maxOf(a, b)).toFloat()
     }
 
+    // The live readout (null: none, as in v1.6, for empty text and plain numbers).
+    val readout = ExpressionReadout.of(field.text, relativeBase.toDouble()) { t -> parseText(t)?.toDouble() }
+        ?.takeUnless { it is Readout.Value && !relativeReadout && Expressions.isRelative(field.text) }
+    val blocked = ExpressionReadout.blocks(readout)
+
     val apply = {
         val v = parseText(field.text)
-        if (v == null) {
+        if (blocked) {
+            // The readout already says why: nothing applies, the dialog stays.
+        } else if (v == null) {
             error = true
         } else {
             val asText = onApplyText
@@ -126,7 +145,7 @@ fun ValueInputDialog(
         }
     }
 
-    BwDialog(title = title, onDismiss = onDismiss, confirmText = "OK", onConfirm = apply) {
+    BwDialog(title = title, onDismiss = onDismiss, confirmText = "OK", onConfirm = apply, confirmEnabled = !blocked) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             RepeatIconButton(Icons.Filled.Remove, "Decrease $label") { setValue(stepped(parseText(field.text) ?: current, false)) }
             OutlinedTextField(
@@ -140,14 +159,29 @@ fun ValueInputDialog(
                 label = { Text(label, maxLines = 1) },
                 suffix = if (suffix.isNotEmpty()) ({ Text(suffix) }) else null,
                 singleLine = true,
-                isError = error,
-                supportingText = { Text(if (error) "Type a number ($rangeText)" else rangeText) },
+                isError = error || blocked,
+                supportingText = {
+                    if (readout != null) {
+                        ReadoutText(ExpressionReadout.text(readout, { format(it.toFloat()) }, suffix), blocked)
+                    } else {
+                        Text(if (error) "Type a number ($rangeText)" else rangeText)
+                    }
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { apply() }),
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
             RepeatIconButton(Icons.Filled.Add, "Increase $label") { setValue(stepped(parseText(field.text) ?: current, true)) }
         }
+        // The keypad has no operators (V17): + − × ÷ ( ) under the field.
+        OperatorKeys(
+            onKey = { key ->
+                field = OperatorText.insert(field, key)
+                error = false
+                parseText(field.text)?.let { current = it }
+            },
+            modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 2.dp),
+        )
         Slider(
             value = toFraction(current).coerceIn(0f, 1f),
             onValueChange = { f -> setValue(fromSlider(f)) },
