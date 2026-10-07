@@ -36,9 +36,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.onClick
-import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -96,11 +93,8 @@ private fun OpButton(op: PathfinderOp, enabled: Boolean, onClick: () -> Unit) {
             .height(56.dp)
             .clip(RoundedCornerShape(8.dp))
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
-            .clearAndSetSemantics {
-                contentDescription = op.description
-                role = Role.Button
-                if (enabled) onClick { onClick(); true } else disabled()
-            }
+            // The short visible name is not announced: the unique description is (I10).
+            .clearAndSetSemantics { contentDescription = op.description }
             .padding(horizontal = 4.dp),
     ) {
         Icon(iconOf(op), contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
