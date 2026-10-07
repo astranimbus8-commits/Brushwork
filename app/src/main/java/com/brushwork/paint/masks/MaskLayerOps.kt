@@ -1,6 +1,7 @@
 package com.brushwork.paint.masks
 
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.mask.MaskTool
@@ -43,8 +44,11 @@ object MaskLayerOps {
     fun prepareFilterThroughMask(c: EditorController, layer: Layer): Boolean {
         if (layer.mask == null) { c.toast("\"${layer.name}\" has no mask"); return false }
         val target = if (layer.isAdjustmentLayer) {
+            // v1.7 (§3.8): no lower than what the effect works on (inside an isolated folder,
+            // the folder's own layers).
+            val layers = c.doc.layers
             val idx = c.doc.indexOf(layer)
-            (idx - 1 downTo 0).map { c.doc.layers[it] }.firstOrNull { !it.isFolder && c.doc.effectiveVisible(it) && !it.isAdjustmentLayer }
+            (idx - 1 downTo FolderComposite.effectStart(layers, idx)).map { layers[it] }.firstOrNull { !it.isFolder && c.doc.effectiveVisible(it) && !it.isAdjustmentLayer }
         } else layer
         if (target == null) { c.toast("There is no layer below to apply a filter to"); return false }
         // Said now, not after the filter was picked (the filter would be refused then, leaving

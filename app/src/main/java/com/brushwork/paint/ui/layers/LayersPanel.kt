@@ -126,6 +126,8 @@ fun LayersPanel(
     val density = LocalDensity.current
     val thumbPx = with(density) { IbisDims.LayerThumb.roundToPx() }.coerceIn(40, 192)
     val thumbs = remember(thumbPx) { LayerThumbnails(thumbPx) }
+    // v1.7 (item 8): the folder rows' composite, rendered after the last change (FolderThumbnailEffect).
+    val folderThumbs = remember { FolderThumbnails() }
     val frames = remember { FrameInfoCache() }
 
     // Local order while a row is being dragged (top first, every layer); null = follow the document.
@@ -144,7 +146,9 @@ fun LayersPanel(
         val ids = doc.layers.mapTo(HashSet()) { it.id }
         thumbs.retain(ids)
         frames.retain(ids)
+        folderThumbs.retain(ids)
     }
+    FolderThumbnailEffect(controller, folderThumbs, rows)
 
     val active = doc.activeLayer
     val activeRow = allRows.firstOrNull { it.layer === active } ?: allRows.first()
@@ -226,6 +230,7 @@ fun LayersPanel(
                     controller = controller,
                     rows = rows,
                     thumbs = thumbs,
+                    folderThumbs = folderThumbs,
                     docAspect = docAspect,
                     dragOrder = dragOrderState,
                     dragged = draggedState,
@@ -408,6 +413,7 @@ private fun LayerList(
     controller: EditorController,
     rows: List<LayerRowModel>,
     thumbs: LayerThumbnails,
+    folderThumbs: FolderThumbnails,
     docAspect: Float,
     dragOrder: MutableState<List<Layer>?>,
     dragged: MutableState<DraggedUnit?>,
@@ -546,6 +552,7 @@ private fun LayerList(
                 height = rowHeight,
                 thumbSize = if (row.depth == 0) thumbSize else metrics.thumbAt(row.depth).dp,
                 indent = LayerTreeRows.indent(row.depth).dp,
+                folderPreview = if (row.isFolder) folderThumbs.image(layer.id) else null,
                 onToggleOpen = { controller.fromPanel { controller.setFolderOpen(layer, !row.folderOpen) } },
                 onSelect = { controller.fromPanel { controller.selectLayer(layer) } },
                 onToggleVisible = { controller.fromPanel { controller.toggleVisibility(layer) } },

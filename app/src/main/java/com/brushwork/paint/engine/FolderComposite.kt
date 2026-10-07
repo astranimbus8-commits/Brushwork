@@ -16,6 +16,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerTree
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 /**
  * v1.7 (item 8, I11, §3.8 c): drawing a document that has folders. [Compositor.drawDocument]
@@ -48,6 +49,13 @@ import kotlin.math.min
  * then draw as pass-through anyway), and so does a pass-through folder below 100 %, as an
  * isolated Normal group: an approximation. So is a pass-through folder below 100 % on a target
  * that is not [CompositeTarget.directWrite] (its bitmap may lag behind the canvas).
+ *
+ * A folder has no content of its own, so a render override whose layer is a folder (a tool
+ * previewing the layer it will add while a folder is active: the Shape tool's and
+ * `VectorRender`'s "as a new layer" previews) draws its content where
+ * `LayerStructure.insertionPoint` puts that layer, Normal at 100 %: as the top child of an open
+ * folder (with the folder's opacity, blend and isolation, as the new layer will be), directly
+ * above a closed one (after its clipping group, when it is a clip base: an approximation).
  */
 object FolderComposite {
     /** The side of a scratch tile, in target px (the adjustment stage's chunk). */
@@ -127,6 +135,24 @@ object FolderComposite {
     }
 
     /**
+     * The lowest flat index whose pixels an adjustment layer at [index] works on (design §3.8:
+     * inside an isolated folder it affects only that folder's content, inside a pass-through
+     * folder everything below, as at the top level): the first index of the block of the nearest
+     * folder it is in that [draw] composites isolated (pass-through off, a clip base or clipped),
+     * else 0. A pass-through folder below 100 % lerps its children over the backdrop, which they
+     * are drawn onto: it does not limit the effect. The adjustment's histogram and the layer
+     * "Apply a filter through this mask…" picks look no lower.
+     */
+    fun effectStart(layers: List<Layer>, index: Int): Int {
+        if (index !in layers.indices) return 0
+        for (a in LayerTree.ancestors(layers, index)) {
+            val f = layers[a]
+            if (f.folder?.passThrough != true || isClipped(layers, a) || isClipBase(layers, a)) return LayerTree.block(layers, a).first
+        }
+        return 0
+    }
+
+    /**
      * The composite of [folder]'s children (all levels; the folder's own opacity, blend and eye
      * not applied: its children are composited isolated, onto transparency) as a new
      * document-sized bitmap the caller owns ("Merge folder", "Layer from folder", the folder
@@ -141,6 +167,33 @@ object FolderComposite {
         val pass = Pass(Compositor(doc) { null }, doc, null, doc.layers.indices)
         val surface = Surface(Canvas(out), CompositeTarget.identity(out), RectF(doc.bounds), direct = true)
         pass.level(surface, folder.id, block.first until f)
+        return out
+    }
+
+    /**
+     * [renderBlock] fitted into [maxSize] × [maxSize] (never upscaled): the folder rows' small
+     * composite. Drawn at about twice the size through a scaled canvas and [CompositeTarget] (no
+     * document-sized bitmap, as `Compositor.renderThumbnail`), then filtered down. [compositor]
+     * is [doc]'s (its scratch pools are reused: call on its drawing thread, the main thread).
+     */
+    fun renderBlockThumbnail(compositor: Compositor, doc: Document, folder: Layer, maxSize: Int): Bitmap {
+        val s = minOf(1f, maxSize.toFloat() / maxOf(1, doc.width, doc.height))
+        val w = maxOf(1, (doc.width * s).roundToInt())
+        val h = maxOf(1, (doc.height * s).roundToInt())
+        val f = doc.indexOf(folder)
+        if (f < 0 || !folder.isFolder) return BitmapUtils.createLayerBitmap(w, h)
+        val s2 = minOf(1f, s * 2f)
+        val w2 = maxOf(1, (doc.width * s2).roundToInt())
+        val h2 = maxOf(1, (doc.height * s2).roundToInt())
+        val mid = BitmapUtils.createLayerBitmap(w2, h2)
+        val toMid = Matrix().apply { setScale(w2.toFloat() / doc.width, h2.toFloat() / doc.height) }
+        val canvas = Canvas(mid).apply { setMatrix(toMid) }
+        val block = LayerTree.block(doc.layers, f)
+        val pass = Pass(compositor, doc, null, doc.layers.indices)
+        pass.level(Surface(canvas, CompositeTarget(mid, toMid), RectF(doc.bounds), direct = true), folder.id, block.first until f)
+        if (w2 == w && h2 == h) return mid
+        val out = Bitmap.createScaledBitmap(mid, w, h, true)
+        if (out !== mid) mid.recycle()
         return out
     }
 
@@ -162,6 +215,12 @@ object FolderComposite {
         private val layers = doc.layers
         private val pool = c.folderScratch
 
+        /** An override on a folder: the new layer's preview (see the class docs), else null. */
+        private val preview: LayerRenderOverride? = override?.takeIf { it !is MultiLayerRenderOverride && it.layer.isFolder }
+
+        /** The flat index of [preview]'s folder (-1 without one); the preview is drawn when it is selected. */
+        private val previewIndex: Int = preview?.let { p -> doc.indexOf(p.layer).takeIf { it in selected } } ?: -1
+
         /**
          * Draws the level whose parent is [parentId] ([Layer.ROOT_ID] = the top level): the units
          * of [range] (the folder's inside, or every index), bottom first, in v1.6 groups.
@@ -181,8 +240,18 @@ object FolderComposite {
                     lo >= selected.first && hi <= selected.last -> group(s, units, i, j)
                     else -> cut(s, units, i, j)
                 }
+                if (previewIndex >= 0 && !layers[previewIndex].folderOpen && (i until j).any { units[it].last == previewIndex }) drawPreview(s)
                 i = j
             }
+            if (previewIndex >= 0 && layers[previewIndex].folderOpen && layers[previewIndex].id == parentId) drawPreview(s)
+        }
+
+        /** [preview]'s content as a Normal layer at 100 % on [s]. */
+        private fun drawPreview(s: Surface) {
+            val p = preview ?: return
+            val save = s.canvas.saveLayer(s.bounds, null)
+            p.drawContent(s.canvas)
+            s.canvas.restoreToCount(save)
         }
 
         /** True when [l] clips to the unit below it (an adjustment layer never does). */

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.filters.FilterSessionMath
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -19,21 +20,32 @@ object AdjustmentHistogram {
      * about 10–30 ms on a phone.
      */
     fun below(c: EditorController, layer: Layer): IntArray? {
+        val layers = c.doc.layers
         val idx = c.doc.indexOf(layer)
         if (idx <= 0) return null
         val tmp = Document("histogram", "histogram", c.doc.width, c.doc.height)
-        for (i in 0 until idx) {
-            val l = c.doc.layers[i]
-            // v1.7 (rule P, site 24): folders are skipped and their layers measured flat (a
-            // child of a hidden folder hidden); inside an isolated folder this approximates
-            // what the effect works on.
-            if (l.isFolder) continue
-            tmp.layers += Layer(-1L - i, l.name, l.bitmap).also { v ->
+        // v1.7 (§3.8, rule P, site 24): what the effect works on. Inside an isolated folder that
+        // is the folder's layers below it, else everything below. The tree is copied, folders
+        // included; a layer whose folder is not copied (a pass-through folder the adjustment is
+        // in, which draws as if it were not there) moves to the top level, unclipped when it was
+        // the bottom of its folder.
+        val start = FolderComposite.effectStart(layers, idx)
+        val views = HashMap<Long, Long>()
+        for (i in start until idx) if (layers[i].isFolder) views[layers[i].id] = viewId(i)
+        for (i in start until idx) {
+            val l = layers[i]
+            tmp.layers += Layer(viewId(i), l.name, l.bitmap).also { v ->
                 v.copyPropsFrom(l.props())
                 v.mask = l.mask
                 v.maskSpec = l.maskSpec
                 v.adjustment = l.adjustment
-                if (l.parentId != Layer.ROOT_ID) v.visible = c.doc.effectiveVisible(l)
+                v.folder = l.folder
+                val parent = views[l.parentId]
+                if (parent != null) {
+                    v.parentId = parent
+                } else if (l.parentId != Layer.ROOT_ID) {
+                    v.clipping = l.clipping && FolderComposite.isClipped(layers, i)
+                }
             }
         }
         if (tmp.layers.isEmpty()) return null
@@ -57,4 +69,7 @@ object AdjustmentHistogram {
             mask?.recycle()
         }
     }
+
+    /** The id of the view of the layer at flat index [i] (negative: never a document id). */
+    private fun viewId(i: Int): Long = -1L - i
 }
