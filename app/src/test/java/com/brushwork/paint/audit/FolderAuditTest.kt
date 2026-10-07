@@ -24,6 +24,7 @@ import com.brushwork.paint.exchange.export.ExportSceneBuilder
 import com.brushwork.paint.exchange.export.PayloadKind
 import com.brushwork.paint.exchange.export.TextSource
 import com.brushwork.paint.filters.FilterRegistry
+import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentHistogram
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.FolderSpec
@@ -486,6 +487,43 @@ class FolderAuditTest {
         for (id in ToolId.entries) {
             audit("tool $id", refused = id in LayerToolRules.FOLDER_REFUSED, tool = id) { c, _ -> c.gesture() }
         }
+    }
+
+    /** Where [add] put its new layer: (flat index, parent's name or "root"). */
+    private fun landing(c: EditorController, add: (EditorController) -> Layer?): Pair<Int, String> {
+        val layer = add(c)
+        assertNotNull(layer)
+        assertFoldersIntact(c, "added ${layer!!.name}")
+        assertSame("the new layer is active", layer, c.activeLayer)
+        val parent = c.doc.layers.firstOrNull { it.id == layer.parentId }?.name ?: "root"
+        return c.doc.indexOf(layer) to parent
+    }
+
+    @Test
+    fun newLayersGoAboveTheActiveRowOrToTheTopOfAnOpenActiveFolder() {
+        // §3.8: bottom first [Background, A, B, F2, F1, Top]; A and F2 in F1, B in F2.
+        val adds = listOf<Pair<String, (EditorController) -> Layer?>>(
+            "layer" to { c -> c.addLayer() },
+            "vector layer" to { c -> c.addVectorLayer() },
+            "adjustment layer" to { c -> c.addAdjustmentLayer(AdjustmentEffects.defaultSpec(drawingColor = red), null) },
+            "paste" to { c -> c.paste() },
+        )
+        for ((what, add) in adds) {
+            fun doc(active: String, open: Boolean = true) = nested().also { c ->
+                c.selectLayer(c.byName("A"))
+                c.setSelection(rectSelection(Rect(5, 5, 50, 40)), label = "Select")
+                assertTrue(c.copySelection())
+                c.byName("F1").folderOpen = open
+                c.selectLayer(c.byName(active))
+            }
+            assertEquals("$what, the open folder F1 active: its top child", 4 to "F1", landing(doc("F1"), add))
+            assertEquals("$what, F1 closed: above it at its level", 5 to "root", landing(doc("F1", open = false), add))
+            assertEquals("$what, A active: above it in its folder", 2 to "F1", landing(doc("A"), add))
+            assertEquals("$what, Top active: above it", 6 to "root", landing(doc("Top"), add))
+        }
+        // "New folder" goes directly above the active row at its level, even an open folder.
+        assertEquals(5 to "root", landing(nested().also { c -> c.selectLayer(c.byName("F1")) }) { c -> c.addFolder() })
+        assertEquals(2 to "F1", landing(nested().also { c -> c.selectLayer(c.byName("A")) }) { c -> c.addFolder() })
     }
 
     @Test
