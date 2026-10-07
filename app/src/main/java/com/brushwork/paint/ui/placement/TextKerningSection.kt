@@ -79,7 +79,7 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
             Text(KerningLabels.KERNING, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(KerningLabelWidth))
             // Mixed: the field is empty (typing sets every gap) and −/+ move each gap by a step.
             // One field call either way, so typing that ends "Mixed" keeps the field focused.
-            if (mixed && active != null) {
+            if (mixed) {
                 RepeatIconButton(Icons.Filled.Remove, "Decrease ${KerningLabels.KERNING}") { kerning.nudgeKerns(active, -KERNING_STEP) }
             }
             NumberField(
@@ -94,7 +94,7 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
                 enabled = active != null,
                 adjust = NumberAdjust.NONE,
             )
-            if (mixed && active != null) {
+            if (mixed) {
                 RepeatIconButton(Icons.Filled.Add, "Increase ${KerningLabels.KERNING}") { kerning.nudgeKerns(active, KERNING_STEP) }
             }
             Text(
@@ -116,8 +116,11 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
 
 /** "Between “A” and “V”": the letters before the first gap of [gaps] and after its last. */
 internal fun gapCaption(text: String, gaps: IntRange): String {
-    val a = text.codePointBefore((gaps.first + 1).coerceIn(1, text.length))
-    val b = text.codePointAt((gaps.last + 1).coerceIn(0, text.length - 1))
+    // Whole surrogate pairs: a selection may start or end with an emoji.
+    val i = (gaps.first + 1).coerceIn(1, text.length)
+    val a = if (i < text.length && Character.isHighSurrogate(text[i - 1]) && Character.isLowSurrogate(text[i])) text.codePointAt(i - 1) else text.codePointBefore(i)
+    val j = (gaps.last + 1).coerceIn(0, text.length - 1)
+    val b = if (j > 0 && Character.isLowSurrogate(text[j]) && Character.isHighSurrogate(text[j - 1])) text.codePointAt(j - 1) else text.codePointAt(j)
     return KerningLabels.between(shown(a), shown(b))
 }
 

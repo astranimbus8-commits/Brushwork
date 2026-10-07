@@ -94,6 +94,16 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
         editingNew = false
     }
 
+    /**
+     * v1.7 (item 10): the story back as [item] (what the editor showed when a history tap's first
+     * finger landed); the editor stays open. Nothing while it is closed.
+     */
+    internal fun restore(item: TextItem) {
+        if (!isOpen || itemState == item) return
+        itemState = item
+        tool.onStoryChanged()
+    }
+
     private fun update(t: (TextItem) -> TextItem) {
         val cur = itemState ?: return
         val next = t(cur)

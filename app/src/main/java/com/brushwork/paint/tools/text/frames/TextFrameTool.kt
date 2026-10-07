@@ -1157,6 +1157,46 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         changed()
     }
 
+    // ------------------------------------------------------------------ v1.7: history taps (item 10)
+
+    /**
+     * What this tool has pending when a history tap's first finger lands (§3.10): the story the
+     * open editor shows (and the frame it was opened from), and a pill move of a frame.
+     */
+    private data class FrameMark(val target: Layer?, val story: TextItem?, val moveLayer: Layer?, val move: TextItem?)
+
+    /** v1.7 (item 10): the open story and the pill move, null while neither is pending. */
+    override fun historyMark(): Any? {
+        val s = if (story.isOpen) story.item else null
+        val move = positionEdit?.second
+        if (s == null && move == null) return null
+        return FrameMark(if (s != null) storyTarget else null, s, if (move != null) positionEditLayer else null, move)
+    }
+
+    /**
+     * v1.7 (item 10): takes back what a history tap's first finger changed here (a slider or
+     * chip of the open story editor, a pill move), so the tap's undo undoes one document step
+     * when nothing else was pending. The story goes back only in the editor session of the mark
+     * (the same frame); a pill move begun after the mark is dropped.
+     */
+    override fun rollbackHistory(mark: Any?) {
+        val m = mark as? FrameMark
+        if (mark != null && m == null) return
+        val s = m?.story
+        if (s != null && story.isOpen && storyTarget === m.target && story.item != s) story.restore(s)
+        val edit = positionEdit ?: return
+        val back = m?.move?.takeIf { m.moveLayer === positionEditLayer }
+        if (back == null) {
+            positionEdit = null
+            positionEditLayer = null
+            preview.clear()
+        } else if (back != edit.second) {
+            positionEdit = edit.first to back
+            requestPreview(0L)
+        }
+        changed()
+    }
+
     // ------------------------------------------------------------------ overlay
 
     private var pulseOn = false
