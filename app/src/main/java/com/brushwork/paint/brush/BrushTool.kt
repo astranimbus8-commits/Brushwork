@@ -23,6 +23,7 @@ import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.common.SymmetryLabels
+import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.log2
@@ -125,6 +126,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             emptyList()
         } else maps
+        // A direct stroke paints each copy with its own painter, whose scratch grows to its
+        // largest dab: refuse up front a stroke whose copies would run out of memory mid-stroke
+        // (drawing it without its copies would break the symmetry the user set).
+        if (kind.isDirect && copies.size > 1 && directCopiesBytes(preset.size, copies, p) > freeMemoryForCopies() / 2) {
+            recorder?.cancel()
+            controller.toast(COPIES_OUT_OF_MEMORY)
+            return null
+        }
         val s = try {
             if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget, recorder, copies)
             else BufferStroke(layer, preset, kind, p, seed, maskTarget, recorder, copies)
@@ -267,6 +276,30 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         if (s.type == SymmetryType.OFF) return emptyList()
         val d = controller.doc
         return SymmetryMaps.transforms(s, d.width, d.height, p.x, p.y)
+    }
+
+    /**
+     * The heap the symmetry copies of a direct stroke may use: half of this (the rest is left to
+     * the undo snapshots and the screen). Tests set a smaller one.
+     */
+    internal var freeMemoryForCopies: () -> Long = {
+        val rt = Runtime.getRuntime()
+        rt.maxMemory() - (rt.totalMemory() - rt.freeMemory())
+    }
+
+    /**
+     * Bytes the copies' painters of a direct stroke with a [size] px brush starting at [p] keep
+     * at most ([DirectPainter]'s pixel, tip, weight, selection and smudge scratch: 20 bytes per
+     * pixel of a copy's dab box, clipped to the document; a copy's dab is scaled as at [p]).
+     */
+    private fun directCopiesBytes(size: Float, maps: List<FloatArray>, p: ToolPoint): Long {
+        val d = controller.doc
+        var total = 0L
+        for (k in 1 until maps.size) {
+            val side = ceil(size * StrokeCopies.scaleAt(maps[k], p.x, p.y)).toLong() + 4L
+            total += DIRECT_BYTES_PER_PX * min(side, d.width.toLong()) * min(side, d.height.toLong())
+        }
+        return total
     }
 
     /** Color the stroke paints with on [layer] (luminance when painting a mask). */
@@ -1099,6 +1132,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     companion object {
         /** The tools whose strokes the symmetry rulers replicate (v1.7 item 18). */
         private val REPLICATED = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR)
+
+        /** Said when a smudge / blur / watercolor stroke's symmetry copies would not fit in memory. */
+        internal const val COPIES_OUT_OF_MEMORY = "Not enough memory for symmetry with a brush this large"
+
+        /** Scratch bytes per pixel of a direct dab's box ([DirectPainter]: px, shape, weight, sel, srcPx). */
+        private const val DIRECT_BYTES_PER_PX = 20L
 
         /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
         private const val COMMIT_TILE = 256
