@@ -21,27 +21,24 @@ object TextKerns {
      * text's cursor after the edit, −1 when unknown) settles where an edit inside a run of equal
      * characters happened: typing "a" at 1 in "aab" gives "aaab", which an insertion at 0, 1 or 2
      * would all give; the cursor (at 2) says it was 1. Without a cursor the common start wins
-     * (an insertion at the end of the run).
+     * (an insertion at the end of the run). A cursor that no smallest edit ends at (a whole
+     * text set at once, which leaves the cursor at its end) is not used.
      */
     fun diff(old: String, new: String, cursor: Int = -1): Edit? {
         if (old == new) return null
         val limit = minOf(old.length, new.length)
-        var suffix = 0
-        while (suffix < limit && old[old.length - 1 - suffix] == new[new.length - 1 - suffix]) suffix++
-        val prefix: Int
-        if (cursor in 0..new.length) {
-            // The edit ends at the cursor at the latest: the common end is what follows it.
-            suffix = minOf(suffix, new.length - cursor)
-            var p = 0
-            while (p < limit - suffix && old[p] == new[p]) p++
-            prefix = p
-        } else {
-            var p = 0
-            while (p < limit && old[p] == new[p]) p++
-            prefix = p
-            suffix = minOf(suffix, limit - prefix)
-        }
-        return Edit(prefix, old.length - suffix - prefix, new.length - suffix - prefix)
+        var common = 0
+        while (common < limit && old[old.length - 1 - common] == new[new.length - 1 - common]) common++
+        var p = 0
+        while (p < limit && old[p] == new[p]) p++
+        val free = Edit(p, old.length - minOf(common, limit - p) - p, new.length - minOf(common, limit - p) - p)
+        if (cursor !in 0..new.length) return free
+        // The edit ends at the cursor at the latest: the common end is what follows it.
+        val suffix = minOf(common, new.length - cursor)
+        var prefix = 0
+        while (prefix < limit - suffix && old[prefix] == new[prefix]) prefix++
+        val atCursor = Edit(prefix, old.length - suffix - prefix, new.length - suffix - prefix)
+        return if (atCursor.removed + atCursor.inserted == free.removed + free.inserted) atCursor else free
     }
 
     /**
@@ -139,6 +136,25 @@ object TextKerns {
         while (i < kerns.size && kerns[i].index < gaps.first) out += kerns[i++]
         if (v != 0) for (g in gaps) out += TextKern(g, v)
         while (i < kerns.size && kerns[i].index <= gaps.last) i++
+        while (i < kerns.size) out += kerns[i++]
+        return TextKern.sanitized(out, length)
+    }
+
+    /**
+     * [kerns] with every gap of [gaps] moved by [delta] (1/1000 em; a gap without a kern starts
+     * at 0, so mixed values keep their differences), each clamped, sanitized against a text of
+     * [length] chars.
+     */
+    fun nudged(kerns: List<TextKern>, gaps: IntRange, delta: Int, length: Int): List<TextKern> {
+        if (gaps.isEmpty() || delta == 0) return kerns
+        val out = ArrayList<TextKern>(kerns.size + gaps.last - gaps.first + 1)
+        var i = 0
+        while (i < kerns.size && kerns[i].index < gaps.first) out += kerns[i++]
+        for (g in gaps) {
+            val old = if (i < kerns.size && kerns[i].index == g) kerns[i++].value else 0
+            val v = (old.toLong() + delta).coerceIn(TextKern.MIN_VALUE.toLong(), TextKern.MAX_VALUE.toLong()).toInt()
+            if (v != 0) out += TextKern(g, v)
+        }
         while (i < kerns.size) out += kerns[i++]
         return TextKern.sanitized(out, length)
     }

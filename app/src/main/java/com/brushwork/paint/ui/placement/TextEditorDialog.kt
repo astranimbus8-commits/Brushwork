@@ -33,11 +33,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderFit
 import com.brushwork.paint.tools.text.PlaceholderKind
@@ -96,6 +100,14 @@ fun TextEditorDialog(host: TextEditorHost) {
     var fontsVersion by remember { mutableIntStateOf(0) }
     val baseTypeface = remember(spec.font, spec.fontId, fontsVersion) { TextRenderer.baseTypeface(spec) }
     val fontMissing = remember(spec.fontId, fontsVersion) { TextRenderer.isFontMissing(spec) }
+    val kerning = host as? KerningEditor
+    var field by remember { mutableStateOf(TextFieldValue(item.text, TextRange(item.text.length))) }
+    // The selection the Kerning row edits: the field's, except that leaving the field (to type a
+    // number into the Kerning field) keeps it. Compose collapses a selection to its end when its
+    // field loses focus; the row keeps the selected gaps, so the typed number sets all of them.
+    var kernAt by remember { mutableStateOf(TextRange(item.text.length)) }
+    val kernBefore = remember { arrayOf(TextRange(item.text.length)) }
+    var textFocused by remember { mutableStateOf(false) }
 
     BwSheet(
         title = if (tool.editingNew) "Add text" else "Edit text",
@@ -107,14 +119,32 @@ fun TextEditorDialog(host: TextEditorHost) {
             TextButton(onClick = { tool.confirmEditor() }) { Text("OK", fontWeight = FontWeight.SemiBold, color = BrushworkColors.Accent) }
         },
     ) {
+        // v1.7: the field keeps its cursor and selection (the Kerning row's gaps); a text changed
+        // elsewhere (placeholder text) is shown with the cursor at its end. Typing goes through
+        // the host's kerning edit when it has one, so kerns follow their letters.
+        val shown = if (field.text == item.text) field else TextFieldValue(item.text, TextRange(item.text.length))
         OutlinedTextField(
-            value = item.text,
-            onValueChange = { tool.setText(it) },
+            value = shown,
+            onValueChange = { v ->
+                if (textFocused || v.text != field.text) {
+                    kernBefore[0] = kernAt
+                    kernAt = v.selection
+                }
+                field = v
+                if (v.text != tool.item?.text) {
+                    if (kerning != null) kerning.setText(v.text, v.selection.end) else tool.setText(v.text)
+                }
+            },
             label = { Text("Text") },
             placeholder = { Text(if (spec.vertical) "縦書き / vertical text" else "Type here") },
             minLines = 3,
             maxLines = 6,
-            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            modifier = Modifier.fillMaxWidth().focusRequester(focus).onFocusChanged { f ->
+                // Losing focus, the field may already have collapsed its selection: undo that here.
+                val before = kernBefore[0]
+                if (textFocused && !f.isFocused && !before.collapsed && kernAt == TextRange(before.max)) kernAt = before
+                textFocused = f.isFocused
+            },
         )
         // Same composition as the field, so the requester is attached when this runs.
         LaunchedEffect(Unit) {
@@ -211,6 +241,8 @@ fun TextEditorDialog(host: TextEditorHost) {
             valueText = Units.formatNumber(spec.letterSpacing.toDouble(), 2) + " em",
             typing = SliderTyping(decimals = 2, suffix = "em"),
         )
+        // v1.7 (item 17): manual kerning of the gap at the cursor, and the font's own kerning.
+        TextKerningSection(tool, if (field.text == item.text) kernAt else TextRange(item.text.length))
         if (!onPath) {
             LabeledSlider(
                 label = if (spec.vertical) "Column spacing" else "Line spacing",

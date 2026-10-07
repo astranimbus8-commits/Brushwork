@@ -22,4 +22,10 @@ interface KerningEditor {
      * [TextKern.MIN_VALUE]..[TextKern.MAX_VALUE]; 0 removes them). Ignored for vertical text.
      */
     fun setKerns(gaps: IntRange, value: Int)
+
+    /**
+     * Moves the kern of every gap of [gaps] by [delta] (1/1000 em; the −/+ buttons of a "Mixed"
+     * selection: their differences stay, [TextKerns.nudged]). Ignored for vertical text.
+     */
+    fun nudgeKerns(gaps: IntRange, delta: Int)
 }

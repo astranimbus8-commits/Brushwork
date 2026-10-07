@@ -240,6 +240,10 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
         it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
+    override fun nudgeKerns(gaps: IntRange, delta: Int) = update {
+        it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
+    }
+
     /** The box look (padding, background, border, rounding); its size stays the frame's. */
     override fun updateBox(transform: (TextBoxSpec) -> TextBoxSpec) = updateSpec { s ->
         val b = transform(s.box)

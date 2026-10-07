@@ -111,6 +111,27 @@ class TextKernTest {
     }
 
     @Test
+    fun aMixedRangeIsNudgedGapByGap() {
+        // −/+ on "Mixed" moves each gap by the step and keeps their differences.
+        val kerns = k(0 to 5, 1 to -50, 3 to 80)
+        assertEquals(k(0 to 5, 1 to -40, 2 to 10, 3 to 90), TextKerns.nudged(kerns, 1..3, 10, 6))
+        // A gap the nudge brings to 0 loses its kern; gaps outside the range keep theirs.
+        assertEquals(k(0 to 5, 2 to -10, 3 to 70), TextKerns.nudged(k(0 to 5, 1 to 10, 3 to 80), 1..3, -10, 6))
+        // Clamped, kept inside the text, and the same list for no nudge.
+        assertEquals(k(1 to TextKern.MAX_VALUE), TextKerns.nudged(k(1 to TextKern.MAX_VALUE - 5), 1..1, 10, 3))
+        assertEquals(k(0 to 10, 1 to 10), TextKerns.nudged(emptyList(), 0..5, 10, 3))
+        assertSame(kerns, TextKerns.nudged(kerns, 1..3, 0, 6))
+    }
+
+    @Test
+    fun aCursorNoSmallestEditEndsAtIsNotUsed() {
+        // The editor's whole text replaced at once (the cursor goes to its end): "x" between A and
+        // V is still the edit, so the kerns of V and E stay with them.
+        assertEquals(TextKerns.Edit(2, 0, 1), TextKerns.diff("WAVE", "WAxVE", cursor = 5))
+        assertEquals(k(1 to -120, 3 to 40), TextKerns.edited(k(1 to -120, 2 to 40), "WAVE", "WAxVE", cursor = 5))
+    }
+
+    @Test
     fun onlyUsableKernsReachTheRenderer() {
         // −200 at a 100 px font is 20 px.
         val px = TextKerns.advancesPx("AV", k(0 to -200), 0, 100f)!!

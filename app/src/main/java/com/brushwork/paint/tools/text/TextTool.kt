@@ -441,6 +441,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         if (it.spec.vertical) it else it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
+    override fun nudgeKerns(gaps: IntRange, delta: Int) = update {
+        if (it.spec.vertical) it else it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
+    }
+
     override fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
 
     // ------------------------------------------------------------------ fonts
