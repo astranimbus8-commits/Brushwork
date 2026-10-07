@@ -227,5 +227,26 @@ class TextPillRobolectricTest {
         tool.rollbackHistory(null)
         tool.rollbackHistory("not a mark")
         assertEquals(before, tool.item)
+
+        // An opened text layer whose first finger moved a slider: the slider's change is taken
+        // back, then the tap's ONE undo undoes one document step (the text tool's untouched open
+        // text is let go, as v1.6's undo does), not the slider's change.
+        tool.commit()
+        val layer = c.doc.layers.single { it.textData != null }
+        val data = layer.textData
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.editLayer(layer))
+        val opened = tool.item!!
+        val tap = c.uiMark()
+        tool.setSizePx(90f)
+        assertTrue(c.restoreUiMark(tap))
+        assertEquals(opened, tool.item)
+        c.undo()
+        c.releaseUiMark(tap)
+        assertEquals("exactly one document step undone", steps - 1, c.undoManager.undoCount)
+        assertEquals("the text's add step went", -1, c.doc.indexOf(layer))
+        assertNull(tool.item)
+        c.redo()
+        assertEquals(data, layer.textData)
     }
 }
