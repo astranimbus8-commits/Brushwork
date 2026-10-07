@@ -33,9 +33,15 @@ object TextExport {
      * v1.6: null (the FIRST check, before anything is laid out) for text with letter scaling
      * on: its letters have their own sizes and places, which a run of one font size can't
      * carry, so exporters use [outlineParts] and the look stays exact.
+     *
+     * v1.7 (item 17): null too, before anything is laid out, for text with a manual kern that
+     * applies to its own characters ([kerned]) and for text with "Font kerning" off
+     * ([TextSpec.fontKerning]): a run of text can carry neither (an SVG viewer or PDF reader would
+     * set the letters with the font's kerning), so they export as outlines.
      */
     fun lines(item: TextItem): List<TextLineRun>? {
         if (item.spec.letterScale.isOn) return null
+        if (!item.spec.fontKerning || kerned(item)) return null
         if (item.spec.vertical || item.path.isActive) return null
         val prep = TextRenderer.prepare(item)
         val block = prep.block ?: return null
@@ -55,6 +61,23 @@ object TextExport {
             out += TextLineRun(text.substring(s, e), TextRenderer.staticLineX(layout, i) + inset, layout.getLineBaseline(i) + inset, paint)
         }
         return out
+    }
+
+    /**
+     * v1.7: whether a manual kern of [item] moves letters of its own characters (the renderer's
+     * rule, [TextKerns.advancesPx]: a frame of a linked story looks at its slice of the story).
+     * Kerns that don't apply (vertical text, a right-to-left paragraph, beside a line break) leave
+     * the text exportable as runs.
+     */
+    fun kerned(item: TextItem): Boolean {
+        if (item.kerns.isEmpty() || item.spec.vertical) return false
+        val th = item.thread
+        val source = if (th.isOn) th.story else item.text
+        val from = if (th.isOn) th.start.coerceIn(0, source.length) else 0
+        val px = TextKerns.advancesPx(source, item.kerns, from, item.spec.sizePx) ?: return false
+        val n = if (th.isOn) (th.end - from).coerceIn(0, px.size) else px.size
+        for (i in 0 until n) if (px[i] != 0f) return true
+        return false
     }
 
     /**
