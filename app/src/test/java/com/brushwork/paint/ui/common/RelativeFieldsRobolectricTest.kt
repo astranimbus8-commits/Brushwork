@@ -14,9 +14,11 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.ValueInputDialog
+import com.brushwork.paint.ui.points.MixedNumberField
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.tools.CoordinatePill
 import org.junit.Assert.assertEquals
@@ -32,7 +34,8 @@ import org.robolectric.shadows.ShadowLog
  * v1.7 (item 15, design §3.15, F4): relative text typed into the shared fields applies to the
  * value the edit started from: "/2" in the X / Y pill's X at 300 gives 150, "*2" in a NumberField
  * thickness at 4 gives 8, "/2" in a ValueInputDialog opened at 60 (an opacity held as 0..1 and
- * shown in percent) gives 30. 392 dp phone; own sandbox, one test.
+ * shown in percent) gives 30; a MixedNumberField resolves against its shared value and hands
+ * "Mixed" relative text over as typed. 392 dp phone; own sandbox, one test.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.common.relativefieldssandbox"])
@@ -50,12 +53,16 @@ class RelativeFieldsRobolectricTest {
         var thickness by mutableDoubleStateOf(4.0)
         var opacity by mutableFloatStateOf(0.6f)
         var dialog by mutableStateOf(false)
+        var typedShared by mutableStateOf<String?>(null)
+        var typedMixed by mutableStateOf<String?>(null)
         activity.setContent {
             BrushworkTheme {
                 CompositionLocalProvider(LocalIncrements provides c.increments) {
                     Column {
                         CoordinatePill(c)
                         NumberField("Thickness", thickness, { thickness = it }, decimals = 1, suffix = "px", min = 0.0, max = 100.0, step = 1.0, adjust = NumberAdjust.NONE)
+                        MixedNumberField("Weight shared", Mixed.Same(120f), "", 0f..500f, "test.weight", {}, { _, _ -> }, {}, { typedShared = it })
+                        MixedNumberField("Weight mixed", Mixed.Spread(20f, 80f), "", 0f..500f, "test.weight", {}, { _, _ -> }, {}, { typedMixed = it })
                         if (dialog) {
                             ValueInputDialog(
                                 title = "Layer opacity",
@@ -101,6 +108,15 @@ class RelativeFieldsRobolectricTest {
         SmokeUi.settle()
         SmokeUi.typeAndDone("Opacity", "/2")
         assertEquals(0.3f, opacity, 1e-6f)
+
+        // MixedNumberField: a shared value resolves relative text against it (the tool gets an
+        // absolute expression that sets all); "Mixed" hands the raw text over (applied to each).
+        SmokeUi.click("Type Weight shared")
+        SmokeUi.typeAndDone("Weight shared", "/2")
+        assertEquals("120/2", typedShared)
+        SmokeUi.click("Type Weight mixed")
+        SmokeUi.typeAndDone("Weight mixed", "*2")
+        assertEquals("*2", typedMixed)
         c.dispose()
     }
 
