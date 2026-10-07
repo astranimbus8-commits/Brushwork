@@ -23,6 +23,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import kotlin.math.roundToInt
 
 /**
  * v1.7 (§3.14, area G): `SavedSelectionOps.mappedForCanvas` keeps the saved selections through a
@@ -208,6 +209,54 @@ class SavedSelectionOpsTest {
         val t = SavedSelectionOps.thumbnail(e, w, h, 20, 15)
         assertEquals(255, t[2 * 20 + 2].toInt() and 0xFF)
         assertEquals(0, t[10 * 20 + 15].toInt())
+    }
+
+    /** The thumbnail read from the whole crop at once (what the streamed one must equal byte for byte). */
+    private fun wholeCropThumbnail(e: SavedSelection, docW: Int, docH: Int, tw: Int, th: Int): ByteArray {
+        val out = ByteArray(tw * th)
+        val b = Rect(e.bounds)
+        if (!b.intersect(0, 0, docW, docH)) return out
+        val src = SavedSelectionOps.rows(e)
+        val sw = e.bounds.width()
+        val sums = LongArray(tw * th)
+        for (y in b.top until b.bottom) {
+            val ty = (y.toLong() * th / docH).toInt().coerceIn(0, th - 1)
+            for (x in b.left until b.right) {
+                val v = src[(y - e.bounds.top) * sw + x - e.bounds.left].toInt() and 0xFF
+                if (v == 0) continue
+                sums[ty * tw + (x.toLong() * tw / docW).toInt().coerceIn(0, tw - 1)] += v.toLong()
+            }
+        }
+        val area = docW.toDouble() / tw * (docH.toDouble() / th)
+        for (i in sums.indices) if (sums[i] != 0L) out[i] = (sums[i] / area).roundToInt().coerceIn(48, 255).toByte()
+        return out
+    }
+
+    /**
+     * A row's thumbnail inflates the crop one row at a time (the rows' thumbnails are drawn in
+     * parallel; a whole 4000 × 5000 crop each would be 20 MB apiece): the same bytes as reading
+     * the whole crop, for an antialiased disc at several thumbnail sizes and for data that ends
+     * half way (the rows it has, the rest unselected), and quickly.
+     */
+    @Test
+    fun thumbnailsReadTheCropRowByRow() {
+        val n = 512
+        val p = Path().apply { addCircle(260f, 250f, 230f, Path.Direction.CW) }
+        val e = SavedSelection.of(1L, "Selection 1", Selection.fromPath(p, n, n, antiAlias = true), 1L)!!
+        for ((tw, th) in listOf(48 to 48, 37 to 61, 192 to 120)) {
+            assertArrayEquals("$tw × $th", wholeCropThumbnail(e, n, n, tw, th), SavedSelectionOps.thumbnail(e, n, n, tw, th))
+        }
+        val cut = SavedSelection(e.id, e.name, Rect(e.bounds), e.packed.copyOf(e.packed.size / 2), e.revision)
+        val half = SavedSelectionOps.thumbnail(cut, n, n, 48, 48)
+        assertArrayEquals("data that ends early", wholeCropThumbnail(cut, n, n, 48, 48), half)
+        assertTrue("the rows it has", half.take(48 * 12).any { it.toInt() != 0 })
+        assertTrue("the rest unselected", half.drop(48 * 40).all { it.toInt() == 0 })
+        // A 512 × 512 entry's thumbnail, warmed up.
+        SavedSelectionOps.thumbnail(e, n, n, 48, 48)
+        val t0 = System.nanoTime()
+        SavedSelectionOps.thumbnail(e, n, n, 48, 48)
+        val ms = (System.nanoTime() - t0) / 1e6
+        assertTrue("thumbnail of a 512 × 512 entry took $ms ms", ms <= PerfBudget.ms(60.0))
     }
 
     /** A 512 × 512 document's full-canvas saved selection flips well within the operation's time. */

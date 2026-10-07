@@ -35,6 +35,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -102,12 +103,16 @@ fun SavedSelectionRows(controller: EditorController) {
     var renaming by remember { mutableStateOf<SavedSelection?>(null) }
     Column(Modifier.fillMaxWidth()) {
         for (e in list.asReversed()) {
-            SavedSelectionRow(
-                controller = c,
-                entry = e,
-                hasSelection = hasSelection,
-                onRename = { renaming = e },
-            )
+            // Keyed by id: a new entry (on top) or a deleted one doesn't shift the other rows'
+            // state, so their thumbnails are not drawn again and an open menu stays on its row.
+            key(e.id) {
+                SavedSelectionRow(
+                    controller = c,
+                    entry = e,
+                    hasSelection = hasSelection,
+                    onRename = { renaming = e },
+                )
+            }
         }
     }
     renaming?.let { e ->

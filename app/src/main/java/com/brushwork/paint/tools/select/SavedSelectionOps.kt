@@ -248,26 +248,67 @@ object SavedSelectionOps {
     }
 
     /**
+     * Inflates [e]'s crop one row at a time into [row] (its width) and hands each row's index
+     * (0 = the top) to [onRow]; reuses [row]. Data that ends early (or is damaged) stops after the
+     * row it ends in, the rest of that row unselected, as [rows] reads it (the rows after it are
+     * unselected and not handed over).
+     */
+    private inline fun eachRow(e: SavedSelection, row: ByteArray, onRow: (Int) -> Unit) {
+        val h = e.bounds.height()
+        if (row.isEmpty() || h <= 0) return
+        val inflater = Inflater()
+        try {
+            inflater.setInput(e.packed)
+            for (r in 0 until h) {
+                var off = 0
+                var ended = false
+                try {
+                    while (off < row.size) {
+                        if (inflater.finished()) { ended = true; break }
+                        val k = inflater.inflate(row, off, row.size - off)
+                        if (k == 0 && (inflater.needsInput() || inflater.needsDictionary())) { ended = true; break }
+                        off += k
+                    }
+                } catch (x: DataFormatException) {
+                    ended = true
+                }
+                if (ended) {
+                    if (off > 0) { row.fill(0, off, row.size); onRow(r) }
+                    return
+                }
+                onRow(r)
+            }
+        } finally {
+            inflater.end()
+        }
+    }
+
+    /**
      * A [tw] × [th] coverage thumbnail of [e] on a [docW] × [docH] document (each thumbnail pixel
-     * the mean coverage of the document px it covers), for the layer window's rows. Only the
-     * entry's crop is read. Runs on a worker.
+     * the mean coverage of the document px it covers), for the layer window's rows. Runs on a
+     * worker, one per row shown, so it never holds the crop: it inflates one crop row at a time
+     * into a single row buffer (a full-canvas entry of a 4000 × 5000 document would otherwise be
+     * 20 MB per thumbnail).
      */
     fun thumbnail(e: SavedSelection, docW: Int, docH: Int, tw: Int, th: Int): ByteArray {
         val out = ByteArray(max(0, tw) * max(0, th))
         if (tw <= 0 || th <= 0 || docW <= 0 || docH <= 0) return out
-        val b = Rect(e.bounds)
-        val src = rows(e)
-        val sw = e.bounds.width()
-        if (!b.intersect(0, 0, docW, docH)) return out
+        val eb = e.bounds
+        val b = Rect(eb)
+        if (eb.width() <= 0 || eb.height() <= 0 || !b.intersect(0, 0, docW, docH)) return out
         val sums = LongArray(tw * th)
-        for (y in b.top until b.bottom) {
-            val ty = (y.toLong() * th / docH).toInt().coerceIn(0, th - 1)
-            val srcRow = (y - e.bounds.top) * sw - e.bounds.left
-            for (x in b.left until b.right) {
-                val v = src[srcRow + x].toInt() and 0xFF
-                if (v == 0) continue
-                val tx = (x.toLong() * tw / docW).toInt().coerceIn(0, tw - 1)
-                sums[ty * tw + tx] += v.toLong()
+        // The thumbnail column of each document column inside the bounds.
+        val txOf = IntArray(b.width()) { ((b.left + it).toLong() * tw / docW).toInt().coerceIn(0, tw - 1) }
+        val skip = b.left - eb.left
+        val row = ByteArray(eb.width())
+        eachRow(e, row) { r ->
+            val y = eb.top + r
+            if (y >= b.top && y < b.bottom) {
+                val base = (y.toLong() * th / docH).toInt().coerceIn(0, th - 1) * tw
+                for (i in txOf.indices) {
+                    val v = row[skip + i].toInt() and 0xFF
+                    if (v != 0) sums[base + txOf[i]] += v.toLong()
+                }
             }
         }
         // Document px per thumbnail cell (the cells' areas differ by at most one row or column).
