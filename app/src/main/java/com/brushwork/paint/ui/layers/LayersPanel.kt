@@ -123,12 +123,18 @@ fun LayersPanel(
     val thumbs = remember(thumbPx) { LayerThumbnails(thumbPx) }
     val frames = remember { FrameInfoCache() }
 
-    // Local order while a row is being dragged (top first); null = follow the document.
+    // Local order while a row is being dragged (top first, every layer); null = follow the document.
     val dragOrderState = remember { mutableStateOf<List<Layer>?>(null) }
     val dragOrder = dragOrderState.value
-    val rows = remember(layersVersion, editCount, dragOrder) {
-        LayerRowModel.build(doc, dragOrder ?: doc.layers.asReversed().toList(), frames)
+    // v1.7: the unit being dragged (a folder hides its rows and moves with its whole block).
+    val draggedState = remember { mutableStateOf<DraggedUnit?>(null) }
+    val dragged = draggedState.value
+    // Every layer's row (the active layer's controls never fall back to another row when its
+    // folder is closed); the list shows the listed ones.
+    val allRows = remember(layersVersion, editCount, dragOrder, dragged) {
+        LayerRowModel.build(doc, dragOrder ?: doc.layers.asReversed().toList(), frames, dragged?.id)
     }
+    val rows = remember(allRows) { allRows.filter { it.shownInList } }
     SideEffect {
         val ids = doc.layers.mapTo(HashSet()) { it.id }
         thumbs.retain(ids)
@@ -136,7 +142,7 @@ fun LayersPanel(
     }
 
     val active = doc.activeLayer
-    val activeRow = rows.firstOrNull { it.layer === active } ?: rows.first()
+    val activeRow = allRows.firstOrNull { it.layer === active } ?: allRows.first()
     val activeDocIndex = doc.indexOf(active)
     val layerCount = doc.layers.size
     val canAddLayer = controller.canAddLayer
@@ -199,6 +205,7 @@ fun LayersPanel(
                     thumbs = thumbs,
                     docAspect = docAspect,
                     dragOrder = dragOrderState,
+                    dragged = draggedState,
                     selection = selection,
                     metrics = m,
                     ui = ui,
@@ -339,9 +346,15 @@ private fun WindowHeader(layerCount: Int, maxLayers: Int, canAddLayer: Boolean, 
 
 /**
  * The bottom-aligned list: the Selection Layer row (item 0) and the saved selections (item 1, one
- * item for all of them; [HEADER_ITEMS]), then the layer rows top first; the
- * filler above few rows is [IbisColors.PanelOpaque]. Rows drag from their ≡ handle at once, or
- * after a long press anywhere else; a long press released in place opens the layer's ⋮ menu.
+ * item for all of them; [HEADER_ITEMS]), then the listed layer rows top first ([rows]: v1.7, the
+ * rows inside closed folders are not listed); the filler above few rows is
+ * [IbisColors.PanelOpaque]. Rows drag from their ≡ handle at once, or after a long press anywhere
+ * else; a long press released in place opens the layer's ⋮ menu.
+ *
+ * v1.7 (§3.8): a dragged folder hides its rows and moves with its whole block; the dropped unit
+ * takes the folder of the row above the gap, or becomes the top child of an open folder there
+ * (`EditorController.moveBlock`, which refuses a drop nested too deep with "Folders can be nested
+ * 8 deep": the rows then snap back).
  */
 @Composable
 private fun LayerList(
@@ -350,6 +363,7 @@ private fun LayerList(
     thumbs: LayerThumbnails,
     docAspect: Float,
     dragOrder: MutableState<List<Layer>?>,
+    dragged: MutableState<DraggedUnit?>,
     selection: Selection?,
     metrics: LayerWindowMetrics,
     ui: LayerWindowUi,
@@ -367,24 +381,40 @@ private fun LayerList(
     val reorder = rememberReorderState(
         listState = listState,
         canDrag = { doc.layers.size > 1 },
-        onStart = {
+        onStart = { index ->
             controller.endCanvasGesture()
             dragOrder.value = doc.layers.asReversed().toList()
+            dragged.value = rows.getOrNull(index - HEADER_ITEMS)?.layer?.let { DraggedUnit.of(doc.layers, it) }
         },
         // Read/write the state directly: several moves can arrive between recompositions.
-        onMove = { from, to -> dragOrder.value?.let { dragOrder.value = LayerListMath.moved(it, from - HEADER_ITEMS, to - HEADER_ITEMS) } },
+        onMove = { from, to ->
+            val order = dragOrder.value
+            val unit = dragged.value
+            if (order != null) {
+                dragOrder.value = if (unit == null || !doc.hasFolders) {
+                    LayerListMath.moved(order, from - HEADER_ITEMS, to - HEADER_ITEMS)
+                } else {
+                    val tree = LayerTreeRows.Tree(doc.layers, unit.id)
+                    LayerTreeRows.movedBlock(order, tree::shown, unit.id, unit.size, from - HEADER_ITEMS, to - HEADER_ITEMS)
+                }
+            }
+        },
         onDrop = { index ->
             val order = dragOrder.value
+            val unit = dragged.value
             dragOrder.value = null
-            val at = index - HEADER_ITEMS
-            if (at >= 0 && order != null && at < order.size) {
-                val layer = order[at]
+            dragged.value = null
+            val layer = unit?.let { u -> order?.firstOrNull { it.id == u.id } }
+            if (index >= HEADER_ITEMS && order != null && layer != null) {
                 // moveLayer makes the moved layer active without the tool lifecycle; selecting it
                 // first lets the current tool commit/re-target (which may itself add a layer).
                 controller.fromPanel { controller.selectLayer(layer) }
                 if (order.size == doc.layers.size) {
-                    val target = LayerListMath.displayToDoc(at, order.size)
-                    if (doc.indexOf(layer) != target) controller.moveLayer(layer, target)
+                    // The flat index of the unit's top (v1.6: the dragged row's display index mirrored).
+                    val target = LayerTreeRows.flatIndexIn(order, layer)
+                    if (target >= 0 && doc.indexOf(layer) != target) {
+                        if (doc.hasFolders) controller.moveBlock(layer, target, null) else controller.moveLayer(layer, target)
+                    }
                 }
             }
         },
@@ -454,7 +484,9 @@ private fun LayerList(
                 docAspect = docAspect,
                 dragging = dragging,
                 height = rowHeight,
-                thumbSize = thumbSize,
+                thumbSize = if (row.depth == 0) thumbSize else metrics.thumbAt(row.depth).dp,
+                indent = LayerTreeRows.indent(row.depth).dp,
+                onToggleOpen = { controller.fromPanel { controller.setFolderOpen(layer, !row.folderOpen) } },
                 onSelect = { controller.fromPanel { controller.selectLayer(layer) } },
                 onToggleVisible = { controller.fromPanel { controller.toggleVisibility(layer) } },
                 onMaskSquare = {

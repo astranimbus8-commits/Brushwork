@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.defaultMinSize
@@ -27,6 +28,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Contrast
+import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
@@ -84,10 +87,13 @@ import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
+import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -132,6 +138,26 @@ internal data class LayerRowModel(
     val hasArray: Boolean = false,
     /** v1.7: the array is in "Edit source pixels" mode (the badge reads "Array: editing source"). */
     val arrayEditingSource: Boolean = false,
+    /** v1.7 (item 8): the number of folders the layer is in (0 = top level); the row's indent. */
+    val depth: Int = 0,
+    /** v1.7: the row is a folder (its thumbnail opens and closes it). */
+    val isFolder: Boolean = false,
+    /** v1.7: a folder whose rows are listed. */
+    val folderOpen: Boolean = false,
+    /** v1.7: a folder in "Pass through" (the row's blend reads "Pass through"). */
+    val passThrough: Boolean = false,
+    /** v1.7: the layers inside the folder, all levels (0 for a layer). */
+    val descendants: Int = 0,
+    /** v1.7: a folder above the layer is hidden (a dimmed row and eye). */
+    val hiddenByFolder: Boolean = false,
+    /** v1.7: a folder above the layer is locked (a dimmed lock on the number line). */
+    val lockedByFolder: Boolean = false,
+    /**
+     * v1.7: the row is listed (no closed folder above it, not inside the folder being dragged).
+     * Models are built for every layer so the active layer's controls never fall back to another
+     * row when its folder is closed; the list shows only these.
+     */
+    val shownInList: Boolean = true,
 ) {
     /** An editable text layer (its text can be edited again with the text tool). */
     val isText: Boolean get() = kind == LayerKindBadge.TEXT
@@ -148,19 +174,39 @@ internal data class LayerRowModel(
     /** An adjustment layer (its effect applies to the layers below). */
     val isAdjustment: Boolean get() = kind == LayerKindBadge.ADJUSTMENT
 
+    /** The blend the row shows: "Pass through" for a pass-through folder (v1.7), else the mode's label. */
+    val blendLabel: String get() = if (passThrough) FolderLabels.PASS_THROUGH else blendMode.label
+
     companion object {
         /** Rows for [topFirst] (display order). Decodes text data afresh (see the cached overload). */
         fun build(doc: Document, topFirst: List<Layer>): List<LayerRowModel> = build(doc, topFirst, FrameInfoCache())
 
-        /** Rows for [topFirst] (display order); [frames] keeps the decoded threads of text layers. */
-        fun build(doc: Document, topFirst: List<Layer>, frames: FrameInfoCache): List<LayerRowModel> {
+        /**
+         * Rows for [topFirst] (display order, every layer); [frames] keeps the decoded threads of
+         * text layers. v1.7: with folders, each row gets its level, the inherited eye and lock,
+         * whether it is listed (see [shownInList]; [draggedId]: the folder being dragged, whose
+         * rows hide) and its clip mark per level, read from the document's own order (the drag's
+         * local order only reorders the rows). Without folders the rows are v1.6's, clip marks
+         * following the local order.
+         */
+        fun build(doc: Document, topFirst: List<Layer>, frames: FrameInfoCache, draggedId: Long? = null): List<LayerRowModel> {
             val docOrder = topFirst.asReversed()
-            val clips = LayerListMath.clipStructureForDisplay(docOrder.map { it.clipping })
+            val folders = doc.hasFolders
+            val layers = doc.layers
+            val clips = if (folders) {
+                val flat = java.util.IdentityHashMap<Layer, Int>(layers.size * 2)
+                layers.forEachIndexed { i, l -> flat[l] = i }
+                topFirst.map { l -> flat[l]?.let { LayerTreeRows.clipInfo(layers, it) } ?: ClipInfo.NONE }
+            } else {
+                LayerListMath.clipStructureForDisplay(docOrder.map { it.clipping })
+            }
+            val tree = if (folders) LayerTreeRows.Tree(layers, draggedId) else null
             val badges = frames.badges(topFirst)
             val active = doc.activeLayer
             return topFirst.mapIndexed { i, l ->
                 val clip = clips[i]
                 val adjustment = l.adjustment
+                val base = if (!clip.clipped) null else if (folders) layers.getOrNull(clip.baseIndex) else docOrder.getOrNull(clip.baseIndex)
                 LayerRowModel(
                     layer = l,
                     name = l.name,
@@ -176,7 +222,7 @@ internal data class LayerRowModel(
                     contentVersion = l.contentVersion,
                     active = l === active,
                     clip = clip,
-                    baseHidden = clip.clipped && !docOrder[clip.baseIndex].visible,
+                    baseHidden = base != null && !base.visible,
                     kind = when {
                         l.isAdjustmentLayer -> LayerKindBadge.ADJUSTMENT
                         l.isVectorLayer -> LayerKindBadge.VECTOR
@@ -190,6 +236,14 @@ internal data class LayerRowModel(
                     effectName = adjustment?.let { AdjustmentEffects.displayName(it) },
                     hasArray = l.array != null,
                     arrayEditingSource = l.array?.spec?.editingSource == true,
+                    depth = tree?.depth(l) ?: 0,
+                    isFolder = l.isFolder,
+                    folderOpen = l.isFolder && l.folderOpen,
+                    passThrough = l.folder?.passThrough == true,
+                    descendants = if (l.isFolder) LayerTree.descendantCount(layers, doc.indexOf(l)) else 0,
+                    hiddenByFolder = tree?.hiddenByFolder(l) == true,
+                    lockedByFolder = tree?.lockedByFolder(l) == true,
+                    shownInList = tree?.shown(l) ?: true,
                 )
             }
         }
@@ -215,6 +269,13 @@ private val SELECTION_PINK = Color(0xFFF4BFCB)
  * A tap selects at once; a second tap within the double-tap time runs [onEdit] (text, story,
  * shape, objects, adjustment). The list turns a long press into the layer's ⋮ menu, or into a
  * reorder drag when the finger then moves.
+ *
+ * v1.7 (item 8, §3.8): a row inside folders is indented [indent] (12 dp a level, at most 48; a
+ * deeper row draws a thin guide line). A folder row ([V17Tags.folderRow]) shows the folder glyph
+ * with [folderPreview] (its composite) inside; a tap on it opens or closes the folder
+ * ([onToggleOpen]: "Open Folder 1" / "Close Folder 1"). A row inside a hidden folder is dimmed
+ * with a dimmed eye; one inside a locked folder shows a dimmed lock. A clipping row without a
+ * base in its folder shows a greyed clip mark.
  */
 @Composable
 internal fun LayerRow(
@@ -230,9 +291,12 @@ internal fun LayerRow(
     onMove: (up: Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onEdit: (() -> Unit)? = null,
+    indent: Dp = 0.dp,
+    folderPreview: ImageBitmap? = null,
+    onToggleOpen: () -> Unit = {},
 ) {
     val n = row.number
-    val dim = if (!row.visible || row.baseHidden) 0.45f else 1f
+    val dim = if (!row.visible || row.baseHidden || row.hiddenByFolder) 0.45f else 1f
     // A tap selects at once (selecting again is harmless); a second tap within the double-tap
     // time edits (combinedClickable would hold every single tap back).
     val doubleTapMs = LocalViewConfiguration.current.doubleTapTimeoutMillis
@@ -263,21 +327,65 @@ internal fun LayerRow(
             .then(click),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val gutter = if (row.clip.clipped) IbisDims.LayerClipGutter else PLAIN_GUTTER
+        if (indent > 0.dp) IndentGuide(row.depth, Modifier.width(indent).fillMaxHeight())
+        // The row's own parts (a folder row's carry its tag; the row keeps LayerWindowTags.row).
+        Row(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .then(if (row.isFolder) Modifier.testTag(V17Tags.folderRow(row.layer.id)) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RowParts(row, thumbs, docAspect, height, thumbSize, dim, onToggleVisible, onMaskSquare, onMove, folderPreview, onToggleOpen)
+        }
+    }
+}
+
+/** Everything right of the indent: see [LayerRow]. */
+@Composable
+private fun RowScope.RowParts(
+    row: LayerRowModel,
+    thumbs: LayerThumbnails,
+    docAspect: Float,
+    height: Dp,
+    thumbSize: Dp,
+    dim: Float,
+    onToggleVisible: () -> Unit,
+    onMaskSquare: () -> Unit,
+    onMove: (up: Boolean) -> Unit,
+    folderPreview: ImageBitmap?,
+    onToggleOpen: () -> Unit,
+) {
+    val n = row.number
+    run {
+        val marked = row.clip.clipped || row.clip.noBase
+        val gutter = if (marked) IbisDims.LayerClipGutter else PLAIN_GUTTER
         Box(Modifier.width(gutter).fillMaxHeight()) {
-            if (row.clip.clipped) ClipBracket(row.clip, Modifier.fillMaxSize())
+            if (marked) ClipBracket(row.clip, Modifier.fillMaxSize())
         }
         Box(Modifier.alpha(dim)) {
-            RowThumbnail(
-                image = thumbs.content(row.layer),
-                aspect = docAspect,
-                size = thumbSize,
-                selected = row.active && !row.editingMask,
-                overlayText = row.effectName,
-                modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
-            ) {
-                KindBadge(row)
-                if (row.hasArray) ArrayBadge(row)
+            if (row.isFolder) {
+                FolderThumbnail(
+                    row = row,
+                    preview = folderPreview,
+                    aspect = docAspect,
+                    size = thumbSize,
+                    selected = row.active,
+                    onToggle = onToggleOpen,
+                    modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
+                )
+            } else {
+                RowThumbnail(
+                    image = thumbs.content(row.layer),
+                    aspect = docAspect,
+                    size = thumbSize,
+                    selected = row.active && !row.editingMask,
+                    overlayText = row.effectName,
+                    modifier = Modifier.testTag(LayerWindowTags.thumb(row.layer.id)),
+                ) {
+                    KindBadge(row)
+                    if (row.hasArray) ArrayBadge(row)
+                }
             }
         }
         // A masked row in an 80 dp row stacks its eye over its mask square (one 40 dp column):
@@ -333,18 +441,28 @@ internal fun LayerRow(
     }
 }
 
-/** The eye (Ø 28 in a 40 dp target): "Hide layer N" / "Show layer N". */
+/**
+ * The eye (Ø 28 in a 40 dp target): "Hide layer N" / "Show layer N". v1.7: an open eye inside a
+ * hidden folder is dimmed (the layer is hidden through the folder; its own eye still toggles).
+ */
 @Composable
 private fun EyeButton(row: LayerRowModel, n: Int, onToggleVisible: () -> Unit) {
     IconButton(onClick = onToggleVisible, modifier = Modifier.size(IbisDims.LayerEyeTouch)) {
         Icon(
             if (row.visible) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
             contentDescription = if (row.visible) LayerLabels.hide(n) else LayerLabels.show(n),
-            tint = if (row.visible) EYE_TINT else THUMB_EDGE,
+            tint = when {
+                !row.visible -> THUMB_EDGE
+                row.hiddenByFolder -> EYE_TINT.copy(alpha = INHERITED_ALPHA)
+                else -> EYE_TINT
+            },
             modifier = Modifier.size(IbisDims.LayerEye - 2.dp),
         )
     }
 }
+
+/** The alpha of an eye or lock a layer inherits from its folder (v1.7). */
+private const val INHERITED_ALPHA = 0.4f
 
 /**
  * "100%" over "Normal", at ibisPaint's size ([IbisDims.LayerRowValueText]) where they fit, one
@@ -357,8 +475,8 @@ private fun EyeButton(row: LayerRowModel, n: Int, onToggleVisible: () -> Unit) {
 @Composable
 private fun RowValues(row: LayerRowModel, modifier: Modifier) {
     val pct = (row.opacity * 100f).roundToInt()
-    val state = LayerLabels.rowState(row.number, pct, row.blendMode.label, row.effectName, row.locked, row.alphaLocked)
-    val lines = listOf("$pct%", row.blendMode.label)
+    val state = LayerLabels.rowState(row.number, pct, row.blendLabel, row.effectName, row.locked, row.alphaLocked, row.lockedByFolder, row.hiddenByFolder)
+    val lines = listOf("$pct%", row.blendLabel)
     BoxWithConstraints(
         modifier.clearAndSetSemantics {
             contentDescription = state
@@ -391,13 +509,13 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
         val density = LocalDensity.current
         val wantsMask = row.editingMask && !row.isAdjustment
         val room = constraints.maxWidth
-        val mask = wantsMask && remember(measurer, base, density, digits, room, row.alphaLocked, row.locked) {
+        val mask = wantsMask && remember(measurer, base, density, digits, room, row.alphaLocked, row.locked, row.lockedByFolder) {
             with(density) {
                 fun width(text: String, style: TextStyle) = measurer.measure(text, base.merge(style), maxLines = 1, softWrap = false).size.width
                 var need = width(digits, TextStyle(fontSize = IbisDims.LayerRowTextMin, fontWeight = FontWeight.Normal)) +
                     width("MASK", MASK_TEXT) + (MASK_PAD * 2 + BADGE_GAP).roundToPx()
                 if (row.alphaLocked) need += width("α", ALPHA_TEXT) + (ALPHA_LOCK + BADGE_GAP).roundToPx()
-                if (row.locked) need += IbisDims.LayerLockIcon.roundToPx()
+                if (row.locked || row.lockedByFolder) need += IbisDims.LayerLockIcon.roundToPx()
                 need <= room
             }
         }
@@ -413,7 +531,7 @@ private fun TallNumberLine(row: LayerRowModel, n: Int, modifier: Modifier) {
     }
 }
 
-/** The number line's badges: MASK (when [mask]), α + lock, lock. */
+/** The number line's badges: MASK (when [mask]), α + lock, lock (v1.7: a dimmed lock when a folder above is locked). */
 @Composable
 private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
     if (mask) {
@@ -434,8 +552,86 @@ private fun NumberLineBadges(row: LayerRowModel, mask: Boolean) {
     }
     if (row.locked) {
         Icon(Icons.Filled.Lock, contentDescription = null, tint = DIM_TEXT, modifier = Modifier.size(IbisDims.LayerLockIcon).testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_LOCK)))
+    } else if (row.lockedByFolder) {
+        Icon(
+            Icons.Filled.Lock,
+            contentDescription = null,
+            tint = DIM_TEXT.copy(alpha = INHERITED_ALPHA),
+            modifier = Modifier.size(IbisDims.LayerLockIcon).testTag(LayerWindowTags.badge(row.layer.id, LayerWindowTags.BADGE_FOLDER_LOCK)),
+        )
     }
 }
+
+/**
+ * v1.7 (§3.8): the indent of a row [depth] folders deep; past the 48 dp it stops at, a thin guide
+ * line at its edge says the row is deeper than it shows.
+ */
+@Composable
+private fun IndentGuide(depth: Int, modifier: Modifier) {
+    Box(modifier) {
+        if (LayerTreeRows.hasGuide(depth)) {
+            Canvas(Modifier.fillMaxSize()) {
+                val x = size.width - 3.dp.toPx()
+                drawLine(THUMB_EDGE, Offset(x, 0f), Offset(x, size.height), 1.dp.toPx())
+            }
+        }
+    }
+}
+
+/**
+ * v1.7 (§3.8): a folder row's thumbnail, the folder glyph (open or closed) with [preview], the
+ * folder's composite, inside it; 2 dp border when [selected]. A tap opens or closes the folder
+ * ("Open Folder 1" / "Close Folder 1", the folder's name; also its description).
+ */
+@Composable
+private fun FolderThumbnail(
+    row: LayerRowModel,
+    preview: ImageBitmap?,
+    aspect: Float,
+    size: Dp,
+    selected: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val label = if (row.folderOpen) FolderLabels.close(row.name) else FolderLabels.open(row.name)
+    Box(
+        modifier
+            .size(size)
+            .background(THUMB_BACK)
+            .border(if (selected) IbisDims.LayerThumbBorder else 1.dp, if (selected) IbisColors.ThumbSelectedBorder else THUMB_EDGE)
+            .semantics { contentDescription = label }
+            .clickable(onClickLabel = label, role = Role.Button, onClick = onToggle),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (row.folderOpen) Icons.Filled.FolderOpen else Icons.Filled.Folder,
+            contentDescription = null,
+            tint = FOLDER_TINT,
+            modifier = Modifier.fillMaxSize().padding(2.dp),
+        )
+        if (preview != null) {
+            // The composite on a checker, inside the folder's body.
+            Box(
+                Modifier
+                    .fillMaxSize(0.52f)
+                    .padding(top = size * 0.06f)
+                    .aspectRatio(aspect.coerceIn(0.01f, 100f), matchHeightConstraintsFirst = aspect < 1f)
+                    .drawBehind { checker(IbisColors.CheckerLight, IbisColors.CheckerLight2, 3.dp.toPx()) }
+                    .border(0.5.dp, THUMB_EDGE),
+            ) {
+                Image(
+                    bitmap = preview,
+                    contentDescription = null,
+                    contentScale = ContentScale.FillBounds,
+                    filterQuality = FilterQuality.Low,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+        }
+    }
+}
+
+private val FOLDER_TINT = Color(0xFFE0A93B)
 
 private val MASK_TEXT = TextStyle(fontSize = 8.sp, lineHeight = 10.sp, fontWeight = FontWeight.Bold)
 private val ALPHA_TEXT = TextStyle(fontSize = 10.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold)
@@ -762,10 +958,13 @@ private fun MaskSquare(
     }
 }
 
-/** "↳" bracket linking a clipped row down to its base layer. */
+/**
+ * "↳" bracket linking a clipped row down to its base layer; greyed (v1.7) for a clipping row with
+ * no base in its folder ([ClipInfo.noBase]: it draws unclipped).
+ */
 @Composable
 private fun ClipBracket(clip: ClipInfo, modifier: Modifier) {
-    val color = IbisColors.Accent
+    val color = if (clip.noBase) THUMB_EDGE else IbisColors.Accent
     Canvas(modifier) {
         val stroke = 2.dp.toPx()
         val x = size.width * 0.45f

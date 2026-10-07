@@ -180,12 +180,16 @@ data class FrameBadge(val index: Int, val count: Int, val overset: Boolean) {
  * @property baseIndex document index of the base layer (-1 when not clipped).
  * @property continuesAbove the row shown directly above is clipped to the same base.
  * @property lowestInGroup the row shown directly below is the base itself.
+ * @property noBase v1.7 (§3.8, clipping per level): the layer clips, but it is the bottom unit of
+ *   its folder (or sits on an adjustment layer): it has no base, draws unclipped, and its row
+ *   shows a greyed clip mark. Never set at the top level (v1.6 rows there are unchanged).
  */
 data class ClipInfo(
     val clipped: Boolean,
     val baseIndex: Int,
     val continuesAbove: Boolean,
     val lowestInGroup: Boolean,
+    val noBase: Boolean = false,
 ) {
     companion object {
         val NONE = ClipInfo(clipped = false, baseIndex = -1, continuesAbove = false, lowestInGroup = false)

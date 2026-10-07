@@ -193,6 +193,16 @@ data class LayerWindowMetrics(
         /** The thumbnail of a list [list] dp wide: 62 while the row keeps [ROW_ROOM_BESIDE_THUMB] beside it, smaller (≥ [SMALL_THUMB]) below. */
         fun thumbFor(list: Float): Float = (list - ROW_ROOM_BESIDE_THUMB).coerceIn(SMALL_THUMB, IbisDims.LayerThumb.value)
     }
+
+    /**
+     * v1.7 (§3.8): the thumbnail of a row [depth] folders deep. Its indent comes out of the
+     * thumbnail first (down to [SMALL_THUMB]) so the name, the values and every badge keep their
+     * room at 392 dp: [thumb] at the top level, and wherever the list is wide enough.
+     */
+    fun thumbAt(depth: Int): Float {
+        if (depth <= 0) return thumb
+        return (list - ROW_ROOM_BESIDE_THUMB - LayerTreeRows.indent(depth)).coerceIn(SMALL_THUMB, maxOf(thumb, SMALL_THUMB))
+    }
 }
 
 /**
@@ -235,14 +245,26 @@ object LayerLabels {
     /**
      * What a row's values say, as ONE description that names the row (so no two rows, nor a row
      * and the blend dropdown, share a label; I10): "Layer 2: 100%, Normal", then the adjustment's
-     * effect and the locks ("Layer 3: 60%, Multiply, Tone, locked, alpha locked").
+     * effect and the locks ("Layer 3: 60%, Multiply, Tone, locked, alpha locked"). v1.7: then
+     * what a folder above passes on (", in a locked folder", ", in a hidden folder").
      */
-    fun rowState(n: Int, percent: Int, blend: String, effect: String? = null, locked: Boolean = false, alphaLocked: Boolean = false): String =
+    fun rowState(
+        n: Int,
+        percent: Int,
+        blend: String,
+        effect: String? = null,
+        locked: Boolean = false,
+        alphaLocked: Boolean = false,
+        inLockedFolder: Boolean = false,
+        inHiddenFolder: Boolean = false,
+    ): String =
         buildString {
             append("Layer ").append(n).append(": ").append(percent).append("%, ").append(blend)
             if (effect != null) append(", ").append(effect)
             if (locked) append(", locked")
             if (alphaLocked) append(", alpha locked")
+            if (inLockedFolder) append(", in a locked folder")
+            if (inHiddenFolder) append(", in a hidden folder")
         }
 
     // Badges (content descriptions): the v1.5 kind names, spoken with the row's number so that
@@ -322,4 +344,7 @@ object LayerWindowTags {
     const val BADGE_MASK = "mask"
     const val BADGE_ALPHA = "alpha"
     const val BADGE_LOCK = "lock"
+
+    /** v1.7: the dimmed lock of a layer inside a locked folder. */
+    const val BADGE_FOLDER_LOCK = "folderLock"
 }
