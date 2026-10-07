@@ -16,6 +16,10 @@ import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.image.ArgbImage
+import com.brushwork.paint.model.ArrayCodec
+import com.brushwork.paint.model.ArrayLayout
+import com.brushwork.paint.model.ArraySourceBlob
+import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -46,12 +50,15 @@ import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
+import java.io.ByteArrayOutputStream
+import java.util.Base64
 import kotlin.coroutines.coroutineContext
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -95,6 +102,11 @@ interface TextSource {
  * - v1.7 (item 8): folders are groups of their layers ([SceneLayer.children]), isolated or
  *   not as the canvas composites them; the adjustment and clipping rules apply per level and per
  *   isolated folder ([Planner]).
+ * - v1.7 (item 3, I14): a vector array exports every copy's objects, placed by the
+ *   `ArrayLayout` matrices (the formats' groups carry no transform here: the geometry is mapped);
+ *   a text, shape or raster array exports its cache. The payload writes an arrayed layer as its
+ *   cache plus its array (spec and source container), as a project file does.
+ * - v1.7 (item 18): a stroke with symmetry copies is one outline of one envelope per copy.
  *
  * Runs on the main thread (one layer at a time, yielding between layers: it only takes
  * references to immutable data and decides what goes where); converting vector objects runs on
@@ -137,6 +149,8 @@ class ExportSceneBuilder(
         class Picture(val image: SceneImage?) : Content()
         class Objects(val objects: List<VObject>) : Content()
         class Items(val items: List<SceneItem>) : Content()
+        /** v1.7 (I14): a vector array's source [content], its copies placed by [spec] off the main thread ([arrayObjects]). */
+        class Copies(val content: VectorContent, val spec: ArraySpec) : Content()
     }
 
     private fun key(prefix: String): String = "$prefix-${++keys}"
@@ -200,6 +214,7 @@ class ExportSceneBuilder(
             is Content.Picture -> listOfNotNull(ct.image?.let { SceneItem.Image(it) })
             is Content.Items -> ct.items
             is Content.Objects -> objectItems(ct.objects)
+            is Content.Copies -> objectItems(arrayObjects(ct.content, ct.spec))
         }
         // A grayscale or 1-bit document's colors, as its pixels show them.
         val shown = if (docMode == ColorMode.RGB) items else items.map { constrained(it, docMode) }
@@ -372,6 +387,18 @@ class ExportSceneBuilder(
 
     private fun contentOf(layer: Layer, ownImage: MutableMap<Layer, SceneImage>): Content {
         val vector = layer.vector
+        val array = layer.array
+        if (array != null) {
+            // v1.7 (I14): a vector array as its copies' objects (as many as the editor lists);
+            // a text, shape or raster array as its cache, every copy in it.
+            val spec = array.spec
+            if (vector != null && vector.objects.isNotEmpty() && spec.count.toLong() * vector.objects.size <= ArraySpec.MAX_INSTANCES) {
+                return Content.Copies(vector, spec)
+            }
+            val cache = layerImage(layer) ?: return Content.Picture(null)
+            ownImage[layer] = cache
+            return Content.Picture(cache)
+        }
         if (vector != null) return Content.Objects(vector.objects)
         val shape = layer.shapeData?.let { ShapeCodec.decode(it) }
         if (shape != null) return Content.Objects(listOf(VShape(1, shape = shape)))
@@ -634,9 +661,35 @@ class ExportSceneBuilder(
         class Picture(val obj: VObject) : Part()
     }
 
+    /**
+     * v1.7 (item 3, I14): a vector array's objects as its cache shows them: the source's objects
+     * mapped by each [ArrayLayout] matrix (measured from the objects' paint bounds, as
+     * `LayerDataTransforms` measures the array), copy N − 1 at the bottom and the source on top;
+     * copy k ≥ 1 of object `id` has the id `id + (k shl 53)` (never written). Off the main thread.
+     */
+    private fun arrayObjects(content: VectorContent, spec: ArraySpec): List<VObject> {
+        val ms = ArrayLayout.matrices(spec, ObjectIndex.of(content).unionBounds())
+        val out = ArrayList<VObject>(ms.size * content.objects.size)
+        for (k in ms.indices.reversed()) {
+            for (o in content.objects) out += if (k == 0) o else VectorOps.transformed(o, ms[k]).withId(o.id + (k.toLong() shl 53))
+        }
+        return out
+    }
+
+    /**
+     * The outline of [s] for "Outlines": v1.7 (item 18), one envelope per symmetry copy
+     * ([StrokeEnvelopeExport.ofCopies]) in ONE path, filled with the non-zero rule, so copies that
+     * overlap are covered once, as the one stroke buffer paints them. Null: a picture.
+     */
+    private fun strokeEnvelope(s: VStroke): VectorPath? {
+        if (s.copies.isEmpty()) return StrokeEnvelopeExport.of(s)
+        val pieces = StrokeEnvelopeExport.ofCopies(s)
+        return if (pieces.isEmpty()) null else VectorPath(pieces.flatMap { it.ops })
+    }
+
     private fun partsOf(o: VObject): List<Part> = when (o) {
         is VStroke -> {
-            val env = if (options.strokes == StrokeExport.OUTLINES) StrokeEnvelopeExport.of(o) else null
+            val env = if (options.strokes == StrokeExport.OUTLINES) strokeEnvelope(o) else null
             if (env != null) listOf(Part.Item(SceneItem.Shape(env, fill = VPaint.Solid(StrokeEnvelopeExport.fillColor(o.color, o.preset, o.opacity)))))
             else listOf(Part.Picture(o))
         }
@@ -725,15 +778,21 @@ class ExportSceneBuilder(
 
     // ------------------------------------------------------------------ payload
 
-    private fun payloadLayer(
+    private suspend fun payloadLayer(
         layer: Layer,
         ownImage: Map<Layer, SceneImage>,
         ownMask: Map<Layer, SceneImage>,
         extra: MutableList<SceneImage>,
     ): PayloadLayer {
+        val data = layer.dataSnapshot()
+        // v1.7 (I14): an arrayed layer is written as its cache (what a v1.6 reader shows: a raster
+        // layer with every copy) plus its array, the source living only in the array's container,
+        // as in a project file. An array without a source is written as plain pixels.
+        val arraySource = ArraySourceBlob.of(data)
         val kind = when {
             layer.isFolder -> PayloadKind.FOLDER
             layer.isAdjustmentLayer -> PayloadKind.ADJUSTMENT
+            arraySource != null -> PayloadKind.RASTER
             layer.isVectorLayer -> PayloadKind.VECTOR
             layer.textData != null -> PayloadKind.TEXT
             layer.shapeData != null -> PayloadKind.SHAPE
@@ -754,7 +813,13 @@ class ExportSceneBuilder(
             maskFill = (0xFF shl 24) or (luma(bg) * 0x010101)
             maskImage = ownMask[layer] ?: ContentBounds.of(m, emptyColor = bg)?.let { r -> pixelImage(key("pmask"), m, r, gray = true).also { extra += it } }
         }
-        val data = layer.dataSnapshot()
+        val array = data.array
+        val payloadArray = if (array != null && arraySource != null) {
+            // The source is immutable (shared with undo), so it is encoded off the main thread.
+            withContext(renderDispatcher) { payloadArray(array.spec, arraySource) }
+        } else {
+            null
+        }
         return PayloadLayer(
             id = layer.id,
             props = layer.props(),
@@ -765,16 +830,23 @@ class ExportSceneBuilder(
             maskRef = maskImage?.key,
             maskRect = maskImage?.let { PayloadRect(it.left, it.top, it.width, it.height) },
             maskFill = maskFill,
-            vector = data.vector,
-            textData = data.text,
-            shapeData = data.shape,
+            vector = if (payloadArray != null) null else data.vector,
+            textData = if (payloadArray != null) null else data.text,
+            shapeData = if (payloadArray != null) null else data.shape,
             maskSpec = data.maskSpec,
             adjustment = data.adjustment,
             // v1.7 (I11): the tree (every layer is written, so the ids resolve on import).
             parentId = layer.parentId,
             folder = layer.folder,
             folderOpen = layer.folderOpen,
+            array = payloadArray,
         )
+    }
+
+    /** v1.7 (I14): [spec] and [source] as a payload's array: the spec JSON and the base64 of the source container. */
+    private fun payloadArray(spec: ArraySpec, source: ArraySourceBlob): PayloadArray {
+        val bytes = ByteArrayOutputStream().also { ArrayCodec.writeSource(it, source) }.toByteArray()
+        return PayloadArray(ArrayCodec.encodeSpec(spec), Base64.getEncoder().encodeToString(bytes))
     }
 
     companion object {

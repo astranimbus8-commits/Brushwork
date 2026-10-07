@@ -48,7 +48,6 @@ import com.brushwork.paint.exchange.svg.SvgDocument
 import com.brushwork.paint.exchange.svg.SvgFormatException
 import com.brushwork.paint.exchange.svg.SvgParser
 import com.brushwork.paint.model.Layer
-import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.ui.editor.endCanvasGesture
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.Dispatchers
@@ -321,9 +320,9 @@ class ExchangeUiState(
 
     private suspend fun restore(payload: BrushworkPayload, newArtwork: Boolean, images: PayloadImport.Images) {
         val replace = if (newArtwork) defaultLayers(includeBackground = true) else emptyList()
-        // A new artwork made for the file takes its color mode (it has nothing else yet), in
-        // the import's undo step.
-        val mode = if (newArtwork && replace.size == controller.doc.layers.size) payload.colorMode else null
+        // A new artwork made for the file takes its color mode (it has nothing else yet; v1.7:
+        // folders, which have no pixels, are not counted), in the import's undo step.
+        val mode = if (newArtwork && replace.size == controller.doc.pixelLayerCount) payload.colorMode else null
         val target = target().let { it.copy(room = it.room + replace.size, colorMode = mode ?: it.colorMode) }
         val prepared = withContext(Dispatchers.IO) { PayloadImport.prepare(payload, images, target) }
         stopIfCancelled(prepared.layers)
@@ -444,10 +443,8 @@ class ExchangeUiState(
     /** Stopped meanwhile: the prepared layers are freed and nothing is inserted. */
     private suspend fun stopIfCancelled(layers: List<com.brushwork.paint.exchange.NewLayer>) {
         if (coroutineContext.isActive) return
-        layers.forEach { l ->
-            l.bitmap.recycleUnlessShared()
-            l.mask?.recycle()
-        }
+        // v1.7: never Layer.FOLDER_BITMAP (rule B); a raster array's source pixels too.
+        layers.forEach { it.recycleBitmaps() }
         coroutineContext.ensureActive()
     }
 

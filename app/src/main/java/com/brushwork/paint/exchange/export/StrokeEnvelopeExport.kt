@@ -14,6 +14,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.VariableWidthOutline
 import com.brushwork.paint.tools.vector.VectorPath
+import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VStroke
 import kotlin.math.PI
 import kotlin.math.abs
@@ -37,7 +38,8 @@ import kotlin.math.sqrt
  * through [VariableWidthOutline]; elliptical tips (calligraphy, roundness < 1) through the same
  * in the tip's circle space; square and marker tips as convex hulls of consecutive dab shapes.
  * Every piece winds the same way: fill with the non-zero rule. Other brushes are exported as
- * pictures. Pure Kotlin; thread-safe.
+ * pictures. v1.7: a stroke with symmetry copies has one outline per copy ([ofCopies]). Pure
+ * Kotlin; thread-safe.
  */
 object StrokeEnvelopeExport {
     private val SOLID_TIPS = setOf(BrushTip.ROUND_HARD, BrushTip.CALLIGRAPHY, BrushTip.SQUARE, BrushTip.MARKER)
@@ -59,6 +61,42 @@ object StrokeEnvelopeExport {
     fun of(s: VStroke): VectorPath? = outline(s.preset, s.stylus, s.seed, s.points, s.sizeScale, s.taperIn, s.taperOut)
 
     /**
+     * v1.7 (item 18, §3.18): one outline per map of [s]'s symmetry copies ([VStroke.copies],
+     * identity first), in their order; the stroke's own outline alone ([of]) without copies.
+     * Each copy is built from the stroke's own dabs as `DabMapping` stamps them: the centre mapped
+     * and the diameter × √|det J| there ([StrokeCopies.mappedDabs]), the tip not turned. So copy
+     * k's outline is the dabs that copy paints, and every outline winds the same way (they are
+     * built after the map, a mirror included): the outlines together fill with the non-zero
+     * rule, overlapping copies once, as the one stroke buffer paints them. A copy that paints
+     * nothing is left out; empty when the brush is not solid.
+     */
+    fun ofCopies(s: VStroke): List<VectorPath> {
+        if (s.copies.isEmpty()) return listOfNotNull(of(s))
+        val d = solidDabs(s.preset, s.stylus, s.seed, s.points, s.sizeScale, s.taperIn, s.taperOut) ?: return emptyList()
+        val chain = FloatArray(d.n * 3)
+        for (i in 0 until d.n) {
+            chain[3 * i] = d.xs[i]; chain[3 * i + 1] = d.ys[i]; chain[3 * i + 2] = d.ds[i]
+        }
+        val out = ArrayList<VectorPath>(s.copies.size)
+        for (m in s.copies) {
+            val mapped = StrokeCopies.mappedDabs(chain, m)
+            val xs = FloatArray(d.n)
+            val ys = FloatArray(d.n)
+            val ds = FloatArray(d.n)
+            var n = 0
+            for (i in 0 until d.n) {
+                val x = mapped[3 * i]; val y = mapped[3 * i + 1]; val dia = mapped[3 * i + 2]
+                if (!x.isFinite() || !y.isFinite() || !(dia > 0f) || !dia.isFinite()) continue
+                xs[n] = x; ys[n] = y; ds[n] = dia
+                n++
+            }
+            if (n == 0) continue
+            build(d.preset, xs, ys, ds, n)?.let { out += it }
+        }
+        return out
+    }
+
+    /**
      * The outline of a stroke replayed from [points] (raw pressures) with [preset] and the replay's
      * size scale and taper flags; null when the brush is not solid or nothing is painted.
      */
@@ -71,6 +109,23 @@ object StrokeEnvelopeExport {
         taperIn: Boolean = true,
         taperOut: Boolean = true,
     ): VectorPath? {
+        val d = solidDabs(preset, stylus, seed, points, sizeScale, taperIn, taperOut) ?: return null
+        return build(d.preset, d.xs, d.ys, d.ds, d.n)
+    }
+
+    /** The [n] painting dabs of a replay (centres, diameters) and the replay's preset. */
+    private class SolidDabs(val preset: BrushPreset, val xs: FloatArray, val ys: FloatArray, val ds: FloatArray, val n: Int)
+
+    /** The dabs the replay stamps that paint (alpha > 0, finite centre); null when not solid or none. */
+    private fun solidDabs(
+        preset: BrushPreset,
+        stylus: Boolean,
+        seed: Long,
+        points: PackedPoints,
+        sizeScale: Float,
+        taperIn: Boolean,
+        taperOut: Boolean,
+    ): SolidDabs? {
         if (!isSolid(preset) || points.size == 0) return null
         val p = StrokeRaster.replayPreset(preset, sizeScale, taperIn, taperOut)
         val dabs = dabs(p, stylus, seed, points)
@@ -78,18 +133,25 @@ object StrokeEnvelopeExport {
         val n = dabs.size
         val xs = FloatArray(n)
         val ys = FloatArray(n)
-        val rs = FloatArray(n)
-        val edges = HashMap<Int, Float>()
+        val ds = FloatArray(n)
         var m = 0
         for (d in dabs) {
             if (!(d.alpha > 0f) || !d.cx.isFinite() || !d.cy.isFinite()) continue
-            xs[m] = d.cx; ys[m] = d.cy
-            // Edge radii per 1 % of diameter (strokes with pressure have many diameters).
-            val q = (ln(max(d.diameter, 0.5f)) * 100f).roundToInt()
-            rs[m] = edges.getOrPut(q) { edgeRadius(p, exp(q / 100f)) } * d.diameter / exp(q / 100f)
+            xs[m] = d.cx; ys[m] = d.cy; ds[m] = d.diameter
             m++
         }
-        if (m == 0) return null
+        return if (m == 0) null else SolidDabs(p, xs, ys, ds, m)
+    }
+
+    /** The outline of [n] dabs of the replay preset [p] (centres [xs], [ys], diameters [ds]); null when empty. */
+    private fun build(p: BrushPreset, xs: FloatArray, ys: FloatArray, ds: FloatArray, n: Int): VectorPath? {
+        val rs = FloatArray(n)
+        val edges = HashMap<Int, Float>()
+        for (i in 0 until n) {
+            // Edge radii per 1 % of diameter (strokes with pressure have many diameters).
+            val q = (ln(max(ds[i], 0.5f)) * 100f).roundToInt()
+            rs[i] = edges.getOrPut(q) { edgeRadius(p, exp(q / 100f)) } * ds[i] / exp(q / 100f)
+        }
         val angle = p.angle
         val rho = p.roundness.coerceIn(0.05f, 1f)
         // The tip's frame: T = rotate(angle) · scale(1, roundness) maps a circle onto the dab shape.
@@ -97,13 +159,13 @@ object StrokeEnvelopeExport {
         val toTip = if (round) null else frame(angle, rho)
         if (toTip != null) {
             val inv = toTip.inverse
-            for (i in 0 until m) {
+            for (i in 0 until n) {
                 val x = xs[i]; val y = ys[i]
                 xs[i] = inv[0] * x + inv[1] * y
                 ys[i] = inv[2] * x + inv[3] * y
             }
         }
-        val keep = simplify(xs, ys, rs, m, TOLERANCE)
+        val keep = simplify(xs, ys, rs, n, TOLERANCE)
         val kx = FloatArray(keep.size) { xs[keep[it]] }
         val ky = FloatArray(keep.size) { ys[keep[it]] }
         val kr = FloatArray(keep.size) { rs[keep[it]] }

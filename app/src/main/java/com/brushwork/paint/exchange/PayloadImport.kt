@@ -11,24 +11,30 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.exchange.export.BrushworkPayload
+import com.brushwork.paint.exchange.export.PayloadArray
 import com.brushwork.paint.exchange.export.PayloadKind
 import com.brushwork.paint.exchange.export.PayloadLayer
 import com.brushwork.paint.exchange.export.PayloadRect
 import com.brushwork.paint.exchange.image.ArgbImage
 import com.brushwork.paint.exchange.svg.Affine
 import com.brushwork.paint.masks.MaskSpecs
+import com.brushwork.paint.model.ArrayCodec
+import com.brushwork.paint.model.ArraySourceBlob
 import com.brushwork.paint.model.ColorMode
+import com.brushwork.paint.model.CorruptArrayException
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
-import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
+import java.io.ByteArrayInputStream
+import java.util.Base64
 
 /**
  * Restores the layers of a Brushwork SVG or PDF from its payload (v1.5 §4.10b, §4.11a): kind,
@@ -37,6 +43,9 @@ import com.brushwork.paint.vector.VectorOps
  * the layers are placed like an SVG (kept when they fit, else 90 % and centred): pixels and
  * vector objects follow the placement, text and shape layers keep only their pixels then.
  * Vector layers are rendered again from their objects (their pixels are not stored).
+ * v1.7 (payload v2): folders and the tree (I11); a live array keeps its pixels (the cache with
+ * the copies) and gets its spec and source back from its container (I14), on the payload's
+ * canvas only.
  */
 object PayloadImport {
     /** v1.7: a payload-v2 folder entry. */
@@ -60,6 +69,8 @@ object PayloadImport {
         var missing = 0
         var rasterized = 0
         var damaged = 0
+        var arraysRasterized = 0
+        var arraysDamaged = 0
         val fits = fitting(p.layers, target.room)
         if (p.layers.size > fits.size) dropped["layers (layer limit)"] = p.layers.size - fits.size
         for (pl in fits) {
@@ -72,6 +83,7 @@ object PayloadImport {
                 continue
             }
             var bmp: Bitmap? = null
+            var arrayed: RestoredArray? = null
             try {
                 var vector: VectorContent? = null
                 if (pl.kind == PayloadKind.VECTOR && pl.vector != null) {
@@ -98,23 +110,47 @@ object PayloadImport {
                 }
                 val dataKept = keep || (pl.textData == null && pl.shapeData == null)
                 if (!dataKept) rasterized++
-                val data = LayerData(
-                    text = if (keep) pl.textData else null,
-                    shape = if (keep) pl.shapeData else null,
-                    vector = vector,
-                    maskSpec = if (mask != null) spec else null,
-                    adjustment = pl.adjustment,
-                )
+                // v1.7 (I14): a live array. Its pixels above are the cache with every copy; the
+                // source comes from its container and replaces whatever else the entry holds (as a
+                // project file's). Placed on another canvas, or damaged, the copies stay pixels.
+                if (pl.array != null && pl.adjustment == null) {
+                    if (!keep) {
+                        arraysRasterized++
+                    } else {
+                        arrayed = restoreArray(pl.array, target)
+                        if (arrayed == null) arraysDamaged++ else damaged += arrayed.droppedObjects
+                    }
+                }
+                val a = arrayed
+                val data = if (a != null) {
+                    LayerData(
+                        text = a.text, shape = a.shape, vector = a.vector,
+                        maskSpec = if (mask != null) spec else null,
+                        adjustment = pl.adjustment,
+                        array = a.array,
+                    )
+                } else {
+                    LayerData(
+                        text = if (keep) pl.textData else null,
+                        shape = if (keep) pl.shapeData else null,
+                        vector = vector,
+                        maskSpec = if (mask != null) spec else null,
+                        adjustment = pl.adjustment,
+                    )
+                }
                 out += NewLayer(pl.props.name, bmp, pl.props, data, mask, sourceId = pl.id, parentSourceId = pl.parentId)
             } catch (e: Throwable) {
                 bmp?.recycle()
-                out.forEach { it.bitmap.recycleUnlessShared(); it.mask?.recycle() }
+                arrayed?.array?.pixels?.bitmap?.recycle()
+                out.forEach { it.recycleBitmaps() }
                 throw e
             }
         }
         if (missing > 0) dropped["missing pictures"] = missing
         if (damaged > 0) dropped["damaged objects"] = damaged
         if (rasterized > 0) dropped["text and shape layers (kept as pixels: other canvas size)"] = rasterized
+        if (arraysRasterized > 0) dropped["arrays (kept as pixels: other canvas size)"] = arraysRasterized
+        if (arraysDamaged > 0) dropped["damaged arrays (kept as pixels)"] = arraysDamaged
         // v1.7 (rule P): folders aren't counted as imported layers.
         val outcome = ImportOutcome(layers = out.count { it.folder == null }, dropped = dropped)
         return Prepared(out, p.activeLayer.coerceIn(0, maxOf(0, out.lastIndex)), outcome)
@@ -153,7 +189,7 @@ object PayloadImport {
             }
             return Compositor(doc) { null }.renderFlattened()
         } finally {
-            prepared.layers.forEach { it.bitmap.recycleUnlessShared(); it.mask?.recycle() }
+            prepared.layers.forEach { it.recycleBitmaps() }
         }
     }
 
@@ -171,22 +207,93 @@ object PayloadImport {
     /**
      * The bottom layers of [layers] that fit in [room] free layer slots, by the editor's own
      * rules: any layer needs one free slot, an adjustment layer two (`canAddAdjustmentLayer`).
+     * v1.7: a folder needs none (it has no pixels); a raster array takes two, its source pixels
+     * counting as a layer (`effectiveLayerCount`).
      */
     internal fun fitting(layers: List<PayloadLayer>, room: Int): List<PayloadLayer> {
         var left = room
         val out = ArrayList<PayloadLayer>()
         for (pl in layers) {
-            // v1.7: a folder needs no slot (it has no pixels).
+            val pixelArray = !pl.isFolder && pl.adjustment == null && pl.array != null && hasPixelSource(pl.array)
             val needed = when {
                 pl.isFolder -> 0
                 pl.kind == PayloadKind.ADJUSTMENT || pl.adjustment != null -> 2
+                pixelArray -> 2
                 else -> 1
             }
             if (needed > left) break
             out += pl
-            if (needed > 0) left--
+            left -= when {
+                needed == 0 -> 0
+                pixelArray -> 2
+                else -> 1
+            }
         }
         return out
+    }
+
+    /**
+     * v1.7 (I14): true when [a]'s container holds source pixels: its header ("BWAR", version,
+     * kind) says kind 0, PIXELS (`ArrayCodec`). Read from the first 8 base64 characters only.
+     */
+    private fun hasPixelSource(a: PayloadArray): Boolean {
+        val head = StringBuilder(8)
+        for (ch in a.source) {
+            if (!ch.isWhitespace()) head.append(ch)
+            if (head.length == 8) break
+        }
+        if (head.length < 8) return false
+        val bytes = try {
+            Base64.getDecoder().decode(head.toString())
+        } catch (e: IllegalArgumentException) {
+            return false
+        }
+        return bytes.size >= 6 && bytes[5].toInt() == 0
+    }
+
+    /** v1.7 (I14): a payload array restored: the layer's array and its source data. */
+    private class RestoredArray(
+        val array: LayerArray,
+        val text: String?,
+        val shape: String?,
+        val vector: VectorContent?,
+        /** Objects of a vector source left out as damaged ([sound]). */
+        val droppedObjects: Int,
+    )
+
+    /**
+     * v1.7 (I14): the array of a payload layer on a canvas of the payload's size, as a project
+     * file's is read (`LayerEntries.readArray`): the spec, and the source from its container — a
+     * text, shape or vector source becomes the layer's data ("Edit source pixels" off), a raster
+     * source the array's pixels (constrained to [target]'s color mode). Null when the spec or the
+     * container can't be read: the layer then keeps its copies as pixels. Not on the main thread.
+     */
+    private fun restoreArray(pa: PayloadArray, target: ImportTarget): RestoredArray? {
+        val spec = ArrayCodec.decodeSpec(pa.spec) ?: return null
+        val bytes = try {
+            Base64.getDecoder().decode(pa.source.filterNot { it.isWhitespace() })
+        } catch (e: IllegalArgumentException) {
+            return null
+        }
+        val blob = try {
+            ArrayCodec.readSource(ByteArrayInputStream(bytes), target.width, target.height)
+        } catch (e: CorruptArrayException) {
+            return null
+        }
+        val plain = spec.copy(editingSource = false)
+        return when (blob) {
+            is ArraySourceBlob.Pixels -> {
+                val bmp = blob.pixels.bitmap
+                if (target.colorMode != ColorMode.RGB && bmp.isMutable) ColorModeOps.constrain(bmp, Rect(0, 0, bmp.width, bmp.height), target.colorMode)
+                RestoredArray(LayerArray(spec, blob.pixels), null, null, null, 0)
+            }
+            is ArraySourceBlob.Vector -> {
+                val sound = sound(blob.content)
+                RestoredArray(LayerArray(plain), null, null, sound, blob.content.objects.size - sound.objects.size)
+            }
+            is ArraySourceBlob.Text -> RestoredArray(LayerArray(plain), blob.textData, null, null, 0)
+            is ArraySourceBlob.Shape -> RestoredArray(LayerArray(plain), null, blob.shapeData, null, 0)
+        }
     }
 
     /**

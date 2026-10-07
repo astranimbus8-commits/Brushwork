@@ -12,6 +12,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerProps
 import com.brushwork.paint.model.LayerTree
+import com.brushwork.paint.model.recycleUnlessShared
 import com.brushwork.paint.tools.text.TextCodec
 
 /**
@@ -42,6 +43,16 @@ class NewLayer(
 ) {
     /** True when this import carries part of a layer tree (a folder, or a layer inside one). */
     internal val inTree: Boolean get() = folder != null || parentSourceId != 0L
+
+    /**
+     * Recycles what an import that did not happen allocated: [bitmap] (never
+     * `Layer.FOLDER_BITMAP`, rule B), [mask] and, v1.7 (I14), a raster array's source pixels.
+     */
+    fun recycleBitmaps() {
+        bitmap.recycleUnlessShared()
+        mask?.recycle()
+        data.array?.pixels?.bitmap?.recycle()
+    }
 }
 
 /** Inserting imported layers into the open document as one undo step (v1.5 §4.11, I2). */
