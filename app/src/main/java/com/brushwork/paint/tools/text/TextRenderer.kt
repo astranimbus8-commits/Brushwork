@@ -357,20 +357,20 @@ object TextRenderer {
         // v1.6: scaled letters go through WrapLayout (StaticLayout can't size letters one by one).
         scalesLetters(spec, text) -> layoutScaled(text, spec, measureInk, kerns)
         else -> {
-            val px = kernPx(spec, text, kerns, 0, text, null)
+            val px = kernPx(spec, text, kerns, 0, null)
             if (px != null) layoutKerned(text, spec, measureInk, px) else layoutHorizontal(text, spec, measureInk)
         }
     }
 
     /**
-     * The extra advance after each character of [text] (the source [source] from [offset] on: a
-     * linked story's tail, or the text itself) for [kerns], or null when none applies (see
-     * [TextKerns.advancesPx]): vertical text, a script drawn as a whole, no usable kern. [ramp]
-     * (scaled letters) scales each kern with the letter before its gap.
+     * The extra advance after each character of `source[from, length)` (the text itself, or a
+     * linked story's tail from a frame's start) for [kerns], or null when none applies (see
+     * [TextKerns.advancesPx]: vertical text, a paragraph in a script drawn as a whole, no usable
+     * kern). [ramp] (scaled letters) scales each kern with the letter before its gap.
      */
-    private fun kernPx(spec: TextSpec, text: String, kerns: List<TextKern>, offset: Int, source: String, ramp: LetterRampResult?): FloatArray? {
+    private fun kernPx(spec: TextSpec, source: String, kerns: List<TextKern>, from: Int, ramp: LetterRampResult?): FloatArray? {
         if (kerns.isEmpty() || spec.vertical) return null
-        return TextKerns.advancesPx(text, kerns, offset, spec.sizePx, ramp != null || LetterRamp.supports(source), ramp?.factors)
+        return TextKerns.advancesPx(source, kerns, from, spec.sizePx, ramp?.factors)
     }
 
     /**
@@ -448,7 +448,7 @@ object TextRenderer {
         val fmi = paint.fontMetricsInt
         val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
         val ramp = LetterRamp.of(text, spec.letterScale)
-        val wt = measureFor(text, paint, ramp, 0, ScaleKey(spec.letterScale, text, 0), kernPx(spec, text, kerns, 0, text, ramp))
+        val wt = measureFor(text, paint, ramp, 0, ScaleKey(spec.letterScale, text, 0), kernPx(spec, text, kerns, 0, ramp))
         val wrap = spec.box.width
         val width = scaledWidth(wrap, wt)
         val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
@@ -492,8 +492,13 @@ object TextRenderer {
      * The block of kerned [lines] of [text] (v1.7): each line drawn in pieces split at its kerned
      * gaps, every piece at the line's x plus the measured advance before it (so the kerns, the
      * font's own kerning and the letter spacing all come from [wt]); a piece is shaped with its
-     * whole line as context ([Canvas.drawTextRun]), so it draws exactly as that part of the line.
-     * [kernPx] indexes [text] (and [wt]).
+     * whole line as context ([Canvas.drawTextRun], left to right: kerns only apply in paragraphs
+     * drawn one cluster at a time), so it draws exactly as that part of the line. A line without
+     * a kerned gap is drawn whole, as a wrapped line (any script, either direction). [kernPx]
+     * indexes [text] (and [wt]).
+     *
+     * A kern inside a ligature ("fi") moves the letters after the ligature: the measurement and
+     * the drawing both keep the font's ligature, so they agree.
      */
     private fun kernedBlock(
         spec: TextSpec, text: String, paint: TextPaint, wt: WrapText, kernPx: FloatArray,
@@ -502,38 +507,41 @@ object TextRenderer {
         val overflow = if (measureInk && spec.fontId != null) kernedOverflow(lines, text, paint, wt, kernPx, width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p ->
             val tmp = Path()
-            for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x ->
+            for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x, _ ->
                 tmp.rewind()
                 p.getTextPath(text, a, b, x, l.baseline, tmp)
                 out.addPath(tmp)
             }
         }
         return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p ->
-            for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x -> c.drawTextRun(text, a, b, l.start, l.end, x, l.baseline, false, p) }
+            for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x, whole ->
+                if (whole) c.drawText(text, a, b, x, l.baseline, p) else c.drawTextRun(text, a, b, l.start, l.end, x, l.baseline, false, p)
+            }
         }
     }
 
     /**
      * The pieces of line [l] between its kerned gaps: `text[a, b)` drawn at x (text area
-     * coordinates). Nothing for an empty line.
+     * coordinates), and whether it is the whole line (no kerned gap in it). Nothing for an empty
+     * line.
      */
-    private inline fun forEachKernedPiece(l: WrapLine, wt: WrapText, kernPx: FloatArray, piece: (Int, Int, Float) -> Unit) {
+    private inline fun forEachKernedPiece(l: WrapLine, wt: WrapText, kernPx: FloatArray, piece: (Int, Int, Float, Boolean) -> Unit) {
         if (l.end <= l.start) return
         var a = l.start
         for (j in l.start until l.end - 1) {
             if (kernPx[j] != 0f) {
-                piece(a, j + 1, l.x + wt.width(l.start, a))
+                piece(a, j + 1, l.x + wt.width(l.start, a), false)
                 a = j + 1
             }
         }
-        piece(a, l.end, l.x + wt.width(l.start, a))
+        piece(a, l.end, l.x + wt.width(l.start, a), a == l.start)
     }
 
     /** Like [wrappedOverflow] for kerned [lines], piece by piece. */
     private fun kernedOverflow(lines: List<WrapLine>, text: String, paint: TextPaint, wt: WrapText, kernPx: FloatArray, w: Float, h: Float): Float {
         val r = Rect()
         var over = 0f
-        for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x ->
+        for (l in lines) forEachKernedPiece(l, wt, kernPx) { a, b, x, _ ->
             paint.getTextBounds(text, a, b, r)
             if (!r.isEmpty) over = max(over, max(max(-(x + r.left), x + r.right - w), max(-(l.baseline + r.top), l.baseline + r.bottom - h)))
         }
@@ -626,7 +634,7 @@ object TextRenderer {
         if (ramp != null) paint.fontFeatureSettings = scaledFeatures(spec)
         val key = ramp?.let { ScaleKey(spec.letterScale, text, 0) }
         // v1.7: manual kerns are measured in (and a measurement is reused only for the same kerns).
-        val px = kernPx(spec, text, item.kerns, 0, text, ramp)
+        val px = kernPx(spec, text, item.kerns, 0, ramp)
         val wt = measured?.takeIf { it.text == text && it.scaleKey == key && it.sameKerns(px) } ?: measureFor(text, paint, ramp, 0, key, px)
         // StaticLayout's width (whole pixels); without a fixed box, the text's own width.
         val width = if (ramp != null || px != null) scaledWidth(wrap, wt)
@@ -703,7 +711,7 @@ object TextRenderer {
         val ramp = rampFor(spec, text)
         if (ramp != null) paint.fontFeatureSettings = scaledFeatures(spec)
         // v1.7: the item's kerns index its own text (another text is measured without them).
-        val px = if (text == item.text) kernPx(spec, text, item.kerns, 0, text, ramp) else null
+        val px = if (text == item.text) kernPx(spec, text, item.kerns, 0, ramp) else null
         val wt = measureFor(text, paint, ramp, 0, ramp?.let { ScaleKey(spec.letterScale, text, 0) }, px)
         val width = if (ramp != null || px != null) scaledWidth(wrap, wt)
         else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
@@ -750,10 +758,9 @@ object TextRenderer {
         val ramp = rampFor(spec, story)
         if (ramp != null) paint.fontFeatureSettings = scaledFeatures(spec)
         // v1.7: the story's kerns (story indices) from this frame's start on.
-        val tail = if (item.kerns.isEmpty()) null else tailOf(story, start, measured)
-        val px = tail?.let { kernPx(spec, it, item.kerns, start, story, ramp) }
+        val px = kernPx(spec, story, item.kerns, start, ramp)
         val wt = measured?.takeIf { reusable(it, story, start, ramp) && it.sameKerns(px) }
-            ?: measureFor(tail ?: story.substring(start), paint, ramp, start, ramp?.let { TailScaleKey.of(it, start) }, px)
+            ?: measureFor(story.substring(start), paint, ramp, start, ramp?.let { TailScaleKey.of(it, start) }, px)
         val width = if (ramp != null || wt.kernPx != null) scaledWidth(wrap, wt)
         else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
         val height = if (wrap > 0f && spec.box.minHeight > 0f) spec.box.minHeight else Float.POSITIVE_INFINITY
@@ -778,15 +785,8 @@ object TextRenderer {
         val start = if (th.isOn) th.start.coerceIn(0, story.length) else 0
         val ramp = rampFor(item.spec, story)
         if (!reusable(measured, story, start, ramp)) return false
-        val px = if (item.kerns.isEmpty()) null else kernPx(item.spec, measured.text, item.kerns, start, story, ramp)
+        val px = kernPx(item.spec, story, item.kerns, start, ramp)
         return measured.sameKerns(px)
-    }
-
-    /** `story.substring(start)`: [measured]'s text when it is that tail (nothing copied), else a copy. */
-    private fun tailOf(story: String, start: Int, measured: WrapText?): String {
-        val rest = story.length - start
-        val m = measured?.text
-        return if (m != null && m.length == rest && story.regionMatches(start, m, 0, rest)) m else story.substring(start)
     }
 
     private fun reusable(m: WrapText, story: String, start: Int, ramp: LetterRampResult?): Boolean {

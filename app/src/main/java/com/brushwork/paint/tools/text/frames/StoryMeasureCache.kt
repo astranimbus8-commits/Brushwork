@@ -35,7 +35,8 @@ class StoryMeasureCache internal constructor(private val maxChars: Int = DEFAULT
 
     /**
      * Where a measurement is filed: the tail's text, the look without the frame's size, the
-     * imported fonts. (Scaled letters' factors are checked on [get]: one entry per tail text.)
+     * imported fonts. (Scaled letters' factors and, v1.7, the story's kerns are checked on [get]:
+     * one entry per tail text.)
      */
     private data class Key(val text: String, val look: TextSpec, val fonts: Int)
 

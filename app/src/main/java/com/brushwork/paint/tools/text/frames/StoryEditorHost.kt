@@ -8,6 +8,7 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
+import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.PlaceholderAmount
 import com.brushwork.paint.tools.text.PlaceholderFit
 import com.brushwork.paint.tools.text.PlaceholderKind
@@ -16,6 +17,7 @@ import com.brushwork.paint.tools.text.TextBoxSpec
 import com.brushwork.paint.tools.text.TextEditorHost
 import com.brushwork.paint.tools.text.TextFont
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextKerns
 import com.brushwork.paint.tools.text.TextPathSpec
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextThreadSpec
@@ -33,7 +35,7 @@ import kotlin.math.max
  * boxes whose size is set on the canvas): [supportsVertical], [supportsPath] and
  * [boxSizeEditable] are false. A story holds at most [TextThreadSpec.MAX_STORY] characters.
  */
-class StoryEditorHost internal constructor(private val tool: TextFrameTool) : TextEditorHost {
+class StoryEditorHost internal constructor(private val tool: TextFrameTool) : TextEditorHost, KerningEditor {
 
     override val controller: EditorController get() = tool.controller
 
@@ -142,7 +144,7 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
         val capped = TextThreadFlow.cap(text)
         // The look may change (never the frame's box size, which belongs to the frame).
         val spec = edit?.spec?.let { FrameGeometry.withFrameBox(it, cur.spec.box) } ?: cur.spec
-        update { it.copy(text = capped, spec = spec) }
+        update { it.copy(text = capped, spec = spec, kerns = TextKerns.edited(it.kerns, it.text, capped)) }
         return true
     }
 
@@ -224,10 +226,18 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
     }
 
     /** The whole story; longer than [TextThreadSpec.MAX_STORY] characters is cut (with a message). */
-    override fun setText(text: String) {
+    override fun setText(text: String) = setText(text, -1)
+
+    /** v1.7: the whole story, its kerns (story indices) following their characters ([TextKerns.edited]). */
+    override fun setText(text: String, cursor: Int) {
         val capped = TextThreadFlow.cap(text)
         if (capped.length < text.length) controller.toast("A linked story holds at most ${TextThreadSpec.MAX_STORY} characters")
-        update { it.copy(text = capped) }
+        update { it.copy(text = capped, kerns = TextKerns.edited(it.kerns, it.text, capped, cursor.coerceAtMost(capped.length))) }
+    }
+
+    /** v1.7: kerns of [gaps] in the story (shared by all its frames; written on OK). */
+    override fun setKerns(gaps: IntRange, value: Int) = update {
+        it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
     /** The box look (padding, background, border, rounding); its size stays the frame's. */

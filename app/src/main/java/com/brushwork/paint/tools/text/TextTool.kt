@@ -70,7 +70,7 @@ import kotlin.math.max
  * snaps so its outline touches a line. The text layer being edited is never a target. Pinching
  * isn't snapped.
  */
-class TextTool(controller: EditorController) : Tool(controller), TextEditorHost {
+class TextTool(controller: EditorController) : Tool(controller), TextEditorHost, KerningEditor {
     override val id = ToolId.TEXT
 
     // v1.6 TextEditorHost capability flags: the Text tool offers everything.
@@ -187,7 +187,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     fun preparedFor(t: TextItem): PreparedText = TextRenderer.prepare(t, prepared).also { prepared = it }
 
     /** Straight layout of [t] (cached while text and spec are unchanged). */
-    fun blockFor(t: TextItem): TextBlock = preparedFor(t).block ?: TextRenderer.layout(t.text, t.spec)
+    fun blockFor(t: TextItem): TextBlock = preparedFor(t).block ?: TextRenderer.layout(t.text, t.spec, kerns = t.kerns)
 
     // ------------------------------------------------------------------ editing API (UI)
 
@@ -431,7 +431,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         return true
     }
 
-    override fun setText(text: String) = update { it.copy(text = text) }
+    override fun setText(text: String) = setText(text, -1)
+
+    /** v1.7: the text with its kerns following their characters ([TextKerns.edited]). */
+    override fun setText(text: String, cursor: Int) = update { it.copy(text = text, kerns = TextKerns.edited(it.kerns, it.text, text, cursor)) }
+
+    /** v1.7: kerns of [gaps] in the current text (horizontal text only; see [KerningEditor.setKerns]). */
+    override fun setKerns(gaps: IntRange, value: Int) = update {
+        if (it.spec.vertical) it else it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
+    }
 
     override fun updateSpec(transform: (TextSpec) -> TextSpec) = update { it.copy(spec = transform(it.spec)) }
 
@@ -494,7 +502,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
             controller.toast("No room for placeholder text in this box: make the box bigger or the text smaller")
             return false
         }
-        update { it.copy(text = edit.text, spec = edit.spec) }
+        update { it.copy(text = edit.text, spec = edit.spec, kerns = TextKerns.edited(it.kerns, it.text, edit.text)) }
         return true
     }
 
@@ -565,7 +573,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
         val box = s.box
         // Off: the box fits the text again (its fixed other side goes too).
         if (!on) return@updateSpec s.copy(box = if (s.vertical) box.copy(height = 0f, minWidth = 0f) else box.copy(width = 0f, minHeight = 0f))
-        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)), measureInk = false)
+        val natural = TextRenderer.layout(item?.text ?: "", s.copy(box = box.copy(width = 0f, height = 0f)), measureInk = false, kerns = item?.kerns ?: emptyList())
         if (s.vertical) s.copy(box = box.copy(height = natural.contentHeight.coerceIn(s.sizePx, maxBoxPx)))
         else s.copy(box = box.copy(width = natural.contentWidth.coerceIn(s.sizePx, maxBoxPx)))
     }
@@ -585,7 +593,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     override fun setFixedDepth(on: Boolean) = updateSpec { s ->
         if (s.box.wrapFor(s.vertical) <= 0f) return@updateSpec s
         val v = if (!on) 0f else {
-            val block = TextRenderer.layout(item?.text ?: "", s, measureInk = false)
+            val block = TextRenderer.layout(item?.text ?: "", s, measureInk = false, kerns = item?.kerns ?: emptyList())
             (if (s.vertical) block.contentWidth else block.contentHeight).coerceIn(s.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         }
         s.copy(box = if (s.vertical) s.box.copy(minWidth = v) else s.box.copy(minHeight = v))
@@ -752,7 +760,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost 
     /** [t] (auto width) with its box width fixed at max(its width, 8 em) within the canvas, left edge kept. */
     private fun withFixedWidth(t: TextItem): TextItem {
         val spec = t.spec
-        val natural = TextRenderer.layout(t.text, spec, measureInk = false).contentWidth
+        val natural = TextRenderer.layout(t.text, spec, measureInk = false, kerns = t.kerns).contentWidth
         val width = max(natural, WRAP_MIN_WIDTH_EM * spec.sizePx).coerceAtMost(doc.width.toFloat()).coerceIn(spec.sizePx.coerceAtMost(maxBoxPx), maxBoxPx)
         val dx = (width - natural) / 2f
         val shift = Vec2(dx, 0f).rotated(Math.toRadians(t.rotationDeg.toDouble()).toFloat())

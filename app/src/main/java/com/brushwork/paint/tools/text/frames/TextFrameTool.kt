@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.text.PreparedText
 import com.brushwork.paint.tools.text.TextBoxSpec
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextKerns
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextWrapSpec
@@ -235,7 +236,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         storyIdEditing = s.id
         // The frame's own place, size and wrap around a picture stay as they are (the flow takes
         // them from this item for the frame it was opened from).
-        story.open(TextItem(text = s.text, spec = FrameGeometry.withFrameBox(s.spec, item.spec.box), cx = item.cx, cy = item.cy, wrap = item.wrap), new = false)
+        story.open(TextItem(text = s.text, spec = FrameGeometry.withFrameBox(s.spec, item.spec.box), cx = item.cx, cy = item.cy, wrap = item.wrap, kerns = s.kerns), new = false)
         pendingFlow = null
         changed()
         return true
@@ -285,7 +286,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         if (new) {
             if (cur.text.isBlank()) return
             val sid = threads.newStoryId()
-            val layers = threads.writeStory(ADD_LABEL, sid, cur.text, cur.spec, listOf(FlowFrame(null, cur))) ?: return
+            val layers = threads.writeStory(ADD_LABEL, sid, cur.text, cur.spec, cur.kerns, listOf(FlowFrame(null, cur))) ?: return
             nextSpec = FrameGeometry.storyLook(cur.spec)
             select(layers.first())
             return
@@ -294,7 +295,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val frames = threads.framesOf(id)
         if (frames.none { it.layer === target }) return
         val chain = frames.map { f -> if (f.layer === target) FlowFrame(target, cur) else FlowFrame(f.layer, f.item) }
-        threads.writeStory(EDIT_LABEL, id, cur.text, cur.spec, chain)
+        threads.writeStory(EDIT_LABEL, id, cur.text, cur.spec, cur.kerns, chain)
         nextSpec = FrameGeometry.storyLook(cur.spec)
         changed()
     }
@@ -321,14 +322,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val frames = threads.framesOf(storyIdEditing)
         val s = threads.storyOf(frames) ?: return null
         val chain = frames.map { f -> if (f.layer === storyTarget) FlowFrame(f.layer, cur) else FlowFrame(f.layer, f.item) }
-        return frames to TextThreadFlow.flow(cur.text, cur.spec, chain, s.id, s.rev, threads.measures)
+        return frames to TextThreadFlow.flow(cur.text, cur.spec, chain, s.id, s.rev, threads.measures, cur.kerns)
     }
 
     private fun refreshStoryPreview() {
         val cur = story.item ?: return
         if (story.editingNew) {
             preview.clear()
-            val item = TextThreadFlow.flow(cur.text, cur.spec, listOf(FlowFrame(null, cur)), PREVIEW_STORY_ID, 0L, threads.measures).first()
+            val item = TextThreadFlow.flow(cur.text, cur.spec, listOf(FlowFrame(null, cur)), PREVIEW_STORY_ID, 0L, threads.measures, cur.kerns).first()
             pendingNew = item
             pendingNewPrepared = threads.prepare(item)
             controller.invalidateOverlay()
@@ -367,7 +368,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             tokens.forEachIndexed { i, tok -> sb.append(if (i == 0 && (prefix.isEmpty() || prefix.last().isWhitespace())) tok.trimStart() else tok) }
             val full = TextThreadFlow.cap(sb.toString())
             // Not through the measure cache: these trial stories are thrown away.
-            val items = TextThreadFlow.flow(full, cur.spec, chain, PREVIEW_STORY_ID, 0L)
+            val items = TextThreadFlow.flow(full, cur.spec, chain, PREVIEW_STORY_ID, 0L, kerns = if (replace) emptyList() else cur.kerns)
             val last = items.last()
             if (last.thread.overset || last.thread.end < full.length) {
                 val end = last.thread.end
@@ -816,7 +817,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         val s = threads.storyOf(frames) ?: return false
         if (frames.none { it.layer === layer }) return false
         val chain = frames.map { f -> if (f.layer === layer) FlowFrame(layer, item) else FlowFrame(f.layer, f.item) }
-        val written = threads.writeStory(label, s.id, s.text, s.spec, chain) != null
+        val written = threads.writeStory(label, s.id, s.text, s.spec, s.kerns, chain) != null
         changed()
         return written
     }
@@ -838,7 +839,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             pendingFlow = null
         } else {
             val chain = frames.map { f -> if (f.layer === layer) FlowFrame(layer, item) else FlowFrame(f.layer, f.item) }
-            val items = TextThreadFlow.flow(s.text, s.spec, chain, s.id, s.rev, threads.measures)
+            val items = TextThreadFlow.flow(s.text, s.spec, chain, s.id, s.rev, threads.measures, s.kerns)
             for (i in frames.indices) if (i == k || !StoryWriter.sameRendering(frames[i].item, items[i])) shown[frames[i].layer] = items[i]
             pendingFlow = items
         }
@@ -935,7 +936,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         }
         // The new layer goes right above the frame it continues.
         if (controller.activeLayer !== from) controller.selectLayer(from)
-        val layers = threads.writeStory(LINK_LABEL, s.id, s.text, s.spec, chain) ?: return null
+        val layers = threads.writeStory(LINK_LABEL, s.id, s.text, s.spec, s.kerns, chain) ?: return null
         val created = layers[k + 1]
         select(created)
         return created
@@ -990,7 +991,10 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             chain += FlowFrame(f.layer, f.item)
             if (i == k) chain += FlowFrame(target, template)
         }
-        val layers = threads.writeStory(LINK_LABEL, s.id, joined, s.spec, chain) ?: return false
+        // v1.7: the joined text keeps its kerns, after the story's.
+        val addedKerns = tFrame?.kerns ?: tItem.kerns
+        val kerns = s.kerns + TextKerns.shifted(addedKerns, s.text.length + sep.length)
+        val layers = threads.writeStory(LINK_LABEL, s.id, joined, s.spec, kerns, chain) ?: return false
         select(layers[k + 1])
         return true
     }
@@ -1019,7 +1023,7 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             FrameWrite(f.layer, f.item, TextThreadFlow.frameItem("", look, f.item, nid, 0, 0, 0, false, 0L))
         }
         val chain = frames.take(k + 1).map { FlowFrame(it.layer, it.item) }
-        threads.writeStory(UNLINK_LABEL, s.id, s.text, s.spec, chain, extra) ?: return false
+        threads.writeStory(UNLINK_LABEL, s.id, s.text, s.spec, s.kerns, chain, extra) ?: return false
         changed()
         return true
     }

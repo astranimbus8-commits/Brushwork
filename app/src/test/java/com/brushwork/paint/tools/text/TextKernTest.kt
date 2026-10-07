@@ -113,15 +113,20 @@ class TextKernTest {
     @Test
     fun onlyUsableKernsReachTheRenderer() {
         // −200 at a 100 px font is 20 px.
-        val px = TextKerns.advancesPx("AV", k(0 to -200), 0, 100f, supported = true)!!
+        val px = TextKerns.advancesPx("AV", k(0 to -200), 0, 100f)!!
         assertArrayEquals(floatArrayOf(-20f, 0f), px, 1e-4f)
-        // Not around a line break, not inside a cluster (e + combining acute), not in shaping scripts.
-        assertNull(TextKerns.advancesPx("A\nV", k(0 to 100, 1 to 100), 0, 100f, true))
-        assertNull(TextKerns.advancesPx("éx", k(0 to 100), 0, 100f, true))
-        assertArrayEquals(floatArrayOf(0f, 10f, 0f), TextKerns.advancesPx("éx", k(1 to 100), 0, 100f, true)!!, 1e-4f)
-        assertNull(TextKerns.advancesPx("AV", k(0 to 100), 0, 100f, supported = false))
+        // Not around a line break, not inside a cluster (e + combining acute).
+        assertNull(TextKerns.advancesPx("A\nV", k(0 to 100, 1 to 100), 0, 100f))
+        assertNull(TextKerns.advancesPx("éx", k(0 to 100), 0, 100f))
+        assertArrayEquals(floatArrayOf(0f, 10f, 0f), TextKerns.advancesPx("éx", k(1 to 100), 0, 100f)!!, 1e-4f)
+        // Not in a right-to-left paragraph; the Latin paragraph next to it keeps its kern.
+        val arabic = "مرحبا"
+        assertNull(TextKerns.advancesPx(arabic, k(1 to 100), 0, 100f))
+        val mixed = TextKerns.advancesPx("AV\n$arabic", k(0 to 100, 4 to 100), 0, 100f)!!
+        assertEquals(10f, mixed[0], 1e-4f)
+        assertEquals(0f, mixed[4], 1e-4f)
         // A story's tail from 3: story kern 4 is the tail's gap 1; scaled letters scale it.
-        val tail = TextKerns.advancesPx("abcd", k(1 to 500, 4 to 100), 3, 50f, true, factors = FloatArray(7) { if (it == 4) 0.5f else 1f })!!
+        val tail = TextKerns.advancesPx("xyzabcd", k(1 to 500, 4 to 100), 3, 50f, FloatArray(7) { if (it == 4) 0.5f else 1f })!!
         assertArrayEquals(floatArrayOf(0f, 2.5f, 0f, 0f), tail, 1e-4f)
     }
 }

@@ -8,6 +8,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.text.PreparedText
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextKerns
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.text.textRectOf
@@ -156,18 +157,28 @@ internal class StoryWriter(
          * lines are laid out from those characters only: their advances are measured per
          * paragraph and its line breaks found per paragraph). Scaled letters (§3.5) depend on the
          * whole story (each letter's place in the ramp): then the whole story must be the same.
+         *
+         * v1.7 manual kerns (story indices): the kerns of those characters must be the same, and
+         * when there are any, also the story from the start of the frame's first paragraph (a
+         * kern applies or not by its whole paragraph, [TextKerns.advancesPx]).
          */
         fun sameRendering(a: TextItem, b: TextItem): Boolean {
             if (a.text != b.text || a.spec != b.spec || a.cx != b.cx || a.cy != b.cy || a.rotationDeg != b.rotationDeg || a.wrap != b.wrap || a.path != b.path) return false
             val ta = a.thread
             val tb = b.thread
             if (ta.isOn != tb.isOn) return false
-            if (!ta.isOn) return true
+            if (!ta.isOn) return a.kerns == b.kerns
             if (ta.start != tb.start || ta.end != tb.end) return false
-            if (a.spec.letterScale.isOn) return ta.story == tb.story
             val pa = ta.story.indexOf('\n', ta.end).let { if (it < 0) ta.story.length else it }
             val pb = tb.story.indexOf('\n', tb.end).let { if (it < 0) tb.story.length else it }
-            return pa == pb && ta.story.regionMatches(ta.start, tb.story, tb.start, pa - ta.start)
+            val ka = TextKerns.slice(a.kerns, ta.start, pa)
+            if (ka != TextKerns.slice(b.kerns, tb.start, pb)) return false
+            if (a.spec.letterScale.isOn) return ta.story == tb.story
+            if (pa != pb) return false
+            // With kerns, from the start of the paragraph the frame starts in.
+            val from = if (ka.isEmpty()) ta.start else ta.story.lastIndexOf('\n', ta.start - 1) + 1
+            if (ka.isNotEmpty() && from != tb.story.lastIndexOf('\n', tb.start - 1) + 1) return false
+            return ta.story.regionMatches(from, tb.story, from, pa - from)
         }
 
         /** [prep]'s document bounds rounded out, or null when it draws nothing. */

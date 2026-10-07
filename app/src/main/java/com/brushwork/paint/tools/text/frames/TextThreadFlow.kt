@@ -2,6 +2,7 @@ package com.brushwork.paint.tools.text.frames
 
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextKern
 import com.brushwork.paint.tools.text.TextPathSpec
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
@@ -32,6 +33,9 @@ object TextThreadFlow {
      * each frame's own), as story [storyId] at [rev]. Indices follow the chain (0, 1, 2…; a pinned
      * frame keeps its stored index and the frames after it number on from there). [cache] (the
      * measured tails) makes flowing and then drawing a chain measure each tail once.
+     * v1.7: [kerns] (the story's manual kerns, story indices) go into every frame, so each frame
+     * measures the ones of its tail and a kern stays between the same letters whichever frame
+     * they flow into.
      */
     fun flow(
         story: String,
@@ -40,6 +44,7 @@ object TextThreadFlow {
         storyId: Long,
         rev: Long,
         cache: StoryMeasureCache? = null,
+        kerns: List<TextKern> = emptyList(),
     ): List<TextItem> {
         val text = cap(story)
         val look = FrameGeometry.storyLook(spec)
@@ -57,9 +62,9 @@ object TextThreadFlow {
             }
             val index = maxOf(k, lastIndex + 1)
             lastIndex = index
-            val probe = frameItem(text, look, f.template, storyId, index, start, start, false, rev)
+            val probe = frameItem(text, look, f.template, storyId, index, start, start, false, rev, kerns)
             val end = (cache?.frameLayout(probe) ?: TextRenderer.frameLayout(probe)).end.coerceIn(start, text.length)
-            out += frameItem(text, look, f.template, storyId, index, start, end, last && end < text.length, rev)
+            out += frameItem(text, look, f.template, storyId, index, start, end, last && end < text.length, rev, kerns)
             start = end
         }
         return out
@@ -67,7 +72,8 @@ object TextThreadFlow {
 
     /**
      * Frame [index] of story [storyId] showing `story[start, end)` in [look] with [template]'s
-     * place, size and wrap: sanitized, so it is exactly what a frame layer stores and decodes to.
+     * place, size and wrap, carrying the story's [kerns] (v1.7): sanitized, so it is exactly what
+     * a frame layer stores and decodes to.
      */
     fun frameItem(
         story: String,
@@ -79,6 +85,7 @@ object TextThreadFlow {
         end: Int,
         overset: Boolean,
         rev: Long,
+        kerns: List<TextKern> = emptyList(),
     ): TextItem = TextItem(
         text = "",
         spec = FrameGeometry.withFrameBox(look, template.spec.box),
@@ -88,6 +95,7 @@ object TextThreadFlow {
         path = TextPathSpec(),
         wrap = template.wrap,
         thread = TextThreadSpec(storyId = storyId, index = index, story = story, start = start, end = end, overset = overset, rev = rev),
+        kerns = kerns,
     ).sanitized()
 
     /** [story] cut to [TextThreadSpec.MAX_STORY] characters (never inside a surrogate pair), as frames store it. */

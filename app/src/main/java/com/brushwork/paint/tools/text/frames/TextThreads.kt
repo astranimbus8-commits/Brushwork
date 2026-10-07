@@ -10,6 +10,8 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextKern
+import com.brushwork.paint.tools.text.TextKerns
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.text.TextThreadSpec
@@ -52,8 +54,11 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         val thread: TextThreadSpec get() = item.thread
     }
 
-    /** A story as its frames hold it: the copy that wins (highest `rev`, then the lowest index). */
-    class Story(val id: Long, val text: String, val spec: TextSpec, val rev: Long, val frames: List<Frame>)
+    /**
+     * A story as its frames hold it: the copy that wins (highest `rev`, then the lowest index).
+     * v1.7: [kerns] are its manual kerns (story indices), which every frame stores.
+     */
+    class Story(val id: Long, val text: String, val spec: TextSpec, val rev: Long, val frames: List<Frame>, val kerns: List<TextKern> = emptyList())
 
     /** The measured tails of the stories (flowing then drawing a chain measures each once). */
     internal val measures = StoryMeasureCache()
@@ -130,7 +135,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
     fun storyOf(frames: List<Frame>): Story? {
         if (frames.isEmpty()) return null
         val best = frames.minWith(compareByDescending<Frame> { it.thread.rev }.thenBy { it.thread.index })
-        return Story(best.thread.storyId, best.thread.story, best.item.spec, frames.maxOf { it.thread.rev }, frames)
+        return Story(best.thread.storyId, best.thread.story, best.item.spec, frames.maxOf { it.thread.rev }, frames, best.item.kerns)
     }
 
     /** A new story id: random, positive, 63-bit, used by no frame of the document. */
@@ -216,7 +221,8 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      * True when [frames] (one story, chain order) hold their story whole: the same story copy,
      * each unlocked frame starting where the one before ends (the first at 0), indices increasing,
      * and `overset` only on the last frame, exactly when the story goes on beyond it. Locked
-     * frames keep whatever slice they have (they can't be changed).
+     * frames keep whatever slice they have (they can't be changed). v1.7: and the same story
+     * kerns in every unlocked frame (a frame written by v1.6 has lost them).
      */
     internal fun isWhole(frames: List<Frame>): Boolean {
         val s = storyOf(frames) ?: return true
@@ -225,6 +231,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
             if (k > 0 && th.index <= frames[k - 1].thread.index) return false
             if (c.doc.effectiveLocked(f.layer)) continue
             if (th.story !== s.text && th.story != s.text) return false
+            if (f.item.kerns !== s.kerns && f.item.kerns != s.kerns) return false
             val expected = if (k == 0) 0 else frames[k - 1].thread.end
             if (th.start != expected) return false
             if (th.overset != (k == frames.lastIndex && th.end < s.text.length)) return false
@@ -250,7 +257,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      */
     private fun reflow(s: Story, chain: List<FlowFrame>): Boolean {
         val items = try {
-            TextThreadFlow.flow(s.text, s.spec, chain, s.id, s.rev, measures)
+            TextThreadFlow.flow(s.text, s.spec, chain, s.id, s.rev, measures, s.kerns)
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory to re-flow the linked text")
             return false
@@ -291,12 +298,15 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
     /**
      * A duplicated frame becomes an unlinked plain fixed-box text of its slice (§3.6a), drawn
      * again with its own layout, in the duplicate's step. A locked copy is unlocked around the
-     * change (the change and the lock are restored together by undo).
+     * change (the change and the lock are restored together by undo). v1.7: it keeps the story
+     * kerns of its slice, re-indexed into its own text.
      */
     private fun unthreadCopy(copy: Layer) {
         val item = frameOf(copy) ?: return
         if (c.doc.indexOf(copy) < 0) return
-        val plain = item.copy(thread = TextThreadSpec()).sanitized()
+        val th = item.thread
+        val kerns = TextKerns.slice(item.kerns, th.start, th.end)
+        val plain = item.copy(thread = TextThreadSpec(), kerns = kerns).sanitized()
         c.amendLastStep {
             val locked = copy.locked
             if (locked) c.setLayerProps(copy, copy.props().copy(locked = false), TextWrapReflow.REFLOW_LABEL)
@@ -355,12 +365,14 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      * same step. New frames (`layer == null`) are created, named by [nameOf] (their chain
      * position). Refused with a message, writing nothing, when a frame that would change is
      * locked. Returns the layers of [chain] in order, or null when nothing was written.
+     * v1.7: [kerns] are the story's manual kerns (story indices), written to every frame.
      */
     internal fun writeStory(
         label: String,
         storyId: Long,
         story: String,
         spec: TextSpec,
+        kerns: List<TextKern>,
         chain: List<FlowFrame>,
         extra: List<FrameWrite> = emptyList(),
         nameOf: (Int, TextItem) -> String = { k, it -> frameName(k, it) },
@@ -368,17 +380,17 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
         val before = framesOf(storyId)
         val base = before.maxOfOrNull { it.thread.rev } ?: 0L
         var items = try {
-            TextThreadFlow.flow(story, spec, chain, storyId, base, measures)
+            TextThreadFlow.flow(story, spec, chain, storyId, base, measures, kerns)
         } catch (e: OutOfMemoryError) {
             c.toast("Not enough memory to flow the linked text")
             return null
         }
         val olds = chain.map { f -> f.layer?.let { frameOf(it) ?: TextCodec.decode(it.textData) } }
-        // A re-flow (the story, its look, a slice or the chain changes) bumps rev for every frame;
-        // a frame only moved (its lines the same) changes alone.
+        // A re-flow (the story, its kerns, its look, a slice or the chain changes) bumps rev for
+        // every frame; a frame only moved (its lines the same) changes alone.
         val reflowed = extra.isNotEmpty() || before.size != chain.size || chain.indices.any { k ->
             val o = olds[k]
-            o == null || !o.threaded || o.thread.copy(rev = base) != items[k].thread ||
+            o == null || !o.threaded || o.thread.copy(rev = base) != items[k].thread || o.kerns != items[k].kerns ||
                 FrameGeometry.storyLook(o.spec) != FrameGeometry.storyLook(items[k].spec)
         }
         if (reflowed) items = items.map { withRev(it, base + 1) }

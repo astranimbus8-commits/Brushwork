@@ -144,41 +144,60 @@ object TextKerns {
     }
 
     /**
-     * The extra advance (px) after each character of [text] that the renderer adds, or null
-     * when no kern applies. [text] is the source (the item's text, or a linked story) from
-     * [offset] on: a kern at source index k is the gap after `text[k − offset]`. [sizePx] is the
-     * font size (a kern is `value / 1000` em); [factors] (v1.6 letter scaling: per source
-     * character, null when unscaled) scale it with the size of the character before the gap.
+     * The extra advance (px) after each character of `source[from, length)` that the renderer
+     * adds (index 0 = `source[from]`), or null when no kern applies. [source] is the item's text,
+     * or a linked story ([from]: the frame's start). [sizePx] is the font size (a kern is
+     * `value / 1000` em); [factors] (v1.6 letter scaling: per source character, null when
+     * unscaled) scale it with the size of the character before the gap.
      *
-     * A kern applies when [supported] (the source can be drawn one cluster at a time:
-     * [LetterRamp.supports]; right-to-left and shaping scripts keep their shaping and ignore
-     * kerns), its gap lies in [text], is no line break (`\n` or `\r` on either side) and falls
-     * between two grapheme clusters (an accent stays on its letter).
+     * A kern applies when its gap lies at or after [from], is no line break (`\n` or `\r` on
+     * either side), falls between two grapheme clusters (an accent stays on its letter), and its
+     * PARAGRAPH (the source between line breaks, also its part before [from]) can be drawn one
+     * cluster at a time ([LetterRamp.supports]): right-to-left and shaping scripts keep their
+     * shaping and ignore kerns, and a line holding them is never drawn in pieces. What a kern
+     * does depends only on its paragraph.
      */
-    fun advancesPx(text: String, kerns: List<TextKern>, offset: Int, sizePx: Float, supported: Boolean, factors: FloatArray? = null): FloatArray? {
-        if (kerns.isEmpty() || !supported || !(sizePx > 0f) || !sizePx.isFinite()) return null
-        val n = text.length
+    fun advancesPx(source: String, kerns: List<TextKern>, from: Int, sizePx: Float, factors: FloatArray? = null): FloatArray? {
+        if (kerns.isEmpty() || !(sizePx > 0f) || !sizePx.isFinite()) return null
+        val n = source.length
         var out: FloatArray? = null
-        var bounds: BooleanArray? = null
         val em = sizePx / 1000f
+        // The paragraph of the last kern looked at: [ps, pe), whether it is supported, its clusters.
+        var ps = 0
+        var pe = -1
+        var supported = false
+        var clusters: BooleanArray? = null
         for (k in kerns) {
-            val j = k.index - offset
-            if (j < 0) continue
-            if (j + 1 >= n) break
-            val a = text[j]
-            val b = text[j + 1]
+            val i = k.index
+            if (i < from) continue
+            if (i + 1 >= n) continue
+            val a = source[i]
+            val b = source[i + 1]
             if (a == '\n' || a == '\r' || b == '\n' || b == '\r') continue
-            if (needsClusters(a, b)) {
-                val bd = bounds ?: clusterStarts(text).also { bounds = it }
-                if (!bd[j + 1]) continue
+            if (i >= pe || i < ps) {
+                ps = source.lastIndexOf('\n', i) + 1
+                pe = source.indexOf('\n', i).let { if (it < 0) n else it }
+                supported = supports(source, ps, pe)
+                clusters = null
             }
-            val f = factors?.getOrNull(offset + j) ?: 1f
+            if (!supported) continue
+            if (needsClusters(a, b)) {
+                val c = clusters ?: clusterStarts(source.substring(ps, pe)).also { clusters = it }
+                if (!c[i + 1 - ps]) continue
+            }
+            val f = factors?.getOrNull(i) ?: 1f
             val px = k.value * em * f
             if (px == 0f || !px.isFinite()) continue
-            val o = out ?: FloatArray(n).also { out = it }
-            o[j] = px
+            val o = out ?: FloatArray(n - from).also { out = it }
+            o[i - from] = px
         }
         return out
+    }
+
+    /** [LetterRamp.supports] of `source[start, end)` (plain ASCII without a copy). */
+    private fun supports(source: String, start: Int, end: Int): Boolean {
+        for (i in start until end) if (source[i].code >= 0x80) return LetterRamp.supports(source.substring(start, end))
+        return true
     }
 
     /** Whether a cluster boundary between [a] and [b] can't be assumed (plain Latin characters always have one). */
