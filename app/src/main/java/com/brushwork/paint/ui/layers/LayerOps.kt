@@ -129,8 +129,18 @@ object LayerOps {
 
     fun duplicate(c: EditorController, layer: Layer) = guardMemory(c, "Duplicate layer") { c.duplicateLayer(layer) }
 
-    /** Whether [layer] has a layer below it to merge into. */
-    fun canMergeDown(c: EditorController, layer: Layer): Boolean = c.doc.indexOf(layer) > 0
+    /**
+     * Whether [layer] has a layer below it to merge into (v1.7: at its own level; a folder merges
+     * as "Merge folder").
+     */
+    fun canMergeDown(c: EditorController, layer: Layer): Boolean = layer.isFolder || siblingBelow(c, layer) != null
+
+    /** The row directly below [layer] when it is at the same level (v1.6: `layers[index - 1]`), else null. */
+    private fun siblingBelow(c: EditorController, layer: Layer): Layer? {
+        val idx = c.doc.indexOf(layer)
+        if (idx <= 0) return null
+        return c.doc.layers[idx - 1].takeIf { it.parentId == layer.parentId }
+    }
 
     /**
      * Merges [layer] into the layer below. When both are clipped to the same base, the upper one
@@ -147,8 +157,11 @@ object LayerOps {
             return
         }
         val idx = c.doc.indexOf(layer)
-        if (idx <= 0) { c.toast("There is no layer below to merge into"); return }
-        val lower = c.doc.layers[idx - 1]
+        // v1.7: the layer below at the same level (a folder's bottom child has none); a folder
+        // there is refused before any lock prompt about it.
+        val lower = siblingBelow(c, layer)
+        if (lower == null) { c.toast("There is no layer below to merge into"); return }
+        if (lower.isFolder) { c.toast(FolderLabels.MERGE_INTO_REFUSAL); return }
         // An adjustment layer has no pixels of its own (checkEditable refuses those without a
         // mask): merging it applies its effect to the layer below ("Apply to layer below").
         if (layer.isAdjustmentLayer) {

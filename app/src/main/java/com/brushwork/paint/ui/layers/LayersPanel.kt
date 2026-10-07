@@ -141,6 +141,9 @@ fun LayersPanel(
     val layerCount = doc.layers.size
     val canAddLayer = controller.canAddLayer
     val maxLayers = controller.maxLayers
+    // v1.7 (I14): the header's "n / max" counts what maxLayers counts (folders 0, array sources
+    // added); without folders and arrays it is the number of layers, as in v1.6.
+    val usedLayers = controller.effectiveLayerCount
 
     var renameId by rememberSaveable { mutableStateOf<Long?>(null) }
     var opacityId by rememberSaveable { mutableStateOf<Long?>(null) }
@@ -204,7 +207,7 @@ fun LayersPanel(
                 )
             }
             Column(Modifier.fillMaxSize()) {
-                WindowHeader(layerCount, maxLayers, canAddLayer, onDismiss, Modifier.height(m.header.dp))
+                WindowHeader(usedLayers, maxLayers, canAddLayer, onDismiss, Modifier.height(m.header.dp))
                 if (m.sideBySide) {
                     // Short, wide window (a phone in landscape): the list beside the controls.
                     Row(Modifier.fillMaxWidth().height(m.main.dp).padding(start = m.padStart.dp, end = m.padEnd.dp, bottom = m.bottomPad.dp)) {
@@ -310,7 +313,10 @@ fun LayersPanel(
     }
 }
 
-/** "Layer", the layer count ("n / max", red at the limit) and the ✕ (kept: tests and V10). */
+/**
+ * "Layer", the layer count ("n / max", red at the limit; v1.7: `effectiveLayerCount`) and the ✕
+ * (kept: tests and V10).
+ */
 @Composable
 private fun WindowHeader(layerCount: Int, maxLayers: Int, canAddLayer: Boolean, onDismiss: () -> Unit, modifier: Modifier) {
     Row(

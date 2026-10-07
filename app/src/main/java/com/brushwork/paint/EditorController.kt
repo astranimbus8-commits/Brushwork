@@ -167,7 +167,10 @@ class UiMark internal constructor(
     internal val color: Int,
     internal val tool: Tool,
     internal val toolMark: Any?,
-)
+) {
+    /** Set by the first [EditorController.releaseUiMark]: a second release (gesture end AND cancel) does nothing. */
+    internal var released = false
+}
 
 /**
  * Central editor state + operations. One instance per open document; lives in a ViewModel.
@@ -610,8 +613,14 @@ class EditorController(
         return changed
     }
 
-    /** Closes [m] (every gesture end and every cancel): trimming resumes; with no mark open the journal is emptied. */
+    /**
+     * Closes [m] (every gesture end and every cancel): trimming resumes; with no mark open the
+     * journal is emptied. Only the first release of a mark counts, so releasing it twice never
+     * ends another open mark's trim hold or journal.
+     */
     fun releaseUiMark(m: UiMark) {
+        if (m.released) return
+        m.released = true
         undoManager.releaseTrim()
         settings.closeJournal()
     }
@@ -2109,23 +2118,63 @@ class EditorController(
 
     // ------------------------------------------------------------------ saved selections (v1.7, item 14)
 
-    /** Ids and names taken by saves still compressing (two quick saves never share one). */
+    /** Ids and names taken by saves still compressing (two quick saves never share a name; they count toward the limit). */
     private val pendingSavedIds = HashSet<Long>()
     private val pendingSavedNames = HashSet<String>()
 
     /**
+     * The highest revision given to each saved selection's id in this session. An update after
+     * an undo never reuses a revision: `sel_<id>_r<revision>.bin` may already be on disk, listed
+     * by the last save, with other pixels, and the save skips files that are (LayerEntries).
+     */
+    private val issuedSavedRevisions = HashMap<Long, Long>()
+
+    /**
+     * The revision saved selection [id] gets when its pixels change: above [current] and above
+     * every revision given to [id] in this session (a revision loaded from the project is the
+     * only one the last save can list from before the session). Main thread.
+     */
+    internal fun nextSavedRevision(id: Long, current: Long): Long {
+        val r = maxOf(current, issuedSavedRevisions[id] ?: 0L) + 1
+        issuedSavedRevisions[id] = r
+        return r
+    }
+
+    /**
+     * [after], the saved selections after an edit of [before] (a canvas operation's
+     * `SavedSelectionOps.mappedForCanvas`), with every entry whose pixels changed (the same id,
+     * another `packed`) given [nextSavedRevision], so its file never takes the name of another
+     * version's. [after] itself when none changed. Main thread.
+     */
+    internal fun withNewSavedRevisions(before: List<SavedSelection>, after: List<SavedSelection>): List<SavedSelection> {
+        if (before.isEmpty() || after.isEmpty()) return after
+        val old = before.associateBy { it.id }
+        var changed = false
+        val out = after.map { e ->
+            val b = old[e.id]
+            if (b == null || b.packed === e.packed) {
+                e
+            } else {
+                changed = true
+                SavedSelection(e.id, e.name, Rect(e.bounds), e.packed, nextSavedRevision(e.id, b.revision))
+            }
+        }
+        return if (changed) out else after
+    }
+
+    /**
      * "Save selection": the active selection is compressed on `Dispatchers.Default`, then added
      * to `doc.savedSelections` (oldest first; the rows list them newest first) as "Selection N"
-     * with one `SavedSelectionsAction` step on the main thread. False (with the message) without
-     * a selection or at a limit (32 entries, 32 MB packed).
+     * with one `SavedSelectionsAction` step on the main thread. Its id is `doc.newSelectionId()`:
+     * never reused in the document, a deleted (or undone) entry's included. False (with the
+     * message) without a selection or at a limit (32 entries, 32 MB packed).
      */
     fun saveSelection(): Boolean {
         val sel = selection?.takeUnless { it.isEmpty } ?: return false
         val list = doc.savedSelections
         if (list.size + pendingSavedIds.size >= SavedSelection.MAX) { toast(SavedSelectionLabels.LIMIT); return false }
         if (list.sumOf { it.bytes } >= SavedSelection.MAX_TOTAL_BYTES) { toast(SavedSelectionLabels.FULL); return false }
-        var id = (list.maxOfOrNull { it.id } ?: 0L) + 1
-        while (id in pendingSavedIds) id++
+        val id = doc.newSelectionId()
         val names = list.mapTo(HashSet()) { it.name } + pendingSavedNames
         var n = list.size + pendingSavedIds.size + 1
         while ("Selection $n" in names) n++
@@ -2151,14 +2200,16 @@ class EditorController(
 
     /**
      * "Update from selection": saved selection [id] takes the active selection (same name, the
-     * revision + 1), compressed in the background; one "Update saved selection" step. False
-     * without a selection or such an entry.
+     * revision + 1; above every revision this id had in the session, so an update after an undo
+     * gets a new file name), compressed in the background; one "Update saved selection" step.
+     * False without a selection or such an entry.
      */
     fun updateSavedSelection(id: Long): Boolean {
         val sel = selection?.takeUnless { it.isEmpty } ?: return false
         val old = doc.savedSelections.firstOrNull { it.id == id } ?: return false
+        val revision = nextSavedRevision(id, old.revision)
         scope.launch {
-            val saved = packSelection(id, old.name, sel, old.revision + 1) ?: return@launch
+            val saved = packSelection(id, old.name, sel, revision) ?: return@launch
             val now = doc.savedSelections
             val i = now.indexOfFirst { it.id == id }
             if (i < 0) return@launch

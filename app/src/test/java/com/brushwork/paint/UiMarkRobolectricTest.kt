@@ -91,4 +91,22 @@ class UiMarkRobolectricTest {
         c.undo()
         assertEquals(listOf("Layer 1"), c.doc.layers.map { it.name })
     }
+
+    @Test
+    fun releasingAMarkTwiceKeepsAnotherOpenMarkWhole() {
+        val c = controller()
+        c.addLayer("A")
+        val outer = c.uiMark()
+        val inner = c.uiMark()
+        // A gesture end and a cancel both release the inner mark: only the first counts.
+        c.releaseUiMark(inner)
+        c.releaseUiMark(inner)
+        repeat(160) { c.renameLayer(c.doc.activeLayer, "N$it") }
+        val leftHanded = c.settings.leftHanded
+        c.settings.leftHanded = !leftHanded
+        assertTrue(c.restoreUiMark(outer))
+        assertEquals("the outer mark's step was not trimmed", "A", c.doc.activeLayer.name)
+        assertEquals("the journal still recorded for the outer mark", leftHanded, c.settings.leftHanded)
+        c.releaseUiMark(outer)
+    }
 }

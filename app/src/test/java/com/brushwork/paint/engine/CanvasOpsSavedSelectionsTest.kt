@@ -97,6 +97,34 @@ class CanvasOpsSavedSelectionsTest {
         assertSame(saved, c.doc.savedSelections)
     }
 
+    /**
+     * Gate 1 review: a mapped entry whose pixels changed gets a revision no earlier step used (its
+     * file `sel_<id>_r<revision>.bin` is skipped by a save that listed it), even after an undo;
+     * an entry the mapping kept (same `packed`) stays the very instance.
+     */
+    @Test
+    fun aMappedEntryGetsARevisionNoUndoneStepUsed() {
+        val c = controller()
+        val saved = c.doc.savedSelections
+        fun flipWith(packed: ByteArray) {
+            val snap = CanvasSnapshot.of(c.doc)
+            val first = snap.savedSelections[0]
+            // What a mapping returns: the next revision by its own count, and the second entry as it was.
+            val mapped = listOf(SavedSelection(first.id, first.name, Rect(first.bounds), packed, first.revision + 1), snap.savedSelections[1])
+            CanvasOps.commit(c, "Flip canvas", snap, CanvasOps.flip(snap, horizontal = true), mapped)
+        }
+        flipWith(byteArrayOf(7))
+        assertEquals(2L, c.doc.savedSelections[0].revision)
+        assertSame("an entry the mapping kept", saved[1], c.doc.savedSelections[1])
+        c.undo()
+        assertSame(saved, c.doc.savedSelections)
+        flipWith(byteArrayOf(8))
+        assertEquals("revision 2 belongs to the undone flip", 3L, c.doc.savedSelections[0].revision)
+        assertTrue(c.doc.savedSelections[0].packed.contentEquals(byteArrayOf(8)))
+        c.undo()
+        assertSame(saved, c.doc.savedSelections)
+    }
+
     @Test
     fun anIdentityResultOfAnotherSizeClearsTheListWithTheStub() {
         val c = controller()

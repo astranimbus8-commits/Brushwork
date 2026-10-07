@@ -263,7 +263,8 @@ internal fun stripActions(env: LayerWindowEnv): List<WindowAction> {
         WindowAction(LayerLabels.FLIP_V, true, iconGlyph(ChromeGlyphs.FlipVertical)) { c.fromPanel { LayerOps.flip(c, layer, horizontal = false) } },
         WindowAction(
             if (row.isAdjustment) LayerLabels.APPLY_BELOW else LayerLabels.MERGE,
-            env.docIndex > 0,
+            // v1.7: a layer below at the same level (a folder's bottom child has none); v1.6: docIndex > 0.
+            env.docIndex > 0 && LayerOps.canMergeDown(c, layer),
             iconGlyph(Icons.Filled.VerticalAlignBottom),
         ) { c.fromPanel { LayerOps.mergeDown(c, layer) } },
         WindowAction(LayerLabels.DELETE, env.layerCount > 1, iconGlyph(Icons.Outlined.Delete)) { c.fromPanel(env.onDelete) },

@@ -432,7 +432,8 @@ object CanvasOps {
      * a [DocumentBitmapsAction] (wrapped so the ruler/grid follow the artwork, the selection comes
      * back on undo and the active tool is reset around the swap), or a small metadata action when
      * no bitmaps changed. [savedAfter]: the saved selections after the operation (v1.7, item 14;
-     * mapped in the background by [run]).
+     * mapped in the background by [run]); an entry whose `packed` changed is given a fresh
+     * revision here (`EditorController.withNewSavedRevisions`).
      */
     fun commit(
         c: EditorController,
@@ -470,10 +471,13 @@ object CanvasOps {
                 snap.width to snap.height, result.width to result.height,
                 snap.dpi, result.dpi, snap.colorMode, result.colorMode,
             )
+            // A saved selection whose pixels the operation changed gets a new revision (its file
+            // name), never one an undone operation or update used: G's mapping need not track them.
+            val savedBefore = c.doc.savedSelections
             CanvasChangeAction(
                 inner, result.geometry, snap.width, snap.height, result.width, result.height,
                 selectionBefore = c.selection, bytesBefore = bytesBefore, bytesAfter = bytesAfter,
-                savedBefore = c.doc.savedSelections, savedAfter = savedAfter,
+                savedBefore = savedBefore, savedAfter = c.withNewSavedRevisions(savedBefore, savedAfter),
             )
         }
         action.redo(c)

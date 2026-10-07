@@ -12,7 +12,11 @@ import com.brushwork.paint.brush.TipShapes
 import com.brushwork.paint.brush.sanitized
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.masks.MaskSpecs
+import com.brushwork.paint.model.ArrayMode
+import com.brushwork.paint.model.ArraySpec
+import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.render.RenderCache
 import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlin.math.abs
@@ -27,18 +31,46 @@ import kotlin.math.abs
  *   a stroke's symmetry copies are conjugated, so they move, turn and mirror with it).
  * - A mask spec is mapped by [MaskSpecs.transformed] (dropped when that can't).
  * - Text and shape layers become raster layers (as in v1.4: their pixels are resampled).
- * - An identity map (color-mode changes) keeps everything: in a grayscale or 1-bit document a
- *   vector layer's cache is the constrained rendering of its objects.
+ * - v1.7 (item 3, design §3.3 b): a vector array's spec is mapped with its content
+ *   ([ArraySpec.mapped]; a CIRCLE centre or TRANSFORM pivot that follows the source is fixed
+ *   first from the content's bounds, unless the map only moves, so the copies land where the
+ *   old ones map to). Every other array is baked (dropped: the layer's pixels already show the
+ *   copies), as text and shape data are: its source is text or shape data that is dropped, or
+ *   pixels that the operation does not map.
+ * - An identity map (color-mode changes) keeps everything else: in a grayscale or 1-bit document
+ *   a vector layer's cache is the constrained rendering of its objects (a vector array is kept;
+ *   any other array is baked, its source being dropped text or shape data or unconverted pixels).
  * - Adjustments are kept.
  */
 object LayerDataTransforms {
     /** Data after a canvas geometry change [m] (old -> new document px); vector content mapped (sizeScale), maskSpec via MaskSpecs.transformed. */
     fun transformed(d: LayerData, m: Matrix, newW: Int, newH: Int): LayerData {
-        if (m.isIdentity) return d.copy(text = null, shape = null)
+        if (m.isIdentity) return d.copy(text = null, shape = null, array = d.array?.takeIf { d.vector != null })
         val values = FloatArray(9).also { m.getValues(it) }
         val vector = d.vector?.let { mapped(it, values) }
         val mask = d.maskSpec?.let { MaskSpecs.transformed(it, m) }
-        return d.copy(text = null, shape = null, vector = vector, maskSpec = mask)
+        val array = d.array?.let { a -> d.vector?.let { v -> mappedArray(a, v, values) } }
+        return d.copy(text = null, shape = null, vector = vector, maskSpec = mask, array = array)
+    }
+
+    /**
+     * A vector source's [array] under [m] (3x3 row-major; [content] = the source BEFORE the map).
+     * A null CIRCLE centre or TRANSFORM pivot follows the source's bounds, which is not where the
+     * old placement maps to under a flip or a turn: unless [m] only moves, it is set from the
+     * content's paint bounds (`ObjectIndex.unionBounds`, what the array is measured from) first.
+     */
+    private fun mappedArray(array: LayerArray, content: VectorContent, m: FloatArray): LayerArray {
+        var spec = array.spec
+        val moveOnly = m[0] == 1f && m[1] == 0f && m[3] == 0f && m[4] == 1f && m[6] == 0f && m[7] == 0f && m[8] == 1f
+        if (!moveOnly) {
+            val circle = spec.mode == ArrayMode.CIRCLE && (spec.centerX == null || spec.centerY == null)
+            val turn = spec.mode == ArrayMode.TRANSFORM && (spec.pivotX == null || spec.pivotY == null)
+            if (circle || turn) {
+                val r = spec.resolved(ObjectIndex.of(content).unionBounds())
+                spec = if (circle) spec.copy(centerX = r.centerX, centerY = r.centerY) else spec.copy(pivotX = r.pivotX, pivotY = r.pivotY)
+            }
+        }
+        return array.copy(spec = spec.mapped(m))
     }
 
     /** [content] with every object mapped by [m] (3x3 row-major); ids and order kept. */
