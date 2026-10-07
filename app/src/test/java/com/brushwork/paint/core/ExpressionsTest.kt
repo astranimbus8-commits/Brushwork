@@ -107,6 +107,49 @@ class ExpressionsTest {
     }
 
     @Test
+    fun numbersInsideExpressionsReadAsPlainNumbersDo() {
+        // Gate 2 review: ".5" and "5." are plain numbers, so they are numbers inside expressions too.
+        assertEquals(1.0, value(".5*2"), 0.0)
+        assertEquals(1.0, value(",5*2"), 0.0)
+        assertEquals(10.0, value("5.*2"), 0.0)
+        assertEquals(240.0, value("/.5", 120.0), 0.0)
+        assertEquals(600.0, value("*5,", 120.0), 0.0)
+        assertEquals(5000.0, value("5.e3"), 0.0)
+        assertEquals(-0.5, value("-.5"), 0.0)
+        assertEquals(0.75, value("(.5+,25)"), 0.0)
+        // A lone separator is still no number.
+        assertEquals(ExpressionLabels.INVALID, error(".*2"))
+        assertEquals(ExpressionLabels.INVALID, error("2*."))
+        assertEquals(ExpressionLabels.INVALID, error("1.2.3"))
+        assertEquals(ExpressionLabels.INVALID, error("1..2"))
+        // At the parse sites: the expression, not the v1.6 filter's "120.5" or ".52".
+        assertEquals(240.0, Units.parse(Expressions.resolveRelative("/.5", 120f)!!)!!, 0.0)
+        assertEquals(1f, com.brushwork.paint.ui.common.NumberSliderMath.parseTyped(".5*2", 1f, 0f, 10f)!!, 0f)
+    }
+
+    @Test
+    fun invalidRelativeTextIsNotResolved() {
+        // Gate 2 review: the caller parses the user's own text, so a parse site's v1.6 fallback
+        // never reads the current value's digits joined to the typed ones.
+        assertNull(Expressions.resolveRelative("/2+", 120f))
+        assertNull(Expressions.resolveRelative("/0", 120f))
+        assertNull(Expressions.resolveRelative("*(2", 120.0))
+        assertNull(Expressions.resolveRelative("*" + "1".repeat(Expressions.MAX_LENGTH), 120f))
+        val slider = com.brushwork.paint.ui.common.NumberSliderMath
+        // "/2+" in a slider at 120: v1.6 read nothing ("2+" is no number), and still does
+        // ("120/(2+)" would have been filtered to 1202).
+        assertNull(slider.parseTyped(Expressions.resolveRelative("/2+", 120f) ?: "/2+", 1f, 0f, 5000f))
+        assertNull(Units.parse(Expressions.resolveRelative("/0", 120f) ?: "/0"))
+        // A readout's message comes from evaluate with the current value, so it stays specific.
+        assertEquals(ExpressionLabels.DIV_ZERO, error("/0", 120.0))
+        assertEquals(ExpressionLabels.INVALID, error("/2+", 120.0))
+        // Valid relative text still resolves, units and all.
+        assertEquals("120*2 px", Expressions.resolveRelative("*2 px", 120f))
+        assertEquals("120*(2+1)%", Expressions.resolveRelative("*2+1 %", 120f))
+        assertEquals(360.0, value(Expressions.resolveRelative("*2+1 %", 120f)!!), 0.0)
+    }
+
+    @Test
     fun plainNumbersAreRecognized() {
         for (plain in listOf("5", "-5", "+5", "1.5", "1,5", ".5", "5.", "1e3", "2.5E-2", "12 px", "12mm", "57 %", "-30°", "  7  ")) {
             assertTrue("\"$plain\" is plain", Expressions.isPlainNumber(plain))

@@ -13,10 +13,13 @@ import com.brushwork.paint.ui.common.ExpressionLabels
  * term    := factor {(* | / | × | ÷ | x | X) factor}
  * factor  := [+ | - | −] primary   (ONE sign: "--5" is an error)
  * primary := number | '(' expr ')'
- * number  := digits [(. | ,) digits] [(e | E) [+ | -] digits]
+ * number  := (digits [(. | ,) [digits]] | (. | ,) digits) [(e | E) [+ | -] digits]
  * ```
  * A leading `+` or `-` is a sign, never relative. NaN or infinite results, a division by 0 and text
  * longer than [MAX_LENGTH] are errors ([ExpressionLabels.DIV_ZERO], [ExpressionLabels.INVALID]).
+ * A number is read as [isPlainNumber] reads one, so ".5" and "5." work inside an expression too
+ * (".5*2" is 1, "/.5" at 120 is 240; gate 2 review: the design's `digits [sep digits]` alone made
+ * them errors, whose lenient fallback then read "120/.5" as 120.5).
  *
  * The three parse sites ([Units.parse], `NumberSliderMath.parseTyped`, `SliderMath.parseValue`)
  * run their v1.6 code unchanged for a [isPlainNumber] text; otherwise they [evaluate] it, and when
@@ -82,8 +85,12 @@ object Expressions {
      * For fields: "/2" at 120 -> "120/2" (the current value formatted with '.' and full
      * precision, then the operator and the rest; a rest that is more than a number is put in
      * parentheses, "*2+1" -> "120*(2+1)", so the text means what [evaluate] makes of it). Null when
-     * [text] has no leading relative operator or [current] is not finite, so the caller parses
-     * [text] as it is.
+     * [text] has no leading relative operator, when [current] is not finite, or when the resolved
+     * text is not a valid expression ("/0", "*2+", too long): the caller then parses [text] as it
+     * is, so a parse site's v1.6 fallback reads what the user typed, never the current value's
+     * digits joined to it ("/2+" at 120 never becomes the 1202 that "120/(2+)" filters to). A
+     * readout takes its message from [evaluate] with the current value ("/0" at 120 is
+     * [ExpressionLabels.DIV_ZERO]), not from this result.
      */
     fun resolveRelative(text: String, current: Float): String? =
         if (current.isFinite()) resolve(text, shortest(current.toString())) else null
@@ -102,10 +109,14 @@ object Expressions {
         if (t.isEmpty() || t[0] !in RELOPS) return null
         val op = t[0]
         val rest = t.substring(1).trim()
-        if (rest.isEmpty() || isPlainNumber(rest)) return "$cur$op$rest"
-        val core = stripUnit(rest)
-        val unit = rest.substring(core.length).trim()
-        return "$cur$op($core)$unit"
+        val out = if (rest.isEmpty() || isPlainNumber(rest)) {
+            "$cur$op$rest"
+        } else {
+            val core = stripUnit(rest)
+            val unit = rest.substring(core.length).trim()
+            "$cur$op($core)$unit"
+        }
+        return out.takeIf { evaluate(it) is Result.Value }
     }
 
     /** Float/Double.toString without a trailing ".0" ("120.0" -> "120"; "1.0E-5" stays: the grammar reads it). */
@@ -178,7 +189,9 @@ object Expressions {
                 i++
                 return v
             }
-            if (!c.isAsciiDigit()) throw ParseError(false)
+            // A digit, or a separator followed by one (".5").
+            val separatorFirst = (c == '.' || c == ',') && i + 1 < s.length && s[i + 1].isAsciiDigit()
+            if (!c.isAsciiDigit() && !separatorFirst) throw ParseError(false)
             return number()
         }
 
@@ -189,11 +202,14 @@ object Expressions {
                 while (i < s.length && s[i].isAsciiDigit()) sb.append(s[i++])
                 return i > start
             }
-            digits()
+            val whole = digits()
             if (i < s.length && (s[i] == '.' || s[i] == ',')) {
                 i++
                 sb.append('.')
-                if (!digits()) throw ParseError(false)
+                // "5." and ".5" are numbers (as isPlainNumber reads them); a lone separator is not.
+                if (!digits() && !whole) throw ParseError(false)
+            } else if (!whole) {
+                throw ParseError(false)
             }
             if (i < s.length && (s[i] == 'e' || s[i] == 'E')) {
                 i++

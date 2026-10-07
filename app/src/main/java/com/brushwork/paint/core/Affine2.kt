@@ -64,8 +64,12 @@ data class Affine2(
     /** True when every coefficient is finite. */
     fun isFinite(): Boolean = a.isFinite() && b.isFinite() && c.isFinite() && d.isFinite() && tx.isFinite() && ty.isFinite()
 
-    /** True when this map has no translation and its linear part is the identity. */
-    val isIdentity: Boolean get() = this == IDENTITY
+    /**
+     * True when this map has no translation and its linear part is the identity. Compared by value,
+     * so -0 counts as 0 (`rotateAbout(p, 0f)` has `c = -0f` and is the identity; data-class
+     * equality would say it is not).
+     */
+    val isIdentity: Boolean get() = a == 1f && b == 0f && c == 0f && d == 1f && tx == 0f && ty == 0f
 
     companion object {
         val IDENTITY = Affine2()

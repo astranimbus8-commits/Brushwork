@@ -85,7 +85,8 @@ class PointGizmo {
     }
 
     /** Corners scale proportionally (freely when [keepProportions] is false), edges one axis, MOVE translates, ROTATE turns
-     *  about the pivot; with [steps] non-null, the Length, Scale and Angle steps apply. */
+     *  about the pivot; with [steps] non-null, the Length, Scale and Angle steps apply (only while increments are on,
+     *  [IncrementSettings.enabled], so a tool may always pass the controller's settings). */
     fun dragMap(layout: Layout, part: Part, startDoc: Vec2, nowDoc: Vec2, keepProportions: Boolean, steps: IncrementSettings?): Affine2 {
         if (!startDoc.x.isFinite() || !startDoc.y.isFinite() || !nowDoc.x.isFinite() || !nowDoc.y.isFinite()) return Affine2.IDENTITY
         val stepped = steps?.takeIf { it.enabled }

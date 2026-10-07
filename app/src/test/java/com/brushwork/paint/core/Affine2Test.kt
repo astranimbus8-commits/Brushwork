@@ -36,6 +36,14 @@ class Affine2Test {
         assertEquals(Affine2.IDENTITY, Affine2.IDENTITY * Affine2.IDENTITY)
         assertEquals(Affine2.IDENTITY, Affine2.IDENTITY.inverse())
         assertTrue(Affine2.IDENTITY.isIdentity)
+        // Gate 2 review: -0 counts as 0 (a turn by 0 has c = -0f, a data-class inequality).
+        val still = Affine2.rotateAbout(Vec2(30f, -40f), 0f)
+        assertTrue(still.isIdentity)
+        assertTrue(Affine2.rotateAbout(Vec2(30f, -40f), 360f).isIdentity)
+        assertTrue(Affine2.scaleAbout(Vec2(7f, 9f), 1f, 1f).isIdentity)
+        assertTrue(Affine2(b = -0f, c = -0f, tx = -0f, ty = -0f).isIdentity)
+        assertTrue(!Affine2.translate(0f, 1e-6f).isIdentity)
+        assertTrue(!Affine2.rotateAbout(Vec2.ZERO, 1e-3f).isIdentity)
     }
 
     @Test

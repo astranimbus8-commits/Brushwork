@@ -35,7 +35,9 @@ import org.robolectric.shadows.ShadowLog
  * value the edit started from: "/2" in the X / Y pill's X at 300 gives 150, "*2" in a NumberField
  * thickness at 4 gives 8, "/2" in a ValueInputDialog opened at 60 (an opacity held as 0..1 and
  * shown in percent) gives 30; a MixedNumberField resolves against its shared value and hands
- * "Mixed" relative text over as typed. 392 dp phone; own sandbox, one test.
+ * "Mixed" relative text over as typed; a LabeledSlider's value editor halves 120 with "/2", and
+ * invalid relative text ("/2+") leaves it as v1.6 did (gate 2 review). 392 dp phone; own sandbox,
+ * one test.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.common.relativefieldssandbox"])
@@ -52,6 +54,7 @@ class RelativeFieldsRobolectricTest {
         val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
         var thickness by mutableDoubleStateOf(4.0)
         var opacity by mutableFloatStateOf(0.6f)
+        var spacing by mutableFloatStateOf(120f)
         var dialog by mutableStateOf(false)
         var typedShared by mutableStateOf<String?>(null)
         var typedMixed by mutableStateOf<String?>(null)
@@ -63,6 +66,7 @@ class RelativeFieldsRobolectricTest {
                         NumberField("Thickness", thickness, { thickness = it }, decimals = 1, suffix = "px", min = 0.0, max = 100.0, step = 1.0, adjust = NumberAdjust.NONE)
                         MixedNumberField("Weight shared", Mixed.Same(120f), "", 0f..500f, "test.weight", {}, { _, _ -> }, {}, { typedShared = it })
                         MixedNumberField("Weight mixed", Mixed.Spread(20f, 80f), "", 0f..500f, "test.weight", {}, { _, _ -> }, {}, { typedMixed = it })
+                        LabeledSlider("Spacing", spacing, { spacing = it }, 1f..500f, typing = SliderTyping(1f, 0, "px"))
                         if (dialog) {
                             ValueInputDialog(
                                 title = "Layer opacity",
@@ -117,6 +121,15 @@ class RelativeFieldsRobolectricTest {
         SmokeUi.click("Type Weight mixed")
         SmokeUi.typeAndDone("Weight mixed", "*2")
         assertEquals("*2", typedMixed)
+
+        // A LabeledSlider's value editor: "/2" applies to the 120 it opened with; "/2+" is no
+        // number, as in v1.6 (resolved, "60/(2+)" would have been filtered to 602 and clamped).
+        SmokeUi.click("Type a value for Spacing")
+        SmokeUi.typeAndDone("Spacing", "/2")
+        assertEquals(60f, spacing, 1e-6f)
+        SmokeUi.click("Type a value for Spacing")
+        SmokeUi.typeAndDone("Spacing", "/2+")
+        assertEquals(60f, spacing, 1e-6f)
         c.dispose()
     }
 
