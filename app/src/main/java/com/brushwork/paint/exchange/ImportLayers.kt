@@ -108,7 +108,7 @@ object ImportLayers {
                 // folder's block), through LayerStructure; the newest import stays active.
                 for (r in replace) {
                     val idx = doc.indexOf(r)
-                    if (idx < 0 || r.isFolder || doc.pixelLayerCount <= 1) continue
+                    if (idx < 0 || r.isFolder || r.parentId != Layer.ROOT_ID || doc.pixelLayerCount <= 1) continue
                     if (!c.structure.delete(r, keepChildren = false, label = label)) continue
                     created.lastOrNull()?.let { top ->
                         c.structural { doc.activeLayerIndex = doc.indexOf(top).coerceAtLeast(0) }

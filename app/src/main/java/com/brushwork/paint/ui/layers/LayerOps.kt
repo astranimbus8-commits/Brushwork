@@ -140,6 +140,12 @@ object LayerOps {
     fun mergeDown(c: EditorController, layer: Layer) {
         // First: committing may insert a layer, which would change the layer below.
         commitPendingWork(c)
+        // v1.7 (§4.4): merging a folder down is "Merge folder" (refused, as any merge, when the
+        // folder is locked or hidden, itself or through its folders).
+        if (layer.isFolder) {
+            if (c.checkUsable(layer, allowFolder = true)) guardMemory(c, FolderLabels.MERGE) { c.mergeDown(layer) }
+            return
+        }
         val idx = c.doc.indexOf(layer)
         if (idx <= 0) { c.toast("There is no layer below to merge into"); return }
         val lower = c.doc.layers[idx - 1]

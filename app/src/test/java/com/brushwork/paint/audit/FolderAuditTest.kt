@@ -16,6 +16,8 @@ import com.brushwork.paint.engine.CanvasResult
 import com.brushwork.paint.engine.CanvasRotation
 import com.brushwork.paint.engine.CanvasSnapshot
 import com.brushwork.paint.engine.Resample
+import com.brushwork.paint.exchange.ImportLayers
+import com.brushwork.paint.exchange.NewLayer
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.export.ExportOptions
 import com.brushwork.paint.exchange.export.ExportSceneBuilder
@@ -28,6 +30,7 @@ import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.storage.ExportFormat
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.LayerToolRules
@@ -351,5 +354,159 @@ class FolderAuditTest {
             assertEquals("$id: a child of a hidden folder = a hidden layer (steps, pixel change)", b, a)
             assertFoldersIntact(inFolder, "$id")
         }
+    }
+
+    // ------------------------------------------------------------------ every entry point, a folder active
+
+    /** A fresh [nested] document with a selection, A's pixels on the clipboard, and F1 active. */
+    private fun folderActive(): EditorController = nested().also { c ->
+        c.selectLayer(c.byName("A"))
+        c.setSelection(rectSelection(Rect(5, 5, 50, 40)), label = "Select")
+        assertTrue(c.copySelection())
+        c.selectLayer(c.byName("F1"))
+        assertTrue(c.activeLayer.isFolder)
+    }
+
+    /**
+     * Runs [action] on a fresh [folderActive] document (the tool it chose put away afterwards):
+     * no exception, the tree and every folder intact, and the composite draws. [refused]: no step
+     * and no change. Otherwise the steps it pushed are undone to the very tree, pixels and
+     * picture, and redone to what it made.
+     */
+    private fun audit(what: String, refused: Boolean, tool: ToolId? = null, action: (EditorController, Layer) -> Unit): Int {
+        val c = folderActive()
+        val f1 = c.byName("F1")
+        // The tool's own observers (started when it is chosen) live until it is put away.
+        tool?.let { c.selectTool(it) }
+        val steps = c.undoManager.undoCount
+        val before = picture(c)
+        val flatBefore = flat(c)
+        settled(what) { action(c, f1) }
+        settled("$what put away") {
+            c.filterSession?.cancel()
+            c.selectTool(if (c.currentTool.id == ToolId.LASSO) ToolId.MARQUEE else ToolId.LASSO)
+        }
+        assertFoldersIntact(c, what)
+        flat(c)
+        val added = c.undoManager.undoCount - steps
+        if (refused) {
+            assertEquals("$what: no step", 0, added)
+            assertEquals("$what: no change", before, picture(c))
+            return 0
+        }
+        assertTrue("$what: no step was lost", added >= 0)
+        val after = picture(c)
+        repeat(added) { settled("$what undone") { c.undo() } }
+        assertFoldersIntact(c, "$what undone")
+        assertEquals("$what undone: the tree and pixels", before, picture(c))
+        assertTrue("$what undone: the picture", flatBefore.contentEquals(flat(c)))
+        repeat(added) { settled("$what redone") { c.redo() } }
+        assertFoldersIntact(c, "$what redone")
+        assertEquals("$what redone", after, picture(c))
+        return added
+    }
+
+    @Test
+    fun withAFolderActiveEveryLayerAndMaskOperationIsRefusedOrKeepsTheTree() {
+        // Pixel and mask operations: a folder has neither.
+        val refused = listOf<Pair<String, (EditorController, Layer) -> Unit>>(
+            "convert to vector" to { c, f -> LayerOps.convertToVector(c, f) },
+            "rasterize vector" to { c, f -> LayerOps.rasterizeVector(c, f) },
+            "edit objects" to { c, f -> LayerOps.editObjects(c, f) },
+            "edit adjustment" to { c, f -> LayerOps.editAdjustment(c, f) },
+            "edit adjustment mask" to { c, f -> LayerOps.editAdjustmentMask(c, f) },
+            "gradient mask" to { c, f -> LayerOps.addGradientMask(c, f) },
+            "to pixel mask" to { c, f -> LayerOps.toPixelMask(c, f) },
+            "mask to selection" to { c, f -> LayerOps.maskToSelection(c, f) },
+            "flip horizontal" to { c, f -> LayerOps.flip(c, f, horizontal = true) },
+            "flip vertical" to { c, f -> LayerOps.flip(c, f, horizontal = false) },
+            "clear" to { c, f -> LayerOps.clear(c, f) },
+            "fill" to { c, f -> LayerOps.fill(c, f) },
+            "add mask" to { c, f -> LayerOps.addMask(c, f, fromSelection = false) },
+            "add mask from selection" to { c, f -> LayerOps.addMask(c, f, fromSelection = true) },
+            "delete mask" to { c, f -> LayerOps.deleteMask(c, f) },
+            "apply mask" to { c, f -> LayerOps.applyMask(c, f) },
+            "invert mask" to { c, f -> LayerOps.invertMask(c, f) },
+            "mask off" to { c, f -> LayerOps.setMaskEnabled(c, f, enabled = false) },
+            "edit text" to { c, f -> LayerOps.editText(c, f) },
+            "edit shape" to { c, f -> LayerOps.editShape(c, f) },
+            "edit the mask" to { c, f -> LayerOps.editTarget(c, f, mask = true) },
+            "edit the content" to { c, f -> LayerOps.editTarget(c, f, mask = false) },
+            "alpha lock" to { c, f -> c.toggleAlphaLock(f) },
+            "bar: clear" to { c, _ -> c.clearLayer() },
+            "bar: cut" to { c, _ -> c.cutSelection() },
+            "fill selection" to { c, _ -> SelectionEdits.fillSelection(c, red) },
+            "clear selection" to { c, _ -> SelectionEdits.clearSelection(c) },
+            "cut to new layer" to { c, _ -> SelectionEdits.cutToNewLayer(c) },
+        ) + FilterRegistry.all.map { filter -> "filter ${filter.id}" to { c: EditorController, _: Layer -> c.startFilter(filter) } }
+        for ((what, action) in refused) audit(what, refused = true, action = action)
+        // Structure, selection and document operations: allowed, one undo away from the start.
+        val allowed = listOf<Pair<String, (EditorController, Layer) -> Unit>>(
+            "duplicate" to { c, f -> LayerOps.duplicate(c, f) },
+            "merge down (merge folder)" to { c, f -> LayerOps.mergeDown(c, f) },
+            "add layer" to { c, _ -> LayerOps.addLayer(c) },
+            "add vector layer" to { c, _ -> LayerOps.addVectorLayer(c) },
+            "add adjustment layer" to { c, _ -> LayerOps.addAdjustmentLayer(c) },
+            "add folder" to { c, _ -> c.addFolder() },
+            "put in new folder" to { c, f -> c.putInNewFolder(f) },
+            "take the bottom child out" to { c, _ -> c.takeOutOfFolder(c.byName("A")) },
+            "move up" to { c, f -> c.moveLayerUp(f) },
+            "move down" to { c, f -> c.moveLayerDown(f) },
+            "close" to { c, f -> c.setFolderOpen(f, open = false) },
+            "pass through off" to { c, f -> c.setFolderPassThrough(f, on = false) },
+            "merge folder" to { c, f -> c.mergeFolder(f) },
+            "layer from folder" to { c, f -> c.layerFromFolder(f) },
+            "ungroup" to { c, f -> c.ungroupFolder(f) },
+            "delete folder, keep its layers" to { c, f -> c.deleteFolder(f, keepChildren = true) },
+            "delete folder and its layers" to { c, f -> c.deleteFolder(f, keepChildren = false) },
+            "rename" to { c, f -> c.renameLayer(f, "Renamed") },
+            "flip canvas" to { c, _ -> LayerOps.flipCanvas(c, horizontal = true) },
+            "transform layer" to { c, f -> LayerOps.transform(c, f); c.gesture() },
+            "bar: copy" to { c, _ -> c.copySelection() },
+            "bar: paste" to { c, _ -> c.paste() },
+            "bar: deselect" to { c, _ -> c.deselect() },
+            "bar: invert selection" to { c, _ -> c.invertSelection() },
+            "copy to new layer" to { c, _ -> SelectionEdits.copyToNewLayer(c) },
+            "select layer opacity" to { c, _ -> SelectionEdits.selectLayerOpacity(c, SelectionMode.REPLACE) },
+            "grow selection" to { c, _ -> SelectionEdits.growOrShrink(c, 3) },
+            "shrink selection" to { c, _ -> SelectionEdits.growOrShrink(c, -3) },
+            "feather selection" to { c, _ -> SelectionEdits.feather(c, 2f) },
+        )
+        // Opening or closing a folder is a view change (no step); copying is no step either; the
+        // Transform tool lifts a folder only with area F (FolderLiftProvider): until then, nothing.
+        val noStep = setOf("close", "bar: copy", "transform layer")
+        for ((what, action) in allowed) {
+            val added = audit(what, refused = false, action = action)
+            if (what !in noStep) assertTrue("$what: one undo away (pushed $added steps)", added >= 1)
+        }
+    }
+
+    @Test
+    fun withAFolderActiveAGestureOfEveryToolKeepsTheTree() {
+        for (id in ToolId.entries) {
+            audit("tool $id", refused = id in LayerToolRules.FOLDER_REFUSED, tool = id) { c, _ -> c.gesture() }
+        }
+    }
+
+    @Test
+    fun anImportInReplaceModeKeepsTheFolderAndItsLayers() {
+        val c = nested()
+        val f1 = c.byName("F1")
+        val kept = listOf("Background", "A", "B", "F2", "F1").map { c.byName(it) }
+        val before = picture(c)
+        val steps = c.undoManager.undoCount
+        val picture = BitmapUtils.createLayerBitmap(w, h).also { it.eraseColor(red) }
+        // Named like the folder; the replace list holds the folder, a layer in it and a top-level layer.
+        val created = ImportLayers.insert(c, listOf(NewLayer("F1", picture)), "Import", replace = listOf(f1, c.byName("A"), c.byName("Top")))
+        assertEquals(1, created.size)
+        assertEquals("one undo step", steps + 1, c.undoManager.undoCount)
+        for (l in kept) assertTrue("${l.name} is kept", c.doc.indexOf(l) >= 0)
+        assertEquals("the folder keeps its block", listOf(f1.id, f1.id), c.doc.layers.filter { it.parentId == f1.id }.map { it.parentId })
+        assertTrue("the top-level layer is replaced", c.doc.layers.none { it.name == "Top" })
+        assertSame(created.single(), c.activeLayer)
+        assertFoldersIntact(c, "import")
+        c.undo()
+        assertEquals("one undo restores the tree", before, picture(c))
+        assertFoldersIntact(c, "import undone")
     }
 }
