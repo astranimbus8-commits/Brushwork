@@ -9,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
@@ -16,9 +17,11 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.SymmetryLabels
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.log2
@@ -103,15 +106,27 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
             return null
         }
-        val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false))
+        // v1.7 (item 18): the symmetry copies, placed from the first point (after the ruler).
+        val maps = symmetryMaps(p, isPath)
+        val toastBefore = controller.message
+        val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false, copies = maps))
         val recorder = when (hook) {
             StrokeHook.None -> null
             is StrokeHook.Refuse -> { controller.toast(hook.message); return null }
             is StrokeHook.Record -> hook.recorder
         }
+        // The vector eraser removes objects (whole strokes, copies and all): it is never replicated.
+        val copies = if (maps.isNotEmpty() && recorder?.replacesStroke == true) {
+            // Said once, and not over the eraser's own first hint (that one shows now; this one next time).
+            if (!symmetryEraserNoteShown && controller.message == toastBefore) {
+                symmetryEraserNoteShown = true
+                controller.toast(SymmetryLabels.ERASER_NOTE)
+            }
+            emptyList()
+        } else maps
         val s = try {
-            if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget, recorder)
-            else BufferStroke(layer, preset, kind, p, seed, maskTarget, recorder)
+            if (kind.isDirect) DirectStroke(layer, preset, kind, p, seed, maskTarget, recorder, copies)
+            else BufferStroke(layer, preset, kind, p, seed, maskTarget, recorder, copies)
         } catch (e: OutOfMemoryError) {
             recorder?.cancel()
             controller.toast("Not enough memory for this brush")
@@ -224,6 +239,22 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         StrokeKind.SMUDGE -> "Smudge"
         StrokeKind.BLUR -> "Blur"
         StrokeKind.WATERCOLOR -> "Watercolor"
+    }
+
+    /** "Symmetry doesn't apply to erasing vector objects" was said (once per tool). */
+    private var symmetryEraserNoteShown = false
+
+    /**
+     * v1.7 (item 18, §3.18): the maps a stroke starting at [p] is replicated with (the identity
+     * first; empty without symmetry). Every brush-type stroke of this tool is replicated (brush,
+     * eraser, smudge, blur, on content or a mask); path strokes and the clone stamp are not.
+     */
+    private fun symmetryMaps(p: ToolPoint, isPath: Boolean): List<FloatArray> {
+        if (isPath || coverageSource != null || id !in REPLICATED) return emptyList()
+        val s = controller.symmetry
+        if (s.type == SymmetryType.OFF) return emptyList()
+        val d = controller.doc
+        return SymmetryMaps.transforms(s, d.width, d.height, p.x, p.y)
     }
 
     /** Color the stroke paints with on [layer] (luminance when painting a mask). */
@@ -342,12 +373,22 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         seed: Long,
         private val maskTarget: Boolean,
         recorder: StrokeRecorder?,
+        /** The symmetry maps (identity first; empty: no copies, the v1.6 stroke). */
+        copies: List<FloatArray>,
     ) : Stroke(layer, preset, kind, first, seed, recorder) {
         private val docW = controller.doc.width
         private val docH = controller.doc.height
         private val coverage: Bitmap = res.coverage(docW, docH)
         private val canvas: Canvas = res.coverageCanvas()
         private val dabs = ArrayList<Dab>()
+        /**
+         * v1.7 (item 18): every dab is followed by its symmetry copies in the same buffer (so
+         * overlapping copies never darken each other). The copies are derived from the dabs
+         * whenever they are drawn; [copyTiles] remembers the [COMMIT_TILE]s they reached.
+         */
+        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper)
+        private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
+        private val copyTiles: BooleanArray? = mapping?.let { BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) }
         /** Union of all dab bounds, clipped to the document. */
         private val bounds = Rect()
         /** Paints the coverage with pixels from elsewhere (clone stamp); fixed for the stroke. */
@@ -423,6 +464,41 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (replaces) res.stamper.measure(preset, dab) else res.stamper.stamp(canvas, preset, dab, draft = drafting)
             dabs += dab
             addBounds(dab)
+            if (mapping != null) stampCopies(mapping, dab, null)
+        }
+
+        /**
+         * Stamps the symmetry copies of resolved [dab] after it, in map order (as `StrokeRaster`
+         * replays them), each one that lands on the document; only those reaching [within] when
+         * it is given (a redraw clipped to it).
+         */
+        private fun stampCopies(m: DabMapping, dab: Dab, within: Rect?) {
+            for (k in 0 until m.copies) {
+                val c = m.place(k, preset, dab) ?: continue
+                if (!c.hasBounds || c.right <= 0 || c.bottom <= 0 || c.left >= docW || c.top >= docH) continue
+                if (within != null && !within.intersects(c.left, c.top, c.right, c.bottom)) continue
+                m.stamp(canvas, k, c)
+                addBounds(c)
+                markCopyTiles(c)
+            }
+        }
+
+        /** Unions the bounds of [dab]'s copies (as they are resolved now) into [region]. */
+        private fun copyBounds(m: DabMapping, dab: Dab, region: Rect) {
+            for (k in 0 until m.copies) {
+                val c = m.place(k, preset, dab) ?: continue
+                if (c.hasBounds) region.union(c.left, c.top, c.right, c.bottom)
+            }
+        }
+
+        private fun markCopyTiles(c: Dab) {
+            val tiles = copyTiles ?: return
+            val l = max(0, c.left); val t = max(0, c.top)
+            val r = min(docW, c.right); val b = min(docH, c.bottom)
+            if (r <= l || b <= t) return
+            for (row in t / COMMIT_TILE..(b - 1) / COMMIT_TILE) {
+                for (col in l / COMMIT_TILE..(r - 1) / COMMIT_TILE) tiles[row * tileCols + col] = true
+            }
         }
 
         // ---------------------------------------------------------- path strokes
@@ -736,6 +812,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             if (!dynamics.hasTaper || dabs.isEmpty()) return
             val total = sampler.length
             val region = Rect()
+            val m = mapping
             for (dab in dabs) {
                 val d = dab.diameter
                 val a = dab.alpha
@@ -744,8 +821,16 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 dynamics.resolve(dab, total)
                 if (dab.diameter == d && dab.alpha == a && dab.cx == x && dab.cy == y) continue
                 if (dab.hasBounds) region.union(dab.left, dab.top, dab.right, dab.bottom)
+                if (m != null) {
+                    // Where the copies were (resolved as before) and where they go now.
+                    val nd = dab.diameter; val na = dab.alpha; val nx = dab.cx; val ny = dab.cy
+                    dab.cx = x; dab.cy = y; dab.diameter = d; dab.alpha = a
+                    copyBounds(m, dab, region)
+                    dab.cx = nx; dab.cy = ny; dab.diameter = nd; dab.alpha = na
+                }
                 res.stamper.measure(preset, dab)
                 if (dab.hasBounds) region.union(dab.left, dab.top, dab.right, dab.bottom)
+                if (m != null) copyBounds(m, dab, region)
             }
             if (region.isEmpty || !region.intersect(0, 0, docW, docH)) return
             canvas.save()
@@ -753,6 +838,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             canvas.drawColor(0, PorterDuff.Mode.CLEAR)
             for (dab in dabs) {
                 if (region.intersects(dab.left, dab.top, dab.right, dab.bottom)) res.stamper.stamp(canvas, preset, dab)
+                if (m != null) stampCopies(m, dab, region)
             }
             canvas.restore()
             bounds.union(region)
@@ -812,6 +898,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                     for (col in r.left / COMMIT_TILE..(r.right - 1) / COMMIT_TILE) hit[row * cols + col] = true
                 }
             }
+            // The symmetry copies' tiles (kept as they were stamped: the copies aren't listed).
+            copyTiles?.let { t -> for (i in t.indices) if (t[i]) hit[i] = true }
             val out = ArrayList<Rect>()
             for (i in hit.indices) {
                 if (!hit[i]) continue
@@ -864,9 +952,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         seed: Long,
         maskTarget: Boolean,
         recorder: StrokeRecorder?,
+        /** The symmetry maps (identity first; empty: no copies, the v1.6 stroke). */
+        copies: List<FloatArray>,
     ) : Stroke(layer, preset, kind, first, seed, recorder) {
         private val rec = controller.beginEdit(layer)
-        private val painter = DirectPainter(
+        private val painter = newPainter(maskTarget)
+
+        private fun newPainter(maskTarget: Boolean) = DirectPainter(
             kind = kind,
             preset = preset,
             surface = BitmapSurface(if (rec.target == EditTarget.MASK) layer.mask!! else layer.bitmap),
@@ -875,6 +967,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             color = strokeColor(maskTarget),
             limit = selection?.bounds?.let { IntBox(it.left, it.top, it.right, it.bottom) },
         )
+
+        /**
+         * v1.7 (item 18): the symmetry copies are independent sub-strokes, one painter each (its
+         * own smudge transport / paint load), fed the mapped dabs right after the stroke's own.
+         */
+        private val mapping: DabMapping? = DabMapping.of(copies, res.stamper)
+        private val copyPainters: Array<DirectPainter> = Array(mapping?.copies ?: 0) { newPainter(maskTarget) }
+        private val copyDab = Dab(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0, 0f)
         /** Dabs held back until the end taper is known (only with a finger end taper). */
         private val pending = ArrayDeque<Dab>()
         private val box = IntBox()
@@ -932,6 +1032,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val reached = Rect()
 
         private fun render(dab: Dab) {
+            render(painter, dab)
+            val m = mapping ?: return
+            for (k in 0 until m.copies) {
+                if (m.mapInto(k, dab, copyDab)) render(copyPainters[k], copyDab)
+            }
+        }
+
+        private fun render(painter: DirectPainter, dab: Dab) {
             // Snapshot for undo only what the painter is really about to change, so a smudge
             // tap (which moves nothing) leaves no undo entry.
             if (!painter.prepare(dab, box)) return
@@ -977,6 +1085,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     )
 
     companion object {
+        /** The tools whose strokes the symmetry rulers replicate (v1.7 item 18). */
+        private val REPLICATED = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR)
+
         /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
         private const val COMMIT_TILE = 256
 

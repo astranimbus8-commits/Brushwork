@@ -29,6 +29,13 @@ data class StrokeInfo(
     val color: Int,
     /** True for a stroke along a vector path ([BrushTool.beginPath]); those always get [StrokeHook.None]. */
     val isPath: Boolean,
+    /**
+     * v1.7 (item 18, additive): the symmetry maps the stroke is replicated with (row-major 3×3,
+     * the identity first, `SymmetryMaps.transforms` at the stroke's first point); empty without
+     * symmetry. A vector stroke keeps them as `VStroke.copies`; a recorder that replaces the
+     * stroke (the vector eraser) gets no copies painted.
+     */
+    val copies: List<FloatArray> = emptyList(),
 )
 
 /** The answer of [BrushTool.strokeHook] for a starting stroke. */
