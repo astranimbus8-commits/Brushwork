@@ -69,6 +69,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.model.IncrementKind
@@ -175,7 +176,9 @@ fun LabeledSlider(
                     suffix = typing.suffix,
                     onDone = { text ->
                         editing = false
-                        val v = NumberSliderMath.parseTyped(text, typing.scale, valueRange.start, valueRange.endInclusive)
+                        // v1.7 (I13): "*2" / "/2" apply to the value shown when the editor opened.
+                        val typed = Expressions.resolveRelative(text, value * typing.scale) ?: text
+                        val v = NumberSliderMath.parseTyped(typed, typing.scale, valueRange.start, valueRange.endInclusive)
                         if (v != null) {
                             latestChange(v)
                             latestFinished?.invoke()
@@ -356,7 +359,11 @@ internal fun NumberFieldCore(
 ) {
     // "NaN", "Infinity" and "1e999" parse as doubles: they are invalid text here like any other
     // garbage (NaN would pass coerceIn, and an infinite value would reach the model).
-    fun parse(s: String): Double? = Units.parse(s)?.takeIf { it.isFinite() }
+    // v1.7 (I13): relative text ("*2", "/2") applies to the value the edit started from (taken when
+    // the field gains focus, and after each commit or button / slider / scrub change), so live
+    // commits while typing never apply it twice.
+    val relativeBase = remember { DoubleArray(1) { value } }
+    fun parse(s: String): Double? = Units.parse(Expressions.resolveRelative(s, relativeBase[0]) ?: s)?.takeIf { it.isFinite() }
     fun format(v: Double): String = if (v.isFinite()) Units.formatNumber(v, decimals) else ""
     var text by remember { mutableStateOf(format(value)) }
     var focused by remember { mutableStateOf(false) }
@@ -371,7 +378,11 @@ internal fun NumberFieldCore(
     fun commit() {
         val v = parse(text)
         if (v != null) {
-            latestChange(v.coerceIn(min, max))
+            val c = v.coerceIn(min, max)
+            latestChange(c)
+            // v1.7: committed relative text shows its result (and is the base of the next one).
+            if (Expressions.isRelative(text)) text = format(c)
+            relativeBase[0] = c
             if (committed != text) latestFinished?.invoke()
             committed = text
         } else {
@@ -385,6 +396,7 @@ internal fun NumberFieldCore(
         val c = v.coerceIn(min, max)
         text = format(c)
         committed = null
+        relativeBase[0] = c
         latestChange(c)
     }
     fun finish() {
@@ -428,7 +440,11 @@ internal fun NumberFieldCore(
                     // Commit valid in-range values while typing, so buttons (Apply, presets) that
                     // don't take focus always see the number the user typed.
                     val v = parse(it)
-                    if (v != null && v >= min && v <= max) latestChange(v)
+                    if (v != null && v >= min && v <= max) {
+                        // (A typed absolute number is the base of relative text typed next.)
+                        if (!Expressions.isRelative(it)) relativeBase[0] = v
+                        latestChange(v)
+                    }
                 },
                 // Beside a slider the box is narrow: a long label ends in "…" instead of being cut.
                 label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -443,7 +459,11 @@ internal fun NumberFieldCore(
                     .weight(1f)
                     .then(longPress)
                     .focusProperties { canFocus = !stepHold.active }
-                    .onFocusChanged { f -> if (focused && !f.isFocused) commit(); focused = f.isFocused },
+                    .onFocusChanged { f ->
+                        if (focused && !f.isFocused) commit()
+                        if (!focused && f.isFocused) relativeBase[0] = latestValue
+                        focused = f.isFocused
+                    },
             )
             if (step != null) {
                 RepeatIconButton(Icons.Filled.Add, "Increase $label", enabled = enabled, onRelease = ::finish) { set(stepped(latestValue, 1, step)) }

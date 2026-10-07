@@ -50,6 +50,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.IncrementSettings
@@ -253,7 +254,9 @@ internal fun StepPopupPanel(inc: Increments, target: StepTarget, onDismiss: () -
             onDismiss()
             return
         }
-        val v = Units.parse(text)?.toFloat()?.takeIf { it.isFinite() }
+        // v1.7 (I13): "*2" / "/2" apply to the current step.
+        val typed = current?.let { Expressions.resolveRelative(text, it) } ?: text
+        val v = Units.parse(typed)?.toFloat()?.takeIf { it.isFinite() }
         if (v == null || v <= 0f || v > max) {
             error = "Type a step above 0, up to ${IncrementStepping.format(max)}"
             return

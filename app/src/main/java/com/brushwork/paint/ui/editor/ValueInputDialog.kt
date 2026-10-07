@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.brush.BrushPresetStore
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.IncrementStepping
@@ -51,6 +52,12 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * increments on, -/+ move to the next multiples of that step and the slider lands on them;
  * [incrementScale] is the step's unit per value unit (100 for a 0..1 value typed as %, px per
  * unit for a length typed in mm). The typed value itself is applied exactly as typed.
+ *
+ * v1.7 (I13, design §3.15): expressions are typed like numbers ([parse] reads them); relative
+ * text ("*2", "/2") applies to the value the dialog opened with AS SHOWN (`format(initial)`: an
+ * opacity held as 0..1 shows, and [parse] reads, percents). With [onApplyText] the dialog hands
+ * the valid text over as typed (not resolved) instead of calling [onApply]: a field showing
+ * "Mixed" applies a relative value to each of its values (`MixedEdit.typed`).
  */
 @Composable
 fun ValueInputDialog(
@@ -69,8 +76,13 @@ fun ValueInputDialog(
     incrementKind: IncrementKind? = null,
     incrementKey: String? = null,
     incrementScale: Float = 1f,
+    onApplyText: ((String) -> Unit)? = null,
 ) {
     fun selectedAll(s: String) = TextFieldValue(s, selection = TextRange(0, s.length))
+    // The value relative text applies to: the number shown when the dialog opened.
+    val relativeBase = remember { relativeBaseOf(format(initial), initial) }
+    /** [parse] of [t], relative text resolved against [relativeBase] first. */
+    fun parseText(t: String): Float? = parse(Expressions.resolveRelative(t, relativeBase) ?: t)
     var field by remember { mutableStateOf(selectedAll(format(initial))) }
     var error by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
@@ -104,23 +116,24 @@ fun ValueInputDialog(
     }
 
     val apply = {
-        val v = parse(field.text)
+        val v = parseText(field.text)
         if (v == null) {
             error = true
         } else {
-            onApply(v)
+            val asText = onApplyText
+            if (asText != null) asText(field.text) else onApply(v)
             onDismiss()
         }
     }
 
     BwDialog(title = title, onDismiss = onDismiss, confirmText = "OK", onConfirm = apply) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            RepeatIconButton(Icons.Filled.Remove, "Decrease $label") { setValue(stepped(parse(field.text) ?: current, false)) }
+            RepeatIconButton(Icons.Filled.Remove, "Decrease $label") { setValue(stepped(parseText(field.text) ?: current, false)) }
             OutlinedTextField(
                 value = field,
                 onValueChange = { v ->
                     field = v
-                    val parsed = parse(v.text)
+                    val parsed = parseText(v.text)
                     error = false
                     if (parsed != null) current = parsed
                 },
@@ -133,7 +146,7 @@ fun ValueInputDialog(
                 keyboardActions = KeyboardActions(onDone = { apply() }),
                 modifier = Modifier.weight(1f).focusRequester(focus),
             )
-            RepeatIconButton(Icons.Filled.Add, "Increase $label") { setValue(stepped(parse(field.text) ?: current, true)) }
+            RepeatIconButton(Icons.Filled.Add, "Increase $label") { setValue(stepped(parseText(field.text) ?: current, true)) }
         }
         Slider(
             value = toFraction(current).coerceIn(0f, 1f),
@@ -146,6 +159,14 @@ fun ValueInputDialog(
         LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
     }
 }
+
+/**
+ * v1.7: the number [shown] for a value (`format(initial)`, read as an expression would read it:
+ * "60", "12,5 px"), or [initial] when it shows no number. Relative text in [ValueInputDialog]
+ * applies to it, in the unit the dialog's `parse` reads.
+ */
+internal fun relativeBaseOf(shown: String, initial: Float): Float =
+    (Expressions.evaluate(shown) as? Expressions.Result.Value)?.value?.toFloat()?.takeIf { it.isFinite() } ?: initial
 
 /**
  * Typed brush size or opacity for the preset shown by the slider bar

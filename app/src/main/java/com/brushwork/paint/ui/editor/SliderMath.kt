@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.core.Units
 import kotlin.math.ln
 import kotlin.math.exp
@@ -41,8 +42,13 @@ object SliderMath {
     /**
      * Parses a number the user typed ("12.5", "12,5", "12.5 px", "85 %"), clamped to
      * [min]..[max]. Null for anything that is not a finite number (the input is then ignored).
+     * v1.7 (I13): text that is not a plain number is evaluated as an expression first ("100/2",
+     * [Expressions]); when that fails the v1.6 reading runs after all.
      */
     fun parseValue(text: String, min: Double, max: Double): Double? {
+        if (!Expressions.isPlainNumber(text)) {
+            (Expressions.evaluate(text) as? Expressions.Result.Value)?.let { return it.value.coerceIn(min, max) }
+        }
         val cleaned = text.trim().removeSuffix("%").removeSuffix("px").removeSuffix("PX").trim()
         if (cleaned.isEmpty()) return null
         val v = Units.parse(cleaned)?.takeIf { it.isFinite() } ?: return null

@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.common
 
+import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.model.IncrementKind
@@ -171,10 +172,20 @@ object NumberSliderMath {
     /**
      * A number typed for a slider shown as value × [scale] ("57", "57%", "12,5 px", "-30°"),
      * back in slider units and clamped to [min]..[max]; null for text without a finite number.
+     * v1.7 (I13): text that is not a plain number is evaluated as an expression first ("100/2",
+     * [Expressions]); when that fails the v1.6 reading runs after all ("1 000" -> 1000).
      */
     fun parseTyped(text: String, scale: Float, min: Float, max: Float): Float? {
+        if (!Expressions.isPlainNumber(text)) {
+            (Expressions.evaluate(text) as? Expressions.Result.Value)?.let { return typedValue(it.value, scale, min, max) }
+        }
         val number = text.trim().filter { it.isDigit() || it == '.' || it == ',' || it == '-' || it == '+' }
         val v = number.replace(',', '.').toDoubleOrNull()?.takeIf { it.isFinite() } ?: return null
+        return typedValue(v, scale, min, max)
+    }
+
+    /** [v] (shown units, finite) back in slider units, clamped; null for a nonsense [scale]. */
+    private fun typedValue(v: Double, scale: Float, min: Float, max: Float): Float? {
         if (scale == 0f || !scale.isFinite()) return null
         val out = (v / scale).toFloat()
         return if (out.isFinite()) out.coerceIn(min, max) else null

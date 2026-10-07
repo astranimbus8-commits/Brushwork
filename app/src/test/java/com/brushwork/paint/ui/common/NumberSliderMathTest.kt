@@ -210,6 +210,17 @@ class NumberSliderMathTest {
     }
 
     @Test
+    fun typedSliderValuesReadExpressionsAndKeepTheLenientV16Reading() {
+        // v1.7 (I13): an expression is evaluated; an error falls back to the v1.6 reading.
+        assertEquals(1000f, NumberSliderMath.parseTyped("1 000", 1f, 0f, 5000f)!!, 0f)
+        assertEquals(12f, NumberSliderMath.parseTyped("12mm", 1f, 0f, 600f)!!, 0f)
+        assertEquals(50f, NumberSliderMath.parseTyped("100/2", 1f, 0f, 600f)!!, 0f)
+        assertEquals(0.5f, NumberSliderMath.parseTyped("100/2", 100f, 0f, 1f)!!, 1e-6f)
+        assertEquals(600f, NumberSliderMath.parseTyped("100*7", 1f, 0f, 600f)!!, 0f)
+        assertNull(NumberSliderMath.parseTyped("100/2", 0f, 0f, 600f))
+    }
+
+    @Test
     fun defaultDragStepFollowsShownDecimals() {
         assertEquals(1.0, NumberSliderMath.defaultDragStep(0), 0.0)
         assertEquals(1.0, NumberSliderMath.defaultDragStep(1), 0.0)

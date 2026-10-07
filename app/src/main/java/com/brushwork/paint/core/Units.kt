@@ -73,6 +73,15 @@ object Units {
         return s
     }
 
-    /** Parses user text like "12,5" or "12.5"; returns null for garbage. */
-    fun parse(text: String): Double? = text.trim().replace(',', '.').toDoubleOrNull()
+    /**
+     * Parses user text like "12,5" or "12.5"; returns null for garbage. v1.7 (I13): a plain
+     * number takes the v1.6 path unchanged; other text is evaluated as an expression ("100/2",
+     * [Expressions]), and when that fails the v1.6 path runs after all.
+     */
+    fun parse(text: String): Double? {
+        if (!Expressions.isPlainNumber(text)) {
+            (Expressions.evaluate(text) as? Expressions.Result.Value)?.let { return it.value }
+        }
+        return text.trim().replace(',', '.').toDoubleOrNull()
+    }
 }
