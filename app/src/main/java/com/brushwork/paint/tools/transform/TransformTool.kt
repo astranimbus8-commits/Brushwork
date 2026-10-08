@@ -39,6 +39,9 @@ import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.vector.VectorLayerOps
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -94,14 +97,27 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ observable options
 
-    /** Free transform (scale/rotate handles) or distort (corners move freely, perspective). */
-    var mode by mutableStateOf(Mode.FREE)
+    private var modeState by mutableStateOf(Mode.FREE)
+
+    /**
+     * Free transform (scale/rotate handles) or distort (corners move freely, perspective). v1.7:
+     * a mode that what is lifted can't take ([modeRefusal]) is not switched to.
+     */
+    var mode: Mode
+        get() = modeState
+        set(v) {
+            if (v == modeState || modeRefusal(v) != null) return
+            modeState = v
+        }
 
     private var keepAspectState by mutableStateOf(true)
 
-    /** Corner handles keep the aspect ratio (free mode); also links width/height in the Numbers sheet. */
+    /**
+     * Corner handles keep the aspect ratio (free mode); also links width/height in the Numbers
+     * sheet. Always on while only a proportional scale is offered ([uniformOnly], v1.7).
+     */
     var keepAspect: Boolean
-        get() = keepAspectState
+        get() = keepAspectState || uniformOnly
         set(v) {
             if (v == keepAspectState) return
             keepAspectState = v
@@ -190,6 +206,96 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         private set
 
     override val hasPendingWork: Boolean get() = transformState != null
+
+    // ------------------------------------------------------------------ what is lifted (v1.7)
+
+    /** What a transform works on (v1.7, design §3.11: it decides which handles and modes are offered). */
+    enum class Lifted { PIXELS, PLACEMENT, VECTOR, TEXT, SHAPE, ARRAY, FOLDER }
+
+    /** What the pending transform lifted; null when nothing is transformed. */
+    var lifted by mutableStateOf<Lifted?>(null)
+        private set
+
+    /**
+     * True while only a proportional scale is offered (v1.7, §3.11 a: a text layer kept as text):
+     * the side handles and the flips are hidden and the corners keep the aspect ratio.
+     */
+    var uniformOnly by mutableStateOf(false)
+        private set
+
+    /** The side handles are drawn and can be dragged. */
+    val sideHandlesShown: Boolean get() = !uniformOnly
+
+    /** The flips are offered. */
+    val flipsAllowed: Boolean get() = !uniformOnly
+
+    /**
+     * Why [m] is not available for what is lifted, or null when it is (v1.7, design §3.11 and
+     * §3.16): Distort on a text or shape kept as data asks to rasterize first, on an array to
+     * apply it, and a folder is refused.
+     */
+    fun modeRefusal(m: Mode): String? = when (m) {
+        Mode.FREE -> null
+        Mode.DISTORT -> when (lifted) {
+            Lifted.TEXT, Lifted.SHAPE -> TransformLabels17.RASTERIZE_TO_DEFORM
+            Lifted.ARRAY -> ArrayLabels.DEFORM_REFUSAL
+            Lifted.FOLDER -> DISTORT_FOLDER_REFUSAL
+            else -> null
+        }
+    }
+
+    /** True when [m] is refused only until the layer is rasterized ([rasterizeAndDeform] offers it). */
+    fun canRasterizeFor(m: Mode): Boolean = modeRefusal(m) != null && lifted in RASTERIZABLE
+
+    /**
+     * "Rasterize and deform" (v1.7, design §3.11): applies the pending transform (its own step,
+     * when it moved anything), turns the layer into a raster layer (its own step, with the usual
+     * message), lifts its pixels again and switches to [m]. False when [m] doesn't need it or the
+     * layer refused (locked...).
+     */
+    fun rasterizeAndDeform(m: Mode): Boolean {
+        if (!canRasterizeFor(m) || gesture != null || pinch != null) return false
+        val s = liveSession() ?: return false
+        val layer = s.layer
+        applyPending(s, moveSelection = true)
+        if (session != null || !rasterizeData(layer)) return false
+        modeState = m
+        beginLift()
+        return true
+    }
+
+    /** Drops [layer]'s text, shape or vector data (one step, its pixels stay); false when refused. */
+    private fun rasterizeData(layer: Layer): Boolean {
+        if (controller.doc.indexOf(layer) < 0) return false
+        if (layer.isVectorLayer) {
+            VectorLayerOps.rasterize(controller, layer)
+            return !layer.isVectorLayer
+        }
+        val before = layer.dataSnapshot()
+        val kind = when {
+            before.text != null -> "text"
+            before.shape != null -> "shape"
+            else -> return true
+        }
+        controller.setLayerData(layer, before.rasterizedContent(), if (kind == "text") RASTERIZE_TEXT_LABEL else RASTERIZE_SHAPE_LABEL)
+        if (layer.textData != null || layer.shapeData != null) return false
+        controller.toast("\"${layer.name}\" is now a regular layer (its $kind can no longer be edited; undo to get it back)")
+        return true
+    }
+
+    /** What [s] lifted. */
+    private fun liftedOf(s: Session): Lifted {
+        if (s.placement) return Lifted.PLACEMENT
+        return when (val lift = s.objectLift) {
+            null -> Lifted.PIXELS
+            is DataLift -> when (lift.kind) {
+                DataKind.TEXT -> Lifted.TEXT
+                DataKind.SHAPE -> Lifted.SHAPE
+                DataKind.ARRAY -> Lifted.ARRAY
+            }
+            else -> Lifted.VECTOR
+        }
+    }
 
     /** A lift nobody moved yet is the tool's own preparation; a placement is always the user's. */
     override val hasUserChanges: Boolean
@@ -540,7 +646,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (liveSession() == null && !beginLift()) return
         val st = transformState ?: return
         val t = controller.viewTransform
-        val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density)
+        val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, sides = sideHandlesShown)
         val hit = layout.hitTest(t.docToScreen(Vec2(p.x, p.y)))
         gesture = Gesture(hit, st, Vec2(p.x, p.y), st.center(), layout.rotateEdge)
         session?.let { if (snapToObjects && hit.kind != HandleKind.ROTATE) requestSnapBounds(it) }
@@ -1329,7 +1435,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Mirrors along the content's own axes. */
-    fun flip(horizontal: Boolean) = update { it.flipped(horizontal) }
+    fun flip(horizontal: Boolean) { if (flipsAllowed) update { it.flipped(horizontal) } }
 
     /** Quarter turn around the center (pixel-exact for unscaled content). */
     fun rotate90(clockwise: Boolean) = update { it.rotated90(clockwise) }
@@ -1513,6 +1619,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun startSession(s: Session, state: TransformState) {
         session = s
         isPlacement = s.placement
+        lifted = liftedOf(s)
+        uniformOnly = (s.objectLift as? DataLift)?.uniformOnly == true
+        // v1.7: a mode what was lifted can't take falls back to Free.
+        if (modeRefusal(modeState) != null) modeState = Mode.FREE
         rebuildPreviewPaint()
         controller.renderOverride = s.preview
         lastBounds = s.liftRect?.let { Rect(it) }
@@ -1613,6 +1723,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         lastBounds = null
         transformState = null
         isPlacement = false
+        lifted = null
+        uniformOnly = false
         numbersOpen = false
         invalidateBoth(last, s.liftRect)
         s.releaseLevels()
@@ -1901,7 +2013,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (guides.isNotEmpty()) SnapGuideRenderer.draw(canvas, t, guides, controller.doc.width.toFloat(), controller.doc.height.toFloat(), st.bounds())
         drawMovedSelectionOutline(canvas, t, st)
         val g = gesture
-        val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, g?.rotateEdge?.takeIf { g.hit.kind == HandleKind.ROTATE })
+        val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, g?.rotateEdge?.takeIf { g.hit.kind == HandleKind.ROTATE }, sides = sideHandlesShown)
         val c = layout.corners
         shadowStroke.strokeWidth = t.dp(3f)
         accentStroke.strokeWidth = t.dp(1.5f)
@@ -1983,6 +2095,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
          * is not transformed: lifting its pixels would bake the copies.
          */
         const val ARRAY_REFUSAL = "Apply the array to transform it"
+        /** v1.7 (§3.11): Distort deforms one layer's pixels; a folder is moved, turned and scaled only. */
+        const val DISTORT_FOLDER_REFUSAL = "Distort works on one layer"
+        /** The rasterize steps of "Rasterize and deform" (the names a pixel edit gives them too). */
+        const val RASTERIZE_TEXT_LABEL = "Rasterize text"
+        const val RASTERIZE_SHAPE_LABEL = "Rasterize shape"
+        /** What "Rasterize and deform" can turn into pixels first (an array is applied by the user instead). */
+        private val RASTERIZABLE = setOf(Lifted.TEXT, Lifted.SHAPE, Lifted.VECTOR)
         /** Largest neighborhood (document px, each way) read to tell whether a finger is on content. */
         private const val MAX_PROBE_RADIUS = 64f
         private const val LIMIT = 1e8f

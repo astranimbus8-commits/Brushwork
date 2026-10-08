@@ -45,6 +45,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -65,15 +66,7 @@ fun TransformToolOptions(tool: TransformTool) {
         )
         return
     }
-    TransformTool.Mode.entries.forEach { m ->
-        FilterChip(
-            selected = tool.mode == m,
-            onClick = { tool.mode = m },
-            label = { Text(m.label) },
-            colors = chipColors(),
-            modifier = Modifier.padding(end = 6.dp),
-        )
-    }
+    TransformTool.Mode.entries.forEach { m -> ModeChip(tool, m) }
     BarDivider()
     TransformDeleteButton(tool)
     BarDivider()
@@ -82,7 +75,7 @@ fun TransformToolOptions(tool: TransformTool) {
         contentDescription = if (tool.keepAspect) "Keep aspect ratio: on" else "Keep aspect ratio: off",
         onClick = { tool.keepAspect = !tool.keepAspect },
         selected = tool.keepAspect,
-        enabled = tool.mode == TransformTool.Mode.FREE,
+        enabled = tool.mode == TransformTool.Mode.FREE && !tool.uniformOnly,
     )
     FilterChip(
         selected = tool.scaleFromCenter,
@@ -104,8 +97,11 @@ fun TransformToolOptions(tool: TransformTool) {
             .semantics { stateDescription = if (tool.snapToObjects) "Snap to objects: on" else "Snap to objects: off" },
     )
     BarDivider()
-    ToolIconButton(Icons.Filled.Flip, "Flip horizontally", onClick = { tool.flip(horizontal = true) })
-    ToolIconButton(Icons.Filled.Flip, "Flip vertically", onClick = { tool.flip(horizontal = false) }, modifier = Modifier.rotate(90f))
+    // v1.7 (§3.11): a text kept as text is never mirrored.
+    if (tool.flipsAllowed) {
+        ToolIconButton(Icons.Filled.Flip, "Flip horizontally", onClick = { tool.flip(horizontal = true) })
+        ToolIconButton(Icons.Filled.Flip, "Flip vertically", onClick = { tool.flip(horizontal = false) }, modifier = Modifier.rotate(90f))
+    }
     ToolIconButton(Icons.Filled.Rotate90DegreesCcw, "Rotate 90° counter-clockwise", onClick = { tool.rotate90(clockwise = false) })
     ToolIconButton(Icons.Filled.Rotate90DegreesCw, "Rotate 90° clockwise", onClick = { tool.rotate90(clockwise = true) })
     ToolIconButton(Icons.Filled.FitScreen, "Fit to canvas", onClick = { tool.fitToCanvas() })
@@ -115,6 +111,42 @@ fun TransformToolOptions(tool: TransformTool) {
     TextButton(onClick = { tool.numbersOpen = true }) { Text("Numbers") }
 
     if (tool.numbersOpen) TransformNumbersSheet(tool)
+}
+
+/**
+ * One mode chip (v1.7, design §3.11 and §3.16). A mode that what is lifted can't take is shown
+ * dimmed with its caption as the chip's state ("Rasterize to deform", "Apply the array to
+ * deform"...); a tap shows the caption, plus "Rasterize and deform" when rasterizing the layer
+ * first makes the mode available.
+ */
+@Composable
+private fun ModeChip(tool: TransformTool, m: TransformTool.Mode) {
+    val refusal = tool.modeRefusal(m)
+    var open by remember { mutableStateOf(false) }
+    Box {
+        FilterChip(
+            selected = tool.mode == m,
+            onClick = { if (refusal == null) tool.mode = m else open = true },
+            label = { Text(m.label, color = if (refusal != null) BrushworkColors.OnChromeDim else Color.Unspecified) },
+            colors = chipColors(),
+            modifier = Modifier
+                .padding(end = 6.dp)
+                .semantics { if (refusal != null) stateDescription = refusal },
+        )
+        DropdownMenu(expanded = open && refusal != null, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(refusal.orEmpty(), style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim) },
+                onClick = {},
+                enabled = false,
+            )
+            if (tool.canRasterizeFor(m)) {
+                DropdownMenuItem(
+                    text = { Text(TransformLabels17.RASTERIZE_AND_DEFORM) },
+                    onClick = { open = false; tool.rasterizeAndDeform(m) },
+                )
+            }
+        }
+    }
 }
 
 @Composable

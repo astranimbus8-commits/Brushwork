@@ -241,9 +241,10 @@ class HandleLayout private constructor(
 
         /**
          * [density] is screen pixels per dp. [rotateEdge] pins the rotation handle to one edge
-         * (used while it is being dragged so it doesn't jump between edges).
+         * (used while it is being dragged so it doesn't jump between edges). Without [sides] the
+         * side handles are hidden (v1.7, §3.11: a text layer scales proportionally only).
          */
-        fun compute(state: TransformState, toScreen: (Vec2) -> Vec2, density: Float, rotateEdge: Int? = null): HandleLayout {
+        fun compute(state: TransformState, toScreen: (Vec2) -> Vec2, density: Float, rotateEdge: Int? = null, sides: Boolean = true): HandleLayout {
             val corners = state.corners().map(toScreen)
             val edges = List(4) { i ->
                 val a = corners[i]; val b = corners[(i + 1) % 4]
@@ -253,7 +254,7 @@ class HandleLayout private constructor(
             val lengths = List(4) { corners[it].distanceTo(corners[(it + 1) % 4]) }
             val minLen = lengths.min()
             val cornerHit = (minLen * 0.3f).coerceIn(8f * density, CORNER_HIT_DP * density)
-            val edgeVisible = lengths.map { it >= MIN_EDGE_FOR_HANDLE_DP * density }
+            val edgeVisible = lengths.map { sides && it >= MIN_EDGE_FOR_HANDLE_DP * density }
             val edgeHit = (minLen * 0.25f).coerceIn(8f * density, EDGE_HIT_DP * density)
             val re = rotateEdge ?: (0 until 4).minBy { edges[it].y }
             var dir = (edges[re] - center).normalized()

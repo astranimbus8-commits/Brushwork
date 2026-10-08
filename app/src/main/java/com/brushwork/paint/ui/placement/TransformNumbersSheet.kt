@@ -91,7 +91,8 @@ fun TransformNumbersSheet(tool: TransformTool) {
                 sliderMinPx = 1.0, sliderMaxPx = maxSize, onValueChangeFinished = finished,
             )
         }
-        ToggleRow("Keep aspect ratio", tool.keepAspect, { tool.keepAspect = it })
+        // v1.7 (§3.11): a text kept as text always keeps its aspect ratio.
+        if (!tool.uniformOnly) ToggleRow("Keep aspect ratio", tool.keepAspect, { tool.keepAspect = it })
         Text(
             "Original: ${Units.format(st.srcW.toDouble(), unit, dpi)} × ${Units.format(st.srcH.toDouble(), unit, dpi)}",
             style = MaterialTheme.typography.bodySmall,
