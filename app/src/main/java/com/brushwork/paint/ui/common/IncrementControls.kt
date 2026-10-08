@@ -247,16 +247,25 @@ internal fun StepPopupPanel(inc: Increments, target: StepTarget, onDismiss: () -
     val focus = remember { FocusRequester() }
     val max = target.kind?.let { IncrementSettings.MAX_STEPS.getValue(it) } ?: IncrementSettings.MAX_CUSTOM_STEP
 
+    /** The step [text] gives (unchecked against the range), relative text applied to the current step. */
+    fun read(text: String): Float? {
+        // v1.7 (I13): "*2" / "/2" apply to the current step.
+        val typed = current?.let { Expressions.resolveRelative(text, it) } ?: text
+        return Units.parse(typed)?.toFloat()?.takeIf { it.isFinite() }
+    }
+    // v1.7 (item 15's UI): the live readout; its error disables OK and Done.
+    val readout = ExpressionReadout.of(field.text, current?.toDouble()) { t -> read(t.trim())?.toDouble() }
+    val blocked = ExpressionReadout.blocks(readout)
+
     fun apply() {
+        if (blocked) return
         val text = field.text.trim()
         if (text.isEmpty() && target.kind == null) {
             target.key?.let { k -> inc.update { it.withCustom(k, null) } }
             onDismiss()
             return
         }
-        // v1.7 (I13): "*2" / "/2" apply to the current step.
-        val typed = current?.let { Expressions.resolveRelative(text, it) } ?: text
-        val v = Units.parse(typed)?.toFloat()?.takeIf { it.isFinite() }
+        val v = read(text)
         if (v == null || v <= 0f || v > max) {
             error = "Type a step above 0, up to ${IncrementStepping.format(max)}"
             return
@@ -289,15 +298,23 @@ internal fun StepPopupPanel(inc: Increments, target: StepTarget, onDismiss: () -
                 label = { Text("${target.name} step") },
                 suffix = if (target.suffix.isNotEmpty()) ({ Text(target.suffix) }) else null,
                 singleLine = true,
-                isError = error != null,
+                isError = error != null || blocked,
                 supportingText = {
-                    Text(
-                        error ?: if (target.kind == null) "Leave empty for no step of its own" else "Sliders and drags land on multiples; typed values stay exact",
-                    )
+                    val e = error
+                    when {
+                        e != null -> Text(e)
+                        readout != null -> ReadoutText(ExpressionReadout.text(readout, { IncrementStepping.format(it.toFloat()) }, target.suffix), blocked)
+                        else -> Text(if (target.kind == null) "Leave empty for no step of its own" else "Sliders and drags land on multiples; typed values stay exact")
+                    }
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { apply() }),
                 modifier = Modifier.fillMaxWidth().padding(end = 8.dp).focusRequester(focus),
+            )
+            // The keypad has no operators (V17): + − × ÷ ( ) under the field.
+            OperatorKeys(
+                onKey = { key -> field = OperatorText.insert(field, key); error = null },
+                modifier = Modifier.padding(end = 8.dp, bottom = 2.dp),
             )
             ToggleRow(
                 "Use increments",
@@ -312,7 +329,7 @@ internal fun StepPopupPanel(inc: Increments, target: StepTarget, onDismiss: () -
                     Spacer(Modifier.weight(1f))
                 }
                 TextButton(onClick = onDismiss) { Text("Cancel") }
-                TextButton(onClick = ::apply) { Text("OK") }
+                TextButton(onClick = ::apply, enabled = !blocked) { Text("OK") }
             }
         }
     }

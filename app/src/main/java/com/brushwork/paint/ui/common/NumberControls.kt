@@ -143,6 +143,8 @@ fun LabeledSlider(
     incrementKey: String? = null,
 ) {
     var editing by remember { mutableStateOf(false) }
+    // v1.7: the value editor's text (here, so the operator keys under the value row type into it).
+    var editorText by remember { mutableStateOf(TextFieldValue("")) }
     val latestChange by rememberUpdatedState(onValueChange)
     val latestFinished by rememberUpdatedState(onValueChangeFinished)
     val focusManager = LocalFocusManager.current
@@ -161,6 +163,15 @@ fun LabeledSlider(
     val sliderChange: (Float) -> Unit = if (sliderStep == null) onValueChange else { v ->
         onValueChange(IncrementStepping.snapSlider(v.toDouble(), sliderStep, valueRange.start.toDouble(), valueRange.endInclusive.toDouble()).toFloat())
     }
+    // v1.7 (I13): "*2" / "/2" apply to the value shown when the editor opened.
+    val shown = value * (typing?.scale ?: 1f)
+    val readTyped: (String) -> Float? = { text ->
+        typing?.let { t -> NumberSliderMath.parseTyped(Expressions.resolveRelative(text, shown) ?: text, t.scale, valueRange.start, valueRange.endInclusive) }
+    }
+    val typedReadout: (String) -> Readout? = { text ->
+        ExpressionReadout.of(text, shown.toDouble()) { t -> readTyped(t)?.let { (it * (typing?.scale ?: 1f)).toDouble() } }
+    }
+    val editorOpen = typing != null && editing && enabled
     Column(modifier.fillMaxWidth()) {
         // A typeable value is a finger-sized target (a near miss would land on the slider below
         // and move it), so its row is as tall as the target.
@@ -170,15 +181,17 @@ fun LabeledSlider(
         ) {
             Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
             when {
-                typing != null && editing && enabled -> SliderValueEditor(
+                typing != null && editorOpen -> SliderValueEditor(
                     label = label,
-                    initial = Units.formatNumber((value * typing.scale).toDouble(), typing.decimals),
+                    field = editorText,
+                    onFieldChange = { editorText = it },
                     suffix = typing.suffix,
                     onDone = { text ->
                         editing = false
-                        // v1.7 (I13): "*2" / "/2" apply to the value shown when the editor opened.
-                        val typed = Expressions.resolveRelative(text, value * typing.scale) ?: text
-                        val v = NumberSliderMath.parseTyped(typed, typing.scale, valueRange.start, valueRange.endInclusive)
+                        // v1.7 (area I, gate 2 review): text whose readout is an error applies
+                        // nothing, even where parseTyped's lenient v1.6 filter reads a number
+                        // ("/0" at 120 is "Can't divide by 0", not 0).
+                        val v = if (ExpressionReadout.blocks(typedReadout(text))) null else readTyped(text)
                         if (v != null) {
                             latestChange(v)
                             latestFinished?.invoke()
@@ -191,7 +204,12 @@ fun LabeledSlider(
                         .widthIn(min = 48.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .stepOnLongPressFor(stepTarget)
-                        .clickable(onClickLabel = "Type a value for $label", role = Role.Button) { editing = true },
+                        .clickable(onClickLabel = "Type a value for $label", role = Role.Button) {
+                            // Opens fully selected, so typing replaces the number.
+                            val initial = Units.formatNumber(shown.toDouble(), typing.decimals)
+                            editorText = TextFieldValue(initial, selection = TextRange(0, initial.length))
+                            editing = true
+                        },
                     contentAlignment = Alignment.CenterEnd,
                 ) {
                     Text(
@@ -213,6 +231,15 @@ fun LabeledSlider(
                 )
             }
         }
+        // v1.7 (item 15's UI): while the value is typed, its readout and the operator keys.
+        if (typing != null && editorOpen) {
+            val r = typedReadout(editorText.text)
+            ExpressionKeys(
+                r?.let { ExpressionReadout.text(it, { v -> Units.formatNumber(v, typing.decimals) }, typing.suffix) },
+                ExpressionReadout.blocks(r),
+                onKey = { key -> editorText = OperatorText.insert(editorText, key) },
+            )
+        }
         Slider(
             value = value.coerceIn(valueRange.start, valueRange.endInclusive),
             onValueChange = sliderChange,
@@ -228,20 +255,30 @@ fun LabeledSlider(
 }
 
 /**
- * Small in-place number editor of a [LabeledSlider]: focused and fully selected when it appears,
- * so typing replaces the number. [onDone] runs once, on Done or when focus leaves.
+ * Small in-place number editor of a [LabeledSlider]: focused when it appears ([LabeledSlider]
+ * opens it with the whole number selected, so typing replaces it). [onDone] runs once, on Done
+ * or when focus leaves.
+ *
+ * v1.7 (item 15's UI): the text is [LabeledSlider]'s, which shows the readout and the operator
+ * keys under the value row while the editor is open ([ExpressionKeys]).
  */
 @Composable
-private fun SliderValueEditor(label: String, initial: String, suffix: String, onDone: (String) -> Unit) {
-    var field by remember { mutableStateOf(TextFieldValue(initial, selection = TextRange(0, initial.length))) }
+private fun SliderValueEditor(
+    label: String,
+    field: TextFieldValue,
+    onFieldChange: (TextFieldValue) -> Unit,
+    suffix: String,
+    onDone: (String) -> Unit,
+) {
     val requester = remember { FocusRequester() }
     var wasFocused by remember { mutableStateOf(false) }
     var finished by remember { mutableStateOf(false) }
     val done by rememberUpdatedState(onDone)
+    val latestField by rememberUpdatedState(field)
     fun finish() {
         if (finished) return
         finished = true
-        done(field.text)
+        done(latestField.text)
     }
     Row(
         Modifier
@@ -251,7 +288,7 @@ private fun SliderValueEditor(label: String, initial: String, suffix: String, on
     ) {
         BasicTextField(
             value = field,
-            onValueChange = { field = it },
+            onValueChange = onFieldChange,
             singleLine = true,
             textStyle = MaterialTheme.typography.bodyMedium.copy(color = BrushworkColors.OnChrome, textAlign = TextAlign.End),
             cursorBrush = SolidColor(BrushworkColors.Accent),
@@ -365,9 +402,12 @@ internal fun NumberFieldCore(
     val relativeBase = remember { DoubleArray(1) { value } }
     fun parse(s: String): Double? = Units.parse(Expressions.resolveRelative(s, relativeBase[0]) ?: s)?.takeIf { it.isFinite() }
     fun format(v: Double): String = if (v.isFinite()) Units.formatNumber(v, decimals) else ""
-    var text by remember { mutableStateOf(format(value)) }
+    // v1.7: a TextFieldValue, so the operator keys go in at the cursor.
+    var textValue by remember { mutableStateOf(TextFieldValue(format(value))) }
+    /** Shows [s] with the cursor after it (the same text keeps the cursor and the selection). */
+    fun setText(s: String) { if (s != textValue.text) textValue = TextFieldValue(s, TextRange(s.length)) }
     var focused by remember { mutableStateOf(false) }
-    LaunchedEffect(value, decimals) { if (!focused) text = format(value) }
+    LaunchedEffect(value, decimals) { if (!focused) setText(format(value)) }
     // Hold-to-repeat buttons and drags run between recompositions: they read the latest values.
     val latestValue by rememberUpdatedState(value)
     val latestChange by rememberUpdatedState(onValueChange)
@@ -375,18 +415,21 @@ internal fun NumberFieldCore(
     // Text already committed (Done), so the focus loss that follows doesn't finish the same edit
     // a second time (one undo step / save per edit). Cleared by any new change.
     var committed by remember { mutableStateOf<String?>(null) }
+    /** v1.7 (item 15's UI): what [s] gives ("= 150 px") or its error, which refuses the commit. */
+    fun readout(s: String): Readout? = ExpressionReadout.of(s, relativeBase[0]) { t -> parse(t)?.coerceIn(min, max) }
     fun commit() {
-        val v = parse(text)
+        val text = textValue.text
+        val v = if (ExpressionReadout.blocks(readout(text))) null else parse(text)
         if (v != null) {
             val c = v.coerceIn(min, max)
             latestChange(c)
             // v1.7: committed relative text shows its result (and is the base of the next one).
-            if (Expressions.isRelative(text)) text = format(c)
+            if (Expressions.isRelative(text)) setText(format(c))
             relativeBase[0] = c
-            if (committed != text) latestFinished?.invoke()
-            committed = text
+            if (committed != textValue.text) latestFinished?.invoke()
+            committed = textValue.text
         } else {
-            text = format(latestValue)
+            setText(format(latestValue))
         }
     }
     // Buttons, slider and scrub set the number directly and show it at once, even in a focused
@@ -394,14 +437,26 @@ internal fun NumberFieldCore(
     fun set(v: Double) {
         if (!v.isFinite()) return
         val c = v.coerceIn(min, max)
-        text = format(c)
+        setText(format(c))
         committed = null
         relativeBase[0] = c
         latestChange(c)
     }
     fun finish() {
-        committed = text
+        committed = textValue.text
         latestFinished?.invoke()
+    }
+    /** The text changed to [t] (typed, or an operator key). */
+    fun typed(t: String) {
+        committed = null
+        // Commit valid in-range values while typing, so buttons (Apply, presets) that
+        // don't take focus always see the number the user typed.
+        val v = parse(t)
+        if (v != null && v >= min && v <= max) {
+            // (A typed absolute number is the base of relative text typed next.)
+            if (!Expressions.isRelative(t)) relativeBase[0] = v
+            latestChange(v)
+        }
     }
 
     val scale = remember(adjust, min, max, sliderMin, sliderMax, logSlider) {
@@ -433,18 +488,12 @@ internal fun NumberFieldCore(
                 RepeatIconButton(Icons.Filled.Remove, "Decrease $label", enabled = enabled, onRelease = ::finish) { set(stepped(latestValue, -1, step)) }
             }
             OutlinedTextField(
-                value = text,
+                value = textValue,
                 onValueChange = {
-                    if (it != text) committed = null
-                    text = it
-                    // Commit valid in-range values while typing, so buttons (Apply, presets) that
-                    // don't take focus always see the number the user typed.
-                    val v = parse(it)
-                    if (v != null && v >= min && v <= max) {
-                        // (A typed absolute number is the base of relative text typed next.)
-                        if (!Expressions.isRelative(it)) relativeBase[0] = v
-                        latestChange(v)
-                    }
+                    val changed = it.text != textValue.text
+                    textValue = it
+                    // (A cursor move or a selection alone is no edit.)
+                    if (changed) typed(it.text)
                 },
                 // Beside a slider the box is narrow: a long label ends in "…" instead of being cut.
                 label = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -487,30 +536,64 @@ internal fun NumberFieldCore(
         }
     }
 
-    if (scale == null) {
-        Box(modifier.boundedWidth()) { field() }
-    } else {
-        val minText = MinInlineTextWidth + if (step != null) 80.dp else 0.dp
-        FieldWithSlider(modifier, minText, field) {
-            val focusManager = LocalFocusManager.current
-            Slider(
-                value = scale.fraction(value),
-                onValueChange = { f ->
-                    val v = NumberSliderMath.sliderValue(f, scale, decimals, min, max)
-                    set(if (incStep == null) v else IncrementStepping.snapSlider(v, incStep, maxOf(scale.min, min), minOf(scale.max, max)))
-                },
-                onValueChangeFinished = ::finish,
-                enabled = enabled,
-                colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    // A field being typed in commits first, so it can't overwrite the drag later.
-                    .clearFocusOnTouch(focusManager)
-                    .semantics {
-                        contentDescription = label
-                        stateDescription = if (suffix.isEmpty()) format(value) else "${format(value)} $suffix"
+    // v1.7 (item 15's UI): the readout and the operator keys under the field while it is typed in.
+    // Inline (no popup), and the same layout node with or without them, so the field keeps focus.
+    val keys: @Composable () -> Unit = {
+        if (focused && enabled) {
+            val r = readout(textValue.text)
+            ExpressionKeys(r?.let { ExpressionReadout.text(it, ::format, suffix) }, ExpressionReadout.blocks(r), onKey = { key ->
+                textValue = OperatorText.insert(textValue, key)
+                typed(textValue.text)
+            })
+        }
+    }
+    val control: @Composable () -> Unit = {
+        if (scale == null) {
+            Box(Modifier.boundedWidth()) { field() }
+        } else {
+            val minText = MinInlineTextWidth + if (step != null) 80.dp else 0.dp
+            FieldWithSlider(Modifier, minText, field) {
+                val focusManager = LocalFocusManager.current
+                Slider(
+                    value = scale.fraction(value),
+                    onValueChange = { f ->
+                        val v = NumberSliderMath.sliderValue(f, scale, decimals, min, max)
+                        set(if (incStep == null) v else IncrementStepping.snapSlider(v, incStep, maxOf(scale.min, min), minOf(scale.max, max)))
                     },
-            )
+                    onValueChangeFinished = ::finish,
+                    enabled = enabled,
+                    colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        // A field being typed in commits first, so it can't overwrite the drag later.
+                        .clearFocusOnTouch(focusManager)
+                        .semantics {
+                            contentDescription = label
+                            stateDescription = if (suffix.isEmpty()) format(value) else "${format(value)} $suffix"
+                        },
+                )
+            }
+        }
+    }
+    ControlOverKeys(modifier, control, keys)
+}
+
+/**
+ * [control] with [keys] (the readout and operator keys of a field being typed in; may emit
+ * nothing) under it, no wider than [control]: the keys never widen a field's place in a row,
+ * and in a narrow one their row scrolls ([OperatorKeys]). A bounded height that [control] fills
+ * leaves the keys none.
+ */
+@Composable
+private fun ControlOverKeys(modifier: Modifier, control: @Composable () -> Unit, keys: @Composable () -> Unit) {
+    Layout(content = { control(); keys() }, modifier = modifier) { measurables, constraints ->
+        val c = measurables[0].measure(constraints)
+        val left = if (constraints.hasBoundedHeight) (constraints.maxHeight - c.height).coerceAtLeast(0) else Constraints.Infinity
+        val k = measurables.getOrNull(1)?.measure(Constraints(maxWidth = c.width, maxHeight = left))
+        val h = (c.height + (k?.height ?: 0)).coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(c.width, h) {
+            c.placeRelative(0, 0)
+            k?.placeRelative(0, c.height)
         }
     }
 }

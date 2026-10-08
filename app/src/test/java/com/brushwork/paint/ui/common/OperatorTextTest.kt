@@ -93,18 +93,4 @@ class OperatorTextTest {
         assertEquals("= 2.5", ExpressionReadout.text(Readout.Value(2.5), fmt, ""))
         assertEquals("Can't divide by 0", ExpressionReadout.text(Readout.Error(ExpressionLabels.DIV_ZERO), fmt, "px"))
     }
-
-    @Test
-    fun thePopupSitsUnderItsFieldWhenItFitsElseAbove() {
-        // Window 1000 high, popup 100: under a field ending at 500; above one ending at 950.
-        assertEquals(504, OperatorPopupMath.y(top = 450, bottom = 500, height = 100, window = 1000, gap = 4))
-        assertEquals(346, OperatorPopupMath.y(top = 450, bottom = 950, height = 100, window = 1000, gap = 4))
-        assertEquals(0, OperatorPopupMath.y(top = 50, bottom = 990, height = 100, window = 1000, gap = 4))
-        // Centred on the field, kept 8 px inside the window.
-        assertEquals(150, OperatorPopupMath.x(left = 200, right = 400, width = 300, window = 1000, margin = 8))
-        assertEquals(8, OperatorPopupMath.x(left = 0, right = 40, width = 300, window = 1000, margin = 8))
-        assertEquals(692, OperatorPopupMath.x(left = 960, right = 1000, width = 300, window = 1000, margin = 8))
-        // A window narrower than the popup: centred.
-        assertEquals(0, OperatorPopupMath.x(left = 0, right = 40, width = 300, window = 290, margin = 8))
-    }
 }
