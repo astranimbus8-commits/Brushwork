@@ -33,6 +33,7 @@ import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -914,6 +915,173 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         refreshPreview()
     }
 
+    // ------------------------------------------------------------------ properties of the selected points (v1.7 items 1, 2)
+
+    /** The selected points of [anchors] (ascending). */
+    private fun selectedOf(anchors: List<ShapeAnchor>): List<Int> = pointSelection.resized(anchors.size).indices
+
+    /**
+     * "Smooth" over the selected points (Compose state): `Same(true)`, `Same(false)` or a
+     * `Spread` (the three-state chip's "Mixed"); null without a selected point.
+     */
+    val selectionSmooth: Mixed<Boolean>?
+        get() {
+            if (box == null) return null
+            val pts = points ?: return null
+            val idx = pointSelection.resized(pts.size).indices
+            if (idx.isEmpty()) return null
+            return Mixed.of(BooleanArray(idx.size) { pts[idx[it]].smooth })
+        }
+
+    /**
+     * Makes every selected point smooth (automatic tangents) or a sharp corner, as ONE in-tool
+     * step (with one point selected exactly [setPointSmooth]); nothing when nothing would change.
+     */
+    fun setSelectedSmooth(smooth: Boolean) {
+        val b = box ?: return
+        val anchors = docAnchors() ?: return
+        val idx = selectedOf(anchors).filter { anchors[it].smooth != smooth || anchors[it].hasExplicitHandles }
+        if (idx.isEmpty()) return
+        pushHistory()
+        var next = anchors
+        for (i in idx) next = ShapePoints.setSmooth(next, i, smooth)
+        applyAnchors(next, b.rotationDeg)
+        refreshPreview()
+    }
+
+    /** Some selected smooth point has tangent handles of its own ("Auto tangent" is offered; Compose state). */
+    val selectionHasExplicitHandles: Boolean
+        get() {
+            if (box == null) return false
+            val pts = points ?: return false
+            return pointSelection.resized(pts.size).indices.any { i -> pts[i].let { it.smooth && (it.handleIn != null || it.handleOut != null) } }
+        }
+
+    /** The selected smooth points with handles of their own get their automatic tangents back: ONE in-tool step. */
+    fun resetSelectedTangents() {
+        val b = box ?: return
+        val anchors = docAnchors() ?: return
+        val idx = selectedOf(anchors).filter { anchors[it].smooth && anchors[it].hasExplicitHandles }
+        if (idx.isEmpty()) return
+        pushHistory()
+        var next = anchors
+        for (i in idx) next = ShapePoints.autoTangent(next, i)
+        applyAnchors(next, b.rotationDeg)
+        refreshPreview()
+    }
+
+    /** The corner style the pending shape's own points are drawn with (as `ShapeOutlines` draws a custom outline). */
+    private val customCorner: CornerStyle get() = if (settings.type.hasCorners) settings.corner else CornerStyle.SHARP
+
+    /** The selected points that can be rounded: corners between two straight sides (Compose state; see [ShapeRoundness.targets]). */
+    fun roundnessTargets(): IntArray {
+        val anchors = docAnchors() ?: return IntArray(0)
+        return ShapeRoundness.targets(anchors, closedShape, selectedOf(anchors).toIntArray())
+    }
+
+    /**
+     * "Point roundness" of the selected corners that can be rounded, in document px (Compose
+     * state): their own radius, else the shape's "Corner radius" while its corners are treated,
+     * else 0. Null when no such corner is selected (the field is disabled with "Only corners
+     * between straight sides can be rounded").
+     */
+    val pointRoundness: Mixed<Float>?
+        get() {
+            val anchors = docAnchors() ?: return null
+            val t = ShapeRoundness.targets(anchors, closedShape, selectedOf(anchors).toIntArray())
+            if (t.isEmpty()) return null
+            return Mixed.of(ShapeRoundness.values(anchors, t, customCorner, settings.cornerRadius))
+        }
+
+    /** The points (document px) when the roundness scrub in progress began; null at rest. */
+    private var roundBase: List<ShapeAnchor>? = null
+    /** The corners the roundness scrub in progress changes. */
+    private var roundTargets = IntArray(0)
+    /** The roundness scrub in progress has saved its in-tool step (at its first actual change). */
+    private var roundStepSaved = false
+
+    /** Starts a scrub of "Point roundness": everything until [endPointRoundness] is ONE in-tool step. */
+    fun beginPointRoundness() {
+        if (roundBase != null) return
+        val anchors = docAnchors() ?: return
+        val t = ShapeRoundness.targets(anchors, closedShape, selectedOf(anchors).toIntArray())
+        if (t.isEmpty()) return
+        roundBase = anchors
+        roundTargets = t
+        roundStepSaved = false
+    }
+
+    /** The scrub at [now] from [start] (px): each corner's roundness when it began plus the difference, clamped to 0..500. */
+    fun dragPointRoundness(start: Float, now: Float) {
+        val base = roundBase ?: return
+        val b = box ?: return
+        if (!start.isFinite() || !now.isFinite()) return
+        val next = ShapeRoundness.shifted(base, roundTargets, customCorner, settings.cornerRadius, now - start)
+        if (!roundStepSaved) {
+            if (next == base) return
+            historyKey = null
+            pushHistory()
+            roundStepSaved = true
+        }
+        applyAnchors(next, b.rotationDeg)
+        refreshPreview()
+    }
+
+    /** The roundness scrub is complete. */
+    fun endPointRoundness() {
+        roundBase = null
+        roundStepSaved = false
+        historyKey = null
+    }
+
+    /**
+     * A typed "Point roundness" (document px): an absolute expression sets every selected corner
+     * that can be rounded, a relative one (`*2`, `/2`) applies to each. ONE in-tool step; false
+     * when the text is invalid or no such corner is selected.
+     */
+    fun typePointRoundness(text: String): Boolean {
+        val anchors = docAnchors() ?: return false
+        val t = ShapeRoundness.targets(anchors, closedShape, selectedOf(anchors).toIntArray())
+        val next = ShapeRoundness.typed(anchors, t, customCorner, settings.cornerRadius, text) ?: return false
+        applyPointEdit(anchors, next)
+        return true
+    }
+
+    /** Every selected corner that can be rounded at roundness [r] (document px, clamped to 0..500): ONE in-tool step. */
+    fun setPointRoundness(r: Float) {
+        if (!r.isFinite()) return
+        val anchors = docAnchors() ?: return
+        val t = ShapeRoundness.targets(anchors, closedShape, selectedOf(anchors).toIntArray())
+        if (t.isEmpty()) return
+        applyPointEdit(anchors, ShapeRoundness.withValues(anchors, t, FloatArray(t.size) { r }))
+    }
+
+    /** Some selected point has a roundness of its own ("Reset point roundness" is enabled; Compose state). */
+    val canResetPointRoundness: Boolean
+        get() {
+            if (box == null) return false
+            val pts = points ?: return false
+            return pointSelection.resized(pts.size).indices.any { pts[it].radius != null }
+        }
+
+    /** "Reset point roundness": the selected points follow the shape's own "Corner radius" again. ONE in-tool step. */
+    fun resetPointRoundness() {
+        val anchors = docAnchors() ?: return
+        val idx = selectedOf(anchors).filter { anchors[it].radius != null }
+        if (idx.isEmpty()) return
+        applyPointEdit(anchors, ShapeRoundness.reset(anchors, idx.toIntArray()))
+    }
+
+    /** [next] replaces the points [anchors] as one in-tool step of its own (nothing when equal). */
+    private fun applyPointEdit(anchors: List<ShapeAnchor>, next: List<ShapeAnchor>) {
+        val b = box ?: return
+        if (next == anchors) return
+        historyKey = null
+        pushHistory()
+        applyAnchors(next, b.rotationDeg)
+        refreshPreview()
+    }
+
     /** Moves point [index] to document point [p] (numeric entry; edits of one point share one undo step). */
     fun movePoint(index: Int, p: Vec2) {
         val b = box ?: return
@@ -1085,6 +1253,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         handleBase = null
         handleStepSaved = false
         handleScale = 1f
+        roundBase = null
+        roundStepSaved = false
     }
 
     /**
@@ -1120,6 +1290,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         handleBase = null
         handleStepSaved = false
         handleScale = 1f
+        roundBase = null
+        roundStepSaved = false
         box = s.box
         points = s.points
         pointsMode = s.pointsMode && s.points != null

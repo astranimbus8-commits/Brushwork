@@ -17,14 +17,19 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ChangeHistory
+import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.RoundedCorner
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -50,12 +55,17 @@ import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.IncrementKind
+import com.brushwork.paint.tools.points.Mixed
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.ShapeHandleSide
 import com.brushwork.paint.tools.vector.ShapePoints
+import com.brushwork.paint.tools.vector.ShapeRoundness
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.SliderScale
@@ -63,12 +73,14 @@ import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.editor.ValueInputDialog
+import com.brushwork.paint.ui.points.MixedNumberField
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisDims
 
 /*
- * The "Points" parts of the shape tool's options: the strip's point editing toggle and the
- * actions for the selected point, and the selected point's fields in the Numbers sheet.
+ * The "Points" parts of the shape tool's options: the strip's point editing toggle, the selection
+ * controls ("Select several", "Select all points") and the actions and properties of the selected
+ * points (v1.7 items 1 and 2), and the selected point's fields in the Numbers sheet.
  */
 
 /** What the strip shows about the pending shape's points (only these changes recompose it). */
@@ -76,12 +88,23 @@ private data class PointsInfo(
     val pending: Boolean,
     val pointsMode: Boolean,
     val custom: Boolean,
+    /** The shape is closed (its corners can be rounded). */
+    val closed: Boolean,
     val count: Int,
+    /** The one selected point, else -1 (none, or several). */
     val selected: Int,
-    val smooth: Boolean,
+    /** How many points are selected. */
+    val selectedCount: Int,
+    /** "Smooth" over the selected points (null without a selection). */
+    val smooth: Mixed<Boolean>?,
+    /** Some selected smooth point has handles of its own ("Auto tangent"). */
     val explicitHandles: Boolean,
     /** Some point has tangent handles (smooth, or explicit ones): the Handles group has something to scale. */
     val anyHandles: Boolean,
+    /** "Point roundness" of the selected corners that can be rounded (null: none is selected). */
+    val roundness: Mixed<Float>?,
+    /** Some selected point has a roundness of its own. */
+    val ownRoundness: Boolean,
 )
 
 @Composable
@@ -89,17 +112,21 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
     val info by remember(tool) {
         derivedStateOf {
             val pts = tool.points
-            val sel = tool.selectedPoint
-            val p = pts?.getOrNull(sel)
+            val n = pts?.size ?: 0
+            val sel = tool.pointSelection.resized(n)
             PointsInfo(
                 pending = tool.box != null,
                 pointsMode = tool.pointsMode,
                 custom = pts != null,
-                count = pts?.size ?: 0,
-                selected = if (p != null) sel else -1,
-                smooth = p?.smooth == true,
-                explicitHandles = p != null && (p.handleIn != null || p.handleOut != null),
+                closed = !tool.settings.type.isLineLike,
+                count = n,
+                selected = if (sel.isSingle) sel.primary else -1,
+                selectedCount = sel.count,
+                smooth = tool.selectionSmooth,
+                explicitHandles = tool.selectionHasExplicitHandles,
                 anyHandles = pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
+                roundness = tool.pointRoundness,
+                ownRoundness = tool.canResetPointRoundness,
             )
         }
     }
@@ -108,9 +135,12 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
 
 /**
  * Strip chips for the pending shape's points: "Points" (edit them), the in-tool undo / redo of
- * point edits, the selected point's actions (sharp / smooth, automatic tangent, delete), the
- * Handles group while some point has tangent handles (v1.6) and "Reset shape" (back to the
- * regular outline). Nothing without a pending shape.
+ * point edits, "Select several" (its hint shows as a message when it is turned on) and "Select
+ * all points" / "Deselect all points", the selected points' actions (sharp / smooth as a
+ * three-state chip, automatic tangents, delete, "Deselect point", which clears the whole
+ * selection) and "Point roundness" with its reset on a closed shape, the Handles group while some
+ * point has tangent handles (v1.6) and "Reset shape" (back to the regular outline). Nothing
+ * without a pending shape. With one point selected the actions read and act as in v1.6.
  */
 @Composable
 internal fun ShapePointsStrip(tool: ShapeTool) {
@@ -121,24 +151,96 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
         // The same steps as the app's undo / redo (one point edit at a time).
         ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo point edit", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
         ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point edit", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
-        val sel = info.selected
-        if (sel >= 0) {
-            if (info.smooth) ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setPointSmooth(sel, false) }
-            else ActionChip("Smooth", Icons.Filled.Gesture) { tool.setPointSmooth(sel, true) }
-            if (info.smooth && info.explicitHandles) ActionChip("Auto tangent", Icons.Filled.Restore) { tool.resetTangent(sel) }
-            ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count > tool.minPoints) { tool.deletePoint(sel) }
-            ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.selectPoint(-1) }, size = 44.dp)
+        val several = tool.selectSeveral
+        OptionChip(PointLabels.SELECT_SEVERAL, several, {
+            tool.selectSeveral = !several
+            // The one-line hint (the strip is a single scrolling row: it shows as the editor's message).
+            if (!several) tool.controller.toast(PointLabels.SEVERAL_HINT)
+        }, icon = Icons.Filled.Checklist)
+        val all = info.count > 0 && info.selectedCount == info.count
+        ActionChip(if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL, if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll) {
+            tool.selectPoints(if (all) PointSelection.none(info.count) else PointSelection.all(info.count))
         }
-        if (info.anyHandles) ShapeHandlesGroup(tool, sel)
+        val smooth = info.smooth
+        if (smooth != null) {
+            SmoothChip(smooth) { tool.setSelectedSmooth(it) }
+            if (info.explicitHandles) ActionChip("Auto tangent", Icons.Filled.Restore) { tool.resetSelectedTangents() }
+            val sel = info.selected
+            if (sel >= 0) {
+                ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count > tool.minPoints) { tool.deletePoint(sel) }
+            } else {
+                ActionChip(PillLabels.DELETE_POINTS, Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count - info.selectedCount >= tool.minPoints) { tool.deleteSelectedPoints() }
+            }
+            ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.selectPoints(PointSelection.none(info.count)) }, size = 44.dp)
+            if (info.closed) PointRoundnessControls(tool, info)
+        }
+        if (info.anyHandles) ShapeHandlesGroup(tool, info.selectedCount > 0)
     }
     if (info.custom) ActionChip("Reset shape", Icons.Filled.RestartAlt) { tool.resetShape() }
 }
 
 /**
+ * The selected points' "Smooth" as a three-state chip: all smooth reads "Sharp corner" (a tap
+ * makes them sharp corners), all sharp reads "Smooth" (as v1.6 with one point), and a mix reads
+ * "Smooth" with "Mixed" (state description "Mixed"); a tap on it makes them all smooth.
+ */
+@Composable
+private fun SmoothChip(state: Mixed<Boolean>, onSet: (Boolean) -> Unit) {
+    when (state) {
+        Mixed.Same(true) -> ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { onSet(false) }
+        is Mixed.Same -> ActionChip("Smooth", Icons.Filled.Gesture) { onSet(true) }
+        is Mixed.Spread -> AssistChip(
+            onClick = { onSet(true) },
+            label = {
+                Text("Smooth", maxLines = 1)
+                Text(" · ${PointLabels.MIXED}", maxLines = 1, color = BrushworkColors.OnChromeDim)
+            },
+            leadingIcon = { Icon(Icons.Filled.Gesture, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome),
+            modifier = Modifier
+                .padding(horizontal = 3.dp)
+                .semantics { stateDescription = PointLabels.MIXED },
+        )
+    }
+}
+
+/**
+ * "Point roundness" (v1.7 item 2, design §3.2): the selected corners' roundness in document px
+ * (0–500; a drag adds the same amount to each, a typed value sets all, `*2` doubles each), each
+ * change ONE in-tool step, and "Reset point roundness" (back to the shape's "Corner radius").
+ * Without a selected corner between straight sides the field is disabled and says why.
+ */
+@Composable
+private fun PointRoundnessControls(tool: ShapeTool, info: PointsInfo) {
+    val r = info.roundness
+    MixedNumberField(
+        label = PointLabels.ROUNDNESS,
+        value = r,
+        unit = "px",
+        range = 0f..ShapeRoundness.MAX,
+        incrementKey = ROUNDNESS_INCREMENT_KEY,
+        onBegin = { tool.beginPointRoundness() },
+        onDrag = { start, now -> tool.dragPointRoundness(start, now) },
+        onEnd = { tool.endPointRoundness() },
+        onTyped = { text -> tool.typePointRoundness(text) },
+        modifier = Modifier.padding(horizontal = 3.dp).width(ROUNDNESS_FIELD_WIDTH),
+        enabled = r != null,
+    )
+    if (r == null) Hint(PointLabels.ROUND_REFUSAL, Modifier.padding(horizontal = 6.dp))
+    ActionChip(PointLabels.RESET_ROUNDNESS, Icons.Filled.RoundedCorner, enabled = info.ownRoundness) { tool.resetPointRoundness() }
+}
+
+/** The custom increment step of "Point roundness" (px). */
+private const val ROUNDNESS_INCREMENT_KEY = "shape.pointRoundness"
+
+/** "Point roundness" keeps its label and a 3-digit value readable in the strip. */
+private val ROUNDNESS_FIELD_WIDTH = 220.dp
+
+/**
  * The Handles group (v1.6 §3.3, the shape tool's points): ⟷, ‹ "Shorter handles", the value
  * ("100 %"; tap: "Type handle scale", long-press: the Scale step), › "Longer handles", a 120 dp
  * "Handle scale" slider (10–400 %, logarithmic), the side ("In and out" / "In" / "Out") and "All
- * points". It acts on the [selected] point's handles, or every point's without a selection or with
+ * points". It acts on the selected points' handles, or every point's without a selection ([hasSelection] false) or with
  * "All points"; the value is relative to the handles when a change began and reads 100 % again
  * at rest. ‹ › multiply by 0.9 / 1.1, or step by the Scale increment, and repeat while held;
  * the slider lands on the Scale step's multiples while increments are on; a typed value is exact.
@@ -147,7 +249,7 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
  * the slider are disabled.
  */
 @Composable
-private fun ShapeHandlesGroup(tool: ShapeTool, selected: Int) {
+private fun ShapeHandlesGroup(tool: ShapeTool, hasSelection: Boolean) {
     var typing by remember { mutableStateOf(false) }
     val percent = tool.handleScale * 100f
     // A selected sharp point between straight edges has no handle: nothing to scale until another
@@ -182,7 +284,7 @@ private fun ShapeHandlesGroup(tool: ShapeTool, selected: Int) {
         OptionChip(sideLabel(side), tool.handleSide == side, { tool.handleSide = side })
     }
     // Without a selected point the group acts on all of them anyway.
-    OptionChip("All points", tool.handlesAllPoints || selected < 0, { tool.handlesAllPoints = !tool.handlesAllPoints }, enabled = selected >= 0)
+    OptionChip("All points", tool.handlesAllPoints || !hasSelection, { tool.handlesAllPoints = !tool.handlesAllPoints }, enabled = hasSelection)
     if (typing) {
         ValueInputDialog(
             title = "Handle scale",
@@ -281,6 +383,13 @@ internal fun ShapeEditingSettings(tool: ShapeTool) {
             "drag inside the shape to move it.",
         Modifier.padding(top = 4.dp),
     )
+    Hint(
+        "Several points: turn on ${PointLabels.SELECT_SEVERAL}, then tap points to add or remove them or drag on the canvas to box-select. " +
+            "Drag a selected point or the inside of their box to move them, a box handle to scale them and the knob above it to turn them; " +
+            "a pinch that starts on the box scales and turns them. ${PointLabels.ROUNDNESS} rounds the selected corners; " +
+            "${PointLabels.TO_PATH} makes the shape a Path to edit in the Path tool.",
+        Modifier.padding(top = 4.dp),
+    )
 }
 
 /** Settings sheet, stroke section: an opened brush-stroked shape keeps the brush it was drawn with. */
@@ -305,6 +414,14 @@ internal fun ShapePointFields(tool: ShapeTool, unit: LengthUnit, dpi: Double) {
     val sel = info.selected
     val anchors = tool.docAnchors() ?: return
     val a = anchors.getOrNull(sel)
+    if (info.pointsMode && info.selectedCount >= 2) {
+        // Several points: the X / Y pill moves them, the strip edits them together.
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("${info.selectedCount} of ${info.count} points selected", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+            TextButton(onClick = { tool.selectPoints(PointSelection.none(info.count)) }) { Text(PointLabels.DESELECT_ALL) }
+        }
+        return
+    }
     if (!info.pointsMode || a == null) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("${info.count} points", style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
@@ -324,14 +441,14 @@ internal fun ShapePointFields(tool: ShapeTool, unit: LengthUnit, dpi: Double) {
         LengthField("Y", p.y.toDouble(), { y -> tool.movePoint(sel, Vec2(p.x, y.toFloat())) }, unit, dpi, Modifier.weight(1f), step = null, minPx = -MAX, maxPx = MAX)
     }
     Row(Modifier.fillMaxWidth().padding(top = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-        ChoiceChips(listOf("Sharp corner", "Smooth"), if (info.smooth) 1 else 0, { i -> tool.setPointSmooth(sel, i == 1) }, Modifier.weight(1f))
+        ChoiceChips(listOf("Sharp corner", "Smooth"), if (a.smooth) 1 else 0, { i -> tool.setPointSmooth(sel, i == 1) }, Modifier.weight(1f))
         TextButton(onClick = { tool.deletePoint(sel) }, enabled = info.count > tool.minPoints) {
             Icon(Icons.Outlined.Delete, contentDescription = null, tint = BrushworkColors.Danger, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(4.dp))
             Text("Delete", color = BrushworkColors.Danger)
         }
     }
-    if (info.smooth && info.explicitHandles) {
+    if (a.smooth && a.hasExplicitHandles) {
         TextButton(onClick = { tool.resetTangent(sel) }) { Text("Back to the automatic tangent") }
     }
 }
