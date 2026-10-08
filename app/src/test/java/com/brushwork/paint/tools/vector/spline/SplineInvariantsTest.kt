@@ -133,13 +133,14 @@ class SplineInvariantsTest {
         val spline = VSpline(pts, 99)
         val clean = spline.sanitized()
         // NaN / infinite points dropped: 3 left (order 6, effectively 3: one span); weights held
-        // to 0.1..10 (NaN → 1), so the span is rational: at most 16 pieces.
+        // to 0.1..10 (NaN → 1), so the span is rational: at most 16 pieces for its geometry, and
+        // (v1.7 §3.5, its widths 1 / 3 / 1 vary) at most 32 in all.
         assertEquals(3, clean.points.size)
         assertEquals(VSpline.MAX_ORDER, clean.order)
         assertEquals(listOf(VSpline.MAX_WEIGHT, 1f, VSpline.MIN_WEIGHT), clean.points.map { it.weight })
         val sub = SplineBezier.toSubpath(spline)
         assertEquals(sub, SplineBezier.toSubpath(clean))
-        assertTrue(SplineTestSupport.segmentCount(sub) in 1..SplineBezier.MAX_PIECES_PER_SPAN)
+        assertTrue(SplineTestSupport.segmentCount(sub) in 1..SplineBezier.WIDTH_MAX_PIECES_PER_SPAN)
         for (a in sub.anchors) {
             assertTrue(a.x.isFinite() && a.y.isFinite() && a.inX!!.isFinite() && a.outY!!.isFinite())
             assertTrue(a.width in 0f..VSpline.MAX_WIDTH)

@@ -14,6 +14,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
  * The Bézier form of a Path-tool spline (v1.6 §3.2c): what a [VPath] stores in its subpaths and
@@ -40,12 +41,34 @@ import kotlin.math.min
  * spline's first corner is its anchor 0 (with fewer than 3 spans in all, its spans are cut into
  * equal parts so the subpath has the 3 anchors a closed curve needs). A spline without sharp
  * points converts exactly as in v1.6.
+ *
+ * v1.7 (item 5): every point's thickness counts. The renderer blends two anchors' widths with
+ * smoothstep along the arc length between them ([CurveGeometry.widthAt]), so one cubic per span
+ * lost the widths of the points in between (3 points at 0 / 100 / 0 % drew nothing). A span whose
+ * control widths are equal converts exactly as in v1.6 and is never cut. Any other span's pieces
+ * are checked at [WIDTH_CHECK_SAMPLES] parameters each: the spline's true (rational) width there
+ * against what the renderer draws there, the pieces' end widths blended with smoothstep at the
+ * point's arc-length fraction within its piece. A piece off by more than [WIDTH_TOL] is halved
+ * at its middle parameter by de Casteljau, so the geometry stays (an exact span's halves are its
+ * exact sub-curves, a fitted piece's halves draw the same cubic), and each new anchor takes the
+ * exact width there. Width halving stops at [WIDTH_MAX_PIECES_PER_SPAN] pieces per span (geometric halving
+ * keeps [MAX_PIECES_PER_SPAN]); at the cap every anchor still has its exact width and the residual
+ * between anchors is accepted. A span's pieces still depend on that span alone (I9, [Incremental]).
  */
 object SplineBezier {
     /** Largest distance between a converted piece and the spline (document px). */
     const val DEFAULT_TOLERANCE = 0.05f
     const val MAX_PIECES_PER_SPAN = 16
     const val CHECK_SAMPLES = 16
+
+    /** v1.7 (item 5): the parameters of a piece at which its drawn width is checked. */
+    const val WIDTH_CHECK_SAMPLES = 8
+
+    /** v1.7 (item 5): largest difference between a piece's drawn and true width (thickness factor, 0..[VSpline.MAX_WIDTH]). */
+    const val WIDTH_TOL = 0.01f
+
+    /** v1.7 (item 5): most pieces of a span whose widths vary (width halving stops there). */
+    const val WIDTH_MAX_PIECES_PER_SPAN = 32
 
     /** I9: a stored subpath and the conversion of its spline agree within this (document px). */
     const val MATCH_TOLERANCE = 0.01f
@@ -477,13 +500,29 @@ object SplineBezier {
             }
         }
 
-        /** The Bézier in [h] as cubic pieces into [out]. */
+        /**
+         * The Bézier in [h] as cubic pieces into [out]. v1.7 (item 5): with equal control widths
+         * exactly as in v1.6; otherwise cut where the drawn width would miss the true one.
+         */
         private fun convert(out: PieceOut) {
-            if (p == 1) line(out)
-            else if (p <= 3 && constantWeight()) exact(out) else {
-                toPowerBasis()
-                approximate(out)
+            if (p == 1) { line(out); return }
+            val polynomial = p <= 3 && constantWeight()
+            if (constantWidth()) {
+                if (polynomial) exact(out) else {
+                    toPowerBasis()
+                    approximate(out)
+                }
+                return
             }
+            toPowerBasis()
+            if (polynomial) exactWithWidths(out) else approximateWithWidths(out)
+        }
+
+        /** v1.7 (item 5): all control widths of the span equal, so its width is constant (v1.6's conversion). */
+        private fun constantWidth(): Boolean {
+            val w0 = h[3] / h[2]
+            for (j in 1..p) if (abs(h[j * dim + 3] / h[j * dim + 2] - w0) > 1e-9 * max(1.0, abs(w0))) return false
+            return true
         }
 
         /**
@@ -584,21 +623,213 @@ object SplineBezier {
                 fitPiece(m, c, worst + 1)
                 count++
             }
+            emit(out)
+        }
+
+        /**
+         * v1.7 (item 5): [approximate] for a span whose widths vary. The pieces are halved at the
+         * middle of their standard-form parameter while one misses the spline by more than the
+         * tolerance and there are fewer than [MAX_PIECES_PER_SPAN] (both halves fitted again, as
+         * in v1.6), or misses its true width by more than [WIDTH_TOL] and there are fewer than
+         * [WIDTH_MAX_PIECES_PER_SPAN] (a piece that fits the spline is cut by [splitPiece]: the
+         * drawn curve stays exactly the same); the one that misses most, each miss relative to its
+         * tolerance, first.
+         */
+        private fun approximateWithWidths(out: PieceOut) {
+            count = 0
+            fitPiece(0.0, 1.0, 0)
+            werr[0] = widthMiss(0)
+            count = 1
+            while (true) {
+                val worst = worstPiece()
+                if (worst < 0) break
+                val a = pa[worst]; val c = pc[worst]
+                val rho = prho[worst]
+                val m = a + (c - a) * (rho / (1.0 + rho))
+                if (!(m > a && m < c)) { err[worst] = 0.0; werr[worst] = 0.0; continue }
+                for (k in count downTo worst + 2) copyPiece(k - 1, k)
+                if (err[worst] > tol && count < MAX_PIECES_PER_SPAN) {
+                    fitPiece(a, m, worst)
+                    werr[worst] = widthMiss(worst)
+                    fitPiece(m, c, worst + 1)
+                    werr[worst + 1] = widthMiss(worst + 1)
+                } else {
+                    splitPiece(worst, m)
+                }
+                count++
+            }
+            emit(out)
+        }
+
+        /**
+         * v1.7 (item 5): cuts the fitted piece in [slot] at the middle of its standard-form
+         * parameter ([m] on the span) into [slot] and [slot] + 1 by de Casteljau at ½: the same
+         * curve as drawn, a smooth anchor at its middle with the spline's exact width at [m]. The
+         * halves are in standard form again over their own ranges (ratios (1 + ρ) / 2 and
+         * 2ρ / (1 + ρ)); they keep the piece's geometric miss.
+         */
+        private fun splitPiece(slot: Int, m: Double) {
+            val o = slot * PIECE
+            val q = o + PIECE
+            val p0x = geo[o]; val p0y = geo[o + 1]
+            val ax = geo[o + 3]; val ay = geo[o + 4]; val bx = geo[o + 5]; val by = geo[o + 6]
+            val p1x = geo[o + 7]; val p1y = geo[o + 8]; val w1 = geo[o + 9]
+            val l1x = 0.5 * (p0x + ax); val l1y = 0.5 * (p0y + ay)
+            val hx = 0.5 * (ax + bx); val hy = 0.5 * (ay + by)
+            val r2x = 0.5 * (bx + p1x); val r2y = 0.5 * (by + p1y)
+            val l2x = 0.5 * (l1x + hx); val l2y = 0.5 * (l1y + hy)
+            val r1x = 0.5 * (hx + r2x); val r1y = 0.5 * (hy + r2y)
+            val mx = 0.5 * (l2x + r1x); val my = 0.5 * (l2y + r1y)
+            val wm = widthAt(m)
+            val c = pc[slot]
+            val rho = prho[slot]
+            pa[slot + 1] = m; pc[slot + 1] = c; prho[slot + 1] = 2.0 * rho / (1.0 + rho); err[slot + 1] = err[slot]
+            pc[slot] = m; prho[slot] = 0.5 * (1.0 + rho)
+            geo[o + 3] = l1x; geo[o + 4] = l1y; geo[o + 5] = l2x; geo[o + 6] = l2y
+            geo[o + 7] = mx; geo[o + 8] = my; geo[o + 9] = wm
+            geo[q] = mx; geo[q + 1] = my; geo[q + 2] = wm
+            geo[q + 3] = r1x; geo[q + 4] = r1y; geo[q + 5] = r2x; geo[q + 6] = r2y
+            geo[q + 7] = p1x; geo[q + 8] = p1y; geo[q + 9] = w1
+            werr[slot] = widthMiss(slot)
+            werr[slot + 1] = widthMiss(slot + 1)
+        }
+
+        /** v1.7 (item 5): the piece [approximateWithWidths] halves next, −1 for none. */
+        private fun worstPiece(): Int {
+            val geometric = count < MAX_PIECES_PER_SPAN
+            val widths = count < WIDTH_MAX_PIECES_PER_SPAN
+            val widthTol = WIDTH_TOL.toDouble()
+            var worst = -1
+            var most = 0.0
+            for (k in 0 until count) {
+                var miss = 0.0
+                if (geometric && err[k] > tol) miss = err[k] / tol
+                if (widths && werr[k] > widthTol) miss = max(miss, werr[k] / widthTol)
+                if (miss > 0.0 && (worst < 0 || miss > most)) { worst = k; most = miss }
+            }
+            return worst
+        }
+
+        /**
+         * v1.7 (item 5): an exact span (degree ≤ 3, equal weights: a polynomial) whose widths vary.
+         * The piece whose drawn width misses its true width most (by more than [WIDTH_TOL]) is
+         * halved at its middle parameter while there are fewer than [WIDTH_MAX_PIECES_PER_SPAN];
+         * each half is the span's exact sub-curve (see [exactPiece]). A span that needs no cut
+         * gives [exact]'s cubic, as in v1.6.
+         */
+        private fun exactWithWidths(out: PieceOut) {
+            count = 0
+            exactPiece(0.0, 1.0, 0)
+            count = 1
+            val widthTol = WIDTH_TOL.toDouble()
+            while (count < WIDTH_MAX_PIECES_PER_SPAN) {
+                var worst = -1
+                for (k in 0 until count) if (werr[k] > widthTol && (worst < 0 || werr[k] > werr[worst])) worst = k
+                if (worst < 0) break
+                val a = pa[worst]; val c = pc[worst]
+                val m = 0.5 * (a + c)
+                if (!(m > a && m < c)) { werr[worst] = 0.0; continue }
+                for (k in count downTo worst + 2) copyPiece(k - 1, k)
+                exactPiece(a, m, worst)
+                exactPiece(m, c, worst + 1)
+                count++
+            }
+            if (count == 1) exact(out) else emit(out)
+        }
+
+        /**
+         * v1.7 (item 5): the part [a]..[c] of a polynomial span of degree ≤ 3 into slot [slot],
+         * exactly: the cubic with the span's end points and end derivatives there (Hermite) IS
+         * that part of the span (what a de Casteljau split gives), with the true widths at its ends.
+         */
+        private fun exactPiece(a: Double, c: Double, slot: Int) {
+            at(a, v0, d0)
+            at(c, v1, d1)
+            val third = (c - a) / 3.0
+            pa[slot] = a; pc[slot] = c; prho[slot] = 1.0; err[slot] = 0.0
+            val o = slot * PIECE
+            geo[o] = v0[0]; geo[o + 1] = v0[1]; geo[o + 2] = v0[3]
+            geo[o + 3] = v0[0] + d0[0] * third; geo[o + 4] = v0[1] + d0[1] * third
+            geo[o + 5] = v1[0] - d1[0] * third; geo[o + 6] = v1[1] - d1[1] * third
+            geo[o + 7] = v1[0]; geo[o + 8] = v1[1]; geo[o + 9] = v1[3]
+            werr[slot] = widthMiss(slot)
+        }
+
+        /** The [count] pieces in [geo] into [out]. */
+        private fun emit(out: PieceOut) {
             for (k in 0 until count) {
                 val o = k * PIECE
                 out.add(geo[o], geo[o + 1], geo[o + 2], geo[o + 3], geo[o + 4], geo[o + 5], geo[o + 6], geo[o + 7], geo[o + 8], geo[o + 9])
             }
         }
 
-        /** Pieces of the span being approximated: parameter range, standard-form ratio, miss, geometry. */
+        /** Arc length of piece [widthMiss] checks, from its start to each of its [ARC_STEPS] steps. */
+        private val arc = DoubleArray(ARC_STEPS + 1)
+
+        /**
+         * v1.7 (item 5): the largest difference, at [WIDTH_CHECK_SAMPLES] parameters of the piece
+         * in [slot] (the middles of its eighths), between the spline's true width there and what
+         * the renderer draws there: the piece's end widths blended with smoothstep at the point's
+         * ARC-LENGTH fraction within the piece ([CurveGeometry.widthAt]; arc length from a
+         * [ARC_STEPS]-step flattening of the cubic). 0 for a piece of no length.
+         */
+        private fun widthMiss(slot: Int): Double {
+            val o = slot * PIECE
+            val p0x = geo[o]; val p0y = geo[o + 1]
+            val ax = geo[o + 3]; val ay = geo[o + 4]; val bx = geo[o + 5]; val by = geo[o + 6]
+            val p1x = geo[o + 7]; val p1y = geo[o + 8]
+            var px = p0x; var py = p0y
+            var acc = 0.0
+            arc[0] = 0.0
+            for (k in 1..ARC_STEPS) {
+                val f = k.toDouble() / ARC_STEPS
+                val g = 1.0 - f
+                val b0 = g * g * g; val b1 = 3.0 * g * g * f; val b2 = 3.0 * g * f * f; val b3 = f * f * f
+                val x = b0 * p0x + b1 * ax + b2 * bx + b3 * p1x
+                val y = b0 * p0y + b1 * ay + b2 * by + b3 * p1y
+                val dx = x - px; val dy = y - py
+                acc += sqrt(dx * dx + dy * dy)
+                arc[k] = acc
+                px = x; py = y
+            }
+            val total = arc[ARC_STEPS]
+            if (!(total > 1e-9)) return 0.0
+            val a = pa[slot]; val c = pc[slot]; val rho = prho[slot]
+            val w0 = geo[o + 2]; val w1 = geo[o + 9]
+            var worst = 0.0
+            for (j in 0 until WIDTH_CHECK_SAMPLES) {
+                val k = 2 * j + 1
+                val f = k.toDouble() / ARC_STEPS
+                val truth = widthAt(a + (c - a) * (rho * f / ((1.0 - f) + rho * f)))
+                val s = arc[k] / total
+                val drawn = w0 + (w1 - w0) * (s * s * (3.0 - 2.0 * s))
+                val e = abs(truth - drawn)
+                if (e > worst) worst = e
+            }
+            return worst
+        }
+
+        /** v1.7 (item 5): the span's true width at [u] (Horner on the weight and width·weight rows only). */
+        private fun widthAt(u: Double): Double {
+            var w = power[p * dim + 2]
+            var ww = power[p * dim + 3]
+            for (k in p - 1 downTo 0) {
+                w = w * u + power[k * dim + 2]
+                ww = ww * u + power[k * dim + 3]
+            }
+            return ww / w
+        }
+
+        /** Pieces of the span being approximated: parameter range, standard-form ratio, miss, width miss, geometry. */
         private var count = 0
-        private val pa = DoubleArray(MAX_PIECES_PER_SPAN); private val pc = DoubleArray(MAX_PIECES_PER_SPAN)
-        private val prho = DoubleArray(MAX_PIECES_PER_SPAN); private val err = DoubleArray(MAX_PIECES_PER_SPAN)
+        private val pa = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN); private val pc = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN)
+        private val prho = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN); private val err = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN)
+        private val werr = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN)
         /** Per piece: start x, y, width, handles ax, ay, bx, by, end x, y, width. */
-        private val geo = DoubleArray(MAX_PIECES_PER_SPAN * PIECE)
+        private val geo = DoubleArray(WIDTH_MAX_PIECES_PER_SPAN * PIECE)
 
         private fun copyPiece(from: Int, to: Int) {
-            pa[to] = pa[from]; pc[to] = pc[from]; prho[to] = prho[from]; err[to] = err[from]
+            pa[to] = pa[from]; pc[to] = pc[from]; prho[to] = prho[from]; err[to] = err[from]; werr[to] = werr[from]
             System.arraycopy(geo, from * PIECE, geo, to * PIECE, PIECE)
         }
 
@@ -717,6 +948,8 @@ object SplineBezier {
             const val SAMPLE_COUNT = CHECK_SAMPLES * 2 - 1
             /** Doubles per piece in [geo]. */
             const val PIECE = 10
+            /** v1.7 (item 5): steps of the flattening [widthMiss] measures a piece's arc length on (two per width sample). */
+            const val ARC_STEPS = WIDTH_CHECK_SAMPLES * 2
         }
     }
 }

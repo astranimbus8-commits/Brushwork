@@ -32,6 +32,13 @@ class NurbsPiecesTest {
         return VSpline(pts, order = order, endpoint = endpoint, cyclic = cyclic)
     }
 
+    /**
+     * [this] with every width 1. v1.7 (item 5, §3.5) converts a span whose widths vary into as
+     * many pieces as the drawn width needs; the one-cubic-per-span structure checked here holds
+     * for constant widths.
+     */
+    private fun VSpline.uniformWidths() = copy(points = points.map { it.copy(width = 1f) })
+
     private fun assertNear(expected: Double, actual: Float?, tol: Double = 1e-3, what: String = "") {
         assertTrue("$what: expected $expected, was $actual", actual != null && abs(expected - actual) <= tol)
     }
@@ -107,7 +114,20 @@ class NurbsPiecesTest {
 
     @Test
     fun aCornerIsOneSharpAnchorAtItsPointWithItsWidthAndBrokenTangents() {
-        val p = listOf(pt(100f, 400f), pt(200f, 100f), pt(300f, 400f, width = 2.5f, sharp = true), pt(400f, 100f), pt(500f, 400f))
+        // v1.7 item 5: a corner wider than its neighbours makes the widths vary, so its pieces
+        // are subdivided; the corner is still the one sharp anchor, at its point and width, and
+        // its tangents still point at the neighbouring control points.
+        val varying = listOf(pt(100f, 400f), pt(200f, 100f), pt(300f, 400f, width = 2.5f, sharp = true), pt(400f, 100f), pt(500f, 400f))
+        val v = SplineBezier.toSubpath(VSpline(varying, order = 4))
+        assertEquals(1, v.anchors.count { it.sharp })
+        val vc = v.anchors.single { it.sharp }
+        assertEquals(300f, vc.x); assertEquals(400f, vc.y); assertEquals(2.5f, vc.width)
+        val vin = Vec2(vc.inX!!, vc.inY!!).normalized()
+        val vout = Vec2(vc.outX!!, vc.outY!!).normalized()
+        assertNear(1.0, vin.dot(Vec2(-100f, -300f).normalized()), 1e-3, "in points at (200, 100)")
+        assertNear(1.0, vout.dot(Vec2(100f, -300f).normalized()), 1e-3, "out points at (400, 100)")
+        // Constant widths: v1.6's structure exactly.
+        val p = listOf(pt(100f, 400f, width = 2.5f), pt(200f, 100f, width = 2.5f), pt(300f, 400f, width = 2.5f, sharp = true), pt(400f, 100f, width = 2.5f), pt(500f, 400f, width = 2.5f))
         val sub = SplineBezier.toSubpath(VSpline(p, order = 4))
         // Two quadratic pieces (3 points each), one span each.
         assertEquals(3, sub.anchors.size)
@@ -129,7 +149,7 @@ class NurbsPiecesTest {
 
     @Test
     fun aClosedSplinesCornerIsAnchorZero() {
-        val s = spline(3, n = 6, cyclic = true)
+        val s = spline(3, n = 6, cyclic = true).uniformWidths()
         val sub = SplineBezier.toSubpath(s)
         assertTrue(sub.closed)
         // One clamped cubic piece of 7 points: 4 spans.
@@ -148,7 +168,7 @@ class NurbsPiecesTest {
     @Test
     fun aClosedSplineWithFewSpansStillHasThreeAnchors() {
         // One corner on 3 points: one clamped cubic piece of 4 points, 1 span, cut in 3.
-        val s = spline(1, n = 3, order = 4, cyclic = true)
+        val s = spline(1, n = 3, order = 4, cyclic = true).uniformWidths()
         val sub = SplineBezier.toSubpath(s)
         assertTrue(sub.closed)
         assertEquals(listOf(true, false, false), sub.anchors.map { it.sharp })
@@ -160,14 +180,14 @@ class NurbsPiecesTest {
         }
         assertEquals(3, CurveGeometry.toPath(VectorOps.curveAnchors(sub), true, 0f, false).ops.count { it is PathOp.CubicTo })
         // Two corners on 4 points: two quadratic pieces of 1 span each, cut in 2.
-        val t = SplineBezier.toSubpath(spline(0, 2, n = 4, order = 3, cyclic = true))
+        val t = SplineBezier.toSubpath(spline(0, 2, n = 4, order = 3, cyclic = true).uniformWidths())
         assertEquals(listOf(true, false, true, false), t.anchors.map { it.sharp })
     }
 
     @Test
     fun twoAdjacentSharpPointsAreJoinedByAStraightSegment() {
         // Pieces 0..2 (quadratic), 2..3 (2 points: a segment), 3..5 (quadratic).
-        val s = spline(2, 3, n = 6, order = 4)
+        val s = spline(2, 3, n = 6, order = 4).uniformWidths()
         val sub = SplineBezier.toSubpath(s)
         assertEquals(listOf(false, true, true, false), sub.anchors.map { it.sharp })
         val a = sub.anchors[1]
@@ -288,12 +308,27 @@ class NurbsPiecesTest {
     }
 
     companion object {
-        /** [v16Digest] captured on v1.6 (before F3). */
-        const val V16_EXACT = 0x7a41c71dd8eea33bL
-        const val V16_ALL = 0x00cf608cda23b977L
+        /**
+         * [v16Digest] of v1.6's converter. F3 pinned it on v1.6 with random widths (0x7a41c71dd8eea33b,
+         * 0x00cf608cda23b977); v1.7 item 5 (§3.5) converts varying widths into more pieces, so the
+         * digest now covers the same splines with each spline's widths made uniform (its first
+         * point's width), captured from F3's converter at 22a791d, which is v1.6's for splines
+         * without sharp points.
+         */
+        const val V16_EXACT = -0x6fdebac7606e3fbeL
+        const val V16_ALL = 0x771d71ca849ccf49L
 
-        /** The splines the v1.6 digest covers: every order, Cyclic and Endpoint, 0..40 points. */
-        fun digestSplines(exactOnly: Boolean): List<VSpline> {
+        /**
+         * The splines the v1.6 digest covers: every order, Cyclic and Endpoint, 0..40 points, the
+         * widths of each one uniform.
+         */
+        fun digestSplines(exactOnly: Boolean): List<VSpline> = rawDigestSplines(exactOnly).map { s ->
+            val w = s.points.firstOrNull()?.width ?: 1f
+            s.copy(points = s.points.map { it.copy(width = w) })
+        }
+
+        /** F3's digest splines, widths random in half of them. */
+        private fun rawDigestSplines(exactOnly: Boolean): List<VSpline> {
             val out = ArrayList<VSpline>()
             for (seed in 1..240) {
                 val rnd = Random(seed * 104729L)

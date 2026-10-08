@@ -383,6 +383,34 @@ class PathToolRobolectricTest {
         assertTrue(pixels(layer.bitmap).all { it == 0 })
     }
 
+    /**
+     * v1.7 §3.5 (item 5): 3 points with both ends at 0 % paint at once (v1.6 painted nothing
+     * until there were 5 points): opaque pixels within 5 px of the curve's middle. The same with
+     * 4 points at 0 / 100 / 100 / 0 %.
+     */
+    @Test
+    fun threePointsWithBothEndsAtZeroPaintTheirMiddle() {
+        for (points in listOf(listOf(60f to 220f, 200f to 60f, 340f to 220f), listOf(50f to 220f, 150f to 70f, 250f to 70f, 350f to 220f))) {
+            val c = controller(vector = false)
+            val layer = c.activeLayer
+            val tool = c.tool(ToolId.PATH)
+            tool.update { it.copy(stroke = CurveStroke.PLAIN, useBrushSize = false, plainWidth = 16f) }
+            for ((x, y) in points) c.tap(x, y)
+            tool.setWidth(0, 0f)
+            tool.setWidth(points.size - 1, 0f)
+            val s = tool.spline!!
+            assertEquals(listOf(0f) + List(points.size - 2) { 1f } + 0f, s.points.map { it.width })
+            tool.commit()
+            val line = VectorOps.toVectorPath(VPath(1L, subpaths = listOf(SplineBezier.toSubpath(s)))).flatten(0.25f).first().points
+            val mid = line[line.size / 2]
+            var opaque = 0
+            for (y in (mid.y.toInt() - 5)..(mid.y.toInt() + 5)) for (x in (mid.x.toInt() - 5)..(mid.x.toInt() + 5)) {
+                if (Vec2(x.toFloat(), y.toFloat()).distanceTo(mid) <= 5f && (layer.bitmap.getPixel(x, y) ushr 24) == 255) opaque++
+            }
+            assertTrue("${points.size} points: $opaque opaque pixels near the middle $mid", opaque > 0)
+        }
+    }
+
     @Test
     fun deletingEveryPointOfAReopenedPathRemovesIt() {
         val c = controller()
