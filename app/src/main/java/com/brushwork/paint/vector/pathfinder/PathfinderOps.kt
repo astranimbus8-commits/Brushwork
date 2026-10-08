@@ -12,15 +12,15 @@ import com.brushwork.paint.vector.VPath
  * description [description] (I10).
  */
 enum class PathfinderOp(val description: String) {
-    UNITE("Unite shapes"),
-    MINUS_FRONT("Minus front shape"),
-    MINUS_BACK("Minus back shape"),
-    INTERSECT("Intersect shapes"),
-    EXCLUDE("Exclude overlap"),
-    DIVIDE("Divide shapes"),
-    TRIM("Trim shapes"),
-    MERGE("Merge shapes"),
-    CROP("Crop shapes"),
+    UNITE(PathfinderLabels.UNITE),
+    MINUS_FRONT(PathfinderLabels.MINUS_FRONT),
+    MINUS_BACK(PathfinderLabels.MINUS_BACK),
+    INTERSECT(PathfinderLabels.INTERSECT),
+    EXCLUDE(PathfinderLabels.EXCLUDE),
+    DIVIDE(PathfinderLabels.DIVIDE),
+    TRIM(PathfinderLabels.TRIM),
+    MERGE(PathfinderLabels.MERGE),
+    CROP(PathfinderLabels.CROP),
     OUTLINE(PathfinderLabels.OUTLINE),
     ;
 

@@ -470,21 +470,21 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
         const val BUSY_AFTER_MS = 300L
 
         /** The busy overlay's text. */
-        const val WORKING = "Working…"
+        const val WORKING = PathfinderLabels.WORKING
 
         /** Intersect or Crop of shapes that don't overlap. */
-        const val NOTHING_LEFT = "Nothing is left: the shapes don't overlap"
+        const val NOTHING_LEFT = PathfinderLabels.NOTHING_LEFT
 
         /** Skia's PathOps gave up. */
-        const val FAILED = "Pathfinder couldn't combine these shapes"
+        const val FAILED = PathfinderLabels.FAILED
 
         /** An operand was edited (undo, another window) while the operation ran. */
-        const val CHANGED = "The objects changed: try again"
+        const val CHANGED = PathfinderLabels.CHANGED
 
-        const val NO_MEMORY = "Not enough memory for Pathfinder"
+        const val NO_MEMORY = PathfinderLabels.NO_MEMORY
 
         /** The strip's count of picked operands. */
-        fun picked(n: Int) = if (n == 1) "1 object" else "$n objects"
+        fun picked(n: Int) = PathfinderLabels.picked(n)
 
         /**
          * Whether a new result layer fits the layer limit: the document ends with one layer more

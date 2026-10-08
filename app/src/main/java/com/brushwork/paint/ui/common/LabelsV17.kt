@@ -75,6 +75,7 @@ object TransformLabels17 {
 object SymmetryLabels {
     const val TOOL = "Symmetry"; const val DIVISIONS = "Divisions"; const val RESET = "Reset symmetry"
     const val ERASER_NOTE = "Symmetry doesn't apply to erasing vector objects"
+    const val OUT_OF_MEMORY = "Not enough memory for symmetry with a brush this large"
 }
 
 object PathfinderLabels {
@@ -84,6 +85,14 @@ object PathfinderLabels {
     const val STROKES_SKIPPED = "Brush strokes are skipped"; const val ARRAY_SKIPPED = "Arrayed layers are skipped"
     const val TOO_MANY = "Too many pieces: select fewer objects"; const val TOO_MANY_OPERANDS = "Select up to 12 objects"
     fun resultLayer(n: Int) = "Pathfinder $n"
+    const val WORKING = "Working…"; const val NOTHING_LEFT = "Nothing is left: the shapes don't overlap"
+    const val FAILED = "Pathfinder couldn't combine these shapes"; const val CHANGED = "The objects changed: try again"
+    const val NO_MEMORY = "Not enough memory for Pathfinder"
+    fun picked(n: Int) = if (n == 1) "1 object" else "$n objects"
+    /** Content descriptions of the operations (the visible names are `HistoryLabels.PATHFINDER_OPS`). */
+    const val UNITE = "Unite shapes"; const val MINUS_FRONT = "Minus front shape"; const val MINUS_BACK = "Minus back shape"
+    const val INTERSECT = "Intersect shapes"; const val EXCLUDE = "Exclude overlap"; const val DIVIDE = "Divide shapes"
+    const val TRIM = "Trim shapes"; const val MERGE = "Merge shapes"; const val CROP = "Crop shapes"
 }
 
 object KerningLabels {

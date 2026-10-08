@@ -1230,7 +1230,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val REPLICATED = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR)
 
         /** Said when a smudge / blur / watercolor stroke's symmetry copies would not fit in memory. */
-        internal const val COPIES_OUT_OF_MEMORY = "Not enough memory for symmetry with a brush this large"
+        internal const val COPIES_OUT_OF_MEMORY = SymmetryLabels.OUT_OF_MEMORY
 
         /** Scratch bytes per pixel of a direct dab's box ([DirectPainter]: px, shape, weight, sel, srcPx). */
         private const val DIRECT_BYTES_PER_PX = 20L
