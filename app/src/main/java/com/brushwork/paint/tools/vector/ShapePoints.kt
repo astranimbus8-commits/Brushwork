@@ -355,7 +355,7 @@ object ShapePoints {
      * same direction on both sides, or [p] on top of [prev]. Same angle limit as a corner that
      * [ShapeGeometry.corner] leaves sharp.
      */
-    private fun passesThrough(prev: Vec2, p: Vec2, next: Vec2): Boolean {
+    internal fun passesThrough(prev: Vec2, p: Vec2, next: Vec2): Boolean {
         val toPrev = prev - p
         val toNext = next - p
         val lp = toPrev.length
