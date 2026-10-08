@@ -31,6 +31,7 @@ import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.transform.DocBox
 import com.brushwork.paint.tools.transform.IncrementReadout
@@ -209,17 +210,41 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     var box by mutableStateOf<ShapeBox?>(null)
         private set
 
-    /** Custom points of the pending shape (box-local, normalized), or null for its regular outline. */
-    var points by mutableStateOf<List<ShapePoint>?>(null)
-        private set
+    private var pointsState by mutableStateOf<List<ShapePoint>?>(null)
+
+    /**
+     * Custom points of the pending shape (box-local, normalized), or null for its regular outline.
+     * A change of their number keeps [pointSelection] sized to them (callers that insert or delete
+     * points map the selection themselves: `afterInsert` / `afterRemove`).
+     */
+    var points: List<ShapePoint>?
+        get() = pointsState
+        private set(value) {
+            pointsState = value
+            val n = value?.size ?: 0
+            if (pointSelection.size != n) pointSelection = pointSelection.resized(n)
+        }
 
     /** Point editing is on for the pending shape. */
     var pointsMode by mutableStateOf(false)
         private set
 
-    /** Index of the selected point (points mode) or -1. */
-    var selectedPoint by mutableIntStateOf(-1)
+    /**
+     * v1.7 (item 1, §3.1): the selected points of the pending shape in points mode (Compose
+     * state), sized to [points]. One point selected is v1.6's selection ([selectedPoint]).
+     */
+    var pointSelection by mutableStateOf(PointSelection.none(0))
         private set
+
+    /**
+     * Index of the selected point (points mode) or -1: the primary of [pointSelection] (the point
+     * the single-point actions and the numbers act on). Setting it selects only that point.
+     */
+    var selectedPoint: Int
+        get() = pointSelection.primary
+        private set(value) {
+            pointSelection = PointSelection.none(points?.size ?: 0).only(value)
+        }
 
     /** The shape layer being edited again (null while a new shape is placed). */
     var editingLayer by mutableStateOf<Layer?>(null)
@@ -345,7 +370,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ in-tool history
 
-    private data class PendingState(val box: ShapeBox, val points: List<ShapePoint>?, val pointsMode: Boolean, val selected: Int)
+    private data class PendingState(val box: ShapeBox, val points: List<ShapePoint>?, val pointsMode: Boolean, val selection: PointSelection)
 
     private val history = ArrayDeque<PendingState>()
     private val redo = ArrayDeque<PendingState>()
@@ -893,7 +918,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         historyKeyTime = now
         clearRedo()
         if (coalesce) return
-        history.addLast(PendingState(b, points, pointsMode, selectedPoint))
+        history.addLast(PendingState(b, points, pointsMode, pointSelection))
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
     }
@@ -923,7 +948,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     override fun undoStep(): Boolean {
         val b = box ?: return false
         val prev = history.removeLastOrNull() ?: return false
-        redo.addLast(PendingState(b, points, pointsMode, selectedPoint))
+        redo.addLast(PendingState(b, points, pointsMode, pointSelection))
         redoCount = redo.size
         historyKey = null
         restoreState(prev)
@@ -936,7 +961,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val b = box ?: return false
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size
-        history.addLast(PendingState(b, points, pointsMode, selectedPoint))
+        history.addLast(PendingState(b, points, pointsMode, pointSelection))
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
         historyKey = null
@@ -951,8 +976,42 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         box = s.box
         points = s.points
         pointsMode = s.pointsMode && s.points != null
-        selectedPoint = if (s.points != null && s.selected in s.points.indices) s.selected else -1
+        pointSelection = s.selection.resized(s.points?.size ?: 0)
         refreshPreview()
+    }
+
+    /**
+     * The in-tool history and the pending shape at [historyMark] time: equal marks mean nothing
+     * changed in between (the states compare by value, so a coalesced edit, or a move of a shape
+     * without its own points, which keeps no step, still counts as a change).
+     */
+    private data class HistoryMark(val depth: Int, val top: PendingState?, val state: PendingState, val redo: List<PendingState>)
+
+    /**
+     * v1.7 (item 10, §3.10): a mark of the pending shape and its in-tool steps (null without a
+     * pending shape), for a history tap over the UI to take back what its first finger changed.
+     */
+    override fun historyMark(): Any? {
+        val b = box ?: return null
+        return HistoryMark(history.size, history.lastOrNull(), PendingState(b, points, pointsMode, pointSelection), redo.toList())
+    }
+
+    /**
+     * v1.7 (item 10): back to [mark] ([historyMark]): the in-tool steps pushed since are dropped
+     * (not moved to redo), the redo steps and the pending shape (box, points, mode, selection) are
+     * those of the mark. Nothing happens for another tool's mark or without a pending shape.
+     */
+    override fun rollbackHistory(mark: Any?) {
+        val m = mark as? HistoryMark ?: return
+        if (box == null) return
+        while (history.size > m.depth) history.removeLast()
+        redo.clear()
+        redo.addAll(m.redo)
+        redoCount = redo.size
+        historyKey = null
+        numericHeld = false
+        canUndoStep = history.isNotEmpty()
+        restoreState(m.state)
     }
 
     // ------------------------------------------------------------------ input
@@ -965,7 +1024,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         gesturePushed = false
         resizeGuides = emptyList()
         val b = box
-        gestureState = b?.let { PendingState(it, points, pointsMode, selectedPoint) }
+        gestureState = b?.let { PendingState(it, points, pointsMode, pointSelection) }
         gestureHistory = history.size
         gestureRedo = redo.toList()
         if (b != null) {
@@ -1345,7 +1404,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         box = st.box
         points = st.points
         pointsMode = st.pointsMode
-        selectedPoint = st.selected
+        pointSelection = st.selection.resized(st.points?.size ?: 0)
         while (history.size > gestureHistory) history.removeLast()
         redo.clear()
         redo.addAll(gestureRedo)
