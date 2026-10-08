@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Path
 import android.graphics.Rect
+import android.graphics.RectF
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -14,6 +15,7 @@ import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeKind
+import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
@@ -31,6 +33,9 @@ import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointEditor
+import com.brushwork.paint.tools.points.PointGizmo
+import com.brushwork.paint.tools.points.PointGroupMath
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.transform.ContentBounds
 import com.brushwork.paint.tools.transform.DocBox
@@ -48,6 +53,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -199,7 +205,7 @@ data class ShapeSettings(
  * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
  * (`increments.readout`) says where a stepped gesture is.
  */
-class ShapeTool(controller: EditorController) : Tool(controller) {
+class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
     override val id = ToolId.SHAPE
 
     /** Current options (Compose state); change them with [update]. */
@@ -233,7 +239,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * v1.7 (item 1, §3.1): the selected points of the pending shape in points mode (Compose
      * state), sized to [points]. One point selected is v1.6's selection ([selectedPoint]).
      */
-    var pointSelection by mutableStateOf(PointSelection.none(0))
+    override var pointSelection by mutableStateOf(PointSelection.none(0))
         private set
 
     /**
@@ -331,7 +337,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
 
     // ------------------------------------------------------------------ gestures
 
-    private enum class Mode { NONE, CREATE, MOVE, RESIZE, ROTATE, LINE_START, LINE_END, POINT, NEW_POINT, HANDLE_IN, HANDLE_OUT }
+    /**
+     * v1.7 additions: GROUP_POINT drags the selected points by one of them (a tap acts on that
+     * point), GIZMO is a drag on the group gizmo ([gizmoPart]), MARQUEE box-selects ("Select
+     * several").
+     */
+    private enum class Mode { NONE, CREATE, MOVE, RESIZE, ROTATE, LINE_START, LINE_END, POINT, NEW_POINT, HANDLE_IN, HANDLE_OUT, GROUP_POINT, GIZMO, MARQUEE }
 
     private var mode = Mode.NONE
     private var handle: ShapeGeometry.Handle? = null
@@ -362,6 +373,19 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private var pinchFocus = Vec2.ZERO
     private var pinchPushed = false
 
+    // ------------------------------------------------------------------ group gestures (v1.7 item 1)
+
+    private val gizmo = PointGizmo()
+    /** GIZMO: the gizmo when the finger went down, and the part it grabbed. */
+    private var gizmoLayout: PointGizmo.Layout? = null
+    private var gizmoPart = PointGizmo.Part.NONE
+    /** GROUP_POINT, GIZMO: the point under the finger when it went down (a tap acts on it), or -1. */
+    private var tapIndex = -1
+    /** MARQUEE: where the finger is now (document px). */
+    private var marqueeEnd: Vec2? = null
+    /** A two-finger pinch that started inside the gizmo scales and rotates the selected points about this pivot. */
+    private var groupPinchPivot: Vec2? = null
+
     // ------------------------------------------------------------------ snapping
 
     private val snap = controller.newSnapSession()
@@ -379,6 +403,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** A slider drag is in progress ([beginNumericEdit]): its edits share one step whatever the pace. */
     private var numericHeld = false
     private data class NumericKey(val kind: String, val index: Int)
+    /** A run of nudges of the same group of points (one in-tool step). */
+    private data class GroupNudgeKey(val selection: PointSelection)
 
     /** Time source for coalescing numeric edits (replaceable in tests). */
     internal var clock: () -> Long = { SystemClock.uptimeMillis() }
@@ -388,6 +414,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     private val painter = OverlayPainter()
     private val boxPath = Path()
     private val bandPath = Path()
+    private val marqueePath = Path()
     private val outlinePath = Path()
     private var outlineKey: Any? = null
     private val pts = FloatArray(2)
@@ -420,6 +447,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             points = null
             pointsMode = false
             selectedPoint = -1
+            selectSeveral = false
             clearHistory()
             if (old.type.isLineLike == new.type.isLineLike) box = clean(b)
         }
@@ -667,11 +695,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val b = box ?: return
         val step = settings.nudgeStepPx
         val d = Vec2(dx * step, dy * step)
-        val sel = selectedPoint
         val anchors = docAnchors()
-        if (pointsMode && anchors != null && sel in anchors.indices) {
-            pushHistory(NumericKey("nudge", sel))
-            applyAnchors(anchors.mapIndexed { i, a -> if (i == sel) a.moved(a.pos + d) else a }, b.rotationDeg)
+        val selection = anchors?.let { pointSelection.resized(it.size) }
+        if (pointsMode && anchors != null && selection != null && !selection.isEmpty) {
+            // One point: v1.6's key; several: a run on the same selection.
+            pushHistory(if (selection.isSingle) NumericKey("nudge", selection.primary) else GroupNudgeKey(selection))
+            applyAnchors(anchors.mapIndexed { i, a -> if (i in selection) a.moved(a.pos + d) else a }, b.rotationDeg)
             refreshPreview()
             return
         }
@@ -704,6 +733,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         } else {
             pointsMode = false
             selectedPoint = -1
+            selectSeveral = false
         }
         refreshPreview()
     }
@@ -716,6 +746,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = null
         pointsMode = false
         selectedPoint = -1
+        selectSeveral = false
         // A regular shape needs a size (custom points may have been put on one line).
         box = clean(b)
         refreshPreview()
@@ -728,7 +759,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Fewest points the pending shape can have. */
-    val minPoints: Int get() = ShapePoints.minPoints(closedShape)
+    override val minPoints: Int get() = ShapePoints.minPoints(closedShape)
 
     /** Deletes point [index] (refused with a message below [minPoints]). */
     fun deletePoint(index: Int) {
@@ -736,7 +767,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val anchors = docAnchors() ?: return
         if (index !in anchors.indices) return
         if (anchors.size <= minPoints) {
-            controller.toast(if (closedShape) "A shape needs at least $minPoints points" else "A line needs at least $minPoints points")
+            controller.toast(minPointsMessage())
             return
         }
         pushHistory()
@@ -744,6 +775,122 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         selectedPoint = -1
         refreshPreview()
     }
+
+    /** The refusal below [minPoints]: "A shape needs at least 3 points" / "A line needs at least 2 points". */
+    private fun minPointsMessage(): String =
+        if (closedShape) "A shape needs at least $minPoints points" else "A line needs at least $minPoints points"
+
+    // ------------------------------------------------------------------ several points (v1.7 item 1, §3.1)
+
+    /**
+     * "Select several" (Compose state): a tap on a point adds or removes it, a drag on the canvas
+     * box-selects, a tap elsewhere clears the selection and no point is ever inserted. It turns
+     * itself off when the shape closes, another shape opens or points mode ends.
+     */
+    override var selectSeveral by mutableStateOf(false)
+
+    /** The pending shape's number of points (0 without a pending shape with its own points). */
+    override val pointCount: Int get() = if (box != null) points?.size ?: 0 else 0
+
+    /** Replaces the selection ("Select all points", "Deselect point"...); not an in-tool step. */
+    override fun selectPoints(s: PointSelection) {
+        val n = pointCount
+        val next = if (n == 0) PointSelection.none(0) else s.resized(n)
+        if (next == pointSelection) return
+        pointSelection = next
+        controller.invalidateOverlay()
+    }
+
+    /** Document px of point [i] (NaN when there is no such point). */
+    override fun pointAt(i: Int): Vec2 = docAnchors()?.getOrNull(i)?.pos ?: Vec2(Float.NaN, Float.NaN)
+
+    /** The points (document px) when the group edit in progress began; null at rest. */
+    private var groupBase: List<ShapeAnchor>? = null
+    /** The points the group edit in progress maps. */
+    private var groupSelection = PointSelection.none(0)
+    /** The box rotation the group edit keeps (the box is fitted to the points at it). */
+    private var groupRotation = 0f
+
+    /**
+     * Starts ONE group edit of the selected points (the in-tool step is saved now): everything
+     * until [endGroupEdit] maps the points as they are now. [label] names the gesture for the
+     * reader only: in-tool steps all read "last shape edit".
+     */
+    override fun beginGroupEdit(label: String) {
+        if (groupBase != null) return
+        if (box == null || pointSelection.isEmpty) return
+        val anchors = docAnchors() ?: return
+        historyKey = null
+        pushHistory()
+        startGroup(anchors)
+    }
+
+    /** Captures the points for a group edit whose in-tool step is already saved. */
+    private fun startGroup(anchors: List<ShapeAnchor>) {
+        groupBase = anchors
+        groupSelection = pointSelection.resized(anchors.size)
+        groupRotation = box?.rotationDeg ?: 0f
+    }
+
+    /** The captured selected points (and their tangent handles, as vectors) mapped by [m]. */
+    override fun setGroupTransform(m: Affine2) {
+        val base = groupBase ?: return
+        if (box == null) return
+        applyAnchors(mappedAnchors(base, groupSelection, m), groupRotation)
+        refreshPreview()
+    }
+
+    override fun endGroupEdit() {
+        groupBase = null
+        historyKey = null
+    }
+
+    /**
+     * Deletes the selected points as one in-tool step. Refused with "A shape needs at least N
+     * points" when fewer than [minPoints] would remain (the pill offers "Delete shape" instead
+     * while every point is selected).
+     */
+    override fun deleteSelectedPoints(): Boolean {
+        val b = box ?: return false
+        val anchors = docAnchors() ?: return false
+        val sel = pointSelection.resized(anchors.size)
+        if (sel.isEmpty) return false
+        if (anchors.size - sel.count < minPoints) {
+            controller.toast(minPointsMessage())
+            return false
+        }
+        // The selection after the removal, computed before the points change (their setter resizes it).
+        val next = sel.afterRemove(sel.indices)
+        pushHistory()
+        applyAnchors(anchors.filterIndexed { i, _ -> i !in sel }, b.rotationDeg)
+        pointSelection = next
+        refreshPreview()
+        return true
+    }
+
+    /** [base] with the points of [sel] mapped by [m]: positions by the map, explicit tangent handles as vectors. */
+    private fun mappedAnchors(base: List<ShapeAnchor>, sel: PointSelection, m: Affine2): List<ShapeAnchor> {
+        if (m == Affine2.IDENTITY || sel.isEmpty) return base
+        return base.mapIndexed { i, a ->
+            if (i !in sel) a else a.copy(
+                pos = m.map(a.pos),
+                handleIn = a.handleIn?.let { m.mapVector(it) },
+                handleOut = a.handleOut?.let { m.mapVector(it) },
+            )
+        }
+    }
+
+    /** The group gizmo of [anchors]' selected points (two or more selected in points mode), or null. */
+    private fun groupLayout(anchors: List<ShapeAnchor>): PointGizmo.Layout? {
+        val sel = pointSelection
+        if (!pointsMode || sel.count < 2) return null
+        val pts = sel.indices.mapNotNull { anchors.getOrNull(it)?.pos }
+        return gizmo.layout(pts, controller.viewTransform)
+    }
+
+    /** The pill's "Keep scale proportions" (the gizmo's corners scale proportionally while it is on, the default). */
+    private fun keepScaleProportions(): Boolean =
+        runCatching { controller.settings.getObject(PILL_KEEP_PROPORTIONS_KEY, Boolean.serializer()) }.getOrNull() ?: true
 
     /** Makes point [index] smooth (automatic tangent) or a sharp corner. */
     fun setPointSmooth(index: Int, smooth: Boolean) {
@@ -815,10 +962,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** True while a handle change (a slider drag, a held arrow) is in progress. */
     val handleScaling: Boolean get() = handleBase != null
 
-    /** The points the Handles group acts on now: the selected one, or all of them without a selection or with [handlesAllPoints]. */
+    /** The points the Handles group acts on now: the selected ones, or all of them without a selection or with [handlesAllPoints]. */
     private fun handleTargets(count: Int): IntArray {
-        val sel = selectedPoint
-        return if (handlesAllPoints || sel !in 0 until count) IntArray(count) { it } else intArrayOf(sel)
+        val sel = pointSelection.resized(count)
+        return if (handlesAllPoints || sel.isEmpty) IntArray(count) { it } else sel.indices.toIntArray()
     }
 
     /**
@@ -985,24 +1132,43 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
      * changed in between (the states compare by value, so a coalesced edit, or a move of a shape
      * without its own points, which keeps no step, still counts as a change).
      */
-    private data class HistoryMark(val depth: Int, val top: PendingState?, val state: PendingState, val redo: List<PendingState>)
+    private data class HistoryMark(
+        val settings: ShapeSettings,
+        val userSettings: ShapeSettings?,
+        val depth: Int,
+        val top: PendingState?,
+        val state: PendingState?,
+        val redo: List<PendingState>,
+    )
 
     /**
-     * v1.7 (item 10, §3.10): a mark of the pending shape and its in-tool steps (null without a
-     * pending shape), for a history tap over the UI to take back what its first finger changed.
+     * v1.7 (item 10, §3.10): a mark of the options, the pending shape and its in-tool steps, for
+     * a history tap over the UI to take back what its first finger changed.
      */
-    override fun historyMark(): Any? {
-        val b = box ?: return null
-        return HistoryMark(history.size, history.lastOrNull(), PendingState(b, points, pointsMode, pointSelection), redo.toList())
-    }
+    override fun historyMark(): Any = HistoryMark(
+        settings, userSettings, history.size, history.lastOrNull(),
+        box?.let { PendingState(it, points, pointsMode, pointSelection) }, redo.toList(),
+    )
 
     /**
-     * v1.7 (item 10): back to [mark] ([historyMark]): the in-tool steps pushed since are dropped
-     * (not moved to redo), the redo steps and the pending shape (box, points, mode, selection) are
-     * those of the mark. Nothing happens for another tool's mark or without a pending shape.
+     * v1.7 (item 10): back to [mark] ([historyMark]). The options shown come back (the
+     * controller rolls the saved preferences back itself); with the same shape still pending, the
+     * in-tool steps pushed since are dropped (not moved to redo) and the redo steps and the shape
+     * (box, points, mode, selection) are those of the mark; a NEW shape that was not pending then
+     * (a Numbers field made one) is discarded. Nothing happens for another tool's mark.
      */
     override fun rollbackHistory(mark: Any?) {
         val m = mark as? HistoryMark ?: return
+        // The options: only while the same kind of shape is open (an opened shape shows its own).
+        if ((m.userSettings == null) == (userSettings == null) && (settings != m.settings || userSettings != m.userSettings)) {
+            settings = m.settings
+            userSettings = m.userSettings
+        }
+        val st = m.state
+        if (st == null) {
+            if (box != null && !reopened) discard() else refreshPreview()
+            return
+        }
         if (box == null) return
         while (history.size > m.depth) history.removeLast()
         redo.clear()
@@ -1011,7 +1177,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         historyKey = null
         numericHeld = false
         canUndoStep = history.isNotEmpty()
-        restoreState(m.state)
+        restoreState(st)
     }
 
     // ------------------------------------------------------------------ input
@@ -1073,6 +1239,12 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 val others = startAnchors.filterIndexed { i, _ -> keepOwn || i != dragIndex }.flatMap { SnapLine.point(it.pos, "Vertex") }
                 snap.begin(exclude = exclude, extra = { others })
             }
+            Mode.GROUP_POINT -> {
+                // The points that stay: the group (and the point joining it) moves along.
+                val sel = pointSelection
+                val others = startAnchors.filterIndexed { i, _ -> i !in sel && i != dragIndex }.flatMap { SnapLine.point(it.pos, "Vertex") }
+                snap.begin(exclude = exclude, extra = { others })
+            }
             Mode.MOVE -> {
                 startBounds = box?.let { outlineBounds(objectFor(it, points)) }
                 snap.begin(exclude = exclude)
@@ -1096,6 +1268,25 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 anchor = snap.snapPoint(downPoint)
             }
             started = true
+            if (mode == Mode.MARQUEE) {
+                // Only the selection changes (on release): nothing to save, the shape stays as drawn.
+                marqueeEnd = pt
+                controller.invalidateOverlay()
+                return
+            }
+            // A drag on an unselected point with "Select several" on adds it to the group it moves.
+            if (mode == Mode.GROUP_POINT && dragIndex !in pointSelection) {
+                gesturePushed = true
+                historyKey = null
+                pushHistory()
+                pointSelection = pointSelection.plus(dragIndex)
+                startGroup(docAnchors() ?: startAnchors)
+            }
+            // A group gesture is one in-tool step that restores the points and the selection.
+            if ((mode == Mode.GROUP_POINT || mode == Mode.GIZMO) && !gesturePushed) {
+                beginGroupEdit(if (mode == Mode.GIZMO) "Gizmo" else "Move points")
+                gesturePushed = true
+            }
             // A shape with its own points: every change can be undone one at a time.
             if (mode != Mode.CREATE && !gesturePushed && points != null) { pushHistory(); gesturePushed = true }
             // The point being dragged is the selected one (its actions and numbers follow it).
@@ -1106,6 +1297,13 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         stepReadout = null
         when (mode) {
             Mode.NONE -> return
+            Mode.MARQUEE -> {
+                marqueeEnd = pt
+                controller.invalidateOverlay()
+                return
+            }
+            Mode.GROUP_POINT -> dragGroup(pt)
+            Mode.GIZMO -> dragGizmo(pt)
             Mode.CREATE -> creatingBox = creationBox(pt)
             Mode.MOVE -> box = moved(pt) ?: return
             Mode.RESIZE -> {
@@ -1301,6 +1499,31 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         applyAnchors(startAnchors.mapIndexed { i, a -> if (i == dragIndex) a.moved(target) else a }, start.rotationDeg)
     }
 
+    /** The selected points dragged by one of them: it snaps (and steps) like a dragged point, the others follow. */
+    private fun dragGroup(pt: Vec2) {
+        val d = pt - downPoint
+        val target = steppedPoint(grabStart, d, snap.snapPoint(grabStart + d))
+        val move = target - grabStart
+        setGroupTransform(Affine2.translate(move.x, move.y))
+    }
+
+    /** A drag on the gizmo: its map from where the finger went down (increments as `PointGizmo.dragMap` applies them). */
+    private fun dragGizmo(pt: Vec2) {
+        val layout = gizmoLayout ?: return
+        val inc = controller.increments.state
+        val m = gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepScaleProportions(), inc)
+        if (inc.enabled) stepReadout = gizmoReadout(m)
+        setGroupTransform(m)
+    }
+
+    /** What a stepped gizmo drag shows: the move, the scale or the angle. */
+    private fun gizmoReadout(m: Affine2): String? = when (gizmoPart) {
+        PointGizmo.Part.NONE -> null
+        PointGizmo.Part.MOVE -> IncrementReadout.move(m.tx, m.ty)
+        PointGizmo.Part.ROTATE -> IncrementReadout.angle(Math.toDegrees(kotlin.math.atan2(m.b, m.a).toDouble()).toFloat())
+        else -> IncrementReadout.scale(m.a * 100f, m.d * 100f)
+    }
+
     /** A dragged tangent handle (its end snaps like a point). */
     private fun dragHandle(pt: Vec2) {
         val start = startBox ?: return
@@ -1326,12 +1549,21 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 // A tap on the shape in points mode drops the point selection.
                 pointsMode && !longPressed -> selectPoint(-1)
             }
+            Mode.GROUP_POINT, Mode.GIZMO -> when {
+                started -> { onMove(p); endGroupEdit() }
+                longPressed -> {}
+                tapIndex >= 0 -> tapPoint(tapIndex)
+                // A tap inside the gizmo (not on a point) drops the selection, like a tap on the shape.
+                mode == Mode.GIZMO && gizmoPart == PointGizmo.Part.MOVE -> selectPoints(PointSelection.none(pointCount))
+            }
+            Mode.MARQUEE -> if (started) finishMarquee(Vec2(p.x, p.y)) else if (!longPressed) selectPoints(PointSelection.none(pointCount))
             else -> if (started) onMove(p)
         }
         mode = Mode.NONE
         startBox = null
         startBounds = null
         handle = null
+        endGroupGesture()
         snap.end()
         showReadout(null)
         if (resizeGuides.isNotEmpty()) { resizeGuides = emptyList(); controller.invalidateOverlay() }
@@ -1339,6 +1571,42 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         // once it rests a moment.
         setDragging(false)
         controller.invalidateOverlay()
+    }
+
+    /**
+     * A tap on point [i] in points mode: with "Select several" it is added or removed; otherwise
+     * only it is selected (a tap on the only selected point deselects it, as in v1.6).
+     */
+    private fun tapPoint(i: Int) {
+        val n = pointCount
+        if (i !in 0 until n) return
+        val s = pointSelection.resized(n)
+        selectPoints(
+            when {
+                selectSeveral -> s.toggled(i)
+                s.isSingle && s.primary == i -> PointSelection.none(n)
+                else -> s.only(i)
+            },
+        )
+    }
+
+    /** A marquee released at [end]: the points inside the screen rectangle from where it began join the selection. */
+    private fun finishMarquee(end: Vec2) {
+        val anchors = docAnchors() ?: return
+        val t = controller.viewTransform
+        val a = t.docToScreen(downPoint)
+        val b = t.docToScreen(end)
+        val inside = PointGroupMath.inside(anchors.map { t.docToScreen(it.pos) }, RectF(a.x, a.y, b.x, b.y))
+        if (inside.isNotEmpty()) selectPoints(pointSelection.resized(anchors.size).plusAll(inside))
+    }
+
+    /** Clears what a group gesture (a drag on points, the gizmo or a marquee) kept while it ran. */
+    private fun endGroupGesture() {
+        if (groupBase != null) endGroupEdit()
+        gizmoLayout = null
+        gizmoPart = PointGizmo.Part.NONE
+        tapIndex = -1
+        marqueeEnd = null
     }
 
     /** End of a CREATE gesture: a new shape, or a tap (commit the pending one, open the shape tapped). */
@@ -1374,6 +1642,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
                 points = null
                 pointsMode = false
                 selectedPoint = -1
+                selectSeveral = false
                 clearHistory()
             }
         }
@@ -1387,13 +1656,15 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         resizeGuides = emptyList()
         when (mode) {
             Mode.CREATE -> creatingBox = null
-            Mode.NONE -> {}
+            Mode.NONE, Mode.MARQUEE -> {}
             else -> restoreGesture()
         }
         mode = Mode.NONE
         startBox = null
         startBounds = null
         handle = null
+        groupBase = null
+        endGroupGesture()
         if (box == null) targetLayer = null
         refreshPreview()
     }
@@ -1445,7 +1716,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             true
         }
         else -> {
-            if (mode == Mode.MOVE && !started) longPressed = true
+            // A held finger on the group (or a held marquee) neither toggles nor clears points on release.
+            if ((mode == Mode.MOVE || mode == Mode.GROUP_POINT || mode == Mode.GIZMO || mode == Mode.MARQUEE) && !started) longPressed = true
             true
         }
     }
@@ -1455,8 +1727,23 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     /** Two fingers on (or around) the pending shape scale, rotate and move it. */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         val bx = box ?: return false
-        // A finger (not just the midpoint) must be on the shape's box, or near a line (v1.5, §4.7).
         val t = controller.viewTransform
+        // v1.7 (§3.1): a pinch that starts inside the gizmo scales and rotates the selected points.
+        val layout = if (pointsMode) docAnchors()?.let { groupLayout(it) } else null
+        if (layout != null && PinchTargeting.acceptsQuad(a, b, layout.cornersScreen.map { t.screenToDoc(it) }, t)) {
+            creatingBox = null
+            mode = Mode.NONE
+            endGroupGesture()
+            beginGroupEdit("Pinch")
+            if (groupBase == null) return false
+            groupPinchPivot = layout.pivotDoc
+            pinchFocus = focus
+            setDragging(true)
+            return true
+        }
+        // With "Select several" two fingers outside the gizmo pan and zoom the view.
+        if (pointsMode && selectSeveral) return false
+        // A finger (not just the midpoint) must be on the shape's box, or near a line (v1.5, §4.7).
         val accepted = if (lineHandles) {
             PinchTargeting.acceptsSegment(a, b, bx.start, bx.end, strokeWidth / 2f, t)
         } else {
@@ -1474,6 +1761,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        groupPinchPivot?.let { pivot ->
+            if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || scale <= 0f || !rotationDeg.isFinite()) return
+            setGroupTransform(groupPinchMap(pivot, translation, scale, rotationDeg))
+            return
+        }
         val start = pinchStart ?: return
         if (box == null) { pinchStart = null; return }
         if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || scale <= 0f || !rotationDeg.isFinite()) return
@@ -1482,6 +1774,19 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onTwoFingerEnd(cancelled: Boolean) {
+        if (groupPinchPivot != null) {
+            groupPinchPivot = null
+            showReadout(null)
+            setDragging(false)
+            if (cancelled && box != null) {
+                // Back to the points before the pinch (its step is dropped).
+                history.removeLastOrNull()?.let { restoreState(it) }
+                canUndoStep = history.isNotEmpty()
+            }
+            endGroupEdit()
+            refreshPreview()
+            return
+        }
         val start = pinchStart ?: return
         pinchStart = null
         showReadout(null)
@@ -1492,6 +1797,24 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         }
         pinchPushed = false
         refreshPreview()
+    }
+
+    /**
+     * The map of a pinch on the gizmo: the canvas's [scale] and [rotationDeg] about the gizmo's
+     * [pivot] (the box centre), then its [translation] (the fingers' midpoint moved), the form
+     * `PointGroupMath.pinch` gives for the fingers themselves. With increments on, the scale lands
+     * on the Scale step (relative to the pinch's start) and the angle on the Angle step.
+     */
+    private fun groupPinchMap(pivot: Vec2, translation: Vec2, scale: Float, rotationDeg: Float): Affine2 {
+        val inc = controller.increments
+        val scaleStep = inc.step(IncrementKind.SCALE)
+        val angleStep = inc.step(IncrementKind.ANGLE)
+        val k = if (scaleStep != null) TransformIncrements.relativeFactor(scale, scaleStep) else scale
+        val deg = if (angleStep != null) IncrementMath.snapAngle(rotationDeg, angleStep) else rotationDeg
+        if (scaleStep != null || angleStep != null) {
+            showReadout(listOfNotNull(scaleStep?.let { IncrementReadout.percent(k * 100f) }, angleStep?.let { IncrementReadout.angle(deg) }).joinToString(" · "))
+        }
+        return Affine2.translate(translation.x, translation.y) * Affine2.rotateAbout(pivot, deg) * Affine2.scaleAbout(pivot, k, k)
     }
 
     /**
@@ -1605,8 +1928,11 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         val anchors = ShapePoints.docAnchors(b, pts)
         val closed = closedShape
         val tol = controller.docLength(HANDLE_TOUCH_DP)
+        val selection = pointSelection.resized(anchors.size)
         val sel = selectedPoint
-        if (sel in anchors.indices) {
+        tapIndex = -1
+        // v1.6: the tangent handles of the one selected point.
+        if (selection.isSingle && sel in anchors.indices) {
             val (hIn, hOut) = ShapePoints.handles(anchors, sel, closed)
             val a = anchors[sel].pos
             val dOut = if (hOut.length > HANDLE_MIN_PX) pt.distanceTo(a + hOut) else Float.MAX_VALUE
@@ -1625,10 +1951,38 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
             val d = anchors[i].pos.distanceTo(pt)
             if (d < bestD) { idx = i; bestD = d }
         }
+        // v1.7 (§3.1): with two or more points selected, the gizmo's handles and knob. A selected
+        // point at least as close as the handle wins (a drag on it moves the group: two points in
+        // a row sit on the box's side handles); otherwise a drag scales or turns the group and a
+        // tap still acts on the point under the finger.
+        val t = controller.viewTransform
+        val layout = groupLayout(anchors)
+        val screen = t.docToScreen(pt)
+        val part = layout?.let { gizmo.hit(it, screen, t) } ?: PointGizmo.Part.NONE
+        if (layout != null && part != PointGizmo.Part.NONE && part != PointGizmo.Part.MOVE) {
+            val handleAt = gizmoHandleAt(layout, part)
+            val pointWins = idx in selection && handleAt != null && t.docToScreen(anchors[idx].pos).distanceTo(screen) <= handleAt.distanceTo(screen)
+            if (!pointWins) {
+                startGizmo(anchors, layout, part)
+                tapIndex = idx
+                return Mode.GIZMO
+            }
+        }
         if (idx >= 0) {
             startPointGesture(anchors, idx, anchors[idx].pos)
-            return Mode.POINT
+            tapIndex = idx
+            // A point of the group (or any point with "Select several") drags the group.
+            return if (selectSeveral || (idx in selection && selection.count >= 2)) Mode.GROUP_POINT else Mode.POINT
         }
+        // Inside the gizmo, not on a point: the group moves.
+        if (layout != null && part == PointGizmo.Part.MOVE) {
+            startGizmo(anchors, layout, part)
+            return Mode.GIZMO
+        }
+        // "Select several" never inserts points: the rest of the canvas box-selects.
+        if (selectSeveral) return Mode.MARQUEE
+        // A group is selected: a tap elsewhere on the shape drops it ("+" are hidden meanwhile).
+        if (selection.count >= 2) return if (isOnShape(b, pt)) Mode.MOVE else null
         for (s in plusSegments(anchors)) {
             if (ShapePoints.pointOn(anchors, closed, s, 0.5f).distanceTo(pt) <= tol * PLUS_TOUCH) return insertPoint(b, anchors, s, 0.5f)
         }
@@ -1654,6 +2008,33 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         startAnchors = anchors
         dragIndex = index
         grabStart = grab
+    }
+
+    /** Where [part] (a handle or the knob) of [layout] is on screen, as `PointGizmo` draws it. */
+    private fun gizmoHandleAt(layout: PointGizmo.Layout, part: PointGizmo.Part): Vec2? {
+        val c = layout.cornersScreen
+        if (c.size != 4) return null
+        fun mid(a: Vec2, b: Vec2) = (a + b) * 0.5f
+        return when (part) {
+            PointGizmo.Part.ROTATE -> layout.rotateHandleScreen
+            PointGizmo.Part.SCALE_NW -> c[0]
+            PointGizmo.Part.SCALE_NE -> c[1]
+            PointGizmo.Part.SCALE_SE -> c[2]
+            PointGizmo.Part.SCALE_SW -> c[3]
+            PointGizmo.Part.SCALE_N -> mid(c[0], c[1])
+            PointGizmo.Part.SCALE_E -> mid(c[1], c[2])
+            PointGizmo.Part.SCALE_S -> mid(c[2], c[3])
+            PointGizmo.Part.SCALE_W -> mid(c[3], c[0])
+            PointGizmo.Part.NONE, PointGizmo.Part.MOVE -> null
+        }
+    }
+
+    /** A gizmo gesture on [part] of [layout] (the points as they are now). */
+    private fun startGizmo(anchors: List<ShapeAnchor>, layout: PointGizmo.Layout, part: PointGizmo.Part) {
+        startAnchors = anchors
+        dragIndex = -1
+        gizmoLayout = layout
+        gizmoPart = part
     }
 
     /** Segments long enough on screen to show a "+" in their middle. */
@@ -2067,6 +2448,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = shape.points
         pointsMode = false
         selectedPoint = -1
+        selectSeveral = false
         clearHistory()
         userColor = controller.color
         openedColor = shape.strokeColor
@@ -2370,6 +2752,7 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = obj.points
         pointsMode = false
         selectedPoint = -1
+        selectSeveral = false
         clearHistory()
         // The main color shows the shape's stroke color (changing it recolors the shape); the
         // user's own comes back when the shape closes, unless they picked another one meanwhile.
@@ -2500,6 +2883,9 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         points = null
         pointsMode = false
         selectedPoint = -1
+        selectSeveral = false
+        groupBase = null
+        groupPinchPivot = null
         creatingBox = null
         targetLayer = null
         pinchStart = null
@@ -2757,6 +3143,10 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         if (mode == Mode.CREATE) creatingBox = null
         mode = Mode.NONE
         pinchStart = null
+        groupPinchPivot = null
+        endGroupGesture()
+        // "Select several" ends with the tool (§3.1).
+        selectSeveral = false
         snap.end()
         showReadout(null)
         resizeGuides = emptyList()
@@ -2855,18 +3245,26 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         }
     }
 
-    /** Points mode: the outline, a "+" between points, the selected point's tangent handles and every point. */
+    /**
+     * Points mode: the outline, a "+" between points (not while a group is selected or "Select
+     * several" is on: no point is inserted then), the one selected point's tangent handles, every
+     * point (the selected ones accent-filled), the group gizmo with two or more selected and the
+     * marquee being dragged.
+     */
     private fun drawPoints(canvas: Canvas, t: ViewTransform, b: ShapeBox, pts: List<ShapePoint>) {
         val o = objectFor(b, pts)
         painter.path(canvas, t, outlinePathOf(o))
         val anchors = ShapePoints.docAnchors(b, pts)
         val closed = closedShape
-        for (s in plusSegments(anchors)) {
-            val q = map(t, ShapePoints.pointOn(anchors, closed, s, 0.5f))
-            painter.plus(canvas, t, q[0], q[1])
+        val selection = pointSelection.resized(anchors.size)
+        if (!selectSeveral && selection.count < 2) {
+            for (s in plusSegments(anchors)) {
+                val q = map(t, ShapePoints.pointOn(anchors, closed, s, 0.5f))
+                painter.plus(canvas, t, q[0], q[1])
+            }
         }
         val sel = selectedPoint
-        if (sel in anchors.indices) {
+        if (selection.isSingle && sel in anchors.indices) {
             val (hIn, hOut) = ShapePoints.handles(anchors, sel, closed)
             val a = map(t, anchors[sel].pos).let { it[0] to it[1] }
             for (h in listOf(hIn, hOut)) {
@@ -2878,7 +3276,20 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         }
         for (i in anchors.indices) {
             val q = map(t, anchors[i].pos)
-            painter.handle(canvas, t, q[0], q[1], square = !anchors[i].smooth, active = i == sel)
+            painter.handle(canvas, t, q[0], q[1], square = !anchors[i].smooth, active = i in selection)
+        }
+        groupLayout(anchors)?.let { gizmo.draw(canvas, it, t, if (mode == Mode.GIZMO) gizmoPart else PointGizmo.Part.NONE) }
+        val end = marqueeEnd
+        if (mode == Mode.MARQUEE && end != null) {
+            // A screen rectangle (the view may be turned): its corners back in the document.
+            val a = t.docToScreen(downPoint)
+            val c = t.docToScreen(end)
+            val corners = listOf(Vec2(a.x, a.y), Vec2(c.x, a.y), Vec2(c.x, c.y), Vec2(a.x, c.y)).map { t.screenToDoc(it) }
+            marqueePath.rewind()
+            marqueePath.moveTo(corners[0].x, corners[0].y)
+            for (k in 1..3) marqueePath.lineTo(corners[k].x, corners[k].y)
+            marqueePath.close()
+            painter.path(canvas, t, marqueePath, dashed = true)
         }
     }
 
@@ -2888,6 +3299,8 @@ class ShapeTool(controller: EditorController) : Tool(controller) {
         /** Undo step of an edited shape (layer or object). */
         const val EDIT_SHAPE_LABEL = "Edit shape"
         private const val PREFS_KEY = "vec.shape"
+        /** The pill's "Keep scale proportions" (area I's preference, read only: design §3.9). */
+        private const val PILL_KEEP_PROPORTIONS_KEY = "pill.keepProportions"
         private const val TOUCH_SLOP_DP = 6f
         private const val MIN_SIZE_DP = 4f
         private const val HANDLE_TOUCH_DP = 22f
