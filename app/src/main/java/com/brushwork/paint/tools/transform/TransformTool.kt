@@ -37,7 +37,11 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.ObjectPosition
+import com.brushwork.paint.tools.ObjectScale
+import com.brushwork.paint.tools.PillPositionTool
 import com.brushwork.paint.tools.PinchTargeting
+import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -91,7 +95,7 @@ import kotlin.math.min
  * over the step. While a gesture is stepped `increments.readout` says where it is ("+30 px, 0
  * px", "120 %", "45°"). Typed values are never stepped.
  */
-class TransformTool(controller: EditorController) : Tool(controller), PointEditor {
+class TransformTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool {
     override val id = ToolId.TRANSFORM
 
     /** v1.7 (§3.16): [MESH] is "Free deform", a mesh of up to 12 x 12 cells over the lifted pixels. */
@@ -1538,6 +1542,239 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (next != st) applyState(next)
     }
 
+    // ------------------------------------------------------------------ the pill (v1.7, design §3.1, §3.9 and §4.6)
+
+    /**
+     * The pill's X / Y, the same object for the tool's lifetime. Transforming, it is the Numbers
+     * reference point ("Center" by default), as v1.6's strip adapter was: moves stay part of the
+     * pending transform and the end of a drag ends the numeric edit. In Free deform it falls back
+     * from the single selected vertex ("Point 3") to the selected vertices' box centre ("Selected
+     * points") to the whole mesh's ("Center"); a drag, or a typed value, moves them as ONE
+     * in-tool step.
+     */
+    override val pillPosition: ObjectPosition = object : ObjectPosition {
+        override val position: Vec2?
+            get() = meshEdit?.let { meshPillPosition(it) } ?: anchorPosition
+
+        override val label: String
+            get() {
+                val e = meshEdit ?: return anchor.label
+                return when (e.selection.count) {
+                    0 -> PILL_CENTER
+                    1 -> "Point ${e.selection.indices[0] + 1}"
+                    else -> PILL_SELECTED_POINTS
+                }
+            }
+
+        override fun setPosition(x: Float?, y: Float?) {
+            if (meshEdit != null) moveMeshPillTo(x, y) else setAnchorPosition(x?.toDouble(), y?.toDouble())
+        }
+
+        override fun beginPositionEdit() {
+            if (meshEdit != null) beginMeshPill()
+        }
+
+        override fun endPositionEdit() {
+            if (meshEdit != null) endMeshPill() else endNumericEdit()
+        }
+    }
+
+    override val pillUnit: LengthUnit get() = unit
+
+    /**
+     * The pill's Scale row: null while nothing is lifted. Transforming, percent of the box as it
+     * was lifted (or placed), about the box centre; a text (or a folder holding one) is
+     * proportional only. In Free deform, percent of the selected vertices' box (the whole mesh
+     * with none selected) as it was when the selection was taken, about that box's centre; one
+     * vertex has nothing to scale (null).
+     */
+    override val objectScale: ObjectScale? get() = if (transformState != null) transformScale else null
+
+    private val transformScale = object : ObjectScale {
+        override val scalePercent: Vec2?
+            get() {
+                val e = meshEdit
+                return if (e != null) meshScalePercent(e) else boxScalePercent()
+            }
+
+        override val uniformOnly: Boolean get() = meshEdit == null && this@TransformTool.uniformOnly
+
+        override fun beginScaleEdit() {
+            if (meshEdit != null) beginMeshScale()
+        }
+
+        override fun setScale(xPercent: Float?, yPercent: Float?) {
+            if (meshEdit != null) setMeshScale(xPercent, yPercent) else setBoxScale(xPercent, yPercent)
+        }
+
+        override fun endScaleEdit() {
+            if (meshEdit != null) endMeshScale() else endNumericEdit()
+        }
+    }
+
+    /** Percent (x, y) of the box as it was lifted, or null with nothing lifted. */
+    private fun boxScalePercent(): Vec2? {
+        val st = transformState ?: return null
+        val ref = session?.initial ?: return null
+        if (ref.sx == 0f || ref.sy == 0f) return null
+        return Vec2(abs(st.sx / ref.sx) * 100f, abs(st.sy / ref.sy) * 100f)
+    }
+
+    /**
+     * Scales the pending transform to [xPercent] / [yPercent] of the box as it was lifted, about
+     * the box centre (null keeps that axis; a flip is kept). Proportional only: one value sets both.
+     */
+    private fun setBoxScale(xPercent: Float?, yPercent: Float?) {
+        val ref = session?.initial ?: return
+        var x = xPercent?.takeIf { it.isFinite() && it > 0f }
+        var y = yPercent?.takeIf { it.isFinite() && it > 0f }
+        if (uniformOnly) {
+            val k = x ?: y ?: return
+            x = k
+            y = k
+        }
+        if (x == null && y == null) return
+        update(numeric = true) { st ->
+            fun factor(percent: Float?, refScale: Float, now: Float, side: Int): Float {
+                if (percent == null || now == 0f) return 1f
+                val target = maxOf(abs(refScale) * percent / 100f, TransformState.MIN_SIZE / side)
+                return target / abs(now)
+            }
+            val kx = factor(x, ref.sx, st.sx, st.srcW)
+            val ky = factor(y, ref.sy, st.sy, st.srcH)
+            if (kx == 1f && ky == 1f) st else st.scaledAbout(st.center(), kx, ky)
+        }
+    }
+
+    /** The vertices the pill works on: the selected ones, or all of them with none selected. */
+    private fun meshPillIndices(e: MeshEdit): List<Int> =
+        if (e.selection.isEmpty) (0 until e.mesh.vertexCount).toList() else e.selection.indices
+
+    /** The document box of [indices]' vertices of [mesh]. */
+    private fun meshBox(mesh: MeshDeform, indices: List<Int>): RectF {
+        var l = Float.POSITIVE_INFINITY
+        var t = Float.POSITIVE_INFINITY
+        var r = Float.NEGATIVE_INFINITY
+        var b = Float.NEGATIVE_INFINITY
+        for (i in indices) {
+            val v = mesh.vertex(i)
+            if (v.x < l) l = v.x
+            if (v.x > r) r = v.x
+            if (v.y < t) t = v.y
+            if (v.y > b) b = v.y
+        }
+        return if (l <= r && t <= b) RectF(l, t, r, b) else RectF()
+    }
+
+    private fun meshPillPosition(e: MeshEdit): Vec2? {
+        val indices = meshPillIndices(e)
+        if (indices.isEmpty()) return null
+        if (indices.size == 1) return e.mesh.vertex(indices[0])
+        val b = meshBox(e.mesh, indices)
+        return Vec2(b.centerX(), b.centerY())
+    }
+
+    /** Where a pill drag on the mesh started, and the move it last applied (a null axis keeps it). */
+    private class MeshPillEdit(val from: Vec2, val group: Any) {
+        var delta = Vec2.ZERO
+    }
+
+    private var meshPillEdit: MeshPillEdit? = null
+
+    /** A pill drag (or a typed value) on the mesh starts: its vertices move as one group edit. */
+    private fun beginMeshPill(): Boolean {
+        val e = meshEdit ?: return false
+        if (meshBusy) return false
+        val from = meshPillPosition(e) ?: return false
+        beginMeshGroup(meshPillIndices(e), e)
+        meshPillEdit = MeshPillEdit(from, meshGroup ?: return false)
+        return true
+    }
+
+    private fun moveMeshPillTo(x: Float?, y: Float?) {
+        // A finger on the mesh ended the group: the pill starts a new one.
+        if (meshPillEdit != null && meshPillEdit?.group !== meshGroup) meshPillEdit = null
+        val oneShot = meshPillEdit == null
+        if (oneShot && !beginMeshPill()) return
+        val p = meshPillEdit ?: return
+        val dx = x?.takeIf { it.isFinite() }?.let { it - p.from.x } ?: p.delta.x
+        val dy = y?.takeIf { it.isFinite() }?.let { it - p.from.y } ?: p.delta.y
+        p.delta = Vec2(dx, dy)
+        setMeshGroup(Affine2.translate(dx, dy))
+        if (oneShot) endMeshPill()
+    }
+
+    private fun endMeshPill() {
+        val p = meshPillEdit ?: return
+        meshPillEdit = null
+        if (meshGroup === p.group) endMeshGroup()
+    }
+
+    /** The selected vertices' box (all of them with none selected) when the selection was taken: the Scale row's 100 %. */
+    private class MeshScaleRef(val selection: PointSelection, val box: RectF)
+
+    private var meshScaleRef: MeshScaleRef? = null
+
+    /** Takes [e]'s reference box when its selection is not the one the reference was taken for. */
+    private fun captureMeshScaleRef(e: MeshEdit) {
+        if (meshScaleRef?.selection == e.selection) return
+        meshScaleRef = MeshScaleRef(e.selection, meshBox(e.mesh, meshPillIndices(e)))
+    }
+
+    private fun meshScalePercent(e: MeshEdit): Vec2? {
+        val ref = meshScaleRef ?: return null
+        val indices = meshPillIndices(e)
+        if (indices.size < 2) return null
+        val rw = ref.box.width()
+        val rh = ref.box.height()
+        if (rw <= SCALE_EPS && rh <= SCALE_EPS) return null
+        val b = meshBox(e.mesh, indices)
+        return Vec2(if (rw > SCALE_EPS) b.width() / rw * 100f else 100f, if (rh > SCALE_EPS) b.height() / rh * 100f else 100f)
+    }
+
+    /** A Scale drag (or typed value) on the mesh: where it started and the factors it last applied. */
+    private class MeshScaleEdit(val box: RectF, val group: Any) {
+        var kx = 1f
+        var ky = 1f
+    }
+
+    private var meshScaleEdit: MeshScaleEdit? = null
+
+    private fun beginMeshScale(): Boolean {
+        val e = meshEdit ?: return false
+        if (meshBusy) return false
+        val indices = meshPillIndices(e)
+        if (indices.size < 2) return false
+        beginMeshGroup(indices, e)
+        meshScaleEdit = MeshScaleEdit(meshBox(e.mesh, indices), meshGroup ?: return false)
+        return true
+    }
+
+    private fun setMeshScale(xPercent: Float?, yPercent: Float?) {
+        if (meshScaleEdit != null && meshScaleEdit?.group !== meshGroup) meshScaleEdit = null
+        val oneShot = meshScaleEdit == null
+        if (oneShot && !beginMeshScale()) return
+        val edit = meshScaleEdit ?: return
+        val ref = meshScaleRef?.box
+        if (ref != null) {
+            fun factor(percent: Float?, refSide: Float, startSide: Float, last: Float): Float {
+                val p = percent?.takeIf { it.isFinite() && it > 0f } ?: return last
+                if (refSide <= SCALE_EPS || startSide <= SCALE_EPS) return last
+                return refSide * p / 100f / startSide
+            }
+            edit.kx = factor(xPercent, ref.width(), edit.box.width(), edit.kx)
+            edit.ky = factor(yPercent, ref.height(), edit.box.height(), edit.ky)
+            setMeshGroup(Affine2.scaleAbout(Vec2(edit.box.centerX(), edit.box.centerY()), edit.kx, edit.ky))
+        }
+        if (oneShot) endMeshScale()
+    }
+
+    private fun endMeshScale() {
+        val edit = meshScaleEdit ?: return
+        meshScaleEdit = null
+        if (meshGroup === edit.group) endMeshGroup()
+    }
+
     // ------------------------------------------------------------------ Free deform (v1.7, design §3.16)
 
     /**
@@ -1704,6 +1941,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         meshGesture = null
         meshPinch = null
         meshGroup = null
+        meshPillEdit = null
+        meshScaleEdit = null
+        meshScaleRef = null
         meshEdit = null
         clearMeshSteps()
         s.mesh?.release()
@@ -1713,6 +1953,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     /** Shows [e]: the preview and the overlay are redrawn where the mesh was and is. */
     private fun showMesh(e: MeshEdit) {
         meshEdit = e
+        captureMeshScaleRef(e)
         val view = session?.mesh ?: return
         view.update(e.mesh, smoothMesh)
         val nb = Rect(view.bounds)
@@ -2830,6 +3071,13 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
 
         /** Undo label of an applied Free deform (v1.7, §3.16; `HistoryLabels.FREE_DEFORM`). */
         const val FREE_DEFORM_LABEL = TransformLabels17.FREE_DEFORM
+
+        /** The pill on the Free deform mesh (design §3.1): no vertex selected, and two or more. */
+        const val PILL_CENTER = "Center"
+        const val PILL_SELECTED_POINTS = "Selected points"
+
+        /** Document px under which a reference box side counts as empty (that axis is not scaled). */
+        private const val SCALE_EPS = 1e-3f
 
         /** How far (screen dp) a finger reaches a mesh vertex: half its 44 dp touch target. */
         private const val VERTEX_REACH_DP = PointGizmo.TOUCH_DP / 2f
