@@ -89,6 +89,8 @@ object PathfinderLabels {
 object KerningLabels {
     const val KERNING = "Kerning"; const val FONT_KERNING = "Font kerning"
     const val VERTICAL_REFUSAL = "Kerning works on horizontal text"
+    const val LINE_REFUSAL = "Kerning works between two letters of a line"
+    const val SCRIPT_REFUSAL = "Kerning works on left-to-right text with separate letters"
     fun between(a: String, b: String) = "Between “$a” and “$b”"
 }
 

@@ -41,17 +41,14 @@ internal const val KERNING_HINT = "Put the cursor between two letters, or select
 /** The description of the "Font kerning" switch. */
 internal const val FONT_KERNING_NOTE = "The font's own spacing of letter pairs such as AV and To"
 
-/**
- * The Kerning row's caption, disabled, where the gaps named sit beside a line break (to move into
- * `LabelsV17.KerningLabels`, frozen).
- */
-internal const val KERNING_LINE_REFUSAL = "Kerning works between two letters of a line"
+/** The Kerning row's caption, disabled, where the gaps named sit beside a line break. */
+internal const val KERNING_LINE_REFUSAL = KerningLabels.LINE_REFUSAL
 
 /**
  * The Kerning row's caption, disabled, where the gaps named are in a right-to-left or shaped
- * script, whose letters keep the font's shaping (to move into `LabelsV17.KerningLabels`, frozen).
+ * script, whose letters keep the font's shaping.
  */
-internal const val KERNING_SCRIPT_REFUSAL = "Kerning works on left-to-right text with separate letters"
+internal const val KERNING_SCRIPT_REFUSAL = KerningLabels.SCRIPT_REFUSAL
 
 /** Test tag of the Kerning row. */
 const val KERNING_ROW_TAG = "textKerningRow"
