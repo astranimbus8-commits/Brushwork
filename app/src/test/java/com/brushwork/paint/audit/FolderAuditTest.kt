@@ -25,6 +25,7 @@ import com.brushwork.paint.exchange.export.PayloadKind
 import com.brushwork.paint.exchange.export.TextSource
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.masks.AdjustmentEffects
+import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.AdjustmentHistogram
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.FolderSpec
@@ -214,13 +215,39 @@ class FolderAuditTest {
     }
 
     @Test
-    fun exportWritesTheTreeAndTheFoldersLayersFlat() {
+    fun toggleClippingOnAFolderReadsTheUnitBelowItsBlock() {
+        val c = nested()
+        // F2's block is [B, F2]; the unit below it is A, not its own child B.
+        c.byName("B").adjustment = AdjustmentSpec(filterId = "adjust.invert")
+        c.toggleClipping(c.byName("F2"))
+        assertTrue("an adjustment child does not block clipping", c.byName("F2").clipping)
+        c.undo()
+        c.byName("B").adjustment = null
+        c.byName("A").adjustment = AdjustmentSpec(filterId = "adjust.invert")
+        val steps = c.undoManager.undoCount
+        c.toggleClipping(c.byName("F2"))
+        assertFalse("never clipped onto an adjustment layer", c.byName("F2").clipping)
+        assertEquals(steps, c.undoManager.undoCount)
+        c.byName("A").adjustment = null
+        // F1's unit below is Background.
+        c.byName("Background").adjustment = AdjustmentSpec(filterId = "adjust.invert")
+        c.toggleClipping(c.byName("F1"))
+        assertFalse(c.byName("F1").clipping)
+        assertFoldersIntact(c, "clipping")
+    }
+
+    @Test
+    fun exportWritesTheTreeAndNestsTheFolders() {
         val c = nested()
         fun build(includeHidden: Boolean) = runBlocking {
             ExportSceneBuilder(c, ExportOptions(VectorFormat.SVG, includeHidden = includeHidden), TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build()
         }
         val scene = build(includeHidden = false)
-        assertEquals(listOf("Background", "A", "B", "Top"), scene.layers.map { it.name })
+        assertEquals(listOf("Background", "F1", "Top"), scene.layers.map { it.name })
+        assertEquals(listOf("A", "F2"), scene.layers[1].children.map { it.name })
+        assertEquals(listOf("B"), scene.layers[1].children[1].children.map { it.name })
+        assertFalse(scene.layers[1].isolated)
+        assertTrue(scene.layers[1].children[1].isolated)
         val payload = scene.payload!!
         assertEquals(c.doc.layers.map { it.id }, payload.layers.map { it.id })
         assertEquals(c.doc.layers.map { it.parentId }, payload.layers.map { it.parentId })
@@ -235,10 +262,11 @@ class FolderAuditTest {
         }
         // A hidden folder hides its layers.
         c.byName("F2").visible = false
-        assertEquals(listOf("Background", "A", "Top"), build(includeHidden = false).layers.map { it.name })
-        val withHidden = build(includeHidden = true)
-        assertTrue(withHidden.layers.first { it.name == "B" }.hidden)
-        assertFalse(withHidden.layers.first { it.name == "A" }.hidden)
+        assertEquals(listOf("A"), build(includeHidden = false).layers[1].children.map { it.name })
+        val withHidden = build(includeHidden = true).layers[1].children
+        assertTrue(withHidden.first { it.name == "F2" }.hidden)
+        assertFalse(withHidden.first { it.name == "F2" }.children.single { it.name == "B" }.hidden)
+        assertFalse(withHidden.first { it.name == "A" }.hidden)
         assertFoldersIntact(c, "export")
     }
 

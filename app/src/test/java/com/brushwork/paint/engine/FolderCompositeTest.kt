@@ -418,8 +418,7 @@ class FolderCompositeTest {
         assertTrue("above an adjustment layer a clipping unit is a base", FolderComposite.drawnAsIs(doc.layers, ci))
         bottom.adjustment = null
         f.clipping = false
-        // The sibling FOLDER above clips onto it: a clip base. (LayerTree.showsAsIs reads `index + 1`,
-        // G's child, and misses it.)
+        // The sibling FOLDER above clips onto it: a clip base (G's top, not its bottom child `index + 1`).
         g.clipping = true
         assertFalse(FolderComposite.drawnAsIs(doc.layers, ci))
         g.clipping = false

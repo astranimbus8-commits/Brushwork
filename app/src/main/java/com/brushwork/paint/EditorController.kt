@@ -1963,12 +1963,19 @@ class EditorController(
     }
 
     fun toggleVisibility(layer: Layer) = setLayerProps(layer, layer.props().copy(visible = !layer.visible), "Visibility")
-    /** Clipping on / off; refused on adjustment layers and on a layer right above one (they are never clipping bases). */
+    /**
+     * Clipping on / off; refused on adjustment layers and on a unit right above one at the same
+     * level (they are never clipping bases). The unit below a folder's block is read, not the
+     * folder's bottom child.
+     */
     fun toggleClipping(layer: Layer) {
         if (!layer.clipping) {
             if (layer.isAdjustmentLayer) { toast("Adjustment layers can't be clipped"); return }
             val idx = doc.indexOf(layer)
-            if (idx > 0 && doc.layers[idx - 1].isAdjustmentLayer) { toast("Layers can't be clipped to an adjustment layer"); return }
+            val below = if (idx < 0) -1 else LayerTree.block(doc.layers, idx).first - 1
+            if (below >= 0 && doc.layers[below].parentId == layer.parentId && doc.layers[below].isAdjustmentLayer) {
+                toast("Layers can't be clipped to an adjustment layer"); return
+            }
         }
         setLayerProps(layer, layer.props().copy(clipping = !layer.clipping), "Clipping")
     }

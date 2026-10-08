@@ -2,6 +2,7 @@ package com.brushwork.paint.model
 
 import android.graphics.Bitmap
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.masks.AdjustmentSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -331,13 +332,36 @@ class LayerTreeTest {
         f.folder = FolderSpec(passThrough = false)
         assertFalse(LayerTree.showsAsIs(ls, 0))
         f.folder = FolderSpec()
-        f.clipping = true
-        assertFalse(LayerTree.showsAsIs(ls, 0))
+        f.clipping = true // at the bottom of its level there is nothing to clip onto
+        assertTrue(LayerTree.showsAsIs(ls, 0))
         f.clipping = false
         ls[2].clipping = true // clips to the folder: the folder is a clip base
         assertFalse(LayerTree.showsAsIs(ls, 0))
         ls[2].clipping = false
         assertTrue(LayerTree.showsAsIs(ls, 0))
+        // With a layer below, a clipping folder is clipped.
+        val below = layer(4)
+        val withBelow = listOf(below, l, f, layer(5))
+        f.clipping = true
+        assertTrue(LayerTree.isClipped(withBelow, 2))
+        assertFalse(LayerTree.showsAsIs(withBelow, 1))
+        below.adjustment = AdjustmentSpec(filterId = "adjust.invert") // above an adjustment layer it is a base
+        assertFalse(LayerTree.isClipped(withBelow, 2))
+        assertTrue(LayerTree.showsAsIs(withBelow, 1))
+        below.adjustment = null
+        f.clipping = false
+        // A sibling FOLDER above that clips makes the folder a clip base (its top, not its bottom child).
+        val g = folder(6)
+        val inG = layer(7, 6)
+        val twoFolders = listOf(l, f, inG, g)
+        g.clipping = true
+        assertTrue(LayerTree.isClipBase(twoFolders, 1))
+        assertFalse(LayerTree.showsAsIs(twoFolders, 0))
+        g.clipping = false
+        inG.clipping = true // a clipping layer inside G does not make f a base
+        assertFalse(LayerTree.isClipBase(twoFolders, 1))
+        assertTrue(LayerTree.showsAsIs(twoFolders, 0))
+        inG.clipping = false
         f.locked = true
         assertTrue(LayerTree.lockedByAncestor(ls, 0))
         assertFalse(LayerTree.lockedByAncestor(ls, 1))
