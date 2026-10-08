@@ -24,7 +24,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.exchange.VectorFormat
+import com.brushwork.paint.exchange.export.ExportSceneBuilder
 import com.brushwork.paint.exchange.export.PdfPage
 import com.brushwork.paint.exchange.export.StrokeExport
 import com.brushwork.paint.exchange.export.TextExportMode
@@ -56,7 +58,14 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
             if (layers.any { it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Layers below an adjustment layer are exported as one picture"
             // v1.7 (item 8): a folder clips (and is clipped) like a layer.
             if (layers.any { it.clipping && !it.isAdjustmentLayer && c.doc.effectiveVisible(it) }) out += "Clipping groups are exported as pictures"
-            if (layers.any { it.folder?.passThrough == true && it.opacity > 0f && it.opacity < 1f && c.doc.effectiveVisible(it) }) out += "Pass-through folders below 100 % are exported as isolated groups"
+            // A pass-through folder below 100 % (drawn as itself: not in a clip group): exact in
+            // PDF, isolated in SVG.
+            if (!pdf && layers.indices.any { i ->
+                    val l = layers[i]
+                    l.folder?.passThrough == true && l.opacity > 0f && l.opacity < 1f && c.doc.effectiveVisible(l) &&
+                        !FolderComposite.isClipBase(layers, i) && !FolderComposite.isClipped(layers, i)
+                }
+            ) out += ExportSceneBuilder.PASS_THROUGH_SVG_NOTE
             out
         }
     }

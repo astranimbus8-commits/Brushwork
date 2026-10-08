@@ -235,10 +235,13 @@ class ExportSceneBuilder(
      *   compositor's groups: a base with visible units clipping onto it becomes one picture with
      *   the base's opacity and blend mode; an adjustment layer above the merged part draws nothing.
      * - A folder becomes a group of its children: **isolated** with its own blend mode and
-     *   opacity (SVG `isolation:isolate`, a PDF transparency group), or, pass-through at 100 %, a
-     *   plain group its children blend through. Formats have no pass-through with an opacity: such
-     *   a folder is an isolated Normal group at its opacity (exact when its children blend
-     *   normally, else an approximation with a note).
+     *   opacity (SVG `isolation:isolate`, a PDF transparency group; Normal for a pass-through
+     *   clip base, [FolderComposite.drawnBlend]), or, pass-through at 100 %, a plain group its
+     *   children blend through. Pass-through below 100 % is a NON-isolated Normal group at its
+     *   opacity: PDF draws it exactly (a non-isolated transparency group), SVG writes it isolated
+     *   (group opacity always isolates there), an approximation the summary lists. Its layers
+     *   still form their own context (an adjustment layer inside merges with the folder's layers
+     *   only: an approximation).
      * - A layer's own eye makes it hidden; a hidden folder hides its children with it.
      */
     private inner class Planner(
@@ -314,7 +317,7 @@ class ExportSceneBuilder(
                     val bounds = unitBounds(baseUnit) ?: continue
                     val members = (listOf(baseUnit) + clips).flatMap { u -> u.map { layers[it] } }
                     plans += Plan(
-                        key("layer"), base.name, base.opacity, base.blendMode, hidden, null,
+                        key("layer"), base.name, base.opacity, FolderComposite.drawnBlend(base), hidden, null,
                         Content.Picture(compositeImage(members, bounds, base = base)),
                     )
                     notes += "Clipping groups are exported as pictures"
@@ -341,11 +344,16 @@ class ExportSceneBuilder(
             val clipBase = FolderComposite.isClipBase(layers, f)
             val isolated = isolatedForExport(f)
             val children = if (isolated) context(f, inside(u)) else level(folder.id, inside(u), -1)
-            if (passThrough && !clipBase && folder.opacity > 0f && folder.opacity < 1f && children.isNotEmpty()) {
-                notes += "Pass-through folders below 100 % are exported as isolated groups"
+            // Pass-through below 100 % (o·C + (1 − o)·B on the canvas): a NON-isolated group at its
+            // opacity, which PDF draws exactly. SVG group opacity always isolates: the SVG writer
+            // writes it isolated, an approximation the summary lists (design §9 row 8).
+            val lerp = passThrough && !clipBase && folder.opacity < 1f
+            if (lerp && options.format == VectorFormat.SVG && folder.opacity > 0f && children.isNotEmpty()) {
+                notes += PASS_THROUGH_SVG_NOTE
             }
-            val blend = if (passThrough && !clipBase) LayerBlendMode.NORMAL else folder.blendMode
-            return Plan(key("layer"), folder.name, folder.opacity, blend, hidden, null, Content.Items(emptyList()), children, isolated)
+            // A pass-through folder composited isolated (a clip base) draws Normal, as on the canvas.
+            val blend = FolderComposite.drawnBlend(folder)
+            return Plan(key("layer"), folder.name, folder.opacity, blend, hidden, null, Content.Items(emptyList()), children, isolated && !lerp)
         }
 
         /** True when [l] clips onto the unit below it (an adjustment layer never does). */
@@ -852,6 +860,12 @@ class ExportSceneBuilder(
     companion object {
         /** Rows of a merged picture composited between two breaks of the main thread. */
         private const val COMPOSITE_BAND = 512
+
+        /**
+         * v1.7 (item 8): the SVG summary's line for a pass-through folder below 100 % (PNG, JPEG
+         * and PDF draw it exactly).
+         */
+        const val PASS_THROUGH_SVG_NOTE = "Pass-through folders below 100 % are approximated in SVG (written as isolated groups)"
 
         /**
          * [content] rendered over [r] (document px) like a vector layer's cache: dabs cut at

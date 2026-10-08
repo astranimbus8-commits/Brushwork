@@ -191,7 +191,10 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
      *   inside its own group, nested optional content: shown only while every group around it is
      *   on), drawn like a layer;
      * - a pass-through folder: its layers drawn straight into [content], so they blend with what
-     *   is below the folder (its own opacity, blend mode and mask are not used: it has none).
+     *   is below the folder (its blend mode and mask are not used: it has none);
+     * - a pass-through folder below 100 %: those layers in a NON-isolated transparency-group
+     *   form drawn at the folder's opacity, which is exactly the canvas's o·C + (1 − o)·B (they
+     *   still blend with what is below the folder).
      */
     private suspend fun place(layer: SceneLayer, res: Resources, content: StringBuilder, cancelled: () -> Boolean): OcNode? {
         if (layer.children.isEmpty()) {
@@ -200,18 +203,20 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
             draw(layer, form, ocg, res, content, cancelled)
             return OcNode(ocg, layer, emptyList())
         }
-        val innerRes = if (layer.isolated) Resources() else res
+        // A group of its own: isolated, or a pass-through folder below 100 % (non-isolated).
+        val grouped = layer.isolated || layer.opacity < 1f
+        val innerRes = if (grouped) Resources() else res
         val inner = StringBuilder()
         // Items under the layers (a folder has none).
         writeLayerForm(layer, cancelled)?.let { inner.append("q ").append(innerRes.xobject(it)).append(" Do Q\n") }
         val children = placeAll(layer.children, innerRes, inner, cancelled)
         if (inner.isEmpty()) return null
-        if (!layer.isolated) {
+        if (!grouped) {
             val ocg = ocg(layer)
             content.append("/OC ").append(res.property(ocg)).append(" BDC\n").append(inner).append("EMC\n")
             return OcNode(ocg, layer, children)
         }
-        val form = form(inner, innerRes, gray = false)
+        val form = form(inner, innerRes, gray = false, isolated = layer.isolated)
         val ocg = ocg(layer)
         draw(layer, form, ocg, res, content, cancelled)
         return OcNode(ocg, layer, children)
@@ -275,16 +280,24 @@ class PdfWriter(private val scene: ExportScene, private val page: PdfPage = PdfP
         }
     }
 
-    /** A transparency-group form of [content] over the whole document. */
-    private fun form(content: CharSequence, res: Resources, gray: Boolean): Int =
-        formOf(Pdf.flate(content.toString().toByteArray(Charsets.ISO_8859_1)), res, gray)
+    /**
+     * A transparency-group form of [content] over the whole document; [isolated] false (v1.7: a
+     * pass-through folder below 100 %) makes it a non-isolated group, composited onto what is
+     * below it.
+     */
+    private fun form(content: CharSequence, res: Resources, gray: Boolean, isolated: Boolean = true): Int =
+        formOf(Pdf.flate(content.toString().toByteArray(Charsets.ISO_8859_1)), res, gray, isolated)
 
-    /** A transparency-group form of the zlib-compressed content [deflated]. */
-    private fun formOf(deflated: ByteArray, res: Resources, gray: Boolean): Int = file.stream(PdfDict().apply {
+    /** A transparency-group form of the zlib-compressed content [deflated] (see [form]). */
+    private fun formOf(deflated: ByteArray, res: Resources, gray: Boolean, isolated: Boolean = true): Int = file.stream(PdfDict().apply {
         this["Type"] = "/XObject"
         this["Subtype"] = "/Form"
         this["BBox"] = "[0 0 ${scene.width} ${scene.height}]"
-        this["Group"] = if (gray) "<</S /Transparency /CS /DeviceGray>>" else "<</S /Transparency /CS /DeviceRGB /I true /K false>>"
+        this["Group"] = when {
+            gray -> "<</S /Transparency /CS /DeviceGray>>"
+            isolated -> "<</S /Transparency /CS /DeviceRGB /I true /K false>>"
+            else -> "<</S /Transparency /CS /DeviceRGB /I false /K false>>"
+        }
         this["Resources"] = res.dict()
         this["Filter"] = "/FlateDecode"
     }, deflated)

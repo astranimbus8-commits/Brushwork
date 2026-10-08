@@ -80,14 +80,16 @@ class SvgWriter(private val scene: ExportScene, private val onProgress: (Float) 
             text("</mask></defs>\n")
         }
         val style = StringBuilder()
-        if (layer.isolated) {
-            val opacity = layer.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
+        val opacity = layer.opacity.let { if (it.isFinite()) it.coerceIn(0f, 1f) else 1f }
+        // v1.7 (item 8): a pass-through folder below 100 % (not isolated, PDF draws it exactly)
+        // is written isolated: SVG group opacity always isolates (the export summary says so).
+        if (layer.isolated || opacity < 1f) {
             if (opacity < 1f) style.append("opacity:").append(num(opacity)).append(';')
             blendCss(layer.blend)?.let { style.append("mix-blend-mode:").append(it).append(';') }
             style.append("isolation:isolate")
         }
-        // v1.7 (item 8): a pass-through folder is a plain group (no opacity, blend mode or
-        // isolation: its layers blend with what is below it, as on the canvas).
+        // v1.7 (item 8): a pass-through folder at 100 % is a plain group (no opacity, blend mode
+        // or isolation: its layers blend with what is below it, as on the canvas).
         if (layer.hidden) style.append(if (style.isEmpty()) "display:none" else ";display:none")
         text("<g id=\"${esc(layer.key)}\" inkscape:groupmode=\"layer\" inkscape:label=\"${esc(layer.name)}\"")
         if (style.isNotEmpty()) text(" style=\"$style\"")

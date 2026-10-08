@@ -33,7 +33,8 @@ import kotlin.math.roundToInt
  * - **isolated** (pass-through off, a clip base, or clipped): its children into a scratch tile of
  *   at most [TILE]² target px with its own [CompositeTarget] (adjustment layers inside read their
  *   backdrop from it, which a `saveLayer` could not give them, V8), then the scratch onto the
- *   parent with the folder's blend mode and opacity. A folder clip base is rendered once per tile
+ *   parent with the folder's blend mode ([drawnBlend]: Normal for a pass-through folder) and
+ *   opacity. A folder clip base is rendered once per tile
  *   and reused for every clipped unit's `DST_IN`;
  * - **pass-through below 100 %**, exactly o·C + (1 − o)·B: the backdrop B is copied into a
  *   scratch, the children C are drawn onto it, then the scratch replaces the parent's tile (`SRC`)
@@ -133,6 +134,15 @@ object FolderComposite {
         while (j < layers.size && layers[j].parentId != pid && layers[j].id != pid) j++
         return j < layers.size && layers[j].parentId == pid && layers[j].clipping && !layers[j].isAdjustmentLayer
     }
+
+    /**
+     * The blend mode [l] is drawn with where it is composited as one picture (an isolated folder,
+     * a clip group's base, a clipped unit). A pass-through folder shows "Pass through" in the
+     * blend list, not its stored mode (kept for when pass through is turned off): composited
+     * isolated (a clip base, or clipped) it draws Normal, as it merges ("Merge folder") and as
+     * the window shows it. Every other layer: its own blend mode.
+     */
+    fun drawnBlend(l: Layer): LayerBlendMode = if (l.folder?.passThrough == true) LayerBlendMode.NORMAL else l.blendMode
 
     /**
      * The lowest flat index whose pixels an adjustment layer at [index] works on (design §3.8:
@@ -278,7 +288,7 @@ object FolderComposite {
             val spec = base.folder
             if (spec != null && j == i + 1) {
                 when {
-                    !spec.passThrough -> isolated(s, baseUnit, base.blendMode, base.opacity)
+                    !spec.passThrough -> isolated(s, baseUnit, drawnBlend(base), base.opacity)
                     base.opacity >= 1f -> level(s, base.id, inside(baseUnit))
                     else -> passThroughBelow(s, baseUnit, base.opacity)
                 }
@@ -343,8 +353,13 @@ object FolderComposite {
                 cv.setMatrix(null)
                 cv.clipRect(tile)
                 // One pass: an A8 bitmap draws as a coverage mask of the paint's shader, and
-                // coverage lerps the SRC result with what is there: B + (C − B)·o.
-                cv.drawBitmap(coverage, tile.left.toFloat(), tile.top.toFloat(), pool.lerpPaint(scratch, tile))
+                // coverage lerps the SRC result with what is there: B + (C − B)·o. The tile's
+                // offset goes into the canvas matrix and the coverage draws at (0, 0) with the
+                // shader's local matrix at identity, so every tile draws through the same path
+                // (review: with the offset as the bitmap's left/top and a matching shader local
+                // matrix, a partial redraw at a non-zero offset differed from the full redraw).
+                cv.translate(tile.left.toFloat(), tile.top.toFloat())
+                cv.drawBitmap(coverage, 0f, 0f, pool.lerpPaint(scratch))
                 cv.restoreToCount(save)
                 pool.release(scratch)
             }
@@ -358,7 +373,7 @@ object FolderComposite {
          */
         private fun clipGroup(s: Surface, baseUnit: IntRange, clipUnits: List<IntRange>) {
             val base = layers[baseUnit.last]
-            val groupPaint = BlendModes.paint(base.blendMode, base.opacity)
+            val groupPaint = BlendModes.paint(drawnBlend(base), base.opacity)
             val cv = s.canvas
             if (s.target == null) {
                 compose(cv, s.bounds, groupPaint, baseUnit, clipUnits) { u, b ->
@@ -407,7 +422,7 @@ object FolderComposite {
             content(baseUnit, bounds)
             for (u in clipUnits) {
                 val l = layers[u.last]
-                val cs = cv.saveLayer(bounds, BlendModes.paint(l.blendMode, l.opacity))
+                val cs = cv.saveLayer(bounds, BlendModes.paint(drawnBlend(l), l.opacity))
                 content(u, bounds)
                 // Keep only where the base (a folder: its composite) has alpha.
                 val bs = cv.saveLayer(bounds, c.dstInPaint)
@@ -504,7 +519,6 @@ internal class FolderScratchPool {
     val copyPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
 
     private val lerp = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) }
-    private val lerpMatrix = Matrix()
     private var coverageBitmap: Bitmap? = null
     private var coverageAlpha = -1
 
@@ -518,10 +532,11 @@ internal class FolderScratchPool {
         return b
     }
 
-    /** SRC through the pixels of [s], placed at target tile [tile]'s top-left. */
-    fun lerpPaint(s: Scratch, tile: Rect): Paint {
-        lerpMatrix.setTranslate(tile.left.toFloat(), tile.top.toFloat())
-        s.shader.setLocalMatrix(lerpMatrix)
+    /**
+     * SRC through the pixels of [s], its pixel (0, 0) at the origin of the canvas matrix (draw
+     * the coverage at (0, 0) under a matrix that moves it to the tile).
+     */
+    fun lerpPaint(s: Scratch): Paint {
         lerp.shader = s.shader
         return lerp
     }

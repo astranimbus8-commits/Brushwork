@@ -644,11 +644,13 @@ private fun BlendToggle(
                 if (description != null) contentDescription = description
                 text = AnnotatedString(caption)
             }
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() })
+            // Inside the toggle: a disabled toggleable ends the gesture for what wraps it, so an
+            // outer tap detector never sees the tap (review: "Alpha lock works on layers" never showed).
             .then(
                 if (!enabled && onDisabledTap != null) Modifier.pointerInput(Unit) { detectTapGestures { disabledTap?.invoke() } }
                 else Modifier
-            )
-            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = { onToggle() }),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         glyph(tint)

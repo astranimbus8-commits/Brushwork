@@ -251,13 +251,13 @@ class FolderCompositeTest {
 
     @Test
     fun aFolderClipBaseAndAClippedFolderEqualHandBuiltReferences() {
-        // A folder as a clip base (pass-through: composited isolated all the same).
+        // A folder as a clip base (isolated Screen).
         run {
             val doc = Document("f", "f", w, h)
             val b = backdrop(doc)
             val a = disc(doc, "a", 0xE0FF2020.toInt(), 30f, 30f, 20f)
             val c = disc(doc, "c", 0xC02020FF.toInt(), 50f, 36f, 18f).also { it.blendMode = LayerBlendMode.MULTIPLY }
-            val f = wrap(folder(doc, "F"), a, c).also { it.blendMode = LayerBlendMode.SCREEN; it.opacity = 0.8f }
+            val f = wrap(folder(doc, "F", passThrough = false), a, c).also { it.blendMode = LayerBlendMode.SCREEN; it.opacity = 0.8f }
             val clip = layer(doc, "clip") { it.drawRect(0f, 20f, w.toFloat(), 50f, Paint().apply { color = 0xB000FF00.toInt() }) }.also {
                 it.clipping = true; it.blendMode = LayerBlendMode.OVERLAY
             }
@@ -278,6 +278,20 @@ class FolderCompositeTest {
                 d.layers += Layer(d.newLayerId(), "block", block).also { it.blendMode = LayerBlendMode.SCREEN; it.opacity = 0.8f }
             }
             assertArrayEquals("clip base with a hidden clip", pixels(alone), pixels(doc))
+
+            // Pass-through: composited isolated all the same, Normal (the blend list shows "Pass
+            // through", not the stored Screen), as "Merge folder" makes it.
+            clip.visible = true
+            f.folder = FolderSpec(passThrough = true)
+            assertEquals(LayerBlendMode.NORMAL, FolderComposite.drawnBlend(f))
+            val normal = Document("f", "f", w, h).also { d ->
+                d.layers += backdrop(d)
+                d.layers += Layer(d.newLayerId(), "block", block).also { it.opacity = 0.8f }
+                d.layers += layer(d, "clip") { it.drawRect(0f, 20f, w.toFloat(), 50f, Paint().apply { color = 0xB000FF00.toInt() }) }.also {
+                    it.clipping = true; it.blendMode = LayerBlendMode.OVERLAY
+                }
+            }
+            assertArrayEquals("pass-through folder clip base", pixels(normal), pixels(doc))
         }
         // A clipped folder, and a folder clipped to a folder.
         run {
@@ -286,7 +300,7 @@ class FolderCompositeTest {
             val base = disc(doc, "base", 0xFFFFFFFF.toInt(), 48f, 36f, 26f)
             val x = disc(doc, "x", 0xE0FF00FF.toInt(), 30f, 30f, 22f)
             val y = disc(doc, "y", 0xA000C0C0.toInt(), 60f, 40f, 22f).also { it.blendMode = LayerBlendMode.DARKEN }
-            val f = wrap(folder(doc, "F"), x, y).also { it.clipping = true; it.opacity = 0.75f; it.blendMode = LayerBlendMode.MULTIPLY }
+            val f = wrap(folder(doc, "F", passThrough = false), x, y).also { it.clipping = true; it.opacity = 0.75f; it.blendMode = LayerBlendMode.MULTIPLY }
             doc.layers += listOf(b, base, x, y, f)
             val block = FolderComposite.renderBlock(doc, f)
             val ref = Document("f", "f", w, h).also { d ->
@@ -295,6 +309,14 @@ class FolderCompositeTest {
                 d.layers += Layer(d.newLayerId(), "block", block).also { it.clipping = true; it.opacity = 0.75f; it.blendMode = LayerBlendMode.MULTIPLY }
             }
             assertArrayEquals("clipped folder", pixels(ref), pixels(doc))
+            // Pass-through and clipped: isolated, Normal.
+            f.folder = FolderSpec(passThrough = true)
+            val normal = Document("f", "f", w, h).also { d ->
+                d.layers += backdrop(d)
+                d.layers += disc(d, "base", 0xFFFFFFFF.toInt(), 48f, 36f, 26f)
+                d.layers += Layer(d.newLayerId(), "block", block).also { it.clipping = true; it.opacity = 0.75f }
+            }
+            assertArrayEquals("pass-through clipped folder", pixels(normal), pixels(doc))
 
             // The base becomes a folder too.
             val doc2 = Document("f", "f", w, h)
@@ -304,7 +326,7 @@ class FolderCompositeTest {
             val fb = wrap(folder(doc2, "FB", passThrough = false), p, q)
             val x2 = disc(doc2, "x", 0xE0FF00FF.toInt(), 30f, 30f, 22f)
             val y2 = disc(doc2, "y", 0xA000C0C0.toInt(), 60f, 40f, 22f).also { it.blendMode = LayerBlendMode.DARKEN }
-            val fc = wrap(folder(doc2, "FC"), x2, y2).also { it.clipping = true; it.opacity = 0.75f; it.blendMode = LayerBlendMode.MULTIPLY }
+            val fc = wrap(folder(doc2, "FC", passThrough = false), x2, y2).also { it.clipping = true; it.opacity = 0.75f; it.blendMode = LayerBlendMode.MULTIPLY }
             doc2.layers += listOf(b2, p, q, fb, x2, y2, fc)
             assertNull(LayerTree.check(doc2.layers))
             val baseBlock = FolderComposite.renderBlock(doc2, fb)

@@ -37,6 +37,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -431,11 +432,15 @@ private fun LayerList(
     // when the active layer is the top one).
     val listState = rememberLazyListState(initialFirstVisibleItemIndex = contextItem(activeDisplay))
     val haptics = LocalHapticFeedback.current
+    // The rows listed when the drag started: a dragged folder's hidden rows leave a blank of
+    // their height at the end of the list ([DRAG_GAP_KEY]).
+    var listedAtStart by remember { mutableIntStateOf(0) }
     val reorder = rememberReorderState(
         listState = listState,
         canDrag = { doc.layers.size > 1 },
         onStart = { index ->
             controller.endCanvasGesture()
+            listedAtStart = rows.size
             dragOrder.value = doc.layers.asReversed().toList()
             dragged.value = rows.getOrNull(index - HEADER_ITEMS)?.layer?.let { DraggedUnit.of(doc.layers, it) }
         },
@@ -471,8 +476,9 @@ private fun LayerList(
                 }
             }
         },
-        // Neither header (SELECTION_ROW_KEY, SAVED_SELECTIONS_KEY) is dragged or dropped on.
-        isReorderable = { isLayerItem(it) },
+        // Neither header (SELECTION_ROW_KEY, SAVED_SELECTIONS_KEY) nor the drag's blank
+        // (DRAG_GAP_KEY) is dragged or dropped on.
+        isReorderable = { isLayerItem(it) && it < HEADER_ITEMS + rows.size },
     )
 
     // Keep the active layer in view when it changes (added, duplicated, moved with the buttons).
@@ -569,8 +575,19 @@ private fun LayerList(
                 onEdit = editAction(controller, row),
             )
         }
+        // A dragged folder's rows hide while it moves: a blank of their height at the end keeps
+        // the list's height, so the rows above it stay where they were. Without it a list that
+        // fits (bottom-aligned) or is scrolled to its end shifts them down under the finger and
+        // the drag swaps the folder with the wrong row.
+        val hiddenRows = if (dragged.value != null) (listedAtStart - rows.size).coerceAtLeast(0) else 0
+        if (hiddenRows > 0) {
+            item(key = DRAG_GAP_KEY) { Spacer(Modifier.fillMaxWidth().height(rowHeight * hiddenRows)) }
+        }
     }
 }
+
+/** The blank that stands in for a dragged folder's hidden rows while it moves (v1.7 review). */
+private const val DRAG_GAP_KEY = "drag-gap"
 
 /** What a double tap on [row] edits: its text (or story), shape, objects or adjustment; null for plain layers. */
 private fun editAction(c: EditorController, row: LayerRowModel): (() -> Unit)? {

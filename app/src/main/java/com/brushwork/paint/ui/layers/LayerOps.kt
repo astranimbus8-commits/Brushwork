@@ -229,13 +229,13 @@ object LayerOps {
      * base's blend), reached through pass-through folders drawn straight onto the canvas (an
      * isolated folder inside counts by its own blend). Opacity alone never changes it:
      * o·(C over B) + (1 − o)·B = o·C + (1 − o·αC)·B for Normal content. A clipped pass-through
-     * folder is composited isolated already; a pass-through clip base draws its group with its
-     * stored blend, which the merged layer loses (Normal).
+     * folder or a pass-through clip base is composited isolated already, Normal
+     * ([FolderComposite.drawnBlend]), as the merged layer is.
      */
     fun mergeChangesPicture(layers: List<Layer>, index: Int): Boolean {
         val f = layers.getOrNull(index) ?: return false
         if (f.folder?.passThrough != true || FolderComposite.isClipped(layers, index)) return false
-        if (FolderComposite.isClipBase(layers, index)) return f.blendMode != LayerBlendMode.NORMAL
+        if (FolderComposite.isClipBase(layers, index)) return false
         return blendsWithBackdrop(layers, index)
     }
 
@@ -249,7 +249,8 @@ object LayerOps {
                 if (blendsWithBackdrop(layers, i)) return true
                 continue
             }
-            if (l.blendMode != LayerBlendMode.NORMAL) return true
+            // (A pass-through clip base inside draws its group Normal.)
+            if (FolderComposite.drawnBlend(l) != LayerBlendMode.NORMAL) return true
         }
         return false
     }

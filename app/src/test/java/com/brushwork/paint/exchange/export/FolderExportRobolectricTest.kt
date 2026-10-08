@@ -236,13 +236,16 @@ class FolderExportRobolectricTest {
         doc.byName("Background").visible = true
         assertTrue(s.notes.contains("Clipping groups are exported as pictures"))
 
-        // Its only clip hidden: still a clip base, composited isolated with its own blend mode.
+        // Its only clip hidden: still a clip base, composited isolated: Normal while pass
+        // through is on (its stored blend is not drawn), else with its own blend mode.
         doc.byName("C").visible = false
         doc.byName("F").blendMode = LayerBlendMode.MULTIPLY
         val f = scene(doc).layers.named("F")
         assertTrue(f.isolated)
-        assertEquals(LayerBlendMode.MULTIPLY, f.blend)
+        assertEquals(LayerBlendMode.NORMAL, f.blend)
         assertEquals(listOf("A"), names(f.children))
+        doc.byName("F").folder = FolderSpec(passThrough = false)
+        assertEquals(LayerBlendMode.MULTIPLY, scene(doc).layers.named("F").blend)
     }
 
     @Test
@@ -263,20 +266,42 @@ class FolderExportRobolectricTest {
     }
 
     @Test
-    fun aPassThroughFolderBelow100IsAnIsolatedNormalGroupWithANote() {
+    fun aPassThroughFolderBelow100IsANonIsolatedNormalGroupExactInPdfApproximatedInSvg() {
         val doc = docOf { d ->
             val bg = gradient(d)
             val a = disc(d, "A", 0xFFE05030.toInt(), 30f, 30f, 20f).also { it.blendMode = LayerBlendMode.MULTIPLY }
             val p = folder(d, "P", passThrough = true, a).also { it.opacity = 0.5f; it.blendMode = LayerBlendMode.SCREEN }
             listOf(bg, a, p)
         }
-        val s = scene(doc)
-        val p = s.layers.named("P")
-        assertTrue(p.isolated)
-        assertEquals(LayerBlendMode.NORMAL, p.blend)
-        assertEquals(0.5f, p.opacity, 1e-6f)
-        assertTrue(s.notes.contains("Pass-through folders below 100 % are exported as isolated groups"))
+        for (format in VectorFormat.entries) {
+            val s = scene(doc, format)
+            val p = s.layers.named("P")
+            assertFalse("$format: its layers blend with what is below", p.isolated)
+            assertEquals(LayerBlendMode.NORMAL, p.blend)
+            assertEquals(0.5f, p.opacity, 1e-6f)
+            assertEquals(listOf("A"), names(p.children))
+            assertEquals("$format: the summary lists it for SVG only", format == VectorFormat.SVG, s.notes.contains(ExportSceneBuilder.PASS_THROUGH_SVG_NOTE))
+        }
         assertFalse(scene(nested()).notes.any { it.startsWith("Pass-through") })
+
+        // SVG: group opacity always isolates there.
+        val svg = groups(svgOf(scene(doc), ArrayList()))
+        assertEquals("opacity:0.5;isolation:isolate", svg.getValue("P").getAttribute("style"))
+
+        // PDF: a NON-isolated transparency group drawn Normal at 50 %, exactly o·C + (1 − o)·B:
+        // A multiplies with the background inside it.
+        val out = ByteArrayOutputStream()
+        runBlocking { PdfWriter(scene(doc, VectorFormat.PDF)) {}.write(out) }
+        val r = OwnPdfReader(ArrayPdfBytes(out.toByteArray()))
+        val pageRef = ((r.resolve(r.catalog()!!["Pages"]) as PdfObj.Dict)["Kids"] as PdfObj.Arr).items[0] as PdfObj.Ref
+        val res = (r.obj(pageRef.num) as PdfObj.Dict)["Resources"] as PdfObj.Dict
+        val forms = (res["XObject"] as PdfObj.Dict).map.values.map { r.resolve(it) as PdfObj.Stream }
+        val group = forms.single { f -> ((f.dict["Resources"] as PdfObj.Dict)["Properties"]) != null }
+        assertEquals(PdfObj.Bool(false), (group.dict["Group"] as PdfObj.Dict)["I"])
+        val gs = (res["ExtGState"] as PdfObj.Dict).map.values.map { r.resolve(it) as PdfObj.Dict }
+        assertTrue("P at 50 %, Normal", gs.any { (it["BM"] as? PdfObj.Name)?.name == "Normal" && (it["ca"] as PdfObj.Num).value in 0.49..0.51 })
+        val inner = (group.dict["Resources"] as PdfObj.Dict)["ExtGState"] as PdfObj.Dict
+        assertTrue("A multiplies inside", inner.map.values.any { (r.resolve(it) as PdfObj.Dict)["BM"].let { b -> (b as? PdfObj.Name)?.name == "Multiply" } })
     }
 
     // ------------------------------------------------------------------ the writers

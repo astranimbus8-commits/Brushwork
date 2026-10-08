@@ -118,8 +118,8 @@ class FolderMenuOpsRobolectricTest {
         inner.blendMode = LayerBlendMode.MULTIPLY
         assertTrue("an isolated folder counts by its own blend", LayerOps.mergeChangesPicture(p.layers, p.index(outer)))
 
-        // The folder itself clipped: composited isolated already; a pass-through clip base draws
-        // its group with its stored blend, which the merged layer loses.
+        // The folder itself clipped, or a clip base: composited isolated already, Normal (a
+        // pass-through folder shows "Pass through", never its stored blend), as it merges.
         val q = pic()
         val f = q.folder("F")
         val m = q.pixel("M", f).also { it.blendMode = LayerBlendMode.MULTIPLY }
@@ -128,7 +128,17 @@ class FolderMenuOpsRobolectricTest {
         q.set(bg, m, f, clip)
         assertFalse("a clip base stored Normal", LayerOps.mergeChangesPicture(q.layers, q.index(f)))
         f.blendMode = LayerBlendMode.DARKEN
-        assertTrue(LayerOps.mergeChangesPicture(q.layers, q.index(f)))
+        assertFalse("a stored blend is not drawn while pass through is on", LayerOps.mergeChangesPicture(q.layers, q.index(f)))
+        // Inside a pass-through folder, such a clip base blends Normal with what is below too.
+        val q2 = pic()
+        val outer2 = q2.folder("Outer")
+        val f2 = q2.folder("F", outer2).also { it.blendMode = LayerBlendMode.DARKEN }
+        val m2 = q2.pixel("M", f2).also { it.blendMode = LayerBlendMode.MULTIPLY }
+        val clip2 = q2.pixel("Clip", outer2).also { it.clipping = true }
+        q2.set(q2.pixel("BG"), m2, f2, clip2, outer2)
+        assertFalse(LayerOps.mergeChangesPicture(q2.layers, q2.index(outer2)))
+        f2.folder = f2.folder!!.copy(passThrough = false)
+        assertTrue("an isolated Darken clip base", LayerOps.mergeChangesPicture(q2.layers, q2.index(outer2)))
         q.set(bg, clip, m, f)
         f.clipping = true
         clip.clipping = false
