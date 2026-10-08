@@ -21,6 +21,7 @@ import com.brushwork.paint.brush.PathStrokeInput
 import com.brushwork.paint.brush.StrokeKind
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.brush.sanitized
+import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
@@ -35,6 +36,8 @@ import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointEditor
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
 import com.brushwork.paint.tools.select.applyPointHits
@@ -46,6 +49,7 @@ import com.brushwork.paint.tools.vector.spline.PathOverlay
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
+import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VPaint
@@ -190,7 +194,7 @@ data class CurveSettings(
  *   point was (after object and grid snapping, per axis); handle scaling uses the Scale step.
  *   With increments off every gesture is exactly v1.5.
  */
-class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(controller) {
+class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(controller), PointEditor {
     /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
     constructor(controller: EditorController, polyline: Boolean) : this(controller, if (polyline) CurveKind.POLYLINE else CurveKind.CURVE)
 
@@ -225,9 +229,29 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     var anchors by mutableStateOf<List<CurveAnchor>>(emptyList())
         private set
 
-    /** Index of the selected anchor or -1 (always -1 in PATH mode: see [selectedPoint]). */
-    var selected by mutableIntStateOf(-1)
-        private set
+    /**
+     * v1.7 (item 1, I12): the selected points, control points in PATH mode, else anchors
+     * (Compose state). Read it through [pointSelection], which matches it to [pointCount].
+     */
+    private var selectionState by mutableStateOf(PointSelection.none(0))
+
+    override val pointSelection: PointSelection
+        get() {
+            val s = selectionState
+            val n = pointCount
+            return if (s.size == n) s else s.resized(n)
+        }
+
+    /**
+     * Index of the selected anchor or -1 (always -1 in PATH mode: see [selectedPoint]); with
+     * several points selected, the one selected last ([PointSelection.primary]). Setting it
+     * selects that point alone.
+     */
+    var selected: Int
+        get() = if (isPath) -1 else pointSelection.primary
+        private set(v) {
+            if (!isPath) selectionState = pointSelection.only(v)
+        }
 
     /** PATH: the control points, order, endpoint and cyclic of the pending path (Compose state); null when none. */
     var spline by mutableStateOf<VSpline?>(null)
@@ -240,15 +264,55 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     private val splineBezier = SplineBezier.Incremental()
 
-    /** PATH: index of the selected control point or -1 (Compose state). */
-    var selectedPoint by mutableIntStateOf(-1)
-        private set
+    /**
+     * PATH: index of the selected control point or -1 (Compose state); with several selected,
+     * the one selected last. Setting it selects that point alone.
+     */
+    var selectedPoint: Int
+        get() = if (isPath) pointSelection.primary else -1
+        private set(v) {
+            if (isPath) selectionState = pointSelection.only(v)
+        }
 
     /** The selected point the strip and the Numbers sheet edit: the control point (Path) or the anchor. */
     val selectedIndex: Int get() = if (isPath) selectedPoint else selected
 
     /** Number of points the user edits: control points (Path) or anchors. */
-    val pointCount: Int get() = if (isPath) spline?.points?.size ?: 0 else anchors.size
+    override val pointCount: Int get() = if (isPath) spline?.points?.size ?: 0 else anchors.size
+
+    /** v1.7 (item 1): "Select several" (Compose state; off whenever the edited path changes or ends). */
+    private var severalState by mutableStateOf(false)
+
+    override var selectSeveral: Boolean
+        get() = severalState
+        set(v) {
+            val on = v && pointCount > 0
+            if (on == severalState) return
+            severalState = on
+            controller.invalidateOverlay()
+        }
+
+    override val minPoints: Int get() = MIN_POINTS
+
+    override fun pointAt(i: Int): Vec2 =
+        if (isPath) spline?.points?.getOrNull(i)?.let { Vec2(it.x, it.y) } ?: Vec2.ZERO else anchors.getOrNull(i)?.pos ?: Vec2.ZERO
+
+    /** The positions of every point (control points in PATH mode, else anchors). */
+    private fun pointPositions(): List<Vec2> =
+        if (isPath) spline?.points?.map { Vec2(it.x, it.y) } ?: emptyList() else anchors.map { it.pos }
+
+    override fun selectPoints(s: PointSelection) {
+        val next = s.resized(pointCount)
+        if (next == pointSelection) return
+        selectionState = next
+        controller.invalidateOverlay()
+    }
+
+    /** "Select all points" / "Deselect all points" (not an in-tool step). */
+    fun toggleSelectAll() {
+        val n = pointCount
+        selectPoints(if (n > 0 && pointSelection.count == n) PointSelection.none(n) else PointSelection.all(n))
+    }
 
     /** True when [undoStep] can go back. */
     override var canUndoStep by mutableStateOf(false)
@@ -258,10 +322,14 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     var redoCount by mutableIntStateOf(0)
         private set
 
-    override val hasPendingWork: Boolean get() = anchors.isNotEmpty()
+    /**
+     * A path is pending, or (v1.7, item 13) a pending path was just deleted with the trash cell:
+     * that is an in-tool step, so the app's undo still reaches [undoStep] and brings it back.
+     */
+    override val hasPendingWork: Boolean get() = anchors.isNotEmpty() || (trashedPending && canUndoStep)
 
     /** A reopened path nobody changed yet is not the user's work: undo closes it and goes on (Compose state). */
-    override val hasUserChanges: Boolean get() = anchors.isNotEmpty() && !(reopenedState && pristine)
+    override val hasUserChanges: Boolean get() = (anchors.isNotEmpty() && !(reopenedState && pristine)) || (trashedPending && canUndoStep)
 
     // The app's redo only reaches the tool while a path is pending (see EditorController.redo).
     override val canRedoStep: Boolean get() = redoCount > 0 && anchors.isNotEmpty()
@@ -294,6 +362,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val back: Handoff? = null,
         val toBezier: Boolean = false,
         val look: CurveSettings? = null,
+        /** v1.7 (item 1): the selected points then (in-tool undo restores them with the points). */
+        val selection: PointSelection = PointSelection.none(0),
     )
 
     private val history = ArrayDeque<EditState>()
@@ -326,8 +396,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** The current touch long-pressed an anchor and selected it (lifting keeps it selected). */
     private var longPressed = false
     private var gestureStart = EditState(emptyList(), null)
-    private var gestureSelected = -1
-    private var gestureSelectedPoint = -1
+    private var gestureSelection = PointSelection.none(0)
     private var gestureHistorySize = 0
     private var gestureRedo: List<EditState> = emptyList()
     /** The path object a tap (no pending path) would reopen. */
@@ -511,7 +580,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** The pending path as an in-tool undo state. */
     private fun currentState(): EditState {
         val look = if (ownSettings != null) settings else null
-        return if (isPath) EditState(emptyList(), spline, look = look) else EditState(anchors, null, look = look)
+        val sel = pointSelection
+        return if (isPath) EditState(emptyList(), spline, look = look, selection = sel) else EditState(anchors, null, look = look, selection = sel)
     }
 
     /** Keeps at most [MAX_HISTORY] states (never dropping the way back to the Path tool: it is the first one). */
@@ -583,12 +653,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         // A path that showed a look of its own (a redone quick start) shows it again; the tool's
         // own settings come back when the path is undone away.
         state.look?.let { if (ownSettings == null) showLook(it) }
-        if (isPath) {
-            setSplineState(state.spline)
-            if (selectedPoint !in 0 until pointCount) selectedPoint = -1
-        } else {
-            anchors = state.anchors
-            if (selected !in anchors.indices) selected = -1
+        val before = pointSelection
+        if (isPath) setSplineState(state.spline) else anchors = state.anchors
+        // v1.7 (item 1, I12): a step taken with several points selected (or undone while several
+        // are) brings its selection back with the points; otherwise, as in v1.6, the selected
+        // point stays selected while it still exists.
+        val n = pointCount
+        val then = state.selection
+        selectionState = if (then.count >= 2 || before.count >= 2) then.resized(n) else before.resized(n).let { s ->
+            if (s.primary in 0 until n) s.only(s.primary) else PointSelection.none(n)
         }
         if (anchors.isEmpty()) {
             targetLayer = null
@@ -755,6 +828,221 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         changed()
     }
 
+    // ------------------------------------------------------------------ several points (v1.7, item 1)
+
+    /**
+     * A group edit in progress ([beginGroupEdit]): the points it maps (captured at its start),
+     * the selection then, and what [endGroupEdit] needs to drop its step when nothing changed.
+     */
+    private class GroupEdit(
+        val anchors: List<CurveAnchor>,
+        val spline: VSpline?,
+        val selection: PointSelection,
+        val historySize: Int,
+        val redo: List<EditState>,
+        /** Every point is mapped: PATH maps its Bézier form directly and converts once at the end. */
+        val all: Boolean,
+    )
+
+    private var groupEdit: GroupEdit? = null
+
+    /** True while a group edit is in progress. */
+    internal val groupEditing: Boolean get() = groupEdit != null
+
+    override fun beginGroupEdit(label: String) {
+        if (groupEdit != null) endGroupEdit()
+        val sel = pointSelection
+        if (sel.isEmpty || anchors.isEmpty()) return
+        beginNumericEdit()
+        val size = history.size
+        val redoNow = redo.toList()
+        pushHistory()
+        groupEdit = GroupEdit(anchors, spline, sel, size, redoNow, sel.count == pointCount)
+    }
+
+    override fun setGroupTransform(m: Affine2) {
+        val g = groupEdit ?: return
+        if (!m.isFinite()) return
+        val s = g.spline
+        if (isPath && s != null) {
+            val next = s.copy(points = CurveGroupMath.mappedPoints(s.points, g.selection, m))
+            if (g.all) {
+                // NURBS and Bézier forms are affine-invariant: the cached Bézier form is mapped as
+                // it is, and converted once when the edit ends (the anchors are then exactly I9's).
+                spline = next
+                anchors = CurveGroupMath.mappedAnchors(g.anchors, null, m, VSpline.MAX_COORD)
+            } else {
+                setSplineState(next)
+            }
+        } else {
+            anchors = CurveGroupMath.mappedAnchors(g.anchors, g.selection, m, ShapeSettings.MAX_LENGTH)
+        }
+        changed()
+    }
+
+    override fun endGroupEdit() {
+        val g = groupEdit ?: return
+        groupEdit = null
+        if (isPath && g.all) setSplineState(spline)
+        val unchanged = if (isPath) spline == g.spline else anchors == g.anchors
+        if (unchanged) dropStepsSince(g.historySize, g.redo)
+        endNumericEdit()
+        changed()
+    }
+
+    /** Puts the points back as they were when the group edit began and drops its step (a cancelled gesture). */
+    private fun abortGroupEdit() {
+        val g = groupEdit ?: return
+        groupEdit = null
+        if (isPath) setSplineState(g.spline) else anchors = g.anchors
+        selectionState = g.selection
+        dropStepsSince(g.historySize, g.redo)
+        endNumericEdit()
+        changed()
+    }
+
+    /** Drops the in-tool steps pushed since the history had [size] steps, and brings back [redoThen]. */
+    private fun dropStepsSince(size: Int, redoThen: List<EditState>) {
+        while (history.size > size) history.removeLast()
+        redo.clear(); redo.addAll(redoThen)
+        redoCount = redo.size
+        historyKey = null
+        canUndoStep = history.isNotEmpty()
+    }
+
+    /**
+     * Deletes the selected points as one in-tool step. With every point selected the object goes
+     * ([deleteObject]); a deletion that would leave a single point is refused with a toast.
+     */
+    override fun deleteSelectedPoints(): Boolean {
+        val sel = pointSelection
+        if (sel.isEmpty || anchors.isEmpty() || groupEdit != null) return false
+        val left = pointCount - sel.count
+        if (left <= 0) return deleteObject()
+        if (left < minPoints) {
+            controller.toast(minPointsMessage())
+            return false
+        }
+        pushHistory()
+        if (isPath) {
+            val s = spline ?: return false
+            setSplineState(s.copy(points = s.points.filterIndexed { i, _ -> i !in sel }))
+        } else {
+            anchors = anchors.filterIndexed { i, _ -> i !in sel }
+        }
+        selectionState = PointSelection.none(pointCount)
+        changed()
+        return true
+    }
+
+    /** "A path needs at least 2 points" (the refusal of [deleteSelectedPoints]). */
+    private fun minPointsMessage(): String = "A ${objectNoun()} needs at least $MIN_POINTS points"
+
+    /** The object this tool edits, in the trash cell's words: "curve", "polyline" or "path". */
+    private fun objectNoun(): String = when (kind) {
+        CurveKind.CURVE -> "curve"
+        CurveKind.POLYLINE -> "polyline"
+        CurveKind.PATH -> "path"
+    }
+
+    /**
+     * v1.7 (item 13): the whole object goes. A reopened path object is removed from its layer as
+     * ONE controller step ("Delete path"...; undo brings it back) and the tool's session ends; a
+     * pending path that was never applied is cleared as an in-tool step.
+     */
+    private fun deleteObject(): Boolean {
+        if (anchors.isEmpty() || groupEdit != null) return false
+        val r = reopened
+        if (r != null) {
+            inCommit = true
+            try {
+                brushPreview.cancel()
+                r.session.inner = null
+                r.session.drawPreview = null
+                endReopen(cancelSession = false)
+                r.session.commit(emptyList(), deleteHistoryLabel())
+            } finally {
+                inCommit = false
+            }
+            resetPath()
+            brushPreview.end()
+            brushOverride = null
+            controller.invalidateOverlay()
+            return true
+        }
+        pushHistory()
+        if (isPath) setSplineState(null) else anchors = emptyList()
+        selectionState = PointSelection.none(0)
+        severalState = false
+        trashedPending = true
+        targetLayer = null
+        endLook()
+        changed()
+        controller.invalidateOverlay()
+        return true
+    }
+
+    private fun deleteHistoryLabel(): String = when (kind) {
+        CurveKind.CURVE -> HistoryLabels.DELETE_CURVE
+        CurveKind.POLYLINE -> HistoryLabels.DELETE_POLYLINE
+        CurveKind.PATH -> HistoryLabels.DELETE_PATH
+    }
+
+    /** A pending path was deleted with the trash cell (its in-tool undo brings it back; Compose state). */
+    private var trashedPending by mutableStateOf(false)
+
+    /**
+     * v1.7 (item 1): the thickness factors of the points [indices] become [values] (each held to
+     * 0..3 = 0–300 %): ONE in-tool step, and a scrub (a run of calls between [beginNumericEdit]
+     * and [endNumericEdit], or quickly after each other) shares it.
+     */
+    fun setWidths(indices: List<Int>, values: FloatArray) {
+        if (indices.size != values.size || indices.isEmpty()) return
+        val n = pointCount
+        val want = HashMap<Int, Float>(indices.size * 2)
+        for (k in indices.indices) {
+            val i = indices[k]
+            val v = values[k]
+            if (i !in 0 until n || !v.isFinite()) continue
+            want[i] = v.coerceIn(0f, if (isPath) VSpline.MAX_WIDTH else CurveWidths.MAX_FACTOR)
+        }
+        if (want.all { (i, w) -> widthOf(i) == w }) return
+        pushHistory(NumericKey("thickness", -1))
+        if (isPath) {
+            val s = spline ?: return
+            setSplineState(s.copy(points = s.points.mapIndexed { i, p -> want[i]?.let { if (it == p.width) p else p.copy(width = it) } ?: p }))
+        } else {
+            anchors = anchors.mapIndexed { i, a -> want[i]?.let { if (it == a.width) a else a.copy(width = it) } ?: a }
+        }
+        changed()
+    }
+
+    /**
+     * v1.7 (item 1), PATH: the weights of the control points [indices] become [values] (each held
+     * to [VSpline.MIN_WEIGHT]..[VSpline.MAX_WEIGHT]); one in-tool step, as [setWidths].
+     */
+    fun setWeights(indices: List<Int>, values: FloatArray) {
+        val s = spline ?: return
+        if (indices.size != values.size || indices.isEmpty()) return
+        val want = HashMap<Int, Float>(indices.size * 2)
+        for (k in indices.indices) {
+            val i = indices[k]
+            val v = values[k]
+            if (i !in s.points.indices || !v.isFinite()) continue
+            want[i] = v.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT)
+        }
+        if (want.all { (i, w) -> s.points[i].weight == w }) return
+        pushHistory(NumericKey("weight", -1))
+        setSplineState(s.copy(points = s.points.mapIndexed { i, p -> want[i]?.let { if (it == p.weight) p else p.copy(weight = it) } ?: p }))
+        changed()
+    }
+
+    /** The thickness factors of the selected points (in selection order). */
+    fun selectedWidths(): FloatArray = pointSelection.indices.map { widthOf(it) }.toFloatArray()
+
+    /** PATH: the weights of the selected control points (in selection order). */
+    fun selectedWeights(): FloatArray = pointSelection.indices.map { weightOf(it) }.toFloatArray()
+
     // ------------------------------------------------------------------ Path (v1.6, §3.2)
 
     /** A spline with the order, endpoint and cyclic a new path starts with (no points yet). */
@@ -893,6 +1181,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (anchors.isEmpty()) return
         val step = settings.nudgeStepPx
         val d = Vec2(dx * step, dy * step)
+        val group = pointSelection
+        if (group.count >= 2) {
+            // v1.7 (item 1): several selected points move together (a run of nudges is one step).
+            pushHistory(NumericKey("nudge", -2))
+            val m = Affine2.translate(d.x, d.y)
+            val s = spline
+            if (isPath && s != null) setSplineState(s.copy(points = CurveGroupMath.mappedPoints(s.points, group, m)))
+            else anchors = CurveGroupMath.mappedAnchors(anchors, group, m, ShapeSettings.MAX_LENGTH)
+            changed()
+            return
+        }
         if (isPath) {
             val s = spline ?: return
             val i = selectedPoint
@@ -955,10 +1254,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** A two-finger pinch is scaling the handles ([onTwoFingerStart]). */
     private var pinchingHandles = false
 
-    /** The points a change of the handles scales: the selected one, or all when "All points" is on or none is selected. */
+    /**
+     * The points a change of the handles scales: the selected ones (v1.7: all of a group), or all
+     * when "All points" is on or none is selected.
+     */
     private fun handleTargetsNow(): IntArray {
-        val sel = selected
-        return if (!handleAllPoints && sel in anchors.indices) intArrayOf(sel) else IntArray(anchors.size) { it }
+        val sel = pointSelection
+        return if (!handleAllPoints && !sel.isEmpty) sel.indices.toIntArray() else IntArray(anchors.size) { it }
     }
 
     /**
@@ -1065,7 +1367,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
         if (!canScaleHandles) return false
-        val i = selected
+        val i = if (pointSelection.isSingle) selected else -1
         val anchor = anchors.getOrNull(i) ?: return false
         val t = controller.viewTransform
         val reach = t.dp(IbisDims.HandlePinchDistance.value) * handleSize.coerceAtLeast(1f)
@@ -1121,8 +1423,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         moved = false
         longPressed = false
         gestureStart = currentState()
-        gestureSelected = selected
-        gestureSelectedPoint = selectedPoint
+        gestureSelection = pointSelection
         gestureHistorySize = history.size
         gestureRedo = redo.toList()
         reopenCandidate = null
@@ -1132,7 +1433,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
         if (isPath) { pathDown(pt); return }
         val tol = grabRadius()
-        val sel = selected
+        val sel = if (pointSelection.isSingle) selected else -1
         if (!polyline && sel in anchors.indices && !anchors[sel].sharp) {
             val (hIn, hOut) = handlesOf(sel)
             val a = anchors[sel].pos
@@ -1371,8 +1672,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         reopenCandidate = null
         if (drag != Drag.NONE && drag != Drag.IGNORE && drag != Drag.REOPEN) {
             if (isPath) setSplineState(gestureStart.spline) else anchors = gestureStart.anchors
-            selected = gestureSelected
-            selectedPoint = gestureSelectedPoint
+            selectionState = gestureSelection
             while (history.size > gestureHistorySize) history.removeLast()
             redo.clear(); redo.addAll(gestureRedo)
             redoCount = redo.size
@@ -1675,8 +1975,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         } else {
             anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
         }
-        selected = -1
-        selectedPoint = -1
+        selectionState = PointSelection.none(pointCount)
+        severalState = false
         clearHistory()
         session.drawPreview = { canvas -> drawSessionPreview(canvas) }
         changed()
@@ -2243,9 +2543,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** Forgets the path and its in-tool history (the brush preview is left to the caller). */
     private fun resetPath() {
         anchors = emptyList()
-        selected = -1
         spline = null
-        selectedPoint = -1
+        selectionState = PointSelection.none(0)
+        severalState = false
+        groupEdit = null
+        trashedPending = false
         handleBase = null
         handleScale = 1f
         pinchingHandles = false
@@ -2346,7 +2648,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
             return
         }
-        val sel = selected
+        val group = pointSelection
+        // (Tangent handles show for a single selected point only.)
+        val sel = if (group.isSingle) group.primary else -1
         if (!polyline && sel in list.indices && !list[sel].sharp) {
             val (hIn, hOut) = handlesOf(sel)
             val a = map(t, list[sel].pos).let { it[0] to it[1] }
@@ -2361,7 +2665,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (thicknessRing && sel in list.indices) drawThicknessRing(canvas, t, list[sel].pos, diameterAt(sel))
         for (i in list.indices) {
             val q = map(t, list[i].pos)
-            pointPainter.handle(canvas, t, q[0], q[1], scale, square = list[i].sharp || polyline, active = i == sel)
+            pointPainter.handle(canvas, t, q[0], q[1], scale, square = list[i].sharp || polyline, active = i in group)
         }
         // Smart guides of the dragged point (on top, labels away from the finger).
         snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
@@ -2371,11 +2675,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     private fun drawPathPoints(canvas: Canvas, t: ViewTransform, scale: Float) {
         val s = spline ?: return
         pointPainter.controlPolygon(canvas, t, s)
-        val sel = selectedPoint
+        val group = pointSelection
+        val sel = if (group.isSingle) group.primary else -1
         if (thicknessRing && sel in s.points.indices) drawThicknessRing(canvas, t, SplineEditing.pos(s.points[sel]), diameterAt(sel))
         for (i in s.points.indices) {
             val q = map(t, SplineEditing.pos(s.points[i]))
-            pointPainter.controlPoint(canvas, t, q[0], q[1], selected = i == sel, scale = scale)
+            pointPainter.controlPoint(canvas, t, q[0], q[1], selected = i in group, scale = scale)
         }
     }
 
@@ -2503,8 +2808,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         }
         targetLayer = h.targetLayer
         if (isPath) setSplineState(h.spline) else anchors = h.anchors
-        selected = -1
-        selectedPoint = -1
+        selectionState = PointSelection.none(pointCount)
+        severalState = false
         this.history.clear()
         this.history.addAll(history)
         redo.clear()
@@ -2540,5 +2845,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         const val HANDLE_STEP_UP = 1.1f
         const val HANDLE_STEP_DOWN = 0.9f
         private const val OPAQUE = 0xFF000000.toInt()
+        /** v1.7 (item 1): a curve, polyline or path keeps at least this many points ([deleteSelectedPoints]). */
+        const val MIN_POINTS = 2
     }
 }
