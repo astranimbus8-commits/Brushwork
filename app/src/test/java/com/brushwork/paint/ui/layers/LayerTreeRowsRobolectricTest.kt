@@ -205,9 +205,17 @@ class LayerTreeRowsRobolectricTest {
         // A folder's thumbnail opens and closes it: never under a 40 dp target.
         assertEquals(LayerWindowMetrics.FOLDER_THUMB_MIN, m.thumbAt(4, folder = true), 0f)
         assertEquals(56f, m.thumbAt(2, folder = true), 0f)
-        // A 360 dp phone's 188 dp list: deep rows at the smallest thumbnail.
+        // A 360 dp phone's 188 dp list: 4 dp per level (lead decision #7), so a folder row four
+        // deep keeps 44 dp for "100%" over "Pass" / "through": 188 − 16 − 4 − 40 − 40 − 4 − 40.
         val narrow = LayerWindowMetrics.of(350f, 520f)
-        assertEquals(LayerWindowMetrics.DEEP_THUMB, narrow.thumbAt(2), 0f)
+        assertEquals(188f, narrow.list, 0f)
+        assertEquals(listOf(0f, 4f, 8f, 16f, 16f), listOf(0, 1, 2, 4, 7).map { narrow.indentAt(it) })
+        assertEquals("188 − 140 − 8", 40f, narrow.thumbAt(2), 0f)
+        assertEquals("188 − 140 − 16 = 32", LayerWindowMetrics.DEEP_THUMB, narrow.thumbAt(4), 0f)
+        assertEquals(LayerWindowMetrics.FOLDER_THUMB_MIN, narrow.thumbAt(4, folder = true), 0f)
+        assertEquals(44f, narrow.list - narrow.indentAt(4) - 4f - narrow.thumbAt(4, folder = true) - 40f - 4f - 40f, 0f)
+        // ibisPaint's list keeps 12 dp per level.
+        assertEquals(listOf(0f, 12f, 24f, 48f, 48f), listOf(0, 1, 2, 4, 7).map { m.indentAt(it) })
         // A wide window keeps the full thumbnail at every depth.
         val wide = LayerWindowMetrics.of(600f, 700f)
         assertEquals(wide.thumb, wide.thumbAt(4), 0f)

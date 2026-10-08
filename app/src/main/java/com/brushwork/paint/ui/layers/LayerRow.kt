@@ -468,9 +468,12 @@ private const val INHERITED_ALPHA = 0.4f
  * "100%" over "Normal", at ibisPaint's size ([IbisDims.LayerRowValueText]) where they fit, one
  * size for both lines, smaller where the values are narrow (a 360 dp phone, a clipped row, the
  * side-by-side window), down to [IbisDims.LayerRowTextMin]; a blend mode too long even then
- * ellipsizes. Spoken (and found by tests) as ONE description that names the row
- * ([LayerLabels.rowState]: "Layer 2: 100%, Normal"), so the rows' values, effect names and lock
- * states never repeat a label of another row or of the blend dropdown (I10).
+ * ellipsizes. v1.7: a pass-through folder's "Pass through" that would ellipsize on one line
+ * shows as "Pass" over "through" at [SPLIT_BLEND_TEXT] instead, "100%" above them at the size
+ * the height they leave allows (see [rememberBlendSplit]); the row keeps its height. Spoken (and
+ * found by tests) as ONE description that names the row ([LayerLabels.rowState]: "Layer 2: 100%,
+ * Normal"), so the rows' values, effect names and lock states never repeat a label of another
+ * row or of the blend dropdown (I10).
  */
 @Composable
 private fun RowValues(row: LayerRowModel, modifier: Modifier) {
@@ -484,11 +487,46 @@ private fun RowValues(row: LayerRowModel, modifier: Modifier) {
         },
         contentAlignment = Alignment.Center,
     ) {
-        val style = rememberFittedStyle(lines, constraints, IbisDims.LayerRowValueText, IbisDims.LayerRowTextMin, VALUE_LINE_GAP)
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(lines[0], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(lines[1], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        val split = if (row.passThrough) rememberBlendSplit(row.blendLabel, constraints.maxWidth) else null
+        if (split == null) {
+            val style = rememberFittedStyle(lines, constraints, IbisDims.LayerRowValueText, IbisDims.LayerRowTextMin, VALUE_LINE_GAP)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(lines[0], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(lines[1], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        } else {
+            val room = Constraints(maxWidth = constraints.maxWidth, maxHeight = (constraints.maxHeight - split.heightPx).coerceAtLeast(0))
+            val style = rememberFittedStyle(lines.subList(0, 1), room, IbisDims.LayerRowValueText, SPLIT_BLEND_TEXT, VALUE_LINE_GAP)
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(lines[0], color = IbisColors.ListText, style = style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                for (word in split.words) {
+                    Text(word, color = IbisColors.ListText, style = split.style, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
         }
+    }
+}
+
+/** A blend label shown on two lines: its [words], each in [style], [heightPx] tall together. */
+private class BlendSplit(val words: List<String>, val style: TextStyle, val heightPx: Int)
+
+/**
+ * v1.7 (lead decision #7): [label] ("Pass through") split at its first space when one line of it
+ * at [IbisDims.LayerRowTextMin] is wider than [maxWidthPx] (the values' fitting would ellipsize
+ * it there: a deep folder row, a 360 dp phone); null when one line fits, or for one word.
+ */
+@Composable
+private fun rememberBlendSplit(label: String, maxWidthPx: Int): BlendSplit? {
+    val measurer = rememberTextMeasurer(cacheSize = 0)
+    val base = LocalTextStyle.current
+    return remember(measurer, base, label, maxWidthPx) {
+        val words = label.split(' ', limit = 2)
+        if (words.size < 2) return@remember null
+        val oneLine = measurer.measure(label, base.copy(fontSize = IbisDims.LayerRowTextMin), maxLines = 1, softWrap = false)
+        if (oneLine.size.width <= maxWidthPx) return@remember null
+        val style = base.copy(fontSize = SPLIT_BLEND_TEXT, lineHeight = (SPLIT_BLEND_TEXT.value + SPLIT_LINE_GAP.value).sp, lineHeightStyle = EXACT_LINES)
+        val height = words.sumOf { measurer.measure(it, style, maxLines = 1, softWrap = false).size.height }
+        BlendSplit(words, style, height)
     }
 }
 
@@ -644,6 +682,14 @@ private val NUMBER_FLOOR = 9.sp
 private val NUMBER_LINE = 22.dp
 private val VALUE_LINE_GAP = 2.sp
 private val SELECTION_LINE_GAP = 4.sp
+
+/**
+ * v1.7 (lead decision #7): "Pass" over "through" where "Pass through" would ellipsize: 11 sp, the
+ * two words 1 sp apart (one label), so with "100%" above at up to 14 sp the three lines fill the
+ * 40 dp eye line (12 + 12 + 16) without growing the row.
+ */
+private val SPLIT_BLEND_TEXT = 11.sp
+private val SPLIT_LINE_GAP = 1.sp
 
 /**
  * The text style at which [lines] fit [constraints] stacked, one line each: see [fitTextStyle].

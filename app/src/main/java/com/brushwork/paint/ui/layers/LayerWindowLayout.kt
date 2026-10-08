@@ -213,8 +213,11 @@ data class LayerWindowMetrics(
     fun thumbAt(depth: Int, folder: Boolean = false): Float {
         if (depth <= 0) return thumb
         val floor = if (folder) FOLDER_THUMB_MIN else DEEP_THUMB
-        return (list - ROW_ROOM_BESIDE_THUMB - LayerTreeRows.indent(depth)).coerceIn(floor, maxOf(thumb, floor))
+        return (list - ROW_ROOM_BESIDE_THUMB - indentAt(depth)).coerceIn(floor, maxOf(thumb, floor))
     }
+
+    /** v1.7: the indent of a row [depth] folders deep in this list ([LayerTreeRows.indent]). */
+    fun indentAt(depth: Int): Float = LayerTreeRows.indent(depth, list)
 }
 
 /**

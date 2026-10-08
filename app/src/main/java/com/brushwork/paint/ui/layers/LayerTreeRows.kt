@@ -51,7 +51,8 @@ internal class FolderMoves(val shown: Boolean, val canMoveIn: Boolean, val canMo
  *
  * - Rows are indented [INDENT_DP] per folder level; the indent stops growing at
  *   [MAX_INDENT_LEVELS] levels (48 dp) so names keep their room on a 392 dp phone, and deeper
- *   rows draw a thin guide line ([hasGuide]).
+ *   rows draw a thin guide line ([hasGuide]). A list narrower than ibisPaint's 220 dp indents
+ *   less per level (the two-argument [indent]).
  * - A closed folder hides the rows of everything inside it; while a folder is dragged its rows
  *   hide too (it moves as one unit with its whole block, [movedBlock]).
  * - Clipping is per level ([clipInfo]): a clipping unit clips to the nearest non-clipping sibling
@@ -68,8 +69,26 @@ internal object LayerTreeRows {
     /** The indent stops growing at this many levels (48 dp). */
     const val MAX_INDENT_LEVELS = 4
 
-    /** The indent (dp) of a row [depth] folders deep. */
+    /** The indent (dp) of a row [depth] folders deep in a list of ibisPaint's 220 dp or wider. */
     fun indent(depth: Int): Float = depth.coerceIn(0, MAX_INDENT_LEVELS) * INDENT_DP
+
+    /**
+     * The room (dp) a folder row [MAX_INDENT_LEVELS] deep keeps beside its indent: the gutter 4,
+     * the folder's 40 dp thumbnail (its open / close target), the 40 dp eye, the values' pad 4 and
+     * at least 44 dp for "100%" over "Pass" / "through" (11 sp "through" is 42 dp), the 40 dp ≡.
+     */
+    const val DEEP_FOLDER_ROW = 172f
+
+    /**
+     * The indent (dp) of a row [depth] folders deep in a list [list] dp wide: [INDENT_DP] per level
+     * where the list has room for it (ibisPaint's 220 dp list, the 392 dp phone), less in a
+     * narrower one so a folder row four deep keeps [DEEP_FOLDER_ROW] (4 dp per level in a 360 dp
+     * phone's 188 dp list, where 12 would leave its values 12 dp; lead decision #7).
+     */
+    fun indent(depth: Int, list: Float): Float {
+        val step = ((list - DEEP_FOLDER_ROW) / MAX_INDENT_LEVELS).coerceIn(0f, INDENT_DP)
+        return depth.coerceIn(0, MAX_INDENT_LEVELS) * step
+    }
 
     /** Rows deeper than the indent shows draw a thin guide line at its edge. */
     fun hasGuide(depth: Int): Boolean = depth > MAX_INDENT_LEVELS

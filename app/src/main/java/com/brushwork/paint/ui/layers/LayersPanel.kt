@@ -557,7 +557,7 @@ private fun LayerList(
                 dragging = dragging,
                 height = rowHeight,
                 thumbSize = if (row.depth == 0) thumbSize else metrics.thumbAt(row.depth, row.isFolder).dp,
-                indent = LayerTreeRows.indent(row.depth).dp,
+                indent = metrics.indentAt(row.depth).dp,
                 folderPreview = if (row.isFolder) folderThumbs.image(layer.id) else null,
                 onToggleOpen = { controller.fromPanel { controller.setFolderOpen(layer, !row.folderOpen) } },
                 onSelect = { controller.fromPanel { controller.selectLayer(layer) } },
