@@ -459,11 +459,11 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * v1.7: kerns of [gaps] in the current text (horizontal text and text on a path, which is
      * never set vertically; see [KerningEditor.setKerns]).
      */
-    override fun setKerns(gaps: IntRange, value: Int) = update {
+    override fun setKerns(gaps: Iterable<Int>, value: Int) = update {
         if (it.spec.vertical && !it.path.isActive) it else it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
-    override fun nudgeKerns(gaps: IntRange, delta: Int) = update {
+    override fun nudgeKerns(gaps: Iterable<Int>, delta: Int) = update {
         if (it.spec.vertical && !it.path.isActive) it else it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
     }
 

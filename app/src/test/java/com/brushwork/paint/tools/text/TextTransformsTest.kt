@@ -160,7 +160,9 @@ class TextTransformsTest {
             kerns = listOf(TextKern(4, 120), TextKern(50, -40)),
         ).sanitized()
         val out = requireNotNull(TextTransforms.mapped(TextCodec.decode(TextCodec.encode(frame))!!, similarity(2f, 0f)))
-        assertEquals(frame.thread, out.thread)
+        // Its slice stays; its look changed, so it holds the story's newest copy (rev + 1) and
+        // its look becomes the story's (TextFrameScaleRobolectricTest).
+        assertEquals(frame.thread.copy(rev = frame.thread.rev + 1), out.thread)
         assertEquals(frame.text, out.text)
         assertEquals(frame.kerns, out.kerns)
         assertEquals(32f, out.spec.sizePx, 1e-4f)
@@ -169,6 +171,16 @@ class TextTransformsTest {
         assertEquals(0f, out.rotationDeg, 0f)
         // Frames are never rotated (§7).
         assertNull(TextTransforms.mapped(TextCodec.encode(frame), similarity(1f, 15f)))
+
+        // A move keeps the look and the rev: only the centre changes.
+        val moved = requireNotNull(TextTransforms.mapped(frame, similarity(1f, 0f, tx = 30f, ty = -12f)))
+        assertEquals(frame.copy(cx = 150f, cy = 68f), moved)
+        // A scale of 1 but for float rounding is a move.
+        val nearOne = floatArrayOf(1.0000001f, 0f, 30f, 0f, 1.0000001f, -12f, 0f, 0f, 1f)
+        assertEquals(frame.spec, requireNotNull(TextTransforms.mapped(frame, nearOne)).spec)
+        assertEquals(frame.thread, requireNotNull(TextTransforms.mapped(frame, nearOne)).thread)
+        // A plain (unlinked) text has no thread to bump.
+        assertEquals(TextThreadSpec(), requireNotNull(TextTransforms.mapped(boxed, similarity(2f, 0f))).thread)
     }
 
     @Test

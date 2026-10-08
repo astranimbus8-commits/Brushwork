@@ -1,6 +1,7 @@
 package com.brushwork.paint.tools.text
 
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.tools.text.frames.FrameGeometry
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.sqrt
@@ -21,9 +22,13 @@ import kotlin.math.sqrt
  * A text wrapped around a picture keeps the picture's outline (the picture did not move; when it
  * moves too, as in a folder, its own edit re-flows the text, [TextWrapReflow]).
  *
- * A frame of a linked story keeps its slice of the story: it is scaled with the look it shows
- * (box and type alike), as the Transform preview shows it, while the story's other frames keep
- * theirs. Frames are never rotated (§7), so a map that turns one is refused.
+ * A frame of a linked story is scaled with the look it shows (box and type alike), as the
+ * Transform preview shows it, and its look becomes the whole story's: when the map changes the
+ * look ([FrameGeometry.storyLook]: a scale) the frame's `thread.rev` goes up by one, so it holds
+ * the story's newest copy, and `TextThreads` re-flows the story in that look into every frame
+ * (each keeping its own box) inside the same step, when the caller's edit is reported
+ * (`EditorController.updateTextLayer`). A move keeps the look and the `rev`: nothing re-flows.
+ * Frames are never rotated (§7), so a map that turns one is refused.
  */
 object TextTransforms {
 
@@ -74,7 +79,10 @@ object TextTransforms {
         if (abs(sx - sy) > TOLERANCE * sx) return null
         if (abs(a * b + d * e) > TOLERANCE * sx * sy) return null
         if (a * e - b * d <= 0.0) return null
-        return Similarity(a, b, c, d, e, f, (sx + sy) / 2.0, Math.toDegrees(atan2(d, a)))
+        // A scale that is 1 but for rounding (a move read back from a composed matrix) is 1:
+        // a moved text keeps its sizes exactly.
+        val scale = ((sx + sy) / 2.0).let { if (abs(it - 1.0) <= UNIT_SCALE_EPS) 1.0 else it }
+        return Similarity(a, b, c, d, e, f, scale, Math.toDegrees(atan2(d, a)))
     }
 
     private fun mapped(item: TextItem, m: Similarity): TextItem? {
@@ -95,6 +103,10 @@ object TextTransforms {
             TextOnPath.transformed(item.path, Vec2(cx - item.cx, cy - item.cy), k, turn, Vec2(item.cx, item.cy))
         } else item.path
         val wrap = if (item.wrap.gapPx == 0f) item.wrap else item.wrap.copy(gapPx = (item.wrap.gapPx * k).coerceAtMost(TextWrapSpec.MAX_GAP_PX))
+        // A frame whose look changes holds the story's newest copy: its look wins story-wide.
+        val thread = if (item.thread.isOn && FrameGeometry.storyLook(spec) != FrameGeometry.storyLook(item.spec)) {
+            item.thread.copy(rev = item.thread.rev + 1)
+        } else item.thread
         return item.copy(
             spec = spec,
             cx = cx,
@@ -102,6 +114,7 @@ object TextTransforms {
             rotationDeg = if (item.thread.isOn) item.rotationDeg else TextItem.normalizeDegrees(item.rotationDeg + turn),
             path = path,
             wrap = wrap,
+            thread = thread,
         )
     }
 
@@ -113,6 +126,9 @@ object TextTransforms {
 
     /** Smaller scales collapse the text. */
     private const val MIN_SCALE = 1e-6
+
+    /** How far from 1 a scale is still rounding of 1 (float matrices hold about 7 digits). */
+    private const val UNIT_SCALE_EPS = 1e-6
 
     /** Turns of a frame smaller than this (degrees) are rounding. */
     private const val FRAME_TURN_EPS = 0.01f

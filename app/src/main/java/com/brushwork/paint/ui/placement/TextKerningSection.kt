@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -40,6 +41,18 @@ internal const val KERNING_HINT = "Put the cursor between two letters, or select
 /** The description of the "Font kerning" switch. */
 internal const val FONT_KERNING_NOTE = "The font's own spacing of letter pairs such as AV and To"
 
+/**
+ * The Kerning row's caption, disabled, where the gaps named sit beside a line break (to move into
+ * `LabelsV17.KerningLabels`, frozen).
+ */
+internal const val KERNING_LINE_REFUSAL = "Kerning works between two letters of a line"
+
+/**
+ * The Kerning row's caption, disabled, where the gaps named are in a right-to-left or shaped
+ * script, whose letters keep the font's shaping (to move into `LabelsV17.KerningLabels`, frozen).
+ */
+internal const val KERNING_SCRIPT_REFUSAL = "Kerning works on left-to-right text with separate letters"
+
 /** Test tag of the Kerning row. */
 const val KERNING_ROW_TAG = "textKerningRow"
 
@@ -53,10 +66,11 @@ private val KerningFieldWidth = 40.dp + 72.dp + 40.dp
  * v1.7 manual kerning in the text editor dialog (item 17, area D), under "Letter spacing":
  *
  * - "Kerning": −/+ (10 at a time) and a field in 1/1000 em, for the gap the text field's cursor
- *   is at, or every gap inside its selection ([TextKerns.gaps]; [selection] is the text field's).
+ *   is at, or every gap inside its selection ([kerningRow]; [selection] is the text field's).
  *   The caption names the letters ("Between “A” and “V”"); a selection whose gaps differ shows
  *   "Mixed" (typing a number sets them all, −/+ move each by 10). Disabled, saying why, on
- *   vertical text and where the cursor names no gap; text along a shape is kerned along it.
+ *   vertical text, where no gap named can take a kern (beside a line break, in a right-to-left
+ *   or shaped script) and where the cursor names no gap; text along a shape is kerned along it.
  *   Only for hosts that edit kerns ([KerningEditor]).
  * - "Font kerning": the font's own pair kerning (on by default; off sets the letters by their
  *   plain advances, and the text exports as outlines).
@@ -68,13 +82,12 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
     val kerning = host as? KerningEditor
     if (kerning != null) {
         val text = item.text
-        val gaps = TextKerns.gaps(selection.start, selection.end, text.length)
-        // Text along a shape is kerned along it (TextOnPath, which ignores "vertical"); vertical
-        // text is not kerned.
-        val refusal = if (spec.vertical && !item.path.isActive) KerningLabels.VERTICAL_REFUSAL else null
-        val active = if (refusal == null) gaps else null
-        val common = active?.let { TextKerns.commonValue(item.kerns, it) }
-        val mixed = active != null && common == null
+        val onPath = item.path.isActive
+        val row = remember(text, item.kerns, selection, spec.vertical, onPath) {
+            kerningRow(text, item.kerns, selection.start, selection.end, spec.vertical, onPath)
+        }
+        val active = row.active
+        val mixed = active != null && row.common == null
         Row(Modifier.fillMaxWidth().testTag(KERNING_ROW_TAG), verticalAlignment = Alignment.CenterVertically) {
             Text(KerningLabels.KERNING, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.width(KerningLabelWidth))
             // Mixed: the field is empty (typing sets every gap) and −/+ move each gap by a step.
@@ -84,7 +97,7 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
             }
             NumberField(
                 label = KerningLabels.KERNING,
-                value = if (mixed) Double.NaN else (common ?: 0).toDouble(),
+                value = if (mixed) Double.NaN else (row.common ?: 0).toDouble(),
                 onValueChange = { v -> if (active != null) kerning.setKerns(active, v.roundToInt()) },
                 modifier = Modifier.width(if (mixed) 72.dp else KerningFieldWidth),
                 decimals = 0,
@@ -105,7 +118,7 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
             )
         }
         Text(
-            refusal ?: gaps?.let { gapCaption(text, it) } ?: KERNING_HINT,
+            row.caption,
             style = MaterialTheme.typography.bodySmall,
             color = BrushworkColors.OnChromeDim,
             modifier = Modifier.padding(start = KerningLabelWidth, bottom = 4.dp),
@@ -114,18 +127,49 @@ internal fun TextKerningSection(host: TextEditorHost, selection: TextRange) {
     ToggleRow(KerningLabels.FONT_KERNING, spec.fontKerning, { on -> host.updateSpec { it.copy(fontKerning = on) } }, description = FONT_KERNING_NOTE)
 }
 
-/** "Between “A” and “V”": the letters before the first gap of [gaps] and after its last. */
-internal fun gapCaption(text: String, gaps: IntRange): String {
-    // Whole surrogate pairs: a selection may start or end with an emoji.
-    val i = (gaps.first + 1).coerceIn(1, text.length)
-    val a = if (i < text.length && Character.isHighSurrogate(text[i - 1]) && Character.isLowSurrogate(text[i])) text.codePointAt(i - 1) else text.codePointBefore(i)
-    val j = (gaps.last + 1).coerceIn(0, text.length - 1)
-    val b = if (j > 0 && Character.isLowSurrogate(text[j]) && Character.isHighSurrogate(text[j - 1])) text.codePointAt(j - 1) else text.codePointAt(j)
+/**
+ * What the Kerning row shows for [text] (with [kerns]) and the text field's selection
+ * [selStart]..[selEnd]: [active] are the gaps it edits (null = disabled), [common] their one
+ * value (null = "Mixed"), [caption] the line under it.
+ */
+internal class KerningRowState(val active: List<Int>?, val common: Int?, val caption: String)
+
+/**
+ * The Kerning row's state (see [KerningRowState]). The gaps the selection names
+ * ([TextKerns.gaps]: between whole letters) are edited where a kern applies to them
+ * ([TextKerns.applying]), so no kern is stored where it changes nothing. Disabled, the caption
+ * saying why, on vertical text (not along a shape, which is kerned along it) and when no gap
+ * named can take a kern ([TextKerns.refusal]: beside a line break, in a right-to-left or shaped
+ * script); with no gap named, the caption says how to pick one.
+ */
+internal fun kerningRow(text: String, kerns: List<TextKern>, selStart: Int, selEnd: Int, vertical: Boolean, onPath: Boolean): KerningRowState {
+    val gaps = TextKerns.gaps(selStart, selEnd, text)
+    if (vertical && !onPath) return KerningRowState(null, 0, KerningLabels.VERTICAL_REFUSAL)
+    if (gaps == null) return KerningRowState(null, 0, KERNING_HINT)
+    val active = TextKerns.applying(text, gaps)
+    if (active.isEmpty()) {
+        val why = if (TextKerns.refusal(text, gaps) == TextKerns.Refusal.SCRIPT) KERNING_SCRIPT_REFUSAL else KERNING_LINE_REFUSAL
+        return KerningRowState(null, 0, why)
+    }
+    return KerningRowState(active, TextKerns.commonValue(kerns, active), gapCaption(text, gaps))
+}
+
+/**
+ * "Between “A” and “V”": the letter before the first gap of [gaps] and the one after its last,
+ * each a whole grapheme cluster (an emoji with its skin tone, a letter with its accent).
+ */
+internal fun gapCaption(text: String, gaps: Iterable<Int>): String {
+    if (text.isEmpty()) return KerningLabels.between("", "")
+    // The letter that ends at the first gap, and the one that starts after the last (clamped).
+    val i = (gaps.first() + 1).coerceIn(1, text.length)
+    val a = text.substring(TextKerns.clusterStart(text, i - 1), TextKerns.clusterEnd(text, TextKerns.clusterStart(text, i - 1)))
+    val j = TextKerns.clusterStart(text, (gaps.last() + 1).coerceIn(0, text.length - 1))
+    val b = text.substring(j, TextKerns.clusterEnd(text, j))
     return KerningLabels.between(shown(a), shown(b))
 }
 
-/** [cp] as the caption shows it (a line break as ↵). */
-private fun shown(cp: Int): String = when (cp) {
-    '\n'.code, '\r'.code -> "↵"
-    else -> String(Character.toChars(cp))
+/** [letter] as the caption shows it (a line break as ↵). */
+private fun shown(letter: String): String = when (letter) {
+    "\n", "\r", "\r\n" -> "↵"
+    else -> letter
 }

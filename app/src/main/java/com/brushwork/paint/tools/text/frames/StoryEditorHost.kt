@@ -246,11 +246,11 @@ class StoryEditorHost internal constructor(private val tool: TextFrameTool) : Te
     }
 
     /** v1.7: kerns of [gaps] in the story (shared by all its frames; written on OK). */
-    override fun setKerns(gaps: IntRange, value: Int) = update {
+    override fun setKerns(gaps: Iterable<Int>, value: Int) = update {
         it.copy(kerns = TextKerns.withValue(it.kerns, gaps, value, it.text.length))
     }
 
-    override fun nudgeKerns(gaps: IntRange, delta: Int) = update {
+    override fun nudgeKerns(gaps: Iterable<Int>, delta: Int) = update {
         it.copy(kerns = TextKerns.nudged(it.kerns, gaps, delta, it.text.length))
     }
 

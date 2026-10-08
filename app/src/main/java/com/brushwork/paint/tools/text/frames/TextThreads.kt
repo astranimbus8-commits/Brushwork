@@ -40,6 +40,10 @@ import kotlin.random.Random
  *   artwork it came from) are taken apart into separate stories in the import's own step (the
  *   import reports the layers it adds), before anything re-flows: a frame's own edit right
  *   after it never sees the story twice.
+ * - v1.7: a frame whose look differs from the story's newest copy (the Transform tool scaled
+ *   one frame, `TextTransforms`, which bumps its `rev`) makes the story re-flow in that look
+ *   into every frame, each keeping its own box, inside the Transform's step: the scaled frame's
+ *   look wins story-wide. A frame only moved keeps its look, so nothing re-flows.
  * - Its own writes carry [TextWrapReflow.REFLOW_LABEL] and are ignored; a re-flow whose frames
  *   come out as stored writes nothing. Delivery therefore converges within 2 of the controller's
  *   4 rounds.
@@ -222,16 +226,21 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
      * each unlocked frame starting where the one before ends (the first at 0), indices increasing,
      * and `overset` only on the last frame, exactly when the story goes on beyond it. Locked
      * frames keep whatever slice they have (they can't be changed). v1.7: and the same story
-     * kerns in every unlocked frame (a frame written by v1.6 has lost them).
+     * kerns in every unlocked frame (a frame written by v1.6 has lost them), and the story's look
+     * ([FrameGeometry.storyLook]) in every unlocked frame: a frame scaled by the Transform tool
+     * ([com.brushwork.paint.tools.text.TextTransforms], which bumps its `rev`) holds the newest
+     * copy, so its look becomes the whole story's in the Transform's own step.
      */
     internal fun isWhole(frames: List<Frame>): Boolean {
         val s = storyOf(frames) ?: return true
+        val look = FrameGeometry.storyLook(s.spec)
         for ((k, f) in frames.withIndex()) {
             val th = f.thread
             if (k > 0 && th.index <= frames[k - 1].thread.index) return false
             if (c.doc.effectiveLocked(f.layer)) continue
             if (th.story !== s.text && th.story != s.text) return false
             if (f.item.kerns !== s.kerns && f.item.kerns != s.kerns) return false
+            if (f.item.spec !== s.spec && FrameGeometry.storyLook(f.item.spec) != look) return false
             val expected = if (k == 0) 0 else frames[k - 1].thread.end
             if (th.start != expected) return false
             if (th.overset != (k == frames.lastIndex && th.end < s.text.length)) return false

@@ -35,8 +35,10 @@ import kotlin.math.abs
  * 392 dp phone. The row sits under "Letter spacing"; the text field's cursor or selection names
  * the gaps it edits, its caption names the letters, a selection of differing gaps shows "Mixed"
  * (−/+ move each gap, a typed number sets them all, also after leaving the text field),
- * vertical text disables it saying why, and text along a shape is kerned along it. Controls are
- * found by their labels and the row's tag.
+ * vertical text disables it saying why, and text along a shape is kerned along it. Where no kern
+ * can apply (beside a line break, a right-to-left paragraph) it is disabled saying why, and a
+ * selection sets only the gaps a kern applies to. Controls are found by their labels and the
+ * row's tag.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.placement.kerningrowsandbox"])
@@ -137,6 +139,27 @@ class TextKerningRowTest {
         val before = TextKerns.valueAt(tool.item!!.kerns, 1)
         SmokeUi.click(increase)
         assertEquals(before + KERNING_STEP, TextKerns.valueAt(tool.item!!.kerns, 1))
+
+        // Where no kern can apply the row is disabled, saying why: beside a line break...
+        tool.setPath(TextPathSpec())
+        tool.setText("AB\nCD مرحبا\nEF", -1)
+        SmokeUi.settle()
+        val kept = tool.item!!.kerns
+        assertTrue("the replaced text took its kerns along", kept.isEmpty())
+        select(2, 2)
+        assertTrue("line break: ${SmokeUi.shown().take(80)}", SmokeUi.has(KERNING_LINE_REFUSAL, exact = true))
+        assertFalse(SmokeUi.isEnabled(increase))
+        // ... and in a paragraph of a right-to-left (or shaped) script.
+        select(5, 5)
+        assertTrue("script: ${SmokeUi.shown().take(80)}", SmokeUi.has(KERNING_SCRIPT_REFUSAL, exact = true))
+        assertFalse(SmokeUi.isEnabled(increase))
+        assertEquals("nothing stored", kept, tool.item!!.kerns)
+        // A selection over all of it edits only the gaps a kern applies to (A|B and E|F).
+        select(0, tool.item!!.text.length)
+        assertTrue(SmokeUi.has(KerningLabels.between("A", "F"), exact = true))
+        SmokeUi.typeAndDone(kerning, "40")
+        val text = tool.item!!.text
+        assertEquals(listOf(TextKern(0, 40), TextKern(text.length - 2, 40)), tool.item!!.kerns)
     }
 
     /** Focuses the text field and selects [start, end) in it (a cursor when equal). */

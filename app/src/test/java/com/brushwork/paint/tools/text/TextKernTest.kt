@@ -2,8 +2,10 @@ package com.brushwork.paint.tools.text
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -82,15 +84,82 @@ class TextKernTest {
     @Test
     fun theCursorAndTheSelectionNameGaps() {
         // A cursor between two characters names the gap before it.
-        assertEquals(1..1, TextKerns.gaps(2, 2, 4))
+        assertEquals(listOf(1), TextKerns.gaps(2, 2, "WAVE"))
         // At either end of the text there is no gap.
-        assertNull(TextKerns.gaps(0, 0, 4))
-        assertNull(TextKerns.gaps(4, 4, 4))
+        assertNull(TextKerns.gaps(0, 0, "WAVE"))
+        assertNull(TextKerns.gaps(4, 4, "WAVE"))
         // A selection names every gap inside it, either direction.
-        assertEquals(0..2, TextKerns.gaps(0, 4, 4))
-        assertEquals(1..2, TextKerns.gaps(4, 1, 4))
+        assertEquals(listOf(0, 1, 2), TextKerns.gaps(0, 4, "WAVE"))
+        assertEquals(listOf(1, 2), TextKerns.gaps(4, 1, "WAVE"))
         // One selected character holds no gap.
-        assertNull(TextKerns.gaps(1, 2, 4))
+        assertNull(TextKerns.gaps(1, 2, "WAVE"))
+    }
+
+    @Test
+    fun gapsAreBetweenWholeLettersSoNoDeadKernIsStored() {
+        // "A👍🏽B": the thumbs up (2 chars) and its skin tone (2 chars) are ONE letter, 1 until 5.
+        val thumb = "A👍🏽B"
+        assertEquals(6, thumb.length)
+        // Selecting through it names the gaps around it only, never one inside it.
+        assertEquals(listOf(0, 4), TextKerns.gaps(0, 6, thumb))
+        // A selection ending inside the emoji grows to all of it: the gap before it.
+        assertEquals(listOf(0), TextKerns.gaps(0, 3, thumb))
+        // ... one starting inside it too: the gap after it.
+        assertEquals(listOf(4), TextKerns.gaps(2, 6, thumb))
+        // The emoji alone (or part of it) is one letter: no gap.
+        assertNull(TextKerns.gaps(1, 5, thumb))
+        assertNull(TextKerns.gaps(2, 4, thumb))
+        // A cursor between its base and its skin tone names nothing; beside it, its gaps.
+        assertNull(TextKerns.gaps(3, 3, thumb))
+        assertEquals(listOf(4), TextKerns.gaps(5, 5, thumb))
+        // Setting a value on the selected gaps stores kerns that all apply.
+        val set = TextKerns.withValue(emptyList(), TextKerns.gaps(0, 3, thumb)!!, 120, thumb.length)
+        assertEquals(k(0 to 120), set)
+        val all = TextKerns.withValue(emptyList(), TextKerns.gaps(0, 6, thumb)!!, 120, thumb.length)
+        assertEquals(k(0 to 120, 4 to 120), all)
+        assertTrue(all.all { TextKerns.applies(thumb, it.index) })
+        val px = TextKerns.advancesPx(thumb, all, 0, 100f)!!
+        assertEquals(2, px.count { it != 0f })
+
+        // "café!" with e + combining acute (U+0301): é is one letter, 3 until 5.
+        val cafe = "café!"
+        assertEquals(listOf(2, 4), TextKerns.gaps(2, 6, cafe))
+        // Selecting é alone, or ending between the e and its accent: no gap inside it.
+        assertNull(TextKerns.gaps(3, 5, cafe))
+        assertEquals(listOf(2), TextKerns.gaps(2, 4, cafe))
+        assertNull(TextKerns.gaps(4, 4, cafe))
+        assertEquals(k(2 to -60, 4 to -60), TextKerns.withValue(emptyList(), TextKerns.gaps(0, 6, cafe)!!.drop(2), -60, cafe.length))
+        assertFalse(TextKerns.applies(cafe, 3))
+        // One value or "Mixed" over the gaps named, ignoring characters inside letters.
+        assertEquals(-60, TextKerns.commonValue(k(2 to -60, 4 to -60), listOf(2, 4)))
+    }
+
+    @Test
+    fun aGapBesideALineBreakOrInAShapedScriptTakesNoKern() {
+        val text = "AB\nCD"
+        assertTrue(TextKerns.applies(text, 0))
+        assertFalse(TextKerns.applies(text, 1))
+        assertFalse(TextKerns.applies(text, 2))
+        assertEquals(TextKerns.Refusal.LINE_BREAK, TextKerns.refusal(text, listOf(1)))
+        assertEquals(TextKerns.Refusal.LINE_BREAK, TextKerns.refusal(text, TextKerns.gaps(1, 4, text)!!))
+        // A selection with one gap that applies is no refusal: only that gap is edited.
+        assertNull(TextKerns.refusal(text, TextKerns.gaps(0, 5, text)!!))
+        assertEquals(listOf(0, 3), TextKerns.applying(text, TextKerns.gaps(0, 5, text)!!))
+        // Right-to-left (Arabic, Hebrew) and shaped (Devanagari) paragraphs keep their shaping.
+        val arabic = "AV\nمرحبا"
+        assertEquals(TextKerns.Refusal.SCRIPT, TextKerns.refusal(arabic, TextKerns.gaps(4, 4, arabic)!!))
+        assertEquals(TextKerns.Refusal.SCRIPT, TextKerns.refusal(arabic, TextKerns.gaps(1, 8, arabic)!!))
+        assertEquals(listOf(0), TextKerns.applying(arabic, TextKerns.gaps(0, 8, arabic)!!))
+        val hebrew = "Shalom שלום"
+        assertEquals(TextKerns.Refusal.SCRIPT, TextKerns.refusal(hebrew, listOf(1)))
+        assertEquals(TextKerns.Refusal.SCRIPT, TextKerns.refusal("नमस्ते", listOf(0)))
+        // The same rule as the renderer's, gap by gap.
+        for (t in listOf(text, arabic, hebrew, "café!", "A👍🏽B")) {
+            for (g in t.indices) {
+                val drawn = TextKerns.advancesPx(t, listOf(TextKern(g, 100)), 0, 100f) != null
+                assertEquals("$t gap $g", drawn, TextKerns.applies(t, g))
+            }
+        }
     }
 
     @Test

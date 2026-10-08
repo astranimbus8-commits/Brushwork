@@ -18,14 +18,16 @@ interface KerningEditor {
     fun setText(text: String, cursor: Int)
 
     /**
-     * Gives every gap of [gaps] (see [TextKerns.gaps]) a kern of [value] (1/1000 em, clamped to
-     * [TextKern.MIN_VALUE]..[TextKern.MAX_VALUE]; 0 removes them). Ignored for vertical text.
+     * Gives every gap of [gaps] (gap g is after character g; the Kerning row passes the gaps of
+     * [TextKerns.gaps] a kern applies to, [TextKerns.applying]) a kern of [value] (1/1000 em,
+     * clamped to [TextKern.MIN_VALUE]..[TextKern.MAX_VALUE]; 0 removes them). Ignored for
+     * vertical text.
      */
-    fun setKerns(gaps: IntRange, value: Int)
+    fun setKerns(gaps: Iterable<Int>, value: Int)
 
     /**
      * Moves the kern of every gap of [gaps] by [delta] (1/1000 em; the −/+ buttons of a "Mixed"
      * selection: their differences stay, [TextKerns.nudged]). Ignored for vertical text.
      */
-    fun nudgeKerns(gaps: IntRange, delta: Int)
+    fun nudgeKerns(gaps: Iterable<Int>, delta: Int)
 }

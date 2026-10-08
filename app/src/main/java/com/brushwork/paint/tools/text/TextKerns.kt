@@ -8,8 +8,10 @@ package com.brushwork.paint.tools.text
  * story, so reflowing the story between frames never moves a kern). It belongs to the character
  * before the gap: an edit keeps it with that character, and deleting that character deletes it.
  *
- * The editor names gaps by its cursor and selection ([gaps]): a cursor at c (no selection) is the
- * gap between characters c − 1 and c; a selection [s, e) is every gap inside it, s … e − 2.
+ * The editor names gaps by its cursor and selection ([gaps]), between grapheme clusters only (a
+ * letter with its accents, an emoji with its skin tone is one letter): a cursor at c (no selection)
+ * is the gap between characters c − 1 and c; a selection [s, e) is every gap between two of the
+ * clusters it touches.
  */
 object TextKerns {
 
@@ -90,15 +92,80 @@ object TextKerns {
         if (by == 0 || kerns.isEmpty()) kerns else kerns.map { TextKern(it.index + by, it.value) }
 
     /**
-     * The gaps the editor's cursor or selection names in a text of [length] chars (see the file
-     * comment), or null when it names none: a cursor at either end of the text, or a selection
-     * of one character.
+     * The gaps the editor's cursor or selection names in [text] (see the file comment), in order,
+     * or null when it names none. Only gaps between grapheme clusters ([LetterRamp.clusterBounds],
+     * as [advancesPx] finds them), so no kern is ever stored where it can't apply inside a letter:
+     * - a cursor names the gap at it: none at either end of the text, or inside a cluster;
+     * - a selection first grows to whole clusters (one that starts or ends inside an emoji with
+     *   its skin tone, or a letter with its accent, takes all of it), then names every cluster
+     *   boundary inside it: none when it holds one cluster.
      */
-    fun gaps(selStart: Int, selEnd: Int, length: Int): IntRange? {
-        val s = minOf(selStart, selEnd).coerceIn(0, length)
-        val e = maxOf(selStart, selEnd).coerceIn(0, length)
-        if (s == e) return if (s in 1 until length) (s - 1)..(s - 1) else null
-        return if (e - s >= 2) s..(e - 2) else null
+    fun gaps(selStart: Int, selEnd: Int, text: String): List<Int>? {
+        val n = text.length
+        val s0 = minOf(selStart, selEnd).coerceIn(0, n)
+        val e0 = maxOf(selStart, selEnd).coerceIn(0, n)
+        val clusters = Clusters(text)
+        if (s0 == e0) return if (s0 in 1 until n && clusters.isBoundary(s0)) listOf(s0 - 1) else null
+        val e = clusters.ceil(e0)
+        val s = clusters.floor(s0)
+        var out: ArrayList<Int>? = null
+        for (b in s + 1 until e) {
+            if (clusters.isBoundary(b)) (out ?: ArrayList<Int>().also { out = it }) += b - 1
+        }
+        return out
+    }
+
+    /**
+     * Whether a kern of [gap] (after `text[gap]`) moves the letters after it, as [advancesPx]
+     * decides: no line break on either side, a grapheme cluster boundary, and a paragraph that
+     * can be drawn one cluster at a time ([LetterRamp.supports]).
+     */
+    fun applies(text: String, gap: Int): Boolean = GapRule(text).check(gap) == GapRule.APPLIES
+
+    /** The gaps of [gaps] a kern applies to in [text] ([applies]), in their order. */
+    fun applying(text: String, gaps: Iterable<Int>): List<Int> {
+        val rule = GapRule(text)
+        return gaps.filter { rule.check(it) == GapRule.APPLIES }
+    }
+
+    /** Why a kern can't apply to any gap the editor names (the Kerning row then says so). */
+    enum class Refusal {
+        /** The gaps are beside line breaks. */
+        LINE_BREAK,
+
+        /** A gap's paragraph is right-to-left or in a script whose letters are shaped together. */
+        SCRIPT,
+    }
+
+    /**
+     * Why no gap of [gaps] takes a kern in [text] ([applies]), or null when one does (or [gaps]
+     * is empty). A script that keeps its shaping is the reason when any gap meets one.
+     */
+    fun refusal(text: String, gaps: Iterable<Int>): Refusal? {
+        val rule = GapRule(text)
+        var any = false
+        var script = false
+        for (g in gaps) {
+            any = true
+            when (rule.check(g)) {
+                GapRule.APPLIES -> return null
+                GapRule.SCRIPT -> script = true
+            }
+        }
+        return when {
+            !any -> null
+            script -> Refusal.SCRIPT
+            else -> Refusal.LINE_BREAK
+        }
+    }
+
+    /** The start of the grapheme cluster [p] of [text] is in (as [gaps] finds clusters). */
+    internal fun clusterStart(text: String, p: Int): Int = Clusters(text).floor(p)
+
+    /** The end of the grapheme cluster that starts at [p] of [text] (its length at the end). */
+    internal fun clusterEnd(text: String, p: Int): Int {
+        if (p >= text.length) return text.length
+        return Clusters(text).ceil(p + 1)
     }
 
     /** Value (1/1000 em) of the kern of [gap], 0 when it has none. [kerns] sorted by index. */
@@ -108,35 +175,25 @@ object TextKerns {
     }
 
     /** The value every gap of [gaps] has (0 = no kern), or null when they differ ("Mixed"). */
-    fun commonValue(kerns: List<TextKern>, gaps: IntRange): Int? {
-        if (gaps.isEmpty()) return 0
-        val first = valueAt(kerns, gaps.first)
-        if (gaps.first == gaps.last) return first
-        // Kerns inside the range, in order: every gap must have one (of the same value), or none.
-        var i = lowerBound(kerns, gaps.first)
-        var count = 0
-        while (i < kerns.size && kerns[i].index <= gaps.last) {
-            if (kerns[i].value != first) return null
-            count++
-            i++
-        }
-        val span = gaps.last - gaps.first + 1
-        return if (count == 0 || count == span) first else null
+    fun commonValue(kerns: List<TextKern>, gaps: Iterable<Int>): Int? {
+        val it = gaps.iterator()
+        if (!it.hasNext()) return 0
+        val first = valueAt(kerns, it.next())
+        while (it.hasNext()) if (valueAt(kerns, it.next()) != first) return null
+        return first
     }
 
     /**
      * [kerns] with every gap of [gaps] set to [value] (0 removes them), sanitized against a text
      * of [length] chars.
      */
-    fun withValue(kerns: List<TextKern>, gaps: IntRange, value: Int, length: Int): List<TextKern> {
-        if (gaps.isEmpty()) return kerns
+    fun withValue(kerns: List<TextKern>, gaps: Iterable<Int>, value: Int, length: Int): List<TextKern> {
+        val set = gaps.toSortedSet()
+        if (set.isEmpty()) return kerns
         val v = value.coerceIn(TextKern.MIN_VALUE, TextKern.MAX_VALUE)
-        val out = ArrayList<TextKern>(kerns.size + if (v != 0) gaps.last - gaps.first + 1 else 0)
-        var i = 0
-        while (i < kerns.size && kerns[i].index < gaps.first) out += kerns[i++]
-        if (v != 0) for (g in gaps) out += TextKern(g, v)
-        while (i < kerns.size && kerns[i].index <= gaps.last) i++
-        while (i < kerns.size) out += kerns[i++]
+        val out = ArrayList<TextKern>(kerns.size + if (v != 0) set.size else 0)
+        for (k in kerns) if (k.index !in set) out += k
+        if (v != 0) for (g in set) out += TextKern(g, v)
         return TextKern.sanitized(out, length)
     }
 
@@ -145,17 +202,16 @@ object TextKerns {
      * at 0, so mixed values keep their differences), each clamped, sanitized against a text of
      * [length] chars.
      */
-    fun nudged(kerns: List<TextKern>, gaps: IntRange, delta: Int, length: Int): List<TextKern> {
-        if (gaps.isEmpty() || delta == 0) return kerns
-        val out = ArrayList<TextKern>(kerns.size + gaps.last - gaps.first + 1)
-        var i = 0
-        while (i < kerns.size && kerns[i].index < gaps.first) out += kerns[i++]
-        for (g in gaps) {
-            val old = if (i < kerns.size && kerns[i].index == g) kerns[i++].value else 0
-            val v = (old.toLong() + delta).coerceIn(TextKern.MIN_VALUE.toLong(), TextKern.MAX_VALUE.toLong()).toInt()
+    fun nudged(kerns: List<TextKern>, gaps: Iterable<Int>, delta: Int, length: Int): List<TextKern> {
+        if (delta == 0) return kerns
+        val set = gaps.toSortedSet()
+        if (set.isEmpty()) return kerns
+        val out = ArrayList<TextKern>(kerns.size + set.size)
+        for (k in kerns) if (k.index !in set) out += k
+        for (g in set) {
+            val v = (valueAt(kerns, g).toLong() + delta).coerceIn(TextKern.MIN_VALUE.toLong(), TextKern.MAX_VALUE.toLong()).toInt()
             if (v != 0) out += TextKern(g, v)
         }
-        while (i < kerns.size) out += kerns[i++]
         return TextKern.sanitized(out, length)
     }
 
@@ -178,29 +234,11 @@ object TextKerns {
         val n = source.length
         var out: FloatArray? = null
         val em = sizePx / 1000f
-        // The paragraph of the last kern looked at: [ps, pe), whether it is supported, its clusters.
-        var ps = 0
-        var pe = -1
-        var supported = false
-        var clusters: BooleanArray? = null
+        val rule = GapRule(source)
         for (k in kerns) {
             val i = k.index
             if (i < from) continue
-            if (i + 1 >= n) continue
-            val a = source[i]
-            val b = source[i + 1]
-            if (a == '\n' || a == '\r' || b == '\n' || b == '\r') continue
-            if (i >= pe || i < ps) {
-                ps = source.lastIndexOf('\n', i) + 1
-                pe = source.indexOf('\n', i).let { if (it < 0) n else it }
-                supported = supports(source, ps, pe)
-                clusters = null
-            }
-            if (!supported) continue
-            if (needsClusters(a, b)) {
-                val c = clusters ?: clusterStarts(source.substring(ps, pe)).also { clusters = it }
-                if (!c[i + 1 - ps]) continue
-            }
+            if (rule.check(i) != GapRule.APPLIES) continue
             val f = factors?.getOrNull(i) ?: 1f
             val px = k.value * em * f
             if (px == 0f || !px.isFinite()) continue
@@ -208,6 +246,85 @@ object TextKerns {
             o[i - from] = px
         }
         return out
+    }
+
+    /**
+     * The one rule of where a kern applies ([advancesPx], [applies], [refusal]) for gaps of
+     * [text]: asked gap by gap, in any order, it keeps the paragraph of the last one asked
+     * (whether it is supported) so a run of gaps looks at each paragraph once.
+     */
+    private class GapRule(private val text: String) {
+        private val clusters = Clusters(text)
+
+        // The paragraph of the last gap looked at: [ps, pe) and whether it is supported.
+        private var ps = 0
+        private var pe = -1
+        private var supported = false
+
+        /** [APPLIES], or why a kern of gap [i] (after `text[i]`) changes nothing. */
+        fun check(i: Int): Int {
+            if (i < 0 || i + 1 >= text.length) return OUTSIDE
+            val a = text[i]
+            val b = text[i + 1]
+            if (a == '\n' || a == '\r' || b == '\n' || b == '\r') return LINE_BREAK
+            if (i >= pe || i < ps) {
+                ps = text.lastIndexOf('\n', i) + 1
+                pe = text.indexOf('\n', i).let { if (it < 0) text.length else it }
+                supported = supports(text, ps, pe)
+            }
+            if (!supported) return SCRIPT
+            return if (clusters.isBoundary(i + 1)) APPLIES else INSIDE_CLUSTER
+        }
+
+        companion object {
+            const val APPLIES = 0
+            const val OUTSIDE = 1
+            const val LINE_BREAK = 2
+            const val SCRIPT = 3
+            const val INSIDE_CLUSTER = 4
+        }
+    }
+
+    /**
+     * The grapheme cluster boundaries of [text] as the renderer finds them: between two
+     * characters below U+0300 always (plain Latin text needs no break iterator), at a line
+     * break, and otherwise those of the paragraph ([LetterRamp.clusterBounds] of the text between
+     * line breaks), measured once while the positions asked stay inside it.
+     */
+    private class Clusters(private val text: String) {
+        // The paragraph measured last: [ps, pe) and its cluster starts.
+        private var ps = 0
+        private var pe = -1
+        private var starts: BooleanArray? = null
+
+        /** Whether a grapheme cluster starts at [p] (both ends of the text included). */
+        fun isBoundary(p: Int): Boolean {
+            if (p <= 0 || p >= text.length) return true
+            val a = text[p - 1]
+            val b = text[p]
+            if (a == '\n' || b == '\n' || !needsClusters(a, b)) return true
+            if (p <= ps || p >= pe) {
+                ps = text.lastIndexOf('\n', p - 1) + 1
+                pe = text.indexOf('\n', p).let { if (it < 0) text.length else it }
+                starts = null
+            }
+            val s = starts ?: clusterStarts(text.substring(ps, pe)).also { starts = it }
+            return s[p - ps]
+        }
+
+        /** The boundary at or before [p]. */
+        fun floor(p: Int): Int {
+            var q = p.coerceIn(0, text.length)
+            while (!isBoundary(q)) q--
+            return q
+        }
+
+        /** The boundary at or after [p]. */
+        fun ceil(p: Int): Int {
+            var q = p.coerceIn(0, text.length)
+            while (!isBoundary(q)) q++
+            return q
+        }
     }
 
     /** [LetterRamp.supports] of `source[start, end)` (plain ASCII without a copy). */
