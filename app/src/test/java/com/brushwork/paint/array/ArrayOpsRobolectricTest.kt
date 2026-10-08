@@ -147,8 +147,8 @@ class ArrayOpsRobolectricTest {
         val a = layer.array!!
         assertEquals(ArraySpec(), a.spec)
         assertEquals(20, a.pixels!!.left)
-        assertEquals(30, a.pixels!!.top)
-        assertEquals(40, a.pixels!!.bitmap.width)
+        assertEquals(30, a.pixels.top)
+        assertEquals(40, a.pixels.bitmap.width)
         // The source lost them; the copies sit side by side (relative X 100 %).
         assertEquals(0, src.bitmap.getPixel(30, 40))
         for (k in 0 until 3) assertEquals("copy $k", 0xFFDD2211.toInt(), layer.bitmap.getPixel(30 + 40 * k, 40))

@@ -521,6 +521,7 @@ object ArrayOps {
         if (c.doc.indexOf(layer) < 0) return
         if (c.activeLayer !== layer) c.selectLayer(layer)
         c.selectTool(ToolId.ARRAY)
+        (c.tools[ToolId.ARRAY] as? ArrayTool)?.sheetOpen = layer.array != null
         c.invalidateOverlay()
     }
 
