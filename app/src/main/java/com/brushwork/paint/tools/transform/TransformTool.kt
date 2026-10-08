@@ -1883,11 +1883,30 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     private fun gizmoLayout(e: MeshEdit, t: ViewTransform): PointGizmo.Layout? =
         if (e.selection.count < 2) null else gizmo.layout(e.selection.indices.map { e.mesh.vertex(it) }, t)
 
+    /** Where [part]'s handle (or the knob) of [l] is on screen; null for MOVE and NONE. */
+    private fun gizmoHandleScreen(l: PointGizmo.Layout, part: PointGizmo.Part): Vec2? {
+        val c = l.cornersScreen
+        if (c.size != 4) return null
+        return when (part) {
+            PointGizmo.Part.ROTATE -> l.rotateHandleScreen
+            PointGizmo.Part.SCALE_NW -> c[0]
+            PointGizmo.Part.SCALE_NE -> c[1]
+            PointGizmo.Part.SCALE_SE -> c[2]
+            PointGizmo.Part.SCALE_SW -> c[3]
+            PointGizmo.Part.SCALE_N -> (c[0] + c[1]) * 0.5f
+            PointGizmo.Part.SCALE_E -> (c[1] + c[2]) * 0.5f
+            PointGizmo.Part.SCALE_S -> (c[2] + c[3]) * 0.5f
+            PointGizmo.Part.SCALE_W -> (c[3] + c[0]) * 0.5f
+            PointGizmo.Part.MOVE, PointGizmo.Part.NONE -> null
+        }
+    }
+
     /**
      * A finger goes down in Free deform (§3.1, §3.16): on a gizmo handle it scales or turns the
-     * selection; else on a vertex (the nearest within 22 dp) it moves that vertex, or the group
-     * of two or more it belongs to (with "Select several" off, an unselected vertex is selected
-     * alone right away); else inside the gizmo it moves the selection; else on empty canvas.
+     * selection, unless a vertex is closer (as the Curve tool decides); else on a vertex (the
+     * nearest within 22 dp) it moves that vertex, or the group of two or more it belongs to (with
+     * "Select several" off, an unselected vertex is selected alone right away); else inside the
+     * gizmo it moves the selection; else on empty canvas.
      */
     private fun meshDown(p: ToolPoint) {
         endMeshGroup()
@@ -1895,11 +1914,14 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         if (!p.x.isFinite() || !p.y.isFinite()) return
         val t = controller.viewTransform
         val at = Vec2(p.x, p.y)
+        val screen = t.docToScreen(at)
         val layout = gizmoLayout(e, t)
-        val part = layout?.let { gizmo.hit(it, t.docToScreen(at), t) } ?: PointGizmo.Part.NONE
+        val part = layout?.let { gizmo.hit(it, screen, t) } ?: PointGizmo.Part.NONE
+        val handle = layout?.let { gizmoHandleScreen(it, part) }
         val k = e.mesh.nearest(at.x, at.y, t.screenToDocLength(t.dp(VERTEX_REACH_DP)))
+        val vertexWins = k >= 0 && (handle == null || t.docToScreen(e.mesh.vertex(k)).distanceTo(screen) < handle.distanceTo(screen))
         val g = when {
-            part != PointGizmo.Part.NONE && part != PointGizmo.Part.MOVE -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
+            handle != null && !vertexWins -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
             k >= 0 -> MeshGesture(MeshDrag.POINTS, e, at, k, PointGizmo.Part.NONE, null)
             part == PointGizmo.Part.MOVE -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
             else -> MeshGesture(if (selectSeveral) MeshDrag.MARQUEE else MeshDrag.ALL, e, at, -1, PointGizmo.Part.NONE, null)
