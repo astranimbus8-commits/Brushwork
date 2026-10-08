@@ -14,10 +14,12 @@ import android.graphics.Rect
 import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.edit
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
@@ -39,6 +41,10 @@ import com.brushwork.paint.tools.PinchTargeting
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointEditor
+import com.brushwork.paint.tools.points.PointGizmo
+import com.brushwork.paint.tools.points.PointGroupMath
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.vector.VectorLayerOps
@@ -85,10 +91,11 @@ import kotlin.math.min
  * over the step. While a gesture is stepped `increments.readout` says where it is ("+30 px, 0
  * px", "120 %", "45°"). Typed values are never stepped.
  */
-class TransformTool(controller: EditorController) : Tool(controller) {
+class TransformTool(controller: EditorController) : Tool(controller), PointEditor {
     override val id = ToolId.TRANSFORM
 
-    enum class Mode(val label: String) { FREE("Free"), DISTORT("Distort") }
+    /** v1.7 (§3.16): [MESH] is "Free deform", a mesh of up to 12 x 12 cells over the lifted pixels. */
+    enum class Mode(val label: String) { FREE("Free"), DISTORT("Distort"), MESH(TransformLabels17.FREE_DEFORM) }
 
     enum class Interpolation(val label: String, val description: String) {
         SMOOTH("Smooth", "Bilinear filtering"),
@@ -100,14 +107,31 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private var modeState by mutableStateOf(Mode.FREE)
 
     /**
-     * Free transform (scale/rotate handles) or distort (corners move freely, perspective). v1.7:
-     * a mode that what is lifted can't take ([modeRefusal]) is not switched to.
+     * Free transform (scale/rotate handles), distort (corners move freely, perspective) or, v1.7,
+     * Free deform (a mesh; §3.16). A mode that what is lifted can't take ([modeRefusal]) is not
+     * switched to, nor is any while a finger moves the box or the mesh.
+     *
+     * Free deform starts with the mesh over the box as it is shown (a Free or Distort transform
+     * pending is kept: the mesh shows it). Leaving it with a deformed mesh applies the deformation
+     * (ONE step "Free deform") and lifts the result again; an unchanged mesh is just let go.
      */
     var mode: Mode
         get() = modeState
         set(v) {
             if (v == modeState || modeRefusal(v) != null) return
+            if (gesture != null || pinch != null || meshGesture != null || meshPinch != null) return
+            val s = liveSession()
+            if (modeState == Mode.MESH && s != null && meshEdit != null) {
+                if (meshEdit?.changed == true) {
+                    applyPending(s, moveSelection = true)
+                    modeState = v
+                    if (session == null) beginLift()
+                    return
+                }
+                leaveMesh(s)
+            }
             modeState = v
+            if (v == Mode.MESH && s != null) enterMesh(s)
         }
 
     private var keepAspectState by mutableStateOf(true)
@@ -232,7 +256,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /**
      * Why [m] is not available for what is lifted, or null when it is (v1.7, design §3.11 and
      * §3.16): Distort on a text or shape kept as data asks to rasterize first, on an array to
-     * apply it, and a folder is refused.
+     * apply it, and a folder is refused. Free deform works on pixels only: a text, shape or
+     * vector layer asks to rasterize first, an array to apply it, and a folder is refused with
+     * "Free deform works on one layer".
      */
     fun modeRefusal(m: Mode): String? = when (m) {
         Mode.FREE -> null
@@ -240,6 +266,12 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             Lifted.TEXT, Lifted.SHAPE -> TransformLabels17.RASTERIZE_TO_DEFORM
             Lifted.ARRAY -> ArrayLabels.DEFORM_REFUSAL
             Lifted.FOLDER -> DISTORT_FOLDER_REFUSAL
+            else -> null
+        }
+        Mode.MESH -> when (lifted) {
+            Lifted.TEXT, Lifted.SHAPE, Lifted.VECTOR -> TransformLabels17.RASTERIZE_TO_FREE_DEFORM
+            Lifted.ARRAY -> ArrayLabels.DEFORM_REFUSAL
+            Lifted.FOLDER -> TransformLabels17.ONE_LAYER
             else -> null
         }
     }
@@ -298,12 +330,16 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
     }
 
-    /** A lift nobody moved yet is the tool's own preparation; a placement is always the user's. */
+    /**
+     * A lift nobody moved yet is the tool's own preparation; a placement is always the user's, and
+     * so is a deformed mesh or one with in-tool steps (v1.7).
+     */
     override val hasUserChanges: Boolean
         get() {
             val st = transformState ?: return false
             val s = session ?: return true
-            return s.placement || !st.sameGeometry(s.initial)
+            if (s.placement || meshUndoCount > 0 || meshEdit?.changed == true) return true
+            return !st.sameGeometry(s.initial)
         }
 
     /** Hint shown in the options strip when nothing is being transformed. */
@@ -357,6 +393,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         var drawSource: Bitmap = floating
         /** Maps [drawSource] pixels -> document. */
         val drawMatrix = Matrix()
+
+        /** While Free deform shows its mesh (v1.7): the padded lift and the points drawn. */
+        var mesh: MeshView? = null
 
         /** Fills vacated mask pixels with the background, weighted by an ALPHA_8 selection. */
         val maskFill = Paint().apply { color = maskBackground }
@@ -423,6 +462,14 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
 
         private fun drawFloating(canvas: Canvas) {
+            // v1.7: Free deform draws the lift through its mesh.
+            val view = s.mesh
+            val e = meshEdit
+            if (view != null && e != null) {
+                view.update(e.mesh, smoothMesh)
+                MeshRenderer.draw(canvas, view.padded, e.mesh, view.verts, MeshRenderer.PREVIEW_SUB, previewPaint)
+                return
+            }
             // The caller of startPlacement() may have recycled the picture: never crash drawing.
             if (!s.drawSource.isRecycled) canvas.drawBitmap(s.drawSource, s.drawMatrix, previewPaint)
         }
@@ -536,6 +583,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         cancelJobs()
         showReadout(null)
         if (hasPendingWork) commit()
+        // v1.7 (§3.1): "Select several" turns itself off when the tool closes.
+        selectSeveral = false
         // Nothing to snap until the next transform (what is known stays cached).
         controller.snapping.cancel()
     }
@@ -652,6 +701,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         clearGuides()
         numericEdit = null
         if (liveSession() == null && !beginLift()) return
+        // v1.7 (§3.16): Free deform edits its mesh instead of the box.
+        if (meshEdit != null) { meshDown(p); return }
         val st = transformState ?: return
         val t = controller.viewTransform
         val layout = HandleLayout.compute(st, { t.docToScreen(it) }, t.density, sides = sideHandlesShown)
@@ -662,6 +713,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onMove(p: ToolPoint) {
+        meshGesture?.let { meshMove(it, p); return }
         val g = gesture ?: return
         val s = session
         if (s == null) { gesture = null; return }
@@ -806,6 +858,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onUp(p: ToolPoint) {
+        meshGesture?.let { meshUp(it, p); return }
         val g = gesture ?: return
         // Lifted objects: a tap selects the object there instead (A2), outside the box or inside
         // it (tapping one object of the lifted drawing picks it alone, tapping the same spot
@@ -847,6 +900,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onCancel() {
+        if (meshGesture != null) { cancelMeshGesture(); controller.invalidateOverlay(); return }
         val g = gesture ?: return
         gesture = null
         clearGuides()
@@ -1127,6 +1181,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         pinch = null
         val pts = listOf(focus, a, b)
         if (pts.any { !it.x.isFinite() || !it.y.isFinite() }) return false
+        // v1.7 (§3.1, §3.16): in Free deform a pinch inside the gizmo scales and turns the
+        // selected vertices; anywhere else it zooms the view.
+        if (modeState == Mode.MESH) return meshPinchStart(focus)
         val t = controller.viewTransform
         if (liveSession() == null && !liftForPinch(a, b)) return false
         val p = Pinch(focus)
@@ -1146,6 +1203,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        meshPinch?.let { meshPinchMove(it, translation, scale, rotationDeg); return }
         val p = pinch ?: return
         if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || !rotationDeg.isFinite()) return
         p.translation = translation
@@ -1155,6 +1213,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun onTwoFingerEnd(cancelled: Boolean) {
+        meshPinch?.let { meshPinchEnd(it, cancelled); return }
         val p = pinch ?: return
         if (p.start == null) {
             // Still lifting: a finished pinch is applied when the content lands.
@@ -1451,9 +1510,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Quarter turn around the center (pixel-exact for unscaled content). */
     fun rotate90(clockwise: Boolean) = update { it.rotated90(clockwise) }
 
-    /** Back to where the transform started (the original position, or the initial placement). */
+    /**
+     * Back to where the transform started (the original position, or the initial placement). In
+     * Free deform: "Reset mesh" ([resetMesh]).
+     */
     fun reset() {
         val s = liveSession() ?: return
+        if (meshEdit != null) { resetMesh(); return }
         update { s.initial }
     }
 
@@ -1463,15 +1526,627 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /**
      * Applies a command to the pending transform (not while a finger is moving it). Anything but
      * a [numeric] size / scale / rotation edit starts the next numeric edit from a fresh
-     * reference point, and any command hides the guides.
+     * reference point, and any command hides the guides. Not in Free deform (v1.7): the mesh
+     * shows the content there, and the box stays as the mesh started from it.
      */
     private inline fun update(numeric: Boolean = false, f: (TransformState) -> TransformState) {
-        if (liveSession() == null || gesture != null || pinch != null) return
+        if (liveSession() == null || gesture != null || pinch != null || meshEdit != null) return
         val st = transformState ?: return
         if (!numeric) numericEdit = null
         clearGuides()
         val next = f(st)
         if (next != st) applyState(next)
+    }
+
+    // ------------------------------------------------------------------ Free deform (v1.7, design §3.16)
+
+    /**
+     * One state of the Free deform mesh, what in-tool undo restores: the [mesh], its point
+     * [selection], and [ref], the mesh as Free deform started (the box as Free or Distort showed
+     * it), resampled together with [mesh] when the cells change, so [changed] is exact and "Reset
+     * mesh" goes back to it.
+     */
+    private class MeshEdit(val mesh: MeshDeform, val ref: MeshDeform, val selection: PointSelection) {
+        /** The mesh deforms the content beyond what the box showed. */
+        val changed: Boolean get() = mesh != ref
+
+        fun with(mesh: MeshDeform = this.mesh, selection: PointSelection = this.selection) = MeshEdit(mesh, ref, selection)
+    }
+
+    /**
+     * The padded copy of a session's lift (see [MeshRenderer]) and what is drawn for its current
+     * mesh: the preview's points ([verts]), the surface without the margin for the overlay's grid
+     * lines ([grid]) and the document area it covers ([bounds]). Recomputed only when the mesh or
+     * "Smooth mesh" changes.
+     */
+    private class MeshView(val padded: Bitmap, val srcW: Int, val srcH: Int) {
+        private var key: MeshDeform? = null
+        private var keySmooth = false
+        var verts = FloatArray(0)
+            private set
+        var grid = FloatArray(0)
+            private set
+        var bounds = Rect()
+            private set
+
+        fun update(mesh: MeshDeform, smooth: Boolean) {
+            if (key === mesh && keySmooth == smooth) return
+            key = mesh
+            keySmooth = smooth
+            verts = MeshRenderer.vertices(mesh, srcW, srcH, MeshRenderer.PREVIEW_SUB, smooth)
+            grid = mesh.dense(MeshRenderer.PREVIEW_SUB, smooth)
+            bounds = MeshRenderer.bounds(verts)
+        }
+
+        fun release() {
+            if (!padded.isRecycled) padded.recycle()
+        }
+    }
+
+    /** The mesh while Free deform shows it (a session in [Mode.MESH]); null otherwise. Compose state. */
+    private var meshEdit by mutableStateOf<MeshEdit?>(null)
+
+    /** The in-tool steps of the mesh: the states before each step, oldest first; and those undone. */
+    private val meshUndo = ArrayList<MeshEdit>()
+    private val meshRedo = ArrayList<MeshEdit>()
+    private var meshUndoCount by mutableIntStateOf(0)
+    private var meshRedoCount by mutableIntStateOf(0)
+
+    private var meshSettings by mutableStateOf(MeshSettings.load(controller.settings))
+
+    /** True while Free deform shows its mesh (in [Mode.MESH] with something lifted). */
+    val isMeshShown: Boolean get() = meshEdit != null
+
+    /** True when the mesh deforms the content (applying it records a "Free deform" step). */
+    val isMeshChanged: Boolean get() = meshEdit?.changed == true
+
+    /** "Mesh columns": the mesh's (or, with none shown, what the next one starts with). */
+    val meshColumns: Int get() = meshEdit?.mesh?.cols ?: meshSettings.columns
+
+    /** "Mesh rows": the mesh's (or, with none shown, what the next one starts with). */
+    val meshRows: Int get() = meshEdit?.mesh?.rows ?: meshSettings.rows
+
+    /** "Smooth mesh": Catmull-Rom patches through the vertices; off: bilinear cells. A preference. */
+    var smoothMesh: Boolean
+        get() = meshSettings.smooth
+        set(v) {
+            if (v == meshSettings.smooth) return
+            meshSettings = meshSettings.copy(smooth = v)
+            MeshSettings.save(controller.settings, meshSettings)
+            meshEdit?.let { showMesh(it) }
+        }
+
+    /**
+     * Sets "Mesh columns" and "Mesh rows" (1..12 each; kept as the preference). A shown mesh is
+     * resampled: the content keeps its shape and the new vertices lie on it. Not an in-tool step;
+     * the point selection is cleared (its indices mean other vertices now).
+     */
+    fun setMeshCells(columns: Int, rows: Int) {
+        val c = columns.coerceIn(1, MeshDeform.MAX_CELLS)
+        val r = rows.coerceIn(1, MeshDeform.MAX_CELLS)
+        val prefs = meshSettings.copy(columns = c, rows = r)
+        if (prefs != meshSettings) {
+            meshSettings = prefs
+            MeshSettings.save(controller.settings, prefs)
+        }
+        val e = meshEdit ?: return
+        if (meshBusy || (e.mesh.cols == c && e.mesh.rows == r)) return
+        val smooth = smoothMesh
+        val mesh = e.mesh.resampled(c, r, smooth)
+        val ref = if (e.changed) e.ref.resampled(c, r, smooth) else mesh
+        showMesh(MeshEdit(mesh, ref, PointSelection.none(mesh.vertexCount)))
+    }
+
+    /** "Reset mesh": the mesh as Free deform started (one in-tool step). False when unchanged. */
+    fun resetMesh(): Boolean {
+        val e = meshEdit ?: return false
+        if (meshBusy || !e.changed) return false
+        pushMeshStep(e)
+        showMesh(e.with(mesh = e.ref))
+        return true
+    }
+
+    /** Every vertex is selected ("Select all points" then reads "Deselect all points"). */
+    val allPointsSelected: Boolean
+        get() = meshEdit?.let { it.mesh.vertexCount > 0 && it.selection.count == it.mesh.vertexCount } ?: false
+
+    /** "Select all points", or "Deselect all points" when every vertex is selected. */
+    fun selectAllPoints() {
+        val e = meshEdit ?: return
+        val n = e.mesh.vertexCount
+        selectPoints(if (allPointsSelected) PointSelection.none(n) else PointSelection.all(n))
+    }
+
+    /** A finger (or the pill) is moving vertices: the mesh can't be swapped under it. */
+    private val meshBusy: Boolean get() = meshGesture != null || meshPinch != null || meshGroup != null
+
+    /**
+     * Shows the mesh over [s]'s lift: [MeshSettings]' cells over the box as it is shown now (the
+     * pending transform, also a distorted one), nothing selected and no steps yet. Refused (back
+     * to Free) without memory for the padded copy.
+     */
+    private fun enterMesh(s: Session) {
+        if (meshEdit != null || s.objectLift != null || s.floating.isRecycled) return
+        val padded = MeshRenderer.padded(s.floating)
+        if (padded == null) {
+            controller.toast("Not enough memory to free deform this")
+            modeState = Mode.FREE
+            return
+        }
+        val w = s.initial.srcW
+        val h = s.initial.srcH
+        val values = FloatArray(9).also { s.matrix.getValues(it) }
+        val prefs = meshSettings
+        val mesh = MeshDeform.fromMap(0f, 0f, w.toFloat(), h.toFloat(), prefs.columns, prefs.rows, values)
+        s.mesh = MeshView(padded, w, h)
+        gesture = null
+        numericEdit = null
+        numbersOpen = false
+        clearGuides()
+        clearMeshSteps()
+        showMesh(MeshEdit(mesh, mesh, PointSelection.none(mesh.vertexCount)))
+    }
+
+    /** Leaves Free deform with the mesh unchanged: the box is shown again where the mesh showed it. */
+    private fun leaveMesh(s: Session) {
+        val old = lastBounds
+        dropMesh(s)
+        transformState?.let { st ->
+            val nb = docRect(st)
+            lastBounds = nb
+            invalidateBoth(old, nb)
+        }
+        controller.invalidateOverlay()
+    }
+
+    /** Lets the mesh of [s] go (its steps, the gesture on it, the padded copy). */
+    private fun dropMesh(s: Session) {
+        meshGesture = null
+        meshPinch = null
+        meshGroup = null
+        meshEdit = null
+        clearMeshSteps()
+        s.mesh?.release()
+        s.mesh = null
+    }
+
+    /** Shows [e]: the preview and the overlay are redrawn where the mesh was and is. */
+    private fun showMesh(e: MeshEdit) {
+        meshEdit = e
+        val view = session?.mesh ?: return
+        view.update(e.mesh, smoothMesh)
+        val nb = Rect(view.bounds)
+        val old = lastBounds
+        lastBounds = nb
+        invalidateBoth(old, nb)
+        controller.invalidateOverlay()
+    }
+
+    private fun pushMeshStep(before: MeshEdit) {
+        meshUndo += before
+        meshRedo.clear()
+        syncMeshCounts()
+    }
+
+    private fun clearMeshSteps() {
+        meshUndo.clear()
+        meshRedo.clear()
+        syncMeshCounts()
+    }
+
+    private fun syncMeshCounts() {
+        meshUndoCount = meshUndo.size
+        meshRedoCount = meshRedo.size
+    }
+
+    /**
+     * Applies the deformed mesh [e] of [s] as ONE step "Free deform" (a placement keeps its own
+     * label and its fold with the added layer): the lifted area is cleared and the lift drawn
+     * through the mesh at [MeshRenderer.COMMIT_SUB] parts per cell; the lifted selection moves
+     * the same way (same step).
+     */
+    private fun applyMesh(s: Session, view: MeshView, e: MeshEdit, moveSelection: Boolean): Boolean {
+        val label = if (s.placement) s.placementLabel else FREE_DEFORM_LABEL
+        val bmp = s.targetBitmap
+        val sub = MeshRenderer.COMMIT_SUB
+        val rec = controller.beginEdit(s.layer, s.target)
+        val verts: FloatArray
+        val area: Rect
+        try {
+            verts = MeshRenderer.vertices(e.mesh, view.srcW, view.srcH, sub, smoothMesh)
+            area = MeshRenderer.bounds(verts)
+            s.liftRect?.let { rec.touch(it) }
+            val touched = Rect(area)
+            if (touched.intersect(0, 0, bmp.width, bmp.height)) rec.touch(touched)
+            val canvas = Canvas(bmp)
+            clearSource(canvas, s)
+            MeshRenderer.draw(canvas, view.padded, e.mesh, verts, sub, drawPaint(s, forPreview = false))
+        } catch (oom: OutOfMemoryError) {
+            rec.abort()
+            cancelSession(s)
+            controller.toast("Not enough memory to apply the transform")
+            return false
+        }
+        val extras = if (moveSelection) {
+            moveSelectionBy(s, label, area) { canvas, crop, paint ->
+                val padded = MeshRenderer.padded(crop, Bitmap.Config.ALPHA_8) ?: throw OutOfMemoryError()
+                MeshRenderer.draw(canvas, padded, e.mesh, verts, sub, paint)
+                padded.recycle()
+            }
+        } else {
+            emptyList()
+        }
+        val foldWithAdd = s.placement && isFreshImportLayer(s.layer, s.placementLabel)
+        endSession(s)
+        val recorded = controller.commitEdit(rec, label, extras)
+        if (recorded && foldWithAdd) controller.mergeLastUndo(2, label)
+        return recorded
+    }
+
+    // ---------------------------------------------------- Free deform: points (tools/points, §3.1)
+
+    override val pointCount: Int get() = meshEdit?.mesh?.vertexCount ?: 0
+
+    override val pointSelection: PointSelection get() = meshEdit?.selection ?: PointSelection.none(0)
+
+    override fun selectPoints(s: PointSelection) {
+        val e = meshEdit ?: return
+        val next = s.resized(e.mesh.vertexCount)
+        if (next != e.selection) showMesh(e.with(selection = next))
+    }
+
+    private var selectSeveralState by mutableStateOf(false)
+
+    override var selectSeveral: Boolean
+        get() = selectSeveralState
+        set(v) { selectSeveralState = v }
+
+    override fun pointAt(i: Int): Vec2 {
+        val m = meshEdit?.mesh ?: return Vec2(Float.NaN, Float.NaN)
+        return if (i in 0 until m.vertexCount) m.vertex(i) else Vec2(Float.NaN, Float.NaN)
+    }
+
+    override fun beginGroupEdit(label: String) {
+        val e = meshEdit ?: return
+        if (meshBusy) return
+        beginMeshGroup(e.selection.indices, e)
+    }
+
+    override fun setGroupTransform(m: Affine2) = setMeshGroup(m)
+
+    override fun endGroupEdit() = endMeshGroup()
+
+    /** Mesh vertices are never deleted. */
+    override fun deleteSelectedPoints(): Boolean = false
+
+    override val minPoints: Int get() = Int.MAX_VALUE
+
+    /**
+     * A group edit of the mesh: the vertices [indices] of [start]'s mesh are mapped by each
+     * [setMeshGroup]; [undoTo] (the state before the whole gesture, selection included) becomes
+     * its in-tool step when it moved anything.
+     */
+    private class MeshGroup(val start: MeshEdit, val indices: List<Int>, val undoTo: MeshEdit)
+
+    private var meshGroup: MeshGroup? = null
+
+    private fun beginMeshGroup(indices: List<Int>, undoTo: MeshEdit) {
+        val e = meshEdit ?: return
+        meshGroup = MeshGroup(e, indices, undoTo)
+    }
+
+    private fun setMeshGroup(m: Affine2) {
+        val g = meshGroup ?: return
+        val e = meshEdit ?: return
+        if (!(m.a.isFinite() && m.b.isFinite() && m.c.isFinite() && m.d.isFinite() && m.tx.isFinite() && m.ty.isFinite())) return
+        showMesh(e.with(mesh = g.start.mesh.mapped(g.indices, m)))
+    }
+
+    private fun endMeshGroup() {
+        val g = meshGroup ?: return
+        meshGroup = null
+        val e = meshEdit ?: return
+        if (e.mesh != g.start.mesh) pushMeshStep(g.undoTo)
+    }
+
+    // ---------------------------------------------------- Free deform: fingers
+
+    private enum class MeshDrag {
+        /** On a vertex: it (or the group it belongs to) moves. */
+        POINTS,
+        /** On the gizmo: its handle scales or turns the selection, inside it moves the selection. */
+        GIZMO,
+        /** "Select several" on, empty canvas: a drag draws a marquee that adds the vertices inside. */
+        MARQUEE,
+        /** "Select several" off, empty canvas: a drag moves the whole mesh (the selection stays). */
+        ALL,
+    }
+
+    /** One finger on the mesh: [before] is the state its step undoes to. */
+    private class MeshGesture(
+        val kind: MeshDrag,
+        val before: MeshEdit,
+        val from: Vec2,
+        val vertex: Int,
+        val part: PointGizmo.Part,
+        val layout: PointGizmo.Layout?,
+    ) {
+        var to: Vec2 = from
+        var dragging = false
+    }
+
+    private var meshGesture: MeshGesture? = null
+
+    private val gizmo = PointGizmo()
+
+    /** The gizmo over the selected vertices (two or more), or null. */
+    private fun gizmoLayout(e: MeshEdit, t: ViewTransform): PointGizmo.Layout? =
+        if (e.selection.count < 2) null else gizmo.layout(e.selection.indices.map { e.mesh.vertex(it) }, t)
+
+    /**
+     * A finger goes down in Free deform (§3.1, §3.16): on a gizmo handle it scales or turns the
+     * selection; else on a vertex (the nearest within 22 dp) it moves that vertex, or the group
+     * of two or more it belongs to (with "Select several" off, an unselected vertex is selected
+     * alone right away); else inside the gizmo it moves the selection; else on empty canvas.
+     */
+    private fun meshDown(p: ToolPoint) {
+        endMeshGroup()
+        val e = meshEdit ?: return
+        if (!p.x.isFinite() || !p.y.isFinite()) return
+        val t = controller.viewTransform
+        val at = Vec2(p.x, p.y)
+        val layout = gizmoLayout(e, t)
+        val part = layout?.let { gizmo.hit(it, t.docToScreen(at), t) } ?: PointGizmo.Part.NONE
+        val k = e.mesh.nearest(at.x, at.y, t.screenToDocLength(t.dp(VERTEX_REACH_DP)))
+        val g = when {
+            part != PointGizmo.Part.NONE && part != PointGizmo.Part.MOVE -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
+            k >= 0 -> MeshGesture(MeshDrag.POINTS, e, at, k, PointGizmo.Part.NONE, null)
+            part == PointGizmo.Part.MOVE -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
+            else -> MeshGesture(if (selectSeveral) MeshDrag.MARQUEE else MeshDrag.ALL, e, at, -1, PointGizmo.Part.NONE, null)
+        }
+        if (g.kind == MeshDrag.POINTS && !selectSeveral && !(k in e.selection && e.selection.count >= 2)) {
+            showMesh(e.with(selection = e.selection.only(k)))
+        }
+        meshGesture = g
+        controller.invalidateOverlay()
+    }
+
+    private fun meshMove(g: MeshGesture, p: ToolPoint) {
+        if (!p.x.isFinite() || !p.y.isFinite()) return
+        val to = Vec2(p.x, p.y)
+        g.to = to
+        if (!g.dragging) {
+            val t = controller.viewTransform
+            if (t.docToScreen(to).distanceTo(t.docToScreen(g.from)) <= t.dp(SNAP_SLOP_DP)) return
+            g.dragging = true
+            startMeshDrag(g)
+        }
+        val inc = controller.increments
+        when (g.kind) {
+            MeshDrag.MARQUEE -> controller.invalidateOverlay()
+            MeshDrag.GIZMO -> {
+                val layout = g.layout ?: return
+                setMeshGroup(gizmo.dragMap(layout, g.part, g.from, to, keepProportions = true, steps = inc.state))
+            }
+            MeshDrag.POINTS, MeshDrag.ALL -> {
+                val d = inc.lengthDelta(to - g.from)
+                setMeshGroup(Affine2.translate(d.x, d.y))
+            }
+        }
+    }
+
+    /** The drag of [g] begins (past the slop): its group edit starts. */
+    private fun startMeshDrag(g: MeshGesture) {
+        val e = meshEdit ?: return
+        val indices = when (g.kind) {
+            MeshDrag.MARQUEE -> return
+            MeshDrag.ALL -> (0 until e.mesh.vertexCount).toList()
+            MeshDrag.GIZMO -> e.selection.indices
+            MeshDrag.POINTS -> {
+                // "Select several" on: the touched vertex joins the selection, which moves.
+                val sel = if (selectSeveral && g.vertex !in e.selection) e.selection.plus(g.vertex) else e.selection
+                if (sel != e.selection) showMesh(e.with(selection = sel))
+                sel.indices
+            }
+        }
+        beginMeshGroup(indices, g.before)
+    }
+
+    private fun meshUp(g: MeshGesture, p: ToolPoint) {
+        meshMove(g, p)
+        meshGesture = null
+        val e = meshEdit
+        when {
+            e == null -> {}
+            g.dragging && g.kind == MeshDrag.MARQUEE -> {
+                val inside = PointGroupMath.inside(e.mesh.vertices(), RectF(g.from.x, g.from.y, g.to.x, g.to.y))
+                if (inside.isNotEmpty()) showMesh(e.with(selection = e.selection.plusAll(inside)))
+            }
+            g.dragging -> endMeshGroup()
+            // A tap: with "Select several" on it toggles the vertex; on empty canvas it clears the selection.
+            g.kind == MeshDrag.POINTS && selectSeveral -> showMesh(e.with(selection = e.selection.toggled(g.vertex)))
+            g.kind == MeshDrag.MARQUEE || g.kind == MeshDrag.ALL ->
+                if (!e.selection.isEmpty) showMesh(e.with(selection = PointSelection.none(e.mesh.vertexCount)))
+        }
+        controller.invalidateOverlay()
+    }
+
+    /** The finger on the mesh is cancelled: the mesh and the selection go back to before it. */
+    private fun cancelMeshGesture() {
+        val g = meshGesture ?: return
+        meshGesture = null
+        meshGroup = null
+        if (meshEdit != null && meshEdit !== g.before) showMesh(g.before)
+    }
+
+    /** A pinch on the mesh: the selection scales and turns about [focus]. */
+    private class MeshPinch(val before: MeshEdit, val focus: Vec2)
+
+    private var meshPinch: MeshPinch? = null
+
+    /** A pinch starting on the gizmo (two or more vertices selected) moves the selection; else the view zooms. */
+    private fun meshPinchStart(focus: Vec2): Boolean {
+        if (liveSession() == null || meshGesture != null) return false
+        val e = meshEdit ?: return false
+        val t = controller.viewTransform
+        val layout = gizmoLayout(e, t) ?: return false
+        if (gizmo.hit(layout, t.docToScreen(focus), t) == PointGizmo.Part.NONE) return false
+        endMeshGroup()
+        meshPinch = MeshPinch(e, focus)
+        beginMeshGroup(e.selection.indices, e)
+        return true
+    }
+
+    private fun meshPinchMove(mp: MeshPinch, translation: Vec2, scale: Float, rotationDeg: Float) {
+        if (!translation.x.isFinite() || !translation.y.isFinite() || !scale.isFinite() || scale <= 0f || !rotationDeg.isFinite()) return
+        val inc = controller.increments
+        val k = inc.factor(scale)
+        val deg = inc.angle(rotationDeg)
+        setMeshGroup(Affine2.translate(translation.x, translation.y) * Affine2.rotateAbout(mp.focus, deg) * Affine2.scaleAbout(mp.focus, k, k))
+    }
+
+    private fun meshPinchEnd(mp: MeshPinch, cancelled: Boolean) {
+        meshPinch = null
+        if (cancelled) {
+            meshGroup = null
+            if (meshEdit != null && meshEdit !== mp.before) showMesh(mp.before)
+        } else {
+            endMeshGroup()
+        }
+        controller.invalidateOverlay()
+    }
+
+    // ---------------------------------------------------- Free deform: in-tool history (§3.1, §3.10)
+
+    /** Takes back the newest mesh step (the vertices AND the selection as they were before it). */
+    override fun undoStep(): Boolean {
+        if (meshEdit == null) return false
+        cancelMeshGesture()
+        meshPinch?.let { meshPinchEnd(it, cancelled = true) }
+        endMeshGroup()
+        val cur = meshEdit ?: return false
+        if (meshUndo.isEmpty()) return false
+        meshRedo += cur
+        val back = meshUndo.removeAt(meshUndo.lastIndex)
+        syncMeshCounts()
+        showMesh(back)
+        return true
+    }
+
+    override val canUndoStep: Boolean get() = meshUndoCount > 0
+
+    override fun redoStep(): Boolean {
+        val e = meshEdit ?: return false
+        if (meshBusy || meshRedo.isEmpty()) return false
+        meshUndo += e
+        val next = meshRedo.removeAt(meshRedo.lastIndex)
+        syncMeshCounts()
+        showMesh(next)
+        return true
+    }
+
+    override val canRedoStep: Boolean get() = meshRedoCount > 0
+
+    /** Where the mesh's in-tool history is ([historyMark]): the mesh shown, its step count and newest step. */
+    private data class MeshMark(val view: Any, val steps: Int, val newest: Any?)
+
+    override fun historyMark(): Any? {
+        val view = session?.mesh ?: return null
+        return MeshMark(view, meshUndo.size, meshUndo.lastOrNull())
+    }
+
+    /** Drops the mesh steps pushed after [mark] (not to redo): the mesh and selection are as they were then. */
+    override fun rollbackHistory(mark: Any?) {
+        val m = mark as? MeshMark ?: return
+        if (session?.mesh !== m.view || meshEdit == null) return
+        cancelMeshGesture()
+        meshPinch?.let { meshPinchEnd(it, cancelled = true) }
+        endMeshGroup()
+        if (meshUndo.size <= m.steps) return
+        val back = meshUndo[m.steps]
+        while (meshUndo.size > m.steps) meshUndo.removeAt(meshUndo.lastIndex)
+        syncMeshCounts()
+        showMesh(back)
+    }
+
+    // ---------------------------------------------------- Free deform: overlay
+
+    private val meshDocPath = Path()
+    private val meshScreenPath = Path()
+    private var meshPathKey: FloatArray? = null
+    private val haloFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0x80000000.toInt() }
+    private val marqueeFill = Paint().apply { style = Paint.Style.FILL; color = 0x224DA3FF }
+    private val marqueePts = FloatArray(8)
+
+    /** The mesh lines (along the surface, so "Smooth mesh" shows curves), the vertices, the gizmo and the marquee. */
+    private fun drawMeshOverlay(canvas: Canvas, t: ViewTransform, s: Session, e: MeshEdit) {
+        val view = s.mesh ?: return
+        view.update(e.mesh, smoothMesh)
+        val grid = view.grid
+        if (meshPathKey !== grid) {
+            meshPathKey = grid
+            buildMeshPath(grid, e.mesh.cols, e.mesh.rows, MeshRenderer.PREVIEW_SUB)
+        }
+        meshDocPath.transform(t.matrix, meshScreenPath)
+        shadowStroke.strokeWidth = t.dp(2.5f)
+        accentStroke.strokeWidth = t.dp(1f)
+        canvas.drawPath(meshScreenPath, shadowStroke)
+        canvas.drawPath(meshScreenPath, accentStroke)
+
+        val r = t.dp(VERTEX_DOT_DP / 2f)
+        whiteStroke.strokeWidth = t.dp(1.5f)
+        for (k in 0 until e.mesh.vertexCount) {
+            val p = t.docToScreen(e.mesh.vertex(k))
+            canvas.drawCircle(p.x, p.y, r + t.dp(1.5f), haloFill)
+            if (k in e.selection) {
+                canvas.drawCircle(p.x, p.y, r, accentFill)
+                canvas.drawCircle(p.x, p.y, r, whiteStroke)
+            } else {
+                canvas.drawCircle(p.x, p.y, r - t.dp(0.75f), whiteStroke)
+            }
+        }
+
+        val g = meshGesture
+        gizmoLayout(e, t)?.let { gizmo.draw(canvas, it, t, if (g?.kind == MeshDrag.GIZMO) g.part else PointGizmo.Part.NONE) }
+        if (g != null && g.kind == MeshDrag.MARQUEE && g.dragging) {
+            marqueePts[0] = g.from.x; marqueePts[1] = g.from.y
+            marqueePts[2] = g.to.x; marqueePts[3] = g.from.y
+            marqueePts[4] = g.to.x; marqueePts[5] = g.to.y
+            marqueePts[6] = g.from.x; marqueePts[7] = g.to.y
+            t.matrix.mapPoints(marqueePts)
+            path.rewind()
+            path.moveTo(marqueePts[0], marqueePts[1])
+            for (i in 1 until 4) path.lineTo(marqueePts[2 * i], marqueePts[2 * i + 1])
+            path.close()
+            if (outlineDashDensity != t.density) {
+                outlineDashDensity = t.density
+                outlineLight.pathEffect = DashPathEffect(floatArrayOf(t.dp(4f), t.dp(4f)), 0f)
+            }
+            outlineDark.strokeWidth = t.dp(1f)
+            outlineLight.strokeWidth = t.dp(1f)
+            canvas.drawPath(path, marqueeFill)
+            canvas.drawPath(path, outlineDark)
+            canvas.drawPath(path, outlineLight)
+        }
+    }
+
+    /** [meshDocPath] = the rows and columns of the mesh through [grid] ([sub] points per cell). */
+    private fun buildMeshPath(grid: FloatArray, cols: Int, rows: Int, sub: Int) {
+        meshDocPath.rewind()
+        val w = cols * sub + 1
+        val h = rows * sub + 1
+        fun x(i: Int, j: Int) = grid[2 * (j * w + i)]
+        fun y(i: Int, j: Int) = grid[2 * (j * w + i) + 1]
+        for (row in 0..rows) {
+            val j = row * sub
+            meshDocPath.moveTo(x(0, j), y(0, j))
+            for (i in 1 until w) meshDocPath.lineTo(x(i, j), y(i, j))
+        }
+        for (col in 0..cols) {
+            val i = col * sub
+            meshDocPath.moveTo(x(i, 0), y(i, 0))
+            for (j in 1 until h) meshDocPath.lineTo(x(i, j), y(i, j))
+        }
     }
 
     // ------------------------------------------------------------------ lifting
@@ -1644,6 +2319,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         lastBounds = s.liftRect?.let { Rect(it) }
         numericEdit = null
         applyState(state)
+        // v1.7 (§3.16): Free deform shows its mesh over what was just lifted.
+        if (modeState == Mode.MESH) enterMesh(s)
         // Find what it can snap to before the first drag (cached per layer content).
         if (snapToObjects) requestSnapBounds(s)
         // A pinch that began while this content was being lifted in the background takes over.
@@ -1672,6 +2349,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             cancelSession(s)
             return false
         }
+        // v1.7 (§3.16): a deformed mesh is applied as ONE step "Free deform". An unchanged one
+        // shows the box as it is: the transform below applies it exactly.
+        val view = s.mesh
+        val deformed = meshEdit?.takeIf { it.changed }
+        if (view != null && deformed != null) return applyMesh(s, view, deformed, moveSelection)
         // Unchanged: nothing to record.
         if (!s.placement && st.sameGeometry(s.initial)) { endSession(s); return false }
         val objects = s.objectLift
@@ -1731,6 +2413,9 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun endSession(s: Session) {
         gesture = null
         pinch = null
+        // v1.7: the mesh, its steps and "Select several" end with the session.
+        dropMesh(s)
+        selectSeveral = false
         session = null
         numericEdit = null
         clearGuides()
@@ -1909,7 +2594,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     /** Moves the selection that was lifted together with the pixels; returns its undo action. */
-    private fun moveSelection(s: Session, st: TransformState, label: String): List<UndoAction> {
+    private fun moveSelection(s: Session, st: TransformState, label: String): List<UndoAction> =
+        moveSelectionBy(s, label, docRect(st)) { canvas, crop, paint -> canvas.drawBitmap(crop, s.matrix, paint) }
+
+    /**
+     * Moves the lifted selection by drawing its mask's lifted part with [draw] (the lift's own
+     * map: the transform, or v1.7's Free deform mesh); [region] (document px) is where it can
+     * land. Returns its undo action.
+     */
+    private inline fun moveSelectionBy(s: Session, label: String, region: Rect, draw: (Canvas, Bitmap, Paint) -> Unit): List<UndoAction> {
         val sel = s.selection ?: return emptyList()
         val r = s.liftRect ?: return emptyList()
         val before = controller.selection
@@ -1918,11 +2611,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
             val out = Bitmap.createBitmap(sel.width, sel.height, Bitmap.Config.ALPHA_8)
             val smooth = interpolation == Interpolation.SMOOTH
             val p = Paint().apply { isFilterBitmap = smooth; isAntiAlias = smooth }
-            Canvas(out).drawBitmap(crop, s.matrix, p)
+            draw(Canvas(out), crop, p)
             if (crop !== sel.mask) crop.recycle()
             // Selected pixels can only be inside the transformed area: find the tight bounds
             // there instead of rescanning the whole document.
-            val bounds = ContentBounds.of(out, region = docRect(st)) ?: Rect()
+            val bounds = ContentBounds.of(out, region = region) ?: Rect()
             Selection.wrap(out, bounds)
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory to move the selection")
@@ -2026,6 +2719,10 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        // v1.7 (§3.16): Free deform shows its mesh, vertices and gizmo instead of the box.
+        val ms = session
+        val me = meshEdit
+        if (ms != null && me != null) { drawMeshOverlay(canvas, t, ms, me); return }
         val st = transformState ?: return
         // Smart guides under the box and its handles.
         if (guides.isNotEmpty()) SnapGuideRenderer.draw(canvas, t, guides, controller.doc.width.toFloat(), controller.doc.height.toFloat(), st.bounds())
@@ -2108,6 +2805,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
         /** Undo label of a transform of lifted vector objects. */
         const val TRANSFORM_OBJECTS_LABEL = "Transform objects"
+
+        /** Undo label of an applied Free deform (v1.7, §3.16; `HistoryLabels.FREE_DEFORM`). */
+        const val FREE_DEFORM_LABEL = TransformLabels17.FREE_DEFORM
+
+        /** How far (screen dp) a finger reaches a mesh vertex: half its 44 dp touch target. */
+        private const val VERTEX_REACH_DP = PointGizmo.TOUCH_DP / 2f
+
+        /** Drawn size (screen dp) of a mesh vertex. */
+        private const val VERTEX_DOT_DP = 8f
         /**
          * v1.7 (design §3.11): an arrayed layer whose array can't be mapped (its spec and source)
          * is not transformed: lifting its pixels would bake the copies.

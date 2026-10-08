@@ -6,7 +6,7 @@ import kotlin.math.abs
 import kotlin.math.floor
 
 /**
- * v1.7 (item 11, design §3.11 b): the mesh of the Transform tool's "Free deform" mode. The lifted
+ * v1.7 (item 16, design §3.16): the mesh of the Transform tool's "Free deform" mode. The lifted
  * rectangle ([left], [top], [width] x [height] document px) is divided into [cols] x [rows] equal
  * cells; its (cols + 1) x (rows + 1) vertices (row by row, top first, document px) are where the
  * cells' corners go. Pure Kotlin: no android.graphics, so it is unit-tested on the JVM.
@@ -136,15 +136,21 @@ internal class MeshDeform private constructor(
      * A finer mesh for drawing ([sub] parts per cell along each axis): (cols x sub + 1) x
      * (rows x sub + 1) points, row by row, x then y, as `Canvas.drawBitmapMesh` takes them with
      * `meshWidth = cols x sub`, `meshHeight = rows x sub`.
+     *
+     * [padS] and [padT] widen the sampled range to -pad..1 + pad (the surface continues past the
+     * rectangle): the points for a bitmap with a margin around the source, whose own edges then
+     * land just outside the rectangle's (see [MeshRenderer]).
      */
-    fun dense(sub: Int, smooth: Boolean): FloatArray {
+    fun dense(sub: Int, smooth: Boolean, padS: Float = 0f, padT: Float = 0f): FloatArray {
         val n = sub.coerceAtLeast(1)
         val w = cols * n
         val h = rows * n
         val out = FloatArray((w + 1) * (h + 1) * 2)
+        val spanS = 1f + 2f * padS
+        val spanT = 1f + 2f * padT
         var k = 0
         for (j in 0..h) for (i in 0..w) {
-            val p = at(i.toFloat() / w, j.toFloat() / h, smooth)
+            val p = at(-padS + spanS * i / w, -padT + spanT * j / h, smooth)
             out[k++] = p.x; out[k++] = p.y
         }
         return out

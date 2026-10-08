@@ -2,13 +2,16 @@ package com.brushwork.paint.ui.placement
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AlignHorizontalCenter
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -18,6 +21,7 @@ import androidx.compose.material.icons.filled.Flip
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.Rotate90DegreesCcw
 import androidx.compose.material.icons.filled.Rotate90DegreesCw
@@ -37,15 +41,21 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.tools.transform.MeshDeform
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -70,6 +80,14 @@ fun TransformToolOptions(tool: TransformTool) {
     BarDivider()
     TransformDeleteButton(tool)
     BarDivider()
+    // v1.7 (§3.16): Free deform has its own controls; the box's are not shown.
+    val mesh by remember(tool) { derivedStateOf { tool.isMeshShown } }
+    if (mesh) {
+        MeshOptions(tool)
+        BarDivider()
+        InterpolationMenu(tool)
+        return
+    }
     ToolIconButton(
         if (tool.keepAspect) Icons.Filled.Link else Icons.Filled.LinkOff,
         contentDescription = if (tool.keepAspect) "Keep aspect ratio: on" else "Keep aspect ratio: off",
@@ -146,6 +164,76 @@ private fun ModeChip(tool: TransformTool, m: TransformTool.Mode) {
                 )
             }
         }
+    }
+}
+
+/** v1.7 (§3.16): the labels of the Free deform steppers' buttons (the values are "Mesh columns" / "Mesh rows"). */
+object MeshStepperLabels {
+    const val FEWER_COLUMNS = "Fewer mesh columns"; const val MORE_COLUMNS = "More mesh columns"
+    const val FEWER_ROWS = "Fewer mesh rows"; const val MORE_ROWS = "More mesh rows"
+}
+
+/**
+ * The Free deform controls (v1.7, design §3.1 and §3.16), tagged [V17Tags.MESH]: "Select several"
+ * (with its hint while on), "Select all points" / "Deselect all points", the "Mesh columns" and
+ * "Mesh rows" steppers (1..12), "Smooth mesh" and "Reset mesh". Each value is read through
+ * derivedStateOf: the mesh changes on every drag frame, the strip only when a shown value does.
+ */
+@Composable
+private fun MeshOptions(tool: TransformTool) {
+    val cols by remember(tool) { derivedStateOf { tool.meshColumns } }
+    val rows by remember(tool) { derivedStateOf { tool.meshRows } }
+    val all by remember(tool) { derivedStateOf { tool.allPointsSelected } }
+    val changed by remember(tool) { derivedStateOf { tool.isMeshChanged } }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag(V17Tags.MESH)) {
+        FilterChip(
+            selected = tool.selectSeveral,
+            onClick = { tool.selectSeveral = !tool.selectSeveral },
+            label = { Text(PointLabels.SELECT_SEVERAL) },
+            colors = chipColors(),
+            modifier = Modifier
+                .padding(horizontal = 4.dp)
+                .semantics { stateDescription = if (tool.selectSeveral) "On" else "Off" },
+        )
+        TextButton(onClick = { tool.selectAllPoints() }, modifier = Modifier.heightIn(min = 44.dp)) {
+            Text(if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL)
+        }
+        if (tool.selectSeveral) {
+            Text(
+                PointLabels.SEVERAL_HINT,
+                style = MaterialTheme.typography.bodySmall,
+                color = BrushworkColors.OnChromeDim,
+                maxLines = 2,
+                modifier = Modifier.widthIn(max = 220.dp).padding(horizontal = 4.dp),
+            )
+        }
+        BarDivider()
+        MeshStepper(TransformLabels17.COLUMNS, cols, MeshStepperLabels.FEWER_COLUMNS, MeshStepperLabels.MORE_COLUMNS) { tool.setMeshCells(it, tool.meshRows) }
+        MeshStepper(TransformLabels17.ROWS, rows, MeshStepperLabels.FEWER_ROWS, MeshStepperLabels.MORE_ROWS) { tool.setMeshCells(tool.meshColumns, it) }
+        FilterChip(
+            selected = tool.smoothMesh,
+            onClick = { tool.smoothMesh = !tool.smoothMesh },
+            label = { Text(TransformLabels17.SMOOTH) },
+            colors = chipColors(),
+            modifier = Modifier.padding(horizontal = 4.dp),
+        )
+        ToolIconButton(Icons.Filled.RestartAlt, TransformLabels17.RESET, onClick = { tool.resetMesh() }, enabled = changed)
+    }
+}
+
+/** "[label] [value]" between − and + buttons ([fewer], [more]), held to 1..12. */
+@Composable
+private fun MeshStepper(label: String, value: Int, fewer: String, more: String, onChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
+        ToolIconButton(Icons.Filled.Remove, fewer, onClick = { onChange(value - 1) }, enabled = value > 1, size = 40.dp)
+        Text(
+            "$label $value",
+            style = MaterialTheme.typography.bodyMedium,
+            color = BrushworkColors.OnChrome,
+            maxLines = 1,
+            modifier = Modifier.semantics { contentDescription = label; stateDescription = "$value" },
+        )
+        ToolIconButton(Icons.Filled.Add, more, onClick = { onChange(value + 1) }, enabled = value < MeshDeform.MAX_CELLS, size = 40.dp)
     }
 }
 
