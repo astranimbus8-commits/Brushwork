@@ -2,9 +2,11 @@ package com.brushwork.paint.ui.vector
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -15,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.ShowChart
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Checklist
@@ -25,11 +28,13 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SelectAll
+
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -61,6 +66,7 @@ import com.brushwork.paint.tools.vector.ShapeHandleSide
 import com.brushwork.paint.tools.vector.ShapePoints
 import com.brushwork.paint.tools.vector.ShapeRoundness
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
@@ -103,6 +109,8 @@ private data class PointsInfo(
     val anyHandles: Boolean,
     /** "Point roundness" of the selected corners that can be rounded (null: none is selected). */
     val roundness: Mixed<Float>?,
+    /** The shape is an arrow ("Turn into path" is refused). */
+    val arrow: Boolean,
     /** Some selected point has a roundness of its own. */
     val ownRoundness: Boolean,
 )
@@ -127,6 +135,7 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
                 anyHandles = pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
                 roundness = tool.pointRoundness,
                 ownRoundness = tool.canResetPointRoundness,
+                arrow = tool.settings.type == ShapeType.ARROW,
             )
         }
     }
@@ -139,7 +148,8 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
  * all points" / "Deselect all points", the selected points' actions (sharp / smooth as a
  * three-state chip, automatic tangents, delete, "Deselect point", which clears the whole
  * selection) and "Point roundness" with its reset on a closed shape, the Handles group while some
- * point has tangent handles (v1.6) and "Reset shape" (back to the regular outline). Nothing
+ * point has tangent handles (v1.6), "Reset shape" (back to the regular outline) and, in Points
+ * mode, "Turn into path" (the shape becomes a Path object, opened in the Path tool). Nothing
  * without a pending shape. With one point selected the actions read and act as in v1.6.
  */
 @Composable
@@ -177,6 +187,27 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
         if (info.anyHandles) ShapeHandlesGroup(tool, info.selectedCount > 0)
     }
     if (info.custom) ActionChip("Reset shape", Icons.Filled.RestartAlt) { tool.resetShape() }
+    if (info.pointsMode) TurnIntoPathButton(tool, info.arrow)
+}
+
+/**
+ * "Turn into path" (v1.7 item 6, design §3.6): a 40 dp button at the end of the Points
+ * controls. The whole shape becomes a Path object (the selected corners editable curves) and
+ * the Path tool opens it. Arrows can't: the button is disabled and says why.
+ */
+@Composable
+private fun TurnIntoPathButton(tool: ShapeTool, arrow: Boolean) {
+    FilledTonalButton(
+        onClick = { tool.turnIntoPath() },
+        enabled = !arrow,
+        contentPadding = PaddingValues(horizontal = 14.dp),
+        modifier = Modifier.padding(horizontal = 3.dp).height(40.dp),
+    ) {
+        Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(PointLabels.TO_PATH, maxLines = 1)
+    }
+    if (arrow) Hint(PointLabels.ARROW_REFUSAL, Modifier.padding(horizontal = 6.dp))
 }
 
 /**

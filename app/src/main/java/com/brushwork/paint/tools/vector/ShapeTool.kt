@@ -15,11 +15,13 @@ import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeKind
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
@@ -48,8 +50,14 @@ import com.brushwork.paint.tools.transform.SnapHit
 import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStrokeKind
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.edit.VectorEditSession
+import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -1080,6 +1088,108 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         pushHistory()
         applyAnchors(next, b.rotationDeg)
         refreshPreview()
+    }
+
+    // ------------------------------------------------------------------ turn into path (v1.7 item 6, §3.6)
+
+    /** "Turn into path" is offered: a shape is pending and it is no arrow (Compose state). */
+    val canTurnIntoPath: Boolean get() = box != null && settings.type != ShapeType.ARROW
+
+    /**
+     * "Turn into path" (design §3.6). The pending shape edit lands first, as its own step: a NEW
+     * shape is placed as an object of the vector layer it is drawn on, else in a shape layer of
+     * its own (also with "Editable (own layer)" off: a path lives in a vector layer). Then the
+     * WHOLE shape becomes one Path object ([ShapeToSpline.convert]) as ONE undo step "Turn into
+     * path": a shape layer becomes a vector layer holding the path (re-rendered by the vector
+     * renderer, a live array kept), a shape object of a vector layer is replaced in place (same
+     * id and opacity, its brush seed kept). The Path tool then opens the path with the selected
+     * corners (Points mode) selected; with none selected every corner stays sharp and nothing
+     * moves. Arrows are refused with "Arrows can't become paths". True when the conversion was
+     * applied (or, for a large vector layer, is rendering).
+     */
+    fun turnIntoPath(): Boolean {
+        val b = box ?: return false
+        if (settings.type == ShapeType.ARROW) {
+            controller.toast(PointLabels.ARROW_REFUSAL)
+            return false
+        }
+        val pts = points
+        val selected = if (pointsMode && pts != null) pointSelection.resized(pts.size).indices.toIntArray() else IntArray(0)
+        val doc = controller.doc
+        val session = vectorSession
+        val editLayer = editingLayer
+        val vectorLayer = session?.layer ?: (targetLayer ?: doc.activeLayer).takeIf { editLayer == null && isVectorTarget(it) }
+        val layersBefore = doc.layers.mapTo(HashSet()) { it.id }
+        // 1. The pending edit, as its own step (nothing is recorded for an untouched reopened shape).
+        if (vectorLayer != null) lastVectorId = null
+        if (session != null || editLayer != null || vectorLayer != null) commit() else commitNewLayer(b)
+        // Refused (locked layer, outside the canvas...): the shape stays pending, with the message.
+        if (box != null) return false
+        controller.vectors.flushPending()
+        // 2. The conversion, ONE step.
+        if (vectorLayer != null) {
+            val id = lastVectorId ?: return false
+            return objectToPath(vectorLayer, id, selected)
+        }
+        val layer = editLayer ?: doc.layers.firstOrNull { it.id !in layersBefore && it.isShapeLayer } ?: return false
+        return layerToPath(layer, selected)
+    }
+
+    /** Shape layer [layer] becomes a vector layer with its shape as one path (see [turnIntoPath]). */
+    private fun layerToPath(layer: Layer, selected: IntArray): Boolean {
+        val doc = controller.doc
+        if (doc.indexOf(layer) < 0) return false
+        val o = decoded(layer) ?: return false
+        val result = ShapeToSpline.convert(o, selected) ?: run {
+            controller.toast(CANT_CONVERT_MESSAGE)
+            return false
+        }
+        val before = layer.dataSnapshot()
+        val (content, ids) = VectorContent.EMPTY.plus(listOf(result.path))
+        val after = before.copy(text = null, shape = null, vector = content)
+        // A live array keeps repeating the source: the cache shows the expanded content.
+        val view = ArrayDraw.effectiveVector(after) ?: content
+        // Where the shape's pixels are and where the path paints (the array's copies are added by updateLayerData).
+        val dirty = Rect()
+        inkOf(layer, o)?.let { dirty.union(it) }
+        paintRect(o)?.let { dirty.union(it) }
+        VectorOps.bounds(result.path).let { r ->
+            if (!r.isEmpty) dirty.union(Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt()))
+        }
+        dirty.inset(-2, -2)
+        val whole = Rect(0, 0, doc.width, doc.height)
+        val ok = controller.updateLayerData(layer, after, HistoryLabels.TURN_INTO_PATH, dirty) { c ->
+            VectorLayerRenderer.render(c, view, whole, tips = TipCache(), document = whole)
+        }
+        if (!ok || layer.vector !== content) return false
+        openInPathTool(layer, ids.first(), result.selectedSplineIndices)
+        return true
+    }
+
+    /** Shape object [id] of vector layer [layer] is replaced by its path in place (see [turnIntoPath]). */
+    private fun objectToPath(layer: Layer, id: Long, selected: IntArray): Boolean {
+        if (controller.doc.indexOf(layer) < 0) return false
+        val content = layer.vector ?: return false
+        val vs = content.byId(id) as? VShape ?: return false
+        val result = ShapeToSpline.convert(vs.shape, selected) ?: run {
+            controller.toast(CANT_CONVERT_MESSAGE)
+            return false
+        }
+        // A brush line keeps the shape's grain (a plain one has none: the Path tool rebuilds it
+        // with seed 0, and the reopened path must be unchanged for undo to pass it by).
+        val stroke = result.path.stroke?.let { if (it.kind == VStrokeKind.BRUSH) it.copy(seed = vs.seed) else it }
+        val path = result.path.copy(id = vs.id, opacity = vs.opacity, stroke = stroke)
+        var refused = false
+        controller.vectors.update(layer, content.replaced(mapOf(id to listOf(path))), HistoryLabels.TURN_INTO_PATH) { ok ->
+            if (ok) openInPathTool(layer, id, result.selectedSplineIndices) else refused = true
+        }
+        return !refused
+    }
+
+    /** The Path tool opens path [id] of [layer] with the control points [select] selected (area B's `openPath`). */
+    private fun openInPathTool(layer: Layer, id: Long, select: IntArray) {
+        val path = controller.tools[ToolId.PATH] as? CurveTool ?: return
+        path.openPath(layer.id, id, select)
     }
 
     /** Moves point [index] to document point [p] (numeric entry; edits of one point share one undo step). */
@@ -3473,6 +3583,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         private const val PREFS_KEY = "vec.shape"
         /** The pill's "Keep scale proportions" (area I's preference, read only: design §3.9). */
         private const val PILL_KEEP_PROPORTIONS_KEY = "pill.keepProportions"
+        /** "Turn into path" refused for a shape without an outline (as "Convert to vector layer" says it). */
+        private const val CANT_CONVERT_MESSAGE = "This shape can't be converted"
         private const val TOUCH_SLOP_DP = 6f
         private const val MIN_SIZE_DP = 4f
         private const val HANDLE_TOUCH_DP = 22f
