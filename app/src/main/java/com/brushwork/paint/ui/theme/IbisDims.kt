@@ -54,7 +54,7 @@ object IbisDims {
     val PillTop: Dp = 135.dp
     val PillStart: Dp = 8.dp
 
-    /** Selection / object bar: 40 tall, at y 135, or 173 below the pill. */
+    /** Selection / object bar: 40 tall, at y 135, or 173 below the pill (v1.7: 209 below its Scale row, [SelectionBarTopBelowScaleRow]). */
     val SelectionBarHeight: Dp = 40.dp
     val SelectionBarTop: Dp = 135.dp
     val SelectionBarTopBelowPill: Dp = 173.dp
@@ -234,11 +234,34 @@ object IbisDims {
 
     // ------------------------------------------------------------------ §3.7.8 X / Y pill
 
-    /** Pill: 32 tall, radius 16; contents with 4 dp gaps; about 236 wide. */
+    /**
+     * Pill: 32 tall, radius 16; contents with 4 dp gaps. v1.7 (§3.9): row 1 is
+     * `[fold 40][X 72–110][Y 72–110][# step 40–56][trash 40]`, at least 280 wide and at most
+     * [PillMaxWidth] (372, within 392 − 2 × 8).
+     */
     val PillHeight: Dp = 32.dp
     val PillRadius: Dp = 16.dp
     val PillGap: Dp = 4.dp
-    val PillWidth: Dp = 236.dp
+    val PillWidth: Dp = 280.dp
+    val PillMaxWidth: Dp = 372.dp
+
+    /**
+     * v1.7 (§3.9): the Scale row, `[keep-proportions 40][Scale X][Scale Y][# 40–56]` (at most
+     * [PillScaleRowMaxWidth]), [PillRowGap] under row 1: at y 171 on the reference phone. The
+     * selection bar then sits at [SelectionBarTopBelowScaleRow] (209) instead of 173.
+     */
+    val PillRowGap: Dp = 4.dp
+    val PillScaleRowTop: Dp = 171.dp
+    val PillScaleRowMaxWidth: Dp = 328.dp
+    val SelectionBarTopBelowScaleRow: Dp = 209.dp
+
+    /** v1.7: the "# step" cells, 40..56 touch wide; the trash and keep-proportions cells, 40. */
+    val PillStepMinWidth: Dp = 40.dp
+    val PillStepMaxWidth: Dp = 56.dp
+    val PillIconTouch: Dp = 40.dp
+
+    /** v1.7: the step after the "#" (11 sp, no unit: "# 10"). */
+    val PillStepText: TextUnit = 11.sp
 
     /** The ✥ fold cell, 32 × 32. */
     val PillFold: Dp = 32.dp
@@ -255,7 +278,7 @@ object IbisDims {
     val PillPrefixText: TextUnit = 11.sp
     val PillValueText: TextUnit = 13.sp
 
-    /** The "#" increments cell: 32 × 28 visual, 40 touch. */
+    /** The "#" increments cell: at least 32 × 28 visual (v1.7: wider with its step), 40 touch. */
     val PillHashWidth: Dp = 32.dp
     val PillHashHeight: Dp = 28.dp
 

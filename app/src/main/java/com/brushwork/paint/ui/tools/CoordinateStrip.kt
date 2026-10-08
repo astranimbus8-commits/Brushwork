@@ -114,3 +114,36 @@ internal class PillDrag(
         return raw
     }
 }
+
+// ------------------------------------------------------------------ v1.7 (§3.9): the Scale row
+
+/** Smallest and largest scale (%) a Scale cell's drag reaches (a typed value may go further, down to [MIN_SCALE_PERCENT]). */
+internal const val SCALE_DRAG_MIN = 1f
+internal const val SCALE_DRAG_MAX = 1000f
+
+/** Smallest scale (%) a Scale cell accepts: the object never collapses to nothing. */
+internal const val MIN_SCALE_PERCENT = 0.1f
+
+/** How far a Scale cell's drag moves the value: 1 % per dp of finger travel. */
+internal const val SCALE_PERCENT_PER_DP = 1f
+
+/**
+ * What `setScale` gets when Scale X ([onX]) or Scale Y is set to [v] % while the scale is
+ * [current]: with [keep] ("Keep scale proportions") the other axis follows by the same factor
+ * (so X 200 at 100 / 100 gives 200 / 200, and X 200 at 100 / 50 gives 200 / 100); without it
+ * the other axis is left as it is (null). A zero current value can't give a factor: the other
+ * axis is then left alone.
+ */
+internal fun scaleTarget(onX: Boolean, v: Float, current: com.brushwork.paint.core.Vec2, keep: Boolean): Pair<Float?, Float?> {
+    if (!keep) return if (onX) v to null else null to v
+    val was = if (onX) current.x else current.y
+    val other = if (onX) current.y else current.x
+    val follows = if (was != 0f && was.isFinite()) other * (v / was) else null
+    return if (onX) v to follows else follows to v
+}
+
+/** A scale (%) shown in a cell: whole percents, else one decimal ("150", "12.5"). */
+internal fun formatScale(percent: Float): String = Units.formatNumber(round1(percent).toDouble(), 1)
+
+/** The range a Scale cell's drag may take a value starting at [v] over. */
+internal fun scaleDragRange(v: Float): ClosedFloatingPointRange<Float> = min(SCALE_DRAG_MIN, v)..max(SCALE_DRAG_MAX, v)
