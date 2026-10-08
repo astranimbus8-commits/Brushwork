@@ -24,6 +24,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.GridType
@@ -31,7 +32,13 @@ import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectDeletion
+import com.brushwork.paint.tools.ObjectPosition
+import com.brushwork.paint.tools.ObjectScale
+import com.brushwork.paint.tools.PillPositionTool
 import com.brushwork.paint.tools.PinchTargeting
+import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -214,15 +221,26 @@ data class ShapeSettings(
  * the Scale step from its start. Per axis a guide wins, then the grid, then the step; the readout
  * (`increments.readout`) says where a stepped gesture is.
  */
-class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
+class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
     override val id = ToolId.SHAPE
 
     /** Current options (Compose state); change them with [update]. */
     var settings by mutableStateOf(loadSettings())
         private set
 
-    /** The pending (still editable) shape, or null. */
-    var box by mutableStateOf<ShapeBox?>(null)
+    private var boxState by mutableStateOf<ShapeBox?>(null)
+
+    /** The pending (still editable) shape, or null (Compose state). */
+    var box: ShapeBox?
+        get() = boxState
+        private set(value) {
+            // A shape opens or closes: the pill's scale reference is taken again ([ShapeObjectScale]).
+            if ((value == null) != (boxState == null)) openCount++
+            boxState = value
+        }
+
+    /** Counts the pending shape opening and closing (the pill's scale reference follows it). */
+    internal var openCount = 0
         private set
 
     private var pointsState by mutableStateOf<List<ShapePoint>?>(null)
@@ -854,6 +872,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
         historyKey = null
     }
 
+    /** A group edit ([beginGroupEdit]) is in progress. */
+    internal val inGroupEdit: Boolean get() = groupBase != null
+
     /**
      * Deletes the selected points as one in-tool step. Refused with "A shape needs at least N
      * points" when fewer than [minPoints] would remain (the pill offers "Delete shape" instead
@@ -1190,6 +1211,73 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor {
     private fun openInPathTool(layer: Layer, id: Long, select: IntArray) {
         val path = controller.tools[ToolId.PATH] as? CurveTool ?: return
         path.openPath(layer.id, id, select)
+    }
+
+    // ------------------------------------------------------------------ the pill (v1.7 items 1, 9, 13; §4.6)
+
+    /**
+     * v1.7 (items 1 and 13, §3.1): the X / Y pill's ONE source for this tool's lifetime
+     * ([ShapePillPosition]): the single selected point ("Point 3"), the selected points' box
+     * centre ("Selected points"), else the shape's centre ("Center"); null while no shape is
+     * pending.
+     */
+    override val pillPosition: ObjectPosition = ShapePillPosition(this)
+
+    /** The unit of the shape's own fields. */
+    override val pillUnit: LengthUnit get() = settings.unit
+
+    private val scale = ShapeObjectScale(this)
+
+    /** v1.7 (item 9): the pill's Scale row while a shape is pending ([ShapeObjectScale]). */
+    override val objectScale: ObjectScale? get() = if (box != null) scale else null
+
+    private val deletion = ShapeObjectDeletion(this)
+
+    /** v1.7 (item 13): the pill's trash cell while a shape is pending ([ShapeObjectDeletion]). */
+    override val objectDeletion: ObjectDeletion? get() = if (box != null) deletion else null
+
+    /**
+     * The points the pill acts on as a group, with their selection: in Points mode with at least
+     * one point selected; null otherwise (the pill acts on the whole shape).
+     */
+    internal fun pillPoints(): Pair<List<ShapeAnchor>, PointSelection>? {
+        if (!pointsMode || box == null) return null
+        val anchors = docAnchors() ?: return null
+        val sel = pointSelection.resized(anchors.size)
+        return if (sel.isEmpty) null else anchors to sel
+    }
+
+    /**
+     * "Delete shape" (the pill's trash cell, design §3.13): ONE controller step "Delete shape"
+     * that ends the session. A shape layer being edited is deleted (`LayerStructure.delete`; the
+     * last pixel layer is refused with its message and stays open), a shape object is removed
+     * from its vector layer, and a shape never placed is cleared (nothing to undo). Pending edits
+     * of a placed shape go with it: one undo gives it back as it was before it was opened.
+     */
+    fun deleteShape() {
+        if (box == null) return
+        val doc = controller.doc
+        val editLayer = editingLayer
+        val session = vectorSession
+        when {
+            editLayer != null -> {
+                if (doc.indexOf(editLayer) >= 0 && doc.pixelLayerCount <= 1) {
+                    controller.toast(LayerStructure.LAST_LAYER)
+                    return
+                }
+                discard()
+                if (doc.indexOf(editLayer) >= 0) controller.structure.delete(editLayer, keepChildren = false, label = HistoryLabels.DELETE_SHAPE)
+            }
+            session != null -> {
+                val layer = session.layer
+                val id = vectorEditId
+                discard()
+                val content = layer.vector ?: return
+                if (doc.indexOf(layer) < 0 || content.byId(id) == null) return
+                controller.vectors.update(layer, content.without(setOf(id)), HistoryLabels.DELETE_SHAPE)
+            }
+            else -> discard()
+        }
     }
 
     /** Moves point [index] to document point [p] (numeric entry; edits of one point share one undo step). */
