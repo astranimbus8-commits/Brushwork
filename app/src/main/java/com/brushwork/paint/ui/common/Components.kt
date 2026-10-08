@@ -160,6 +160,8 @@ private fun ModalBwSheet(
 ) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val historyTaps = LocalHistoryTaps.current
+    val historySlot = remember { HistoryTapSlots.next() }
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         modifier = modifier,
@@ -174,7 +176,14 @@ private fun ModalBwSheet(
         contentWindowInsets = { WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal) },
         properties = ModalBottomSheetProperties(shouldDismissOnBackPress = true, shouldDismissOnClickOutside = dismissible),
     ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = sheetBodyMaxHeight(screenHeight, maxHeightFraction))) {
+        // v1.7 (item 10): this sheet is a window of its own: its pointers count for the editor's
+        // two- and three-finger taps too.
+        Column(
+            Modifier
+                .historyTaps(historyTaps, historySlot)
+                .fillMaxWidth()
+                .heightIn(max = sheetBodyMaxHeight(screenHeight, maxHeightFraction)),
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()

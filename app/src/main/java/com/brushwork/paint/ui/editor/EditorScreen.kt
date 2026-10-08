@@ -59,6 +59,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -102,13 +103,17 @@ import com.brushwork.paint.ui.assist.StabilizerPanel
 import com.brushwork.paint.ui.brush.BrushPanel
 import com.brushwork.paint.ui.canvas.CanvasAdjustDialog
 import com.brushwork.paint.ui.color.ColorPickerPanel
+import com.brushwork.paint.ui.common.HistoryTapSlots
 import com.brushwork.paint.ui.common.IncrementsSheet
+import com.brushwork.paint.ui.common.LocalHistoryTaps
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.LocalSheetGroup
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
 import com.brushwork.paint.ui.common.SheetPill
+import com.brushwork.paint.ui.common.historyTapCanvas
+import com.brushwork.paint.ui.common.historyTaps
 import com.brushwork.paint.ui.common.rememberSheetHostState
 import com.brushwork.paint.ui.editor.chrome.BottomBar
 import com.brushwork.paint.ui.editor.chrome.ChromeGlyphs
@@ -175,14 +180,17 @@ private val PANELS_BLOCKED_BY_FILTER = setOf(
 @Composable
 fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: () -> Unit) {
     val sheetHost = rememberSheetHostState()
+    // v1.7 (item 10): two- and three-finger taps over the UI; every window of the editor feeds it.
+    val density = LocalDensity.current.density
+    val historyTaps = remember(controller, density) { EditorHistoryTaps(controller, TouchGestureClassifier.TAP_SLOP_DP * density) }
     // v1.6: the shared number controls reach the increments service through LocalIncrements.
-    CompositionLocalProvider(LocalSheetHost provides sheetHost, LocalIncrements provides controller.increments) {
-        EditorScreenContent(controller, sheetHost, onExit, onSaveNow)
+    CompositionLocalProvider(LocalSheetHost provides sheetHost, LocalIncrements provides controller.increments, LocalHistoryTaps provides historyTaps) {
+        EditorScreenContent(controller, sheetHost, historyTaps, onExit, onSaveNow)
     }
 }
 
 @Composable
-private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHostState, onExit: () -> Unit, onSaveNow: () -> Unit) {
+private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHostState, historyTaps: EditorHistoryTaps, onExit: () -> Unit, onSaveNow: () -> Unit) {
     val context = LocalContext.current
     val density = LocalDensity.current
     val prefs = remember(controller) { EditorPrefs(controller.settings) }
@@ -250,6 +258,11 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         if (tapSerial > 0) { delay(1200); tapVisible = false }
     }
     val showFeedback: (String) -> Unit = { text -> tapText = text; tapVisible = true; tapSerial++ }
+    // v1.7 (item 10): a history tap over the UI shows the same feedback, and makes the canvas yield.
+    SideEffect {
+        historyTaps.onFeedback = showFeedback
+        historyTaps.canvas = { canvasRef[0] }
+    }
     // Zoom/rotation readout while pinching, lingering briefly afterwards.
     var gestureInfo by remember { mutableStateOf(ViewGestureInfo(1f, 0f)) }
     var gestureActive by remember { mutableStateOf(false) }
@@ -441,6 +454,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     BoxWithConstraints(
         Modifier
             .fillMaxSize()
+            // v1.7 (item 10): every pointer of the editor's window, before any control sees it.
+            .historyTaps(historyTaps, HistoryTapSlots.EDITOR)
             .background(IbisColors.Surround)
             .onGloballyPositioned { layersBounds.root = it; menuBounds.root = it }
             // A tap on the chrome around the layer window or the tool menu that no control used
@@ -471,7 +486,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         key(controller) {
             AndroidView(
                 factory = { ctx -> CanvasView(ctx, controller).also { canvasRef[0] = it } },
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().historyTapCanvas(historyTaps),
                 update = { v ->
                     v.onTapAction = showFeedback
                     v.onViewGesture = { info ->

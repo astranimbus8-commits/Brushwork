@@ -36,6 +36,13 @@ class HistoryTapHubTest {
         return consume
     }
 
+    /** One up event: Initial pass (returns whether it is consumed), then Final pass. */
+    private fun up(slot: Int, id: Long, t: Long): Boolean {
+        val consume = hub.up(slot, id, t)
+        hub.upsDone()
+        return consume
+    }
+
     @Test
     fun twoFingersOnTheUiUndoOnce() {
         assertFalse("one finger is not claimed", down(0, 100f, 1000))
@@ -43,8 +50,10 @@ class HistoryTapHubTest {
         assertTrue("a second finger claims the gesture", down(1, 300f, 1050))
         assertTrue(hub.claimed)
         hub.move(0, 0, 105f, 100f, 1100)
-        assertTrue("claimed events are consumed", hub.up(0, 0, 1150))
+        assertTrue("claimed events are consumed", up(0, 0, 1150))
         assertTrue(hub.up(0, 1, 1200))
+        assertTrue("not before the last up has reached the controls (Final pass)", host.taps.isEmpty())
+        hub.upsDone()
         assertEquals(listOf("undo"), host.taps)
         assertEquals("one mark, released once", 1, host.released)
         assertEquals("no canvas finger: nothing to yield", 0, host.yields)
@@ -57,9 +66,9 @@ class HistoryTapHubTest {
         down(0, 100f, 0)
         down(1, 200f, 20)
         down(2, 300f, 40)
-        hub.up(0, 2, 100)
-        hub.up(0, 1, 110)
-        hub.up(0, 0, 120)
+        up(0, 2, 100)
+        up(0, 1, 110)
+        up(0, 0, 120)
         assertEquals(listOf("redo"), host.taps)
         assertEquals(host.opened, host.released)
     }
@@ -70,24 +79,24 @@ class HistoryTapHubTest {
         down(1, 300f, 40)
         hub.move(0, 1, 300f + slop, 100f, 60)
         assertEquals("the mark goes as soon as no tap can come of it", 1, host.released)
-        hub.up(0, 0, 100)
-        hub.up(0, 1, 110)
+        up(0, 0, 100)
+        up(0, 1, 110)
         assertTrue(host.taps.isEmpty())
 
         // A second finger after 300 ms: not claimed, the first finger's control keeps its touch.
         assertFalse(down(0, 100f, 1000))
         assertFalse(down(1, 300f, 1301))
         assertFalse(hub.claimed)
-        assertFalse(hub.up(0, 0, 1310))
-        hub.up(0, 1, 1320)
+        assertFalse(up(0, 0, 1310))
+        up(0, 1, 1320)
         assertTrue(host.taps.isEmpty())
         assertEquals(host.opened, host.released)
 
         // Lifted after 300 ms: claimed (consumed) but no tap.
         down(0, 100f, 2000)
         down(1, 300f, 2010)
-        hub.up(0, 0, 2200)
-        hub.up(0, 1, 2301)
+        up(0, 0, 2200)
+        up(0, 1, 2301)
         assertTrue(host.taps.isEmpty())
         assertEquals(host.opened, host.released)
     }
@@ -98,8 +107,8 @@ class HistoryTapHubTest {
         host.redoOn = false
         down(0, 100f, 0)
         assertFalse(down(1, 300f, 10))
-        hub.up(0, 0, 50)
-        hub.up(0, 1, 60)
+        up(0, 0, 50)
+        up(0, 1, 60)
         assertEquals("no mark at all", 0, host.opened)
         assertTrue(host.taps.isEmpty())
 
@@ -107,13 +116,13 @@ class HistoryTapHubTest {
         host.redoOn = true
         down(0, 100f, 1000)
         assertTrue(down(1, 300f, 1010))
-        hub.up(0, 0, 1050)
-        hub.up(0, 1, 1060)
+        up(0, 0, 1050)
+        up(0, 1, 1060)
         assertTrue(host.taps.isEmpty())
         down(0, 100f, 2000)
         down(1, 200f, 2010)
         down(2, 300f, 2020)
-        hub.up(0, 0, 2050); hub.up(0, 1, 2060); hub.up(0, 2, 2070)
+        up(0, 0, 2050); up(0, 1, 2060); up(0, 2, 2070)
         assertEquals(listOf("redo"), host.taps)
         assertEquals(host.opened, host.released)
     }
@@ -125,8 +134,8 @@ class HistoryTapHubTest {
         assertEquals("and dropped once it is the canvas'", 1, host.released)
         assertFalse(down(1, 300f, 20, canvas = true))
         assertFalse(hub.claimed)
-        assertFalse(hub.up(0, 0, 60))
-        assertFalse(hub.up(0, 1, 70))
+        assertFalse(up(0, 0, 60))
+        assertFalse(up(0, 1, 70))
         assertTrue("the canvas undoes, not the hub", host.taps.isEmpty())
         assertEquals(0, host.yields)
         assertEquals(host.opened, host.released)
@@ -139,16 +148,16 @@ class HistoryTapHubTest {
         assertFalse("not known yet at the Initial pass", down(1, 300f, 20))
         assertTrue(hub.claimed)
         assertEquals(1, host.yields)
-        hub.up(0, 0, 60)
-        hub.up(0, 1, 70)
+        up(0, 0, 60)
+        up(0, 1, 70)
         assertEquals(listOf("undo"), host.taps)
 
         // UI first: the canvas finger is consumed before it reaches the canvas; it yields all the same.
         down(0, 100f, 1000)
         assertTrue(down(1, 300f, 1020, canvas = true))
         assertEquals(2, host.yields)
-        hub.up(0, 1, 1060)
-        hub.up(0, 0, 1070)
+        up(0, 1, 1060)
+        up(0, 0, 1070)
         assertEquals(listOf("undo", "undo"), host.taps)
         assertEquals(host.opened, host.released)
     }
@@ -158,19 +167,19 @@ class HistoryTapHubTest {
         // Two windows (the editor and a sheet's), the same pointer id: two fingers.
         down(0, 100f, 0, slot = 0)
         assertTrue(down(0, 100f, 10, slot = 1))
-        hub.up(1, 0, 40)
-        hub.up(0, 0, 50)
+        up(1, 0, 40)
+        up(0, 0, 50)
         assertEquals(listOf("undo"), host.taps)
 
         // A stylus is never a history tap.
         down(0, 100f, 1000)
         down(1, 300f, 1010, finger = false)
-        hub.up(0, 0, 1040); hub.up(0, 1, 1050)
+        up(0, 0, 1040); up(0, 1, 1050)
         assertEquals(1, host.taps.size)
 
         // Four fingers: no tap.
         for (i in 0L..3L) down(i, 100f * i, 2000 + i)
-        for (i in 0L..3L) hub.up(0, i, 2050 + i)
+        for (i in 0L..3L) up(0, i, 2050 + i)
         assertEquals(1, host.taps.size)
 
         // Cancelled: no tap, the mark released; a cancel of another window changes nothing.
@@ -197,7 +206,7 @@ class HistoryTapHubTest {
                 h.down(0, 0, 100f, 100f, t, true); h.downsDone(t)
                 h.down(0, 1, 300f, 100f, t + 1, true); h.downsDone(t + 1)
                 for (k in 0 until 6) { h.move(0, 0, 101f, 100f, t + 2); h.move(0, 1, 301f, 100f, t + 2) }
-                h.up(0, 0, t + 50); h.up(0, 1, t + 60)
+                h.up(0, 0, t + 50); h.upsDone(); h.up(0, 1, t + 60); h.upsDone()
             }
             return System.nanoTime() - t0
         }

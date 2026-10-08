@@ -62,6 +62,10 @@ class HistoryTapHub(
     private var anyCanvas = false
     private var yielded = false
     private var markOpen = false
+    // The last pointer went up; [upsDone] ends the gesture (with a tap: [endTap], [endRedo]).
+    private var ending = false
+    private var endTap = false
+    private var endRedo = false
 
     /** The current gesture is a history tap candidate: its events are consumed. */
     var claimed = false
@@ -76,6 +80,7 @@ class HistoryTapHub(
      * consume the event (the gesture is claimed).
      */
     fun down(slot: Int, id: Long, x: Float, y: Float, timeMs: Long, finger: Boolean): Boolean {
+        if (ending) upsDone()
         if (count == 0) startGesture(timeMs)
         val key = keyOf(slot, id)
         if (indexOf(key) >= 0) return claimed
@@ -146,8 +151,8 @@ class HistoryTapHub(
     }
 
     /**
-     * Pointer [id] of window [slot] went up at [timeMs] (Initial pass). The last one ends the
-     * gesture: a claimed history tap undoes or redoes. True: consume the event.
+     * Pointer [id] of window [slot] went up at [timeMs] (Initial pass). True: consume the event.
+     * The last one ends the gesture once the event's passes are over ([upsDone]).
      */
     fun up(slot: Int, id: Long, timeMs: Long): Boolean {
         val i = indexOf(keyOf(slot, id))
@@ -155,12 +160,23 @@ class HistoryTapHub(
         val consume = claimed
         removeAt(i)
         if (count == 0) {
-            val tap = claimed && tapPossible(timeMs)
-            val redo = maxPointers == 3
-            if (tap && host.allowed(redo)) host.historyTap(redo)
-            endGesture()
+            ending = true
+            endTap = claimed && tapPossible(timeMs)
+            endRedo = maxPointers == 3
         }
         return consume
+    }
+
+    /**
+     * Every pass of an event with an up is over (Final pass). After the last up, a claimed
+     * history tap undoes or redoes: only now, so what a control did on that (consumed) up, such
+     * as ending its edit with a step, is put back with the rest.
+     */
+    fun upsDone() {
+        if (!ending) return
+        ending = false
+        if (endTap && host.allowed(endRedo)) host.historyTap(endRedo)
+        endGesture()
     }
 
     /**
@@ -198,6 +214,7 @@ class HistoryTapHub(
         claimed = false
         yielded = false
         count = 0
+        ending = false
     }
 
     private fun tapPossible(timeMs: Long): Boolean =

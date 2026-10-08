@@ -801,6 +801,19 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         classifier.cancel()
     }
 
+    /**
+     * v1.7 (item 10): a finger on the UI made this gesture a two- or three-finger history tap
+     * ([HistoryTapHub], which undoes or redoes itself): what the canvas' fingers started is
+     * dropped (no stroke, the view back where it was, the tool's two-finger gesture cancelled),
+     * and the rest of the gesture does nothing here, so it is never a canvas tap as well.
+     */
+    fun yieldToHistoryTap() {
+        if (mode == Mode.NONE) return
+        revertView()
+        abortGesture()
+        mode = Mode.IGNORE
+    }
+
     private fun handleTap(tap: TouchGestureClassifier.Tap) {
         val settings = controller.settings
         when (tap) {
