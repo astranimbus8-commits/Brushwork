@@ -338,10 +338,26 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Identifies the object lift the tool waits for (an answer to an abandoned one is let go). */
     private var objectLiftTicket: Any? = null
 
-    /** The provider that lifts objects of [layer] for [target], or null to lift pixels. */
+    /**
+     * The data maps of text, shape and array lifts (v1.7, design §3.11; areas D, C and E own the
+     * bodies). Tests substitute fakes.
+     */
+    internal var dataMaps: () -> DataMaps = { RealDataMaps }
+
+    /** Lifts text, shape and arrayed layers as data (v1.7, design §3.11). */
+    private val dataLiftProvider: DataLiftProvider by lazy { DataLiftProvider(controller) { dataMaps() } }
+
+    /**
+     * The provider that lifts objects of [layer] for [target], or null to lift pixels (v1.7,
+     * design §3.11): an arrayed layer goes to the data lift (which refuses it while its map is not
+     * available), vector content to the v1.5 object lift, a text or shape layer to the data lift
+     * while its map is available. A mask is always lifted as pixels.
+     */
     private fun objectProviderFor(layer: Layer, target: EditTarget): ObjectLiftProvider? {
-        if (!layer.isVectorLayer || target != EditTarget.CONTENT) return null
-        return objectLiftProvider().takeUnless { it === RefusingLiftProvider }
+        if (target != EditTarget.CONTENT) return null
+        if (layer.array != null) return dataLiftProvider
+        if (layer.isVectorLayer) return objectLiftProvider().takeUnless { it === RefusingLiftProvider }
+        return dataLiftProvider.takeIf { it.kindOf(layer) != null }
     }
 
     // ------------------------------------------------------------------ smart guides state
@@ -1532,9 +1548,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         }
         // Unchanged: nothing to record.
         if (!s.placement && st.sameGeometry(s.initial)) { endSession(s); return false }
-        s.objectLift?.let { lift ->
-            // Vector objects: their geometry is mapped exactly (one step, made by the lift).
-            val recorded = lift.commit(st, TRANSFORM_OBJECTS_LABEL)
+        val objects = s.objectLift
+        if (objects != null && !pixelFallback(objects, st)) {
+            // Vector objects: their geometry is mapped exactly (one step, made by the lift); a
+            // text, shape or array layer keeps its data, mapped and re-rendered (v1.7, §3.11).
+            val recorded = objects.commit(st, if (objects is DataLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL)
             endSession(s)
             return recorded
         }
@@ -1565,6 +1583,15 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (recorded && foldWithAdd) controller.mergeLastUndo(2, label)
         return recorded
     }
+
+    /**
+     * True when the text or shape of a data lift can't be kept as data for [st] (its map
+     * declined): the lifted pixels are then resampled as in v1.6, and the layer becomes a raster
+     * layer in the same step, with the controller's message (I1). An array never falls back: its
+     * lift refuses instead (the copies would be baked).
+     */
+    private fun pixelFallback(lift: ObjectLift, st: TransformState): Boolean =
+        lift is DataLift && lift.kind != DataKind.ARRAY && lift.mapped(st) == null
 
     /** Ends the session without changes; a discarded placement also removes its empty layer. */
     private fun cancelSession(s: Session) {
@@ -1951,6 +1978,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
 
         /** Undo label of a transform of lifted vector objects. */
         const val TRANSFORM_OBJECTS_LABEL = "Transform objects"
+        /**
+         * v1.7 (design §3.11): an arrayed layer whose array can't be mapped (its spec and source)
+         * is not transformed: lifting its pixels would bake the copies.
+         */
+        const val ARRAY_REFUSAL = "Apply the array to transform it"
         /** Largest neighborhood (document px, each way) read to tell whether a finger is on content. */
         private const val MAX_PROBE_RADIUS = 64f
         private const val LIMIT = 1e8f
