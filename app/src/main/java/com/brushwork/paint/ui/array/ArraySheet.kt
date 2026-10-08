@@ -86,11 +86,11 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
             Button(onClick = { tool.finishSource() }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text(ArrayLabels.FINISH_SOURCE) }
             return@BwSheet
         }
-        ModeSegments(spec.mode) { m -> if (m != spec.mode) tool.commit(spec.copy(mode = m)) }
+        ModeSegments(spec.mode) { m -> tool.shownSpec()?.let { cur -> if (m != cur.mode) tool.commit(cur.copy(mode = m)) } }
         NumberField(
             label = COUNT,
             value = spec.count.toDouble(),
-            onValueChange = { v -> if (v.isFinite()) tool.preview(spec.copy(count = Math.round(v).toInt().coerceIn(1, ArraySpec.MAX_COUNT))) },
+            onValueChange = { v -> edit(tool, v) { cur, n -> cur.copy(count = Math.round(n).toInt().coerceIn(1, ArraySpec.MAX_COUNT)) } },
             decimals = 0,
             min = 1.0,
             max = ArraySpec.MAX_COUNT.toDouble(),
@@ -155,6 +155,21 @@ internal fun spokenName(m: ArrayMode): String = when (m) {
     ArrayMode.TRANSFORM -> ArrayLabels.TRANSFORM
 }
 
+/**
+ * Previews [change] of the spec shown NOW with the field value [v]. Read at call time, not at
+ * composition: a field that leaves the sheet while focused (the mode changed) commits its text
+ * on the way out, and must not bring back the spec it was composed with.
+ */
+private fun edit(tool: ArrayTool, v: Double, change: (ArraySpec, Double) -> ArraySpec) {
+    val cur = tool.shownSpec() ?: return
+    if (v.isFinite()) tool.preview(change(cur, v))
+}
+
+/** Commits [change] of the spec shown now (a toggle): one step. */
+private fun toggle(tool: ArrayTool, change: (ArraySpec) -> ArraySpec) {
+    tool.shownSpec()?.let { tool.commit(change(it)) }
+}
+
 /** A field that previews while it changes and commits one step when done. */
 @Composable
 private fun SpecField(
@@ -166,12 +181,12 @@ private fun SpecField(
     min: Double = Double.NEGATIVE_INFINITY,
     max: Double = Double.POSITIVE_INFINITY,
     step: Double? = null,
-    change: (Double) -> ArraySpec,
+    change: (ArraySpec, Double) -> ArraySpec,
 ) {
     NumberField(
         label = label,
         value = value,
-        onValueChange = { v -> if (v.isFinite()) tool.preview(change(v)) },
+        onValueChange = { v -> edit(tool, v, change) },
         decimals = decimals,
         suffix = suffix,
         min = min,
@@ -184,37 +199,37 @@ private fun SpecField(
 @Composable
 private fun LineFields(tool: ArrayTool, spec: ArraySpec) {
     SectionHeader(OFFSET)
-    SpecField(tool, "Relative X", spec.relativeX * 100.0, "%", 0, -1000.0, 1000.0, 10.0) { spec.copy(relativeX = (it / 100.0).toFloat()) }
-    SpecField(tool, "Relative Y", spec.relativeY * 100.0, "%", 0, -1000.0, 1000.0, 10.0) { spec.copy(relativeY = (it / 100.0).toFloat()) }
-    SpecField(tool, "Constant X", spec.constantX.toDouble(), "px", 1) { spec.copy(constantX = it.toFloat()) }
-    SpecField(tool, "Constant Y", spec.constantY.toDouble(), "px", 1) { spec.copy(constantY = it.toFloat()) }
+    SpecField(tool, "Relative X", spec.relativeX * 100.0, "%", 0, -1000.0, 1000.0, 10.0) { cur, v -> cur.copy(relativeX = (v / 100.0).toFloat()) }
+    SpecField(tool, "Relative Y", spec.relativeY * 100.0, "%", 0, -1000.0, 1000.0, 10.0) { cur, v -> cur.copy(relativeY = (v / 100.0).toFloat()) }
+    SpecField(tool, "Constant X", spec.constantX.toDouble(), "px", 1) { cur, v -> cur.copy(constantX = v.toFloat()) }
+    SpecField(tool, "Constant Y", spec.constantY.toDouble(), "px", 1) { cur, v -> cur.copy(constantY = v.toFloat()) }
     Hint(LINE_HINT)
 }
 
 @Composable
 private fun CircleFields(tool: ArrayTool, spec: ArraySpec) {
-    SpecField(tool, "Sweep", spec.sweepDeg.toDouble(), "°", 0, -360.0, 360.0, 15.0) { spec.copy(sweepDeg = it.toFloat()) }
-    ToggleRow("Rotate copies", spec.rotateCopies, { on -> tool.commit(spec.copy(rotateCopies = on)) })
+    SpecField(tool, "Sweep", spec.sweepDeg.toDouble(), "°", 0, -360.0, 360.0, 15.0) { cur, v -> cur.copy(sweepDeg = v.toFloat()) }
+    ToggleRow("Rotate copies", spec.rotateCopies, { on -> toggle(tool) { it.copy(rotateCopies = on) } })
     Hint(CIRCLE_HINT)
 }
 
 @Composable
 private fun CurveFields(tool: ArrayTool, spec: ArraySpec) {
     ArrayCurvePicker(tool, hasGuide = spec.guide != null)
-    SpecField(tool, ArrayLabels.COPY_SPACING, spec.spacing.toDouble(), "px", 1, 0.0) { spec.copy(spacing = it.toFloat()) }
+    SpecField(tool, ArrayLabels.COPY_SPACING, spec.spacing.toDouble(), "px", 1, 0.0) { cur, v -> cur.copy(spacing = v.toFloat()) }
     Hint(SPACING_HINT)
-    ToggleRow("Align to curve", spec.alignToCurve, { on -> tool.commit(spec.copy(alignToCurve = on)) })
+    ToggleRow("Align to curve", spec.alignToCurve, { on -> toggle(tool) { it.copy(alignToCurve = on) } })
 }
 
 @Composable
 private fun TransformFields(tool: ArrayTool, spec: ArraySpec) {
-    SpecField(tool, "Move X", spec.moveX.toDouble(), "px", 1) { spec.copy(moveX = it.toFloat()) }
-    SpecField(tool, "Move Y", spec.moveY.toDouble(), "px", 1) { spec.copy(moveY = it.toFloat()) }
-    SpecField(tool, "Turn", spec.turnDeg.toDouble(), "°", 1, -360.0, 360.0, 5.0) { spec.copy(turnDeg = it.toFloat()) }
+    SpecField(tool, "Move X", spec.moveX.toDouble(), "px", 1) { cur, v -> cur.copy(moveX = v.toFloat()) }
+    SpecField(tool, "Move Y", spec.moveY.toDouble(), "px", 1) { cur, v -> cur.copy(moveY = v.toFloat()) }
+    SpecField(tool, "Turn", spec.turnDeg.toDouble(), "°", 1, -360.0, 360.0, 5.0) { cur, v -> cur.copy(turnDeg = v.toFloat()) }
     SpecField(
         tool, ArrayLabels.SCALE_PER_COPY, spec.scale.toDouble(), "×", 2,
         ArraySpec.MIN_SCALE.toDouble(), ArraySpec.MAX_SCALE.toDouble(), 0.05,
-    ) { spec.copy(scale = it.toFloat()) }
+    ) { cur, v -> cur.copy(scale = v.toFloat()) }
     Hint(TRANSFORM_HINT)
 }
 

@@ -161,6 +161,15 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         controller.invalidateOverlay()
     }
 
+    /**
+     * Closes the Array sheet (✕, Back). A value still being typed is kept: what the preview
+     * shows is committed as ONE step, as the field's own focus loss would.
+     */
+    fun closeSheet() {
+        commitPreview()
+        sheetOpen = false
+    }
+
     /** "Apply array" on the active layer (a text array asks first). */
     fun applyArray() {
         val layer = target ?: return
@@ -364,8 +373,13 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     private fun previewOn(layer: Layer, spec: ArraySpec) {
         val a = layer.array ?: return
         if (a.spec.editingSource) return
-        val p = preview?.takeIf { it.layer === layer } ?: startPreview(layer) ?: return
-        p.update(spec.sanitized())
+        val s = spec.sanitized()
+        val running = preview?.takeIf { it.layer === layer }
+        // A field sending the value already committed (its focus-loss commit after Done) starts
+        // nothing: no step would ever end that preview.
+        if (running == null && s == a.spec) return
+        val p = running ?: startPreview(layer) ?: return
+        p.update(s)
         previewSpec = p.spec
     }
 

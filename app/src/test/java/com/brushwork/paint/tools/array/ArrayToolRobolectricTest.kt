@@ -22,6 +22,7 @@ import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
@@ -130,6 +131,18 @@ class ArrayToolRobolectricTest {
         Smoke.pump(20)
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertEquals(7, layer.array!!.spec.count)
+        assertNull(c.renderOverride)
+        // The field's focus-loss commit after Done sends the committed value again: no preview.
+        t.preview(layer.array!!.spec)
+        assertNull(c.renderOverride)
+        assertNull(t.previewSpec)
+        // A value still being typed when the sheet closes is kept, as one step.
+        t.preview(layer.array!!.spec.copy(count = 5))
+        t.closeSheet()
+        Smoke.pump(20)
+        assertFalse(t.sheetOpen)
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        assertEquals(5, layer.array!!.spec.count)
         assertNull(c.renderOverride)
         Smoke.assertQuiet(c, "rolled back")
     }

@@ -57,7 +57,7 @@ fun ArrayToolOptions(tool: ArrayTool) {
             )
         }
     }
-    if (tool.sheetOpen && layer != null && spec != null) ArraySheet(tool, layer, spec) { tool.sheetOpen = false }
+    if (tool.sheetOpen && layer != null && spec != null) ArraySheet(tool, layer, spec) { tool.closeSheet() }
     if (tool.pendingTextApply != null) {
         BwDialog(
             title = ArrayLabels.APPLY_TEXT_ASK,
