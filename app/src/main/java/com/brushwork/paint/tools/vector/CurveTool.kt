@@ -37,6 +37,8 @@ import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.PointEditor
+import com.brushwork.paint.tools.points.PointGizmo
+import com.brushwork.paint.tools.points.PointGroupMath
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.select.pointBox
 import com.brushwork.paint.tools.select.pointLines
@@ -67,6 +69,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.serializer
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -387,7 +390,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** The brush the live stroke is painted with instead of the painting tool's own (thickness, a reopened path's own brush). */
     private var brushOverride: BrushPreset? = null
 
-    private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, REOPEN, IGNORE }
+    /**
+     * What the finger does. v1.7 (item 1): [GROUP] drags (or taps) a point of a group or, with
+     * "Select several", any point; [GIZMO] drags a part of the group gizmo; [MARQUEE] box-selects.
+     */
+    private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, REOPEN, IGNORE, GROUP, GIZMO, MARQUEE }
 
     private var drag = Drag.NONE
     private var dragIndex = -1
@@ -674,7 +681,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     /** PATH: the pending spline becomes [s] (null or no points = none) and the anchors its Bézier form. */
     private fun setSplineState(s: VSpline?) {
-        val v = s?.takeIf { it.points.isNotEmpty() }
+        val v = s?.takeIf { it.points.isNotEmpty() }?.let { endsSmooth(it) }
         spline = v
         anchors = if (v == null) emptyList() else splineBezier.toSubpath(v).anchors.map { it.toCurveAnchor() }
     }
@@ -728,13 +735,72 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
 
     fun deselect() = select(-1)
 
-    /** Makes anchor [index] a corner (sharp) or smooth. */
+    /**
+     * Makes point [index] a corner (sharp) or smooth: a Curve anchor (its dragged tangent goes),
+     * or (v1.7, item 4) a Path control point that is not an end of an open path ([canBeSharp]).
+     * One in-tool step.
+     */
     fun setSharp(index: Int, sharp: Boolean) {
-        if (isPath) return
+        if (isPath) {
+            setSharpPoints(listOf(index), sharp)
+            return
+        }
         val a = anchors.getOrNull(index) ?: return
         if (a.sharp == sharp && !a.hasCustomTangent) return
         pushHistory()
         replace(index, a.copy(sharp = sharp, handleIn = null, handleOut = null))
+    }
+
+    /**
+     * v1.7 (item 4): point [index] can be a corner: a Curve anchor, or a Path control point that
+     * is not an end of an open path (the ends are always reached: "Ends are always sharp").
+     * Never a Polyline's (all its points are corners).
+     */
+    fun canBeSharp(index: Int): Boolean {
+        if (polyline) return false
+        if (!isPath) return index in anchors.indices
+        val s = spline ?: return false
+        if (index !in s.points.indices) return false
+        return s.cyclic || (index != 0 && index != s.points.lastIndex)
+    }
+
+    /**
+     * v1.7 (items 1 and 4): the points [indices] become corners ([sharp]) or smooth, as ONE
+     * in-tool step; points that can't be ([canBeSharp]) are left alone. A Curve anchor that
+     * changes loses its dragged tangent (as [setSharp]).
+     */
+    fun setSharpPoints(indices: List<Int>, sharp: Boolean) {
+        val want = indices.filter { canBeSharp(it) }.toSet()
+        if (want.isEmpty()) return
+        if (isPath) {
+            val s = spline ?: return
+            if (want.all { s.points[it].sharp == sharp }) return
+            pushHistory()
+            setSplineState(s.copy(points = s.points.mapIndexed { i, p -> if (i in want && p.sharp != sharp) p.copy(sharp = sharp) else p }))
+            changed()
+            return
+        }
+        if (want.all { anchors[it].sharp == sharp && !anchors[it].hasCustomTangent }) return
+        pushHistory()
+        anchors = anchors.mapIndexed { i, a -> if (i in want && (a.sharp != sharp || a.hasCustomTangent)) a.copy(sharp = sharp, handleIn = null, handleOut = null) else a }
+        changed()
+    }
+
+    /** v1.7 (item 1): sharp or not, for each selected point that [canBeSharp] (the three-state chip). */
+    fun selectedSharp(): BooleanArray {
+        val idx = pointSelection.indices.filter { canBeSharp(it) }
+        val s = spline
+        return BooleanArray(idx.size) { k -> if (isPath) s?.points?.getOrNull(idx[k])?.sharp == true else anchors.getOrNull(idx[k])?.sharp == true }
+    }
+
+    /** An open spline's two ends are never sharp (a corner joins two pieces; [VSpline.sanitized]). */
+    private fun endsSmooth(s: VSpline): VSpline {
+        val p = s.points
+        if (s.cyclic || p.isEmpty() || (!p[0].sharp && !p[p.lastIndex].sharp)) return s
+        val out = p.toMutableList()
+        if (out[0].sharp) out[0] = out[0].copy(sharp = false)
+        if (out[out.lastIndex].sharp) out[out.lastIndex] = out[out.lastIndex].copy(sharp = false)
+        return s.copy(points = out)
     }
 
     /** Drops the dragged tangent of anchor [index] and goes back to the automatic one. */
@@ -1366,6 +1432,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      * rotation is ignored. Any other pinch moves the view.
      */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        if (groupPinchStart(focus, a, b)) return true
         if (!canScaleHandles) return false
         val i = if (pointSelection.isSingle) selected else -1
         val anchor = anchors.getOrNull(i) ?: return false
@@ -1388,16 +1455,237 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     override fun onTwoFingerGesture(translation: Vec2, scale: Float, rotationDeg: Float) {
+        if (pinchingGroup) {
+            groupPinch(translation, scale, rotationDeg)
+            return
+        }
         if (!pinchingHandles || !scale.isFinite() || scale <= 0f) return
         scaleHandles(controller.increments.factor(scale))
         showScaleReadout()
     }
 
     override fun onTwoFingerEnd(cancelled: Boolean) {
+        if (pinchingGroup) {
+            pinchingGroup = false
+            setDragging(false)
+            if (cancelled) abortGroupEdit() else endGroupEdit()
+            controller.increments.readout = null
+            return
+        }
         if (!pinchingHandles) return
         pinchingHandles = false
         if (cancelled) revertHandleScale()
         endHandleScale()
+    }
+
+    // ------------------------------------------------------------------ group gestures (v1.7, item 1)
+
+    /** The group gizmo (two or more points selected). */
+    private val gizmo = PointGizmo()
+
+    /** The gizmo part a [Drag.GIZMO] touch drags, and the gizmo as it was when the touch began. */
+    private var gizmoPart = PointGizmo.Part.NONE
+    private var gizmoLayout: PointGizmo.Layout? = null
+
+    /** The marquee's far corner (document px) while a [Drag.MARQUEE] touch box-selects; null before it moves. */
+    private var marqueeTo: Vec2? = null
+    private val marqueePath = Path()
+
+    /** A pinch that started inside the gizmo box scales and rotates the selected points about [pinchPivot]. */
+    private var pinchingGroup = false
+    private var pinchPivot = Vec2.ZERO
+
+    /** The positions of the selected points (document px). */
+    private fun selectedPositions(): List<Vec2> {
+        val sel = pointSelection
+        val out = ArrayList<Vec2>(sel.count)
+        for (i in sel.indices) out += pointAt(i)
+        return out
+    }
+
+    /** The gizmo where it is now: null unless two or more points are selected. */
+    private fun gizmoNow(t: ViewTransform = controller.viewTransform): PointGizmo.Layout? =
+        if (pointSelection.count >= 2 && anchors.isNotEmpty()) gizmo.layout(selectedPositions(), t) else null
+
+    /** "Keep scale proportions" (the pill's preference, on until the user turns it off): gizmo corners scale both axes alike. */
+    private fun keepProportions(): Boolean =
+        runCatching { controller.settings.getObject(KEEP_PROPORTIONS_KEY, Boolean.serializer()) }.getOrNull() ?: true
+
+    /** Where gizmo [part] is drawn on screen (null for the box itself). */
+    private fun gizmoHandleAt(layout: PointGizmo.Layout, part: PointGizmo.Part): Vec2? {
+        val c = layout.cornersScreen
+        if (c.size != 4) return null
+        fun mid(a: Vec2, b: Vec2) = (a + b) * 0.5f
+        return when (part) {
+            PointGizmo.Part.ROTATE -> layout.rotateHandleScreen
+            PointGizmo.Part.SCALE_NW -> c[0]
+            PointGizmo.Part.SCALE_NE -> c[1]
+            PointGizmo.Part.SCALE_SE -> c[2]
+            PointGizmo.Part.SCALE_SW -> c[3]
+            PointGizmo.Part.SCALE_N -> mid(c[0], c[1])
+            PointGizmo.Part.SCALE_E -> mid(c[1], c[2])
+            PointGizmo.Part.SCALE_S -> mid(c[2], c[3])
+            PointGizmo.Part.SCALE_W -> mid(c[3], c[0])
+            PointGizmo.Part.NONE, PointGizmo.Part.MOVE -> null
+        }
+    }
+
+    /** The point (control point in PATH mode, else anchor) within [tol] of [p], or -1; later points win ties. */
+    private fun nearestPointIndex(p: Vec2, tol: Float): Int {
+        val s = spline
+        return if (isPath) (if (s != null) SplineEditing.nearestPoint(s.points, p, tol) else -1) else nearestAnchor(p, tol)
+    }
+
+    /**
+     * The touch at [pt] belongs to the point group (true; [drag] is set): with "Select several",
+     * or with two or more points selected. The gizmo's handles win over a point unless the point
+     * is closer; a touch inside the box that is not on a point moves the group. Otherwise (false)
+     * the v1.6 gestures apply: a point that is not in the group is dragged alone (and then selected
+     * alone), empty canvas adds a point.
+     */
+    private fun groupDown(pt: Vec2): Boolean {
+        if (pointCount == 0) {
+            severalState = false
+            return false
+        }
+        val sel = pointSelection
+        val several = severalState
+        if (!several && sel.count < 2) return false
+        val t = controller.viewTransform
+        val idx = nearestPointIndex(pt, grabRadius())
+        val layout = gizmoNow(t)
+        if (layout != null) {
+            val screen = t.docToScreen(pt)
+            val part = gizmo.hit(layout, screen, t)
+            val handle = gizmoHandleAt(layout, part)
+            val pointWins = idx >= 0 && (handle == null || t.docToScreen(pointAt(idx)).distanceTo(screen) < handle.distanceTo(screen))
+            if ((handle != null || part == PointGizmo.Part.MOVE) && !pointWins) {
+                drag = Drag.GIZMO
+                gizmoPart = part
+                gizmoLayout = layout
+                return true
+            }
+        }
+        if (idx >= 0) {
+            if (!several && idx !in sel) return false
+            drag = Drag.GROUP
+            dragIndex = idx
+            dragStartPos = pointAt(idx)
+            // The other points are snap targets (the group moves together, so not its own points).
+            val moving = if (several) sel.plus(idx) else sel
+            beginSnapWithout { it in moving }
+            return true
+        }
+        if (!several) return false
+        drag = Drag.MARQUEE
+        marqueeTo = null
+        return true
+    }
+
+    /** A move of a [Drag.GROUP], [Drag.GIZMO] or [Drag.MARQUEE] touch. */
+    private fun groupMove(pt: Vec2) {
+        if (!moved && pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
+        val first = !moved
+        moved = true
+        when (drag) {
+            Drag.MARQUEE -> {
+                marqueeTo = pt
+                controller.invalidateOverlay()
+            }
+            Drag.GROUP -> {
+                if (first) {
+                    // "Select several": the dragged point joins the group.
+                    if (severalState && dragIndex !in pointSelection) selectionState = pointSelection.plus(dragIndex)
+                    beginGroupEdit(GROUP_MOVE_LABEL)
+                    setDragging(true)
+                }
+                val d = dragTarget(pt) - dragStartPos
+                setGroupTransform(Affine2.translate(d.x, d.y))
+            }
+            Drag.GIZMO -> {
+                val layout = gizmoLayout ?: return
+                if (first) {
+                    beginGroupEdit(GROUP_MOVE_LABEL)
+                    setDragging(true)
+                }
+                setGroupTransform(gizmo.dragMap(layout, gizmoPart, downPoint, pt, keepProportions(), controller.increments.state))
+            }
+            else -> {}
+        }
+    }
+
+    /** The finger of a [Drag.GROUP], [Drag.GIZMO] or [Drag.MARQUEE] touch lifted at [pt]. */
+    private fun groupUp(pt: Vec2) {
+        when (drag) {
+            Drag.GROUP -> when {
+                moved -> { groupMove(pt); endGroupEdit() }
+                // A tap: "Select several" toggles the point, else it becomes the only one selected.
+                !longPressed -> selectPoints(if (severalState) pointSelection.toggled(dragIndex) else pointSelection.only(dragIndex))
+            }
+            Drag.GIZMO -> when {
+                moved -> { groupMove(pt); endGroupEdit() }
+                // A tap inside the box (not on a point or handle) clears the selection.
+                gizmoPart == PointGizmo.Part.MOVE -> selectPoints(PointSelection.none(pointCount))
+            }
+            Drag.MARQUEE -> {
+                val from = downPoint
+                if (moved) {
+                    val box = RectF(min(from.x, pt.x), min(from.y, pt.y), max(from.x, pt.x), max(from.y, pt.y))
+                    selectPoints(pointSelection.plusAll(PointGroupMath.inside(pointPositions(), box)))
+                } else {
+                    // A tap on empty canvas clears the selection (no point is added).
+                    selectPoints(PointSelection.none(pointCount))
+                }
+                marqueeTo = null
+            }
+            else -> {}
+        }
+        gizmoLayout = null
+        gizmoPart = PointGizmo.Part.NONE
+    }
+
+    /**
+     * A two-finger pinch that starts inside the gizmo box (a finger or their midpoint on it)
+     * scales and rotates the selected points about the box centre, plus the fingers' move: ONE
+     * in-tool step. One that starts outside moves the view, as before.
+     */
+    private fun groupPinchStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        val t = controller.viewTransform
+        val layout = gizmoNow(t) ?: return false
+        val inside = listOf(focus, a, b).any { f ->
+            f.x.isFinite() && f.y.isFinite() && gizmo.hit(layout, t.docToScreen(f), t) != PointGizmo.Part.NONE
+        }
+        if (!inside) return false
+        beginGroupEdit(GROUP_MOVE_LABEL)
+        if (!groupEditing) return false
+        pinchPivot = layout.pivotDoc
+        pinchingGroup = true
+        setDragging(true)
+        return true
+    }
+
+    /** The pinch so far: [translation] of the fingers' midpoint, [scale] and [rotationDeg] (increments apply). */
+    private fun groupPinch(translation: Vec2, scale: Float, rotationDeg: Float) {
+        if (!scale.isFinite() || scale <= 0f || !rotationDeg.isFinite() || !translation.x.isFinite() || !translation.y.isFinite()) return
+        val inc = controller.increments
+        val k = inc.factor(scale)
+        val deg = inc.angle(rotationDeg)
+        val d = inc.lengthDelta(translation)
+        val p = pinchPivot
+        setGroupTransform(Affine2.translate(d.x, d.y) * Affine2.rotateAbout(p, deg) * Affine2.scaleAbout(p, k, k))
+        if (inc.enabled) inc.readout = "${(k * 100f).roundToInt()} %, ${deg.roundToInt()}°"
+    }
+
+    /** The gizmo of the selected points and the marquee being dragged (screen space, over the points). */
+    private fun drawGroupOverlay(canvas: Canvas, t: ViewTransform) {
+        gizmoNow(t)?.let { gizmo.draw(canvas, it, t, if (drag == Drag.GIZMO) gizmoPart else PointGizmo.Part.NONE) }
+        val to = marqueeTo
+        if (drag == Drag.MARQUEE && to != null) {
+            val from = downPoint
+            marqueePath.rewind()
+            marqueePath.addRect(min(from.x, to.x), min(from.y, to.y), max(from.x, to.x), max(from.y, to.y), Path.Direction.CW)
+            painter.path(canvas, t, marqueePath, dashed = true)
+        }
     }
 
     // ------------------------------------------------------------------ handle size on screen (v1.6, §3.3)
@@ -1431,7 +1719,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         snap.end()
         snapMoving = null
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
-        if (isPath) { pathDown(pt); return }
+        if (isPath) { if (!groupDown(pt)) pathDown(pt); return }
         val tol = grabRadius()
         val sel = if (pointSelection.isSingle) selected else -1
         if (!polyline && sel in anchors.indices && !anchors[sel].sharp) {
@@ -1450,6 +1738,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 return
             }
         }
+        if (groupDown(pt)) return
         val idx = nearestAnchor(pt, tol)
         if (idx >= 0) {
             // Every existing point can be grabbed and moved at any time (it snaps once it moves).
@@ -1581,6 +1870,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val pt = Vec2(p.x, p.y)
         when (drag) {
             Drag.NONE, Drag.IGNORE -> return
+            Drag.GROUP, Drag.GIZMO, Drag.MARQUEE -> groupMove(pt)
             Drag.REOPEN -> {
                 if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                 // Not a tap: a new path starts where the finger went down, as anywhere else.
@@ -1591,6 +1881,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             Drag.ANCHOR, Drag.NEW_ANCHOR -> {
                 if (!moved && pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                 if (!moved && drag == Drag.ANCHOR) pushHistory()
+                // v1.7: a point dragged out of a group of two or more is then the only one selected.
+                if (!moved && drag == Drag.ANCHOR && pointSelection.count >= 2) selectionState = pointSelection.only(dragIndex)
                 moved = true
                 // The preview follows the finger as cheaply as possible until it lifts.
                 setDragging(true)
@@ -1647,6 +1939,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
                 if (!moved) changed()
             }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> if (moved) onMove(p)
+            Drag.GROUP, Drag.GIZMO, Drag.MARQUEE -> groupUp(Vec2(p.x, p.y))
             Drag.REOPEN -> {
                 val path = reopenCandidate
                 val k = reopenKind
@@ -1670,6 +1963,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     override fun onCancel() {
         setDragging(false)
         reopenCandidate = null
+        marqueeTo = null
+        gizmoLayout = null
+        if (groupEditing) {
+            // A group gesture: its points, selection and step go back as they were.
+            abortGroupEdit()
+            drag = Drag.NONE
+        }
         if (drag != Drag.NONE && drag != Drag.IGNORE && drag != Drag.REOPEN) {
             if (isPath) setSplineState(gestureStart.spline) else anchors = gestureStart.anchors
             selectionState = gestureSelection
@@ -1758,6 +2058,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             }
             true
         }
+        Drag.GROUP -> {
+            if (!moved) {
+                // As a tap, then the finger can still drag the group.
+                selectPoints(if (severalState) pointSelection.plus(dragIndex) else pointSelection.only(dragIndex))
+                longPressed = true
+            }
+            true
+        }
+        Drag.GIZMO, Drag.MARQUEE -> true
         Drag.HANDLE_IN, Drag.HANDLE_OUT -> true
         else -> false
     }
@@ -1776,10 +2085,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      * are now (a copy: the dragged point never becomes its own target when targets are rebuilt);
      * the selection and other objects are found by the snapping service.
      */
-    private fun beginSnap(except: Int) {
+    private fun beginSnap(except: Int) = beginSnapWithout { it == except }
+
+    /** [beginSnap] with every point for which [skip] is true left out (the points that move together). */
+    private inline fun beginSnapWithout(skip: (Int) -> Boolean) {
         val others = ArrayList<Vec2>(anchors.size)
-        if (isPath) spline?.points?.forEachIndexed { i, p -> if (i != except) others += Vec2(p.x, p.y) }
-        else anchors.forEachIndexed { i, a -> if (i != except) others += a.pos }
+        if (isPath) spline?.points?.forEachIndexed { i, p -> if (!skip(i)) others += Vec2(p.x, p.y) }
+        else anchors.forEachIndexed { i, a -> if (!skip(i)) others += a.pos }
         snap.begin(includeSelection = true) { pointLines(others, POINT_LABEL) }
     }
 
@@ -2645,6 +2957,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val scale = handleSize
         if (isPath) {
             drawPathPoints(canvas, t, scale)
+            drawGroupOverlay(canvas, t)
             snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
             return
         }
@@ -2667,6 +2980,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             val q = map(t, list[i].pos)
             pointPainter.handle(canvas, t, q[0], q[1], scale, square = list[i].sharp || polyline, active = i in group)
         }
+        drawGroupOverlay(canvas, t)
         // Smart guides of the dragged point (on top, labels away from the finger).
         snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
     }
@@ -2680,7 +2994,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (thicknessRing && sel in s.points.indices) drawThicknessRing(canvas, t, SplineEditing.pos(s.points[sel]), diameterAt(sel))
         for (i in s.points.indices) {
             val q = map(t, SplineEditing.pos(s.points[i]))
-            pointPainter.controlPoint(canvas, t, q[0], q[1], selected = i in group, scale = scale)
+            pointPainter.controlPoint(canvas, t, q[0], q[1], selected = i in group, scale = scale, square = s.points[i].sharp)
         }
     }
 
@@ -2847,5 +3161,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         private const val OPAQUE = 0xFF000000.toInt()
         /** v1.7 (item 1): a curve, polyline or path keeps at least this many points ([deleteSelectedPoints]). */
         const val MIN_POINTS = 2
+
+        /** The in-tool step of a group gesture (in-tool steps show no label; the session commits as [EDIT_PATH_LABEL]). */
+        private const val GROUP_MOVE_LABEL = EDIT_PATH_LABEL
+
+        /** The X / Y pill's "Keep scale proportions" preference (AppSettings object; on by default). */
+        internal const val KEEP_PROPORTIONS_KEY = "pill.keepProportions"
     }
 }

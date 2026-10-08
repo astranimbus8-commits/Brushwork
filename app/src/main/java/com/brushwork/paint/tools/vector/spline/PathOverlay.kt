@@ -65,21 +65,28 @@ internal class PathOverlay {
         canvas.drawPath(screen, polygonLine)
     }
 
-    /** A control point at screen ([x], [y]): a hollow circle, filled orange when [selected]; sized by [scale]. */
-    fun controlPoint(canvas: Canvas, t: ViewTransform, x: Float, y: Float, selected: Boolean, scale: Float) {
-        val r = t.dp(IbisDims.PathPoint.value / 2f) * scale
+    /**
+     * A control point at screen ([x], [y]): a hollow circle, filled orange when [selected]; sized
+     * by [scale]. v1.7 (item 4): a sharp point ([square]) is a [SHARP_SIDE_DP] square instead.
+     */
+    fun controlPoint(canvas: Canvas, t: ViewTransform, x: Float, y: Float, selected: Boolean, scale: Float, square: Boolean = false) {
+        val r = t.dp(if (square) SHARP_SIDE_DP / 2f else IbisDims.PathPoint.value / 2f) * scale
         val w = t.dp(2f)
         // A dark rim under the white ring keeps it readable over light artwork.
         pointEdge.color = 0x99000000.toInt()
         pointEdge.strokeWidth = w + t.dp(1.5f)
-        canvas.drawCircle(x, y, r, pointEdge)
+        shape(canvas, x, y, r, square, pointEdge)
         if (selected) {
             pointFill.color = SELECTED
-            canvas.drawCircle(x, y, r, pointFill)
+            shape(canvas, x, y, r, square, pointFill)
         }
         pointEdge.color = if (selected) SELECTED_EDGE else 0xFFFFFFFF.toInt()
         pointEdge.strokeWidth = w
-        canvas.drawCircle(x, y, r, pointEdge)
+        shape(canvas, x, y, r, square, pointEdge)
+    }
+
+    private fun shape(canvas: Canvas, x: Float, y: Float, r: Float, square: Boolean, paint: Paint) {
+        if (square) canvas.drawRect(x - r, y - r, x + r, y + r, paint) else canvas.drawCircle(x, y, r, paint)
     }
 
     private fun map(t: ViewTransform, x: Float, y: Float) {
@@ -106,5 +113,7 @@ internal class PathOverlay {
         const val POLYGON_GREY = 0xFFB0B0B0.toInt()
         val SELECTED: Int = IbisColors.SplineSelected.toArgb()
         val SELECTED_EDGE: Int = 0xFFFFE0A0.toInt()
+        /** v1.7 (item 4): the side of a sharp control point's square (dp, before the handle-size scale). */
+        const val SHARP_SIDE_DP = 10f
     }
 }
