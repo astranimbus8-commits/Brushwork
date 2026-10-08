@@ -293,6 +293,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
                 DataKind.SHAPE -> Lifted.SHAPE
                 DataKind.ARRAY -> Lifted.ARRAY
             }
+            is FolderLift -> Lifted.FOLDER
             else -> Lifted.VECTOR
         }
     }
@@ -349,7 +350,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     ) {
         /** Source pixels -> document ([floating] may be smaller than the source: see [ObjectLift.floatingScale]). */
         val matrix = Matrix()
-        val preview = Preview(this)
+        /** The preview override: a folder's layers drawn moving together (v1.7), else [Preview]. */
+        val preview: LayerRenderOverride = (objectLift as? FolderLift)?.preview(matrix) { previewPaint } ?: Preview(this)
 
         /** Bitmap actually drawn: [floating], or a pre-halved copy for strong downscales. */
         var drawSource: Bitmap = floating
@@ -453,6 +455,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** Lifts text, shape and arrayed layers as data (v1.7, design §3.11). */
     private val dataLiftProvider: DataLiftProvider by lazy { DataLiftProvider(controller) { dataMaps() } }
 
+    /** Lifts a folder: its layers are transformed together, each by its own rule (v1.7, design §3.11 a). */
+    private val folderLiftProvider: FolderLiftProvider by lazy {
+        FolderLiftProvider(controller, { dataMaps() }, dataLiftProvider) { interpolation == Interpolation.SMOOTH }
+    }
+
     /**
      * The provider that lifts objects of [layer] for [target], or null to lift pixels (v1.7,
      * design §3.11): an arrayed layer goes to the data lift (which refuses it while its map is not
@@ -461,6 +468,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
      */
     private fun objectProviderFor(layer: Layer, target: EditTarget): ObjectLiftProvider? {
         if (target != EditTarget.CONTENT) return null
+        if (layer.isFolder) return folderLiftProvider
         if (layer.array != null) return dataLiftProvider
         if (layer.isVectorLayer) return objectLiftProvider().takeUnless { it === RefusingLiftProvider }
         return dataLiftProvider.takeIf { it.kindOf(layer) != null }
@@ -872,10 +880,13 @@ class TransformTool(controller: EditorController) : Tool(controller) {
      * placing a picture, and the grid when grid snapping is on.
      */
     private fun buildSnapTargets(s: Session): SnapTargets =
-        controller.snapping.targets(exclude = listOf(s.layer), includeSelection = s.placement, includeGrid = true)
+        controller.snapping.targets(exclude = snapExcluded(s), includeSelection = s.placement, includeGrid = true)
 
     /** Starts finding the content bounds / lines of the layers the box of [s] can snap to (cached). */
-    private fun requestSnapBounds(s: Session) = controller.snapping.prepare(listOf(s.layer))
+    private fun requestSnapBounds(s: Session) = controller.snapping.prepare(snapExcluded(s))
+
+    /** The layers the box of [s] never snaps to: its own, and a lifted folder's layers (v1.7). */
+    private fun snapExcluded(s: Session): List<Layer> = listOf(s.layer) + ((s.objectLift as? FolderLift)?.layers ?: emptySet())
 
     /** A dragged box: moved onto the closest guide within reach (unscaled content stays on whole pixels). */
     private fun snapMove(g: Gesture, raw: TransformState, snap: SnapContext?): TransformState {
@@ -1574,7 +1585,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     private fun liftSource(report: Boolean): LiftSource? {
         val layer = controller.activeLayer
         if (report) {
-            if (!controller.checkEditable(layer)) return null
+            // v1.7: a folder is lifted as a whole (its layers move together; see FolderLift).
+            if (!(if (layer.isFolder) controller.checkUsable(layer, allowFolder = true) else controller.checkEditable(layer))) return null
         } else if (controller.doc.effectiveLocked(layer) || !controller.doc.effectiveVisible(layer)) {
             return null
         }
@@ -1620,7 +1632,11 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         session = s
         isPlacement = s.placement
         lifted = liftedOf(s)
-        uniformOnly = (s.objectLift as? DataLift)?.uniformOnly == true
+        uniformOnly = when (val l = s.objectLift) {
+            is DataLift -> l.uniformOnly
+            is FolderLift -> l.uniformOnly
+            else -> false
+        }
         // v1.7: a mode what was lifted can't take falls back to Free.
         if (modeRefusal(modeState) != null) modeState = Mode.FREE
         rebuildPreviewPaint()
@@ -1662,7 +1678,7 @@ class TransformTool(controller: EditorController) : Tool(controller) {
         if (objects != null && !pixelFallback(objects, st)) {
             // Vector objects: their geometry is mapped exactly (one step, made by the lift); a
             // text, shape or array layer keeps its data, mapped and re-rendered (v1.7, §3.11).
-            val recorded = objects.commit(st, if (objects is DataLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL)
+            val recorded = objects.commit(st, if (objects is DataLift || objects is FolderLift) TRANSFORM_LABEL else TRANSFORM_OBJECTS_LABEL)
             endSession(s)
             return recorded
         }
@@ -1797,6 +1813,8 @@ class TransformTool(controller: EditorController) : Tool(controller) {
     /** The session's layer and bitmaps are still the ones it was started on. */
     private fun isValid(s: Session): Boolean {
         val doc = controller.doc
+        // A folder has no pixels of its own (Layer.FOLDER_BITMAP): its lift holds its layers'.
+        if (s.objectLift is FolderLift) return doc.indexOf(s.layer) >= 0 && s.layer.isFolder && !s.floating.isRecycled
         val bmp = s.targetBitmap
         return doc.indexOf(s.layer) >= 0 && targetBitmapOf(s.layer, s.target) === bmp && !bmp.isRecycled &&
             bmp.width == doc.width && bmp.height == doc.height && !s.floating.isRecycled
