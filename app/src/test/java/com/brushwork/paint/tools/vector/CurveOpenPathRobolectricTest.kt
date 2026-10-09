@@ -8,6 +8,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
@@ -26,12 +27,13 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * v1.7 F3 (design §3.6): the `CurveTool.openPath` stub switches to the Path tool on the layer
- * and opens the path object there with NO selection (the `select` argument is ignored on `main`).
- * Area B deletes or rewrites this test when it fills the body (the selection is then asserted).
+ * v1.7 (item 6, design §3.6; area B's body of the F3 stub): `CurveTool.openPath` switches to the
+ * Path tool on the layer and opens the path object there with the control points `select`
+ * selected (the Shape tool's "Turn into path" selects the converted corner this way); indices past
+ * the path are ignored, several selected show the group, an empty array selects nothing.
  */
 @RunWith(RobolectricTestRunner::class)
-class CurveOpenPathStubRobolectricTest {
+class CurveOpenPathRobolectricTest {
     private val w = 400
     private val h = 300
 
@@ -58,7 +60,7 @@ class CurveOpenPathStubRobolectricTest {
     }
 
     @Test
-    fun theStubOpensThePathInThePathToolWithNoSelection() {
+    fun itOpensThePathInThePathToolWithThePointsSelected() {
         val (c, layer) = controller()
         val obj = layer.vector!!.objects.single() as VPath
         assertEquals(ToolId.BRUSH, c.activeToolId)
@@ -70,8 +72,25 @@ class CurveOpenPathStubRobolectricTest {
         assertSame(layer, c.activeLayer)
         assertTrue(path.isReopened)
         assertEquals(obj.spline, path.spline)
-        assertEquals("the stub selects nothing", -1, path.selectedPoint)
+        assertEquals("the corner is selected", 1, path.selectedPoint)
+        assertEquals(PointSelection.of(5, 1), path.pointSelection)
         assertFalse(curve.hasPendingWork)
+        path.discard()
+
+        // Several (and one past the end, ignored): the group.
+        path.openPath(layer.id, obj.id, intArrayOf(0, 2, 9))
+        assertTrue(path.isReopened)
+        assertEquals(PointSelection.of(5, 0, 2), path.pointSelection)
+        path.discard()
+        // None.
+        path.openPath(layer.id, obj.id, intArrayOf())
+        assertTrue(path.isReopened)
+        assertTrue(path.pointSelection.isEmpty)
+        // A tap reopens it later with nothing selected (nothing carries over).
+        path.discard()
+        assertTrue(path.reopen(obj))
+        assertTrue(path.pointSelection.isEmpty)
+        path.discard()
     }
 
     @Test

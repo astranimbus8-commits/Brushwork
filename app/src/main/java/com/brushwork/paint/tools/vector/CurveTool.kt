@@ -32,7 +32,12 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.tools.DeletingTool
+import com.brushwork.paint.tools.ObjectDeletion
 import com.brushwork.paint.tools.ObjectPosition
+import com.brushwork.paint.tools.ObjectScale
+import com.brushwork.paint.tools.PillPositionTool
+import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -51,6 +56,7 @@ import com.brushwork.paint.tools.vector.spline.PathOverlay
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
+import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VFillRule
@@ -92,6 +98,13 @@ enum class CurveStroke(val label: String) {
  * and Path (a NURBS / B-spline through control points, like a Blender path).
  */
 enum class CurveKind { CURVE, POLYLINE, PATH }
+
+/**
+ * v1.7 (item 7): what a curve tool's path draws, the strip's three segments: its line only, its
+ * fill only (the stroke kind is then [CurveStroke.NONE]; the kind before it is kept in
+ * [CurveSettings.lastStroke]), or both.
+ */
+enum class CurvePaint { STROKE, FILL, BOTH }
 
 /** Persisted options of the curve / polyline tools. Lengths are document pixels. */
 @Serializable
@@ -197,7 +210,8 @@ data class CurveSettings(
  *   point was (after object and grid snapping, per axis); handle scaling uses the Scale step.
  *   With increments off every gesture is exactly v1.5.
  */
-class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(controller), PointEditor {
+class CurveTool(controller: EditorController, val kind: CurveKind) :
+    Tool(controller), PointEditor, PillPositionTool, ScaledTool, DeletingTool {
     /** v1.5 constructor: the Polyline tool when [polyline], else the Curve tool. */
     constructor(controller: EditorController, polyline: Boolean) : this(controller, if (polyline) CurveKind.POLYLINE else CurveKind.CURVE)
 
@@ -214,12 +228,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     val isPath: Boolean get() = kind == CurveKind.PATH
 
     /**
-     * v1.6: in PATH mode, the X / Y pill's target (the selected control point); null = the Curve
-     * adapter (`CurvePointPosition`: the selected anchor). The X / Y strip reads it ONCE per
-     * selected tool (`coordinateSourceOf` is remembered per tool), so in PATH mode it is one
-     * stable, non-null instance whose `position` is null while no control point is selected.
+     * In PATH mode, the X / Y pill's target: since v1.7 the tool's one pill source ([pillPosition],
+     * the same stable instance), which every curve tool has; null for Curve and Polyline (v1.6 API).
      */
-    val splinePointPosition: ObjectPosition? = if (kind == CurveKind.PATH) SplinePointPosition() else null
+    val splinePointPosition: ObjectPosition? get() = if (kind == CurveKind.PATH) pillPosition else null
 
     /** Current options (Compose state); change them with [update]. */
     var settings by mutableStateOf(loadSettings())
@@ -471,6 +483,46 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         runCatching { controller.settings.putObject(prefsKey, CurveSettings.serializer(), toSave) }
         changed()
     }
+
+    /**
+     * v1.7 (item 7): the segment the strip shows: Fill for no line and a fill (a v1.6 fill-only
+     * path reopens so), Both for a line and a fill, Stroke for a line alone; null for neither
+     * (v1.6 "No stroke" without Fill). Compose state.
+     */
+    val paintMode: CurvePaint?
+        get() {
+            val s = settings
+            return when {
+                s.stroke == CurveStroke.NONE -> if (s.fill) CurvePaint.FILL else null
+                s.fill -> CurvePaint.BOTH
+                else -> CurvePaint.STROKE
+            }
+        }
+
+    /**
+     * v1.7 (item 7): Stroke, Fill or Both. Fill sets the stroke kind to [CurveStroke.NONE] and
+     * remembers the kind it had in [CurveSettings.lastStroke]; Stroke and Both bring it back.
+     */
+    fun setPaintMode(mode: CurvePaint) = update { s ->
+        val kind = if (s.stroke != CurveStroke.NONE) s.stroke else s.lastStroke.takeIf { it != CurveStroke.NONE } ?: CurveStroke.BRUSH
+        when (mode) {
+            CurvePaint.STROKE -> s.copy(stroke = kind, fill = false, lastStroke = kind)
+            CurvePaint.FILL -> s.copy(stroke = CurveStroke.NONE, fill = true, lastStroke = kind)
+            CurvePaint.BOTH -> s.copy(stroke = kind, fill = true, lastStroke = kind)
+        }
+    }
+
+    /** v1.7 (item 7): the stroke kind of Stroke and Both ("Current brush" or "Plain line"; remembered for after Fill). */
+    fun setStrokeKind(kind: CurveStroke) {
+        if (kind == CurveStroke.NONE) return
+        update { it.copy(stroke = kind, lastStroke = kind) }
+    }
+
+    /**
+     * v1.7 (item 7): Fill and Both can show: the pending path has 3 points (an open path fills as
+     * if closed), or none yet (the choice is the next path's). Compose state.
+     */
+    val fillPossible: Boolean get() = pointCount == 0 || pointCount >= 3
 
     /**
      * The tool's own settings while the pending path shows a look that is not theirs: the
@@ -915,6 +967,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     /** True while a group edit is in progress. */
     internal val groupEditing: Boolean get() = groupEdit != null
 
+    /**
+     * A group gesture drags a path of more than [LIVE_OUTLINE_MAX_POINTS] points (§3.1c): a
+     * plain line of varying thickness shows its centre line only, and its outline again when the
+     * finger lifts ([endGroupEdit]).
+     */
+    internal val centreLineOnly: Boolean get() = groupEdit != null && pointCount > LIVE_OUTLINE_MAX_POINTS
+
     override fun beginGroupEdit(label: String) {
         if (groupEdit != null) endGroupEdit()
         val sel = pointSelection
@@ -1226,17 +1285,207 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         return if (v.intersect(doc) && v.width() > 1f && v.height() > 1f) v else doc
     }
 
-    /** The X / Y pill's target in PATH mode: the selected control point (hidden while none is). */
-    private inner class SplinePointPosition : ObjectPosition {
-        override val position: Vec2? get() = spline?.points?.getOrNull(selectedPoint)?.let { Vec2(it.x, it.y) }
-        override val label: String get() = "Point ${selectedPoint + 1}"
-        override fun setPosition(x: Float?, y: Float?) {
-            val i = selectedPoint
-            val p = spline?.points?.getOrNull(i) ?: return
-            moveAnchor(i, Vec2(x?.takeIf { it.isFinite() } ?: p.x, y?.takeIf { it.isFinite() } ?: p.y))
+    // ------------------------------------------------------------------ the pill (v1.7, items 1, 9, 12, 13)
+
+    override val pillUnit: LengthUnit get() = settings.unit
+
+    /**
+     * The ONE pill source (design §4.6): the single selected point ("Point 3", as v1.6), the box
+     * centre of two or more ("Selected points": X / Y move the group), or with no point selected
+     * the centre of the open path's points ("Center": X / Y move the whole path). Its position is
+     * null only while no path is open.
+     */
+    override val pillPosition: ObjectPosition = PillPosition()
+
+    private val pillScale = PillScale()
+    private val pillDeletion = PillDeletion()
+
+    /** The pill's Scale row, whenever a path is open (Compose state). */
+    override val objectScale: ObjectScale? get() = if (pointCount > 0) pillScale else null
+
+    /** The pill's trash cell, whenever a path is open (Compose state). */
+    override val objectDeletion: ObjectDeletion? get() = if (pointCount > 0) pillDeletion else null
+
+    /** The points the pill's group edits act on: the selection with two or more selected, else every point. */
+    private fun pillTargets(): PointSelection {
+        val sel = pointSelection
+        return if (sel.count >= 2) sel else PointSelection.all(pointCount)
+    }
+
+    /**
+     * The points of [sel] of [baseAnchors] (Curve, Polyline) or [baseSpline] (Path) mapped by [m],
+     * as one in-tool step that edits keyed [key] share (a scrub, a held arrow, quick typing).
+     * Thickness is not scaled (item 12): it is a factor of the line width, as the Shape tool keeps
+     * its stroke width.
+     */
+    private fun mapPointsStep(key: Any?, sel: PointSelection, m: Affine2, baseAnchors: List<CurveAnchor>, baseSpline: VSpline?) {
+        if (!m.isFinite() || anchors.isEmpty() || groupEdit != null) return
+        pushHistory(key)
+        if (isPath) {
+            val s = baseSpline ?: return
+            setSplineState(s.copy(points = CurveGroupMath.mappedPoints(s.points, sel, m)))
+        } else {
+            anchors = CurveGroupMath.mappedAnchors(baseAnchors, sel, m, ShapeSettings.MAX_LENGTH)
         }
+        changed()
+    }
+
+    private inner class PillPosition : ObjectPosition {
+        override val position: Vec2?
+            get() {
+                if (pointCount == 0) return null
+                val sel = pointSelection
+                if (sel.isSingle) return pointAt(sel.primary)
+                val box = PointGroupMath.bounds(pointPositions(), pillTargets()) ?: return null
+                return Vec2(box.centerX(), box.centerY())
+            }
+
+        override val label: String
+            get() {
+                val sel = pointSelection
+                return when {
+                    sel.isSingle -> "Point ${sel.primary + 1}"
+                    sel.count >= 2 -> SELECTED_POINTS_LABEL
+                    else -> CENTER_LABEL
+                }
+            }
+
+        override fun setPosition(x: Float?, y: Float?) {
+            if (pointCount == 0) return
+            val sel = pointSelection
+            if (sel.isSingle) {
+                // One point: exactly v1.6 (its own step, keyed by the point).
+                val i = sel.primary
+                val p = pointAt(i)
+                moveAnchor(i, Vec2(x?.takeIf { it.isFinite() } ?: p.x, y?.takeIf { it.isFinite() } ?: p.y))
+                return
+            }
+            val now = position ?: return
+            val dx = x?.takeIf { it.isFinite() }?.let { it - now.x } ?: 0f
+            val dy = y?.takeIf { it.isFinite() }?.let { it - now.y } ?: 0f
+            if (dx == 0f && dy == 0f) return
+            mapPointsStep(NumericKey("groupMove", -1), pillTargets(), Affine2.translate(dx, dy), anchors, spline)
+        }
+
         override fun beginPositionEdit() = beginNumericEdit()
         override fun endPositionEdit() = endNumericEdit()
+    }
+
+    /**
+     * The Scale row's reference: the points [sel] of [anchors] / [spline] as they were when the
+     * row first saw this selection, about the centre of their box. [result] is what the row made
+     * of them last, at [percent].
+     */
+    private class ScaleRef(val sel: PointSelection, val anchors: List<CurveAnchor>, val spline: VSpline?, val centre: Vec2) {
+        var result: Any? = null
+        var percent = HUNDRED
+    }
+
+    /** Kept while the same points stay selected and only the Scale row changed them (not Compose state). */
+    private var scaleRef: ScaleRef? = null
+
+    private fun pointsNow(): Any? = if (isPath) spline else anchors
+
+    /** The Scale row's reference box, captured again when the selection or the points changed otherwise. */
+    private fun scaleRefNow(): ScaleRef? {
+        if (pointCount == 0) return null
+        val sel = pillTargets()
+        val now = pointsNow()
+        val r = scaleRef
+        if (r != null && r.sel == sel && (now === (if (isPath) r.spline else r.anchors) || now === r.result)) return r
+        val box = PointGroupMath.bounds(pointPositions(), sel) ?: return null
+        return ScaleRef(sel, anchors, spline, Vec2(box.centerX(), box.centerY())).also { scaleRef = it }
+    }
+
+    private inner class PillScale : ObjectScale {
+        override val scalePercent: Vec2?
+            get() {
+                val r = scaleRefNow() ?: return null
+                return if (r.result != null && pointsNow() === r.result) r.percent else HUNDRED
+            }
+
+        override fun beginScaleEdit() = beginNumericEdit()
+
+        override fun setScale(xPercent: Float?, yPercent: Float?) {
+            if (groupEdit != null) return
+            val r = scaleRefNow() ?: return
+            val cur = if (r.result != null && pointsNow() === r.result) r.percent else HUNDRED
+            val px = (xPercent?.takeIf { it.isFinite() } ?: cur.x).coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
+            val py = (yPercent?.takeIf { it.isFinite() } ?: cur.y).coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
+            if (px == cur.x && py == cur.y) return
+            // From the reference points every time: a scrub never accumulates rounding.
+            mapPointsStep(NumericKey("scale", -1), r.sel, Affine2.scaleAbout(r.centre, px / 100f, py / 100f), r.anchors, r.spline)
+            r.result = pointsNow()
+            r.percent = Vec2(px, py)
+        }
+
+        override fun endScaleEdit() = endNumericEdit()
+    }
+
+    private inner class PillDeletion : ObjectDeletion {
+        /** "Delete selected points" with some but not all selected; otherwise "Delete curve" / "Delete polyline" / "Delete path". */
+        override val deleteLabel: String?
+            get() {
+                val n = pointCount
+                if (n == 0) return null
+                return if (pointSelection.count in 1 until n) PillLabels.DELETE_POINTS else PillLabels.deleteObject(objectNoun())
+            }
+
+        override fun delete() {
+            val n = pointCount
+            if (n == 0) return
+            if (pointSelection.count in 1 until n) deleteSelectedPoints() else deleteObject()
+        }
+    }
+
+    // ------------------------------------------------------------------ history taps over the UI (v1.7, item 10)
+
+    /**
+     * The tool's in-tool history at a moment ([historyMark]): equal marks mean nothing changed.
+     * The states compare by identity, the points by value.
+     */
+    private data class ToolMark(
+        val epoch: Int,
+        val session: Reopened?,
+        val history: List<EditState>,
+        val redo: List<EditState>,
+        val anchors: List<CurveAnchor>,
+        val spline: VSpline?,
+        val selection: PointSelection,
+        val several: Boolean,
+        val trashed: Boolean,
+        val targetLayer: Layer?,
+    )
+
+    /** Counts the paths the tool has edited: a mark of another path never rolls this one back. */
+    private var historyEpoch = 0
+
+    override fun historyMark(): Any? = ToolMark(
+        historyEpoch, reopened, history.toList(), redo.toList(), anchors, spline, pointSelection, severalState, trashedPending, targetLayer,
+    )
+
+    /**
+     * Puts the pending path, its selection and its in-tool undo and redo back as they were at
+     * [mark] (the steps since are dropped, not moved to redo), while the tool still edits the same
+     * path; otherwise nothing.
+     */
+    override fun rollbackHistory(mark: Any?) {
+        val m = mark as? ToolMark ?: return
+        if (m.epoch != historyEpoch || m.session !== reopened) return
+        groupEdit = null
+        history.clear(); history.addAll(m.history)
+        redo.clear(); redo.addAll(m.redo)
+        redoCount = redo.size
+        historyKey = null
+        numericHeld = false
+        canUndoStep = history.isNotEmpty()
+        if (isPath) setSplineState(m.spline) else anchors = m.anchors
+        selectionState = m.selection.resized(pointCount)
+        severalState = m.several && pointCount > 0
+        trashedPending = m.trashed
+        targetLayer = m.targetLayer
+        changed()
+        controller.invalidateOverlay()
     }
 
     /**
@@ -2224,7 +2473,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      * until ✓ / ✕. Returns false when it can't be edited (another path is pending, the layer is
      * locked or hidden...).
      */
-    fun reopen(path: VPath): Boolean {
+    fun reopen(path: VPath): Boolean = reopenSelecting(path, null)
+
+    /** [reopen] with the points [select] selected once the path is open (null or empty: none). */
+    private fun reopenSelecting(path: VPath, select: IntArray?): Boolean {
         if (anchors.isNotEmpty() || opening || !canReopen(path)) return false
         val layer = controller.doc.activeLayer
         if (!vectorTarget(layer) || layer.vector?.byId(path.id) == null) return false
@@ -2237,7 +2489,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
             opening = false
             if (session == null) return@beginEdit
             if (!wanted) { session.cancel(); return@beginEdit }
-            open(session, layer, path)
+            open(session, layer, path, select)
         }
         return reopened != null || opening
     }
@@ -2249,11 +2501,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
      * instance, the Path tool's does it. Nothing happens without such a layer; when the object
      * can't be opened (not a spline path that passes I9, a locked or hidden layer...), the Path
      * tool is still active on the layer. A pending path of the Path tool is applied first.
-     *
-     * Foundation stub: opens the object with no selection ([select] is ignored) until area B
-     * implements it.
+     * Indices of [select] past the path's control points are ignored; two or more selected show
+     * the group gizmo, as after a box selection.
      */
-    @Suppress("UNUSED_PARAMETER")
     fun openPath(layerId: Long, objectId: Long, select: IntArray) {
         val tool = controller.tools[ToolId.PATH] as? CurveTool ?: return
         val layer = controller.doc.layerById(layerId) ?: return
@@ -2262,10 +2512,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         if (controller.currentTool !== tool || controller.doc.activeLayer !== layer) return
         if (tool.hasPendingWork) tool.commit()
         val path = layer.vector?.byId(objectId) as? VPath ?: return
-        tool.reopen(path)
+        tool.reopenSelecting(path, select)
     }
 
-    private fun open(session: VectorEditSession, layer: Layer, path: VPath) {
+    private fun open(session: VectorEditSession, layer: Layer, path: VPath, select: IntArray? = null) {
         val st = path.stroke
         val user = settings
         val strokeColor = st?.color ?: (path.fill as? VPaint.Solid)?.color ?: controller.color
@@ -2287,7 +2537,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         } else {
             anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
         }
-        selectionState = PointSelection.none(pointCount)
+        // v1.7 (item 6): [openPath] hands over the points to select (a converted shape's corner).
+        val n = pointCount
+        selectionState = select?.filter { it in 0 until n }?.takeIf { it.isNotEmpty() }
+            ?.let { PointSelection.none(n).plusAll(it) } ?: PointSelection.none(n)
         severalState = false
         clearHistory()
         session.drawPreview = { canvas -> drawSessionPreview(canvas) }
@@ -2456,6 +2709,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         val width = lineWidth
         if (CurveGeometry.isUniformWidth(anchors)) {
             return listOfNotNull(VectorPaintSpec.build(fill, fillColor, path, color, width, cap, join))
+        }
+        // v1.7 (item 1, §3.1c): the centre line only while a group gesture drags a long path.
+        if (centreLineOnly) {
+            return listOfNotNull(VectorPaintSpec.build(fill, fillColor, path, color, controller.docLength(CENTRE_LINE_DP), cap, join))
         }
         // Varying thickness: a filled outline (round joins and caps), painted with the line color.
         val outline = varyingOutline(width)
@@ -2877,6 +3134,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
     }
 
     private fun clearHistory() {
+        historyEpoch++
         history.clear()
         redo.clear()
         redoCount = 0
@@ -3162,10 +3420,23 @@ class CurveTool(controller: EditorController, val kind: CurveKind) : Tool(contro
         /** v1.7 (item 1): a curve, polyline or path keeps at least this many points ([deleteSelectedPoints]). */
         const val MIN_POINTS = 2
 
+        /** v1.7 (item 1, §3.1c): above this many points a group drag shows the line's centre, [CENTRE_LINE_DP] wide on screen. */
+        internal const val LIVE_OUTLINE_MAX_POINTS = 500
+        private const val CENTRE_LINE_DP = 1f
+
         /** The in-tool step of a group gesture (in-tool steps show no label; the session commits as [EDIT_PATH_LABEL]). */
         private const val GROUP_MOVE_LABEL = EDIT_PATH_LABEL
 
         /** The X / Y pill's "Keep scale proportions" preference (AppSettings object; on by default). */
         internal const val KEEP_PROPORTIONS_KEY = "pill.keepProportions"
+
+        /** The pill's position labels besides "Point 3": two or more points, and no point selected (I10). */
+        const val SELECTED_POINTS_LABEL = "Selected points"
+        const val CENTER_LABEL = "Center"
+
+        /** The pill's Scale row: 100 % is the points as selected; held to 1 %..10 000 %. */
+        private val HUNDRED = Vec2(100f, 100f)
+        private const val MIN_SCALE_PERCENT = 1f
+        private const val MAX_SCALE_PERCENT = 10_000f
     }
 }

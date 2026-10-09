@@ -10,6 +10,7 @@ import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.docLength
 import com.brushwork.paint.tools.vector.spline.SplineBezier
@@ -156,10 +157,9 @@ class QaPathCapsuleByHandUiTest {
             click("Cyclic", exact = true)
             assertTrue(tool.spline!!.cyclic)
             assertEquals("the default order is Blender's capsule's", 4, tool.spline!!.order)
-            if (!tool.settings.fill) click("Fill", exact = true)
+            // v1.7: the "Fill" segment (known as "Fill only") is a fill without a stroke.
+            click(CurveLabels17.FILL_ONLY, exact = true)
             assertTrue(tool.settings.fill)
-            click("Stroke", exact = true)
-            click(CurveStroke.NONE.label, exact = true)
             assertEquals(CurveStroke.NONE, tool.settings.stroke)
             val sp = tool.spline!!
             var worst = 0f
@@ -194,7 +194,7 @@ class QaPathCapsuleByHandUiTest {
             click("Path shapes", exact = true)
             click("Capsule", exact = true)
             assertEquals(12, tool.spline!!.points.size)
-            if (!tool.settings.fill) click("Fill", exact = true)
+            click(CurveLabels17.FILL_ONLY, exact = true)
             val steps = c.undoManager.undoCount
             click("Apply path edit")
             assertEquals(steps + 1, c.undoManager.undoCount)
@@ -215,9 +215,10 @@ class QaPathCapsuleByHandUiTest {
             click("Path shapes", exact = true)
             click("Circle", exact = true)
             assertEquals(SplinePresets.CIRCLE_POINTS, tool.spline!!.points.size)
-            click("Stroke", exact = true)
+            click(CurveLabels17.STROKE_ONLY, exact = true)
+            click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveStroke.PLAIN.label, exact = true)
-            if (tool.settings.fill) click("Fill", exact = true)
+            assertFalse(tool.settings.fill)
             val n = c.undoManager.undoCount
             click("Apply path edit")
             assertEquals(n + 1, c.undoManager.undoCount)

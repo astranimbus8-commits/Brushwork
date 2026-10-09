@@ -31,12 +31,13 @@ import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Deselect
-import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.Gesture
+import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Delete
@@ -76,6 +77,10 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -89,6 +94,12 @@ import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.vector.HandleSide
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.ui.common.stepOnLongPress
+import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.tools.vector.CurvePaint
+import com.brushwork.paint.tools.points.Mixed
+import com.brushwork.paint.tools.points.MixedEdit
+import com.brushwork.paint.ui.points.MixedNumberField
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VSpline
@@ -145,8 +156,38 @@ import kotlin.math.sin
  */
 @Composable
 fun CurveToolOptions(tool: CurveTool) {
-    if (tool.isPath) PathToolOptions(tool) else BezierToolOptions(tool)
+    // v1.7: a one-line hint under the bar ("Select several", or the Path thickness caption).
+    val hint by remember(tool) { derivedStateOf { stripHint(tool) } }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (tool.isPath) PathToolOptions(tool) else BezierToolOptions(tool)
+        }
+        hint?.let {
+            Text(
+                it,
+                style = MaterialTheme.typography.labelSmall,
+                color = BrushworkColors.OnChromeDim,
+                maxLines = 2,
+                modifier = Modifier.widthIn(max = HINT_MAX_WIDTH).padding(start = 6.dp, bottom = 2.dp),
+            )
+        }
+    }
 }
+
+/** The hint line under the strip: "Select several"'s, or (v1.7, item 5) the caption of a smooth middle Path point's thickness. */
+private fun stripHint(tool: CurveTool): String? {
+    if (tool.selectSeveral) return PointLabels.SEVERAL_HINT
+    if (!tool.isPath || !tool.pointSelection.isSingle) return null
+    val i = tool.selectedPoint
+    val p = tool.spline?.points?.getOrNull(i) ?: return null
+    return if (tool.canBeSharp(i) && !p.sharp) PATH_WIDTH_CAPTION else null
+}
+
+/** v1.7 (item 5): why a smooth middle point's thickness isn't reached (shown under the Path strip). */
+internal const val PATH_WIDTH_CAPTION = "The line reaches a point's full thickness only where it passes through it (sharp points)"
+
+/** The hint line wraps to a second line rather than run past a phone's width. */
+private val HINT_MAX_WIDTH = 360.dp
 
 /**
  * Options strip of the curve and polyline tools: undo last point, closed path, actions for the
@@ -159,7 +200,8 @@ private fun BezierToolOptions(tool: CurveTool) {
     // Only what the row shows about the selected point: dragging anchors doesn't recompose it.
     val selInfo by remember(tool) {
         derivedStateOf {
-            val i = tool.selected
+            // (One point: the v1.6 controls. Two or more: the group's, [GroupPointControls].)
+            val i = if (tool.pointSelection.isSingle) tool.selected else -1
             tool.anchors.getOrNull(i)?.let { SelectedAnchor(i, it.sharp, it.hasCustomTangent, it.width) }
         }
     }
@@ -174,6 +216,13 @@ private fun BezierToolOptions(tool: CurveTool) {
     ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
     ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
     val a = selInfo
+    // v1.7 (item 1): "Select several" and "Select all points" start the points bar, then the
+    // group's controls. With exactly one point selected they follow that point's controls, which
+    // keep their v1.6 places (I12).
+    if (a == null) {
+        PointSelectionControls(tool)
+        GroupPointControls(tool, anyThickness)
+    }
     if (a != null) {
         val sel = a.index
         // First, so it shows without scrolling on a phone: the selected point's thickness.
@@ -186,6 +235,7 @@ private fun BezierToolOptions(tool: CurveTool) {
         }
         ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(sel) }
         ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
+        PointSelectionControls(tool)
     }
     // v1.6 §3.3: the selected point's handles (all points' with none selected).
     if (handlesShown) HandlesGroup(tool)
@@ -200,16 +250,19 @@ private fun BezierToolOptions(tool: CurveTool) {
 @Composable
 private fun StrokeFillAndSheets(tool: CurveTool, onSettings: () -> Unit, onNumbers: () -> Unit) {
     val s = tool.settings
-    fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
-    DropdownChip(
-        label = s.stroke.label,
-        options = CurveStroke.entries,
-        selected = s.stroke,
-        optionLabel = { it.label },
-        onSelect = { m -> set { it.copy(stroke = m) } },
-        leading = { Icon(Icons.Filled.LineWeight, contentDescription = null, modifier = Modifier.size(18.dp)) },
-        contentDescription = "Stroke",
-    )
+    // v1.7 (item 7): Stroke / Fill / Both, then the stroke kind for a line (Stroke, Both).
+    PaintSegments(tool)
+    if (s.stroke != CurveStroke.NONE) {
+        DropdownChip(
+            label = s.stroke.label,
+            options = STROKE_KINDS,
+            selected = s.stroke,
+            optionLabel = { it.label },
+            onSelect = { m -> tool.setStrokeKind(m) },
+            leading = { Icon(Icons.Filled.LineWeight, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            contentDescription = CurveLabels17.STROKE_KIND,
+        )
+    }
     if (s.stroke == CurveStroke.PLAIN) {
         // The line width: the brush size while linked (brush icon), else the line's own.
         val dpi = tool.controller.doc.dpi.toDouble()
@@ -219,17 +272,242 @@ private fun StrokeFillAndSheets(tool: CurveTool, onSettings: () -> Unit, onNumbe
             if (linked) Icons.Filled.Brush else Icons.Filled.LineWeight,
         ) { onSettings() }
     }
-    OptionChip("Fill", s.fill, { set { it.copy(fill = !it.fill) } }, icon = Icons.Filled.FormatColorFill)
     SnapToObjectsChip(tool.controller)
     ActionChip("Numbers", Icons.Filled.Pin) { onNumbers() }
     // I10: shows "Settings", known as "Curve settings" / "Polyline settings" / "Path settings".
     ActionChip("Settings", Icons.Filled.Tune, contentDescription = "${tool.id.label} settings") { onSettings() }
 }
 
+/** The stroke kinds of the strip's dropdown ("No stroke" is the Fill segment now). */
+private val STROKE_KINDS = listOf(CurveStroke.BRUSH, CurveStroke.PLAIN)
+
+/**
+ * v1.7 (item 7, §3.7a): the three segments "Stroke", "Fill", "Both" (known as "Stroke only",
+ * "Fill only", "Stroke and fill"; 40 dp tall, about 64 dp wide). With 1 or 2 points Fill and Both
+ * are greyed (disabled for TalkBack); a tap on one says "Fill needs 3 points".
+ */
+@Composable
+private fun PaintSegments(tool: CurveTool) {
+    val mode = tool.paintMode
+    val fillOk by remember(tool) { derivedStateOf { tool.fillPossible } }
+    fun pick(m: CurvePaint) {
+        if (m != CurvePaint.STROKE && !fillOk) tool.controller.toast(CurveLabels17.FILL_NEEDS_3) else tool.setPaintMode(m)
+    }
+    Row(
+        Modifier
+            .padding(horizontal = 3.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(BrushworkColors.ChromeHigh.copy(alpha = 0.6f)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PaintSegment("Stroke", CurveLabels17.STROKE_ONLY, mode == CurvePaint.STROKE, available = true) { pick(CurvePaint.STROKE) }
+        PaintSegment("Fill", CurveLabels17.FILL_ONLY, mode == CurvePaint.FILL, available = fillOk) { pick(CurvePaint.FILL) }
+        PaintSegment("Both", CurveLabels17.BOTH, mode == CurvePaint.BOTH, available = fillOk) { pick(CurvePaint.BOTH) }
+    }
+}
+
+/** One segment of [PaintSegments]: [text] shown, known by [description] alone (I10, as [ActionChip]). */
+@Composable
+private fun PaintSegment(text: String, description: String, selected: Boolean, available: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .heightIn(min = 40.dp)
+            .widthIn(min = 64.dp)
+            .background(if (selected) BrushworkColors.AccentDim else Color.Transparent)
+            .clickable(role = Role.RadioButton, onClick = onClick)
+            .semantics {
+                contentDescription = description
+                this.selected = selected
+                if (!available) {
+                    stateDescription = CurveLabels17.FILL_NEEDS_3
+                    disabled()
+                }
+            }
+            .padding(horizontal = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            maxLines = 1,
+            color = when {
+                !available -> BrushworkColors.OnChromeDim.copy(alpha = 0.5f)
+                selected -> Color.White
+                else -> BrushworkColors.OnChrome
+            },
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+    }
+}
+
+// ====================================================================== several points (v1.7, item 1)
+
+/** What the selection controls show (derived: dragging points doesn't recompose them). */
+private data class SelectionInfo(val points: Int, val selected: Int, val several: Boolean)
+
+/**
+ * The start of the points bar (§3.1a), 44 dp each: "Select several" (accent while on) and
+ * "Select all points" ("Deselect all points" when every point is selected). Nothing while no
+ * point exists. With exactly one point selected the strips show them after that point's
+ * controls instead, so those keep their v1.6 places (I12).
+ */
+@Composable
+private fun PointSelectionControls(tool: CurveTool) {
+    val info by remember(tool) { derivedStateOf { SelectionInfo(tool.pointCount, tool.pointSelection.count, tool.selectSeveral) } }
+    val i = info
+    if (i.points == 0) return
+    // (As [OptionChip], 44 dp tall: a finger's size, as the button beside it.)
+    FilterChip(
+        selected = i.several,
+        onClick = { tool.selectSeveral = !i.several },
+        label = { Text(PointLabels.SELECT_SEVERAL, maxLines = 1) },
+        leadingIcon = { Icon(Icons.Filled.HighlightAlt, contentDescription = null, modifier = Modifier.size(18.dp)) },
+        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White, selectedLeadingIconColor = Color.White),
+        modifier = Modifier.padding(horizontal = 3.dp).heightIn(min = SELECTION_CONTROL_SIZE),
+    )
+    val all = i.selected == i.points
+    ToolIconButton(
+        if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll,
+        if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL,
+        onClick = { tool.toggleSelectAll() },
+        size = SELECTION_CONTROL_SIZE,
+    )
+}
+
+/** "Select several" and "Select all points" are 44 dp each (§3.1a). */
+private val SELECTION_CONTROL_SIZE = 44.dp
+
+/**
+ * Two or more points selected (§3.1a): their thickness (and a Path's weights) as one
+ * [MixedNumberField] each, the sharp chip in three states (not for a Polyline, whose points are
+ * all corners), "All points 100 %", "Delete point" (the selected ones, one in-tool step) and
+ * "Deselect point" (clears the selection). Nothing with fewer than two selected.
+ */
+@Composable
+private fun GroupPointControls(tool: CurveTool, anyThickness: Boolean) {
+    val selected by remember(tool) { derivedStateOf { tool.pointSelection.count } }
+    if (selected < 2) return
+    if (tool.isPath) GroupWeightField(tool)
+    GroupThicknessField(tool)
+    if (!tool.polyline) GroupSharpChip(tool)
+    if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
+    ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteSelectedPoints() }
+    ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
+}
+
+/** The custom increment key of the group thickness field (a control without a kind, as the weight's). */
+internal const val POINT_THICKNESS_KEY = "curve.pointThickness"
+
+/** Thickness factors (0..3) as percentages. */
+private fun percents(factors: FloatArray) = FloatArray(factors.size) { factors[it] * 100f }
+
+/** Percentages as thickness factors. */
+private fun factors(percents: FloatArray) = FloatArray(percents.size) { percents[it] / 100f }
+
+/**
+ * "Point thickness" of the selected points: the shared value or "Mixed"; a scrub multiplies each
+ * point's thickness (0 stays 0), a typed value sets all of them (`*2` / `/2`: each). One in-tool
+ * step per scrub or typed value.
+ */
+@Composable
+private fun GroupThicknessField(tool: CurveTool) {
+    val value by remember(tool) { derivedStateOf { Mixed.of(percents(tool.selectedWidths())) } }
+    // The selected points and their thickness when the scrub began (every event scales those).
+    val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
+    val indices = remember(tool) { arrayOf(emptyList<Int>()) }
+    MixedNumberField(
+        label = POINT_THICKNESS_LABEL,
+        value = value,
+        unit = "%",
+        range = 0f..MAX_THICKNESS_PERCENT,
+        incrementKey = POINT_THICKNESS_KEY,
+        onBegin = {
+            indices[0] = tool.pointSelection.indices
+            base[0] = percents(tool.selectedWidths())
+            tool.beginNumericEdit()
+        },
+        onDrag = drag@{ start, now ->
+            val b = base[0] ?: return@drag
+            tool.setWidths(indices[0], factors(MixedEdit.scaled(b, start, now, 0f, MAX_THICKNESS_PERCENT)))
+        },
+        onEnd = {
+            base[0] = null
+            tool.endNumericEdit()
+        },
+        onTyped = typed@{ text ->
+            val v = MixedEdit.typed(percents(tool.selectedWidths()), text, 0f, MAX_THICKNESS_PERCENT) ?: return@typed
+            tool.setWidths(tool.pointSelection.indices, factors(v))
+            tool.endNumericEdit()
+        },
+    )
+}
+
+/** PATH: "Point weight" of the selected control points (0.1–10), as [GroupThicknessField]. */
+@Composable
+private fun GroupWeightField(tool: CurveTool) {
+    val value by remember(tool) { derivedStateOf { Mixed.of(tool.selectedWeights()) } }
+    val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
+    val indices = remember(tool) { arrayOf(emptyList<Int>()) }
+    MixedNumberField(
+        label = POINT_WEIGHT_LABEL,
+        value = value,
+        unit = "",
+        range = VSpline.MIN_WEIGHT..VSpline.MAX_WEIGHT,
+        incrementKey = PATH_WEIGHT_KEY,
+        onBegin = {
+            indices[0] = tool.pointSelection.indices
+            base[0] = tool.selectedWeights()
+            tool.beginNumericEdit()
+        },
+        onDrag = drag@{ start, now ->
+            val b = base[0] ?: return@drag
+            tool.setWeights(indices[0], MixedEdit.scaled(b, start, now, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT))
+        },
+        onEnd = {
+            base[0] = null
+            tool.endNumericEdit()
+        },
+        onTyped = typed@{ text ->
+            val v = MixedEdit.typed(tool.selectedWeights(), text, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) ?: return@typed
+            tool.setWeights(tool.pointSelection.indices, v)
+            tool.endNumericEdit()
+        },
+    )
+}
+
+/** The labels of the group fields (the v1.6 single-point controls say the same). */
+internal const val POINT_THICKNESS_LABEL = "Point thickness"
+internal const val POINT_WEIGHT_LABEL = "Point weight"
+
+/**
+ * The sharp chip for several points (§3.1a, §3.4a): "Sharp corner" when all are smooth,
+ * "Smooth" when all are corners, "Mixed" (known as "Sharp corner: Mixed") when they differ; a
+ * tap on "Mixed" makes all of them corners. One in-tool step. Only the points that can be
+ * corners count: on a Path selection of open ends only it is disabled ("Ends are always sharp").
+ */
+@Composable
+private fun GroupSharpChip(tool: CurveTool) {
+    val state by remember(tool) { derivedStateOf { Mixed.of(tool.selectedSharp()) } }
+    when (val st = state) {
+        null -> ActionChip(PointLabels.ENDS_SHARP, Icons.Filled.ChangeHistory, enabled = false) {}
+        is Mixed.Same -> if (st.value) {
+            ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharpPoints(tool.pointSelection.indices, false) }
+        } else {
+            ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharpPoints(tool.pointSelection.indices, true) }
+        }
+        is Mixed.Spread -> ActionChip(PointLabels.MIXED, Icons.Filled.ChangeHistory, contentDescription = SHARP_MIXED) {
+            tool.setSharpPoints(tool.pointSelection.indices, true)
+        }
+    }
+}
+
+/** What the three-state sharp chip is known as while the selected points differ. */
+internal const val SHARP_MIXED = "Sharp corner: ${PointLabels.MIXED}"
+
 // ====================================================================== the Path tool (v1.6, §3.2)
 
 /** What the path options row shows about the selected control point. */
-private data class SelectedPathPoint(val index: Int, val weight: Float, val width: Float)
+private data class SelectedPathPoint(val index: Int, val weight: Float, val width: Float, val sharp: Boolean, val canSharp: Boolean)
 
 /**
  * Options strip of the Path tool (§3.2a, in order): Undo / Redo point, the Order stepper,
@@ -240,8 +518,9 @@ private data class SelectedPathPoint(val index: Int, val weight: Float, val widt
 private fun PathToolOptions(tool: CurveTool) {
     val selInfo by remember(tool) {
         derivedStateOf {
-            val i = tool.selectedPoint
-            tool.spline?.points?.getOrNull(i)?.let { SelectedPathPoint(i, it.weight, it.width) }
+            // (One point: the v1.6 controls. Two or more: the group's, [GroupPointControls].)
+            val i = if (tool.pointSelection.isSingle) tool.selectedPoint else -1
+            tool.spline?.points?.getOrNull(i)?.let { SelectedPathPoint(i, it.weight, it.width, it.sharp, tool.canBeSharp(i)) }
         }
     }
     val anyThickness by remember(tool) { derivedStateOf { !tool.uniformWidth } }
@@ -254,11 +533,14 @@ private fun PathToolOptions(tool: CurveTool) {
     ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
     ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
     val f = flags
+    val a = selInfo
+    // v1.7 (item 1): "Select several" and "Select all points" start the points bar (with exactly one
+    // point selected they follow that point's controls, as in the Curve strip).
+    if (a == null) PointSelectionControls(tool)
     OrderStepper(tool, f.order)
     // (Endpoint only matters for an open curve: greyed while Cyclic is on.)
     OptionChip("Endpoint", f.endpoint, { tool.setEndpoint(!f.endpoint) }, enabled = !f.cyclic)
     OptionChip("Cyclic", f.cyclic, { tool.setCyclic(!f.cyclic) }, icon = Icons.Filled.Loop)
-    val a = selInfo
     if (a != null) {
         // A point just got selected: the strip scrolls so its controls start near the left edge
         // (the whole Weight control, then the Thickness arrows and value). The two together are
@@ -282,9 +564,18 @@ private fun PathToolOptions(tool: CurveTool) {
             WeightControl(tool, a.index, a.weight)
             ThicknessControl(tool, a.index, a.width, bringIntoView = false)
         }
+        // v1.7 (item 4): a middle point can be a corner (the ends of an open path always are).
+        when {
+            !a.canSharp -> ActionChip(PointLabels.ENDS_SHARP, Icons.Filled.ChangeHistory, enabled = false) {}
+            a.sharp -> ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharp(a.index, false) }
+            else -> ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharp(a.index, true) }
+        }
         if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
         ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(a.index) }
         ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
+        PointSelectionControls(tool)
+    } else {
+        GroupPointControls(tool, anyThickness)
     }
     StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
     if (count >= 2) ActionChip("To Bézier", Icons.Filled.Gesture) { tool.toBezier() }
@@ -751,7 +1042,10 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
 
     BwSheet(title = tool.id.label, onDismiss = onDismiss) {
         SectionHeader("Stroke")
-        ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i -> set { it.copy(stroke = CurveStroke.entries[i]) } })
+        ChoiceChips(CurveStroke.entries.map { it.label }, s.stroke.ordinal, { i ->
+            val e = CurveStroke.entries[i]
+            set { it.copy(stroke = e, lastStroke = if (e != CurveStroke.NONE) e else it.lastStroke) }
+        })
         when (s.stroke) {
             CurveStroke.BRUSH -> {
                 val paintTool = controller.lastPaintTool

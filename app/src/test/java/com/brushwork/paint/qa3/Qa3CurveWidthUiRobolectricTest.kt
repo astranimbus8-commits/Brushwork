@@ -16,6 +16,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.EditorScreen
@@ -191,7 +192,7 @@ class Qa3CurveWidthUiRobolectricTest {
         c.brush = c.brush.copy(size = 8f)
         val tool = pendingCurve(c)
         val before = tool.anchors.map { it.width }
-        SmokeUi.click("Stroke", exact = false)
+        SmokeUi.click(CurveLabels17.STROKE_KIND, exact = true)
         SmokeUi.click("Current brush", exact = true)
         assertEquals(CurveStroke.BRUSH, tool.settings.stroke)
         assertEquals("the points keep their thickness", before, tool.anchors.map { it.width })

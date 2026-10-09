@@ -220,8 +220,10 @@ class PathToolRobolectricTest {
         assertEquals(2f, tool.spline!!.points[1].width, 0f)
         tool.setWeight(1, 99f)
         assertEquals(VSpline.MAX_WEIGHT, tool.spline!!.points[1].weight, 0f)
-        // The X / Y pill moves the selected point (one stable source, null while none is selected).
+        // The X / Y pill moves the selected point (one stable source; v1.7: with none selected it
+        // shows the path's centre).
         val pos = tool.splinePointPosition!!
+        assertSame(tool.pillPosition, pos)
         assertEquals(Vec2(80f, 40f), pos.position)
         pos.beginPositionEdit()
         pos.setPosition(90f, null)
@@ -231,7 +233,8 @@ class PathToolRobolectricTest {
         tool.undoStep()
         assertEquals("one step per pill drag", Vec2(80f, 40f), SplineEditing.pos(tool.spline!!.points[1]))
         tool.deselect()
-        assertNull(pos.position)
+        assertEquals(CurveTool.CENTER_LABEL, pos.label)
+        assertNotNull(pos.position)
         assertSame(pos, tool.splinePointPosition)
         assertNull("Curve uses its own adapter", (c.tools.getValue(ToolId.CURVE) as CurveTool).splinePointPosition)
     }

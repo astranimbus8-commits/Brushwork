@@ -184,7 +184,9 @@ class CoordinateStripUiRobolectricTest {
         for (p in listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f))) tool.addAnchor(p)
         tool.deselect()
         settle()
-        assertFalse("no point selected: hidden", hasSlider("X slider"))
+        // v1.7 (item 12, design §3.12): with no point selected the pill shows the object's centre.
+        assertTrue("no point selected: the pill shows the object's Center", hasSlider("X slider"))
+        assertTrue(SmokeUi.has(CurveTool.CENTER_LABEL, exact = true))
         val before = matrixOf(c)
         tool.select(1)
         settle()

@@ -9,6 +9,7 @@ import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -59,7 +60,7 @@ class QaCurveLineWidthIncrementsUiTest {
             QaCurves.tool(s, "Curve")
             assertEquals(ToolId.CURVE, s.c.activeToolId)
             val tool = s.c.currentTool as CurveTool
-            click("Stroke", exact = true)
+            click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveStroke.PLAIN.label, exact = true)
             click("Curve settings")
             val w0 = tool.lineWidth
@@ -82,7 +83,7 @@ class QaCurveLineWidthIncrementsUiTest {
             QaCurves.incrementsOff()
             QaCurves.tool(s, "Curve")
             val tool = s.c.currentTool as CurveTool
-            if (tool.settings.stroke != CurveStroke.PLAIN) { click("Stroke", exact = true); click(CurveStroke.PLAIN.label, exact = true) }
+            if (tool.settings.stroke != CurveStroke.PLAIN) { click(CurveLabels17.STROKE_KIND, exact = true); click(CurveStroke.PLAIN.label, exact = true) }
             click("Curve settings")
             val w0 = tool.lineWidth
             click("Increase Line width", exact = true)

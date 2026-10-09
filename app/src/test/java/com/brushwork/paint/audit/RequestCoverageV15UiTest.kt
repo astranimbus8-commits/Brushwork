@@ -25,6 +25,7 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveStroke
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.CanvasView
@@ -473,7 +474,7 @@ class RequestCoverageV15UiTest {
         val layer = c.doc.layers[1]
         tool("Curve")
         val curve = c.currentTool as CurveTool
-        click("Stroke")
+        click(CurveLabels17.STROKE_KIND, exact = true)
         click("Plain line", exact = true)
         assertEquals(CurveStroke.PLAIN, curve.settings.stroke)
         assertTrue("the width follows the brush size", curve.widthLinked)
