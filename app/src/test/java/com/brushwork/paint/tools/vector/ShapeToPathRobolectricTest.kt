@@ -127,8 +127,8 @@ class ShapeToPathRobolectricTest {
         assertNotNull("a Path tool path", path.spline)
         assertEquals(true, path.spline!!.cyclic)
         // No corner selected: every corner stays sharp and nothing moves.
-        assertEquals(4, path.spline!!.points.size)
-        assertTrue(path.spline!!.points.all { it.sharp })
+        assertEquals(4, path.spline.points.size)
+        assertTrue(path.spline.points.all { it.sharp })
         assertEquals(0xFF40C0E0.toInt(), (path.fill as com.brushwork.paint.vector.VPaint.Solid).color)
         // Data and pixels together: the layer shows the vector renderer's path.
         assertArrayEquals(render(layer.vector!!), pixels(layer.bitmap))
@@ -298,12 +298,51 @@ class ShapeToPathRobolectricTest {
         assertEquals(shape, layer.vector!!.objects.single())
     }
 
+    /**
+     * Review: a path lives in a vector layer, which can't hold an outline painted by a tool that
+     * moves pixels. A shape layer outlined with a watercolor brush is refused before anything is
+     * placed (the message a shape object of a vector layer gets); with a plain line it converts.
+     */
+    @Test
+    fun anOutlineOfAToolThatMovesPixelsIsRefused() {
+        val c = controller(vector = false)
+        c.brush = c.brush.copy(tip = com.brushwork.paint.brush.BrushTip.WATERCOLOR)
+        val tool = shapeTool(c)
+        tool.update { it.copy(style = ShapeStyle.STROKE, strokeWith = ShapeStroke.BRUSH) }
+        c.drag(50f to 50f, 100f to 90f, 150f to 130f)
+        tool.flushPreview()
+        tool.commit()
+        val layer = c.doc.activeLayer
+        assertTrue(layer.isShapeLayer)
+        val data = layer.shapeData
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.editLayer(layer))
+        val refusal = tool.turnIntoPathRefusal
+        assertNotNull(refusal)
+        assertTrue(refusal!!, refusal.endsWith("outlines need a raster layer: choose \"Plain line\" or a painting brush"))
+        assertFalse(tool.canTurnIntoPath)
+        assertFalse(tool.turnIntoPath())
+        assertEquals(refusal, c.message)
+        assertEquals(ToolId.SHAPE, c.activeToolId)
+        assertTrue("still open", tool.hasPendingWork)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals(data, layer.shapeData)
+        // A plain line: converted (the outline change lands first, as its own step).
+        tool.update { it.copy(strokeWith = ShapeStroke.PLAIN) }
+        assertNull(tool.turnIntoPathRefusal)
+        assertTrue(tool.turnIntoPath())
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        assertTrue(layer.isVectorLayer)
+        assertEquals(com.brushwork.paint.vector.VStrokeKind.PLAIN, (layer.vector!!.objects.single() as VPath).stroke!!.kind)
+    }
+
     @Test
     fun arrowsAreRefused() {
         val c = controller(vector = false)
         val tool = shapeTool(c, ShapeType.ARROW)
         c.drag(50f to 50f, 150f to 130f)
         assertFalse(tool.canTurnIntoPath)
+        assertEquals(PointLabels.ARROW_REFUSAL, tool.turnIntoPathRefusal)
         assertFalse(tool.turnIntoPath())
         assertEquals(PointLabels.ARROW_REFUSAL, c.message)
         assertTrue(tool.hasPendingWork)

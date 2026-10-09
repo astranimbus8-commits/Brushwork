@@ -28,7 +28,6 @@ import androidx.compose.material.icons.filled.Restore
 import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SelectAll
-
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.outlined.Delete
@@ -66,7 +65,6 @@ import com.brushwork.paint.tools.vector.ShapeHandleSide
 import com.brushwork.paint.tools.vector.ShapePoints
 import com.brushwork.paint.tools.vector.ShapeRoundness
 import com.brushwork.paint.tools.vector.ShapeTool
-import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
@@ -109,8 +107,8 @@ private data class PointsInfo(
     val anyHandles: Boolean,
     /** "Point roundness" of the selected corners that can be rounded (null: none is selected). */
     val roundness: Mixed<Float>?,
-    /** The shape is an arrow ("Turn into path" is refused). */
-    val arrow: Boolean,
+    /** Why "Turn into path" is refused (an arrow, an outline of a tool that moves pixels), or null. */
+    val toPathRefusal: String?,
     /** Some selected point has a roundness of its own. */
     val ownRoundness: Boolean,
 )
@@ -135,7 +133,7 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
                 anyHandles = pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
                 roundness = tool.pointRoundness,
                 ownRoundness = tool.canResetPointRoundness,
-                arrow = tool.settings.type == ShapeType.ARROW,
+                toPathRefusal = tool.turnIntoPathRefusal,
             )
         }
     }
@@ -187,19 +185,20 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
         if (info.anyHandles) ShapeHandlesGroup(tool, info.selectedCount > 0)
     }
     if (info.custom) ActionChip("Reset shape", Icons.Filled.RestartAlt) { tool.resetShape() }
-    if (info.pointsMode) TurnIntoPathButton(tool, info.arrow)
+    if (info.pointsMode) TurnIntoPathButton(tool, info.toPathRefusal)
 }
 
 /**
  * "Turn into path" (v1.7 item 6, design §3.6): a 40 dp button at the end of the Points
  * controls. The whole shape becomes a Path object (the selected corners editable curves) and
- * the Path tool opens it. Arrows can't: the button is disabled and says why.
+ * the Path tool opens it. When it is refused ([refusal]: an arrow, or an outline painted by a tool
+ * that moves pixels, which a vector layer can't hold) the button is disabled and says why.
  */
 @Composable
-private fun TurnIntoPathButton(tool: ShapeTool, arrow: Boolean) {
+private fun TurnIntoPathButton(tool: ShapeTool, refusal: String?) {
     FilledTonalButton(
         onClick = { tool.turnIntoPath() },
-        enabled = !arrow,
+        enabled = refusal == null,
         contentPadding = PaddingValues(horizontal = 14.dp),
         modifier = Modifier.padding(horizontal = 3.dp).height(40.dp),
     ) {
@@ -207,7 +206,7 @@ private fun TurnIntoPathButton(tool: ShapeTool, arrow: Boolean) {
         Spacer(Modifier.width(6.dp))
         Text(PointLabels.TO_PATH, maxLines = 1)
     }
-    if (arrow) Hint(PointLabels.ARROW_REFUSAL, Modifier.padding(horizontal = 6.dp))
+    if (refusal != null) Hint(refusal, Modifier.padding(horizontal = 6.dp))
 }
 
 /**

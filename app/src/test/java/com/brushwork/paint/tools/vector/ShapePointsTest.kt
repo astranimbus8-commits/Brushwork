@@ -287,6 +287,22 @@ class ShapePointsTest {
         assertNull(ShapeCodec.decode(json.replace("\"cx\":120.0", "\"cx\":NaN")))
     }
 
+    /**
+     * Review (I13): a shape layer's points keep their own roundness through the codec, and a point
+     * without one writes no "radius" key (a v1.6 shape's points read and write as before).
+     */
+    @Test
+    fun codecKeepsAPointsOwnRoundnessAndWritesNoneWithout() {
+        val plain = sample()
+        assertFalse(ShapeCodec.encode(plain).contains("\"radius\""))
+        val rounded = plain.copy(points = plain.points!!.mapIndexed { i, p -> if (i == 3) p.copy(radius = 12.5f) else p })
+        val json = ShapeCodec.encode(rounded)
+        assertTrue(json.contains("\"radius\":12.5"))
+        val back = ShapeCodec.decode(json)!!
+        assertEquals(rounded, back)
+        assertEquals(listOf(null, null, null, 12.5f), back.points!!.take(4).map { it.radius })
+    }
+
     // ------------------------------------------------------------------ hit testing and features
 
     @Test

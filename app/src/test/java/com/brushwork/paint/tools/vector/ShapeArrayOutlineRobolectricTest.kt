@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.ArraySpec
@@ -16,6 +17,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -178,5 +180,41 @@ class ShapeArrayOutlineRobolectricTest {
         for (k in 1..2) assertEquals("copy $k", inside, p[70 * w + 60 + 150 * k])
         tool.discard()
         assertNull(c.renderOverride)
+    }
+
+    /**
+     * Review (§3.6, I14): "Turn into path" on a shape layer with a live array keeps the array: the
+     * vector layer's pixels are its EXPANDED content (every copy of the path), exactly as a fresh
+     * render, and one undo gives the shape layer back with its array and pixels.
+     */
+    @Test
+    fun turningAnArrayedShapeLayerIntoAPathKeepsTheArray() {
+        val c = controller()
+        val tool = shapeTool(c)
+        tool.update { it.copy(type = ShapeType.RECTANGLE, style = ShapeStyle.FILL, fillColor = 0xFF40C0E0.toInt(), editable = true, keepProportions = false, fromCenter = false) }
+        c.drag(20f to 40f, 60f to 70f, 100f to 100f)
+        tool.commit()
+        val layer = c.doc.activeLayer
+        assertTrue(c.updateLayerData(layer, layer.dataSnapshot().copy(array = LayerArray(spec)), "Array", null, draw = null))
+        c.selectTool(ToolId.SHAPE)
+        val data = layer.shapeData
+        val before = pixels(layer.bitmap)
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.editLayer(layer))
+        assertTrue(tool.turnIntoPath())
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertTrue(layer.isVectorLayer)
+        assertEquals(LayerArray(spec), layer.array)
+        val fresh = BitmapUtils.createLayerBitmap(w, h)
+        val whole = android.graphics.Rect(0, 0, w, h)
+        VectorLayerRenderer.render(Canvas(fresh), ArrayDraw.effectiveVector(layer.dataSnapshot())!!, whole, tips = TipCache(), document = whole)
+        val p = pixels(layer.bitmap)
+        assertArrayEquals(pixels(fresh), p)
+        for (k in 1..2) assertTrue("copy $k", (p[70 * w + 60 + 150 * k] ushr 24) > 0)
+        c.undo()
+        assertEquals(data, layer.shapeData)
+        assertNull(layer.vector)
+        assertEquals(LayerArray(spec), layer.array)
+        assertArrayEquals(before, pixels(layer.bitmap))
     }
 }

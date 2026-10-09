@@ -168,4 +168,33 @@ class ShapeFolderRobolectricTest {
         assertTrue(tool.liveBrushForNewLayer(raster))
         assertFalse(tool.newLayerPreviewInOverlay(raster))
     }
+
+    /**
+     * Review (§3.6 in a folder): "Turn into path" on a new shape drawn with an open folder active
+     * places it in the folder (its own step), then the layer becomes a vector layer that stays in
+     * the folder; one undo gives the shape layer back there, another removes it.
+     */
+    @Test
+    fun aShapeTurnedIntoAPathStaysInTheFolder() {
+        val (c, folder) = controller()
+        val tool = shapeTool(c, editable = true)
+        val layers = c.doc.layers.size
+        val steps = c.undoManager.undoCount
+        c.drag(40f to 40f, 90f to 80f, 140f to 120f)
+        tool.setPointEditing(true)
+        tool.selectPoints(com.brushwork.paint.tools.points.PointSelection.of(4, 0))
+        assertTrue(tool.turnIntoPath())
+        assertEquals(steps + 2, c.undoManager.undoCount)
+        val layer = c.doc.activeLayer
+        assertTrue(layer.isVectorLayer)
+        assertEquals(folder.id, layer.parentId)
+        assertEquals(ToolId.PATH, c.activeToolId)
+        c.undo()
+        assertTrue(layer.isShapeLayer)
+        assertEquals(folder.id, layer.parentId)
+        c.undo()
+        assertTrue(c.doc.indexOf(layer) < 0)
+        assertEquals(layers, c.doc.layers.size)
+        assertEquals(steps, c.undoManager.undoCount)
+    }
 }

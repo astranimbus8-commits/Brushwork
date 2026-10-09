@@ -1147,8 +1147,23 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     // ------------------------------------------------------------------ turn into path (v1.7 item 6, §3.6)
 
-    /** "Turn into path" is offered: a shape is pending and it is no arrow (Compose state). */
-    val canTurnIntoPath: Boolean get() = box != null && settings.type != ShapeType.ARROW
+    /**
+     * Why "Turn into path" is refused for the pending shape, or null (Compose state): arrows can't
+     * become paths ("Arrows can't become paths"), and a path lives in a vector layer, which can't
+     * hold an outline painted by a tool that moves pixels (smudge, blur, watercolor: the message
+     * a shape object of a vector layer gets, v1.5).
+     */
+    val turnIntoPathRefusal: String?
+        get() {
+            if (box == null) return null
+            val s = settings
+            if (s.type == ShapeType.ARROW) return PointLabels.ARROW_REFUSAL
+            if (s.strokeWith == ShapeStroke.BRUSH && s.strokes && brushMovesPixels()) return movesPixelsMessage()
+            return null
+        }
+
+    /** "Turn into path" is offered: a shape is pending and nothing refuses it ([turnIntoPathRefusal]; Compose state). */
+    val canTurnIntoPath: Boolean get() = box != null && turnIntoPathRefusal == null
 
     /**
      * "Turn into path" (design §3.6). The pending shape edit lands first, as its own step: a NEW
@@ -1159,13 +1174,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * renderer, a live array kept), a shape object of a vector layer is replaced in place (same
      * id and opacity, its brush seed kept). The Path tool then opens the path with the selected
      * corners (Points mode) selected; with none selected every corner stays sharp and nothing
-     * moves. Arrows are refused with "Arrows can't become paths". True when the conversion was
-     * applied (or, for a large vector layer, is rendering).
+     * moves. Arrows, and outlines of tools that move pixels, are refused before anything is placed
+     * ([turnIntoPathRefusal]). True when the conversion was applied (or, for a large vector layer,
+     * is rendering).
      */
     fun turnIntoPath(): Boolean {
         val b = box ?: return false
-        if (settings.type == ShapeType.ARROW) {
-            controller.toast(PointLabels.ARROW_REFUSAL)
+        turnIntoPathRefusal?.let {
+            controller.toast(it)
             return false
         }
         val pts = points
@@ -3503,7 +3519,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // source alone). Without an array it is painted exactly as in v1.6, below, and so is an
         // outline whose tool moves pixels (smudge, blur, watercolor: a replay can't paint it).
         val perCopy = path != null && layer.array != null && !brushMovesPixels()
-        val replay = if (perCopy && path != null) outlineReplay(o, path, brushPreview.sessionSeed) else null
+        val replay = if (perCopy) outlineReplay(o, path, brushPreview.sessionSeed) else null
         var done = false
         inCommit = true
         val maskEditing = layer.editingMask
