@@ -16,8 +16,14 @@ import kotlin.math.sqrt
  *   on its events are consumed before the controls see them (the button under the first finger
  *   does not fire), and the canvas drops what its fingers started ([Host.yieldCanvas]);
  * - what the UI did before the claim (a slider that jumped under the first finger) is put back
- *   from the [Host.openMark] mark taken at the first down; then ONE undo (or redo) runs.
+ *   from what [Host.openMark] remembered at the first down and from the [Host.claimMark] mark
+ *   taken at the claim; then ONE undo (or redo) runs.
  * A gesture on the canvas alone stays the canvas' (its own taps); its mark is released at once.
+ *
+ * The mark comes in two steps because the full one records a pending live edit as its step first
+ * (`EditorController.uiMark` -> `undoMarker`). Taken at every first down, it would split the
+ * Adjust sheet's live edit into one step per tap, and it would wait for a vector render still
+ * running at every touch, the canvas' included.
  *
  * Pure and allocation-free: fixed arrays of [MAX_POINTERS], one call per pointer change. Pointers
  * are told apart by window ([slot], up to 16) and id.
@@ -32,10 +38,19 @@ class HistoryTapHub(
         /** Whether a two-finger undo ([redo] false) or three-finger redo tap is on now. */
         fun allowed(redo: Boolean): Boolean
 
-        /** Remembers the state a tap puts back (the first down of a gesture that may be one). */
+        /**
+         * Remembers what the first finger may change before the claim (the first down of a
+         * gesture that may be one). Cheap: it records no step and waits for nothing.
+         */
         fun openMark()
 
-        /** Forgets the [openMark] mark (every gesture end; at once for a canvas-only gesture). */
+        /**
+         * The gesture is claimed (always after [openMark]): takes the full mark of what a tap
+         * puts back, now that a history tap may come.
+         */
+        fun claimMark()
+
+        /** Forgets what [openMark] and [claimMark] took (every gesture end; at once for a canvas-only gesture). */
         fun releaseMark()
 
         /** The gesture is claimed while fingers are on the canvas: it drops what they started. */
@@ -103,7 +118,7 @@ class HistoryTapHub(
                 host.openMark()
             }
             // A finger is already on the UI: claim before this one reaches anything.
-            if (!claimed && count >= 2 && anyUi) claimed = true
+            if (!claimed && count >= 2 && anyUi) claim()
         } else {
             // No tap (or none that is on) can come of it any more.
             releaseMark()
@@ -132,7 +147,7 @@ class HistoryTapHub(
             releaseMark()
             return
         }
-        if (!claimed && count >= 2 && tapPossible(timeMs) && tapAllowed(count)) claimed = true
+        if (!claimed && count >= 2 && tapPossible(timeMs) && tapAllowed(count)) claim()
         if (claimed && anyCanvas && !yielded) {
             yielded = true
             host.yieldCanvas()
@@ -207,6 +222,16 @@ class HistoryTapHub(
         anyCanvas = false
         yielded = false
         claimed = false
+    }
+
+    /** The gesture is a history tap candidate: its events are consumed, the full mark is taken. */
+    private fun claim() {
+        claimed = true
+        if (!markOpen) {
+            markOpen = true
+            host.openMark()
+        }
+        host.claimMark()
     }
 
     private fun endGesture() {

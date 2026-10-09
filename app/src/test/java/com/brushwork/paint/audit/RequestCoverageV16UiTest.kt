@@ -21,6 +21,7 @@ import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.ToolMenu
 import com.brushwork.paint.ui.editor.ToolMenuEntry
@@ -514,9 +515,11 @@ class RequestCoverageV16UiTest {
         assertEquals("at x 8", 8f, slot.left, 1f)
         for (label in listOf("X slider", "Y slider")) assertTrue("\"$label\"", RobolectricUi.elements().any { it.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(label) == true })
         assertTrue("typed", has("Type X") && has("Type Y"))
-        // The pill's own look (area G): 32 dp tall with the "#" increments cell.
+        // The pill's own look (area G): 32 dp tall with the "#" increments cell. v1.7 (item 9):
+        // with the Scale row under it (a tool with an object scale), 32 + 4 + 32.
         if (areaControl("G", "Increments")) {
-            assertEquals("a small pill", 32f, slot.height, 1.5f)
+            val rows = if (s.tagged(V17Tags.PILL_SCALE_ROW) != null) 68f else 32f
+            assertEquals("a small pill", rows, slot.height, 1.5f)
         }
         val steps = c.undoManager.undoCount
         setSlider("X slider", 300f)

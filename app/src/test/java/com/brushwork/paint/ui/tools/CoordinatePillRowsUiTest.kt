@@ -126,9 +126,12 @@ class CoordinatePillRowsUiTest {
 
             // Typed, proportions kept: one setScale, both axes, about the box centre.
             var calls = fake.setScaleCalls
+            var edits = fake.beginScaleCalls
             SmokeUi.click("Type ${PillLabels.SCALE_X}")
             SmokeUi.typeAndDone(PillLabels.SCALE_X, "200")
-            assertEquals("one edit", calls + 1, fake.setScaleCalls)
+            assertEquals("one setScale", calls + 1, fake.setScaleCalls)
+            assertEquals("one edit (one undo step)", edits + 1, fake.beginScaleCalls)
+            assertEquals("ended", fake.beginScaleCalls, fake.endScaleCalls)
             assertEquals(Vec2(200f, 200f), fake.objectScale!!.scalePercent)
             assertEquals(listOf(Vec2(-10f, 0f), Vec2(70f, 0f), Vec2(70f, 40f), Vec2(-10f, 40f)), fake.points)
             assertEquals("200 %", described(PillLabels.SCALE_Y)!!.stateDescription)
@@ -154,6 +157,7 @@ class CoordinatePillRowsUiTest {
                 idle(8)
                 t += 8
             }
+            edits = fake.beginScaleCalls
             send(MotionEvent.ACTION_DOWN, b.center.x)
             for (i in 1..10) send(MotionEvent.ACTION_MOVE, b.center.x + 50f * density * i / 10f)
             send(MotionEvent.ACTION_UP, b.center.x + 50f * density)
@@ -161,6 +165,8 @@ class CoordinatePillRowsUiTest {
             val dragged = fake.objectScale!!.scalePercent!!
             assertEquals("+50 dp = +50 %", 250f, dragged.x, 0.6f)
             assertEquals(25f, dragged.y, 1e-3f)
+            assertEquals("the whole drag is one edit", edits + 1, fake.beginScaleCalls)
+            assertEquals(fake.beginScaleCalls, fake.endScaleCalls)
 
             // "Scale increments": the same switch as "#"; its long-press is the Scale step.
             SmokeUi.click(PillLabels.SCALE_INCREMENTS, exact = true)

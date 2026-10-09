@@ -86,9 +86,9 @@ import com.brushwork.paint.ui.common.summary
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.editor.endCanvasGesture
-import kotlinx.serialization.builtins.serializer
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
+import kotlinx.serialization.builtins.serializer
 
 /**
  * The X / Y pill (v1.6 §3.7.8; area G): "small, the number is the slider, X and Y in beveled

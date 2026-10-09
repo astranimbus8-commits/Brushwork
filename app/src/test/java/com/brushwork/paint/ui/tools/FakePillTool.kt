@@ -65,6 +65,11 @@ class FakePillTool(
         private set
     var endPositionCalls = 0
         private set
+    /** v1.7 area I: the Scale row's edits (one typed value or one drag is one begin … end). */
+    var beginScaleCalls = 0
+        private set
+    var endScaleCalls = 0
+        private set
 
     /** The scale reference box (min, max) captured when the selection was taken, and the points then. */
     private var reference: Pair<Vec2, Vec2>? = null
@@ -130,6 +135,9 @@ class FakePillTool(
                 fun pct(now: Float, was: Float) = if (was == 0f) 100f else now / was * 100f
                 return Vec2(pct(nhi.x - nlo.x, hi.x - lo.x), pct(nhi.y - nlo.y, hi.y - lo.y))
             }
+
+        override fun beginScaleEdit() { beginScaleCalls++ }
+        override fun endScaleEdit() { endScaleCalls++ }
 
         override fun setScale(xPercent: Float?, yPercent: Float?) {
             setScaleCalls++

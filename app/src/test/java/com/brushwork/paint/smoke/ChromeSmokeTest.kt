@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.select.SelectionEdits
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.ExpressionLabels
 import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.EditorScreen
 import com.brushwork.paint.ui.editor.SliderMath
@@ -192,11 +193,13 @@ class ChromeSmokeTest {
         SmokeUi.typeAndDone("Brush size", "25")
         assertEquals(25f, c.brush.size)
         assertEquals("dialog closed", 1, SmokeUi.windows().size)
-        // Garbage is refused: the value stays and the dialog says why.
+        // Garbage is refused: the value stays and the dialog says why (v1.7, item 15: the live
+        // readout's error; OK and Done do nothing while it shows).
         click("Type brush size")
         SmokeUi.typeAndDone("Brush size", "abc")
         assertEquals(25f, c.brush.size)
-        assertTrue("invalid input reported", has("Type a number"))
+        assertTrue("invalid input reported", has(ExpressionLabels.INVALID))
+        assertEquals("the dialog stays", 2, SmokeUi.windows().size)
         click("Cancel", exact = true)
         assertEquals(1, SmokeUi.windows().size)
         // Out of range is clamped; commas work.

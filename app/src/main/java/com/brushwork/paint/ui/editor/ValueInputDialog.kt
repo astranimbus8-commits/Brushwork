@@ -37,12 +37,12 @@ import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ExpressionReadout
+import com.brushwork.paint.ui.common.IncrementStepping
+import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.OperatorKeys
 import com.brushwork.paint.ui.common.OperatorText
 import com.brushwork.paint.ui.common.Readout
 import com.brushwork.paint.ui.common.ReadoutText
-import com.brushwork.paint.ui.common.IncrementStepping
-import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.stepFor
 import com.brushwork.paint.ui.theme.BrushworkColors

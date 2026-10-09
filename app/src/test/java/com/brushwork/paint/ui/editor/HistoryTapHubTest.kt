@@ -14,11 +14,16 @@ class HistoryTapHubTest {
 
     private class Host(var undoOn: Boolean = true, var redoOn: Boolean = true) : HistoryTapHub.Host {
         var opened = 0
+        var claims = 0
         var released = 0
         var yields = 0
         val taps = ArrayList<String>()
         override fun allowed(redo: Boolean) = if (redo) redoOn else undoOn
         override fun openMark() { opened++ }
+        override fun claimMark() {
+            assertTrue("the full mark comes after the light one", opened > released)
+            claims++
+        }
         override fun releaseMark() { released++ }
         override fun yieldCanvas() { yields++ }
         override fun historyTap(redo: Boolean) { taps += if (redo) "redo" else "undo" }
@@ -47,8 +52,10 @@ class HistoryTapHubTest {
     fun twoFingersOnTheUiUndoOnce() {
         assertFalse("one finger is not claimed", down(0, 100f, 1000))
         assertEquals("the mark is taken at the first down", 1, host.opened)
+        assertEquals("the full mark only at the claim", 0, host.claims)
         assertTrue("a second finger claims the gesture", down(1, 300f, 1050))
         assertTrue(hub.claimed)
+        assertEquals("the full mark at the claim, once", 1, host.claims)
         hub.move(0, 0, 105f, 100f, 1100)
         assertTrue("claimed events are consumed", up(0, 0, 1150))
         assertTrue(hub.up(0, 1, 1200))
@@ -138,6 +145,7 @@ class HistoryTapHubTest {
         assertFalse(up(0, 1, 70))
         assertTrue("the canvas undoes, not the hub", host.taps.isEmpty())
         assertEquals(0, host.yields)
+        assertEquals("no full mark for the canvas' own gesture", 0, host.claims)
         assertEquals(host.opened, host.released)
     }
 
