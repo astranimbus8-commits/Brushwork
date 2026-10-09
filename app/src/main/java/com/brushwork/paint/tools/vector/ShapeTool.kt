@@ -3469,7 +3469,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * "Edit shape" (pixels and shape data; a brush outline is replayed with the shape's own
      * brush in the same step). Nothing is recorded when nothing changed. A refusal (layer
      * locked or hidden meanwhile) keeps the shape open. v1.7 (I14): with a live array every copy
-     * gets the outline too ([outlineReplay] inside the draw that `updateShapeLayer` repeats).
+     * gets the outline too ([outlineReplay] inside the draw that `updateShapeLayer` repeats),
+     * except an outline whose tool moves pixels (smudge, blur, watercolor), which is painted on
+     * the source alone, as in v1.6.
      */
     private fun commitLayerEdit(layer: Layer, b: ShapeBox) {
         val doc = controller.doc
@@ -3498,8 +3500,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         }
         // v1.7 (I14): on a layer with a live array the outline is replayed inside the draw, which
         // updateShapeLayer repeats for every copy (the painting tool's stroke would reach the
-        // source alone). Without an array it is painted exactly as in v1.6, below.
-        val replay = if (path != null && layer.array != null) outlineReplay(o, path, brushPreview.sessionSeed) else null
+        // source alone). Without an array it is painted exactly as in v1.6, below, and so is an
+        // outline whose tool moves pixels (smudge, blur, watercolor: a replay can't paint it).
+        val perCopy = path != null && layer.array != null && !brushMovesPixels()
+        val replay = if (perCopy && path != null) outlineReplay(o, path, brushPreview.sessionSeed) else null
         var done = false
         inCommit = true
         val maskEditing = layer.editingMask
@@ -3510,7 +3514,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                     spec?.let { renderer.draw(c, it, false, doc.colorMode) }
                     replay?.invoke(c)
                 }
-                if (done && path != null && layer.array == null) {
+                if (done && path != null && !perCopy) {
                     // The outline is painted on the layer's pixels, never into its mask, and the
                     // shape is drawn again whole, from scratch, like its fill: neither alpha lock
                     // (which would keep the just cleared outline empty) nor a selection (which
