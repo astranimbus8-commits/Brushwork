@@ -1037,13 +1037,19 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /**
      * Deletes the selected points as one in-tool step. With every point selected the object goes
-     * ([deleteObject]); a deletion that would leave a single point is refused with a toast.
+     * ([deleteObject]); a deletion of several that would leave a single point is refused with a
+     * toast. One selected point (of two or more) is deleted as the strip's "Delete point" does
+     * ([deleteAnchor], I12: as in v1.6, which has no minimum).
      */
     override fun deleteSelectedPoints(): Boolean {
         val sel = pointSelection
         if (sel.isEmpty || anchors.isEmpty() || groupEdit != null) return false
         val left = pointCount - sel.count
         if (left <= 0) return deleteObject()
+        if (sel.isSingle) {
+            deleteAnchor(sel.primary)
+            return true
+        }
         if (left < minPoints) {
             controller.toast(minPointsMessage())
             return false

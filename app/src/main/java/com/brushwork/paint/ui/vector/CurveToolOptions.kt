@@ -1298,12 +1298,18 @@ private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
         }
 
         if (count > 0) {
+            // v1.7 (item 1): with several points selected the arrows move all of them ([CurveTool.nudge]).
+            val group = tool.pointSelection.count
             SectionHeader("Nudge")
             NudgeRow(
                 stepPx = s.nudgeStepPx,
                 onStep = { v -> set { it.copy(nudgeStepPx = v) } },
                 unit = unit, dpi = dpi,
-                hint = if (a != null) "Each arrow moves point ${sel + 1} by one step" else "Each arrow moves the whole path by one step",
+                hint = when {
+                    group >= 2 -> "Each arrow moves the $group selected points by one step"
+                    a != null -> "Each arrow moves point ${sel + 1} by one step"
+                    else -> "Each arrow moves the whole path by one step"
+                },
                 onNudge = { dx, dy -> tool.nudge(dx, dy) },
             )
         }
