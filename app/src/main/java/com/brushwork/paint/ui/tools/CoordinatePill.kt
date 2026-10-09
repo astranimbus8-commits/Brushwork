@@ -172,8 +172,10 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
                 FoldCell("Unfold the X / Y strip") { setFolded(false) }
             } else {
                 FoldCell("Fold the X / Y strip") { setFolded(true) }
-                AxisCell(controller, target, "X", p.x, doc.width.toFloat(), unit, dpi, snap) { v -> target.setPosition(v, null) }
-                AxisCell(controller, target, "Y", p.y, doc.height.toFloat(), unit, dpi, snap) { v -> target.setPosition(null, v) }
+                // At most 110 dp each; on a phone narrower than 392 dp they give way first, so the
+                // "#" and trash cells stay whole (no effect at 392 dp: their share is 112 dp there).
+                AxisCell(controller, target, "X", p.x, doc.width.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(v, null) }
+                AxisCell(controller, target, "Y", p.y, doc.height.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(null, v) }
                 StepCell(controller, IncrementKind.LENGTH, INCREMENTS_LABEL)
             }
             // Item 13: delete stays one tap away, folded too.
@@ -509,6 +511,7 @@ private fun AxisCell(
     unit: LengthUnit,
     dpi: Double,
     snap: Boolean,
+    modifier: Modifier = Modifier,
     onSet: (Float) -> Unit,
 ) {
     val haptics = LocalHapticFeedback.current
@@ -541,7 +544,7 @@ private fun AxisCell(
     val range = axisRange(value, extent)
     val shown = formatCoordinate(value, unit, dpi)
     Box(
-        Modifier
+        modifier
             .requiredHeight(IbisDims.PillCellTouch)
             .semantics {
                 contentDescription = "$axis slider"

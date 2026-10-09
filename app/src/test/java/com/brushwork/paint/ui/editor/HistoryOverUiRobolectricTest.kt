@@ -36,7 +36,8 @@ import org.robolectric.shadows.ShadowViewConfiguration
  * - two fingers on the options bar undo once; three on the bottom bar redo once; the buttons
  *   under the fingers do nothing (no panel, no tool change);
  * - over a panel (the Brush sheet) the same, and what its sliders did under the fingers is put
- *   back; a "Bigger brush" step under the first finger is put back too;
+ *   back; a "Bigger brush" step under the first finger is put back too, and so is the brush
+ *   size slider the first finger dragged;
  * - a finger on the canvas and one on the UI: exactly one undo, the canvas finger draws nothing;
  *   the canvas alone keeps its own taps (one undo, not two);
  * - with [FakePillTool], a Scale X drag under the first finger (an in-tool step) is rolled back,
@@ -81,6 +82,31 @@ class HistoryOverUiRobolectricTest {
         assertEquals((8 * s.density).toInt(), ViewConfiguration.get(s.activity).scaledTouchSlop)
     }
 
+    /**
+     * The first finger goes down at [first] (editor dp) and drags 10 dp to the right (under the
+     * 12 dp tap slop), [whileDragging] checks what the drag did, then a second finger lands at
+     * [other] and both lift: a two-finger tap.
+     */
+    private fun dragThenSecondFinger(first: Pair<Float, Float>, other: Pair<Float, Float>, whileDragging: () -> Unit) {
+        val a = px(first)
+        val b = px(other)
+        val t = s.touch
+        t.send(MotionEvent.ACTION_DOWN, P(0, a.first, a.second))
+        for (i in 1..5) {
+            t.idle(16)
+            t.send(MotionEvent.ACTION_MOVE, P(0, a.first + 2f * i * s.density, a.second))
+        }
+        settle(2, 10)
+        whileDragging()
+        val dragged = a.first + 10f * s.density
+        t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, dragged, a.second), P(1, b.first, b.second), index = 1)
+        t.idle(40)
+        t.send(MotionEvent.ACTION_POINTER_UP, P(0, dragged, a.second), P(1, b.first, b.second), index = 0)
+        t.idle(20)
+        t.send(MotionEvent.ACTION_UP, P(1, b.first, b.second))
+        settle()
+    }
+
     private val steps: Int get() = s.c.undoManager.undoCount
 
     private fun feedback(): String? = SmokeUi.shown().lastOrNull { it.startsWith("Undo: ") || it.startsWith("Redo: ") }
@@ -95,13 +121,13 @@ class HistoryOverUiRobolectricTest {
             s = h.editor(Smoke.document(400, 300, layers = 2, whiteBottom = true))
             val c = s.c
             assertTrue("both taps are on by default", c.settings.twoFingerUndo && c.settings.threeFingerRedo)
-            for (y in listOf(60f, 110f, 160f, 210f)) stroke(y)
-            assertEquals("four strokes", 4, steps)
+            for (y in listOf(40f, 80f, 120f, 160f, 200f)) stroke(y)
+            assertEquals("five strokes", 5, steps)
 
             // ------------------------------------------------ options bar: two fingers undo
             val strip = region(ChromeTags.OPTIONS_STRIP)
             twoFingers(strip.at(0.3f), strip.at(0.7f))
-            assertEquals("one undo", 3, steps)
+            assertEquals("one undo", 4, steps)
             assertTrue(c.canRedo)
             assertTrue("the feedback: ${SmokeUi.shown().take(40)}", feedback()?.startsWith("Undo: ") == true)
             assertTrue("nothing opened", SmokeUi.sheetTitles().isEmpty() && SmokeUi.pillTitles().isEmpty())
@@ -109,7 +135,7 @@ class HistoryOverUiRobolectricTest {
             // ------------------------------------------------ bottom bar: three fingers redo
             val bar = region(ChromeTags.BOTTOM_BAR)
             threeFingers(bar.at(0.2f), bar.at(0.5f), bar.at(0.8f))
-            assertEquals("one redo", 4, steps)
+            assertEquals("one redo", 5, steps)
             assertEquals("no button fired", ToolId.BRUSH, c.activeToolId)
             assertTrue(SmokeUi.sheetTitles().isEmpty() && SmokeUi.pillTitles().isEmpty())
             assertNull("no tool menu", s.tagged(ChromeTags.TOOL_MENU))
@@ -117,14 +143,25 @@ class HistoryOverUiRobolectricTest {
 
             // ------------------------------------------------ the buttons under the fingers
             twoFingers(control("Open brush settings").at(0.5f), control("Open color picker").at(0.5f))
-            assertEquals(3, steps)
+            assertEquals(4, steps)
             assertTrue("the brush settings did not open", SmokeUi.sheetTitles().isEmpty() && SmokeUi.pillTitles().isEmpty())
 
             // ------------------------------------------------ a step under the first finger is put back
             val size = c.brush.size
             twoFingers(control("Bigger brush").at(0.5f), region(ChromeTags.TOP_ROW).at(0.5f, 0.9f))
             assertEquals("the size the brush had", size, c.brush.size, 1e-4f)
-            assertEquals(2, steps)
+            assertEquals(3, steps)
+
+            // ------------------------------------------------ a slider moved by the first finger is put back
+            // Robolectric's touch slop is 16 dp, a phone's 8 dp: a drag of 10 dp (under the 12 dp
+            // tap slop) is a drag on the phone only. From here on the test has the phone's slop.
+            phoneTouchSlop(s)
+            val sizeTrack = requireNotNull(Finger.element(s, "Brush size")) { "no size slider" }
+            dragThenSecondFinger(sizeTrack.at(0.5f), region(ChromeTags.TOP_ROW).at(0.5f, 0.9f)) {
+                assertNotEquals("the drag moved the size slider", size, c.brush.size)
+            }
+            assertEquals("the size slider put back", size, c.brush.size, 1e-4f)
+            assertEquals("one undo", 2, steps)
 
             // ------------------------------------------------ over a panel
             SmokeUi.click("Open brush settings", exact = true)
@@ -161,27 +198,10 @@ class HistoryOverUiRobolectricTest {
             c.snapping.enabled = false
             settle()
             val before = fake.points
-            // Robolectric's touch slop is 16 dp, a phone's 8 dp: a cell drag of 10 dp (under the
-            // 12 dp tap slop) is a drag on the phone only. Give the test the phone's slop.
-            phoneTouchSlop(s)
-            val scaleX = px(control(PillLabels.SCALE_X).at(0.5f))
-            val other = px(region(ChromeTags.TOP_ROW).at(0.5f, 0.9f))
-            val t = s.touch
-            t.send(MotionEvent.ACTION_DOWN, P(0, scaleX.first, scaleX.second))
-            for (i in 1..5) {
-                t.idle(16)
-                t.send(MotionEvent.ACTION_MOVE, P(0, scaleX.first + 2f * i * s.density, scaleX.second))
+            dragThenSecondFinger(control(PillLabels.SCALE_X).at(0.5f), region(ChromeTags.TOP_ROW).at(0.5f, 0.9f)) {
+                assertNotEquals("the drag scaled the object (an in-tool step)", before, fake.points)
+                assertTrue(fake.steps > 0)
             }
-            settle(2, 10)
-            assertNotEquals("the drag scaled the object (an in-tool step)", before, fake.points)
-            assertTrue(fake.steps > 0)
-            val dragged = scaleX.first + 10f * s.density
-            t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, dragged, scaleX.second), P(1, other.first, other.second), index = 1)
-            t.idle(40)
-            t.send(MotionEvent.ACTION_POINTER_UP, P(0, dragged, scaleX.second), P(1, other.first, other.second), index = 0)
-            t.idle(20)
-            t.send(MotionEvent.ACTION_UP, P(1, other.first, other.second))
-            settle()
             assertEquals("the drag rolled back", before, fake.points)
             assertEquals(0, fake.steps)
             assertEquals("then one undo", 0, steps)
