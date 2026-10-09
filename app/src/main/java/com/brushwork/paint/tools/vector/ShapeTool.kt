@@ -14,18 +14,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
+import com.brushwork.paint.brush.PathStrokeInput
 import com.brushwork.paint.brush.StrokeKind
+import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
 import com.brushwork.paint.core.LengthUnit
+import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.ArrayLayout
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
@@ -57,6 +61,7 @@ import com.brushwork.paint.tools.transform.SnapHit
 import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.VShape
@@ -462,6 +467,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val old = settings
         val new = transform(old).sanitized(fallback = old)
         if (new == old) return
+        if (refusesIntoFolder(old, new)) {
+            controller.toast(FolderLabels.PAINT_REFUSAL)
+            return
+        }
         settings = new
         // While a shape layer is edited the options show that shape: only the drawing options
         // are the user's own (and saved).
@@ -480,6 +489,17 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         }
         if (b != null && old.type.isLineLike != new.type.isLineLike) box = clean(convert(b, new.type))
         refreshPreview()
+    }
+
+    /**
+     * v1.7 (§3.8): a pending NEW shape placed with a folder active goes into a layer of its own;
+     * options that would paint it into the folder instead ("Editable (own layer)" off, or a
+     * smudge / blur outline) are refused and kept as they were. (A shape being placed later is
+     * refused when it starts, [checkCanPlaceNew].)
+     */
+    private fun refusesIntoFolder(old: ShapeSettings, new: ShapeSettings): Boolean {
+        if (box == null || editingLayer != null || vectorSession != null || userSettings != null) return false
+        return paintsIntoFolder(new) && !paintsIntoFolder(old)
     }
 
     private fun loadSettings(): ShapeSettings =
@@ -547,8 +567,22 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return kind != StrokeKind.SMUDGE && kind != StrokeKind.BLUR
     }
 
-    /** True when a new shape needs the active layer: when it is painted into it, it must be editable. */
-    private fun checkCanPlaceNew(): Boolean = placesInNewLayer() || controller.checkEditable()
+    /**
+     * True when a new shape needs the active layer: when it is painted into it, it must be
+     * editable. v1.7 (§3.8): the Shape tool works with a folder active (a new shape layer goes in
+     * at `structure.insertionPoint()`), but with "Editable (own layer)" off it would paint into
+     * the folder itself, which has no pixels: refused with "Choose a layer inside the folder to
+     * paint".
+     */
+    private fun checkCanPlaceNew(): Boolean {
+        if (placesInNewLayer()) return true
+        if (paintsIntoFolder()) { controller.toast(FolderLabels.PAINT_REFUSAL); return false }
+        return controller.checkEditable()
+    }
+
+    /** A new shape painted into the active layer ([placesInNewLayer] false for [s]) would paint a folder. */
+    private fun paintsIntoFolder(s: ShapeSettings = newShapeSettings()): Boolean =
+        (targetLayer ?: controller.doc.activeLayer).isFolder && !placesInNewLayer(s)
 
     /** New shapes go into a shape layer of their own (Compose state; see [placesInNewLayer]). */
     val newShapesEditable: Boolean get() = placesInNewLayer()
@@ -2446,7 +2480,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val asNew = placesInNewLayer()
         val pending = box?.let { objectFor(it, points) }
         val creating = creatingBox?.let { newObject(it) }
-        val brushObj = if (paintsWithBrush(layer)) creating ?: pending else null
+        // v1.7 (§3.8): nothing is ever painted into a folder (such a shape is refused when it is
+        // placed): it shows as plain outlines over the canvas.
+        val intoFolder = !asNew && layer.isFolder
+        val brushObj = if (!intoFolder && paintsWithBrush(layer)) creating ?: pending else null
         brushGuide = null
         if (brushObj != null) {
             ensureObserving()
@@ -2472,7 +2509,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             overlaySpecs = emptyList()
             val specs = listOfNotNull(pending?.let { ShapeOutlines.paintSpec(it, brush = false) }, creating?.let { ShapeOutlines.paintSpec(it, brush = false) })
             if (specs.isNotEmpty()) ensureObserving()
-            preview.show(layer, specs, asNewLayer = asNew, overlayOnly = asNew && newLayerPreviewInOverlay(layer))
+            preview.show(layer, specs, asNewLayer = asNew || intoFolder, overlayOnly = intoFolder || (asNew && newLayerPreviewInOverlay(layer)))
         }
         controller.invalidateOverlay()
     }
@@ -2483,9 +2520,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * layer is a plain one). When the active layer would change how it looks (hidden, opacity,
      * blend mode, mask, clipping) it is drawn over the canvas instead, unless layers above would
      * then be covered (a hidden active layer always uses the overlay: inside it, it would not show).
+     * v1.7 (§3.8): with an OPEN folder active the new layer becomes the folder's top child, and
+     * the compositor draws the preview inside the folder (false); a closed folder is never plain.
      */
-    private fun newLayerPreviewInOverlay(layer: Layer): Boolean {
+    internal fun newLayerPreviewInOverlay(layer: Layer): Boolean {
         if (!controller.doc.effectiveVisible(layer)) return true
+        if (layer.isFolder && layer.folderOpen) return false
         if (isPlain(layer)) return false
         val layers = controller.doc.layers
         val index = controller.doc.indexOf(layer)
@@ -2496,17 +2536,21 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return true
     }
 
-    /** [layer] shows its content as it is: fully opaque, normal blending, no mask, not clipped. */
-    private fun isPlain(layer: Layer): Boolean =
-        layer.opacity >= 1f && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping && !(layer.mask != null && layer.maskEnabled)
+    /**
+     * [layer] shows its content as it is: fully opaque, normal blending, no mask, not clipped.
+     * v1.7: never a folder (it shows its children's composite, not content of its own).
+     */
+    internal fun isPlain(layer: Layer): Boolean =
+        !layer.isFolder && layer.opacity >= 1f && layer.blendMode == LayerBlendMode.NORMAL && !layer.clipping && !(layer.mask != null && layer.maskEnabled)
 
     /**
      * The brush outline of a new shape that goes into a layer of its own can be shown live on the
      * active layer (as it will look in the new one): the active layer takes a plain stroke and
-     * shows it as it is.
+     * shows it as it is. v1.7: never on a folder (it has no pixels to take a stroke): the outline
+     * is shown as a guide and painted when the shape is placed.
      */
-    private fun liveBrushForNewLayer(layer: Layer): Boolean =
-        controller.doc.effectiveVisible(layer) && !controller.doc.effectiveLocked(layer) && !layer.alphaLocked && controller.editTargetOf(layer) == EditTarget.CONTENT && isPlain(layer)
+    internal fun liveBrushForNewLayer(layer: Layer): Boolean =
+        !layer.isFolder && controller.doc.effectiveVisible(layer) && !controller.doc.effectiveLocked(layer) && !layer.alphaLocked && controller.editTargetOf(layer) == EditTarget.CONTENT && isPlain(layer)
 
     /**
      * The preview while a shape layer is edited: the layer's pixels are hidden and the edited
@@ -2535,7 +2579,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // While a finger drags a plain shape that looks the same over the finished image, it is
         // drawn in the overlay: the canvas tiles (the layer's hidden pixels) stay as they are.
         val inOverlay = dragging && !brush && editDrawsInOverlay(layer)
-        setEditSpecs(ov, if (inOverlay) emptyList() else specs)
+        // v1.7 (I14): placed as ArrayDraw.sourceBounds places the committed shape's copies.
+        val arraySource = if (layer.array != null) VectorOps.bounds(VShape(0L, shape = o)) else null
+        setEditSpecs(ov, if (inOverlay) emptyList() else specs, arraySource)
         // A new shape dragged out meanwhile looks as it will once the opened one is closed.
         overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { ShapeOutlines.paintSpec(newObject(it), brush = false) })
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
@@ -2551,6 +2597,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * color document, at a zoom where the canvas is drawn smoothed.
      */
     private fun editDrawsInOverlay(layer: Layer): Boolean {
+        // v1.7 (I14): an array's copies are drawn through the edit override only.
+        if (layer.array != null) return false
         if (controller.viewTransform.zoom >= OVERLAY_MAX_ZOOM) return false
         val doc = controller.doc
         val index = doc.indexOf(layer)
@@ -2717,11 +2765,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * The brush outline of a shape on vector [layer] can be the painting tool's live stroke: the
      * stroke paints the active layer's content exactly as the object's replay will (started
      * unclipped by the selection and the alpha lock, see the init block; not a smudge / blur /
-     * watercolor tool that moves pixels).
+     * watercolor tool that moves pixels). v1.7 (I14): not on a layer with a live array either: the
+     * live stroke would paint the source alone, while its cache repeats every object.
      */
     private fun liveBrushOnVector(layer: Layer): Boolean {
         if (layer !== controller.doc.activeLayer || !controller.doc.effectiveVisible(layer) || controller.doc.effectiveLocked(layer)) return false
-        if (controller.editTargetOf(layer) != EditTarget.CONTENT) return false
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT || layer.array != null) return false
         return !brushMovesPixels()
     }
 
@@ -2973,16 +3022,26 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * their place THROUGH THE COMPOSITOR, so the layer's order, opacity, blend mode, mask and the
      * layers clipped to it look exactly like the result. The painting tool's live stroke of a
      * brush outline ([inner], its own override) is drawn over the fill, without the layer's old
-     * pixels.
+     * pixels. v1.7 (I14): on a layer with a live array the edited shape is drawn once per copy
+     * ([ArrayDraw.drawWithArray], placed from [arraySource], the edited shape's bounds as
+     * `ArrayDraw.sourceBounds` measures shape data), so the copies follow the edit; the live
+     * brush stroke is shown on the source alone until ✓ paints it on every copy.
      */
     private inner class EditOverride(override val layer: Layer) : LayerRenderOverride {
         var specs: List<VectorPaintSpec> = emptyList()
         var regions: List<Rect> = emptyList()
         var inner: LayerRenderOverride? = null
+        var arraySource: RectF? = null
 
         override fun drawContent(canvas: Canvas): Boolean {
             val mode = controller.doc.colorMode
-            for (s in specs) renderer.draw(canvas, s, false, mode)
+            val array = layer.array
+            val source = arraySource
+            if (array != null && source != null) {
+                ArrayDraw.drawWithArray(canvas, array, source) { c -> for (s in specs) renderer.draw(c, s, false, mode) }
+            } else {
+                for (s in specs) renderer.draw(canvas, s, false, mode)
+            }
             val i = inner
             if (i != null && i !== this) {
                 // The painting tool's override draws the layer's bitmap under its stroke: for
@@ -3017,11 +3076,21 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return ov
     }
 
-    private fun setEditSpecs(ov: EditOverride, specs: List<VectorPaintSpec>) {
+    /** Shows [specs] in [ov]; [arraySource]: the edited shape's bounds when its layer has a live array (see [EditOverride]). */
+    private fun setEditSpecs(ov: EditOverride, specs: List<VectorPaintSpec>, arraySource: RectF? = null) {
         val old = ov.regions
         val regions = ArrayList<Rect>()
         for (s in specs) regions += s.regions
+        val array = ov.layer.array
+        if (array != null && arraySource != null && specs.isNotEmpty() && !arraySource.isEmpty) {
+            // Every copy's tiles are redrawn too.
+            val all = ArrayLayout.bounds(array.spec, arraySource)
+            if (all.left.isFinite() && all.top.isFinite() && all.right.isFinite() && all.bottom.isFinite()) {
+                regions += Rect().also { r -> all.roundOut(r); r.inset(-2, -2) }
+            }
+        }
         ov.specs = specs
+        ov.arraySource = arraySource
         ov.regions = regions
         invalidateTiles(old)
         invalidateTiles(regions)
@@ -3131,6 +3200,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         controller.color = obj.strokeColor
         loadedObject = objectFor(obj.box, obj.points)
         loadedInk = inkOf(layer, obj)
+        // v1.7 (I14): the hidden pixels include every copy of a live array.
+        ArrayDraw.cacheBounds(layer.dataSnapshot())?.takeIf { !it.isEmpty }?.let { b ->
+            val r = Rect().also { b.roundOut(it); it.inset(-1, -1) }
+            loadedInk = loadedInk?.apply { union(r) } ?: r
+        }
         refreshPreview()
         return true
     }
@@ -3394,7 +3468,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * Re-renders the edited shape layer [layer] with the pending shape [b] as ONE undo step
      * "Edit shape" (pixels and shape data; a brush outline is replayed with the shape's own
      * brush in the same step). Nothing is recorded when nothing changed. A refusal (layer
-     * locked or hidden meanwhile) keeps the shape open.
+     * locked or hidden meanwhile) keeps the shape open. v1.7 (I14): with a live array every copy
+     * gets the outline too ([outlineReplay] inside the draw that `updateShapeLayer` repeats).
      */
     private fun commitLayerEdit(layer: Layer, b: ShapeBox) {
         val doc = controller.doc
@@ -3421,6 +3496,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             ov.inner = null
             if (controller.renderOverride === ov) controller.renderOverride = null
         }
+        // v1.7 (I14): on a layer with a live array the outline is replayed inside the draw, which
+        // updateShapeLayer repeats for every copy (the painting tool's stroke would reach the
+        // source alone). Without an array it is painted exactly as in v1.6, below.
+        val replay = if (path != null && layer.array != null) outlineReplay(o, path, brushPreview.sessionSeed) else null
         var done = false
         inCommit = true
         val maskEditing = layer.editingMask
@@ -3429,8 +3508,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             controller.undoStepNamed("Edit shape") {
                 done = controller.updateShapeLayer(layer, data, "Edit shape", dirty) { c ->
                     spec?.let { renderer.draw(c, it, false, doc.colorMode) }
+                    replay?.invoke(c)
                 }
-                if (done && path != null) {
+                if (done && path != null && layer.array == null) {
                     // The outline is painted on the layer's pixels, never into its mask, and the
                     // shape is drawn again whole, from scratch, like its fill: neither alpha lock
                     // (which would keep the just cleared outline empty) nor a selection (which
@@ -3462,6 +3542,36 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         brushPreview.end()
         endLayerEdit()
         controller.invalidateOverlay()
+    }
+
+    /**
+     * v1.7 (I14): [o]'s brush outline [path] as a draw that can be repeated (an array's copies):
+     * replayed with the shape's own brush and [seed] as the vector renderer replays a shape
+     * object's outline (`VectorLayerRenderer`, a [VShape]: the same samples, the last point once
+     * more as the live stroke's lift). Dabs are clipped and cut at the document united with the
+     * stroke's full reach (`StrokeRaster.strokeBounds`, scatter included), in source coordinates:
+     * a stroke within the document is cut exactly as the live stroke cuts it (at the document),
+     * and a copy is never cut where its source lies outside the document. Null when the outline
+     * has fewer than two samples.
+     */
+    private fun outlineReplay(o: ShapeObject, path: VectorPath, seed: Long): ((Canvas) -> Unit)? {
+        val input = brushStrokeInput(path, out = PathStrokeInput())
+        val n = input.size
+        if (n < 2) return null
+        val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
+        input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
+        xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
+        val points = PackedPoints(xs, ys, ps)
+        val preset = VectorOps.brushPresetOf(o)
+        val color = o.strokeColor
+        val doc = controller.doc
+        val area = Rect(0, 0, doc.width, doc.height)
+        val reach = StrokeRaster.strokeBounds(preset, 1f, points)
+        if (!reach.isEmpty && reach.left.isFinite() && reach.top.isFinite() && reach.right.isFinite() && reach.bottom.isFinite()) {
+            area.union(Rect().also { reach.roundOut(it) })
+        }
+        val raster = StrokeRaster(TipCache())
+        return { c -> raster.render(c, area, preset, color, seed, true, points, cut = area) }
     }
 
     override fun discard() {
