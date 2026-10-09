@@ -152,6 +152,106 @@ controller.commitEdit(rec, "Brush")       // color-mode constraint + undo + redr
 ```
 Whole-layer ops: `controller.editWholeLayer(layer, "Label") { bitmap -> ... }`.
 
+## Layer tree and folders (v1.7: `model/LayerTree.kt`, `engine/LayerStructure.kt`, `engine/FolderComposite.kt`, `ui/layers/`)
+
+**Model (I11, foundation F1/F2).**
+- `doc.layers` stays ONE flat list, bottom first. A folder is a `Layer` with `folder: FolderSpec(passThrough)` and the shared 1 × 1 `Layer.FOLDER_BITMAP`; drawing into it throws.
+- A child names its folder in `parentId` (`Layer.ROOT_ID` at the top level). A folder's block `[f - d, f]` is contiguous and ends with the folder: its children lie directly below it. `LayerTree.block / ancestors / depth / units / check` read the tree.
+- `folderOpen` is saved but is never an undo step (`controller.setFolderOpen`).
+- `engine/LayerStructure` (`controller.structure`) is the ONLY structure mutator: `insert`, `delete`, `move`, `above`, `insertionPoint`.
+  - It records a `LayerTreeAction` only when the document has a folder. Without folders the v1.6 actions run, and the file saves as format 1, byte for byte v1.6 (I13).
+- `insertionPoint()` is where a new layer lands: with an OPEN folder active, its top child; otherwise directly above the active row at its level.
+  - `addFolder()` puts the folder directly above the active layer at its level.
+  - Then `putInNewFolder`, `putIntoFolderAbove`, `takeOutOfFolder` (bottom child only), `ungroupFolder`, `deleteFolder`, `setFolderPassThrough`. Each is one undo step, and undo/redo restore the tree, properties, bitmaps (by identity) and picture exactly (`FolderUndoRedoRobolectricTest`).
+
+**Consumer sweep (design §4.4).** Every main file that reads `doc.layers` or a layer's bitmap follows one rule, so a folder never reaches a pixel consumer:
+- **P**: whole-document pixel loops skip folders (`doc.pixelLayers`, or `if (l.isFolder) continue`).
+- **T**: structure is read through `LayerTree`.
+- **R**: active-layer pixel readers are safe because `LayerToolRules` and `checkUsable` never give them a folder.
+- **C**: the eyedropper, magic wand and object select read the composite when a folder is active.
+- **L**: gates read `doc.effectiveLocked(layer)` / `doc.effectiveVisible(layer)`. Only tree walkers (the compositor's level walk, the rows, the property sheet, storage) read a layer's own flags.
+- **B**: recycling uses `Layer.recycleBitmaps()` / `Bitmap.recycleUnlessShared()`, so `FOLDER_BITMAP` is never freed.
+- **S**: inserts and removes go through `LayerStructure`. `ownership-check-v17.ps1` fails on `doc.layers.add`, `insertLayer(` or `RemoveLayerAction(` outside `engine/`.
+
+**Folder refusals (F5).**
+- `LayerToolRules.refusal` refuses on a folder the tools that write into the active layer, with "Choose a layer inside the folder to paint".
+- `checkUsable` and `startFilter` refuse folders.
+- A child of a locked or hidden folder is refused like a locked or hidden layer.
+
+**Compositing (`FolderComposite`).**
+- `Compositor.drawDocument` calls it only when the document has a folder. Otherwise the v1.6 loop runs unchanged (I5).
+- The tree is drawn level by level. On each level the units (a layer, or a folder with its block) form the v1.6 groups:
+  - an adjustment layer is its own group;
+  - a base takes the clipping units directly above it on the SAME level, so a clipping layer at the bottom of a folder draws unclipped;
+  - groups without a folder go through `Compositor.drawGroup` as before.
+- **Pass-through at 100 %** (not a clip base, not clipped): the children draw straight onto the current canvas.
+- **Isolated** (pass-through off, a clip base, or clipped):
+  - the children composite into a pooled tile-sized scratch (at most 512² px, `FolderScratchPool`) with its OWN `CompositeTarget`;
+  - the scratch then draws onto the parent with the folder's blend mode and opacity;
+  - this is not a `saveLayer`, because adjustment layers read their backdrop through `CompositeTarget.bitmap`, which a `saveLayer` cannot expose (V8);
+  - a folder clip base renders once per tile and is reused for every clipped unit's `DST_IN`.
+- `drawnBlend(layer)`: a pass-through folder that is composited isolated (a clip base or clipped) draws **Normal**; its stored blend mode is used only once Pass through is off. The merge confirmation (`LayerOps.mergeChangesPicture` / `blendsWithBackdrop`) and export read the same rule.
+- **Pass-through below 100 %** is exactly o·C + (1 − o)·B, in one pass with one rounding:
+  - the backdrop is copied into a scratch and the children are drawn on it;
+  - the scratch is drawn back with `SRC` through its `BitmapShader` under a constant A8 coverage bitmap of o;
+  - the coverage is drawn at (0, 0) under `cv.translate(tile.left, tile.top)`, with the shader's local matrix at identity, so a partial display-tile redraw (`DisplayTiles`: `clipRect`, `CLEAR`, `drawDocument`) is bit-identical to the full one.
+- `drawnAsIs(layers, i)`: every folder the layer is in draws its children straight. Live adjust and preview ranges may start or end only there. It is `LayerTree.showsAsIs`, one rule for the model and the compositor.
+- `isClipped` / `isClipBase` (`LayerTree`) answer per level: the sibling unit above is the first layer above with the same parent (a sibling folder's top, not its bottom child); a clipping unit at the bottom of its level, or right above an adjustment layer, is not clipped. `EditorController.toggleClipping` reads the unit below a folder's block the same way.
+- `effectStart(layers, i)`: the lowest flat index an adjustment's effect works on, i.e. the bottom of its nearest isolated folder, else 0.
+- `renderBlock(doc, folder)` renders a folder's block isolated at document size. `renderBlockThumbnail` renders it through a scaled canvas (2× then filtered down), never into a document-sized bitmap.
+- A render override whose layer is a folder (the Shape/vector "as a new layer" previews) draws at `insertionPoint`:
+  - as an open folder's top child, with the folder's opacity, blend and isolation;
+  - directly above a closed folder (after its clip group when it is a clip base: an approximation).
+
+**Live adjust (`engine/live`).**
+- A live session runs only while `FolderComposite.drawnAsIs` holds for the adjustment layer; otherwise the exact path draws.
+- `BelowKey` also captures each layer's `parentId` and the folder flags (pass-through; opacity, blend and eye as for a layer). Moving a layer into or out of a folder therefore invalidates the below-cache.
+
+**Export (`exchange/export`).**
+- `ExportSceneBuilder.Planner` works per context: the top level and each folder that is isolated for export (pass-through off, opacity < 1, clipped or a clip base).
+  - In a context, everything from its bottom up to the topmost shown adjustment becomes one picture.
+  - Clip groups are formed per level, and their pictures carry the base's `drawnBlend`.
+- A folder becomes a `SceneLayer` with `children`:
+  - in SVG a `<g>`, with `isolation:isolate`, its blend and its opacity when isolated;
+  - in PDF an optional-content group nested in `/Order`, and a transparency group (`/I true`) when isolated.
+- **Pass-through below 100 %** is a NON-isolated Normal group at its opacity:
+  - PDF writes a non-isolated transparency group (`/I false`), exactly the canvas's o·C + (1 − o)·B;
+  - SVG group opacity always isolates, so SVG writes it isolated and the export summary lists `ExportSceneBuilder.PASS_THROUGH_SVG_NOTE` (`ExportOptionsSheet` shows it for SVG only);
+  - its layers still form their own context, so an adjustment inside merges with the folder's layers only (an approximation).
+- A hidden folder hides its children.
+- Vector arrays export each copy's objects with the `ArrayLayout` matrix applied to the geometry (`SceneLayer` has no transform). Other arrays export the cache picture.
+- `StrokeEnvelopeExport` writes one envelope per `VStroke.copies` entry.
+- Payload v2 carries the tree (`parentId`, `folder`, `folderOpen`) and arrays. `PayloadImport` rebuilds the tree from the source ids, and replace mode matches non-folder layers only.
+
+**Layer window (`ui/layers`).**
+- `LayerTreeRows` lists the rows, skipping everything inside a closed or dragged folder.
+- `LayerTreeRows.indent(depth, list)` (via `LayerWindowMetrics.indentAt`):
+  - the step is min(12, (list − `DEEP_FOLDER_ROW` 172) / 4) dp per level, stopping at 4 levels;
+  - that is 12 dp per level (48 dp max) in the 220 dp list of a 392 dp phone, and 4 dp per level in the 188 dp list of a 360 dp phone, so a depth-4 folder row keeps its values room.
+- Rows show inherited eye and lock and per-level clip marks.
+- `LayerWindowMetrics.thumbAt(depth, folder)`: a nested row takes its indent from the thumbnail, down to `DEEP_THUMB` 32 dp. A folder row stops at `FOLDER_THUMB_MIN` 40 dp, its open/close target.
+- `LayerRow.RowValues`: a folder row shows "Pass through" on one line or, when one line at `LayerRowTextMin` 12 sp would ellipsize, "Pass" over "through" at 11 sp (`rememberBlendSplit`). The opacity line is fitted into what remains, and the row stays 80 dp. At 392 dp every folder row splits.
+- Tapping a folder's thumbnail opens or closes it ("Open Folder 1" / "Close Folder 1"): saved, no undo step.
+- The reorder handle:
+  - a drag moves a whole block (`DraggedUnit`, `movedBlock`);
+  - the dragged folder's hidden rows leave a blank `DRAG_GAP_KEY` item of their height at the list's end, so the rows above stay under the finger. Headers and the gap are not reorderable;
+  - `HandleGesture` swipe right moves the layer into the folder directly above;
+  - swipe left takes a folder's BOTTOM child out (other children refuse with no step);
+  - `Smoke.pump` placement animations must finish before a test touches a row, because `ReorderState.itemAt` reads layoutInfo offsets.
+- `LayerControls` / `LayerOps` hold the folder menu items:
+  - "New folder", "Put in new folder", "Move into folder above", "Rename folder", "Duplicate folder", "Layer from folder", "Ungroup folder";
+  - "Pass through" first in a folder's blend list (a mode picked turns it off in the same step);
+  - alpha lock and mask disabled, their captions shown on tap (the disabled-tap detector sits inside the toggleable);
+  - "Delete folder and its N layers?" (folder only, or everything);
+  - "Merge folder" on the strip, refused on a locked or hidden folder, or one with a locked layer inside (`LayerOps.canMergeFolder`; as for merge down, the controller merges without checks).
+- `FolderThumbnails` draws the composite in each folder row's glyph.
+  - Out-of-date pictures render 300 ms after the last change, one per frame, on the main thread (I3: rendering reads layer bitmaps).
+  - The budget is 30 ms each on the T606.
+
+**Mask scopes (`masks`).** `AdjustmentHistogram` and the filter-through-mask range start at `FolderComposite.effectStart`:
+- inside an isolated folder they measure the folder's own layers below the adjustment;
+- a pass-through folder the adjustment is in is flattened to the top level of the histogram's view document.
+
 ## Controller (`EditorController`)
 One per open document. Compose-observable state: `activeToolId`, `color`, `brush`/`eraser`/
 `smudgeBrush`/`blurBrush` presets, `selection`, `ruler`, `grid`, `stabilizer`, `canUndo`/`canRedo`,
@@ -229,6 +329,94 @@ slice of the ramp's factors too (capped at 600k characters). `ThreadPreview` pre
 out-port or "Link…", and has Unlink here, Delete frame (the story re-flows in the same step),
 Edit story and per-frame wrap around a picture. A duplicated frame becomes an unlinked text;
 locked frames keep their slice.
+
+## Kerning (v1.7, item 17; `tools/text/`)
+
+**Model.** `TextKern(index, value)` is extra space AFTER UTF-16 index `index`, in 1/1000 em (−1000..1000). `TextItem.sanitized` keeps the list:
+- sorted and unique;
+- with no zeros;
+- with at most 10 000 entries.
+
+`TextSpec.fontKerning` defaults to on. Both are NEVER-encoded: unkerned text with font kerning on encodes as v1.6, except `TextCodec.VERSION = 5` (I13).
+
+For a frame of a linked story, the indices are STORY indices, and every frame stores the whole story's list. `TextThreads.writeStory` and `StoryWriter` write that list with the slices. `TextThreads.isWhole` treats a frame holding other kerns (one written by v1.6) as broken and heals it in the triggering step.
+
+**Where a kern applies.** One rule (`TextKerns.applies`, shared by rendering and the UI) decides whether a kern after index i applies. It does when:
+- i and i+1 are in the text;
+- neither side is a line break;
+- the paragraph is one `LetterRamp.supports` accepts (not RTL, not a shaping script);
+- i+1 is a grapheme-cluster boundary (`LetterRamp.clusterBounds`, per paragraph).
+
+Kerns that do not apply are kept but ignored.
+
+**Edits.** `TextKerns` holds all kern arithmetic:
+- `edited(old, oldText, newText, cursor)`: diffs by common prefix and suffix, with the cursor settling ambiguous runs. Kerns in deleted gaps drop; later ones shift.
+- `remap`, plus `slice`/`shifted`: a duplicated frame keeps its slice's kerns, re-indexed; joining two stories shifts the second story's kerns.
+- `gaps(selStart, selEnd, text)`: the gaps between grapheme clusters that the cursor or selection names, as a list.
+  - A cursor inside a cluster names none.
+  - A selection end inside a cluster snaps outward to the whole cluster.
+- `applying(text, gaps)` and `refusal(text, gaps)` (`LINE_BREAK`, `SCRIPT`): which of those gaps can take a kern, and why none can.
+- `commonValue`/`withValue`/`nudged` over any `Iterable<Int>` of gaps: back the row's single value, "Mixed", and −/+.
+
+Every host edit path goes through `edited`: `setText(text, cursor)`, placeholders, the story editor. `KerningEditor` (`setKerns(gaps, value)`, `nudgeKerns(gaps, delta)`) is the host interface the dialog calls; `TextTool` and `StoryEditorHost` implement it.
+
+**Rendering.** `TextKerns.advancesPx(source, kerns, from, sizePx, factors)` gives the extra advance after each character, or null when no kern applies. Text with an applying kern takes the per-cluster route: `WrapLayout.measure` with `kernPx`, drawn by `kernedBlock` as `drawTextRun` pieces split at kerned gaps. Text without one keeps the `StaticLayout` route bit for bit (I5, I8).
+
+Letter scaling scales a kern with the letter before its gap. On a path, kerns move the letters along it. "Font kerning" off sets `'kern' 0` on every paint of the item, on every route: `TextRenderer.NO_FONT_KERNING`, combined with the scaled-letter features by `scaledFeatures(spec)`.
+
+**UI.** `ui/placement/TextKerningSection` sits under "Letter spacing" in `TextEditorDialog` (tag `textKerningRow`). `kerningRow(text, kerns, selStart, selEnd, vertical, onPath)` gives the row's state: the gaps it edits, their common value, and its caption.
+
+- "Kerning": −/+ in steps of 10 and a field in 1/1000 em ("Mixed" when the gaps differ).
+  - It edits only the named gaps a kern applies to, so no dead kern is stored.
+  - The caption comes from `gapCaption`: "Between “A” and “V”". It names whole clusters (an emoji with its skin tone, a letter with its accent) and shows ↵ for a line break.
+  - Disabled, with a caption saying why:
+    - "Kerning works on horizontal text" on vertical text (not on a path);
+    - "Kerning works between two letters of a line" when every named gap is beside a line break;
+    - "Kerning works on left-to-right text with separate letters" when one is in an RTL or shaping-script paragraph.
+  - With no gap named, it shows the hint "Put the cursor between two letters, or select letters".
+- "Font kerning" switch.
+
+**Export.** `TextExport.lines` returns null when a kern applies to the item's own characters (`TextExport.kerned`) or Font kerning is off. SVG and PDF then draw the text as outlines; A's `ExportSceneBuilder` is unchanged. Unkerned text stays live `<text>`.
+
+## Text: transforms, pill, history taps (v1.7, items 9, 10, 11, 13; area D)
+
+**`TextTransforms` (item 11)** is a pure map of one text layer's data by a similarity: a row-major 3×3 matrix. Flips, skews and perspective give `canMap` false.
+- The centre is mapped and `rotationDeg` turns by the map's angle. A scale within 1e-6 of 1 is exactly 1, so a move keeps every size.
+- Every length is multiplied by s:
+  - size and outline width;
+  - box size, padding, border width and minimum sizes;
+  - the path's points and sizes;
+  - the wrap gap (capped at `TextWrapSpec.MAX_GAP_PX`).
+- Quantities in em or percent are unchanged.
+- The result is null when a size would leave its range, or when a frame would be turned.
+
+It writes nothing: F's `DataLift` renders the mapped data and commits it through `updateTextLayer`/`updateLayerData` as one step. A wrapped text lays out around its stored outline at its new place.
+
+**A scaled frame of a linked story** gives its look to the whole story:
+- `mapped` bumps the frame's `thread.rev` when the map changes `FrameGeometry.storyLook` (any scale), so the frame holds the story's newest copy.
+- `TextThreads.isWhole` compares every unlocked frame's look with that copy's.
+- On the commit's `EditEvent`, `TextThreads` re-flows the story in the scaled look into every frame. Each frame keeps its own box (`withFrameBox`), and locked frames are pinned. The re-flow is folded into the "Transform" step (`amendLastStep`).
+- One undo restores every frame's data and pixels; redo gives the same pixels.
+- A move changes neither look nor `rev`, so nothing re-flows.
+- Unlinked text is untouched by any of this.
+- A transform that maps several frames of one story must commit them in one `editScope`, so the story heals once.
+
+**Pill sources (items 9, 13).**
+- `TextTool` is a `PillPositionTool` ("Center" of the open text).
+- It is a `ScaledTool`, uniform only: 100 % is the text as opened, scaled about its centre, with size, box, padding and border together.
+- It is a `DeletingTool` (trash cell "Delete text"):
+  - a new text is cleared with no step;
+  - an opened text layer goes in ONE step, "Delete text", through `controller.structure.delete` (rule S), and undo puts it back in its folder at its place;
+  - the last pixel layer refuses with `LayerStructure.LAST_LAYER`.
+- `TextFrameTool` is a `PillPositionTool` for the selected frame. The move is pending until `endPositionEdit`, then one "Move frame" step.
+
+**History taps (item 10).**
+- `TextTool.historyMark()` is `TextMark(open item, layer)`. `rollbackHistory` puts the open text back while the same text is open.
+- `TextFrameTool.historyMark()` is `FrameMark(story target, open story, pill-move layer, pending move)`. `rollbackHistory` does three things:
+  - puts the story back through `StoryEditorHost.restore`, in the same frame's session only;
+  - puts a pill move that was under way at the mark back to its position;
+  - drops a pill move begun after the mark.
+- Afterwards an untouched editor or text reports `hasUserChanges` false, so the tap's one undo lets it go and undoes exactly one document step.
 
 ## Shape layers (`tools/vector/Shape*`)
 With "Editable (own layer)" on (the default), each new shape goes into its own layer whose
@@ -390,6 +578,61 @@ is relative and rests at 100 %. The Shape tool's Points mode has the same group.
 (`AppSettings.curveHandleScale`, 75–200 %) scales the drawn handles and their grab radii for Curve,
 Polyline and Path.
 
+## Pathfinder (v1.7 item 20, area G)
+
+- **Geometry: `vector/pathfinder/`**, pure and thread-safe.
+  - **`PathConvert`** builds operand regions and reads paths back:
+    - a `VPath` via `VectorOps.toVectorPath` with its fill rule;
+    - a `VShape` or a shape layer's `ShapeObject` via `ShapeOutlines.outline`, WINDING;
+    - a `VStroke` is never an operand.
+    - Read-back uses the platform `PathIterator` on API 34+ (`PlatformReader`) and androidx `PathIterator` below (`AndroidxReader`, which a JVM test cannot load). The platform reader calls `next(points, 0)` only, the conic weight in `points[6]`: after `hasNext()` (which reads one segment ahead) `peek()` answers the segment after the next one, so never use it. Conics become quads (0.25 px), quads become cubics exactly.
+    - The read-back yields explicit-segment `Contour`s, then `VSubpath`s with sharp anchors; the fill rule comes from the result.
+    - Area and connected pieces come from nesting parity.
+  - **`PathfinderOps.run(op, operands)`**: the ten `PathfinderOp`s.
+    - The shape modes use Skia `Path.op` folds.
+    - Divide is built operand by operand. Trim, Merge and Crop are per-operand unions and differences. Outline works on Divide's pieces.
+    - Caps: 12 operands, 256 pieces; pieces under 0.5 px² are dropped as slivers.
+    - Result: `Done(objects)`, `Empty`, `TooMany` or `Failed`.
+  - **`PathfinderStyles`**: `PathfinderStyle(opacity, fill, stroke)`.
+    - Unite, Intersect and Exclude keep the top operand's style. Minus front keeps the back operand's, Minus back the front's.
+    - Divide, Trim, Merge and Crop keep each piece's own style; Merge then unites touching pieces of the same fill.
+    - Outline edges get a PLAIN 1 px stroke in the piece's fill colour.
+    - Results never keep a spline.
+  - **`PathfinderOutline`**: splits each piece's contour at junctions (vertices snapped at 0.02 px, straight T-junctions split, degree ≥ 3). Each stretch becomes an open unfilled path; a shared stretch is kept once, from the upper piece. On curves each edge is drawn once (Outline = (Unite + Divide) / 2).
+- **Tool: `tools/pathfinder/PathfinderTool`.**
+  - Picks are `Pick(layer, objectId?)` in Compose state (objectId null for a shape layer).
+  - `operands` re-checks every pick on each use: still in the document, effectively visible and unlocked (rule L), not arrayed, the object still a `VPath` or `VShape`. They come in picture order: layer index, then object index.
+  - A tap (16 dp slop, 10 dp tolerance) toggles the topmost eligible object top-down across all layers.
+    - Strokes and arrayed layers are skipped; their message shows only when nothing eligible is under the finger.
+    - A miss sets `missed` (the hint) without a toast.
+  - `selectAll()` takes up to 12 eligible objects, else none and "Select up to 12 objects".
+  - Picks are not edits: `hasPendingWork` stays false. Picks are cleared on `onSelected` and after an operation.
+  - **`apply(op)`**:
+    1. `vectors.flushPending()`: an edit still rendering lands first.
+    2. Snapshot every operand on the main thread: its region, its style, and its layer's content instance, shape data and opacity.
+    3. Compute on `computeDispatcher` (`Dispatchers.Default`).
+    4. If it is not done within 300 ms (`withTimeoutOrNull`), hand over to `runBusy("Working…")`, whose Stop cancels the computation.
+    5. On landing: drop the result if another tool is current; flush pending edits again; refuse it ("The objects changed: try again") if any snapshot differs.
+  - **Landing, always ONE `groupUndo(op.historyLabel)`** with the same label for every inner call:
+    - **All operands are objects of one vector layer:** one `vectors.update` with `content.replaced(anchor → results).without(others)`, the content read inside the step. The anchor is the top operand (the back one for Minus front); the first result keeps its id.
+    - **Otherwise:**
+      1. Check the limit with `roomForResult(effectiveLayerCount, removedShapeLayers, maxLayers)` (the operand shape layers that go are counted out).
+      2. Create "Pathfinder N" (N = 1 + the highest existing), a new vector layer.
+      3. `structure.insert(layer, structure.above(topOperandLayer))`, so it lands inside the top operand's folder (its bitmap is recycled if refused).
+      4. `vectors.addObjects` with the results; layer opacity is folded into object opacity.
+      5. `vectors.update(without(ids))` for each operand vector layer (an emptied layer is kept).
+      6. `structure.delete` for each operand shape layer.
+      7. Make the new layer active.
+      - A refused part (out of memory) takes back the parts already done and records nothing.
+- **Options: `ui/pathfinder/PathfinderOptions`** (one Row; the options bar scrolls it).
+  - First the hint, the "N objects" count, or a spinner with "Working…".
+  - Then the "Select all objects" `ActionChip`.
+  - Then ten icon-and-label buttons, as tall as the 44 dp options strip and at least 56 dp wide: shape modes, a divider, pathfinders. Each is `clickable` plus `clearAndSetSemantics { contentDescription = op.description }` (I10), enabled with ≥ 2 operands and not busy.
+- **Labels.**
+  - `PathfinderLabels`: SELECT_ALL, HINT, OUTLINE, STROKES_SKIPPED, ARRAY_SKIPPED, TOO_MANY, TOO_MANY_OPERANDS, resultLayer(n), the busy and outcome messages (WORKING, NOTHING_LEFT, FAILED, CHANGED, NO_MEMORY, picked(n)) and the nine other content descriptions (UNITE … CROP), read by `PathfinderOp.description`.
+  - `HistoryLabels.PATHFINDER_OPS` and `pathfinder(op)`.
+- **Tests.** `PathfinderOpsRobolectricTest` (the design's squares, budgets), `PathfinderCurvesRobolectricTest` (conic read-back, circles, Outline once per edge), `PathfinderToolRobolectricTest` (every §3.20 tool case, folders, busy handoff, changed operand, a pending edit landing first, the layer limit), `PathfinderRoundTripRobolectricTest` (ellipse layers, save and reopen, undo), `PathfinderOptionsUiRobolectricTest` (in the real options strip at 392 dp). The lead's `StubToolsRobolectricTest` still runs the real tool on every layer kind.
+
 ## Adjustment layers & editable masks (`masks/`, v1.5)
 `Layer.maskSpec` (`masks/MaskModel.kt`) is a parametric mask — linear, radial and brush components
 combined by Add / Subtract / Intersect, invert, density — rendered into the existing `Layer.mask`
@@ -486,6 +729,28 @@ canvas and the screen never freezes before the overlay shows (`qa/VectorExchange
 `rememberSaveable` and each Save as… picker exports its own format, so an activity recreated
 behind the system picker still writes what was chosen.
 
+## Saved selections (v1.7 item 14, area G)
+
+- **Model (F1).** `Document.savedSelections: List<SavedSelection>` holds immutable entries `(id, name, bounds, packed, revision)`.
+  - `packed` is the selection's ALPHA_8 rows cropped to `bounds`, zlib-deflated.
+  - Files are `sel_<id>_r<rev>.bin`.
+  - Limits: `SavedSelection.MAX = 32` entries and `MAX_TOTAL_BYTES = 32 MB` packed.
+- **Controller (F1).**
+  - `saveSelection`, `updateSavedSelection`, `renameSavedSelection` and `deleteSavedSelection` record a `SavedSelectionsAction`.
+  - `loadSavedSelection(id, mode)` inflates on a worker and lands through `Selection.combine` as the existing `SelectionAction` (Load, Add to, Subtract from, Intersect with).
+- **`tools/select/SavedSelectionOps` (G).** Pure Kotlin on the inflated crop bytes, so results are identical on every device.
+  - `mappedForCanvas(list, result, oldWidth, oldHeight)` is called by `CanvasOps` on its background thread after the layers are mapped. It maps one entry at a time: inflate the crop, map it row by row through the operation's `CanvasGeometry` into the result's Deflate stream, so at most one entry's crop is alive.
+    - Flips, quarter turns and whole-pixel moves are exact; a resize samples bilinearly, with several samples per pixel when it shrinks. Samples in the old document's outer half pixel read its edge pixel, so a selection touching the border still covers the new border.
+    - Bounds are re-tightened, and an entry cropped to nothing is dropped.
+    - An unchanged entry is returned as the very instance (the list itself when all are kept). A changed one keeps its id and name, and the controller gives it the next revision.
+  - `rows(e)` inflates an entry's whole crop (used by the mapping). `thumbnail(e, docW, docH, tw, th)` streams the crop one row at a time into a single row buffer (never the whole crop: the rows' thumbnails are computed in parallel).
+  - The ACTIVE selection is still dropped by a geometry change exactly as in v1.6. Saved selections are kept and mapped, and one undo restores both.
+- **`ui/layers/SavedSelectionRows` (G).**
+  - Placement: ONE `LazyColumn` item after the Selection Layer row (`HEADER_ITEMS = 2`). It emits a `Column` of 48 dp rows, newest first, each in `key(id)` and tagged `V17Tags.savedSelectionRow(id)`: a background thumbnail (keyed by the packed bytes, bounds and document size) plus the name.
+  - A tap opens the row's menu (`SavedSelectionLabels`): Load, Add to, Subtract from, Intersect with, Update from, Rename (dialog), Delete. Subtract, Intersect and Update need an active selection.
+  - Actions run through `fromPanel`. The rows are never drag sources or drop targets.
+  - The rows read `layersVersion`, so undo, redo and canvas operations refresh them.
+
 ## Snapping (`snap/`)
 One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
 are the canvas edges and center, the selection, the content bounds of other visible layers, points
@@ -515,6 +780,67 @@ the grid out; callers apply `snapping.gridPoint` themselves, the Text tool only 
 on, to keep I8), with the step shown in the
 top info chip (`increments.readout`) while a gesture is stepped. The steps live in the Increments
 sheet ("Increment steps", More › Increments…), in Settings, and behind the X / Y pill's "#" cell.
+
+## Symmetry (`assist/Symmetry*`, `brush/DabMapping`, `tools/symmetry/`, `ui/symmetry/`, v1.7)
+
+**Settings.** `Document.symmetry: SymmetrySettings` (model, F1) changes only through `controller.updateSymmetry(s)`. Like the ruler, changes are not undoable and are saved in `project.json`.
+- `type`: OFF, MIRROR, KALEIDOSCOPE, ROTATION, ARRAY or PERSPECTIVE_ARRAY.
+- `centerX`/`centerY`: −1 means the canvas centre.
+- `angleDeg`: 90 is a vertical mirror axis. The UI shows `angleDeg − 90`.
+- `divisions` 2..32, `spacingX`/`spacingY`, and `quad` (TL TR BR BL; it must be convex, otherwise the default trapezoid is used).
+
+**Placement.** `SymmetryMaps.transforms(s, w, h, startX, startY)` returns row-major 3×3 maps, identity first. It returns an empty list when symmetry is off or there are fewer than 2 usable maps, so a stroke whose copies are all culled is a v1.6 stroke and writes no `copies` (I13).
+- Mirror: 2 maps.
+- Kaleidoscope n: 2n maps.
+- Rotation n: n maps.
+- Array: lattice translations kept within the canvas size, nearest to the stroke start first.
+- Perspective: H·T(i, j)·H⁻¹ for cells in front of the horizon.
+- The total is capped at `StrokeCopies.MAX` = 256 maps.
+
+**Dabs.** `DabMapping` places copy k of a resolved dab. Use one instance per stroke or replay; it is not thread-safe.
+- The centre goes through the map.
+- The diameter is multiplied by √|det J| (exactly 1 for rigid maps). Below 1 px the copy is drawn at 1 px with less alpha.
+- The rotation is turned by J. Radial tips keep it.
+- Textured AA tips are drawn flipped when det < 0. Pixel tips get a brush whose baked angle is turned.
+- The copy takes no values from the stroke's random sequence.
+- **Many copies** (≥ `PHASE_MIN_MAPS` = 16 maps): an AA copy under an affine map, unturned or with a radial tip, not mirrored-textured, and at most 256 px wide, is drawn from `DabMapping.PhaseTips`. That is its tip pre-drawn at 4×4 quarter-pixel shifts with DabStamper's filtered paint, then copied at a whole-pixel position with the dab's alpha, within 1/8 px of its exact place. Every other copy, the original dab, and strokes with fewer maps use the exact `DabStamper.stamp`.
+- A `PhaseTips` is keyed by tip identity and scale. `BrushTool` keeps one for its strokes and `StrokeRaster` one for its replays (at most 16 ALPHA_8 bitmaps, about 1 MB).
+
+**Live strokes** (`BrushTool`, the V23 stamp sites).
+- `symmetryMaps` is taken at stroke start, after the ruler has constrained the input. There are none for path strokes, clone, or tools other than BRUSH, ERASER, SMUDGE and BLUR.
+- **Buffer strokes** stamp each dab, then each copy that lands on the document, into the ONE coverage buffer. Stroke opacity is applied at the composite, so overlapping copies never darken twice.
+  - `copyTiles` records the commit tiles the copies reached.
+  - `ownReach`/`copyReach[k]` record where the dab and each copy drew.
+  - **End taper** (`retaperCopies`): each copy's changed end is its own region, and overlapping regions are merged (`disjoint`). Each region is cleared, then every contributor that reached it is re-stamped in canonical order (dab, then copies k). The result equals the vector replay within ±1.
+- **Direct strokes** (smudge, blur, watercolor) run one `DirectPainter` per copy, as independent sub-strokes. They are refused at stroke start, with the toast `SymmetryLabels.OUT_OF_MEMORY` ("Not enough memory for symmetry with a brush this large"), when the painters would need more than half the free heap (estimated at 20 bytes per px of each copy's reach).
+- One `PixelEditAction` covers every copy. Dabs are never dropped for copies; `StrokeCost` counts only the stroke's own dabs.
+- When there are no maps, the code path is the v1.6 one, byte for byte.
+
+**Vector layers.**
+- `StrokeInfo.copies` → `VectorStrokeCapture` stores ONE `VStroke` with `copies`.
+- `StrokeRaster.render(…, copies)` replays in the same order (dab, then each copy), with the stroke's seed, into one buffer, so the redraw equals the live stroke within ±1.
+- Reach and tile rejection use the union over the copies. Per render, `copiesReach` also marks which copies can reach the clip (`near`), and only those are placed.
+- The vector-layer eraser is never repeated. "Symmetry doesn't apply to erasing vector objects" shows once per tool. A partial pass over any copy removes the whole stroke in one step.
+
+**Guides.**
+- The F5 hook `SymmetryGuides.draw(canvas, t, doc, editing)` draws only when `editing` is true (Symmetry tool active): the lines plus the 44 dp handles.
+- `BrushTool.drawOverlay` calls `SymmetryGuides.drawGuides` while it repeats strokes.
+- Lines are dashed in the accent colour, clipped to the canvas, then to the screen.
+- The array grid is thinned so lines are at least 10 dp apart, at most 400 lines.
+
+**Tool and UI.**
+- `SymmetryTool` with `SymmetryHandles`:
+  - The angle knob sits 76 dp out and snaps to 15° within 3°.
+  - "Spacing X" also sets the grid angle; "Spacing Y" sets the length along v.
+  - Corners stay convex.
+  - Dragging elsewhere moves the ruler, with a 6 dp slop.
+- `SymmetryOptions`: type chips, value chips, "Reset symmetry" and "Done".
+- `SymmetryRulerSection` in the Ruler panel: "Place on canvas" closes the sheet and selects the tool.
+
+**Budgets** (§6.3, asserted by `SymmetryBudgetRobolectricTest` with `PerfBudget.ms`). These are JVM numbers for stroke work per frame; the T606 times are device checks.
+- Mirror, 100 px brush: about 2.7 ms (budget 16).
+- 32 copies of a 50 px brush: about 2.9 ms (budget 33).
+- 64 copies of a 64 px brush: about 5 ms (budget 16).
 
 ## Storage (`storage/`)
 Each project is a folder in app-private storage: `project.json` (document + layer properties),
