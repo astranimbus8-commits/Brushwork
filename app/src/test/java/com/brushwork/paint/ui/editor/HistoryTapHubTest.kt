@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import com.brushwork.paint.testing.PerfBudget
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -119,18 +120,42 @@ class HistoryTapHubTest {
         assertEquals("no mark at all", 0, host.opened)
         assertTrue(host.taps.isEmpty())
 
-        // Redo only: two fingers are claimed (they may become three) but do not undo.
+        // Redo only: two fingers on the UI are not claimed (the controls keep them) and do not
+        // undo; the mark stays open (they may become three), and a third finger claims.
         host.redoOn = true
         down(0, 100f, 1000)
-        assertTrue(down(1, 300f, 1010))
-        up(0, 0, 1050)
-        up(0, 1, 1060)
+        assertFalse("two fingers stay the controls'", down(1, 300f, 1010))
+        assertFalse(hub.claimed)
+        assertFalse(up(0, 0, 1050))
+        assertFalse(up(0, 1, 1060))
         assertTrue(host.taps.isEmpty())
+        assertEquals("no full mark without a claim", 0, host.claims)
         down(0, 100f, 2000)
-        down(1, 200f, 2010)
-        down(2, 300f, 2020)
+        assertFalse(down(1, 200f, 2010))
+        assertTrue("the third finger claims", down(2, 300f, 2020))
+        assertEquals(1, host.claims)
         up(0, 0, 2050); up(0, 1, 2060); up(0, 2, 2070)
         assertEquals(listOf("redo"), host.taps)
+        assertEquals(host.opened, host.released)
+
+        // Redo only, a canvas finger then a UI finger: not claimed at the Final pass either.
+        down(0, 100f, 3000, canvas = true)
+        down(1, 300f, 3010)
+        assertFalse(hub.claimed)
+        assertEquals("the canvas keeps its gesture", 0, host.yields)
+        assertTrue("a third finger claims, before it reaches anything", down(2, 400f, 3020))
+        assertEquals(1, host.yields)
+        up(0, 0, 3050); up(0, 1, 3060); up(0, 2, 3070)
+        assertEquals(listOf("redo", "redo"), host.taps)
+
+        // Undo only: three fingers are claimed at two but do nothing at the end.
+        host.undoOn = true
+        host.redoOn = false
+        down(0, 100f, 4000)
+        assertTrue(down(1, 200f, 4010))
+        down(2, 300f, 4020)
+        up(0, 0, 4050); up(0, 1, 4060); up(0, 2, 4070)
+        assertEquals(listOf("redo", "redo"), host.taps)
         assertEquals(host.opened, host.released)
     }
 
@@ -221,7 +246,7 @@ class HistoryTapHubTest {
         round(20_000)
         val n = 20_000
         val perEvent = round(n).toDouble() / (n * 18) / 1e6
-        assertTrue("$perEvent ms per event", perEvent <= 0.02)
+        assertTrue("$perEvent ms per event", perEvent <= PerfBudget.ms(0.02))
         assertEquals("every round is one two-finger tap", 20_000 + n, quiet.taps.size)
     }
 }

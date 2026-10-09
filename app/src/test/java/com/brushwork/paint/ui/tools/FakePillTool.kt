@@ -30,7 +30,8 @@ import com.brushwork.paint.ui.common.PillLabels
  * ("Center"); null only when the object is closed ([open] false). Every edit is one in-tool step
  * ([steps]). The scale reference box is captured when the selection is taken (100 % then).
  *
- * [kind] names the object for the trash cell ("Delete curve"); [id] is the tool it stands in for.
+ * [kind] names the object for the trash cell ("Delete curve"); [id] is the tool it stands in for;
+ * [uniformOnly] makes its scale uniform-only, as a text object's (Scale Y hidden, proportions kept).
  */
 class FakePillTool(
     controller: EditorController,
@@ -38,6 +39,7 @@ class FakePillTool(
     override val id: ToolId = ToolId.CURVE,
     val kind: String = "curve",
     override val pillUnit: LengthUnit = LengthUnit.PX,
+    val uniformOnly: Boolean = false,
 ) : Tool(controller), PillPositionTool, ScaledTool, DeletingTool {
 
     /** The open object's points (document px). Compose state, as a real tool's. */
@@ -135,6 +137,8 @@ class FakePillTool(
                 fun pct(now: Float, was: Float) = if (was == 0f) 100f else now / was * 100f
                 return Vec2(pct(nhi.x - nlo.x, hi.x - lo.x), pct(nhi.y - nlo.y, hi.y - lo.y))
             }
+
+        override val uniformOnly: Boolean get() = this@FakePillTool.uniformOnly
 
         override fun beginScaleEdit() { beginScaleCalls++ }
         override fun endScaleEdit() { endScaleCalls++ }

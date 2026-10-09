@@ -354,7 +354,8 @@ private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, pe
                                     }
                                     ch.consume()
                                     val ev = awaitPointerEvent()
-                                    ch = ev.changes.firstOrNull { it.id == down.id }?.takeIf { it.pressed }
+                                    // Lifted, or claimed by a history tap (consumed): the edit ends.
+                                    ch = ev.changes.firstOrNull { it.id == down.id }?.takeIf { it.pressed && !it.isConsumed }
                                     if (ch == null) ev.changes.forEach { it.consume() }
                                 }
                             } finally {
@@ -453,7 +454,8 @@ private enum class CellGesture { TAP, DRAG, LONG_PRESS, NONE }
 /**
  * What the touch that went [down] on a cell is: a TAP (lifted within the slop), a DRAG (moved
  * past it; the change that did is returned with it), a LONG_PRESS (held for the long-press time)
- * or NONE (the pointer went away). Shared by the X / Y and Scale cells.
+ * or NONE (the pointer went away, or a history tap over the UI claimed the touch). Shared by the
+ * X / Y and Scale cells.
  */
 private suspend fun AwaitPointerEventScope.awaitCellGesture(down: PointerInputChange): Pair<CellGesture, PointerInputChange?> {
     val slop = viewConfiguration.touchSlop
@@ -464,7 +466,9 @@ private suspend fun AwaitPointerEventScope.awaitCellGesture(down: PointerInputCh
             val ev = awaitPointerEvent()
             val ch = ev.changes.firstOrNull { it.id == down.id }
             when {
-                ch == null -> return@withTimeoutOrNull false
+                // Consumed: a two- / three-finger history tap over the UI claimed the touch
+                // (`Modifier.historyTaps`): no dialog, drag or Step popup comes of it.
+                ch == null || ch.isConsumed -> return@withTimeoutOrNull false
                 !ch.pressed -> { ch.consume(); kind = CellGesture.TAP }
                 (ch.position - down.position).getDistance() > slop -> { dragFrom = ch; kind = CellGesture.DRAG }
             }
@@ -603,7 +607,8 @@ private fun AxisCell(
                                     }
                                     ch.consume()
                                     val ev = awaitPointerEvent()
-                                    ch = ev.changes.firstOrNull { it.id == down.id }?.takeIf { it.pressed }
+                                    // Lifted, or claimed by a history tap (consumed): the edit ends.
+                                    ch = ev.changes.firstOrNull { it.id == down.id }?.takeIf { it.pressed && !it.isConsumed }
                                     if (ch == null) ev.changes.forEach { it.consume() }
                                 }
                             } finally {

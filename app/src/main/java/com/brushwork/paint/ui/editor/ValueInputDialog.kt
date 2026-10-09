@@ -36,6 +36,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.ui.common.BwDialog
+import com.brushwork.paint.ui.common.ExpressionLabels
 import com.brushwork.paint.ui.common.ExpressionReadout
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LocalIncrements
@@ -131,6 +132,10 @@ fun ValueInputDialog(
     val readout = ExpressionReadout.of(field.text, relativeBase.toDouble()) { t -> parseText(t)?.toDouble() }
         ?.takeUnless { it is Readout.Value && !relativeReadout && Expressions.isRelative(field.text) }
     val blocked = ExpressionReadout.blocks(readout)
+    // A valid expression whose value [parse] refuses ("0.05*1" under a 0.1 % minimum): the
+    // readout names the range, as a plain number out of range does, not "Check the expression".
+    val outOfRange = readout is Readout.Error && readout.message == ExpressionLabels.INVALID &&
+        Expressions.evaluate(field.text.trim(), relativeBase.toDouble()) is Expressions.Result.Value
 
     val apply = {
         val v = parseText(field.text)
@@ -161,7 +166,9 @@ fun ValueInputDialog(
                 singleLine = true,
                 isError = error || blocked,
                 supportingText = {
-                    if (readout != null) {
+                    if (outOfRange) {
+                        ReadoutText("Type a number ($rangeText)", isError = true)
+                    } else if (readout != null) {
                         ReadoutText(ExpressionReadout.text(readout, { format(it.toFloat()) }, suffix), blocked)
                     } else {
                         Text(if (error) "Type a number ($rangeText)" else rangeText)

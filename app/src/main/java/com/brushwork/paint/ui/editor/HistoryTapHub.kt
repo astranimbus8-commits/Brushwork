@@ -12,7 +12,8 @@ import kotlin.math.sqrt
  * A gesture with a finger on the UI is a history tap under the canvas' rules (every finger down
  * and up within [tapTimeoutMs] of the first down, none moved [tapSlopPx] or more, at most 2 or 3
  * fingers at once, fingers only). Then:
- * - the hub CLAIMS it as soon as a second finger is down while a tap is still possible: from then
+ * - the hub CLAIMS it as soon as a second finger is down while a tap is still possible (a third
+ *   one when only the three-finger redo is on: two fingers then stay the controls'): from then
  *   on its events are consumed before the controls see them (the button under the first finger
  *   does not fire), and the canvas drops what its fingers started ([Host.yieldCanvas]);
  * - what the UI did before the claim (a slider that jumped under the first finger) is put back
@@ -117,8 +118,10 @@ class HistoryTapHub(
                 markOpen = true
                 host.openMark()
             }
-            // A finger is already on the UI: claim before this one reaches anything.
-            if (!claimed && count >= 2 && anyUi) claim()
+            // A finger is already on the UI: claim before this one reaches anything, if a tap
+            // with this many fingers is on (with the two-finger undo off, two fingers on the UI
+            // stay the controls'; a third claims for the redo).
+            if (!claimed && count >= 2 && anyUi && host.allowed(count >= 3)) claim()
         } else {
             // No tap (or none that is on) can come of it any more.
             releaseMark()
@@ -147,7 +150,7 @@ class HistoryTapHub(
             releaseMark()
             return
         }
-        if (!claimed && count >= 2 && tapPossible(timeMs) && tapAllowed(count)) claim()
+        if (!claimed && count >= 2 && tapPossible(timeMs) && host.allowed(count >= 3)) claim()
         if (claimed && anyCanvas && !yielded) {
             yielded = true
             host.yieldCanvas()
@@ -245,7 +248,10 @@ class HistoryTapHub(
     private fun tapPossible(timeMs: Long): Boolean =
         !invalid && maxPointers <= 3 && maxMove < tapSlopPx && timeMs - startTime <= tapTimeoutMs
 
-    /** A tap with [n] fingers down so far may still end as one that is on (2 can become 3). */
+    /**
+     * A tap with [n] fingers down so far may still end as one that is on (2 can become 3): the
+     * light mark stays open. The claim waits for a count whose tap is on ([Host.allowed]).
+     */
     private fun tapAllowed(n: Int): Boolean = if (n >= 3) host.allowed(true) else host.allowed(false) || host.allowed(true)
 
     /** The gesture can no longer be a tap: nothing will put the mark back, so it goes now. */
