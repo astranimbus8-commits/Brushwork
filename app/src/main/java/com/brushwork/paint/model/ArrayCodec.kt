@@ -79,7 +79,9 @@ object ArrayCodec {
         allowSpecialFloatingPointValues = true
     }
 
-    fun encodeSpec(s: ArraySpec): String = json.encodeToString(ArraySpec.serializer(), s)
+    fun encodeSpec(s: ArraySpec): String =
+        // v1.8 (I13b): a look that draws as none is never written, sanitized spec or not.
+        json.encodeToString(ArraySpec.serializer(), if (s.look?.sanitized()?.isIdentity == true) s.copy(look = null) else s)
 
     /** The spec in [s] (sanitized), or null when [s] is null or can't be read. */
     fun decodeSpec(s: String?): ArraySpec? {

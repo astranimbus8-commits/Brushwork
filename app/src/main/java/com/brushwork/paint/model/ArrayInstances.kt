@@ -132,9 +132,10 @@ object ArrayInstances {
  * v1.8 (item 2, D9): the Array look's tint. A copy is tinted toward a color T by a strength s,
  * keeping its shading and transparency: each channel becomes (1-s)·c + s·T_c·Y, where Y is the
  * Rec.709 luma of the copy's own color (0..255) and T_c the tint's channel as a fraction (0..1).
- * A white tint keeps every color; strength 0 keeps every color; alpha never changes. The tint's
- * own alpha is ignored. Pixels apply it as a [matrix] (`ColorMatrixColorFilter`), vector copies
- * per paint color ([apply]). Pure arithmetic; thread-safe.
+ * At full strength a gray v becomes T·v (the tint's shade of that brightness); a white tint keeps
+ * every gray as it is; strength 0 keeps every color; alpha never changes. The tint's own alpha is
+ * ignored. Pixels apply it as a [matrix] (`ColorMatrixColorFilter`), vector copies per paint
+ * color ([apply]). Pure arithmetic; thread-safe.
  */
 object ArrayTint {
     private const val LR = 0.2126f
