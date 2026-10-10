@@ -15,6 +15,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.array.ArrayOps
+import com.brushwork.paint.array.ArrayRenders
 import com.brushwork.paint.assist.GridRenderer
 import com.brushwork.paint.assist.RulerRenderer
 import com.brushwork.paint.assist.StrokeAssist
@@ -683,10 +684,12 @@ class EditorController(
      * queued behind it ([PendingRenders]: Object bar actions, lifts), in the order they were asked
      * for, so what follows (undo, redo, a layer operation, a filter, closing) works on them and
      * records its step after theirs. Not inside another step (they would join it), nor during
-     * undo / redo or while edit listeners are told.
+     * undo / redo or while edit listeners are told. v1.7 (§6.3): an array cache still rendering
+     * ([arrayRenders]) lands first (it was asked for first).
      */
     internal fun settleVectorWork() {
         if (editDepth != 0 || inHistory || delivering) return
+        arrayRenders.flush()
         PendingRenders.settle(this)
     }
 
@@ -1023,6 +1026,9 @@ class EditorController(
     fun beginEdit(layer: Layer = doc.activeLayer, target: EditTarget = editTargetOf(layer)): PixelEditRecorder {
         // v1.7: the last line of defence (a crash here means a missed guard, see checkUsable).
         check(!layer.isFolder) { "A folder has no pixels to edit: $layer" }
+        // v1.7 (§6.3): an array cache still rendering for this layer lands first (its step before
+        // this edit's), so the pixels this edit snapshots and changes are the new cache.
+        if (editDepth == 0 && arrayRenders.isPendingOn(layer)) flushDeferredSteps()
         return PixelEditRecorder(layer, target)
     }
 
@@ -2520,6 +2526,7 @@ class EditorController(
         if (toolsLazy.isInitialized()) tools.values.forEach { runCatching { it.onDispose() } }
         // v1.6: a live adjustment session frees its proxy tiles and caches.
         runCatching { liveAdjust.release() }
+        arrayRenders.dispose()
         vectors.dispose()
         snapping.clear()
         tiles.release()
@@ -2533,6 +2540,12 @@ class EditorController(
      * tools use on vector layers (owned by A1).
      */
     val vectors: VectorLayers = VectorLayers(this)
+
+    /**
+     * v1.7 (§6.3): the caches of text, shape and raster arrays rendered off the main thread
+     * (`ArrayOps`' edits, swapped in with their data as one step).
+     */
+    internal val arrayRenders: ArrayRenders = ArrayRenders(this)
 
     /**
      * Vector mode is exactly "the active layer is a vector layer" (derived, never stored): what

@@ -21,7 +21,8 @@ import com.brushwork.paint.ui.vector.ActionChip
  * The Array tool's options strip (v1.7 item 3, §3.3; area E): one chip that shows the array
  * ("Line × 3") and opens the Array sheet ([ArraySheet], known as "Array settings"),
  * "Finish source edit" while a raster source is being edited, and "Rendering array…" while a
- * vector array's copies are on their way. Without an array on the active layer: how to make one.
+ * vector array's copies are on their way or a large cache has rendered for over 300 ms
+ * ([ArrayTool.rendering]). Without an array on the active layer: how to make one.
  * Also hosts the sheet and the "Apply turns the text into pixels" confirmation.
  */
 @Composable

@@ -32,7 +32,8 @@ import java.util.IdentityHashMap
  * v1.6: [drawWithArray] calls its lambda once, untouched, and [effectiveVector] is the layer's own
  * content (the same instance).
  *
- * Thread-safe: canvas operations call [effectiveVector] and [sourceBounds] from their worker.
+ * Thread-safe: canvas operations call [effectiveVector] and [sourceBounds] from their worker, and
+ * `ArrayRenders` draws [drawPixels] and [drawWithArray] on its worker.
  */
 object ArrayDraw {
     /** Copy k ≥ 1 of object `id` has the id `id + (k shl COPY_ID_SHIFT)` (real ids lie within ±2^52, `VectorCodec`'s MAX_ID). */
@@ -74,8 +75,11 @@ object ArrayDraw {
      * A raster array's cache: its [LayerArray.pixels] drawn once per matrix (copies bilinear,
      * the source itself at its place unfiltered, so its pixels are exact); only the source while
      * editing it ([ArraySpec.editingSource]). Nothing without pixels.
+     *
+     * [keepGoing] is asked before each copy (a background render that was superseded stops
+     * early: `ArrayRenders`); when it says false the drawing stops there, unfinished.
      */
-    fun drawPixels(canvas: Canvas, array: LayerArray) {
+    fun drawPixels(canvas: Canvas, array: LayerArray, keepGoing: (() -> Boolean)? = null) {
         val px = array.pixels ?: return
         val bmp = px.bitmap
         if (bmp.isRecycled) return
@@ -84,6 +88,7 @@ object ArrayDraw {
         val bilinear = Paint(Paint.FILTER_BITMAP_FLAG)
         val m = Matrix()
         for (k in ms.size - 1 downTo 1) {
+            if (keepGoing != null && !keepGoing()) return
             val v = ms[k]
             if (v.any { !it.isFinite() }) continue
             m.setValues(v)

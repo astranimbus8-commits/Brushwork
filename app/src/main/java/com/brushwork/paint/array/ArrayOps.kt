@@ -59,7 +59,9 @@ import com.brushwork.paint.vector.select.PendingRenders
  * when it would pass `maxLayers`.
  *
  * Pending tool work is committed first (the tool is paused around each operation, as the
- * controller's layer operations do). Main thread.
+ * controller's layer operations do). Main thread; a large text, shape or raster cache of an edit,
+ * "Finish source edit" or "Apply array" renders on a worker and lands with its data as the same
+ * one step ([ArrayRenders]; vector arrays render through `VectorLayers`).
  */
 object ArrayOps {
     /** Refusal on an adjustment layer (it has no pixels or objects to repeat). */
@@ -165,10 +167,15 @@ object ArrayOps {
 
     /**
      * [edit] as a step named [label] (the tool's handles and the sheet use "Edit array").
-     * [onDone] tells when the new copies are on the layer (a vector layer may render in the
-     * background; every other kind before this returns) and whether the edit was applied.
+     * [onDone] tells when the new copies are on the layer (a large cache renders in the
+     * background, [ArrayRenders]; a small one before this returns) and whether the edit was
+     * applied. An earlier edit of [layer]'s array still rendering is superseded: dropped (no
+     * step, its [onDone] hears false), and this one is made from the layer's data, which the
+     * dropped one never changed.
      */
     internal fun edit(c: EditorController, layer: Layer, spec: ArraySpec, label: String, onDone: (applied: Boolean) -> Unit = {}): Boolean {
+        // Before the pause below, which would land it.
+        c.arrayRenders.supersede(layer)
         val a0 = layer.array ?: run { onDone(false); return false }
         if (keptMode(spec, a0) == a0.spec) { onDone(true); return true }
         return paused(c) {
@@ -176,7 +183,7 @@ object ArrayOps {
             val a = layer.array ?: run { onDone(false); return@paused false }
             val s = keptMode(spec, a)
             if (s == a.spec) { onDone(true); return@paused true }
-            setArray(c, layer, a.copy(spec = s), label, onDone)
+            setArray(c, layer, a.copy(spec = s), label, onDone, supersedable = true)
         }
     }
 
@@ -240,7 +247,7 @@ object ArrayOps {
             val cur = layer.array?.takeIf { it.pixels != null } ?: return@paused false
             if (cur.spec.editingSource) return@paused true
             val editing = cur.copy(spec = cur.spec.copy(editingSource = true))
-            c.updateLayerData(layer, layer.dataSnapshot().copy(array = editing), ArrayLabels.EDIT_SOURCE, Rect()) { cv -> ArrayDraw.drawPixels(cv, editing) }
+            c.arrayRenders.update(layer, layer.dataSnapshot().copy(array = editing), ArrayLabels.EDIT_SOURCE, Rect(), ArrayRenders.Cache.Pixels(editing))
         }
     }
 
@@ -438,46 +445,69 @@ object ArrayOps {
     /**
      * Sets [layer]'s array to [array] (null removes it) and re-renders, as ONE step [label]: a
      * vector layer through `vectors.updateArray`; text and shape sources drawn again by their
-     * own renderer once per copy (`ArrayDraw.drawWithArray` inside `updateLayerData`); a raster
-     * source with `ArrayDraw.drawPixels`, or alone at its place when removed. While a raster
-     * source is being edited only the data changes (the layer shows the source being painted).
+     * own renderer once per copy (`ArrayDraw.drawWithArray`, as `updateLayerData` does); a
+     * raster source with `ArrayDraw.drawPixels`, or alone at its place when removed. While a
+     * raster source is being edited only the data changes (the layer shows the source being
+     * painted). A large cache renders in the background ([ArrayRenders]; [supersedable]: an
+     * "Edit array", which a newer one drops).
      */
-    private fun setArray(c: EditorController, layer: Layer, array: LayerArray?, label: String, onDone: (applied: Boolean) -> Unit = {}): Boolean {
+    private fun setArray(
+        c: EditorController,
+        layer: Layer,
+        array: LayerArray?,
+        label: String,
+        onDone: (applied: Boolean) -> Unit = {},
+        supersedable: Boolean = false,
+    ): Boolean {
         if (ArraySources.kindOf(layer.dataSnapshot()) == ArraySources.Kind.VECTOR) {
             if (!c.checkUsable(layer)) { onDone(false); return false }
             c.vectors.updateArray(layer, array, label, onDone = onDone)
             return true
         }
-        val done = setArrayNow(c, layer, array, label)
-        onDone(done)
-        return done
+        return setArrayNow(c, layer, array, label, onDone, supersedable)
     }
 
-    /** [setArray] of a text, shape or raster source: drawn on the main thread, before it returns. */
-    private fun setArrayNow(c: EditorController, layer: Layer, array: LayerArray?, label: String): Boolean {
+    /**
+     * [setArray] of a text, shape or raster source: drawn before it returns, or in the background
+     * when it is large ([ArrayRenders.update]); [onDone] as there.
+     */
+    private fun setArrayNow(
+        c: EditorController,
+        layer: Layer,
+        array: LayerArray?,
+        label: String,
+        onDone: (applied: Boolean) -> Unit,
+        supersedable: Boolean,
+    ): Boolean {
         val before = layer.dataSnapshot()
         val after = before.copy(array = array)
         val doc = c.doc
+        fun now(done: Boolean): Boolean {
+            onDone(done)
+            return done
+        }
         return when (ArraySources.kindOf(before)) {
-            ArraySources.Kind.VECTOR -> false
+            ArraySources.Kind.VECTOR -> now(false)
             ArraySources.Kind.TEXT, ArraySources.Kind.SHAPE -> {
-                val draw = ArraySources.sourceDraw(after, doc.colorMode, doc.width, doc.height) ?: return false
+                val draw = ArraySources.sourceDraw(after, doc.colorMode, doc.width, doc.height) ?: return now(false)
                 val dirty = ArraySources.sourceRect(before).also { it.union(ArraySources.sourceRect(after)) }
-                c.updateLayerData(layer, after, label, dirty, draw = draw)
+                c.arrayRenders.update(layer, after, label, dirty, ArrayRenders.Cache.Draw(draw), supersedable, onDone = onDone)
             }
             ArraySources.Kind.PIXELS -> {
                 val old = before.array!!
                 val px = old.pixels!!
                 when {
                     // The layer shows the source being painted: only the data changes.
-                    old.spec.editingSource -> c.updateLayerData(layer, after, label, null, draw = null)
-                    array == null -> c.updateLayerData(layer, after, label, Rect(px.left, px.top, px.left + px.bitmap.width, px.top + px.bitmap.height)) { cv ->
-                        cv.drawBitmap(px.bitmap, px.left.toFloat(), px.top.toFloat(), null)
-                    }
-                    else -> c.updateLayerData(layer, after, label, Rect()) { cv -> ArrayDraw.drawPixels(cv, array) }
+                    old.spec.editingSource -> now(c.updateLayerData(layer, after, label, null, draw = null))
+                    array == null -> c.arrayRenders.update(
+                        layer, after, label, Rect(px.left, px.top, px.left + px.bitmap.width, px.top + px.bitmap.height),
+                        ArrayRenders.Cache.Draw({ cv -> cv.drawBitmap(px.bitmap, px.left.toFloat(), px.top.toFloat(), null) }, pixels = true),
+                        supersedable, onDone = onDone,
+                    )
+                    else -> c.arrayRenders.update(layer, after, label, Rect(), ArrayRenders.Cache.Pixels(array), supersedable, onDone = onDone)
                 }
             }
-            null -> c.updateLayerData(layer, after, label, null, draw = null)
+            null -> now(c.updateLayerData(layer, after, label, null, draw = null))
         }
     }
 
@@ -522,21 +552,20 @@ object ArrayOps {
         val after = before.copy(array = null)
         if (!a.spec.editingSource) return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
         val px = ArraySources.layerPixels(layer.bitmap) ?: return c.updateLayerData(layer, after, ArrayLabels.APPLY, null, draw = null)
-        try {
-            val baked = LayerArray(a.spec.copy(editingSource = false), px)
-            val dirty = ArraySources.rectOf(ArrayDraw.cacheBounds(LayerData(array = baked))).also { it.inset(-1, -1) }
-            return c.updateLayerData(layer, after, ArrayLabels.APPLY, dirty) { cv -> ArrayDraw.drawPixels(cv, baked) }
-        } finally {
-            // (Drawn into the cache, never published in data.)
-            px.bitmap.recycle()
-        }
+        val baked = LayerArray(a.spec.copy(editingSource = false), px)
+        val dirty = ArraySources.rectOf(ArrayDraw.cacheBounds(LayerData(array = baked))).also { it.inset(-1, -1) }
+        // (Drawn into the cache, never published in data: let go once drawn.)
+        return c.arrayRenders.update(layer, after, ArrayLabels.APPLY, dirty, ArrayRenders.Cache.Pixels(baked), release = { px.bitmap.recycle() })
     }
 
-    /** Sets [px] as [layer]'s source with [spec] and re-renders the copies: one step [label]. */
+    /**
+     * Sets [px] as [layer]'s source with [spec] and re-renders the copies: one step [label]
+     * (true also while it renders in the background; [px] is then the layer's source).
+     */
     private fun finishInto(c: EditorController, layer: Layer, spec: ArraySpec, px: ArrayPixels, label: String): Boolean {
         val array = LayerArray(spec, px)
         val dirty = Rect(px.left, px.top, px.left + px.bitmap.width, px.top + px.bitmap.height)
-        return c.updateLayerData(layer, layer.dataSnapshot().copy(array = array), label, dirty) { cv -> ArrayDraw.drawPixels(cv, array) }
+        return c.arrayRenders.update(layer, layer.dataSnapshot().copy(array = array), label, dirty, ArrayRenders.Cache.Pixels(array))
     }
 
     // ------------------------------------------------------------------ helpers

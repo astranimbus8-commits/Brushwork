@@ -45,8 +45,10 @@ import kotlin.math.roundToInt
  *   tool's overlay draws a source proxy (at most [PROXY_MAX] px) once per copy over the canvas,
  *   so a frame never re-renders the document's tiles; the release commits ONE step "Edit
  *   array" ([ArrayOps.edit]). A discrete control commits at once ([commit]). A vector array's
- *   re-render may land later: the preview stays up until it does, and [rendering] shows
- *   "Rendering array…" meanwhile.
+ *   re-render, and a large text, shape or raster cache (`ArrayRenders`), may land later: the
+ *   preview stays up until it does, and [rendering] shows "Rendering array…" meanwhile (a
+ *   cache: once it has taken 300 ms). A newer commit drops a cache still rendering; switching
+ *   tools or layers lands it first.
  * - Curve guides: "Draw guide" ([startGuideInput] DRAW) takes the next finger stroke, fitted by
  *   [GuideEditor]; "Use a path" (PICK) takes the first subpath of the vector path tapped next
  *   on any visible layer, copied.
@@ -78,9 +80,15 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     var previewSpec by mutableStateOf<ArraySpec?>(null)
         private set
 
-    /** A vector array's re-render is on its way (Compose state: "Rendering array…"). */
-    var rendering by mutableStateOf(false)
-        private set
+    /** A vector array's re-render is on its way (Compose state). */
+    private var vectorRendering by mutableStateOf(false)
+
+    /**
+     * "Rendering array…" shows (Compose state): a vector array's re-render is on its way, or a
+     * text, shape or raster array's cache has been rendering in the background for over 300 ms
+     * (`ArrayRenders.isSlow`).
+     */
+    val rendering: Boolean get() = vectorRendering || controller.arrayRenders.isSlow
 
     /** The layer the tool last worked on (a change of the active layer re-targets it). */
     private var lastLayer: Layer? = null
@@ -228,6 +236,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     override fun onDeactivate() {
         super.onDeactivate()
         if (selfEdit) return
+        // v1.7 (§6.3): a text, shape or raster cache still rendering lands now (the preview goes
+        // with it): what comes next (another tool, another layer, a layer operation) works on it.
+        if (controller.editDepth == 0) controller.arrayRenders.flush()
         pendingTextApply = null
         drag = null
         stroke.clear()
@@ -397,20 +408,23 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         val token = Any()
         committing = token
         inFlight = s
-        if (vector) rendering = true
+        if (vector) vectorRendering = true
         selfEdit = true
         try {
             ArrayOps.edit(controller, layer, s, ArrayLabels.EDIT) { _ ->
                 if (committing === token) {
                     committing = null
                     inFlight = null
-                    rendering = false
+                    vectorRendering = false
                     dropPreview()
                 }
             }
         } finally {
             selfEdit = false
         }
+        // A text, shape or raster cache rendering in the background (ArrayRenders): the preview
+        // shows the new copies until it lands (a superseded render's preview goes on).
+        if (!vector && committing === token && s != a.spec && !a.spec.editingSource) previewOn(layer, s)
         controller.invalidateOverlay()
     }
 
