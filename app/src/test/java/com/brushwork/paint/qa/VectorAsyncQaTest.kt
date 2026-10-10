@@ -46,13 +46,20 @@ class VectorAsyncQaTest {
     private lateinit var vec: Layer
     private val ink = 0xFF1A2A6C.toInt()
 
-    /** A worker that starts each job late (on its own thread). */
+    /**
+     * A worker that starts each job late (on its own thread). While [hold] is set, jobs wait, and
+     * each job's delay starts only once it is let go: a slow gesture on a loaded machine cannot use
+     * up the delay before the test has seen the render in flight.
+     */
     private class SlowWorker(private val delayMs: Long) : CoroutineDispatcher() {
+        @Volatile var hold = false
         private val ex = Executors.newSingleThreadExecutor { Thread(it, "slow-vector-worker").apply { isDaemon = true } }
         override fun dispatch(context: CoroutineContext, block: Runnable) {
-            ex.execute { Thread.sleep(delayMs); block.run() }
+            ex.execute { while (hold) Thread.sleep(2); Thread.sleep(delayMs); block.run() }
         }
     }
+
+    private lateinit var worker: SlowWorker
 
     @After
     fun tearDown() { if (this::r.isInitialized) r.close() }
@@ -61,7 +68,8 @@ class VectorAsyncQaTest {
     private fun setup() {
         r = VectorQaRig(480, 320)
         // Long enough that the render is still in flight after the next gesture, also on a slow CI runner.
-        c.vectors.workerDispatcher = SlowWorker(PerfBudget.ms(250.0).toLong())
+        worker = SlowWorker(PerfBudget.ms(250.0).toLong())
+        c.vectors.workerDispatcher = worker
         c.toggleVectorMode()
         r.checkpoint("Vector on")
         vec = c.activeLayer
@@ -81,9 +89,14 @@ class VectorAsyncQaTest {
         r.tool(ToolId.ERASER)
         VectorEraserModes.setMode(c, VectorEraseMode.OBJECT)
         c.eraser = c.eraser.copy(size = 12f)
-        r.stroke(240f to 150f, 240f to 175f, 240f to 200f)
-        assertTrue("the erase renders in the background", c.vectors.isRendering)
-        assertNotNull("not landed yet", strokeAt(175f))
+        worker.hold = true
+        try {
+            r.stroke(240f to 150f, 240f to 175f, 240f to 200f)
+            assertTrue("the erase renders in the background", c.vectors.isRendering)
+            assertNotNull("not landed yet", strokeAt(175f))
+        } finally {
+            worker.hold = false
+        }
     }
 
     @Test
