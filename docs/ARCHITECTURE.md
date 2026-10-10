@@ -450,6 +450,9 @@ deleted and made sharp or smooth. As with text, any other pixel edit rasterizes 
 `ShapeAnchor.radius` (document px, null = none) is a point's own corner radius. `ShapePoints.outline` uses each corner's own radius first, then the shape's "Corner radius" when the corners are treated. With every radius null the outline is exactly v1.6 (`ShapeOutlineParityTest`).
 - `ShapeRoundness` (pure Kotlin) handles targets, values, typed text (`*2`, `/2`), shifting and reset. Only a corner between two straight sides can be rounded (`ShapePoints.roundable`); otherwise the message is "Only corners between straight sides can be rounded".
 - In the Shape tool's Points strip, "Point roundness" is a `MixedNumberField` with `MixedEdit.shifted`, next to "Reset point roundness".
+  - `MixedNumberField` (`ui/points`) is `.width(IntrinsicSize.Max)`, as wide as its label, value, unit and arrows: in a horizontally scrolling strip the Row has no max width, and its weighted value text was given 0 width ("Point thickness" showed no value, "Point roundness" lost its unit). "Point roundness" is `widthIn(min = 220.dp)`. Guard: `Qa17ShapesVectorCornersUiTest`.
+  - "Select several" and "Select all points" are 44 dp (`FilterChip` with `heightIn(min = 44.dp)` and `ToolIconButton`), as in the Curve tools.
+- In a group, a point lying exactly on a gizmo handle wins the touch (closest wins, ties to the point), in the Shape tool, `CurveTool.groupDown` and Free deform alike: a tap toggles it with "Select several", and a drag moves the group instead of scaling it. The other handles, the knob and a pinch still scale or turn the group.
 - Each edit is ONE in-tool step.
 - I13: `ShapePoint.radius` is `@EncodeDefault(NEVER)`. A point without one writes no `"radius"` key, and `ShapeCodec.VERSION` is 2. Radii are saved with the shape (`ShapeCodec`) and survive save and load, also on a `VShape`.
 
@@ -752,6 +755,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
   - **Memory.** The patch is never document-sized unless the area is. If the patch is over maxMemory/8 or fails to allocate, the render falls back to the main thread. When that render is estimated over 300 ms, it first shows "Rendering array…" and waits two frames (at most 150 ms).
   - **Speed.** The estimate starts at 40 ns per raster pixel and 6 ns per text or shape unit (the JVM measured about 10–24 and 1–2, scaled by the phone factor). It learns from this device's renders: the whole-edit time for synchronous ones, and worker plus swap time for background ones.
   - Under Robolectric the policy is SYNC. Tests opt in with `policy`, `workerHook` and `patchBudget`.
+  - **Accepted residual (lead, v1.7).** The §6.3 raster rows measure the whole render on the JVM: 200 copies of 500 × 500 on 4000 × 5000 took 1376 ms (budget 600 ms), and 64 copies of 1000 × 1000 took 1863 ms (budget 1.5 s). Those renders run on the worker; the main thread pays only the swap (about 8–15 ms). The budget is read as the main-thread hitch, and the wall-clock time on the T606 is a device check.
 - Vector arrays go through the async vector renderer; meanwhile the Array tool shows "Rendering array…".
 - Text and shape tool commits (`updateTextLayer`/`updateShapeLayer`), `makePixelArray` and `fromLayer` still render their caches synchronously.
 
@@ -819,7 +823,8 @@ The Transform tool (`tools/transform/TransformTool.kt`) asks an `ObjectLiftProvi
 - On ✓, `LiftGeometry.matrix(state, left, top)` gives a row-major 3 x 3. The map turns it into new data, and `DataRender.apply` stores it through `controller.updateLayerData`. That is ONE `LayerDataAction`: it checks the effective lock and re-renders the layer from its data, so the pixels are always the data (I1).
 - A text or shape map that declines falls back to the pixel resample: the layer becomes raster in the same step, as in v1.6. An array map that declines refuses with "Apply the array to transform it".
 - Vector layers map their objects with `LayerDataTransforms.mapped` ("Transform objects").
-- A text is proportional only (`uniformOnly`): no side handles and no flips. A shape skewed or scaled unevenly becomes custom points (area C).
+- A text is proportional only (`uniformOnly`): no side handles and no flips. An arrayed text lifts as ARRAY, so `DataLift.uniformOnly` and `FolderLift.uniformOnly` treat an ARRAY with `textData` as a text too (`ArrayTransforms.mapped` refuses non-uniform maps for text). A shape skewed or scaled unevenly becomes custom points (area C).
+- A raster array in "Edit source pixels" mode lifts as pixels: `DataLiftProvider.kindOf` returns null for it, and `TransformTool.objectProviderFor` routes to the data lift only when `kindOf` is ARRAY. The pixel commit keeps the array through `LayerData.rasterizedContent` (no bake). `FolderLiftProvider.lift` likewise refuses only a child whose kind is ARRAY, so such a child in a folder goes as pixels.
 - Linked frames (lead decision):
   - A SCALE of one frame scales the whole story's type.
   - The re-flow that `TextThreads.onEdited` heals is folded into the Transform step with `amendLastStep`, so there is one undo.
@@ -866,6 +871,8 @@ Free deform is `TransformTool.Mode.MESH`, shown as the "Free deform" mode chip. 
 - Each drag, gizmo edit or "Reset mesh" is one in-tool step, `MeshEdit(mesh, ref, selection)`, on `meshUndo` / `meshRedo`.
 - `historyMark()` / `rollbackHistory(mark)` (§3.10) return to a mark.
 - A cell change resamples every stacked step to the new cells.
+- A finger on a gizmo handle scales or turns the selection, unless a vertex within reach is as close or closer. Ties go to the vertex (`<=` in `meshDown`, as in `CurveTool.groupDown` and the Shape tool), so a vertex lying exactly on a handle is tapped (toggled with "Select several") and dragged as a vertex. Guard: `FreeDeformRobolectricTest.aVertexOnAGizmoHandleWinsTheTapAndTheDrag`.
+- Outside Free deform, `TransformTool.historyMark()` returns a `LiftMark(session, state)` for a plain lift: the state is taken from the canvas gesture's or pinch's start when a canvas finger is moving the box. `rollbackHistory` re-applies it only while the same lift is pending and no canvas gesture is active. So a pill "Scale X" drag on an untouched lift followed by a second finger snaps the scale back and undoes ONE document step (`Qa17ChromePillScaleTapUiTest`).
 
 **Commit**
 - `applyMesh` draws the padded lift through the mesh into the layer: ONE pixel edit labelled "Free deform", and undo restores the exact pixels.
@@ -1133,7 +1140,7 @@ sheet ("Increment steps", More › Increments…), in Settings, and behind the X
 - `StrokeInfo.copies` → `VectorStrokeCapture` stores ONE `VStroke` with `copies`.
 - `StrokeRaster.render(…, copies)` replays in the same order (dab, then each copy), with the stroke's seed, into one buffer, so the redraw equals the live stroke within ±1.
 - Reach and tile rejection use the union over the copies. Per render, `copiesReach` also marks which copies can reach the clip (`near`), and only those are placed.
-- The vector-layer eraser is never repeated. "Symmetry doesn't apply to erasing vector objects" shows once per tool. A partial pass over any copy removes the whole stroke in one step.
+- The vector-layer eraser is never repeated. "Symmetry doesn't apply to erasing vector objects" shows once per tool, when the stroke lifts: `BrushTool.start()` only sets `eraserNoteOnLift`, and `onUp` shows the note if no toast came meanwhile (`onCancel` and `onDeactivate` clear it). The first finger of a two-finger tap or a pinch starts an eraser stroke that the second finger cancels, so a gesture that erased nothing no longer uses the note up. A partial pass over any copy removes the whole stroke in one step.
 
 **Guides.**
 - The F5 hook `SymmetryGuides.draw(canvas, t, doc, editing)` draws only when `editing` is true (Symmetry tool active): the lines plus the 44 dp handles.
@@ -1163,6 +1170,40 @@ background or the user returns to the gallery. v1.5 adds a `.vec` file per vecto
 mask spec / adjustment of each layer inside `project.json`; data that can't be read on open is
 dropped for its layer only and listed in `Document.loadWarnings` (shown once by the editor).
 
+v1.7 (final QA):
+- **Folders after a v1.6 rename.** v1.6 refuses a format-3 project, but its gallery rename rewrites `project.json` with only the keys it knows: folder entries keep `"file": ""` and lose their folder keys. When `formatVersion >= 3`, such entries are read as folders (`isStrippedFolder(formatVersion)` / `folderSpec(formatVersion)` in `ProjectFile` / `LayerEntries`), and "The folder structure was repaired" is shown: the folders come back empty at the top level and every layer is kept. A format-1/2 project with an empty file name is still refused, as in v1.6, so a damaged entry never turns a v1.6 artwork into format 3. The gallery's layer count uses the same rule. Guard: `Qa17CompatV16ReaderRobolectricTest`.
+- **Leaving the app.** `MainActivity.onStop` calls `EditorSession.saveOnLeaving()`. Like `close()`, it lands running work first (`settleVectorWork`: array renders, vector renders and queued Object bar actions; `landSavedSelections`), then saves, so a "Save selection" still compressing or an array still "Rendering array…" survives the process being killed in the background. "Save now" and the periodic autosave still save only what has landed (`ArrayRendersRobolectricTest` requires that a save does not land a render). Guard: `Qa17CompatPendingWorkOnStopUiTest`.
+
+## Formats and compatibility (v1.7)
+
+| Codec | v1.6 | v1.7 | What changed | Older readers |
+|---|---|---|---|---|
+| `ProjectFormat.VERSION` | 2 | **3** | folders | v1.0–v1.6 refuse 3 |
+| `writtenVersion` | 1 or 2 | 1, 2 or **3** | 3 iff any folder (I14) | |
+| `TextCodec.VERSION` | 4 | **5** | `kerns`, `fontKerning` | ignore them; show pixels until edited |
+| `ShapeCodec.VERSION` | 1 | **2** | `ShapePoint.radius` | ignore it |
+| `VectorCodec.VERSION` | 1 | 1 | `VSplinePoint.sharp`, `ShapePoint.radius` inside `VShape`, `VStroke.copies` (all NEVER-encoded) | ignore them (`ignoreUnknownKeys`); no new object kind |
+| `Payload.VERSION` | 1 | **2** | `PayloadLayer.parentId`, `folder`, `folderOpen`, `array: PayloadArray?`; `PayloadKind.FOLDER` | no version check; FOLDER coerces to RASTER |
+| `ArrayCodec` | – | 1 | new (spec JSON plus the BWAR container) | |
+| saved selection file | – | raw Deflate of ALPHA_8 rows | new | |
+
+New file families: `array_<id>_r<rev>.bin` (BWAR container, arrayed layers of any source kind) and `sel_<id>_r<rev>.bin` (a saved selection's packed bytes). A folder writes no pixel or mask file (`"file": ""`). `deleteUnreferenced` and `ProjectRepository.duplicate` know both families.
+
+What v1.6 does with a v1.7 project (the final compat QA checked these rows against the v1.6.0 build; the README states them for users):
+
+| Construct | `formatVersion` | v1.6 opens it? | v1.6 shows | v1.6 edits or saves | Back in v1.7 |
+|---|---|---|---|---|---|
+| Folder | 3 | **No**: "This artwork was saved by a newer version of Brushwork" (its gallery rename strips the folder keys) | | | after a v1.6 rename: "The folder structure was repaired" |
+| Array (any source) | 1 or 2 | yes | the copies (the cache), as a raster layer | raster editing; a save drops `array`/`arrayFile`, and the container becomes an orphan | a raster layer with the copies; the orphan is deleted on the next save |
+| Saved selections | 1 or 2 | yes | nothing | a save drops them; the files become orphans | gone |
+| Symmetry | 1 or 2 | yes | nothing | a save drops it | Off |
+| Sharp path point | 1 or 2 | yes | the stored subpaths: corners correct | the I9 check fails, so the path reopens as a Bézier path in the Curve tool | unchanged if not edited, else a Bézier `VPath` |
+| Per-point roundness | 1 or 2 | yes | the committed pixels | a re-render uses the single radius; a re-encode drops `radius` | as saved |
+| Kerning | 1 or 2 | yes | the committed pixels | editing re-lays out without kerning; a re-encode drops it | as saved |
+| Symmetry vector stroke (`VStroke.copies`) | 1 or 2 | yes | the committed pixels, copies included | a re-render of that layer draws only the original stroke; a re-encode drops `copies` | as saved |
+| Fill/Stroke/Both, Pathfinder, transforms, Free deform, Shape to path | 1 or 2 | yes | identical (plain `VPath`/`VShape`/pixels) | identical | identical |
+
+Folders alone bump the format: v1.6 would draw a folder's children flat, treat the folder entry as a raster layer without a pixel file, and its save would destroy the tree. Every other construct has a correct pixel cache that v1.6 already shows.
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
 nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
@@ -1241,6 +1282,12 @@ Each window feeds it exactly once:
 
 `CanvasView` forwards no `MotionEvent`s. Instead, the canvas `AndroidView` carries `Modifier.historyTapCanvas`, whose Initial pass marks its pointers as canvas pointers. `BwDialog` / `ValueInputDialog`, `DropdownMenu` and `Popup` content have no feed, so a tap there belongs to that window.
 
+**Open dropdowns (`Modifier.closeOnSecondFinger` on every `DropdownMenu`'s content, `ui/common/HistoryTaps.kt`).** A history tap over an open menu only closes it: no item fires, and no undo or redo runs, because the menu window has no feed.
+- **Both fingers on the menu, or the first on an item and the second beside it:** the Initial-pass node sees the second press. A finger beside the menu hits no node; its `ACTION_POINTER_DOWN` is carried by the item's finger, so the node also closes on a Press in which none of its own pointers went down. From then on it consumes every change until all fingers lift and dismisses once.
+- **The first finger beside the menu:** the touch-modal popup window gets it outside its content. No child takes it, so `PopupLayout.onTouchEvent` dismisses on that DOWN and the popup root handles the gesture itself. Because no touch target was added, `ViewGroup` intercepts every later event of the gesture, and a second finger on an item never reaches it, even while the menu fades out. No code is needed for this case.
+- Guard: `Qa17ChromeHistoryTapsUiTest` (More options and the "Stroke kind" strip dropdown, at a usual and a quick pace).
+- Two fingers on a dialog's button act as a plain tap on that button: dialogs are outside history taps by design (§7).
+
 A gesture counts as a history tap under the canvas' rules: every finger goes down and up within 300 ms of the first down, none moves the 12 dp tap slop, there are at most 3 fingers, and all are fingers (a stylus or mouse ends it).
 - **Canvas alone:** the gesture stays the canvas'.
 - **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`).
@@ -1272,6 +1319,22 @@ A document step that a control pushes on a finger's DOWN, before the claim, is n
 
 The panel lays out 0 × 0 and does not place the bar for a tool that shows no options. The bar reports its content width while it is measured, and the "empty" flag is remembered per active tool and vector mode: Compose does not measure an unplaced node again on its own, so a flag kept across tools left the strip hidden for every later tool. On a tool or vector-mode change the flag starts as "not empty", the panel measures the new bar in the same pass, and the bar's report flips it before the panel lays out, so a tool without options never shows an empty panel.
 
+## Typed expressions: grammar and parse sites (v1.7, item 15; `core/Expressions.kt`)
+
+- **Grammar** (a trailing unit word, `°` or `%` is stripped first; spaces between tokens are allowed):
+  ```
+  input   := [relop] expr
+  relop   := * / × ÷ x X        (only a LEADING one is relative: the value applies to the current one)
+  expr    := term {(+ | - | −) term}
+  term    := factor {(* | / | × | ÷ | x | X) factor}
+  factor  := [+ | - | −] primary   (ONE sign: "--5" is an error)
+  primary := number | '(' expr ')'
+  number  := (digits [(. | ,) [digits]] | (. | ,) digits) [(e | E) [+ | -] digits]
+  ```
+- A leading `+` or `-` is a sign, never relative. NaN or infinite results, a division by 0 ("Can't divide by 0") and text longer than `MAX_LENGTH` (64) are errors.
+- **Fast path:** `isPlainNumber` text (a sign, digits with '.' or ',', an exponent, a unit) takes each parse site's v1.6 code unchanged.
+- **The three parse sites** (`Units.parse`, `NumberSliderMath.parseTyped`, `SliderMath.parseValue`) otherwise `evaluate` the text; when that is an error they run their v1.6 code after all (the lenient fallback: "1 000" reads 1000), so no text that gave a number in v1.6 stops giving one (I13).
+- **Relative text:** fields resolve it against their current value before `parse` (`resolveRelative`: "/2" at 120 becomes "120/2"; "*2+1" becomes "120*(2+1)").
 ## Typed expressions: keys and readout (v1.7, item 15's UI; `ui/common/OperatorKeys`)
 
 - **The keys:** six operator keys (+ − × ÷ ( )) sit under the field in `ValueInputDialog`, the `LabeledSlider` value editor (`NumberControls`) and the Step popup (`IncrementControls`). Keys are 52 dp wide, shrink to 40 dp in a narrow place, then the row scrolls. They never take focus, so the keyboard stays up. `OperatorText.insert` appends to a fully selected value: with "120" selected, "+" gives "120+".
@@ -1282,6 +1345,12 @@ The panel lays out 0 × 0 and does not place the bar for a tool that shows no op
   - Text that is not a valid expression shows "Check the expression".
   - A valid expression whose value `parse` refuses (out of range, e.g. "0.05*1" under the 0.1 % scale minimum) shows "Type a number (range)" in `ValueInputDialog`.
 - **Applying:** OK (`BwDialog.confirmEnabled`) and Done do nothing while the readout shows an error. Garbage text therefore reads "Check the expression" where v1.6 said "Type a number (…)". Empty text still says "Type a number (…)".
+- **Closing the keys (final QA):**
+  - A `NumberField` / `LengthField` shows its keys while it has the focus. When Done commits, it also clears the focus (`LocalFocusManager.clearFocus()` after `commit()`), so the row closes at once, as the `LabeledSlider` value editor closes on Done. Before, Done only hid the keyboard and the row stayed open until a scrub's touch-down took the focus; that collapsed the row and moved the handle of a field below 42 dp under the finger.
+  - A refused Done (the readout is an error) keeps the field focused and its keys open, as the Step popup stays open on a refused Done; the keyboard is hidden.
+  - The focus-loss commit that follows Done sends nothing again: `commit()` returns at once when the text is the one already committed (set by a commit, or by `finish()` after a button, slider or scrub change; cleared by any typed or set change). Without this, the Path point's "Weight" field (`CurveToolOptions`) began a numeric edit that nothing ended, and `CurveTool.pushHistory` merged later same-key edits into one undo step whatever the pause between them.
+  - Typing in one field and then scrubbing ANOTHER field below it without Done still closes the row at the scrub's touch-down (the touch-down must take the focus so the typed value commits first).
+  - Guards: `Qa17KeysRowDoneUiTest` (the Array sheet's "Constant X", then a scrub of "Constant Y" whose handle must not move; a slider's value editor) and `NumberFieldDoneRobolectricTest` (ONE edit begun and finished after Done, nothing sent when refocused and left).
 
 ## v1.7 integration: audits and cross-area flows
 

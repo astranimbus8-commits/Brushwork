@@ -10,7 +10,33 @@ A painting and illustration app for Android in the spirit of ibisPaint and Clip 
 
 Requires Android 8.0 or newer. Every release is signed with the same key, so a newer APK installs over the old one and keeps your artwork.
 
+**Opening 1.7 artworks in 1.6.** Projects with layer folders need Brushwork 1.7. Everything else still opens in 1.6, which shows arrays as pixels; a symmetric stroke on a vector layer keeps only its original copy if 1.6 redraws that layer. Saving such an artwork in 1.6 turns its arrays into plain pixels for good and drops its saved selections and symmetry setting.
+
 ## Features
+
+**New in 1.7**
+- Several points at once in Shape (Points), Curve, Polyline and Path: "Select several", then tap points or drag a box on empty canvas. Drag one of them to move them all, drag the dashed box's corners and edges or pinch inside it to scale, turn its knob to rotate, and type a thickness or weight for all of them (the field reads "Mixed" when they differ).
+- "Point roundness" for each selected shape corner, and "Reset point roundness".
+- Live Array like Blender's modifier: Line, Circle, Curve (along a path you draw or pick) or Transform, with count, spacing, sweep, turn and scale per copy. Make one with "Array from selection" or the layer menu's "Array…" on a text, shape or vector layer, and change it any time with "Edit array"; "Edit source pixels", "Apply array" and "Remove array" in the layer menu.
+- "Sharp corner" on any middle point of a Path.
+- "Turn into path" in the Shape tool's Points mode turns the picked corners into an editable Path (weights, thickness, sharp corners) in place.
+- "Stroke only", "Fill only" and "Stroke and fill" for Paths, Curves and Polylines.
+- Layer folders like ibisPaint: "New folder", "Put in new folder", drag or swipe layers in and out, pass through or a blend mode and opacity, clipping to a folder, "Merge folder", "Layer from folder", open / close with the thumbnail.
+- The X / Y pill shows its step next to "#" ("# 10"; hold "#" to change it) and has a Scale X / Scale Y row with "Keep scale proportions".
+- Two-finger tap = undo and three-finger tap = redo also over the toolbars, options strip, layer window, sheets and the pill; the control under your fingers does not fire.
+- Transform keeps text, shapes, vector curves and arrays editable: move, scale and rotate them, then keep editing them with their own tool.
+- Curve, Polyline and Path move and scale the whole curve: with no point selected the pill reads "Center" (X, Y and Scale), or "Select all points" and use the box.
+- A trash cell on the pill in Shape, Curve, Polyline, Path and Text: "Delete shape", "Delete path", "Delete curve", "Delete polyline", "Delete text", or "Delete selected points".
+- Saved selections: "Save" on the selection bar or + on the Selection Layer row; each row in the layer window can load, add to, subtract from, intersect with, update, rename or delete.
+- Equations in number fields: "(3+4)*2", "100/2", or "*1.5" / "/2" to change the current value, with a live "= …" result and + − × ÷ ( ) keys.
+- Free deform: Transform → "Free deform", a mesh up to 12 × 12 ("More mesh columns" / "More mesh rows"), several vertices at once, "Smooth mesh".
+- Kerning per letter pair: put the cursor between two letters (or select some) and set "Kerning" in the text editor; "Font kerning" switches the font's own kerning off. Kerns follow their letters across linked frames.
+- Symmetry tool like ibisPaint: Mirror, Kaleidoscope, Rotation, Array and Perspective array rulers for the brush, eraser and smudge, also in the Ruler sheet; on a vector layer a symmetric stroke stays one editable object.
+- Pathfinder like Illustrator for shapes and vector paths: Unite, Minus front, Minus back, Intersect, Exclude, Divide, Trim, Merge, Crop, Outline; one undo reverts it.
+
+**Fixed in 1.7**
+- Path thickness per point: a Path with 3 points and 0 % ends now shows its middle point's thickness at once (before, nothing showed until it had 5 points). Paths saved by v1.6 keep their old thickness until they are edited.
+- Path: with the first point selected, new points go before it, so a path grows from its start.
 
 **Gallery and files**
 - Gallery of your artworks with thumbnails; rename, duplicate, delete, export PNG/JPG to the phone's gallery, share.
@@ -70,7 +96,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for how the code is organized.
 
 ## Testing status
 
-The app is covered by 2900+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
+The app is covered by 3600+ JVM/Robolectric tests, including real Skia rendering of the compositor, brushes, tools and filters, and whole-editor UI smoke tests. It has not yet been tried on a wide range of physical devices; please open an issue if something misbehaves on yours.
 
 ## Credits
 
