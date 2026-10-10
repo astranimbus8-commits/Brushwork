@@ -323,7 +323,9 @@ private val MinInlineTextWidth = 112.dp
 
 /**
  * Numeric text field that commits on Done / focus loss, with optional -/+ step buttons (hold to
- * repeat). Shows [value] formatted with [decimals]; invalid text is reverted.
+ * repeat). Shows [value] formatted with [decimals]; invalid text is reverted. Done also lets the
+ * focus go, which closes the operator keys under the field (v1.7), unless it refused an
+ * expression whose readout is an error.
  *
  * Besides typing, the number can be dragged ([adjust]):
  * - a compact slider, synced both ways with the text, whenever a range is known: an explicit
@@ -407,6 +409,9 @@ internal fun NumberFieldCore(
     /** Shows [s] with the cursor after it (the same text keeps the cursor and the selection). */
     fun setText(s: String) { if (s != textValue.text) textValue = TextFieldValue(s, TextRange(s.length)) }
     var focused by remember { mutableStateOf(false) }
+    // Done lets the focus go (the keys row closes with it). The focus-loss commit that follows
+    // re-sends the value Done committed and finishes nothing again (`committed`).
+    val fieldFocus = LocalFocusManager.current
     LaunchedEffect(value, decimals) { if (!focused) setText(format(value)) }
     // Hold-to-repeat buttons and drags run between recompositions: they read the latest values.
     val latestValue by rememberUpdatedState(value)
@@ -503,7 +508,18 @@ internal fun NumberFieldCore(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Done),
                 // Done commits and, like everywhere on Android, puts the keyboard away (a sheet
                 // sits on top of it, so it would otherwise keep covering the canvas).
-                keyboardActions = KeyboardActions(onDone = { commit(); defaultKeyboardAction(ImeAction.Done) }),
+                // v1.7 final QA: a value Done commits also lets the focus go, so the operator keys
+                // under the field close at once, as a slider's value editor closes on Done. Kept,
+                // the row stayed open until the next touch elsewhere took the focus (a scrub's
+                // touch-down), and everything under it moved up 42 dp under that finger. Text
+                // whose readout is an error is refused (Done applies nothing): the field keeps
+                // the focus and its keys, as before.
+                keyboardActions = KeyboardActions(onDone = {
+                    val refused = ExpressionReadout.blocks(readout(textValue.text))
+                    commit()
+                    defaultKeyboardAction(ImeAction.Done)
+                    if (!refused) fieldFocus.clearFocus()
+                }),
                 modifier = Modifier
                     .weight(1f)
                     .then(longPress)
