@@ -2323,13 +2323,38 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     /** Where the mesh's in-tool history is ([historyMark]): the mesh shown, its step count and newest step. */
     private data class MeshMark(val view: Any, val steps: Int, val newest: Any?)
 
+    /**
+     * The pending transform of one lift outside Free deform ([historyMark]): the session and its
+     * box. A pill cell or a slider dragged under a history tap's first finger moves the box
+     * before the tap is claimed; without this mark the tap's one undo found a changed lift and
+     * discarded it instead of undoing the document's last step (§3.10).
+     */
+    private data class LiftMark(val session: Any, val state: TransformState)
+
     override fun historyMark(): Any? {
-        val view = session?.mesh ?: return null
-        return MeshMark(view, meshUndo.size, meshUndo.lastOrNull())
+        val s = session ?: return null
+        val view = s.mesh
+        if (view != null) return MeshMark(view, meshUndo.size, meshUndo.lastOrNull())
+        // A finger moving the box on the canvas is dropped by the tap ([onCancel], the pinch's
+        // cancel): the box goes back to where that gesture started, so that is the mark.
+        val state = gesture?.start ?: pinch?.start ?: transformState ?: return null
+        return LiftMark(s, state)
     }
 
-    /** Drops the mesh steps pushed after [mark] (not to redo): the mesh and selection are as they were then. */
+    /**
+     * Back to [mark]: drops the mesh steps pushed after a [MeshMark] (not to redo), the mesh and
+     * selection as they were then; or puts the box of a [LiftMark] back while the same lift is
+     * pending and no finger moves it on the canvas (whose cancel puts it back itself).
+     */
     override fun rollbackHistory(mark: Any?) {
+        if (mark is LiftMark) {
+            val s = session ?: return
+            if (s !== mark.session || s.mesh != null || gesture != null || pinch != null || transformState == mark.state) return
+            numericEdit = null
+            clearGuides()
+            applyState(mark.state)
+            return
+        }
         val m = mark as? MeshMark ?: return
         if (session?.mesh !== m.view || meshEdit == null) return
         cancelMeshGesture()
