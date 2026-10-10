@@ -1,0 +1,153 @@
+// v1.7 QA (compat), kept as text so it never runs again. It made qa17/compat/v16-plain and
+// v16-adjust: run ONCE on the v1.6.0 sources (tag v1.6.0, c72ea66) with qa16/V15Fixtures.kt,
+// tools/text/WrapFixtures.kt, tools/text/frames/FrameFixtures.kt and
+// tools/vector/spline/CurveToolTestSupport.kt of that tag, it repeats V16GoldenGenerator (the I13
+// goldens) and writes every file v1.6 saved (the r1 ones are byte for byte qa16/v15's) plus
+// probe.tsv: what v1.6 draws from the saved project loaded back (composite, stored pixels, a fresh
+// rendering of every text, shape and vector layer; CRC32 of the ARGB ints, big-endian). Its story
+// ids and vector seeds are new, so these files are not the I13 goldens' bytes (same content).
+
+package com.brushwork.paint.qa17
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Rect
+import com.brushwork.paint.brush.TipCache
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.qa16.V15Fixtures
+import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.text.LetterScaleSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.tools.text.frames.FrameFixtures
+import com.brushwork.paint.tools.text.frames.FrameFixtures.linkFrame
+import com.brushwork.paint.tools.text.frames.FrameFixtures.newFrame
+import com.brushwork.paint.tools.text.frames.TextFrameTool
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapePoints
+import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tap
+import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tool
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.render.VectorLayerRenderer
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.File
+import java.nio.ByteBuffer
+import java.util.zip.CRC32
+
+/**
+ * v1.7 QA (compat), run on the REAL v1.6.0 sources: V16GoldenGenerator (the I13 goldens) again,
+ * keeping every file v1.6 saved, and what v1.6 draws from the saved project once loaded back: the
+ * composite, every layer's stored pixels, and a fresh rendering of every text, shape and vector
+ * layer (CRC32 of the ARGB ints, big-endian).
+ */
+@RunWith(RobolectricTestRunner::class)
+class V16GoldenPixelsProbeTest {
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val ex = File(System.getenv("TEMP"), "v17qa_compat_exchange/v16gold")
+
+    private fun pixels(b: Bitmap): IntArray = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
+
+    private fun crc(p: IntArray): Long {
+        val buf = ByteBuffer.allocate(p.size * 4)
+        buf.asIntBuffer().put(p)
+        return CRC32().apply { update(buf.array()) }.value
+    }
+
+    /** A fresh rendering of [l]'s data (null: a plain raster layer). */
+    private fun fresh(doc: Document, l: com.brushwork.paint.model.Layer): IntArray? {
+        val area = Rect(0, 0, doc.width, doc.height)
+        val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
+        when {
+            l.textData != null -> {
+                val item = TextCodec.decode(l.textData)!!
+                TextRenderer.drawItem(Canvas(out), item, TextRenderer.prepare(item), null)
+            }
+            l.shapeData != null -> {
+                val s = ShapeCodec.decode(l.shapeData)!!
+                VectorLayerRenderer.render(Canvas(out), VectorContent(objects = listOf(VShape(0L, shape = s))), area, tips = TipCache(), document = area)
+            }
+            l.vector != null -> VectorLayerRenderer.render(Canvas(out), l.vector!!, area, tips = TipCache(), document = area)
+            else -> return null
+        }
+        return pixels(out)
+    }
+
+    @Test
+    fun generate() {
+        ex.deleteRecursively()
+        for ((id, name) in listOf(V15Fixtures.PLAIN to "plain", V15Fixtures.ADJUST to "adjust")) {
+            V15Fixtures.install(app, id)
+            val repo = ProjectRepository(app)
+            val doc = runBlocking { repo.load(id) }
+            val c = Smoke.controller(app, doc)
+            c.viewTransform.set(Matrix())
+            c.snapping.enabled = false
+            assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering })
+            for (layer in doc.layers) {
+                layer.textData = layer.textData?.let { TextCodec.encode(TextCodec.decode(it)!!) }
+                layer.shapeData = layer.shapeData?.let { s ->
+                    val shape = ShapeCodec.decode(s)!!
+                    val pts = ShapePoints.fromRegular(shape.type, shape.outlineParams).mapIndexed { i, p -> if (i == 1) p.copy(smooth = true) else p }
+                    ShapeCodec.encode(shape.copy(points = pts))
+                }
+            }
+            val background = doc.layers[0]
+            c.selectLayer(background)
+            c.selectTool(ToolId.TEXT_FRAMES)
+            val frames = c.tools.getValue(ToolId.TEXT_FRAMES) as TextFrameTool
+            frames.storyPreviewMs = 0L
+            frames.dragPreviewMs = 0L
+            val s = FrameFixtures.Setup(c, background, background, frames)
+            val f1 = newFrame(s, 20f, 300f, 180f, 400f)
+            linkFrame(s, f1, 220f, 300f, 380f, 400f)
+            c.selectLayer(background)
+            c.selectTool(ToolId.TEXT)
+            val text = c.tools.getValue(ToolId.TEXT) as TextTool
+            text.startTextAt(480f, 360f)
+            text.setText("ELTON JOHN")
+            text.setSizePx(30f)
+            text.updateSpec { it.copy(letterScale = LetterScaleSpec(smallestPercent = 50f)) }
+            text.commit()
+            c.addVectorLayer()
+            assertTrue(c.activeLayer.isVectorLayer)
+            val path = c.tool(ToolId.PATH)
+            for ((x, y) in listOf(40f to 280f, 120f to 230f, 220f to 290f, 330f to 240f, 420f to 300f)) c.tap(x, y)
+            path.commit()
+            assertTrue(Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering })
+            assertTrue("a Path curve", (c.activeLayer.vector ?: VectorContent.EMPTY).objects.filterIsInstance<VPath>().single().spline != null)
+            runBlocking { repo.save(doc, null) }
+            val dir = File(app.filesDir, "projects/$id")
+            val target = File(ex, name).apply { mkdirs() }
+            dir.listFiles()!!.filter { it.name != "thumb.png" }.forEach { it.copyTo(File(target, it.name), overwrite = true) }
+
+            // What v1.6 draws from the saved project, loaded back.
+            val back = runBlocking { ProjectRepository(app).load(id) }
+            val lines = StringBuilder()
+            lines.appendLine("warnings\t${back.loadWarnings}")
+            val composite = pixels(Compositor(back) { null }.renderFlattened())
+            lines.appendLine("composite\t${crc(composite)}")
+            java.io.DataOutputStream(File(target, "composite.argb.bin").outputStream().buffered()).use { o -> composite.forEach { o.writeInt(it) } }
+            for (l in back.layers) {
+                val stored = pixels(l.bitmap)
+                val f = fresh(back, l)
+                lines.appendLine("layer\t${l.id}\t${l.name}\t${crc(stored)}\t${f?.let { crc(it) } ?: "-"}\t${f?.contentEquals(stored) ?: "-"}")
+            }
+            File(target, "probe.tsv").writeText(lines.toString())
+            println("[v16gold] $name:\n$lines")
+        }
+    }
+}
