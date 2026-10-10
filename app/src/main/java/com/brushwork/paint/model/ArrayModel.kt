@@ -16,7 +16,7 @@ enum class ArrayMode { LINE, CIRCLE, CURVE, TRANSFORM }
 
 /** v1.8 (item 2): how the look changes from the first copy to the last ([ArrayInstances.ease]). */
 @Serializable
-enum class ArrayEasing { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT }   // "Even", "Speeds up", "Slows down", "S-curve"
+enum class ArrayEasing { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT }   // labels: ArrayLabels18.EVEN, SPEEDS_UP, SLOWS_DOWN, S_CURVE
 
 /**
  * v1.8 (item 2): how copies change from the first to the last. The source never changes (I19).

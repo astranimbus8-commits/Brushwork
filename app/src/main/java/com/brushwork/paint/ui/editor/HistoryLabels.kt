@@ -168,9 +168,9 @@ internal object HistoryLabels {
 
     /** Every field edit of the Array sheet's Look tab (one array edit step; a slider drag amends it). */
     const val ARRAY_LOOK = ArrayLabels18.HISTORY_LOOK
-    /** The vector object bar's "Detach mirror copies": the object becomes N plain objects in one step. */
+    /** The vector object bar's [MirrorLabels18.DETACH]: the object becomes N plain objects in one step. */
     const val DETACH_MIRROR_COPIES = MirrorLabels18.DETACH
-    /** The More row's "Remove mirror copies" on an open curve or shape (one in-tool step). */
+    /** The More row's [MirrorLabels18.REMOVE] on an open curve or shape (one in-tool step). */
     const val REMOVE_MIRROR_COPIES = MirrorLabels18.REMOVE
 
     /** Every v1.8 step name above. */

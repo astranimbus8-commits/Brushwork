@@ -34,8 +34,8 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 /**
  * v1.8 (item 5): the control of a [FilterParam.Fringes]: its preset chips (tagged
  * [V18Tags.FRINGE_PREFIX] + the preset's name), the three fringe swatches (first, middle, last;
- * each opens the color picker, a pick replaces that color), and a "No color" chip beside the
- * middle swatch that sets it to 0 (D16). The color picker itself is unchanged.
+ * each opens the color picker, a pick replaces that color), and a [FringeLabels18.NO_COLOR]
+ * chip beside the middle swatch that sets it to 0 (D16). The color picker itself is unchanged.
  *
  * F1 stub (minimal, working): area A owns this file and finishes its look.
  */

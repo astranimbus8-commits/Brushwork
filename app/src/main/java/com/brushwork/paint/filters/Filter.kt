@@ -138,8 +138,9 @@ sealed class FilterParam {
     }
 
     /**
-     * v1.8 (item 5): three fringe colors (ARGB; 0 = "No color"), with preset chips. The value is
-     * an `IntArray(3)`: the first (forward), middle and last (back) fringe. Equal by content.
+     * v1.8 (item 5): three fringe colors (ARGB; 0 = no color, the control's
+     * [com.brushwork.paint.ui.common.FringeLabels18.NO_COLOR] chip), with preset chips. The value
+     * is an `IntArray(3)`: the first (forward), middle and last (back) fringe. Equal by content.
      */
     data class Fringes(
         override val key: String,

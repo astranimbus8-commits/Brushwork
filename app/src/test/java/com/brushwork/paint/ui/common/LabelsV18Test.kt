@@ -76,18 +76,24 @@ class LabelsV18Test {
         val labelValues = labels.values.toSet()
         val tagValues = tags.values.toSet()
         val retyped = mutableListOf<String>()
+        val quoted = mutableListOf<String>()
         val sharedSeen = mutableSetOf<String>()
         for (f in files) {
-            for (lit in KotlinLiterals.of(f.readText())) {
+            val text = f.readText()
+            for (lit in KotlinLiterals.of(text)) {
                 if (lit in labelValues) {
                     if (lit in shared) sharedSeen += lit else retyped += "${f.name}: \"$lit\""
                 }
                 if (lit in tagValues) retyped += "${f.name}: tag \"$lit\""
             }
+            // The ownership script's rule L greps `"value"` in the raw text, comments included, and
+            // drops a value it finds from the check: a comment refers to the constant instead.
+            for (v in labelValues + tagValues) if (v !in shared && text.contains("\"$v\"")) quoted += "${f.name}: \"$v\""
         }
         assertTrue("a v1.8 label or tag typed as a literal outside LabelsV18 (rule L): $retyped", retyped.isEmpty())
-        // The scanner finds what it should: the shared labels' v1.7 twins, and v1.7 texts.
-        assertTrue("shared v1.7 twins found: $sharedSeen", sharedSeen.isNotEmpty())
+        assertTrue("a v1.8 label or tag quoted outside LabelsV18 (a comment hides it from rule L): $quoted", quoted.isEmpty())
+        // Each shared label has its v1.7 twin (else it is exempted for nothing).
+        assertEquals("shared labels with a v1.7 twin", shared, sharedSeen)
     }
 
     @Test
