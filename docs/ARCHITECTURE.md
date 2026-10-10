@@ -1185,3 +1185,55 @@ shape — only when one of the two fingers is on the object's box as drawn, `too
 otherwise pan/zoom/rotate the view; two-finger tap = undo (tools with steps take back one
 step via `Tool.undoStep`), three-finger tap = redo; holding still with a color tool picks a color
 (`EditorController.pointerLongPress` → temporary eyedropper with a preview square).
+
+## History taps over the UI (v1.7, item 10; `ui/editor/HistoryTapHub`, `ui/editor/EditorHistoryTaps`, `ui/common/HistoryTaps`)
+
+The canvas still recognizes its own two- and three-finger taps (`TouchGestureClassifier`). `HistoryTapHub` recognizes the ones that touch the UI too. It is pure and allocation-free: fixed arrays, one call per pointer change, pointers told apart by window slot and id.
+
+Each window feeds it exactly once:
+- the editor root, through `Modifier.historyTaps(sink, HistoryTapSlots.EDITOR)` at the Initial and Final passes. Hosted sheets (`SheetHost`, inside the root `BoxWithConstraints`) are in this window, so the root feed covers them;
+- a `ModalBwSheet` composed in a window of its own, through its column and `LocalHistoryTaps`.
+
+`CanvasView` forwards no `MotionEvent`s. Instead, the canvas `AndroidView` carries `Modifier.historyTapCanvas`, whose Initial pass marks its pointers as canvas pointers. `BwDialog` / `ValueInputDialog`, `DropdownMenu` and `Popup` content have no feed, so a tap there belongs to that window.
+
+A gesture counts as a history tap under the canvas' rules: every finger goes down and up within 300 ms of the first down, none moves the 12 dp tap slop, there are at most 3 fingers, and all are fingers (a stylus or mouse ends it).
+- **Canvas alone:** the gesture stays the canvas'.
+- **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`).
+- **After the last up**, in the Final pass so a control's own up has run: the hub puts back what the fingers did and runs ONE `HistoryLabels.performUndo` / `performRedo` with the hotbar's feedback. With a filter open, undo cancels it and redo says "Finish the filter first".
+
+**The mark has two parts.** This differs from design §3.10, which takes `uiMark()` at the first down. `uiMark()` → `undoMarker()` records a pending live edit first. Taken at every first down, it split the Adjust sheet's live edit into one step per tap, and it `runBlocking`-waited for a running vector render on every touch, the canvas' included.
+- **At the first down,** `EditorHistoryTaps.openMark` takes a light mark that records no step and waits for nothing: the active tool's `Tool.historyMark()`, the `AppSettings` journal (opened), the live brush presets, the colour, and an open filter's `FilterSession.values` (a filter panel's − / +, curve point or gradient stop changes them on touch-down). The light mark stays open while a tap with the current finger count is still allowed.
+- **At the claim,** `claimMark` takes the full `uiMark()`. Recording the pending live edit there is right: it belongs before the mark, and the one undo takes it back.
+- **The tap** calls `restoreUiMark(full)`, then puts back the light mark: `rollbackHistory`, `rollbackJournal`, the presets (persisted), the colour and the filter values.
+- **Every gesture end and cancel** releases both (`releaseUiMark`, journal closed).
+- **Canvas finger first:** its light mark is released when that finger's down is settled as the canvas' own, and opened again at the UI finger's down. What the canvas finger started is dropped by `yieldToHistoryTap`, not by the mark.
+
+A document step that a control pushes on a finger's DOWN, before the claim, is not put back. The touch-down audit found none in the chrome.
+
+## The coordinate pill (v1.7, items 9 and 13; `ui/tools/CoordinatePill`)
+
+- **Row 1** is `[✥][X][Y][# 10][🗑]`. The "#" cell shows the Length step in 11 sp, with no unit. It is still "Increments", and a long-press opens the Length Step popup.
+- **The trash cell** deletes what the tool's `DeletingTool.objectDeletion` names (`deleteLabel`: "Delete selected points", "Delete curve"…). One tap, no confirmation, and undo restores it. The folded pill is `[✥][🗑]`.
+- **Row 2** sits 4 dp under row 1 (`IbisDims.PillRowGap`) while `ScaledTool.objectScale` has a scale: `[⛓][Scale X][Scale Y][# step]`.
+  - "Keep scale proportions" is remembered as `pill.keepProportions`. For a uniform-only object (`ObjectScale.uniformOnly`) it is shown on and disabled and Scale Y is hidden; the remembered setting is left alone.
+  - The scale is in % of the box the selection was taken with. It is typed (expressions too) or dragged at 1 % per dp. One typed value or one drag is one `beginScaleEdit` … `endScaleEdit`.
+  - "Scale increments" shows the Scale step.
+  - A Scale cell is read as "Scale X" / "Scale Y" with its value as state; the drawn letter and value are cleared from the semantics, so row 2 never repeats row 1's "X" / "Y". The `Clickables` audit skips what a `clearAndSetSemantics` node hides, as a screen reader does.
+- **Cells and history taps:** a cell's tap, long-press and drag give way when a history tap claims the touch (the change is consumed); a running drag ends there.
+- **Routing:** the pill reads the interfaces through `coordinateSourceOf` and never names a concrete tool, so any tool that implements `ObjectScale` / `ObjectDeletion` gets the row and the cell.
+- **Layout:** the pill's width comes from its cells; at 360 dp the X / Y cells give way first (`weight(1f, fill = false)`). `ChromeLayout.selectionBarTop(statusDp, pillHeightDp)` follows the measured pill height: the selection bar is at 173 dp with row 1 alone and at 209 dp with row 2. `IbisDims.PillWidth` (280), `PillMaxWidth` (372), `PillScaleRowTop` (171) and `SelectionBarTopBelowScaleRow` (209) are reference values; no code reads them.
+
+## The options strip (v1.6 §3.7.2; `ui/editor/chrome/OptionsStrip`)
+
+The panel lays out 0 × 0 and does not place the bar for a tool that shows no options. The bar reports its content width while it is measured, and the "empty" flag is remembered per active tool and vector mode: Compose does not measure an unplaced node again on its own, so a flag kept across tools left the strip hidden for every later tool. On a tool or vector-mode change the flag starts as "not empty", the panel measures the new bar in the same pass, and the bar's report flips it before the panel lays out, so a tool without options never shows an empty panel.
+
+## Typed expressions: keys and readout (v1.7, item 15's UI; `ui/common/OperatorKeys`)
+
+- **The keys:** six operator keys (+ − × ÷ ( )) sit under the field in `ValueInputDialog`, the `LabeledSlider` value editor (`NumberControls`) and the Step popup (`IncrementControls`). Keys are 52 dp wide, shrink to 40 dp in a narrow place, then the row scrolls. They never take focus, so the keyboard stays up. `OperatorText.insert` appends to a fully selected value: with "120" selected, "+" gives "120+".
+- **The readout:** `ExpressionReadout.of` gives the live readout.
+  - Empty text and a plain number show nothing, as in v1.6 (a plain out-of-range number is refused only at OK, with "Type a number (…)").
+  - Otherwise it shows "= 150 px", the value the field's own `parse` reads.
+  - Relative text is checked with `Expressions.evaluate` first, so "/0" is an error ("Can't divide by 0"), not 0.
+  - Text that is not a valid expression shows "Check the expression".
+  - A valid expression whose value `parse` refuses (out of range, e.g. "0.05*1" under the 0.1 % scale minimum) shows "Type a number (range)" in `ValueInputDialog`.
+- **Applying:** OK (`BwDialog.confirmEnabled`) and Done do nothing while the readout shows an error. Garbage text therefore reads "Check the expression" where v1.6 said "Type a number (…)". Empty text still says "Type a number (…)".
