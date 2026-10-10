@@ -348,10 +348,14 @@ object ArrayOps {
 
     /**
      * The undo half of "the new array layer is the active row": recorded BEFORE the new layer's
-     * insert in the same step, so its undo runs after the layer is gone and selects [src] again
-     * (the v1.6 `AddLayerAction` leaves the active row on whatever slid into the removed row's
-     * place; a folder's `LayerTreeAction` already restores it, and this then changes nothing).
+     * insert in the same step, so its undo runs after the layer is gone and selects [src] again.
      * Its redo does nothing: the insert's redo selects the new layer.
+     *
+     * v1.7: `AddLayerAction` and `LayerTreeAction` now both select the row that was active
+     * before the insert, so in the usual case this changes nothing. It stays because the
+     * array's source is not always that row: [paused] runs the tool's `onDeactivate` after
+     * [src] was chosen (it may commit pending work that inserts a layer and selects it), and
+     * [fromObjects] takes the Object bar's `vectors.selectedLayer`. Undo must give [src] back.
      */
     private fun reselectOnUndo(src: Layer): UndoAction = LambdaAction(
         ArrayLabels.BUTTON,

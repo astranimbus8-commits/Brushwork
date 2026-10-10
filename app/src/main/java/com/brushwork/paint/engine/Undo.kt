@@ -240,9 +240,24 @@ class CompositeAction(override val label: String, private val actions: List<Undo
     override fun dispose() { actions.forEach { it.dispose() } }
 }
 
-class AddLayerAction(private val layer: Layer, private val index: Int, override val label: String = "Add layer") : UndoAction {
+/**
+ * v1.6's add (I11: a plain layer at the root of a document without folders). v1.7: undo also
+ * selects [activeBefore] again, the row that was active before the add (by reference, as
+ * [LayerTreeAction] does); without it (or when it is gone) the index is clamped as before. Redo
+ * selects the added layer.
+ */
+class AddLayerAction(
+    private val layer: Layer,
+    private val index: Int,
+    override val label: String = "Add layer",
+    private val activeBefore: Layer? = null,
+) : UndoAction {
     override val byteSize: Long get() = 0 // the layer bitmap is owned by the document while present
-    override fun undo(c: EditorController) = c.structural { c.doc.layers.remove(layer) }
+    override fun undo(c: EditorController) = c.structural {
+        c.doc.layers.remove(layer)
+        val i = activeBefore?.let { c.doc.indexOf(it) } ?: -1
+        if (i >= 0) c.doc.activeLayerIndex = i
+    }
     override fun redo(c: EditorController) = c.structural {
         c.doc.layers.add(index.coerceIn(0, c.doc.layers.size), layer)
         c.doc.activeLayerIndex = c.doc.indexOf(layer)

@@ -71,12 +71,14 @@ internal class LayerStructure(private val c: EditorController) {
         val ins = at ?: insertionPoint()
         val pos = ins.index.coerceIn(0, doc.layers.size)
         if (!layer.isFolder && ins.parentId == Layer.ROOT_ID && !doc.hasFolders) {
-            // v1.6, exactly (I11): the same mutation and the same action.
+            // v1.6 (I11): the same mutation and the same action; v1.7: its undo selects the row
+            // that was active before the add again.
+            val activeBefore = doc.layers.getOrNull(doc.activeLayerIndex)
             c.structural {
                 doc.insertLayer(pos, layer, Layer.ROOT_ID)
                 doc.activeLayerIndex = pos
             }
-            return AddLayerAction(layer, pos, label)
+            return AddLayerAction(layer, pos, label, activeBefore)
         }
         if (layer.isFolder && folderCount() >= LayerTree.MAX_FOLDERS) { c.toast(FolderLabels.COUNT_LIMIT); return null }
         return applied(label, LayerTree.inserted(doc.layers, pos, listOf(layer), ins.parentId))
