@@ -148,6 +148,20 @@ class PerfBudgetTest {
     }
 
     @Test
+    fun timedWithinHasNoWarmUpAndKeepsThePassingRun() {
+        val s = Script(7.0)
+        assertEquals(PerfBudget.Timed("value", 7.0), PerfBudget.timedOn(s.clock) { s.block(); "value" })
+        var runs = 0
+        val first = PerfBudget.timedWithin(1e9) { ++runs }
+        assertEquals("no warm-up: the first run counts", 1, first.value)
+        assertEquals(1, runs)
+        runs = 0
+        val e = assertThrows(AssertionError::class.java) { PerfBudget.timedWithin(-1.0, tries = 3, what = "cold") { ++runs } }
+        assertEquals("three tries, no warm-up", 3, runs)
+        assertTrue(e.message!!, e.message!!.startsWith("cold: over the budget of -1.000 ms in all 3 tries"))
+    }
+
+    @Test
     fun budgetsScaleOnCiOnly() {
         assertEquals(4.0, PerfBudget.CI_FACTOR, 0.0)
         assertEquals(5, PerfBudget.TRIES)
