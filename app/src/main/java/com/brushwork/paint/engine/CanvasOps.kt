@@ -502,6 +502,9 @@ object CanvasOps {
         c.currentTool.onDeactivate()
         // A vector edit still rendering lands first (the snapshot must hold its result).
         c.vectors.flushPending()
+        // So does a saved selection still compressing (v1.7): it is mapped with the others (made
+        // after the operation, its mask would not follow the artwork).
+        c.landSavedSelections()
         val snap = CanvasSnapshot.of(c.doc)
         val stop = AtomicBoolean(false)
         c.runBusy(label, onCancel = { stop.set(true) }) {

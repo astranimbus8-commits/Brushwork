@@ -88,10 +88,15 @@ import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.PendingRenders
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.min
 
@@ -530,6 +535,8 @@ class EditorController(
      */
     fun undoMarker(): UndoMarker {
         if (editDepth == 0) flushDeferredSteps()
+        // So does a saved selection still compressing (v1.7): it was asked for before the mark.
+        landSavedSelections()
         val um = undoManager
         return UndoMarker(um.undoCount, um.undoAt(um.undoCount - 1), um.dropped)
     }
@@ -545,6 +552,7 @@ class EditorController(
     /** [rollbackTo]: the number of steps taken back, or -1 when the history no longer holds [marker]. */
     private fun rollbackSteps(marker: UndoMarker): Int {
         if (editDepth == 0) flushDeferredSteps()
+        landSavedSelections()
         settleVectorWork()
         val um = undoManager
         val top = marker.top
@@ -633,6 +641,9 @@ class EditorController(
         if (session != null) { session.cancel(); return }
         // A pending live edit becomes its step first: undo then takes it back.
         flushDeferredSteps()
+        // So does a saved selection still compressing (v1.7): undo takes the save back, and it
+        // never lands on top of what undo took back (clearing the redo stack).
+        landSavedSelections()
         // So do vector edits still rendering and the object edits waiting for them (v1.5): undo
         // takes back the newest, and nothing lands on top of what it took back.
         settleVectorWork()
@@ -654,6 +665,7 @@ class EditorController(
         if (filterSession != null) return
         // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
         flushDeferredSteps()
+        landSavedSelections()
         // So do vector edits still rendering and the object edits waiting for them (v1.5).
         settleVectorWork()
         val tool = currentTool
@@ -2170,9 +2182,36 @@ class EditorController(
 
     // ------------------------------------------------------------------ saved selections (v1.7, item 14)
 
-    /** Ids and names taken by saves still compressing (two quick saves never share a name; they count toward the limit). */
-    private val pendingSavedIds = HashSet<Long>()
-    private val pendingSavedNames = HashSet<String>()
+    /**
+     * A "Save selection" or "Update from selection" still compressing on `Dispatchers.Default`
+     * (v1.7, §3.14 (c)). [id] is the entry's id (a new one for a save, the entry's own for an
+     * [update]); [name] is the name a save gets.
+     */
+    class PendingSavedSelection internal constructor(val id: Long, val name: String, val update: Boolean, internal val revision: Long) {
+        internal lateinit var work: Deferred<SavedSelection?>
+        @Volatile internal var result: SavedSelection? = null
+        @Volatile internal var ready = false
+        @Volatile internal var outOfMemory = false
+        internal val landed = AtomicBoolean(false)
+    }
+
+    /**
+     * The saves and updates still compressing, oldest first (Compose state): the layer window
+     * shows a save's row at once with a spinner, and neither its row nor an updating one can be
+     * used until it lands. Each lands as ONE step, in the order they were asked for: when its
+     * work is done, or at once (waiting for it) before undo, redo, a history mark or rollback,
+     * a canvas operation, closing the editor and the other saved-selection actions
+     * ([landSavedSelections]). Not a [DeferredStep]: a save is not owned by a tool, and a flush
+     * inside another action's pushes could fold it into that action's step (a placement's
+     * `mergeLastUndo(2)`, a fill's mark), breaking I2. Two quick saves never share a name and
+     * count toward the limit.
+     */
+    var pendingSavedSelections by mutableStateOf<List<PendingSavedSelection>>(emptyList())
+        private set
+    private val pendingSavedLock = Any()
+
+    /** Test seam (this controller only): runs on the worker before a pending save is compressed, e.g. a delay. */
+    internal var beforeSavedSelectionPack: (suspend () -> Unit)? = null
 
     /**
      * The highest revision given to each saved selection's id in this session. An update after
@@ -2217,36 +2256,22 @@ class EditorController(
     /**
      * "Save selection": the active selection is compressed on `Dispatchers.Default`, then added
      * to `doc.savedSelections` (oldest first; the rows list them newest first) as "Selection N"
-     * with one `SavedSelectionsAction` step on the main thread. Its id is `doc.newSelectionId()`:
-     * never reused in the document, a deleted (or undone) entry's included. False (with the
-     * message) without a selection or at a limit (32 entries, 32 MB packed).
+     * with one `SavedSelectionsAction` step on the main thread; meanwhile it is in
+     * [pendingSavedSelections]. Its id is `doc.newSelectionId()`: never reused in the document,
+     * a deleted (or undone) entry's included. False (with the message) without a selection or at
+     * a limit (32 entries, 32 MB packed).
      */
     fun saveSelection(): Boolean {
         val sel = selection?.takeUnless { it.isEmpty } ?: return false
         val list = doc.savedSelections
-        if (list.size + pendingSavedIds.size >= SavedSelection.MAX) { toast(SavedSelectionLabels.LIMIT); return false }
+        val saving = pendingSavedSelections.filter { !it.update }
+        if (list.size + saving.size >= SavedSelection.MAX) { toast(SavedSelectionLabels.LIMIT); return false }
         if (list.sumOf { it.bytes } >= SavedSelection.MAX_TOTAL_BYTES) { toast(SavedSelectionLabels.FULL); return false }
         val id = doc.newSelectionId()
-        val names = list.mapTo(HashSet()) { it.name } + pendingSavedNames
-        var n = list.size + pendingSavedIds.size + 1
+        val names = list.mapTo(HashSet()) { it.name } + saving.map { it.name }
+        var n = list.size + saving.size + 1
         while ("Selection $n" in names) n++
-        val name = "Selection $n"
-        pendingSavedIds += id
-        pendingSavedNames += name
-        scope.launch {
-            try {
-                val saved = packSelection(id, name, sel, revision = 1) ?: return@launch
-                val now = doc.savedSelections
-                when {
-                    now.size >= SavedSelection.MAX -> toast(SavedSelectionLabels.LIMIT)
-                    now.sumOf { it.bytes } + saved.bytes > SavedSelection.MAX_TOTAL_BYTES -> toast(SavedSelectionLabels.FULL)
-                    else -> setSavedSelections(now + saved, SavedSelectionLabels.SAVE)
-                }
-            } finally {
-                pendingSavedIds -= id
-                pendingSavedNames -= name
-            }
-        }
+        startSavedSelectionWork(PendingSavedSelection(id, "Selection $n", update = false, revision = 1), sel)
         return true
     }
 
@@ -2258,25 +2283,95 @@ class EditorController(
      */
     fun updateSavedSelection(id: Long): Boolean {
         val sel = selection?.takeUnless { it.isEmpty } ?: return false
+        landSavedSelections()
         val old = doc.savedSelections.firstOrNull { it.id == id } ?: return false
-        val revision = nextSavedRevision(id, old.revision)
-        scope.launch {
-            val saved = packSelection(id, old.name, sel, revision) ?: return@launch
-            val now = doc.savedSelections
-            val i = now.indexOfFirst { it.id == id }
-            if (i < 0) return@launch
-            if (now.sumOf { it.bytes } - now[i].bytes + saved.bytes > SavedSelection.MAX_TOTAL_BYTES) {
-                toast(SavedSelectionLabels.FULL); return@launch
-            }
-            // The entry keeps its current name (a rename may have happened meanwhile).
-            val entry = if (now[i].name == saved.name) saved else SavedSelection(id, now[i].name, saved.bounds, saved.packed, saved.revision)
-            setSavedSelections(now.toMutableList().also { it[i] = entry }, UPDATE_SAVED_SELECTION_LABEL)
-        }
+        startSavedSelectionWork(PendingSavedSelection(id, old.name, update = true, revision = nextSavedRevision(id, old.revision)), sel)
         return true
+    }
+
+    /**
+     * Compresses [sel] for [p] on `Dispatchers.Default` (in [pendingSavedSelections] meanwhile)
+     * and lands it when done, after the saves asked for before it.
+     */
+    private fun startSavedSelectionWork(p: PendingSavedSelection, sel: Selection) {
+        val hook = beforeSavedSelectionPack
+        p.work = scope.async(Dispatchers.Default) {
+            hook?.invoke()
+            try {
+                SavedSelection.of(p.id, p.name, sel, p.revision)
+            } catch (e: OutOfMemoryError) {
+                p.outOfMemory = true
+                null
+            }
+        }
+        synchronized(pendingSavedLock) { pendingSavedSelections = pendingSavedSelections + p }
+        scope.launch {
+            p.result = p.work.await()
+            p.ready = true
+            // In order: one asked for earlier and still compressing lands this one with it.
+            for (q in pendingSavedSelections) {
+                if (!q.ready) break
+                landSavedSelection(q, q.result)
+            }
+        }
+    }
+
+    /**
+     * Lands every save and update still compressing now, oldest first, each as its step
+     * (waiting for its work): before undo, redo, a history mark or rollback, a canvas operation,
+     * closing the editor and the other saved-selection actions, so what they do comes after the
+     * saves the user asked for before them. Not inside another step, during undo / redo or while
+     * edit listeners are told. Main thread.
+     */
+    internal fun landSavedSelections() {
+        if (editDepth != 0 || inHistory || delivering) return
+        for (p in pendingSavedSelections) {
+            val saved = if (p.ready) {
+                p.result
+            } else {
+                try {
+                    runBlocking { p.work.await() }
+                } catch (e: CancellationException) {
+                    null
+                }
+            }
+            landSavedSelection(p, saved)
+        }
+    }
+
+    /**
+     * [p]'s result ([saved]; null when it was empty or out of memory) as its one step: a save is
+     * added (unless a limit was reached meanwhile), an update replaces its entry (unless deleted
+     * meanwhile; the entry keeps its current name, as a rename may have happened). Once only.
+     */
+    private fun landSavedSelection(p: PendingSavedSelection, saved: SavedSelection?) {
+        if (!p.landed.compareAndSet(false, true)) return
+        synchronized(pendingSavedLock) { pendingSavedSelections = pendingSavedSelections.filter { it !== p } }
+        if (saved == null) {
+            if (p.outOfMemory) toast("Not enough memory to save this selection")
+            return
+        }
+        val now = doc.savedSelections
+        if (!p.update) {
+            when {
+                now.size >= SavedSelection.MAX -> toast(SavedSelectionLabels.LIMIT)
+                now.sumOf { it.bytes } + saved.bytes > SavedSelection.MAX_TOTAL_BYTES -> toast(SavedSelectionLabels.FULL)
+                else -> setSavedSelections(now + saved, SavedSelectionLabels.SAVE)
+            }
+            return
+        }
+        val i = now.indexOfFirst { it.id == p.id }
+        if (i < 0) return
+        if (now.sumOf { it.bytes } - now[i].bytes + saved.bytes > SavedSelection.MAX_TOTAL_BYTES) {
+            toast(SavedSelectionLabels.FULL); return
+        }
+        val entry = if (now[i].name == saved.name) saved else SavedSelection(p.id, now[i].name, saved.bounds, saved.packed, saved.revision)
+        setSavedSelections(now.toMutableList().also { it[i] = entry }, UPDATE_SAVED_SELECTION_LABEL)
     }
 
     /** "Rename selection": one "Rename saved selection" step; a blank or unchanged name does nothing. */
     fun renameSavedSelection(id: Long, name: String) {
+        landSavedSelections()
         val trimmed = name.trim()
         val list = doc.savedSelections
         val i = list.indexOfFirst { it.id == id }
@@ -2286,6 +2381,7 @@ class EditorController(
 
     /** "Delete saved selection": one step. */
     fun deleteSavedSelection(id: Long) {
+        landSavedSelections()
         val list = doc.savedSelections
         if (list.none { it.id == id }) return
         setSavedSelections(list.filter { it.id != id }, SavedSelectionLabels.DELETE)
@@ -2297,6 +2393,7 @@ class EditorController(
      * active selection (`Selection.combine`) as the usual `SelectionAction` step.
      */
     fun loadSavedSelection(id: Long, mode: SelectionMode) {
+        landSavedSelections()
         val saved = doc.savedSelections.firstOrNull { it.id == id } ?: return
         val w = doc.width
         val h = doc.height
@@ -2320,13 +2417,6 @@ class EditorController(
             }
             setSelection(result, label = label)
         }
-    }
-
-    /** [sel] packed as a saved selection on `Dispatchers.Default`; null (with a message) when empty or without memory. */
-    private suspend fun packSelection(id: Long, name: String, sel: Selection, revision: Long): SavedSelection? = try {
-        withContext(Dispatchers.Default) { SavedSelection.of(id, name, sel, revision) }
-    } catch (e: OutOfMemoryError) {
-        toast("Not enough memory to save this selection"); null
     }
 
     /** Sets `doc.savedSelections` to [after] as one `SavedSelectionsAction` step [label]. */

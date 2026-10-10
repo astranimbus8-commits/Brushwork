@@ -103,6 +103,8 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                     runCatching { c.currentTool.onDeactivate() }
                     // (What the tool's commit rendered lands too.)
                     runCatching { c.vectors.flushPending() }
+                    // A saved selection still compressing (v1.7) lands, so it is saved too.
+                    runCatching { c.landSavedSelections() }
                 }
                 save()
                 controller?.dispose()

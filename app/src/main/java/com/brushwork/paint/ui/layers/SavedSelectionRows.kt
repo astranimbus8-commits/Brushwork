@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.FilterCenterFocus
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.RemoveCircleOutline
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -92,6 +93,11 @@ import kotlin.math.roundToInt
  *
  * Each row's thumbnail is drawn from the entry's crop in the background
  * ([SavedSelectionOps.thumbnail]): no document-size mask is inflated for it.
+ *
+ * A save still compressing (`EditorController.pendingSavedSelections`, §3.14 (c)) shows its row
+ * at once, on top with its name and a spinner in place of the thumbnail; an entry being updated
+ * shows a spinner in place of its ⋮. Neither can be tapped (no menu: nothing to load, rename or
+ * delete yet) until the save lands as its step.
  */
 @Composable
 fun SavedSelectionRows(controller: EditorController) {
@@ -99,9 +105,15 @@ fun SavedSelectionRows(controller: EditorController) {
     // Undo, redo and canvas operations replace the list with notifyLayersChanged.
     c.layersVersion
     val list = c.doc.savedSelections
+    val pending = c.pendingSavedSelections
     val hasSelection = c.selection?.isEmpty == false
     var renaming by remember { mutableStateOf<SavedSelection?>(null) }
     Column(Modifier.fillMaxWidth()) {
+        // Saves still compressing are the newest: on top, newest first (the tag is the id the
+        // entry will have).
+        for (p in pending.asReversed()) {
+            if (!p.update) key(p.id) { PendingSavedSelectionRow(p.id, p.name) }
+        }
         for (e in list.asReversed()) {
             // Keyed by id: a new entry (on top) or a deleted one doesn't shift the other rows'
             // state, so their thumbnails are not drawn again and an open menu stays on its row.
@@ -110,6 +122,7 @@ fun SavedSelectionRows(controller: EditorController) {
                     controller = c,
                     entry = e,
                     hasSelection = hasSelection,
+                    updating = pending.any { it.update && it.id == e.id },
                     onRename = { renaming = e },
                 )
             }
@@ -127,8 +140,39 @@ fun SavedSelectionRows(controller: EditorController) {
     }
 }
 
+/** A save still compressing: its name and a spinner, not clickable (no menu yet). */
 @Composable
-private fun SavedSelectionRow(controller: EditorController, entry: SavedSelection, hasSelection: Boolean, onRename: () -> Unit) {
+private fun PendingSavedSelectionRow(id: Long, name: String) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(ROW_HEIGHT)
+            .background(IbisColors.ListRow)
+            .drawBehind { drawLine(ROW_LINE, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1f) }
+            .testTag(V17Tags.savedSelectionRow(id)),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Spacer(Modifier.width(INDENT))
+        Box(Modifier.size(THUMB).background(THUMB_BACK).border(1.dp, THUMB_EDGE), contentAlignment = Alignment.Center) {
+            Spinner()
+        }
+        Text(
+            name,
+            color = DIM,
+            fontSize = NAME_SIZE,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f).padding(start = 8.dp, end = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun Spinner(modifier: Modifier = Modifier) =
+    CircularProgressIndicator(modifier.size(SPINNER), color = COVERAGE, strokeWidth = 2.dp)
+
+@Composable
+private fun SavedSelectionRow(controller: EditorController, entry: SavedSelection, hasSelection: Boolean, updating: Boolean, onRename: () -> Unit) {
     val c = controller
     var menuOpen by remember { mutableStateOf(false) }
     val close = { menuOpen = false }
@@ -140,7 +184,8 @@ private fun SavedSelectionRow(controller: EditorController, entry: SavedSelectio
                 .height(ROW_HEIGHT)
                 .background(IbisColors.ListRow)
                 .drawBehind { drawLine(ROW_LINE, Offset(0f, size.height - 0.5f), Offset(size.width, size.height - 0.5f), 1f) }
-                .clickable(role = Role.Button) { menuOpen = true }
+                // While an update compresses the row waits for it (no menu).
+                .then(if (updating) Modifier else Modifier.clickable(role = Role.Button) { menuOpen = true })
                 .testTag(V17Tags.savedSelectionRow(entry.id)),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -155,9 +200,13 @@ private fun SavedSelectionRow(controller: EditorController, entry: SavedSelectio
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f).padding(start = 8.dp, end = 4.dp),
             )
-            Icon(Icons.Filled.MoreVert, contentDescription = null, tint = DIM, modifier = Modifier.padding(end = 10.dp).size(22.dp))
+            if (updating) {
+                Spinner(Modifier.padding(end = 10.dp))
+            } else {
+                Icon(Icons.Filled.MoreVert, contentDescription = null, tint = DIM, modifier = Modifier.padding(end = 10.dp).size(22.dp))
+            }
         }
-        DropdownMenu(expanded = menuOpen, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = menuOpen && !updating, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
             Item(SavedSelectionLabels.LOAD, Icons.Filled.FileDownload) { act { c.loadSavedSelection(entry.id, SelectionMode.REPLACE) } }
             Item(SavedSelectionLabels.ADD, Icons.Filled.AddCircleOutline) { act { c.loadSavedSelection(entry.id, SelectionMode.ADD) } }
             // Without an active selection there is nothing to subtract from or intersect with.
@@ -249,6 +298,7 @@ private const val NAME_FIELD = "Name"
 private const val MAX_NAME = 64
 private val ROW_HEIGHT = 48.dp
 private val THUMB = 40.dp
+private val SPINNER = 20.dp
 private val INDENT = 16.dp
 private val NAME_SIZE = 16.sp
 private val ROW_LINE = Color(0xFFC4C4C4)
