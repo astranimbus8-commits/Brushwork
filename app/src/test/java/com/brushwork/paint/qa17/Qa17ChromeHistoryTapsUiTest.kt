@@ -12,6 +12,8 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveLabels17
+import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.HistoryTapFingers
 import com.brushwork.paint.ui.editor.HistoryTapFingers.Companion.SEED
@@ -39,6 +41,9 @@ import org.robolectric.shadows.ShadowLog
  *   window that takes every finger while it is up (touch-modal, as on the phone). Two fingers on
  *   its "Flip view" and "Canvas…" items close it, and neither item fires; two fingers beside it
  *   (over the canvas) close it too. No undo either way.
+ * - **The pill of a real Path tool:** the first finger on the trash ("Delete path"), the second on
+ *   "Keep scale proportions": one in-tool undo (the last point goes), the path is not deleted and
+ *   the chain keeps its state; three fingers redo the point.
  * - **A plain layer row:** two fingers on the rows of the layer window undo once ("Undo: Seed"),
  *   the row under the first finger does not select its layer and the window stays; three redo.
  * One test (Compose's frame clock serves the first test of a sandbox only), own sandbox; one fresh
@@ -58,6 +63,7 @@ class Qa17ChromeHistoryTapsUiTest {
         h.section("over the More options menu") { moreMenu(h) }
         h.section("over the Curve tool's Stroke kind menu") { strokeKindMenu(h) }
         h.section("a plain layer row") { layerRow(h) }
+        h.section("the trash and keep cells of a real path's pill") { pillTrash(h) }
         dog.interrupt()
         h.finish()
     }
@@ -252,5 +258,36 @@ class Qa17ChromeHistoryTapsUiTest {
             assertEquals("a one-finger tap selects", 0, c.doc.activeLayerIndex)
         }
         Smoke.assertQuiet(c, "layer row")
+    }
+
+    private fun pillTrash(h: ChromeHarness) {
+        val s = h.editor(Smoke.document(400, 300, layers = 1, whiteBottom = true))
+        val c = s.c
+        val f = HistoryTapFingers(s)
+        c.selectTool(ToolId.PATH)
+        settle()
+        val tool = c.currentTool as CurveTool
+        for ((x, y) in listOf(100f to 200f, 200f to 100f, 300f to 200f)) {
+            s.touch.idle(300)
+            val (sx, sy) = s.screen(x, y)
+            s.touch.tap(sx, sy)
+            settle(4)
+        }
+        assertEquals(3, tool.pointCount)
+        val trash = requireNotNull(s.tagged(V17Tags.PILL_TRASH)) { "no trash; shown: ${SmokeUi.shown().take(60)}" }
+        assertTrue("the trash deletes the path", SmokeUi.has(PillLabels.deleteObject("path"), exact = true))
+        fun keep() = SmokeUi.find(PillLabels.KEEP_PROPORTIONS, exact = true)?.node?.config?.getOrNull(SemanticsProperties.ToggleableState)
+        val chain = keep()
+        assertNotNull("row 2's chain", chain)
+        with(f) {
+            val keepCell = control(PillLabels.KEEP_PROPORTIONS)
+            twoFingers(trash.at(0.5f), keepCell.at(0.5f))
+            assertEquals("one in-tool undo: the last point goes, not the path", 2, tool.pointCount)
+            assertEquals("the chain did not toggle", chain, keep())
+            threeFingers(trash.at(0.5f), keepCell.at(0.5f), control("X slider").at(0.5f))
+            assertEquals("one redo", 3, tool.pointCount)
+            assertEquals(chain, keep())
+        }
+        Smoke.assertQuiet(c, "pill trash")
     }
 }
