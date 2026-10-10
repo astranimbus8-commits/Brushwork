@@ -33,9 +33,9 @@ import kotlin.math.sqrt
  * v1.7 final QA, items 12 and 13 ("while in curve, polyline and path you are allowed to transform
  * (move and scale) the curves" and "a delete option ... next to the transform X Y UI") on the
  * user's phone (392 dp): with NO point selected the pill reads "Center" and its X / Y and Scale
- * row move and scale the whole Path and Polyline (thickness kept), each typed value one step
- * that the top bar's Undo takes back alone; after "Select all points" the gizmo moves the whole
- * path by a drag inside its box and turns it by its knob; the trash cell reads "Delete curve" /
+ * row move and scale the whole Path, Polyline and Curve (thickness kept), each typed value one
+ * step that the top bar's Undo takes back alone; after "Select all points" the gizmo moves the
+ * whole path by a drag inside its box and turns it by its knob; the trash cell reads "Delete curve" /
  * "Delete path" with no point selected and deletes a pending curve as an in-tool step and a
  * reopened (applied) path as ONE app step, and Undo brings each back.
  */
@@ -51,7 +51,8 @@ class Qa17PointsWholeUiTest {
         val h = ChromeHarness()
         val qa = PointsQa(h)
         h.section("Path: the pill and the gizmo on the whole path") { qa.whole("Path") }
-        h.section("Polyline: the pill on the whole polyline") { qa.whole("Polyline") }
+        h.section("Polyline: the pill and the gizmo on the whole polyline") { qa.whole("Polyline") }
+        h.section("Curve: the pill and the gizmo on the whole curve") { qa.whole("Curve") }
         h.section("Curve: the trash deletes a pending curve") { qa.trashPending() }
         h.section("Path: the trash deletes an applied path") { qa.trashReopened() }
         dog.interrupt()
@@ -116,7 +117,7 @@ class Qa17PointsWholeUiTest {
         click("Redo", exact = true)
         for (i in start.indices) assertNear("$label: redone point $i", scaled[i], points(tool)[i])
 
-        if (tool.isPath) {
+        run {
             // "Select all points": the gizmo; a drag inside its box (not on a point) moves the path.
             press(PointLabels.SELECT_ALL, 44f)
             assertEquals(4, tool.pointSelection.count)
