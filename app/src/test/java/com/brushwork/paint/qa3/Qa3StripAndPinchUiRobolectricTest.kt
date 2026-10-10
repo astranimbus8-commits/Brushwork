@@ -158,20 +158,12 @@ class Qa3StripAndPinchUiRobolectricTest {
     }
 
     /**
-     * A window point on the canvas (clear of the top and bottom chrome) far from document point
-     * ([x], [y]): the corner of that free area farthest from it.
+     * A window point on the canvas (clear of the top and bottom chrome as measured now: the pill's
+     * Scale row moves the selection bar down) far from document point ([x], [y]): the corner of
+     * that free area farthest from it.
      */
-    private fun farFrom(activity: ComponentActivity, c: EditorController, x: Float, y: Float): Pair<Float, Float> {
-        val v = canvasOf(activity)
-        val loc = IntArray(2)
-        v.getLocationInWindow(loc)
-        val l = loc[0] + dp(activity, 40f)
-        val r = loc[0] + v.width - dp(activity, 40f)
-        val t = loc[1] + dp(activity, 230f)
-        val b = loc[1] + v.height - dp(activity, 190f)
-        val p = screen(activity, c, x, y)
-        return listOf(l to t, r to t, l to b, r to b).maxBy { (cx, cy) -> (cx - p.first) * (cx - p.first) + (cy - p.second) * (cy - p.second) }
-    }
+    private fun farFrom(activity: ComponentActivity, c: EditorController, x: Float, y: Float): Pair<Float, Float> =
+        Qa3FreeCanvas.farFrom(activity, c, x, y)
 
     @Test
     fun stripAndTwoFingers() {

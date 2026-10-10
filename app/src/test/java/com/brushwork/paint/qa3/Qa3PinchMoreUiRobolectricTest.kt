@@ -107,18 +107,9 @@ class Qa3PinchMoreUiRobolectricTest {
         settle(4)
     }
 
-    /** A point on the free canvas (clear of the chrome) far from document point ([x], [y]). */
-    private fun farFrom(activity: ComponentActivity, c: EditorController, x: Float, y: Float): Pair<Float, Float> {
-        val v = canvasOf(activity)
-        val loc = IntArray(2)
-        v.getLocationInWindow(loc)
-        val l = loc[0] + dp(activity, 40f)
-        val r = loc[0] + v.width - dp(activity, 40f)
-        val t = loc[1] + dp(activity, 230f)
-        val b = loc[1] + v.height - dp(activity, 190f)
-        val p = screen(activity, c, x, y)
-        return listOf(l to t, r to t, l to b, r to b).maxBy { (cx, cy) -> (cx - p.first) * (cx - p.first) + (cy - p.second) * (cy - p.second) }
-    }
+    /** A point on the free canvas (clear of the chrome as measured now) far from document point ([x], [y]). */
+    private fun farFrom(activity: ComponentActivity, c: EditorController, x: Float, y: Float): Pair<Float, Float> =
+        Qa3FreeCanvas.farFrom(activity, c, x, y)
 
     private fun shifted(p: Pair<Float, Float>, dx: Float, dy: Float) = (p.first + dx) to (p.second + dy)
 

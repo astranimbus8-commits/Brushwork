@@ -105,7 +105,8 @@ class Qa3WrapChecklistUiRobolectricTest {
             fun screen(x: Float, y: Float) = c.viewTransform.docToScreen(x, y).let { (it.x + loc[0]) to (it.y + loc[1]) }
             val dp = activity.resources.displayMetrics.density
             val on = screen(110f, 150f)
-            val far = (loc[0] + view.width - 40f * dp) to (loc[1] + view.height - 200f * dp)
+            // The free canvas measured between the chrome (the ✓ / ✕ and slider rows sit at the bottom).
+            val far = Qa3FreeCanvas.farFrom(activity, c, 110f, 150f)
             val touch = Smoke.Touch(activity.window.decorView)
             touch.idle(300)
             touch.pinch(far, on, far.first + 30f * dp to far.second + 30f * dp, on.first - 30f * dp to on.second - 30f * dp)
