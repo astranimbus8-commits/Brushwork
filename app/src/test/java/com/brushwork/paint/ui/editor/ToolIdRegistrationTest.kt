@@ -17,7 +17,6 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.tools.ToolOptionsBar
 import com.brushwork.paint.ui.tools.coordinateSourceOf
-import com.brushwork.paint.ui.tools.CurvePointPosition
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -71,9 +70,11 @@ class ToolIdRegistrationTest {
         assertTrue(ToolId.PATH in EditorController.HOLD_PICK_TOOLS)
         assertFalse("Text frames drags never turn into picks", ToolId.TEXT_FRAMES in EditorController.HOLD_PICK_TOOLS)
 
-        // Coordinate sources: Path uses its control-point position (area B), Curve the Curve adapter; Text frames has none yet.
+        // Coordinate sources: Path uses its control-point position (area B); Text frames has none yet.
         assertTrue(coordinateSourceOf(path)!!.target === path.splinePointPosition)
-        assertTrue(coordinateSourceOf(c.tools.getValue(ToolId.CURVE))!!.target is CurvePointPosition)
+        // v1.7 area B: Curve is a PillPositionTool, so its X / Y target is the tool's own pill position.
+        val curveTool = c.tools.getValue(ToolId.CURVE) as CurveTool
+        assertTrue(coordinateSourceOf(curveTool)!!.target === curveTool.pillPosition)
         assertNull(coordinateSourceOf(c.tools.getValue(ToolId.TEXT_FRAMES))!!.target.position)
 
         // Options strips compose for both tools; selecting and touching them is safe.

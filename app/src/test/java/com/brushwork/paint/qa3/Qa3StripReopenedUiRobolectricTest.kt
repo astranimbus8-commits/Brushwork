@@ -153,7 +153,7 @@ class Qa3StripReopenedUiRobolectricTest {
         Smoke.pumpUntil { tool.isReopened }
         settle()
         assertTrue("reopened", tool.isReopened)
-        assertFalse("no point selected: no strip", hasStrip())
+        assertTrue("no point selected: the pill moves the path's center", hasStrip() && SmokeUi.has("Center", exact = true))
         tool.select(1)
         settle()
         assertTrue("a point selected: the strip", hasStrip())
