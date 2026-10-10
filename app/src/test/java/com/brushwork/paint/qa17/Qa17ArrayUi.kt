@@ -68,6 +68,17 @@ internal class Qa17ArrayUi(private val h: ChromeHarness) {
         click(label, exact = true)
     }
 
+    /**
+     * Brings [label] wholly into view, then a finger taps its centre with real touch events: what
+     * the window hit-tests there gets it (a sheet button over the slider rows must win).
+     */
+    fun fingerPress(label: String, minDp: Float = 32f) {
+        ui.reach(label, minDp)
+        s.touch.idle(300)
+        SmokeUi.tap(label, exact = true)
+        settle(4)
+    }
+
     fun steps(): Int = c.undoManager.undoCount
 
     fun seed(layer: Layer, l: Float, t: Float, r: Float, b: Float, color: Int) {

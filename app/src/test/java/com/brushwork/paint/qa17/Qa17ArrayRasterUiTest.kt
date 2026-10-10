@@ -239,7 +239,8 @@ class Qa17ArrayRasterUiTest {
         val cache0 = pixels(layer.bitmap)
         val n = u.steps()
 
-        u.press(ArrayLabels.APPLY)
+        // Real finger taps on the sheet's footer, which sits where the slider rows are: the sheet gets them.
+        u.fingerPress(ArrayLabels.APPLY)
         u.settleRenders("applied")
         assertNull("applied", layer.array)
         assertEquals(n + 1, u.steps())
@@ -252,7 +253,7 @@ class Qa17ArrayRasterUiTest {
         assertEquals(n, u.steps())
 
         showSheet(u)
-        u.press(ArrayLabels.REMOVE)
+        u.fingerPress(ArrayLabels.REMOVE)
         u.settleRenders("removed")
         assertNull("removed", layer.array)
         assertEquals(n + 1, u.steps())
