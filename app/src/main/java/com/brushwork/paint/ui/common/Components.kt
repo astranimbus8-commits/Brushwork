@@ -293,7 +293,7 @@ fun UnitSelector(unit: LengthUnit, onUnitChange: (LengthUnit) -> Unit, modifier:
             Text(unit.short)
             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Change unit")
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             units.forEach { u ->
                 DropdownMenuItem(text = { Text("${u.label} (${u.short})") }, onClick = { onUnitChange(u); open = false })
             }

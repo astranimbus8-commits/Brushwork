@@ -45,6 +45,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.editor.MenuEntry
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -163,7 +164,7 @@ private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, e
         scrollState = scroll,
         containerColor = IbisColors.Sheet,
         shape = RoundedCornerShape(IbisDims.OptionsStripRadius),
-        modifier = Modifier.width(IbisDims.MoreMenuWidth).heightIn(max = maxHeight),
+        modifier = Modifier.width(IbisDims.MoreMenuWidth).heightIn(max = maxHeight).closeOnSecondFinger(onDismiss),
     ) {
         Column(Modifier.fillMaxWidth().heightIn(min = 40.dp).padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(header, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = BrushworkColors.OnChrome, maxLines = 2, overflow = TextOverflow.Ellipsis)

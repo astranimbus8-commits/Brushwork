@@ -56,6 +56,7 @@ import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -151,7 +152,7 @@ private fun ModeChip(tool: TransformTool, m: TransformTool.Mode) {
                 .padding(end = 6.dp)
                 .semantics { if (refusal != null) stateDescription = refusal },
         )
-        DropdownMenu(expanded = open && refusal != null, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open && refusal != null, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             DropdownMenuItem(
                 text = { Text(refusal.orEmpty(), style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim) },
                 onClick = {},
@@ -271,7 +272,7 @@ private fun InterpolationMenu(tool: TransformTool) {
             Text(tool.interpolation.label)
             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Choose interpolation")
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             TransformTool.Interpolation.entries.forEach { mode ->
                 DropdownMenuItem(
                     text = {

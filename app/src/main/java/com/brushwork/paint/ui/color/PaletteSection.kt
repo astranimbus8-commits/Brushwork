@@ -53,6 +53,7 @@ import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.SectionHeader
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /**
@@ -85,7 +86,7 @@ fun PaletteSection(
             if (manage) {
                 Box {
                     IconButton(onClick = { menuOpen = true }) { Icon(Icons.Filled.MoreVert, contentDescription = "Palette options") }
-                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }, modifier = Modifier.closeOnSecondFinger { menuOpen = false }) {
                         DropdownMenuItem(
                             text = { Text("New palette") },
                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
@@ -209,7 +210,7 @@ private fun SwatchMenu(
     onMove: (Int) -> Unit,
     onDelete: () -> Unit,
 ) {
-    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss, modifier = Modifier.closeOnSecondFinger(onDismiss)) {
         DropdownMenuItem(text = { Text("Replace with current color") }, leadingIcon = { Icon(Icons.Filled.FormatColorFill, null) }, onClick = onReplace)
         DropdownMenuItem(text = { Text("Move left") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null) }, enabled = canMoveLeft, onClick = { onMove(-1) })
         DropdownMenuItem(text = { Text("Move right") }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null) }, enabled = canMoveRight, onClick = { onMove(1) })

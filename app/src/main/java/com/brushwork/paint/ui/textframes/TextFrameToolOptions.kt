@@ -38,6 +38,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.placement.TextEditorDialog
 import com.brushwork.paint.ui.theme.BrushworkColors
 
@@ -108,7 +109,7 @@ private fun FrameWrapChip(tool: TextFrameTool, frame: Layer, rev: Int) {
             onClick = { open = true },
             selected = on,
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             val current = tool.wrapSourceOf(frame)
             val sources = tool.wrapSources(frame)
             Text(

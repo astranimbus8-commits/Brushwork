@@ -36,6 +36,7 @@ import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import kotlin.math.roundToInt
 
 /**
@@ -155,7 +156,7 @@ private fun ValueChip(label: String, value: String, content: @Composable () -> U
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
             modifier = Modifier.padding(end = 6.dp),
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             Column(Modifier.width(300.dp).padding(horizontal = 16.dp, vertical = 4.dp)) { content() }
         }
     }

@@ -56,6 +56,7 @@ import com.brushwork.paint.masks.BrushMask
 import com.brushwork.paint.masks.MaskMode
 import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.filters.FilterBrowser
 import com.brushwork.paint.ui.theme.BrushworkColors
 
@@ -199,7 +200,7 @@ private fun TargetChip(tool: MaskTool, info: StripInfo) {
             Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Choose what the mask is for")
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             if (info.activeIsAdjustment) {
                 DropdownMenuItem(
                     text = { Text("This adjustment's mask") },

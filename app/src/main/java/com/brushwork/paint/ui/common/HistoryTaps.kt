@@ -101,3 +101,42 @@ private class HistoryTapCanvasNode(var sink: HistoryTapSink, var slot: Int) : Mo
 
     override fun onCancelPointerInput() {}
 }
+
+/**
+ * v1.7 (design §3.10, QA row 8): an open menu only closes under a two- or three-finger tap. A
+ * `DropdownMenu` is a window of its own, where history taps don't run (§7), and each item sees
+ * only the fingers on it: without this, the item under the first finger to lift fired. Once a
+ * second finger is down on the menu, every pointer is consumed from the Initial pass on (the items
+ * cancel instead of firing) and [onDismiss] runs once. Put it on the menu's content
+ * (`DropdownMenu(modifier = …)`, which is the column around every item).
+ */
+fun Modifier.closeOnSecondFinger(onDismiss: () -> Unit): Modifier = this then CloseOnSecondFingerElement(onDismiss)
+
+private data class CloseOnSecondFingerElement(val onDismiss: () -> Unit) : ModifierNodeElement<CloseOnSecondFingerNode>() {
+    override fun create() = CloseOnSecondFingerNode(onDismiss)
+    override fun update(node: CloseOnSecondFingerNode) {
+        node.onDismiss = onDismiss
+    }
+}
+
+private class CloseOnSecondFingerNode(var onDismiss: () -> Unit) : Modifier.Node(), PointerInputModifierNode {
+    /** A second finger came down in this gesture: its pointers are the menu's no more. */
+    private var closing = false
+
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass != PointerEventPass.Initial) return
+        val changes = pointerEvent.changes
+        var pressed = 0
+        for (i in changes.indices) if (changes[i].pressed) pressed++
+        if (!closing && pressed > 1) {
+            closing = true
+            onDismiss()
+        }
+        if (closing) for (i in changes.indices) changes[i].consume()
+        if (pressed == 0) closing = false
+    }
+
+    override fun onCancelPointerInput() {
+        closing = false
+    }
+}

@@ -74,6 +74,7 @@ import com.brushwork.paint.tools.select.SavedSelectionOps
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlinx.coroutines.Dispatchers
@@ -206,7 +207,7 @@ private fun SavedSelectionRow(controller: EditorController, entry: SavedSelectio
                 Icon(Icons.Filled.MoreVert, contentDescription = null, tint = DIM, modifier = Modifier.padding(end = 10.dp).size(22.dp))
             }
         }
-        DropdownMenu(expanded = menuOpen && !updating, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = menuOpen && !updating, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = BrushworkColors.ChromeHigh) {
             Item(SavedSelectionLabels.LOAD, Icons.Filled.FileDownload) { act { c.loadSavedSelection(entry.id, SelectionMode.REPLACE) } }
             Item(SavedSelectionLabels.ADD, Icons.Filled.AddCircleOutline) { act { c.loadSavedSelection(entry.id, SelectionMode.ADD) } }
             // Without an active selection there is nothing to subtract from or intersect with.

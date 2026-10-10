@@ -66,6 +66,7 @@ import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.UnitSelector
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.cos
 import kotlin.math.ln
@@ -226,7 +227,7 @@ internal fun <T> DropdownChip(
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = contentDescription, modifier = Modifier.size(18.dp)) },
             colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome, trailingIconContentColor = BrushworkColors.OnChromeDim),
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             options.forEach { o ->
                 DropdownMenuItem(
                     text = { Text(optionLabel(o)) },

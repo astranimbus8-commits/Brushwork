@@ -56,6 +56,7 @@ import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 
 /** Brush library + all brush settings for the current paint tool (bottom sheet / dialog). */
@@ -247,7 +248,7 @@ private fun EditableReadout(
     val close = { editing = false; onClose() }
     Box {
         Readout(icon, text, description) { editing = true }
-        DropdownMenu(expanded = editing, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = editing, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = BrushworkColors.ChromeHigh) {
             // Fixed width: the menu measures its content's intrinsic width.
             Column(Modifier.width(300.dp).padding(horizontal = 12.dp, vertical = 4.dp)) {
                 editor()

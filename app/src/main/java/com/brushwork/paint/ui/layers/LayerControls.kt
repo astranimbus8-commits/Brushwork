@@ -124,6 +124,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.EditorPanel
@@ -370,7 +371,7 @@ private fun SpecialLayerMenu(env: LayerWindowEnv, anchor: SpecialMenuAnchor) {
     val c = env.controller
     val ui = env.ui
     val close = { ui.special = null }
-    DropdownMenu(expanded = ui.special == anchor, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+    DropdownMenu(expanded = ui.special == anchor, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = BrushworkColors.ChromeHigh) {
         MenuItem(LayerLabels.NEW_VECTOR, EditorIcons.Vector, enabled = env.canAddLayer) { close(); c.fromPanel { LayerOps.addVectorLayer(c) } }
         MenuItem(LayerLabels.NEW_ADJUSTMENT, Icons.Filled.Tune, enabled = c.canAddAdjustmentLayer) { close(); c.fromPanel { LayerOps.addAdjustmentLayer(c) } }
         // v1.7 (item 8): an empty folder above the active layer (the controller refuses past the folder limit).
@@ -403,7 +404,7 @@ private fun LayerMenu(env: LayerWindowEnv) {
     val act = { block: () -> Unit -> close(); c.fromPanel(block) }
     // Reads the layer's pixels: only while the menu is open.
     val canConvert = remember(menu.open, row.contentVersion, row.kind) { menu.open && LayerOps.canConvertToVector(c, layer) }
-    DropdownMenu(expanded = menu.open, onDismissRequest = close, containerColor = BrushworkColors.ChromeHigh) {
+    DropdownMenu(expanded = menu.open, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = BrushworkColors.ChromeHigh) {
         if (!menu.maskPage) {
             if (row.isFolder) {
                 MenuItem(FolderLabels.RENAME, Icons.Filled.DriveFileRenameOutline) { close(); env.onRename() }
@@ -706,7 +707,7 @@ private fun BlendModeDropdown(
                 Icon(Icons.Filled.KeyboardArrowUp, contentDescription = LayerLabels.BLEND, tint = IbisColors.ListText)
             }
         }
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }, containerColor = BrushworkColors.ChromeHigh) {
             if (passThrough != null) {
                 BlendEntry(FolderLabels.PASS_THROUGH, current = through) { open = false; if (!through) onPassThrough() }
                 HorizontalDivider(color = BrushworkColors.ChromeBorder)

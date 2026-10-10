@@ -136,6 +136,7 @@ import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -716,7 +717,7 @@ private fun ShapesChip(tool: CurveTool) {
             colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome, trailingIconContentColor = BrushworkColors.OnChromeDim),
             modifier = Modifier.semantics { contentDescription = "Path shapes" },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             for (shape in CurveTool.PathShape.entries) {
                 DropdownMenuItem(
                     text = { Text(shape.label) },

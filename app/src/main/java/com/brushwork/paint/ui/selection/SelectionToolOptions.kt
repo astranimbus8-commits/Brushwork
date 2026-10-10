@@ -69,6 +69,7 @@ import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.ToolIconButton
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.vector.ActionChip
 import kotlin.math.roundToInt
@@ -360,7 +361,7 @@ internal fun <T> ChoiceChip(label: String, options: List<T>, selected: T, text: 
             label = { Text("$label: ${text(selected)}") },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             options.forEach { o ->
                 DropdownMenuItem(
                     text = { Text(text(o)) },
@@ -382,7 +383,7 @@ internal fun SliderChip(label: String, value: Int, range: IntRange, suffix: Stri
             label = { Text("$label $value$suffix") },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             Column(Modifier.width(280.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
                 val span = range.last - range.first
                 LabeledSlider(

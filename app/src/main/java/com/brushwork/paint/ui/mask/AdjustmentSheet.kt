@@ -45,6 +45,7 @@ import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.SliderTyping
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.filters.FilterParamControl
 import com.brushwork.paint.ui.filters.LuminanceHistogram
 import com.brushwork.paint.ui.filters.ParamHost
@@ -170,7 +171,7 @@ private fun EffectPicker(c: EditorController, layer: Layer, filter: Filter?, ena
                 Text(filter?.name ?: "Unknown effect", maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Choose the effect")
             }
-            DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
                 for (f in AdjustmentEffects.filters) {
                     DropdownMenuItem(
                         text = { Text(f.name) },

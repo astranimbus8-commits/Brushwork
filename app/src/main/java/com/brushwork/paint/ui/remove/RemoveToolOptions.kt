@@ -43,6 +43,7 @@ import com.brushwork.paint.tools.remove.RemoveSettings
 import com.brushwork.paint.tools.remove.RemoveTool
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlin.math.ln
 import kotlin.math.exp
@@ -119,7 +120,7 @@ private fun SourceChip(source: CafSource, onChange: (CafSource) -> Unit) {
             label = { Text("Sample: ${source.label}") },
             trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
             CafSource.entries.forEach { o ->
                 DropdownMenuItem(
                     text = { Text(o.label) },
