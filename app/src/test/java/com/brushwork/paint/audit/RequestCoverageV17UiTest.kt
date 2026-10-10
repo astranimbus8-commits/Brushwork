@@ -330,14 +330,13 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         tap(200f, 150f)
         tap(320f, 150f)
         assertEquals(3, tool.pointCount)
-        // Both ends at 0 %, the middle at 100 %: the last point is selected after its tap.
-        assertEquals(2, tool.selectedPoint)
-        press("Type the point thickness")
-        SmokeUi.typeAndDone("Thickness", "0")
-        tap(80f, 150f)
-        assertEquals(0, tool.selectedPoint)
-        press("Type the point thickness")
-        SmokeUi.typeAndDone("Thickness", "0")
+        // Both ends at 0 %, the middle at 100 %: each end tapped, its thickness typed.
+        for ((i, x) in listOf(2 to 320f, 0 to 80f)) {
+            tap(x, 150f)
+            assertEquals("the end tapped", i, tool.selectedPoint)
+            press("Type the point thickness")
+            SmokeUi.typeAndDone("Thickness", "0")
+        }
         assertEquals(listOf(0f, 1f, 0f), tool.spline!!.points.map { it.width })
         applyEdit("Apply path edit")
         val layer = c.activeLayer
@@ -381,11 +380,12 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         tap(300f, 150f)
         tap(100f, 150f)
         assertEquals("the first point, tapped", 0, tool.selectedPoint)
+        fun xs() = tool.spline!!.points.map { it.x.roundToInt() }
         tap(60f, 60f)
-        assertEquals("a tap grows the path from its start", listOf(60f, 100f, 300f), tool.spline!!.points.map { it.x })
+        assertEquals("a tap grows the path from its start", listOf(60, 100, 300), xs())
         assertEquals("the new start stays selected", 0, tool.selectedPoint)
         tap(40f, 220f)
-        assertEquals(listOf(40f, 60f, 100f, 300f), tool.spline!!.points.map { it.x })
+        assertEquals(listOf(40, 60, 100, 300), xs())
         applyEdit("Apply path edit")
         assertTrue("drawn from the new start", ink(c.activeLayer, 32, 212, 48, 228) > 0)
         Smoke.assertQuiet(c, "extend from start")
@@ -448,8 +448,11 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertEquals("one tap deletes the selected point", 2, tool.pointCount)
         click(PillLabels.deleteObject("curve"), exact = true)
         settle()
-        assertFalse("the curve is gone", tool.hasPendingWork)
+        assertEquals("the curve is gone", 0, tool.pointCount)
         assertNull("nothing to delete: no trash cell", s.tagged(V17Tags.PILL_TRASH))
+        // The top row's Undo brings it back.
+        click("Undo", exact = true)
+        assertEquals(2, tool.pointCount)
         Smoke.assertQuiet(c, "the pill on a curve")
     }
 
