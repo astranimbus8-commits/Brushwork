@@ -163,6 +163,11 @@ Whole-layer ops: `controller.editWholeLayer(layer, "Label") { bitmap -> ... }`.
 - `insertionPoint()` is where a new layer lands: with an OPEN folder active, its top child; otherwise directly above the active row at its level.
   - `addFolder()` puts the folder directly above the active layer at its level.
   - Then `putInNewFolder`, `putIntoFolderAbove`, `takeOutOfFolder` (bottom child only), `ungroupFolder`, `deleteFolder`, `setFolderPassThrough`. Each is one undo step, and undo/redo restore the tree, properties, bitmaps (by identity) and picture exactly (`FolderUndoRedoRobolectricTest`).
+- **`AddLayerAction(layer, index, label, activeBefore)`** is the v1.6 add: a plain layer at the root of a document without folders.
+  - `LayerStructure.placed` captures the active row before the insert.
+  - Undo removes the layer and selects `activeBefore` again, by reference, as `LayerTreeAction` does. When that layer is gone, the index is clamped as before. Redo selects the added layer.
+  - This covers every plain add, cut or copy to a new layer, import and duplicate without folders.
+  - It is the only intended change to v1.6 undo behaviour; the actions and file bytes are unchanged.
 
 **Consumer sweep (design §4.4).** Every main file that reads `doc.layers` or a layer's bitmap follows one rule, so a folder never reaches a pixel consumer:
 - **P**: whole-document pixel loops skip folders (`doc.pixelLayers`, or `if (l.isFolder) continue`).
@@ -219,7 +224,7 @@ Whole-layer ops: `controller.editWholeLayer(layer, "Label") { bitmap -> ... }`.
   - SVG group opacity always isolates, so SVG writes it isolated and the export summary lists `ExportSceneBuilder.PASS_THROUGH_SVG_NOTE` (`ExportOptionsSheet` shows it for SVG only);
   - its layers still form their own context, so an adjustment inside merges with the folder's layers only (an approximation).
 - A hidden folder hides its children.
-- Vector arrays export each copy's objects with the `ArrayLayout` matrix applied to the geometry (`SceneLayer` has no transform). Other arrays export the cache picture.
+- Vector arrays export each copy's objects, and text arrays each copy's outline parts (`TextSource.parts`), with the `ArrayLayout` matrix applied to the geometry (`SceneLayer` has no transform). The matrices are measured from `ArrayDraw.sourceBounds`, as the cache is, and the copies run N − 1 first with the source on top. A text array is never written as `<text>`, so manual kerns and Font kerning show in every copy. Shape and raster arrays, and a text array with color emoji (letters without outlines), export the cache picture. The payload is unchanged: an arrayed layer is its cache plus its array.
 - `StrokeEnvelopeExport` writes one envelope per `VStroke.copies` entry.
 - Payload v2 carries the tree (`parentId`, `folder`, `folderOpen`) and arrays. `PayloadImport` rebuilds the tree from the source ids, and replace mode matches non-folder layers only.
 
@@ -251,6 +256,17 @@ Whole-layer ops: `controller.editWholeLayer(layer, "Label") { bitmap -> ... }`.
 **Mask scopes (`masks`).** `AdjustmentHistogram` and the filter-through-mask range start at `FolderComposite.effectStart`:
 - inside an isolated folder they measure the folder's own layers below the adjustment;
 - a pass-through folder the adjustment is in is flattened to the top level of the histogram's view document.
+
+**Audits and flows with the other v1.7 areas (integration).**
+- **Audits.** `FolderAuditTest` uses the audit's nested document (F1 holding A and the isolated F2 holding B). On top of the v1.6 whole-document operations, it covers the following, each ONE step with exact undo and redo of the tree, pixels, layer data and composite, `LayerTree.check` clean, and nothing drawn into `FOLDER_BITMAP`:
+  - an array made from a selection inside a folder (it lands directly above its source, in the same folder), and Apply array (pixels, and a shape array that becomes a vector layer);
+  - Free deform of a folder's child (a folder refuses it with "Free deform works on one layer");
+  - saved selections carried through a canvas rotate, flip and resize;
+  - Pathfinder on shape layers in two folders (the result goes into the top operand's folder).
+- **Cross-area flows.** `FolderFlowsRobolectricTest` runs these flows end to end:
+  - a selection array and a shape-layer array in an isolated folder, moved and scaled with the Transform tool (FolderLift), saved and reopened: the arrays stay live with the mapped spec, the composite is unchanged, and one undo restores everything;
+  - a Rotation × 4 stroke on a child of an isolated folder at 60 %: one step, and the composite shows all four copies;
+  - two shape layers in a folder united by Pathfinder: "Pathfinder 1" goes in that folder, and one undo restores both operands.
 
 ## Controller (`EditorController`)
 One per open document. Compose-observable state: `activeToolId`, `color`, `brush`/`eraser`/
@@ -728,7 +744,16 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - `drawPixels` draws a raster cache (bilinear). In "Edit source pixels" mode it draws copy 0 only.
 - `effectiveVector` is used by `VectorLayers`. Copy k of object `id` gets the id `id + (k shl 53)`; these ids are never encoded.
 - `updateLayerData` clears and redraws `dirty ∪ cacheBounds(before) ∪ cacheBounds(after)`, both computed from the `LayerData`.
-- Raster, text and shape caches render synchronously on the main thread. Vector arrays go through the async vector renderer; meanwhile the Array tool shows "Rendering array…".
+- **Background array renders (`array/ArrayRenders.kt`, v1.7 integration).** "Edit array" (`ArrayOps.edit`/`setArray`: handles, sliders, typed values, the sheet's buttons) on a raster, text or shape array calls `ArrayRenders.update`. It works like `updateLayerData` for the cache.
+  - **Where it renders.** The cache renders on one worker (`limitedParallelism(1)`) when three things hold: the estimated main-thread cost (cost units × learnt ns per unit) is over 25 ms, the Array tool is current, and nothing else is under way. Otherwise it renders on the main thread. The worker draws from immutable inputs only (the after data, its `ArrayPixels`, text prepared on the main thread), never from the layer bitmap. It draws into a patch the size of the area (dirty ∪ cacheBounds before and after, grown 1 px). The patch is reused and released 3 s after the last render.
+  - **Landing.** The main thread swaps the patch in together with the data as ONE step (undo-tile snapshot, SRC copy, `LayerDataAction`). Until then the layer keeps its old data and pixels, and the tool's preview shows the new copies. A preview changed after the commit (a finger still on a slider or handle) stays up through the landing, and its release is the next step. A commit that lands at once ends the preview it replaced. A two-finger history tap counts such a move as the tool's own change and takes it back.
+  - **Ordering.** A pending render is a `DeferredStep`, so any other step, undo and redo land it first. So do `beginEdit` on the layer, the Array tool deactivating, and `settleVectorWork` (save, close, export, canvas ops). A newer "Edit array" on the same layer supersedes it: the old render is dropped with no step and gets `onDone(false)`.
+  - **"Rendering array…"** shows once a render has run 300 ms (`isSlow`).
+  - **Memory.** The patch is never document-sized unless the area is. If the patch is over maxMemory/8 or fails to allocate, the render falls back to the main thread. When that render is estimated over 300 ms, it first shows "Rendering array…" and waits two frames (at most 150 ms).
+  - **Speed.** The estimate starts at 40 ns per raster pixel and 6 ns per text or shape unit (the JVM measured about 10–24 and 1–2, scaled by the phone factor). It learns from this device's renders: the whole-edit time for synchronous ones, and worker plus swap time for background ones.
+  - Under Robolectric the policy is SYNC. Tests opt in with `policy`, `workerHook` and `patchBudget`.
+- Vector arrays go through the async vector renderer; meanwhile the Array tool shows "Rendering array…".
+- Text and shape tool commits (`updateTextLayer`/`updateShapeLayer`), `makePixelArray` and `fromLayer` still render their caches synchronously.
 
 **The bake in the same step (I14).** Any raster pixel edit of an arrayed layer bakes the array inside that edit's own step (`rasterizedContent()` drops it), with the toast "Array applied"; undo brings the live array back.
 - The exception is a raster array in "Edit source pixels" mode (`ArraySpec.editingSource`): the cache is the source alone, painting changes the source, and "Finish source edit" takes the layer's non-transparent pixels as the new `ArrayPixels`.
@@ -740,7 +765,8 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
   - `fromObjects` moves vector objects into a new vector layer directly above.
   - `fromLayer` arrays a whole text, shape or vector layer in place.
   - A new array is `ArraySpec()`: count 3, Line mode, relative X 100 %.
-  - Undoing a new array layer selects its source again: `reselectOnUndo` is recorded BEFORE the insert, so its undo runs after the layer is gone. The v1.6 `AddLayerAction` does not restore the active row.
+  - Undoing a new array layer selects its source again. `reselectOnUndo` is recorded BEFORE the insert, so its undo runs after the layer is gone.
+  - Since v1.7, `AddLayerAction` and `LayerTreeAction` both restore the row that was active before an insert. In the usual case the source is already selected, and `reselectOnUndo` changes nothing. It stays because the array's source is not always that row: `paused()` runs the tool's `onDeactivate` after the source was chosen, and that may commit work that inserts and selects a layer; `fromObjects` takes `vectors.selectedLayer`.
 - **`edit` ("Edit array").**
 - **`apply` ("Apply array"):**
   - a vector array becomes real objects with new ids;
@@ -1006,6 +1032,23 @@ behind the system picker still writes what was chosen.
 - **Controller (F1).**
   - `saveSelection`, `updateSavedSelection`, `renameSavedSelection` and `deleteSavedSelection` record a `SavedSelectionsAction`.
   - `loadSavedSelection(id, mode)` inflates on a worker and lands through `Selection.combine` as the existing `SelectionAction` (Load, Add to, Subtract from, Intersect with).
+- **Pending saves (§3.14 (c), integration).** `saveSelection` and `updateSavedSelection` compress on `Dispatchers.Default`.
+  - Meanwhile each one is in `controller.pendingSavedSelections`: Compose state, oldest first, with `id` (a save's future id, or the updated entry's id), `name` and `update`.
+  - A pending save counts toward the 32-entry limit and the "Selection N" numbering.
+  - Each lands ONCE (an `AtomicBoolean`) as ONE step, in request order: a fast save waits for an earlier slow one.
+  - A worker failure other than OOM drops the save, with a log line, instead of leaving it pending.
+- **`landSavedSelections()`** lands every pending save at once, waiting for its work with `runBlocking`. It is called by:
+  - `undo` and `redo`;
+  - `HistoryLabels.performUndo` / `performRedo`, before the feedback label is computed, so it reads "Undo: Save selection";
+  - `undoMarker`, and so `uiMark`;
+  - `rollbackSteps`, and so `restoreUiMark` and `rollbackTo`;
+  - `CanvasOps.run` before its snapshot, so the save is its own step before the operation and is mapped with the others;
+  - `EditorSession.close` before the project save;
+  - the start of rename, delete, update and load.
+  - It returns at once inside an edit scope, during undo or redo, and while edit listeners are told.
+- **Why it is not a `DeferredStep`:** a save is not owned by a tool. A flush inside another action's pushes could fold the save into that action's step and break I2, for example a placement's `foldWithAdd` followed by `mergeLastUndo(2)`, or `ContentAwareFillJob`'s depth-0 mark.
+- **Consequence:** a save that finishes after a quicker later action (for example a stroke within the ≤ 300 ms window) records its step after that action's step, in completion order.
+- **Test seam:** `beforeSavedSelectionPack`, a per-controller suspend hook that runs on the worker before the compression.
 - **`tools/select/SavedSelectionOps` (G).** Pure Kotlin on the inflated crop bytes, so results are identical on every device.
   - `mappedForCanvas(list, result, oldWidth, oldHeight)` is called by `CanvasOps` on its background thread after the layers are mapped. It maps one entry at a time: inflate the crop, map it row by row through the operation's `CanvasGeometry` into the result's Deflate stream, so at most one entry's crop is alive.
     - Flips, quarter turns and whole-pixel moves are exact; a resize samples bilinearly, with several samples per pixel when it shrinks. Samples in the old document's outer half pixel read its edge pixel, so a selection touching the border still covers the new border.
@@ -1018,6 +1061,8 @@ behind the system picker still writes what was chosen.
   - A tap opens the row's menu (`SavedSelectionLabels`): Load, Add to, Subtract from, Intersect with, Update from, Rename (dialog), Delete. Subtract, Intersect and Update need an active selection.
   - Actions run through `fromPanel`. The rows are never drag sources or drop targets.
   - The rows read `layersVersion`, so undo, redo and canvas operations refresh them.
+  - **Pending saves** show at once, on top and newest first, tagged with the id they will have (`V17Tags.savedSelectionRow(id)`). Each row shows the name and a spinner in the thumbnail slot, and has no clickable and no menu until it lands.
+  - **A pending update** replaces the entry's ⋮ with a spinner, and the row cannot be tapped until the update lands.
 
 ## Snapping (`snap/`)
 One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
@@ -1237,3 +1282,62 @@ The panel lays out 0 × 0 and does not place the bar for a tool that shows no op
   - Text that is not a valid expression shows "Check the expression".
   - A valid expression whose value `parse` refuses (out of range, e.g. "0.05*1" under the 0.1 % scale minimum) shows "Type a number (range)" in `ValueInputDialog`.
 - **Applying:** OK (`BwDialog.confirmEnabled`) and Done do nothing while the readout shows an error. Garbage text therefore reads "Check the expression" where v1.6 said "Type a number (…)". Empty text still says "Type a number (…)".
+
+## v1.7 integration: audits and cross-area flows
+
+**I10 on the v1.7 screens (`ui/editor/chrome/UniqueLabelsV17`).** UniqueLabelsTest (392 dp) and UniqueLabelsNarrowTest (360 dp) also run the v1.7 sections. The screens are:
+- Path with two points picked through "Select several";
+- a shape in Points mode with one point picked, then two;
+- the Array sheet in each mode;
+- the Symmetry tool with each ruler, and each ruler's value chip open;
+- the Ruler panel over the Symmetry tool, and over the Brush;
+- Pathfinder with its operands;
+- Transform in Free deform;
+- the text editor with the Kerning row;
+- the layer window with an open folder and two saved selections, plus their menus.
+
+Each screen is reached as a finger reaches it, by labels and `V17Tags`, never by coordinates.
+- The options strip and a sheet are checked at every scroll position and again as a whole. A vertical walk also walks each row inside the container that scrolls sideways (a ChoiceChips row): start to end, then back at its start, because a lazy row recomposes its first items. The lazy layer list is checked per position only, because its node ids change.
+- Each walk asserts that it started at the start and reached the end. A ScrollBy action animates, so the walk waits until the position stops changing. At the end, every placed clickable in the container must have been seen. A control only reachable by an unwalked scroll fails the test instead of escaping it.
+- `ChromeHarness` does not read what a `clearAndSetSemantics` node hides (its children, which the unmerged tree still lists).
+
+The v1.7 sections use `UniqueLabels.duplicates`, which has three rules the v1.6 `assertUnique` keeps out:
+- unit suffixes (`LengthUnit.short`, "%", "°") are values, not names;
+- a "Type a value for …" cell (`NumberSlider`) is known by its name, not by the value it shows, as `ownLabelsInside` treats a layer row's "100%";
+- labels matching the VALUE pattern ("12 px", "45°", "8.0") are values.
+
+Finger sizes (`StateAudit.assertFingerSized`) are checked where the v1.6 audits check them: the Path, Shape and Free-deform pills with the chrome, the layer window, and its menus.
+
+Decided at integration:
+- With two or more shape points picked, the strip's delete chip reads "Delete point", because the pill's trash cell is "Delete selected points" (§3.13).
+- While the Symmetry tool is active, the Ruler panel leaves out its "Symmetry rulers" section, because the tool's options strip already shows those rulers and "Reset symmetry" (I10: one label, one control on screen). This matches the More menu over the layer window leaving out "Import picture". With any other tool active, the panel lists the symmetry rulers (§3.18).
+
+**Request coverage (`audit/RequestCoverageV17*UiTest`).** Each v1.7 request item (1–20) has one end-to-end check. The checks drive the UI as a finger does: labels come from `LabelsV17` or existing labels, and tags from `V17Tags`. Each runs at both QA sizes (`w392dp-h873dp-xxhdpi` and `w360dp-h760dp-xxhdpi`). Documents are at most 512 × 512.
+- One shared driver, `RequestCoverageV17.run(group, widthDp)`, holds three groups: POINTS (items 1, 2, 4, 5, 6, 7, 19), OBJECTS (items 9, 11, 12, 13, 15, 16, 17) and LAYERS (items 3, 8, 10, 14, 18, 20).
+- Six classes run it, one group and one size each. Each class has one @Test after `installTestRecomposer` and its own `instrumentedPackages` sandbox: `RequestCoverageV17UiTest` (Points 392), `...Points360UiTest`, `...ObjectsUiTest`, `...Objects360UiTest`, `...LayersUiTest`, `...Layers360UiTest`.
+- Each item runs in a `ChromeHarness.section`. A failing item does not hide the next, and the failure message names the item.
+- Waits for renders and computed results (Apply, array copies, Pathfinder) use `PerfBudget.ms(10 s)`. The Pathfinder check sets `PathfinderTool.computeDispatcher = Dispatchers.Unconfined`.
+- Layer inserts and removals go through `controller.structure` (the app's paths). The test adds no layers of its own outside them.
+- Cost: the six classes take about 55 s of JUnit time.
+
+**Flows with objects (`qa17/Flow*RobolectricTest`).**
+- `FlowShapePathPathfinder`: rounded corner, Turn into path, Sharp corner, Pathfinder Unite.
+- `FlowKernedTextArraySvg`: kerned text, Transform-mode array, SVG outlines.
+- `FlowSavedSelectionRotateArray`: saved selection, canvas rotated 90°, Load (Replace), Array from the selection bar.
+- `FlowSymmetryVectorSvg`: Rotation × 6 vector stroke, save, reopen, SVG with six envelopes in one path.
+- `FlowLinkedFrameRasterize`: middle frame, Rasterize and deform (Distort). The pending transform and the rasterize are separate steps, and the chain heals inside the rasterize step.
+- The folder flows and audits are listed under "Layer tree and folders".
+
+**History-tap UI tests.**
+- `HistoryTapsArrayAndPathUiTest` (392 dp, real multi-touch) covers two cases.
+  - The open Array sheet is hosted, so both fingers must land inside it. The second finger goes on the title "Array". The first finger drags the Count slider, then holds "Increase Count" (it steps on touch-down), then rests on "Apply array". Each time the test checks the live preview while the first finger is still down. The tap then puts it back and undoes one "Edit array". The sheet stays open and Apply does not fire.
+  - The Path tool on a reopened, untouched path: one finger drags a point's width slider (a live in-tool step), then a second finger lands. The width rolls back, the untouched path is released, and exactly one document step is undone.
+- `HistoryTapsV17ToolsUiTest` covers five controls: the Symmetry ruler chips, the Pathfinder strip, a saved-selection row in the layer window, the Free deform "Smooth mesh" chip and the "More mesh columns" stepper.
+  - One two-finger tap over each gives one undo, and the control under the first finger does not fire. Three fingers redo one step.
+  - An undo lets an untouched Transform lift go (`EditorController.undo`), so the test lifts again before the next control.
+- The Kerning row sits in the text editor sheet, where `HistoryLabels.historyBlocked` (v1.3) holds. The first finger's touch-down kern is checked, then the tap puts the kern back and says "Finish the text first: OK or Cancel". After OK, a tap over the options strip undoes one step.
+- Finger discipline (`HistoryTapFingers`): find controls by label or tag, never by fixed dp.
+  - Measure, then touch at once: no idle between the measure and the first down.
+  - `reach` / `reachInStrip` / `reachSlider` settle after scrolling. A semantics scroll animates: a control still gliding moves away from where it was measured, and a finger on a container still scrolling stops the scroll instead of pressing the control.
+  - For controls that act on touch-down or on a drag, `holdThenSecondFinger` / `dragThenSecondFinger` check that change before the second finger lands, so "put back" is proven and not vacuous.
+- QA canvas points: `qa3/Qa3FreeCanvas.farFrom` measures the free canvas on screen. Its top is the lowest of the top row, the options strip, the pill and the selection bar. Its bottom is the highest of the ✓ / ✕, the slider rows and the bottom bar. The qa3 pinch tests use it instead of fixed dp, because the pill's Scale row moves the selection bar down to 209–249 dp.
