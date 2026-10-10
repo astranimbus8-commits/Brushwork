@@ -248,7 +248,7 @@ class FolderFlowsRobolectricTest {
         assertEquals(24f, pa.spec.pivotY!!, 1e-4f)
         assertEquals("its source moved by whole pixels", pixelSource.left + 10, pa.pixels!!.left)
         assertEquals(pixelSource.top + 4, pa.pixels.top)
-        assertArrayEquals("the same source pixels", px(pixelSource.bitmap), px(pa.pixels.bitmap))
+        assertSame("a whole-pixel move shares the very source bitmap (immutable once published)", pixelSource.bitmap, pa.pixels.bitmap)
         assertArrayEquals("the copies moved with it", shifted(pixelArrayBefore, w, h, 10, 4), px(pixelArray.bitmap))
         val sa = shape.array
         assertNotNull("the shape array is live", sa)
