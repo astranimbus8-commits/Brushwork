@@ -48,7 +48,8 @@ import kotlin.math.sign
 
 /**
  * v1.7 area A (§5.1 A; items 3 and 18, I14): a vector array exports every copy's objects placed
- * by the `ArrayLayout` matrices (source on top), a raster or text array its cache; a stroke with
+ * by the `ArrayLayout` matrices (source on top), a text array its copies' outlines placed the same
+ * way (v1.7 §6.2, no `<text>`), a raster array its cache; a stroke with
  * symmetry copies is one outline of one envelope per copy, every envelope winding the same way;
  * the payload carries an array (spec and source container) and the import gives it back on the
  * payload's canvas, keeping the copies as pixels elsewhere or when the array is damaged.
@@ -170,24 +171,33 @@ class ArrayExportRobolectricTest {
     }
 
     @Test
-    fun rasterAndTextArraysExportTheirCache() {
+    fun aRasterArrayExportsItsCacheAndATextArrayItsCopiesOutlines() {
         val doc = docOf { d -> listOf(rasterArray(d), textArray(d)) }
         val s = scene(doc)
-        for (name in listOf("Stamps", "Words")) {
-            val item = s.layers.named(name).items.single()
-            assertTrue("$name: its cache, every copy in it", item is SceneItem.Image)
-            val img = (item as SceneItem.Image).image
-            val px = runBlocking { img.source.load() }.pixels
-            val layer = doc.layers.first { it.name == name }
-            val all = pixels(layer.bitmap)
-            for (y in 0 until img.height) for (x in 0 until img.width) {
-                assertEquals("$name at $x, $y", all[(y + img.top) * w + x + img.left], px[y * img.width + x])
-            }
+        val item = s.layers.named("Stamps").items.single()
+        assertTrue("its cache, every copy in it", item is SceneItem.Image)
+        val img = (item as SceneItem.Image).image
+        val px = runBlocking { img.source.load() }.pixels
+        val all = pixels(doc.layers.first { it.name == "Stamps" }.bitmap)
+        for (y in 0 until img.height) for (x in 0 until img.width) {
+            assertEquals("Stamps at $x, $y", all[(y + img.top) * w + x + img.left], px[y * img.width + x])
         }
         // The raster array's picture reaches its last copy.
-        val stamps = (s.layers.named("Stamps").items.single() as SceneItem.Image).image
-        assertEquals(10, stamps.left)
-        assertEquals(110, stamps.left + stamps.width)
+        assertEquals(10, img.left)
+        assertEquals(110, img.left + img.width)
+
+        // v1.7 (§6.2): a text array is every copy's outlines (never `<text>`), copy 1 under the
+        // source, placed by the matrix (60 px to the right), each in the text's color.
+        val words = s.layers.named("Words").items
+        assertEquals("one outline per copy", 2, words.size)
+        val shapes = words.map { it as SceneItem.Shape }
+        for (sh in shapes) assertEquals(VPaint.Solid(0xFF2040E0.toInt()), sh.fill)
+        val copy = shapes[0].path.box()
+        val source = shapes[1].path.box()
+        for (i in 0..3) assertEquals(source[i] + if (i % 2 == 0) 60f else 0f, copy[i], 1e-3f)
+        val out = ByteArrayOutputStream()
+        runBlocking { SvgWriter(s).write(out) }
+        assertFalse("no <text>", out.toString("UTF-8").contains("<text"))
     }
 
     @Test

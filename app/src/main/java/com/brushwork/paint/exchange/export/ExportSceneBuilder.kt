@@ -10,6 +10,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
@@ -23,6 +24,7 @@ import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.text.TextCodec
@@ -104,7 +106,8 @@ interface TextSource {
  *   isolated folder ([Planner]).
  * - v1.7 (item 3, I14): a vector array exports every copy's objects, placed by the
  *   `ArrayLayout` matrices (the formats' groups carry no transform here: the geometry is mapped);
- *   a text, shape or raster array exports its cache. The payload writes an arrayed layer as its
+ *   a text array every copy's outlines, mapped the same way (never `<text>`; color emoji: its
+ *   cache); a shape or raster array exports its cache. The payload writes an arrayed layer as its
  *   cache plus its array (spec and source container), as a project file does.
  * - v1.7 (item 18): a stroke with symmetry copies is one outline of one envelope per copy.
  *
@@ -398,10 +401,15 @@ class ExportSceneBuilder(
         val array = layer.array
         if (array != null) {
             // v1.7 (I14): a vector array as its copies' objects (as many as the editor lists);
-            // a text, shape or raster array as its cache, every copy in it.
+            // a text array as its copies' outlines (§6.2); a shape or raster array as its
+            // cache, every copy in it.
             val spec = array.spec
             if (vector != null && vector.objects.isNotEmpty() && spec.count.toLong() * vector.objects.size <= ArraySpec.MAX_INSTANCES) {
                 return Content.Copies(vector, spec)
+            }
+            if (vector == null && array.pixels == null) {
+                val item = layer.textData?.let { TextCodec.decode(it) }
+                if (item != null) textCopies(layer, item, array)?.let { return Content.Items(it) }
             }
             val cache = layerImage(layer) ?: return Content.Picture(null)
             ownImage[layer] = cache
@@ -459,6 +467,39 @@ class ExportSceneBuilder(
         }
         items += SceneItem.Shape(path, evenOdd, VPaint.Solid(spec.color))
         return items
+    }
+
+    /**
+     * v1.7 (§6.2, I14): a text array as every copy's filled outlines: the parts the text paints
+     * ([TextSource.parts]) mapped by each [ArrayLayout] matrix, measured from the bounds the
+     * cache is drawn from ([ArrayDraw.sourceBounds]); copy N − 1 at the bottom, the source on top,
+     * as [ArrayDraw.drawWithArray] draws them. Never real `<text>` (a copy is the letters moved,
+     * turned and scaled; manual kerns are in the outlines). Null = the cache: the parts are not
+     * known, or some letters have no outlines (color emoji).
+     */
+    private fun textCopies(layer: Layer, item: TextItem, array: LayerArray): List<SceneItem>? {
+        val parts = text.parts(item) ?: return null
+        if (ColorGlyphs.has(item.text)) return null
+        if (item.text.isNotBlank() && parts.none { it.kind == TextOutlinePart.Kind.TEXT }) return null
+        val own = partItems(parts)
+        if (own.isEmpty()) return null
+        val source = ArrayDraw.sourceBounds(layer.dataSnapshot()) ?: return null
+        // As the cache: the source alone while editing it or without a usable source rectangle.
+        val usable = source.left.isFinite() && source.top.isFinite() && source.right.isFinite() && source.bottom.isFinite() && !source.isEmpty
+        if (array.spec.editingSource || !usable) return own
+        val ms = ArrayLayout.matrices(array.spec, source)
+        val out = ArrayList<SceneItem>(ms.size * own.size)
+        for (k in ms.indices.reversed()) {
+            if (k == 0) { out += own; continue }
+            val v = ms[k]
+            if (v.any { !it.isFinite() }) continue
+            for (it in own) {
+                val s = it as SceneItem.Shape
+                val path = s.path.transformed { p -> Vec2(v[0] * p.x + v[1] * p.y + v[2], v[3] * p.x + v[4] * p.y + v[5]) }
+                out += SceneItem.Shape(path, s.evenOdd, s.fill, s.stroke, s.opacity)
+            }
+        }
+        return out
     }
 
     /** One `<text>` of [runs] (the letters; their outline stroke is drawn behind the fill). */
