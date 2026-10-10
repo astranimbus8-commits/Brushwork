@@ -137,9 +137,9 @@ internal class ChromeScreen(val activity: ComponentActivity, val c: EditorContro
 internal object Clickables {
     /**
      * A clickable on screen: [labels] with its descendants' texts and descriptions, [own] its
-     * name alone — its own text, description and click label plus its descendants' descriptions
+     * name alone â€” its own text, description and click label plus its descendants' descriptions
      * (an icon button's name sits on its icon), not the texts it shows (a layer row's "100%" over
-     * "Normal"); [bounds] are what shows (clipped by a scrolling list), [width] × [height] its own
+     * "Normal"); [bounds] are what shows (clipped by a scrolling list), [width] Ã— [height] its own
      * layout size in dp (the target a finger gets once it is scrolled into view).
      */
     class Item(
@@ -163,6 +163,8 @@ internal object Clickables {
         val out = linkedSetOf<String>()
         out += ownLabels()
         fun walk(n: SemanticsNode) {
+            // What a `clearAndSetSemantics` node hides (its children, which the unmerged tree still lists) is not read.
+            if (n.config.isClearingSemantics) return
             for (child in n.children) {
                 if (child.isClickable()) continue
                 out += child.ownLabels()
@@ -178,6 +180,7 @@ internal object Clickables {
         val out = linkedSetOf<String>()
         out += ownLabels()
         fun walk(n: SemanticsNode) {
+            if (n.config.isClearingSemantics) return
             for (child in n.children) {
                 if (child.isClickable()) continue
                 out += child.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()

@@ -369,12 +369,15 @@ private fun ScaleCell(controller: EditorController, tool: Tool, onX: Boolean, pe
             },
         contentAlignment = Alignment.Center,
     ) {
+        // The cell is read as "Scale X" (its description) and "… %" (its state): the drawn "X" and
+        // value stay out of the semantics, or row 2 would repeat row 1's "X" / "Y" labels.
         Row(
             Modifier
                 .widthIn(min = IbisDims.PillCellMinWidth, max = IbisDims.PillCellMaxWidth)
                 .height(IbisDims.PillCellHeight)
                 .bevel(IbisColors.PillCell)
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .clearAndSetSemantics {},
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
