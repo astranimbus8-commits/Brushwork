@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.CompositeTarget
+import com.brushwork.paint.model.Document
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -32,10 +33,13 @@ internal class PointsQa(private val h: ChromeHarness) {
     lateinit var ui: Qa16Ui
     val c: EditorController get() = s.c
 
-    /** The editor on a 400 × 300 document: a white bottom layer under an empty one ([vector]: a vector layer). */
-    fun editor(widthDp: Float = 392f, vector: Boolean = false): ChromeScreen {
-        val doc = Smoke.document(400, 300, layers = 2, whiteBottom = true)
-        if (vector) doc.layers.last().vector = VectorContent.EMPTY
+    /**
+     * The editor on a 400 × 300 document: a white bottom layer under an empty one ([vector]: a
+     * vector layer), or on [opened] (a saved project, reopened).
+     */
+    fun editor(widthDp: Float = 392f, vector: Boolean = false, opened: Document? = null): ChromeScreen {
+        val doc = opened ?: Smoke.document(400, 300, layers = 2, whiteBottom = true)
+        if (vector && opened == null) doc.layers.last().vector = VectorContent.EMPTY
         s = h.editor(doc) { it.snapping.enabled = false }
         ui = Qa16Ui(s)
         settle()
