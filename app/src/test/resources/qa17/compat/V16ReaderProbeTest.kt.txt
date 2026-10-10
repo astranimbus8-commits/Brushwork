@@ -1,0 +1,150 @@
+// v1.7 QA (compat cluster), kept as text so it never runs in this build. How the README compatibility
+// note was checked against the REAL v1.6.0 code: (1) copy Qa17CompatV16Bridge.kt.txt to app/src/test/java/
+// com/brushwork/paint/qa17/ here and run its a_export (writes %TEMP%/v17qa_compat_exchange); (2) in a
+// checkout of tag v1.6.0, put this file in app/src/test/java/com/brushwork/paint/smoke/ and run it
+// (prints and writes v16-probe.txt, saves into v16saved/); (3) run the bridge's b_readV16Saves here.
+
+package com.brushwork.paint.smoke
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Rect
+import com.brushwork.paint.brush.TipCache
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.spline.SplineBezier
+import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VStroke
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.render.VectorLayerRenderer
+import kotlinx.coroutines.runBlocking
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.DataInputStream
+import java.io.File
+import kotlin.math.abs
+import kotlin.math.max
+
+/** v1.7 QA (compat): what the REAL v1.6 code (tag v1.6.0) does with projects saved by v1.7. */
+@RunWith(RobolectricTestRunner::class)
+class V16ReaderProbeTest {
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val ex = File(System.getenv("TEMP"), "v17qa_compat_exchange")
+    private val out = StringBuilder()
+
+    private fun log(s: String) { out.appendLine(s); println("[v16] $s") }
+
+    private fun pixels(b: Bitmap): IntArray = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
+
+    private fun readInts(f: File, n: Int): IntArray = DataInputStream(f.inputStream().buffered()).use { i -> IntArray(n) { i.readInt() } }
+
+    private fun diff(a: IntArray, b: IntArray, tol: Int = 0): Int {
+        var n = 0
+        for (k in a.indices) {
+            if (a[k] == b[k]) continue
+            var m = 0
+            for (s in intArrayOf(24, 16, 8, 0)) m = max(m, abs(((a[k] ushr s) and 0xFF) - ((b[k] ushr s) and 0xFF)))
+            if (m > tol) n++
+        }
+        return n
+    }
+
+    private fun opaque(a: IntArray) = a.count { (it ushr 24) != 0 }
+
+    @Test
+    fun probe() {
+        val projects = File(app.filesDir, "projects").apply { deleteRecursively(); mkdirs() }
+        for (id in listOf("v17-folders", "v17-nofolders")) File(ex, "projects/$id").copyRecursively(File(projects, id), overwrite = true)
+        val repo = ProjectRepository(app)
+
+        // The gallery.
+        for (info in runBlocking { repo.list() }) log("gallery: ${info.id} '${info.name}' ${info.width}x${info.height} layers=${info.layerCount} thumb=${info.thumbnail != null}")
+
+        // 1. Folders: refused.
+        val r = runCatching { runBlocking { repo.load("v17-folders") } }
+        log("open v17-folders: ${r.exceptionOrNull()?.javaClass?.simpleName}: ${r.exceptionOrNull()?.message}")
+        // The gallery's Duplicate and Rename on it.
+        val dup = runCatching { runBlocking { repo.duplicate("v17-folders") } }
+        log("duplicate v17-folders: ${dup.exceptionOrNull()?.javaClass?.simpleName}: ${dup.exceptionOrNull()?.message} -> ${dup.getOrNull()}")
+        val ren = runCatching { runBlocking { repo.rename("v17-folders", "Renamed in 1.6") } }
+        log("rename v17-folders: ${ren.exceptionOrNull()?.message ?: "ok"}")
+        val renamedJson = File(projects, "v17-folders/project.json").readText()
+        log("after the rename: formatVersion ${Regex("\"formatVersion\":\\d+").find(renamedJson)?.value}, folder keys ${renamedJson.contains("\"folder\"")}, parentId keys ${renamedJson.contains("\"parentId\"")}, file \"\" ${renamedJson.contains("\"file\":\"\"")}")
+        val r2 = runCatching { runBlocking { repo.load("v17-folders") } }
+        log("open the renamed v17-folders: ${r2.exceptionOrNull()?.message}")
+        File(projects, "v17-folders").copyRecursively(File(ex, "v16saved/v17-folders"), overwrite = true)
+
+        // 2. No folders: opens; every layer shows what v1.7 drew.
+        val id = "v17-nofolders"
+        val doc = runBlocking { repo.load(id) }
+        log("open $id: warnings ${doc.loadWarnings}")
+        val w = doc.width
+        val h = doc.height
+        val manifest = File(ex, "expected/$id/manifest.tsv").readLines().filter { it.isNotBlank() }.map { it.split('\t') }
+        val role = manifest.associate { it[0].toLong() to it[1] }
+        for (l in doc.layers) {
+            val exp = readInts(File(ex, "expected/$id/layer_${l.id}.argb"), w * h)
+            val kind = listOfNotNull(
+                "text".takeIf { l.textData != null }, "shape".takeIf { l.shapeData != null },
+                "vector".takeIf { l.vector != null }, "raster".takeIf { l.textData == null && l.shapeData == null && l.vector == null },
+            ).joinToString()
+            log("layer ${l.id} ${role[l.id]} '${l.name}' [$kind]: pixels differing from v1.7's ${diff(exp, pixels(l.bitmap))}")
+        }
+        val composite = Compositor(doc) { null }.renderFlattened()
+        log("composite differing from v1.7's: ${diff(readInts(File(ex, "expected/$id/composite.argb"), w * h), pixels(composite))}")
+
+        // 3. What a v1.6 re-render of each data layer draws (vs the stored cache).
+        val area = Rect(0, 0, w, h)
+        fun layer(r: String) = doc.layers.single { role[it.id] == r }
+        fun redrawVector(c: VectorContent): IntArray = pixels(BitmapUtils.createLayerBitmap(w, h).also { VectorLayerRenderer.render(Canvas(it), c, area, tips = TipCache(), document = area) })
+        val sym = layer("symmetric")
+        val stroke = sym.vector!!.objects.single() as VStroke
+        val symRedraw = redrawVector(sym.vector!!)
+        log("symmetric stroke: cache opaque px ${opaque(pixels(sym.bitmap))}, v1.6 redraw opaque px ${opaque(symRedraw)}, differing ${diff(pixels(sym.bitmap), symRedraw, 1)} (points ${stroke.points.size})")
+        val paths = layer("paths")
+        for (o in paths.vector!!.objects) if (o is VPath) log("path ${o.id}: spline ${o.spline != null}, I9 matches ${SplineBezier.matches(o)} (fill ${o.fill != null}, stroke ${o.stroke != null})")
+        log("paths: v1.6 redraw differing from the cache (±1) ${diff(pixels(paths.bitmap), redrawVector(paths.vector!!), 1)}")
+        for (rl in listOf("rounded", "skewed")) {
+            val l = layer(rl)
+            val s = ShapeCodec.decode(l.shapeData)!!
+            val re = redrawVector(VectorContent(objects = listOf(VShape(0L, shape = s))))
+            log("$rl shape: v1.6 redraw differing from the cache (±1) ${diff(pixels(l.bitmap), re, 1)} of ${opaque(pixels(l.bitmap))} opaque; points ${s.points?.size}")
+        }
+        for (rl in listOf("kerned", "turned")) {
+            val l = layer(rl)
+            val item = TextCodec.decode(l.textData)!!
+            val re = pixels(BitmapUtils.createLayerBitmap(w, h).also { TextRenderer.drawItem(Canvas(it), item, TextRenderer.prepare(item), null) })
+            log("$rl text: v1.6 re-layout differing from the cache (±1) ${diff(pixels(l.bitmap), re, 1)} of ${opaque(pixels(l.bitmap))} opaque; text '${item.text}' size ${item.spec.sizePx} rot ${item.rotationDeg}")
+        }
+        for (rl in listOf("arrayPixels", "arrayText", "arrayShape", "arrayVector", "vectorSource")) {
+            val l = layer(rl)
+            log("$rl: text ${l.textData != null} shape ${l.shapeData != null} vector ${l.vector?.objects?.size}")
+        }
+
+        // 4. Edited and saved in v1.6: a dot on the Background, and the symmetric layer redrawn
+        // (its stroke recoloured, as an edit in v1.6 would).
+        val c = Smoke.controller(app, doc)
+        Smoke.pumpUntil { !c.vectors.isRendering && c.busyMessage == null }
+        val bg = doc.layers[0]
+        Canvas(bg.bitmap).drawCircle(10f, 10f, 5f, android.graphics.Paint().apply { color = 0xFF000000.toInt() })
+        bg.markChanged()
+        c.vectors.update(sym, sym.vector!!.copy(objects = listOf(stroke.copy(color = 0xFFC02020.toInt()))), "Recolour")
+        Smoke.pumpUntil { !c.vectors.isRendering && c.busyMessage == null }
+        c.vectors.flushPending()
+        log("symmetric after the v1.6 edit: opaque px ${opaque(pixels(sym.bitmap))}")
+        runBlocking { repo.save(doc, null) }
+        val saved = File(projects, id)
+        log("after the v1.6 save: files ${saved.list()!!.sorted()}")
+        val json = File(saved, "project.json").readText()
+        log("after the v1.6 save: array keys ${json.contains("\"array\"")}, selections ${json.contains("\"selections\"")}, symmetry ${json.contains("\"symmetry\"")}, kerns ${json.contains("kerns")}, fontKerning ${json.contains("fontKerning")}, radius ${json.contains("radius")}")
+        saved.copyRecursively(File(ex, "v16saved/$id"), overwrite = true)
+        File(ex, "v16-probe.txt").writeText(out.toString())
+    }
+}

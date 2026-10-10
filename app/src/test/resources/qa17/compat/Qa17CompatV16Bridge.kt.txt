@@ -1,0 +1,86 @@
+// v1.7 QA (compat cluster): the v1.7 half of the v1.6 probe (see V16ReaderProbeTest.kt.txt), kept as text.
+
+package com.brushwork.paint.qa17
+
+import com.brushwork.paint.engine.ArrayDraw
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.qa17.Qa17CompatArtwork.picture
+import com.brushwork.paint.qa17.Qa17CompatArtwork.pixels
+import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.ProjectRepository
+import kotlinx.coroutines.runBlocking
+import org.junit.After
+import org.junit.Assume.assumeTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.DataOutputStream
+import java.io.File
+
+/** TEMPORARY bridge to the v1.6 build (not committed): writes v1.7 projects, reads v1.6's saves back. */
+@RunWith(RobolectricTestRunner::class)
+class Qa17CompatV16BridgeTmpTest {
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val ex = File(System.getenv("TEMP"), "v17qa_compat_exchange")
+
+    @After
+    fun tearDown() = ArrayDraw.clearCaches()
+
+    private fun writeInts(f: File, a: IntArray) {
+        f.parentFile.mkdirs()
+        DataOutputStream(f.outputStream().buffered()).use { o -> for (v in a) o.writeInt(v) }
+    }
+
+    @Test
+    fun a_export() {
+        File(app.filesDir, "projects").deleteRecursively()
+        File(ex, "projects").deleteRecursively()
+        File(ex, "expected").deleteRecursively()
+        for ((id, folders) in listOf("v17-folders" to true, "v17-nofolders" to false)) {
+            val (c, made) = Qa17CompatArtwork.build(app, id, folders)
+            val doc = c.doc
+            runBlocking { ProjectRepository(app).save(doc, null) }
+            File(app.filesDir, "projects/$id").copyRecursively(File(ex, "projects/$id"), overwrite = true)
+            writeInts(File(ex, "expected/$id/composite.argb"), picture(doc))
+            val manifest = StringBuilder()
+            for (l in doc.layers) {
+                val role = made.entries.firstOrNull { it.value === l }?.key ?: "-"
+                manifest.appendLine("${l.id}\t$role\t${l.name}")
+                if (!l.isFolder) writeInts(File(ex, "expected/$id/layer_${l.id}.argb"), pixels(l.bitmap))
+            }
+            File(ex, "expected/$id/manifest.tsv").writeText(manifest.toString())
+            println("[bridge] wrote $id: ${File(ex, "projects/$id").list()!!.sorted()}")
+        }
+    }
+
+    @Test
+    fun b_readV16Saves() {
+        val back = File(ex, "v16saved")
+        assumeTrue(back.isDirectory)
+        val root = File(app.filesDir, "projects").apply { deleteRecursively(); mkdirs() }
+        for (dir in back.listFiles()!!.filter { it.isDirectory }) {
+            dir.copyRecursively(File(root, dir.name), overwrite = true)
+            val json = File(dir, ProjectFormat.PROJECT_FILE).readText()
+            println("[bridge] ${dir.name}: files ${dir.list()!!.sorted()}")
+            val r = runCatching { runBlocking { ProjectRepository(app).load(dir.name) } }
+            val doc: Document? = r.getOrNull()
+            if (doc == null) {
+                println("[bridge] ${dir.name}: v1.7 load FAILED: ${r.exceptionOrNull()}")
+                continue
+            }
+            println("[bridge] ${dir.name}: warnings ${doc.loadWarnings}")
+            println("[bridge] ${dir.name}: layers ${doc.layers.map { "${it.name}${if (it.isFolder) "[folder]" else ""}${if (it.array != null) "[array]" else ""}${if (it.vector != null) "[vector]" else ""}${if (it.textData != null) "[text]" else ""}${if (it.shapeData != null) "[shape]" else ""}" }}")
+            println("[bridge] ${dir.name}: selections ${doc.savedSelections.map { it.name }} symmetry ${doc.symmetry}")
+            for (l in doc.layers) l.vector?.objects?.forEach { o ->
+                if (o is com.brushwork.paint.vector.VStroke) println("[bridge] ${dir.name}/${l.name}: stroke copies ${o.copies.size}")
+                if (o is com.brushwork.paint.vector.VPath) println("[bridge] ${dir.name}/${l.name}: path spline ${o.spline != null} sharp ${o.spline?.points?.map { it.sharp }}")
+            }
+            for (l in doc.layers) l.textData?.let { println("[bridge] ${dir.name}/${l.name}: kerns ${com.brushwork.paint.tools.text.TextCodec.decode(it)?.kerns} fontKerning ${com.brushwork.paint.tools.text.TextCodec.decode(it)?.spec?.fontKerning}") }
+            for (l in doc.layers) l.shapeData?.let { println("[bridge] ${dir.name}/${l.name}: radii ${com.brushwork.paint.tools.vector.ShapeCodec.decode(it)?.points?.map { p -> p.radius }}") }
+            runBlocking { ProjectRepository(app).save(doc, null) }
+            println("[bridge] ${dir.name}: after a v1.7 save ${File(root, dir.name).list()!!.sorted()}")
+            println("[bridge] ${dir.name}: json had array keys ${json.contains("\"array\"")}")
+        }
+    }
+}

@@ -89,6 +89,17 @@ internal data class LayerEntryDto(
 ) {
     val contentFileName: String get() = file ?: "layer_$id.bin"
     val maskFileName: String get() = maskFile ?: "mask_$id.bin"
+
+    /**
+     * v1.7 QA: an entry whose pixel file is "" is a folder whose v1.7 keys an older version
+     * dropped: v1.6's gallery "Rename" rewrites `project.json` with only the keys it knows (it
+     * keeps `formatVersion` 3, so v1.6 still refuses to open it). Only a v1.7 folder entry has
+     * that file name.
+     */
+    val isStrippedFolder: Boolean get() = folder == null && file == ""
+
+    /** v1.7: the folder this entry is ([folder]; a default one when [isStrippedFolder]), else null. */
+    val folderSpec: FolderSpec? get() = folder ?: if (isStrippedFolder) FolderSpec() else null
 }
 
 /** v1.7 (item 14): one saved selection; [file] holds `SavedSelection.packed`, the rows inside the bounds. */
@@ -207,7 +218,7 @@ internal object ProjectFormat {
      */
     fun referencedFiles(dto: ProjectFileDto): Set<String> = buildSet {
         for (e in dto.layers) {
-            if (e.folder != null) continue
+            if (e.folderSpec != null) continue
             e.contentFileName.takeIf { it.isNotEmpty() }?.let { add(it) }
             if (e.hasMask) add(e.maskFileName)
             e.vectorFile?.let { add(it) }

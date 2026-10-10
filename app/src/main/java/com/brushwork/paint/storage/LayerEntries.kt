@@ -48,6 +48,9 @@ internal object LayerEntries {
     /** The load warning of a damaged array container (`ArrayLabels.damaged`). */
     fun arrayDamaged(name: String) = "The array of layer “$name” could not be read; its copies are kept as pixels"
 
+    /** The load warning when folders lost their tree (`FolderLabels.REPAIRED`, as `LayerTree.sanitize`'s). */
+    private const val FOLDERS_REPAIRED = "The folder structure was repaired"
+
     /** The load warning of a saved selection that could not be read (damaged, missing, or beyond the limits). */
     fun selectionDropped(name: String) = "The saved selection “$name” could not be read and was removed"
 
@@ -74,13 +77,15 @@ internal object LayerEntries {
         }
         if (doc.hasFolders) uniqueIds(doc)
         doc.loadWarnings += LayerTree.sanitize(doc.layers)
+        // v1.7 QA: folders an older version stripped (LayerEntryDto.isStrippedFolder) open empty.
+        if (dto.layers.any { it.isStrippedFolder } && FOLDERS_REPAIRED !in doc.loadWarnings) doc.loadWarnings += FOLDERS_REPAIRED
         sanitizeAdjustmentClipping(doc.layers)
         reserveWrapSourceIds(doc)
     }
 
     private fun readEntry(dir: File, entry: LayerEntryDto, doc: Document, scratch: ByteArray, allocated: MutableList<Bitmap>): Layer {
         val props = sanitized(entry.props)
-        entry.folder?.let { spec ->
+        entry.folderSpec?.let { spec ->
             // A folder has no pixels, mask or editable data (I11); anything else in its entry is ignored.
             return Layer.newFolder(entry.id, entry.props.name, spec).apply {
                 copyPropsFrom(props)
