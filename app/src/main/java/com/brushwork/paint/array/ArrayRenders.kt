@@ -368,7 +368,8 @@ internal class ArrayRenders(private val c: EditorController) {
                     learn(p.kind, p.units, ns)
                     apply(p)
                 }
-                else -> c.updateLayerData(layer, p.after, p.label, p.dirty, draw = syncDraw(p.cache))
+                // (Hidden meanwhile without a step, by a properties preview: it still lands.)
+                else -> c.updateLayerData(layer, p.after, p.label, p.dirty, allowHidden = true, draw = syncDraw(p.cache))
             }
         } finally {
             flushing = wasFlushing
@@ -387,7 +388,8 @@ internal class ArrayRenders(private val c: EditorController) {
      */
     private fun apply(p: Pending): Boolean = c.editScope {
         val layer = p.layer
-        if (c.doc.indexOf(layer) < 0 || !c.checkUsable(layer)) return@editScope false
+        // Committed while usable: a layer hidden since (a properties preview, no step) still takes it.
+        if (c.doc.indexOf(layer) < 0 || !c.checkUsable(layer, allowHidden = true)) return@editScope false
         val before = layer.dataSnapshot()
         val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
         try {

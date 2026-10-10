@@ -516,4 +516,40 @@ class ArrayRendersRobolectricTest {
         assertEquals(steps + 2, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "lands first")
     }
+
+    /**
+     * Hiding the layer lands the render first (a step); a properties preview that hides it
+     * without a step meanwhile does not lose the edit: it lands on the hidden layer.
+     */
+    @Test
+    fun hidingTheLayerDoesNotLoseTheEdit() {
+        val (c, layer) = rasterArray()
+        val t = tool(c)
+        c.arrayRenders.policy = VectorLayers.Policy.ASYNC
+        val steps = c.undoManager.undoCount
+        t.commit(layer.array!!.spec.copy(count = 5))
+        assertTrue(c.arrayRenders.isPending)
+        c.toggleVisibility(layer)
+        assertFalse(c.arrayRenders.isPending)
+        assertEquals("the edit, then the visibility", steps + 2, c.undoManager.undoCount)
+        assertEquals(5, layer.array!!.spec.count)
+        c.toggleVisibility(layer)
+        assertTrue(layer.visible)
+
+        val gate = CountDownLatch(1)
+        c.arrayRenders.workerHook = { gate.await(20, TimeUnit.SECONDS) }
+        val props = layer.props()
+        try {
+            t.commit(layer.array!!.spec.copy(count = 7))
+            assertTrue(c.arrayRenders.isPending)
+            c.previewLayerProps(layer, props.copy(visible = false))
+        } finally {
+            gate.countDown()
+        }
+        land(c)
+        assertEquals("landed on the hidden layer", 7, layer.array!!.spec.count)
+        assertEquals(steps + 4, c.undoManager.undoCount)
+        c.previewLayerProps(layer, props)
+        Smoke.assertQuiet(c, "hidden")
+    }
 }
