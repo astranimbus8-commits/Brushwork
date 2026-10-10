@@ -56,7 +56,8 @@ import org.junit.Assert.assertTrue
  * options strip sideways, a sheet up and down, the layer list — and as a whole (a control
  * scrolled out of view is still found by its label):
  * - the Path tool with two points picked through "Select several" (the strip and the X / Y pill);
- * - a shape in Points mode with one point picked;
+ * - a shape in Points mode with one point picked, then two (the strip's "Delete point" beside the
+ *   pill's "Delete selected points");
  * - the Array sheet in each of its four modes, with the Array tool's strip;
  * - the Symmetry tool with each ruler chosen, and each ruler's "Label value ▾" chip open;
  * - the Pathfinder with its two operands picked;
