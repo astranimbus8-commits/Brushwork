@@ -146,13 +146,13 @@ class Qa17ChromeKerningUiTest {
         click("Increase ${KerningLabels.KERNING}", exact = true)
         assertEquals(listOf(TextKern(0, -190), TextKern(1, 10), TextKern(2, 10), TextKern(3, 60)), text.item!!.kerns)
         click("Decrease ${KerningLabels.KERNING}", exact = true)
-        assertEquals("back", listOf(TextKern(0, -200), TextKern(3, 50)), text.item!!.kerns.filter { it.value != 0 })
+        assertEquals("back", listOf(TextKern(0, -200), TextKern(3, 50)), text.item!!.kerns)
 
         // Font kerning off: plain advances, the kerns stay.
         assertTrue(text.item!!.spec.fontKerning)
         click(KerningLabels.FONT_KERNING, exact = true)
         assertFalse(text.item!!.spec.fontKerning)
-        assertEquals(listOf(TextKern(0, -200), TextKern(3, 50)), text.item!!.kerns.filter { it.value != 0 })
+        assertEquals(listOf(TextKern(0, -200), TextKern(3, 50)), text.item!!.kerns)
         val off = render(plain.copy(spec = plain.spec.copy(fontKerning = false)), c.doc.width, c.doc.height, "kern-3-font-kerning-off")
         println("AVATAR font kerning off: ${off.width()} px wide (on: ${wide.width()} px)")
         assertTrue("no narrower without the font's kerning (${off.width()} vs ${wide.width()})", off.width() >= wide.width())
@@ -163,7 +163,7 @@ class Qa17ChromeKerningUiTest {
         assertTrue(Smoke.pumpUntil(10_000) { settle(1); !text.hasPendingWork && c.busyMessage == null })
         val layer = c.activeLayer
         assertTrue("a text layer", layer.isTextLayer)
-        assertEquals(listOf(TextKern(0, -200), TextKern(3, 50)), layer.item().kerns.filter { it.value != 0 })
+        assertEquals(listOf(TextKern(0, -200), TextKern(3, 50)), layer.item().kerns)
         assertFalse(layer.item().spec.fontKerning)
         val shot = Bitmap.createBitmap(c.doc.width, c.doc.height, Bitmap.Config.ARGB_8888)
         shot.eraseColor(Color.WHITE)
