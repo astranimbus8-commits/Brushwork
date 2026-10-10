@@ -174,7 +174,8 @@ class Qa17PointsReopenUiTest {
      * Item 7 in the Polyline tool (the strip is the same in Curve, Polyline and Path): three taps,
      * "Fill only": the open polyline fills to its chord at once, nothing above its peak; ✓ makes
      * a fill-only polyline. A tap inside that fill opens it again showing "Fill"; "Both" brings
-     * the line back; ✓ is one app step; Undo gives the fill-only polyline back.
+     * the line back; ✓ is one app step and the tool's own "Stroke only" (chosen before the tap)
+     * comes back for the next line; Undo gives the fill-only polyline back.
      */
     private fun PointsQa.polylineFill() {
         editor(vector = true)
@@ -217,6 +218,7 @@ class Qa17PointsReopenUiTest {
         assertEquals("the same object", fillOnly.id, both.id)
         assertNotNull("a line now", both.stroke)
         assertEquals(fillOnly.fill, both.fill)
+        assertEquals("the user's Stroke comes back for the next line", CurvePaint.STROKE, tool.paintMode)
         assertTrue(Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); !c.vectors.isRendering })
         val lined = composite(c)
         save(lined, "polyline-both-doc")
