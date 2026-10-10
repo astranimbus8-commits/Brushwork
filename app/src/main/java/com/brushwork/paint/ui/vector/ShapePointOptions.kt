@@ -68,7 +68,6 @@ import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LengthField
 import com.brushwork.paint.ui.common.LocalIncrements
-import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.SectionHeader
@@ -177,7 +176,9 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
             if (sel >= 0) {
                 ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count > tool.minPoints) { tool.deletePoint(sel) }
             } else {
-                ActionChip(PillLabels.DELETE_POINTS, Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count - info.selectedCount >= tool.minPoints) { tool.deleteSelectedPoints() }
+                // "Delete point" as the Path strip's chip for its selected points: "Delete selected
+                // points" is the pill's trash cell beside it (§3.13), and a label names one control (I10).
+                ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger, enabled = info.count - info.selectedCount >= tool.minPoints) { tool.deleteSelectedPoints() }
             }
             ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.selectPoints(PointSelection.none(info.count)) }, size = 44.dp)
             if (info.closed) PointRoundnessControls(tool, info)
