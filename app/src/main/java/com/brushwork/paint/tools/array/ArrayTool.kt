@@ -47,8 +47,9 @@ import kotlin.math.roundToInt
  *   array" ([ArrayOps.edit]). A discrete control commits at once ([commit]). A vector array's
  *   re-render, and a large text, shape or raster cache (`ArrayRenders`), may land later: the
  *   preview stays up until it does, and [rendering] shows "Rendering array…" meanwhile (a
- *   cache: once it has taken 300 ms). A newer commit drops a cache still rendering; switching
- *   tools or layers lands it first.
+ *   cache: once it has taken 300 ms). A slider or handle moved again meanwhile keeps its own
+ *   preview when the commit lands, and its release commits it. A newer commit drops a cache
+ *   still rendering; switching tools or layers lands it first.
  * - Curve guides: "Draw guide" ([startGuideInput] DRAW) takes the next finger stroke, fitted by
  *   [GuideEditor]; "Use a path" (PICK) takes the first subpath of the vector path tapped next
  *   on any visible layer, copied.
@@ -104,6 +105,15 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /** The spec of that commit. */
     private var inFlight: ArraySpec? = null
+
+    /** Counts the specs [previewOn] has shown: a commit's landing keeps a preview changed after it. */
+    private var previewChanges = 0
+
+    /**
+     * [previewChanges] when the commit on its way ([committing]) returned; -1 before it has (a
+     * synchronous landing: no preview can be newer than the commit).
+     */
+    private var shownAtCommit = -1
 
     /** The handle drag in progress. */
     private var drag: Drag? = null
@@ -254,12 +264,31 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         proxyCache = null
     }
 
-    override fun historyMark(): Any? = preview?.takeIf { committing == null }
+    /**
+     * The preview, while it is not just the commit on its way (that one shows what the history
+     * already holds or will hold once it lands, never an in-tool step).
+     */
+    override fun historyMark(): Any? = preview?.takeIf { committing == null || changedSinceCommit() }
 
     override fun rollbackHistory(mark: Any?) {
         // A preview started after the mark (a finger on a slider when the second one landed).
-        if (committing == null && preview != null && preview !== mark) dropPreview()
+        val p = preview ?: return
+        if (p === mark) return
+        val s = inFlight
+        if (committing == null || s == null) {
+            dropPreview()
+            return
+        }
+        // Moved while a commit is on its way: back to that commit's own preview.
+        if (!changedSinceCommit()) return
+        p.update(s)
+        previewSpec = p.spec
+        shownAtCommit = previewChanges
+        controller.invalidateOverlay()
     }
+
+    /** The preview was changed after the commit on its way returned. */
+    private fun changedSinceCommit(): Boolean = shownAtCommit >= 0 && previewChanges != shownAtCommit
 
     // ------------------------------------------------------------------ touches
 
@@ -397,6 +426,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         val p = running ?: startPreview(layer) ?: return
         p.update(s)
         previewSpec = p.spec
+        previewChanges++
     }
 
     private fun commitOn(layer: Layer, spec: ArraySpec) {
@@ -409,6 +439,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         committing = token
         inFlight = s
         if (vector) vectorRendering = true
+        shownAtCommit = -1
         selfEdit = true
         try {
             ArrayOps.edit(controller, layer, s, ArrayLabels.EDIT) { _ ->
@@ -416,7 +447,11 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
                     committing = null
                     inFlight = null
                     vectorRendering = false
-                    dropPreview()
+                    // A preview changed while this edit rendered (a finger still on a slider or
+                    // a handle) stays up: its release commits it. Off this tool nothing would, so
+                    // it goes; so does the preview of this very commit.
+                    val p = preview
+                    if (!changedSinceCommit() || p == null || p.layer !== layer || p.spec == s || controller.currentTool !== this) dropPreview()
                 }
             }
         } finally {
@@ -425,6 +460,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         // A text, shape or raster cache rendering in the background (ArrayRenders): the preview
         // shows the new copies until it lands (a superseded render's preview goes on).
         if (!vector && committing === token && s != a.spec && !a.spec.editingSource) previewOn(layer, s)
+        if (committing === token) shownAtCommit = previewChanges
         controller.invalidateOverlay()
     }
 

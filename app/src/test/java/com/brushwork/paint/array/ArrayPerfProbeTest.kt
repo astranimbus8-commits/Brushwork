@@ -319,7 +319,7 @@ class ArrayPerfProbeTest {
             if (slowAt >= 0) assertTrue("$what: not before 300 ms (${"%.0f".format(slowAt)})", slowAt >= 295.0)
         }
         val med = median(totals)
-        println("v17 arrayrender probe: $what: median edit ${"%.1f".format(med)} ms (budget ${budgetMs.toInt()} ms)")
+        println("v17 arrayrender probe: $what: median edit ${"%.1f".format(med)} ms (the phone's budget ${budgetMs.toInt()} ms is a device check; the guard here is five times it)")
         assertTrue("$what: $med ms", med <= PerfBudget.ms(5 * budgetMs))
         assertFalse(c.arrayRenders.isSlow)
     }

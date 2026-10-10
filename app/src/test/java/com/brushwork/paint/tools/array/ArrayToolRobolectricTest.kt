@@ -265,6 +265,68 @@ class ArrayToolRobolectricTest {
         Smoke.assertQuiet(c, "overlay preview")
     }
 
+    /**
+     * A vector array's commit re-rendering in the background (v1.7 arrayrender review): a slider
+     * moved meanwhile keeps its value when the render lands and its release is the next step; a
+     * history mark sees that move as the tool's own change, and rolling it back while the render
+     * still runs shows the commit's own preview again (the release then records nothing more).
+     */
+    @Test
+    fun aSliderMovedWhileAVectorArrayRendersKeepsItsValue() {
+        val c = Smoke.controller(app)
+        val t = tool(c)
+        val vl = Layer(c.doc.newLayerId(), "Boxes", com.brushwork.paint.engine.BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height))
+        vl.vector = VectorContent.EMPTY.plus(listOf(VPath(
+            0, subpaths = listOf(VSubpath(listOf(VAnchor(20f, 200f, true), VAnchor(50f, 200f, true), VAnchor(50f, 230f, true), VAnchor(20f, 230f, true)), closed = true)),
+            fill = VPaint.Solid(red),
+        ))).first
+        assertTrue(c.structure.insert(vl, label = "Test"))
+        assertTrue(c.arrayWholeLayer(vl))
+        Smoke.pumpUntil { !c.vectors.isRendering }
+        Smoke.pump(20)
+        assertEquals(ToolId.ARRAY, c.activeToolId)
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        val old = vl.array!!.spec
+        val a = old.copy(count = 5).sanitized()
+        val b = old.copy(count = 7).sanitized()
+        val steps = c.undoManager.undoCount
+        t.preview(a)
+        t.commitPreview()
+        assertTrue("rendering in the background", t.rendering)
+        t.preview(b)
+        assertTrue(Smoke.pumpUntil { !c.vectors.isRendering && !t.rendering })
+        Smoke.pump(20)
+        assertEquals("the released value is ONE step", steps + 1, c.undoManager.undoCount)
+        assertEquals(a, vl.array!!.spec)
+        assertEquals("the slider keeps its value", b, t.previewSpec)
+        assertNotNull(c.renderOverride)
+        t.commitPreview()
+        assertTrue(Smoke.pumpUntil { !c.vectors.isRendering && !t.rendering })
+        Smoke.pump(20)
+        assertEquals("its release is the next step", steps + 2, c.undoManager.undoCount)
+        assertEquals(b, vl.array!!.spec)
+        assertNull(c.renderOverride)
+
+        t.commit(a)
+        assertTrue(t.rendering)
+        val mark = t.historyMark()
+        assertNull("the commit's own preview is no in-tool change", mark)
+        t.preview(b)
+        assertNotNull("a move after it is", t.historyMark())
+        t.rollbackHistory(mark)
+        assertEquals("back to the commit's own preview", a, t.previewSpec)
+        assertNull(t.historyMark())
+        assertNotNull(c.renderOverride)
+        assertTrue(Smoke.pumpUntil { !c.vectors.isRendering && !t.rendering })
+        Smoke.pump(20)
+        assertNull(c.renderOverride)
+        t.commitPreview()
+        Smoke.pump(20)
+        assertEquals(steps + 3, c.undoManager.undoCount)
+        assertEquals(a, vl.array!!.spec)
+        Smoke.assertQuiet(c, "vector slider")
+    }
+
     @Test
     fun theGuideFitKeepsAtMostSixtyFourAnchors() {
         val pts = List(2000) { i -> Vec2(i * 0.5f, 100f * kotlin.math.sin(i / 37.0).toFloat()) }

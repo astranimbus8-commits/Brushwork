@@ -51,7 +51,8 @@ import kotlin.math.abs
  * (data and pixels agreeing) and closing lands it first; "Rendering array…" shows past 300 ms
  * only; a patch the memory can't take, and a small array, render synchronously (a long one
  * without a patch once "Rendering array…" is on screen, still as ONE step); another tool, a
- * pixel edit on the layer and any other step land it first, in order.
+ * pixel edit on the layer and any other step land it first, in order; a slider moved again
+ * meanwhile keeps its value through the landing.
  */
 @RunWith(RobolectricTestRunner::class)
 class ArrayRendersRobolectricTest {
@@ -586,6 +587,107 @@ class ArrayRendersRobolectricTest {
         Smoke.pump(400)
         assertEquals(steps + 2, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "lands first")
+    }
+
+    /**
+     * A slider moved again while the released value still renders: the landing records that value
+     * as ONE step and keeps the newer preview up (the slider keeps its value); its release commits
+     * it as the next step. A history tap meanwhile (a second finger) takes back what the first
+     * finger changed, then undoes the landed step, and the release commits nothing. A commit that
+     * lands at once (a chip while a field's value is previewed) ends the preview it replaced.
+     */
+    @Test
+    fun aSliderMovedWhileARenderRunsKeepsItsPreviewAndItsReleaseCommitsIt() {
+        val (c, layer) = rasterArray()
+        val (twin, twinLayer) = rasterArray()
+        val t = tool(c)
+        c.arrayRenders.policy = VectorLayers.Policy.ASYNC
+        val old = layer.array!!.spec
+        val before = pixels(layer.bitmap)
+        val steps = c.undoManager.undoCount
+        val spec1 = old.copy(count = 5)
+        val spec2 = old.copy(count = 7)
+        val gate = CountDownLatch(1)
+        c.arrayRenders.workerHook = { gate.await(20, TimeUnit.SECONDS) }
+        try {
+            t.preview(spec1)
+            t.commitPreview()
+            assertTrue(c.arrayRenders.isPending)
+            assertEquals(spec1.sanitized(), t.previewSpec)
+            t.preview(spec2)
+            assertEquals(spec2.sanitized(), t.previewSpec)
+            assertTrue(c.arrayRenders.isPending)
+            assertEquals(steps, c.undoManager.undoCount)
+        } finally {
+            gate.countDown()
+        }
+        land(c)
+        assertEquals("the released value landed as ONE step", steps + 1, c.undoManager.undoCount)
+        assertEquals(spec1.sanitized(), layer.array!!.spec)
+        assertNotNull("the newer preview stays up", c.renderOverride)
+        assertEquals("the slider keeps its value", spec2.sanitized(), t.previewSpec)
+        assertTrue(ArrayOps.edit(twin, twinLayer, spec1))
+        assertSameRender("the landed pixels", twinLayer.bitmap, layer.bitmap)
+        val landed1 = pixels(layer.bitmap)
+        c.arrayRenders.workerHook = null
+        t.commitPreview()
+        land(c)
+        assertEquals("its release is the next step", steps + 2, c.undoManager.undoCount)
+        assertEquals(spec2.sanitized(), layer.array!!.spec)
+        assertNull(c.renderOverride)
+        assertNull(t.previewSpec)
+        assertTrue(ArrayOps.edit(twin, twinLayer, spec2))
+        assertSameRender("the second step's pixels", twinLayer.bitmap, layer.bitmap)
+        c.undo()
+        assertEquals(spec1.sanitized(), layer.array!!.spec)
+        assertArrayEquals("undo is exact", landed1, pixels(layer.bitmap))
+        c.undo()
+        assertEquals(old, layer.array!!.spec)
+        assertArrayEquals("undo is exact", before, pixels(layer.bitmap))
+
+        // A history tap: the first finger lands on the slider while a value renders, moves it,
+        // then a second finger taps (the claim lands the render; the tap rolls the slider back).
+        val gate2 = CountDownLatch(1)
+        c.arrayRenders.workerHook = { gate2.await(20, TimeUnit.SECONDS) }
+        var light: Any? = Unit
+        try {
+            t.commit(spec1)
+            assertTrue(c.arrayRenders.isPending)
+            light = t.historyMark()
+            t.preview(spec2)
+        } finally {
+            gate2.countDown()
+        }
+        assertNull("the first finger's mark: the commit's own preview is no in-tool step", light)
+        val ui = c.uiMark()
+        assertFalse("the claim landed it", c.arrayRenders.isPending)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        c.restoreUiMark(ui)
+        if (t.historyMark() != light) t.rollbackHistory(light)
+        assertNull("the first finger's change is taken back", c.renderOverride)
+        c.undo()
+        c.releaseUiMark(ui)
+        assertEquals(old, layer.array!!.spec)
+        assertArrayEquals(before, pixels(layer.bitmap))
+        t.commitPreview()
+        Smoke.pump(20)
+        assertFalse(c.arrayRenders.isPending)
+        assertEquals("the release commits nothing", steps, c.undoManager.undoCount)
+        assertEquals(old, layer.array!!.spec)
+
+        // A commit landing at once ends the preview it replaced (a field's value, then a chip).
+        c.arrayRenders.workerHook = null
+        c.arrayRenders.policy = VectorLayers.Policy.SYNC
+        t.preview(spec2)
+        val chip = spec2.copy(count = 4)
+        t.commit(chip)
+        assertEquals(chip.sanitized(), layer.array!!.spec)
+        assertNull(c.renderOverride)
+        assertNull(t.previewSpec)
+        t.commitPreview()
+        assertEquals("the field's focus loss records nothing more", steps + 1, c.undoManager.undoCount)
+        assertEquals(chip.sanitized(), layer.array!!.spec)
+        Smoke.assertQuiet(c, "slider while rendering")
     }
 
     /**
