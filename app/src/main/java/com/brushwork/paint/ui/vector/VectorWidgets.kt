@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.HorizontalRule
 import androidx.compose.material.icons.outlined.Circle
 import androidx.compose.material.icons.outlined.CropSquare
 import androidx.compose.material.icons.outlined.Hexagon
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
@@ -82,6 +83,7 @@ internal fun shapeIcon(type: ShapeType): ImageVector = when (type) {
     ShapeType.POLYGON -> Icons.Outlined.Hexagon
     ShapeType.STAR -> Icons.Outlined.StarOutline
     ShapeType.ARROW -> Icons.AutoMirrored.Filled.ArrowRightAlt
+    ShapeType.COG -> Icons.Outlined.Settings
 }
 
 /** Logarithmic slider mapping for widths / radii (fine control for small values). */

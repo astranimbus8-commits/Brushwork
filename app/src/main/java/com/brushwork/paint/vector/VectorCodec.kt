@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector
 
+import com.brushwork.paint.tools.vector.ShapeType
 import kotlinx.serialization.json.Json
 import java.io.ByteArrayOutputStream
 import java.io.IOException
@@ -40,8 +41,9 @@ object VectorCodec {
         allowSpecialFloatingPointValues = true
     }
 
+    /** v1.8: a cog shape is written with its v1.7 fallback outline ([forWriting]). */
     fun encode(c: VectorContent): ByteArray {
-        val text = json.encodeToString(VectorContent.serializer(), c).toByteArray(Charsets.UTF_8)
+        val text = json.encodeToString(VectorContent.serializer(), forWriting(c)).toByteArray(Charsets.UTF_8)
         val deflater = Deflater(5)
         try {
             deflater.setInput(text)
@@ -106,9 +108,42 @@ object VectorCodec {
      * [c] with unique ids (a later duplicate gets a new id) and a `nextId` beyond every id; the
      * same instance when it already is. Ids (or a `nextId`) so large that new ids would overflow
      * come from a damaged file: the objects are then numbered 1..n again (order kept). v1.7:
-     * strokes' symmetry copies are sanitized too ([sanitizedCopies]).
+     * strokes' symmetry copies are sanitized too ([sanitizedCopies]). v1.8: a cog's fallback
+     * outline is dropped ([sanitizedShapes]).
      */
-    internal fun sanitized(c: VectorContent): VectorContent = sanitizedIds(sanitizedCopies(sanitizedSplines(c)))
+    internal fun sanitized(c: VectorContent): VectorContent = sanitizedShapes(sanitizedIds(sanitizedCopies(sanitizedSplines(c))))
+
+    /**
+     * v1.8 (D23): what [encode] writes. Every [VShape] of type [ShapeType.COG] is written as
+     * `shape.forWriting()` (its outline as fallback points, so v1.7 shows the teeth); every other
+     * object as it is. The same instance when there is no cog, so non-cog bytes never change. Also
+     * used for a payload's vector layers (`Payload.toJson`).
+     */
+    internal fun forWriting(c: VectorContent): VectorContent {
+        if (c.objects.none { it is VShape && it.shape.type == ShapeType.COG }) return c
+        var changed = false
+        val objects = c.objects.map { o ->
+            if (o !is VShape || o.shape.type != ShapeType.COG) return@map o
+            val w = o.shape.forWriting()
+            if (w === o.shape) o else { changed = true; o.copy(shape = w) }
+        }
+        return if (changed) c.copy(objects = objects) else c
+    }
+
+    /**
+     * v1.8 (D23): every [VShape] whose shape carries a cog's fallback outline
+     * ([ShapeObject.cogFallback]) read back as the cog itself ([ShapeObject.sanitized] drops the
+     * points and the flag); the same instance when no shape has the flag (I3, the byte-exact
+     * goldens). Run by [decode] and on a payload's vector layers (`PayloadImport.sound`).
+     */
+    internal fun sanitizedShapes(c: VectorContent): VectorContent {
+        if (c.objects.none { it is VShape && it.shape.cogFallback }) return c
+        val objects = c.objects.map { o ->
+            if (o !is VShape || !o.shape.cogFallback) return@map o
+            o.copy(shape = o.shape.sanitized() ?: o.shape.copy(points = null, cogFallback = false))
+        }
+        return c.copy(objects = objects)
+    }
 
     /**
      * v1.7 (item 18): every stroke's symmetry copies ([VStroke.copies]) reduced to usable maps

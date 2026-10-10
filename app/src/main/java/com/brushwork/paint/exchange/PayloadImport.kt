@@ -301,9 +301,11 @@ object PayloadImport {
      * coordinates that are not finite or lie absurdly far away (the payload's JSON allows NaN).
      * v1.6: Path-tool control points are reduced to usable numbers as a `.vec` file's are when
      * read ([VectorCodec.sanitizedSplines]), so save and reload give the imported document back;
-     * v1.7: strokes' symmetry copies likewise ([VectorCodec.sanitizedCopies]).
+     * v1.7: strokes' symmetry copies likewise ([VectorCodec.sanitizedCopies]). v1.8: a cog's
+     * fallback outline is dropped ([VectorCodec.sanitizedShapes]), so an imported cog is a cog.
      */
-    internal fun sound(content: VectorContent): VectorContent = VectorCodec.sanitizedSplines(soundObjects(VectorCodec.sanitizedCopies(content)))
+    internal fun sound(content: VectorContent): VectorContent =
+        VectorCodec.sanitizedShapes(VectorCodec.sanitizedSplines(soundObjects(VectorCodec.sanitizedCopies(content))))
 
     private fun soundObjects(content: VectorContent): VectorContent {
         val ok = content.objects.filter { o ->

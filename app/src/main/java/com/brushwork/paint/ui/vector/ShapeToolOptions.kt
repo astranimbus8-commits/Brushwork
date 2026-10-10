@@ -111,7 +111,7 @@ fun ShapeToolOptions(tool: ShapeTool) {
 
     DropdownChip(
         label = s.type.label,
-        options = ShapeType.entries,
+        options = ShapeGeometry.pickerTypes,
         selected = s.type,
         optionLabel = { it.label },
         onSelect = { t -> set { it.copy(type = t) } },
@@ -188,7 +188,7 @@ private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
 
     BwSheet(title = "Shape", onDismiss = onDismiss) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            ShapeType.entries.forEach { t ->
+            ShapeGeometry.pickerTypes.forEach { t ->
                 ToolIconButton(shapeIcon(t), t.label, onClick = { set { it.copy(type = t) } }, selected = t == s.type)
             }
         }

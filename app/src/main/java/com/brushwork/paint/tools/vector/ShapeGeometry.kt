@@ -23,13 +23,20 @@ enum class ShapeType(val label: String) {
     ELLIPSE("Ellipse"),
     POLYGON("Polygon"),
     STAR("Star"),
-    ARROW("Arrow");
+    ARROW("Arrow"),
+
+    /**
+     * v1.8 (item 4): a cog, its teeth set by [ShapeObject.cogTeeth] and the other cog fields. Last,
+     * so the v1.7 ordinals keep their places; v1.7 reads it as [RECTANGLE] (D23). Not offered in
+     * the Shape tool while [ShapeGeometry.pickerTypes] leaves it out.
+     */
+    COG("Cog");
 
     /** Defined by two end points instead of a box. */
     val isLineLike: Boolean get() = this == LINE || this == ARROW
 
     /** Supports live corners (round / bevel / inverted). */
-    val hasCorners: Boolean get() = this == RECTANGLE || this == POLYGON || this == STAR
+    val hasCorners: Boolean get() = this == RECTANGLE || this == POLYGON || this == STAR || this == COG
 }
 
 @Serializable
@@ -116,6 +123,8 @@ data class OutlineParams(
     val corner: CornerStyle = CornerStyle.SHARP,
     /** Corner size in document pixels (cut-back distance along each edge). */
     val cornerRadius: Float = 0f,
+    /** v1.8 (item 4): the cog's teeth, depth, tooth width, taper and hole ([ShapeType.COG] only). */
+    val cog: CogParams = CogParams(),
 )
 
 /** Arrow parts: a stroked shaft (+ open heads) and filled heads. */
@@ -124,6 +133,13 @@ data class ArrowGeometry(val stroke: VectorPath, val fill: VectorPath)
 object ShapeGeometry {
     const val MIN_SIDES = 3
     const val MAX_SIDES = 64
+
+    /**
+     * v1.8: the shape types the Shape tool offers (its dropdown and the settings icon row). Every
+     * type but [ShapeType.COG] until the cog's own geometry lands; codecs and renderers still
+     * handle every entry.
+     */
+    val pickerTypes: List<ShapeType> = ShapeType.entries.filter { it != ShapeType.COG }
 
     /** Regular polygon on the unit circle, first vertex at the top, clockwise on screen (y down). */
     fun unitPolygon(sides: Int): List<Vec2> {
@@ -171,8 +187,15 @@ object ShapeGeometry {
     fun vertices(type: ShapeType, w: Float, h: Float, params: OutlineParams): List<Vec2> = when (type) {
         ShapeType.POLYGON -> fitToBox(unitPolygon(params.sides), w, h)
         ShapeType.STAR -> fitToBox(unitStar(params.starPoints, params.innerRatio), w, h)
+        ShapeType.COG -> fitToBox(interimCog(params.cog), w, h)
         else -> rectVertices(w, h)
     }
+
+    /**
+     * v1.8 interim cog (replaced by the cog's own geometry): a star zigzag of [CogParams.teeth]
+     * tips on the unit circle with inner vertices at 1 - [CogParams.depth]. No hole.
+     */
+    private fun interimCog(cog: CogParams): List<Vec2> = unitStar(cog.teeth, 1f - cog.depth)
 
     /** The effective cut-back distance at each vertex (radius clamped to half the shorter adjacent edge). */
     fun cornerCuts(v: List<Vec2>, radius: Float): FloatArray {
@@ -319,11 +342,12 @@ object ShapeGeometry {
         return VectorPath(ops)
     }
 
-    /** Document-space outline of a box shape (rectangle, ellipse, polygon, star). */
+    /** Document-space outline of a box shape (rectangle, ellipse, polygon, star, cog). */
     fun outline(type: ShapeType, box: ShapeBox, params: OutlineParams): VectorPath {
         val local = when (type) {
             ShapeType.ELLIPSE -> ellipsePath(box.w, box.h)
-            ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR ->
+            // COG: v1.8 interim, the zigzag of vertices(COG) (no hole).
+            ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR, ShapeType.COG ->
                 cornerPath(vertices(type, box.w, box.h, params), params.corner, params.cornerRadius)
             ShapeType.LINE, ShapeType.ARROW -> VectorPath.polyline(listOf(Vec2(-box.w / 2f, 0f), Vec2(box.w / 2f, 0f)))
         }

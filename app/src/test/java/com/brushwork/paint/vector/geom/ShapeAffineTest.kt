@@ -141,7 +141,8 @@ class ShapeAffineTest {
             val skewed = ShapeAffine.mapped(s, skew)!!
             val ownAxes = ShapeAffine.mapped(s, ownAxes)!!
             when (s.type) {
-                ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR -> {
+                // v1.8: a cog is a regular type too (similarity maps keep the type).
+                ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR, ShapeType.COG -> {
                     assertTrue("$name becomes a point shape under a skew", ShapeOutlines.isCustom(skewed))
                     assertEquals(s.type, skewed.type)
                     assertNull("$name stays regular along its own axes", ownAxes.points)

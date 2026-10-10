@@ -5,6 +5,7 @@ import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
@@ -133,10 +134,24 @@ object Payload {
         allowSpecialFloatingPointValues = true
     }
 
-    /** UTF-8 JSON of [p], with its [writtenVersion]. */
+    /**
+     * UTF-8 JSON of [p], with its [writtenVersion]. v1.8: a vector layer's cog shapes are written
+     * with their v1.7 fallback outline, as in a `.vec` file (`VectorCodec.forWriting`, D23).
+     */
     fun toJson(p: BrushworkPayload): ByteArray {
         val v = writtenVersion(p)
-        return json.encodeToString(BrushworkPayload.serializer(), if (p.version == v) p else p.copy(version = v)).toByteArray(Charsets.UTF_8)
+        return json.encodeToString(BrushworkPayload.serializer(), forWriting(if (p.version == v) p else p.copy(version = v))).toByteArray(Charsets.UTF_8)
+    }
+
+    /** [p] with each vector layer as `VectorCodec.forWriting` writes it; this instance without cogs. */
+    private fun forWriting(p: BrushworkPayload): BrushworkPayload {
+        var changed = false
+        val layers = p.layers.map { l ->
+            val c = l.vector ?: return@map l
+            val w = VectorCodec.forWriting(c)
+            if (w === c) l else { changed = true; l.copy(vector = w) }
+        }
+        return if (changed) p.copy(layers = layers) else p
     }
 
     /** The payload in [bytes] (UTF-8 JSON); throws [IOException] when it can't be read. */

@@ -73,7 +73,7 @@ data class VectorContent(
                     o.spline?.let { b += it.points.size * 32L }
                     b += o.copies.maps.size * 52L
                 }
-                is VShape -> b += (o.shape.points?.size ?: 0) * 40L
+                is VShape -> b += (o.shape.points?.size ?: 0) * 40L + o.shape.copies.maps.size * 52L
             }
         }
         return b
