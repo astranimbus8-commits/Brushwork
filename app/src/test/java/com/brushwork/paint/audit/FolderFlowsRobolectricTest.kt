@@ -152,10 +152,14 @@ class FolderFlowsRobolectricTest {
 
     // ------------------------------------------------------------------ 1. arrays, transform, save, reopen
 
-    @Test
-    fun arraysInsideAnIsolatedFolderFollowItsTransformSurviveReopenAndOneUndoRestoresAll() {
-        val w = 160
-        val h = 120
+    private data class Arrays(val c: EditorController, val folder: Layer, val pixelArray: Layer, val shape: Layer)
+
+    /**
+     * A [w] x [h] document whose isolated folder "Group" holds "Paint" (emptied by the array),
+     * "Array 1" (a selection array of a red square: by transform, three copies 30 px apart) and
+     * "Shape" (a whole shape layer arrayed round a circle, four copies), made the user's way.
+     */
+    private fun arraysInFolder(w: Int, h: Int): Arrays {
         val c = folderDoc(w, h, 1f, "Paint")
         val folder = c.byName("Group")
         val paint = c.byName("Paint")
@@ -180,6 +184,49 @@ class FolderFlowsRobolectricTest {
         settle(c)
         assertNull(LayerTree.check(c.doc.layers))
         assertEquals(listOf("Background", "Paint", pixelArray.name, "Shape", "Group"), c.doc.layers.map { it.name })
+        return Arrays(c, folder, pixelArray, shape)
+    }
+
+    /** [folder] lifted whole by the Transform tool, changed by [edit], applied: ONE step (the tool put away). */
+    private fun transformFolder(c: EditorController, folder: Layer, edit: (TransformTool) -> Unit) {
+        c.selectLayer(folder)
+        c.selectTool(ToolId.TRANSFORM)
+        idle()
+        val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        tool.snapToObjects = false
+        tool.start()
+        idle()
+        assertEquals("the folder is lifted", TransformTool.Lifted.FOLDER, tool.lifted)
+        val steps = c.undoManager.undoCount
+        edit(tool)
+        tool.commit()
+        c.selectTool(ToolId.LASSO)
+        settle(c)
+        assertEquals("ONE step", steps + 1, c.undoManager.undoCount)
+        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
+        assertFoldersIntact(c, "transformed")
+    }
+
+    /** [c]'s document saved and loaded again (no warnings, format 3), in a controller of its own. */
+    private fun reopened(c: EditorController): EditorController {
+        runBlocking { ProjectRepository(app).save(c.doc, null) }
+        val json = ProjectFormat.json.parseToJsonElement(File(File(root, c.doc.id), ProjectFormat.PROJECT_FILE).readText()).jsonObject
+        assertEquals("a folder: format 3", 3, json.getValue("formatVersion").jsonPrimitive.int)
+        val loaded = runBlocking { ProjectRepository(app).load(c.doc.id) }
+        assertEquals(emptyList<String>(), loaded.loadWarnings)
+        val c2 = Smoke.controller(app, loaded).also { it.viewTransform.set(Matrix()) }
+        settle(c2)
+        assertFoldersIntact(c2, "reopened")
+        assertEquals("the tree", c.doc.layers.map { Triple(it.id, it.parentId, it.name) }, loaded.layers.map { Triple(it.id, it.parentId, it.name) })
+        assertEquals("the folders", c.doc.layers.map { it.folder }, loaded.layers.map { it.folder })
+        return c2
+    }
+
+    @Test
+    fun arraysInsideAnIsolatedFolderFollowItsTransformSurviveReopenAndOneUndoRestoresAll() {
+        val w = 160
+        val h = 120
+        val (c, folder, pixelArray, shape) = arraysInFolder(w, h)
 
         val pixelSpec = pixelArray.array!!.spec
         val pixelSource = pixelArray.array!!.pixels!!
@@ -190,22 +237,7 @@ class FolderFlowsRobolectricTest {
         val pixelArrayBefore = px(pixelArray.bitmap)
 
         // The folder moved by (10, 4) with the Transform tool: ONE step.
-        c.selectLayer(folder)
-        c.selectTool(ToolId.TRANSFORM)
-        idle()
-        val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
-        tool.snapToObjects = false
-        tool.start()
-        idle()
-        assertEquals("the folder is lifted", TransformTool.Lifted.FOLDER, tool.lifted)
-        val steps = c.undoManager.undoCount
-        tool.moveBy(10f, 4f)
-        tool.commit()
-        c.selectTool(ToolId.LASSO)
-        settle(c)
-        assertEquals("ONE step", steps + 1, c.undoManager.undoCount)
-        assertEquals(TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
-        assertFoldersIntact(c, "transformed")
+        transformFolder(c, folder) { it.moveBy(10f, 4f) }
 
         // Both arrays are still live; the spec is the spec under the move, the source moved with it.
         val move = floatArrayOf(1f, 0f, 10f, 0f, 1f, 4f, 0f, 0f, 1f)
@@ -232,15 +264,8 @@ class FolderFlowsRobolectricTest {
         assertFalse("the picture moved", flatBefore.contentEquals(flatAfter))
 
         // Saved and reopened: the same tree, arrays and composite.
-        runBlocking { ProjectRepository(app).save(c.doc, null) }
-        val json = ProjectFormat.json.parseToJsonElement(File(File(root, c.doc.id), ProjectFormat.PROJECT_FILE).readText()).jsonObject
-        assertEquals("a folder: format 3", 3, json.getValue("formatVersion").jsonPrimitive.int)
-        val loaded = runBlocking { ProjectRepository(app).load(c.doc.id) }
-        assertEquals(emptyList<String>(), loaded.loadWarnings)
-        val c2 = Smoke.controller(app, loaded).also { it.viewTransform.set(Matrix()) }
-        settle(c2)
-        assertFoldersIntact(c2, "reopened")
-        assertEquals("the tree", c.doc.layers.map { Triple(it.id, it.parentId, it.name) }, loaded.layers.map { Triple(it.id, it.parentId, it.name) })
+        val c2 = reopened(c)
+        val loaded = c2.doc
         assertEquals("still isolated", folder.folder, loaded.layers.single { it.id == folder.id }.folder)
         fun twin(l: Layer) = loaded.layers.single { it.id == l.id }
         for (l in listOf(pixelArray, shape)) {
@@ -285,6 +310,63 @@ class FolderFlowsRobolectricTest {
         }
         assertArrayEquals("the same composite", flat(c), flat(c2))
         Smoke.assertQuiet(c2, "reopened")
+    }
+
+    @Test
+    fun aScaledFolderScalesItsArraysAsLiveArraysAndOneUndoRestoresThem() {
+        val (c, folder, pixelArray, shape) = arraysInFolder(160, 120)
+        val pixelSource = pixelArray.array!!.pixels!!
+        val pixelSpec = pixelArray.array!!.spec
+        val before = picture(c)
+        val dataBefore = data(c)
+        val flatBefore = flat(c)
+
+        transformFolder(c, folder) { tool ->
+            tool.setScalePercent(125.0)
+            tool.endNumericEdit()
+        }
+
+        // The raster array: its offsets scale, its source is resampled once; still live.
+        val pa = pixelArray.array
+        assertNotNull("the selection array is live", pa)
+        assertEquals(ArrayMode.TRANSFORM, pa!!.spec.mode)
+        assertEquals("the copy offset scales", 37.5f, pa.spec.moveX, 0.01f)
+        assertEquals(7.5f, pa.spec.moveY, 0.01f)
+        assertEquals("the copies keep their own scale", pixelSpec.scale, pa.spec.scale, 1e-4f)
+        assertTrue("the source is resampled (${pa.pixels!!.bitmap.width} px)", abs(pa.pixels!!.bitmap.width - 20) <= 2)
+        // The shape array: still a shape, scaled, at the scaled distance from the scaled centre.
+        val sa = shape.array
+        assertNotNull("the shape array is live", sa)
+        val o = ShapeCodec.decode(shape.shapeData!!)!!
+        assertEquals(20f, o.w, 0.01f)
+        assertEquals(12.5f, o.h, 0.01f)
+        val r = kotlin.math.hypot(sa!!.spec.centerX!! - o.cx, sa.spec.centerY!! - o.cy)
+        assertEquals("the circle's radius scales", 25f, r, 0.01f)
+        val after = picture(c)
+        val dataAfter = data(c)
+        val flatAfter = flat(c)
+
+        val c2 = reopened(c)
+        for (l in listOf(pixelArray, shape)) {
+            val back = c2.doc.layers.single { it.id == l.id }
+            assertEquals("${l.name}: the spec", l.array!!.spec, back.array!!.spec)
+            assertArrayEquals("${l.name}: the cache", px(l.bitmap), px(back.bitmap))
+        }
+        assertArrayEquals("the composite after reopening", flatAfter, flat(c2))
+
+        c.undo()
+        settle(c)
+        assertFoldersIntact(c, "undone")
+        assertEquals("undone: the tree and pixels", before, picture(c))
+        assertEquals("undone: the data", dataBefore, data(c))
+        assertSame("undone: the very source", pixelSource, pixelArray.array!!.pixels)
+        assertArrayEquals("undone: the composite", flatBefore, flat(c))
+        c.redo()
+        settle(c)
+        assertEquals("redone", after, picture(c))
+        assertEquals("redone: the data", dataAfter, data(c))
+        assertArrayEquals("redone: the composite", flatAfter, flat(c))
+        Smoke.assertQuiet(c, "scaled")
     }
 
     // ------------------------------------------------------------------ 2. symmetry in an isolated folder at 60 %
