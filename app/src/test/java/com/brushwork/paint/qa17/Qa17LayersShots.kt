@@ -51,4 +51,30 @@ internal object Qa17LayersShots {
             kotlin.math.abs(((a shr 8) and 0xFF) - g) <= tol && kotlin.math.abs((a and 0xFF) - b) <= tol
 
     fun near(a: Int, want: Int, tol: Int = 2): Boolean = near(a, (want shr 16) and 0xFF, (want shr 8) and 0xFF, want and 0xFF, tol)
+
+    /** [base] (opaque ARGB) with the pixels [mask] covers washed half-way to [color]. */
+    fun tinted(base: IntArray, mask: ByteArray, color: Int): IntArray = IntArray(base.size) { i ->
+        val k = (mask[i].toInt() and 0xFF) / 510.0
+        if (k == 0.0) base[i] else {
+            fun ch(sh: Int) = (((base[i] shr sh) and 0xFF) * (1 - k) + ((color shr sh) and 0xFF) * k).toInt()
+            (0xFF shl 24) or (ch(16) shl 16) or (ch(8) shl 8) or ch(0)
+        }
+    }
+
+    /**
+     * [tiles] (each [w] × [h]) laid out [cols] to a row with a 4 px grey gutter, saved as
+     * `layers-[name].png`.
+     */
+    fun saveGrid(name: String, tiles: List<IntArray>, w: Int, h: Int, cols: Int) {
+        val rows = (tiles.size + cols - 1) / cols
+        val g = 4
+        val b = Bitmap.createBitmap(cols * w + (cols + 1) * g, rows * h + (rows + 1) * g, Bitmap.Config.ARGB_8888)
+        b.eraseColor(0xFF606060.toInt())
+        tiles.forEachIndexed { i, px -> b.setPixels(px, 0, w, g + (i % cols) * (w + g), g + (i / cols) * (h + g), w, h) }
+        try {
+            save(b, name)?.let { println("Qa17Layers: wrote ${it.path}") }
+        } finally {
+            b.recycle()
+        }
+    }
 }
