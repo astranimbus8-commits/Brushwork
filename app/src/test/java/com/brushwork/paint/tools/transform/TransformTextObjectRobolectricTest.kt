@@ -130,6 +130,27 @@ class TransformTextObjectRobolectricTest {
     }
 
     @Test
+    fun aTextTurnedThirtyAndScaledTwoHundredStaysATextInOneUndo() {
+        val (c, layer) = textSetup()
+        val before = layer.textData
+        val pixelsBefore = pixels(layer.bitmap)
+        val tool = transform(c)
+        tool.setRotation(30.0)
+        tool.setScalePercent(200.0)
+        tool.endNumericEdit()
+        val steps = c.undoManager.undoCount
+        tool.commit()
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        val t = itemOf(layer)
+        assertEquals("the type doubled", 64f, t.spec.sizePx, 0.05f)
+        assertEquals("turned 30°", 30f, t.rotationDeg, 0.05f)
+        assertArrayEquals("I1: the pixels are the stored text", rendered(t, 240, 160), pixels(layer.bitmap))
+        c.undo()
+        assertEquals("one undo restores the text exactly", before, layer.textData)
+        assertArrayEquals(pixelsBefore, pixels(layer.bitmap))
+    }
+
+    @Test
     fun scalingOneLinkedFrameScalesTheStorysTypeAndReflowsItInOneStep() {
         val s = FrameFixtures.setup(app)
         val first = FrameFixtures.newFrame(s, 20f, 20f, 180f, 140f, size = 16f)

@@ -1856,7 +1856,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     /**
      * Sets "Mesh columns" and "Mesh rows" (1..12 each; kept as the preference). A shown mesh is
      * resampled: the content keeps its shape and the new vertices lie on it. Not an in-tool step;
-     * the point selection is cleared (its indices mean other vertices now).
+     * the point selection is cleared (its indices mean other vertices now). The in-tool steps
+     * are resampled the same way, so undo and redo bring back earlier shapes on the new cells.
      */
     fun setMeshCells(columns: Int, rows: Int) {
         val c = columns.coerceIn(1, MeshDeform.MAX_CELLS)
@@ -1869,9 +1870,17 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val e = meshEdit ?: return
         if (meshBusy || (e.mesh.cols == c && e.mesh.rows == r)) return
         val smooth = smoothMesh
-        val mesh = e.mesh.resampled(c, r, smooth)
-        val ref = if (e.changed) e.ref.resampled(c, r, smooth) else mesh
-        showMesh(MeshEdit(mesh, ref, PointSelection.none(mesh.vertexCount)))
+        // One resample per distinct mesh (the steps share their reference and often their mesh).
+        val done = java.util.IdentityHashMap<MeshDeform, MeshDeform>()
+        fun on(m: MeshDeform): MeshDeform = done.getOrPut(m) { m.resampled(c, r, smooth) }
+        fun resampled(x: MeshEdit): MeshEdit {
+            val mesh = on(x.mesh)
+            val ref = if (x.changed) on(x.ref) else mesh
+            return MeshEdit(mesh, ref, PointSelection.none(mesh.vertexCount))
+        }
+        for (i in meshUndo.indices) meshUndo[i] = resampled(meshUndo[i])
+        for (i in meshRedo.indices) meshRedo[i] = resampled(meshRedo[i])
+        showMesh(resampled(e))
     }
 
     /** "Reset mesh": the mesh as Free deform started (one in-tool step). False when unchanged. */

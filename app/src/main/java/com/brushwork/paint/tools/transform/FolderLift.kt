@@ -14,6 +14,7 @@ import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.MultiLayerRenderOverride
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.lift.LiftGeometry
@@ -27,6 +28,9 @@ import kotlin.math.floor
  * every child's lifted pixels moving together (a multi-layer render override); the folder is
  * moved, turned and scaled only (Distort and Free deform work on one layer).
  */
+
+/** Why a child of a folder can't be transformed: its transparency is locked. */
+internal fun alphaLockedMessage(l: Layer): String = "Transparency is locked on \"${l.name}\". Unlock it to transform."
 
 /** How one child of a transformed folder is changed on ✓. */
 internal enum class ChildRule { DATA, VECTOR, PIXELS }
@@ -89,22 +93,37 @@ internal class FolderLift(
 
     /**
      * Applies [state] to every child as ONE step [label] (a folder never distorts). A child that
-     * went away meanwhile is skipped. False when nothing changed.
+     * went away meanwhile is skipped. Refused as a whole, with the reason and nothing changed,
+     * when a child was locked (or its folder, or its transparency) while the transform was
+     * pending, or when an arrayed child's map declines this transform (its copies would be baked).
+     * False when nothing changed.
      */
     override fun commit(state: TransformState, label: String): Boolean {
         if (state.isDistorted || c.doc.indexOf(layer) < 0) return false
         val m = LiftGeometry.matrix(state, sourceRect.left, sourceRect.top) ?: return false
+        val live = children.filter { c.doc.indexOf(it.layer) >= 0 }
+        for (child in live) {
+            val l = child.layer
+            if (!c.checkUsable(l, allowHidden = true)) return false
+            if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
+        }
+        // Planned before anything changes: an arrayed child that can't take [m] refuses it all.
+        val arrays = HashMap<Layer, LayerData>()
+        for (child in live) {
+            if (child.rule != ChildRule.DATA || child.kind != DataKind.ARRAY || child.layer.array == null) continue
+            arrays[child.layer] = maps.array(child.layer, m) ?: run { c.toast(TransformTool.ARRAY_REFUSAL); return false }
+        }
         val steps = c.undoManager.undoCount
         c.groupUndo(label) {
-            for (child in children) {
+            for (child in live) {
                 if (c.doc.indexOf(child.layer) < 0) continue
-                commitChild(child, m, label)
+                commitChild(child, m, label, arrays[child.layer])
             }
         }
         return c.undoManager.undoCount > steps
     }
 
-    private fun commitChild(child: FolderChild, m: FloatArray, label: String) {
+    private fun commitChild(child: FolderChild, m: FloatArray, label: String, array: LayerData?) {
         val l = child.layer
         val d = l.dataSnapshot()
         when (child.rule) {
@@ -112,11 +131,11 @@ internal class FolderLift(
                 val after = when (child.kind) {
                     DataKind.TEXT -> d.text?.takeIf { maps.textCanMap(m) }?.let { maps.text(it, m) }?.let { d.copy(text = it) }
                     DataKind.SHAPE -> d.shape?.let { maps.shape(it, m) }?.let { d.copy(shape = it) }
-                    DataKind.ARRAY -> if (d.array == null) null else maps.array(l, m)
+                    DataKind.ARRAY -> array
                     null -> null
                 }
-                // A map that declines: the pixels are resampled (a text or shape becomes a raster
-                // layer in the same step); an array stays as it was.
+                // A text or shape map that declines: the pixels are resampled (the layer becomes
+                // a raster layer in the same step). An array was mapped up front (see [commit]).
                 if (after != null) DataRender.apply(c, l, after, label, child.rect, allowHidden = true)
                 else if (child.kind != DataKind.ARRAY) resample(child, m, label)
             }
@@ -155,8 +174,17 @@ internal class FolderLift(
         c.commitEdit(rec, label)
     }
 
-    /** Every child's content goes (one step [label]): data children keep their kind, empty. */
+    /**
+     * Every child's content goes (one step [label]): data children keep their kind, empty.
+     * Refused as a whole, with the reason, when a child was locked meanwhile.
+     */
     override fun delete(label: String): Boolean {
+        for (child in children) {
+            val l = child.layer
+            if (c.doc.indexOf(l) < 0) continue
+            if (!c.checkUsable(l, allowHidden = true)) return false
+            if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
+        }
         val steps = c.undoManager.undoCount
         c.groupUndo(label) {
             for (child in children) {
@@ -210,8 +238,9 @@ internal class FolderLiftProvider(
         val members = members(layer)
         val m = maps()
         for (l in members) {
-            if (l.locked) { c.toast("Layer \"${l.name}\" is locked"); return false }
-            if (l.alphaLocked) { c.toast("Transparency is locked on \"${l.name}\". Unlock it to transform."); return false }
+            // Its own lock or that of a folder inside this one (I11), with the standard message.
+            if (!c.checkUsable(l, allowHidden = true)) return false
+            if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
             if (l.array != null && m.array(l, DataRender.IDENTITY) == null) { c.toast(TransformTool.ARRAY_REFUSAL); return false }
         }
         // A vector render still running lands first: the crops are then what the layers show.

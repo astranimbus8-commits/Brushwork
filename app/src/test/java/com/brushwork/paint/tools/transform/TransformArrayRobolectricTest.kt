@@ -1,5 +1,6 @@
 package com.brushwork.paint.tools.transform
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.os.Looper
@@ -22,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -52,6 +54,8 @@ class TransformArrayRobolectricTest {
     private val app get() = RuntimeEnvironment.getApplication()
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
+
+    private fun pixels(b: Bitmap) = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
 
     private val hi = TextItem("Hi", spec = TextSpec(sizePx = 32f), cx = 50f, cy = 80f)
 
@@ -106,6 +110,19 @@ class TransformArrayRobolectricTest {
 
         c.undo()
         assertEquals("undo restores the data exactly", before, layer.dataSnapshot())
+    }
+
+    @Test
+    fun aMovedArraysPixelsEqualAFreshRender() {
+        val (c, layer) = arraySetup()
+        val tool = transform(c)
+        tool.moveBy(20f, 10f)
+        tool.commit()
+        val moved = TextCodec.decode(layer.textData)!!
+        // The same data rendered from scratch on a layer of its own.
+        val ref = c.addLayerWithContent("Ref", "Add text", textData = layer.textData, draw = draw(moved))!!
+        assertTrue(c.updateLayerData(ref, ref.dataSnapshot().copy(array = layer.array), "Array", null, draw = draw(moved)))
+        assertArrayEquals("I1: the pixels are the mapped array", pixels(ref.bitmap), pixels(layer.bitmap))
     }
 
     @Test
