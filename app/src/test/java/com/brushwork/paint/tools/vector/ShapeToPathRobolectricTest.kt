@@ -34,7 +34,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -180,12 +179,7 @@ class ShapeToPathRobolectricTest {
         assertEquals(steps, c.undoManager.undoCount)
     }
 
-    /**
-     * Merge gate (design §3.6, §5.1 C): the converted corner is selected in the Path tool. Needs
-     * area B's `CurveTool.openPath` body (the F3 stub opens the path with no selection), so it is
-     * ignored on C's branch; the lead removes the `@Ignore` at C's merge gate.
-     */
-    @Ignore("merge gate: needs area B's CurveTool.openPath body")
+    /** Design §3.6, §5.1 C: the converted corner is selected in the Path tool (area B's `CurveTool.openPath`). */
     @Test
     fun theConvertedCornerIsSelectedInThePathTool() {
         val c = controller(vector = false)
