@@ -449,7 +449,16 @@ private fun LayerMenu(env: LayerWindowEnv) {
             // A folder is never arrayed (the Array tool refuses it too).
             if (!row.isFolder) {
                 if (row.hasArray) {
-                    MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.selectLayer(layer); c.selectTool(ToolId.ARRAY) } }
+                    // Through ArrayOps.fromLayer: it reopens the sheet even when the Array tool is already current on this layer.
+                    MenuItem(ArrayLabels.EDIT, EditorIcons.tool(ToolId.ARRAY)) { act { c.arrayWholeLayer(layer) } }
+                    // A raster array's source pixels (§3.3 a): paint them with the last painting tool, then finish.
+                    if (row.arrayEditingSource) {
+                        MenuItem(ArrayLabels.FINISH_SOURCE, Icons.Filled.Check) { act { ArrayOps.finishSource(c, layer) } }
+                    } else if (layer.array?.pixels != null) {
+                        MenuItem(ArrayLabels.EDIT_SOURCE, EditorIcons.tool(ToolId.BRUSH)) {
+                            act { c.selectLayer(layer); if (ArrayOps.editSource(c, layer)) c.selectTool(c.lastPaintTool) }
+                        }
+                    }
                     MenuItem(ArrayLabels.APPLY, Icons.Filled.Check) { act { ArrayOps.apply(c, layer) } }
                     MenuItem(ArrayLabels.REMOVE, Icons.Filled.Delete) { act { ArrayOps.remove(c, layer) } }
                 } else {
