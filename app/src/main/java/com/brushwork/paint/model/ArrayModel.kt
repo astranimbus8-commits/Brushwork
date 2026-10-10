@@ -3,13 +3,76 @@ package com.brushwork.paint.model
 import android.graphics.Bitmap
 import android.graphics.RectF
 import com.brushwork.paint.vector.VAnchor
+import com.brushwork.paint.vector.VStop
 import com.brushwork.paint.vector.VSubpath
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlin.math.abs
 
 /** v1.7 (item 3): how an array places its copies (Blender's Array modifier, plus Circle). */
 @Serializable
 enum class ArrayMode { LINE, CIRCLE, CURVE, TRANSFORM }
+
+/** v1.8 (item 2): how the look changes from the first copy to the last ([ArrayInstances.ease]). */
+@Serializable
+enum class ArrayEasing { LINEAR, EASE_IN, EASE_OUT, EASE_IN_OUT }   // "Even", "Speeds up", "Slows down", "S-curve"
+
+/**
+ * v1.8 (item 2): how copies change from the first to the last. The source never changes (I19).
+ * Copy k of n placed instances takes each value at t_k ([ArrayInstances.of]): opacity, size and
+ * turn are lerped from start to end, and the tint color is [tint] sampled at t_k, applied with
+ * [tintStrength] ([ArrayTint]). Stored on [ArraySpec.look] (null = none, never written).
+ */
+@Serializable
+data class ArrayLook(
+    val opacityStart: Float = 1f,   // 0..1
+    val opacityEnd: Float = 1f,
+    val sizeStart: Float = 1f,      // ArraySpec.MIN_SCALE..MAX_SCALE
+    val sizeEnd: Float = 1f,
+    val turnStart: Float = 0f,      // degrees, -3600..3600
+    val turnEnd: Float = 0f,
+    val easing: ArrayEasing = ArrayEasing.LINEAR,
+    /** 0 or 2..MAX_STOPS stops, offsets ascending in 0..1. */
+    val tint: List<VStop> = emptyList(),
+    val tintStrength: Float = 0f,   // 0..1
+) {
+    /** Draws exactly as no look: opacities and sizes 1, turns 0, and no tint (empty or strength 0). */
+    val isIdentity: Boolean
+        get() = opacityStart == 1f && opacityEnd == 1f && sizeStart == 1f && sizeEnd == 1f &&
+            turnStart == 0f && turnEnd == 0f && (tint.isEmpty() || tintStrength == 0f)
+
+    /**
+     * Clamped; a 1-stop tint becomes empty; stops sorted. A non-finite value takes its default,
+     * a stop with a non-finite offset is dropped, offsets are clamped to 0..1 and at most
+     * [MAX_STOPS] stops are kept (the first ones by offset). This instance when nothing changes.
+     */
+    fun sanitized(): ArrayLook {
+        fun f(v: Float, default: Float, min: Float, max: Float) = if (v.isFinite()) v.coerceIn(min, max) else default
+        val stops = tint.filter { it.offset.isFinite() }
+            .map { if (it.offset in 0f..1f) it else it.copy(offset = it.offset.coerceIn(0f, 1f)) }
+            .sortedBy { it.offset }
+            .take(MAX_STOPS)
+        val n = ArrayLook(
+            opacityStart = f(opacityStart, 1f, 0f, 1f),
+            opacityEnd = f(opacityEnd, 1f, 0f, 1f),
+            sizeStart = f(sizeStart, 1f, ArraySpec.MIN_SCALE, ArraySpec.MAX_SCALE),
+            sizeEnd = f(sizeEnd, 1f, ArraySpec.MIN_SCALE, ArraySpec.MAX_SCALE),
+            turnStart = f(turnStart, 0f, -MAX_TURN, MAX_TURN),
+            turnEnd = f(turnEnd, 0f, -MAX_TURN, MAX_TURN),
+            easing = easing,
+            tint = if (stops.size < 2) emptyList() else stops,
+            tintStrength = f(tintStrength, 0f, 0f, 1f),
+        )
+        return if (n == this) this else n
+    }
+
+    companion object {
+        val IDENTITY = ArrayLook()
+        const val MAX_STOPS = 8
+        private const val MAX_TURN = 3600f
+    }
+}
 
 /**
  * v1.7 (item 3, I14): a live array's settings. Lengths and positions are DOCUMENT PIXELS; the
@@ -50,6 +113,10 @@ data class ArraySpec(
     val pivotY: Float? = null,
     /** Raster sources only: "Edit source pixels" mode (§3.3); the cache is the source alone, painting does not bake. */
     val editingSource: Boolean = false,
+    /** v1.8: per-copy look; null (never written) = v1.7 copies. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val look: ArrayLook? = null,
 ) {
     /**
      * Usable values only (damaged or crafted data): count 1..[MAX_COUNT]; every number finite
@@ -57,6 +124,9 @@ data class ArraySpec(
      * null) and within [MAX_COORD]; sweep -360..360; spacing ≥ 0; scale 0.05..20; the guide at
      * most [MAX_GUIDE_ANCHORS] anchors with finite coordinates (handles that are not finite are
      * automatic again). This instance when nothing changes.
+     *
+     * v1.8: the [look] is sanitized too ([ArrayLook.sanitized]); a look that draws as none
+     * ([ArrayLook.isIdentity]) becomes null, so it is never written (I13b).
      *
      * [editingSource] is cleared for non-raster sources by the loader (`ArraySourceBlob` is not
      * [ArraySourceBlob.Pixels]), which knows the source kind; the spec alone does not.
@@ -85,6 +155,7 @@ data class ArraySpec(
             pivotX = opt(pivotX),
             pivotY = opt(pivotY),
             editingSource = editingSource,
+            look = look?.sanitized()?.takeUnless { it.isIdentity },
         )
         return if (n == this) this else n
     }
@@ -98,6 +169,7 @@ data class ArraySpec(
      * as for a square source. A null centre or pivot stays null (it follows the source's new
      * bounds; exact for maps that keep the axes): a caller that needs the old placement exactly
      * under other maps fills them first ([resolved]). A non-finite or singular map returns this.
+     * v1.8: the [look] is kept; a reflection reverses its turns, as it does the sweep.
      */
     fun mapped(m: FloatArray): ArraySpec {
         if (m.size < 9 || m.any { !it.isFinite() } || m[6] != 0f || m[7] != 0f || m[8] == 0f) return this
@@ -136,6 +208,7 @@ data class ArraySpec(
             turnDeg = turnDeg * flip,
             pivotX = if (qx != null && qy != null) px(qx, qy) else qx,
             pivotY = if (qx != null && qy != null) py(qx, qy) else qy,
+            look = look?.let { l -> if (flip < 0f) l.copy(turnStart = -l.turnStart, turnEnd = -l.turnEnd) else l },
         )
     }
 

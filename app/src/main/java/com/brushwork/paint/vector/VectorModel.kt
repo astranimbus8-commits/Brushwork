@@ -71,6 +71,7 @@ data class VectorContent(
                 is VPath -> {
                     for (s in o.subpaths) b += s.anchors.size * 48L
                     o.spline?.let { b += it.points.size * 32L }
+                    b += o.copies.maps.size * 52L
                 }
                 is VShape -> b += (o.shape.points?.size ?: 0) * 40L
             }
@@ -160,6 +161,10 @@ data class VStroke(
  * [subpaths] any other way clears [spline] in the same step; the Path tool re-opens a spline
  * only after checking I9 (else the path is a plain Bézier path). Affine transforms map it
  * (`VectorOps.mapPath`), homographies and subdivision drop it.
+ *
+ * v1.8: [copies] are the path's live symmetry copies (I15: drawn, hit and exported per copy) and
+ * [generator] the curve generator its geometry came from (I16). Neither is written when absent,
+ * so a path without them encodes exactly as in v1.7; v1.7 ignores both (a plain path).
  */
 @Serializable
 @SerialName("path")
@@ -180,6 +185,14 @@ data class VPath(
     @OptIn(ExperimentalSerializationApi::class)
     @EncodeDefault(EncodeDefault.Mode.NEVER)
     val spline: VSpline? = null,
+    /** v1.8 (I15): live symmetry copies; NONE is never written. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val copies: CopyMaps = CopyMaps.NONE,
+    /** v1.8 (I16): the generator this path's geometry came from; null is never written. */
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    val generator: CurveGenerator? = null,
 ) : VObject() {
     /** Only single-subpath paths can be reopened in the Curve tool. */
     val isCurveEditable: Boolean get() = subpaths.size == 1
