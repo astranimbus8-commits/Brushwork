@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.editor.chrome
 
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.LinearMask
 import com.brushwork.paint.masks.MaskSpec
@@ -76,6 +77,31 @@ internal object UniqueLabels {
     }
 
     /**
+     * A unit on its own is part of a value, not a name: a field's suffix ("Constant X" shows
+     * "px", "Relative X" "%") and the unit picker's text ("pt", known as "Change unit").
+     */
+    private val UNITS = LengthUnit.entries.map { it.short }.toSet() + setOf("%", "°")
+
+    /**
+     * The click label of a slider's typeable value (`NumberSlider`): the cell is known by it, and
+     * the text it shows ("12 px", "None" at 0, "Mixed") is its value.
+     */
+    private const val TYPE_A_VALUE = "Type a value for "
+
+    /**
+     * The names [items] share (not values or units, not [allowed]), with the clickables sharing
+     * each; a typeable value cell counts by its own name ([TYPE_A_VALUE]).
+     */
+    fun duplicates(items: List<Clickables.Item>, allowed: Set<String> = emptySet()): Map<String, List<Clickables.Item>> {
+        val byLabel = linkedMapOf<String, MutableList<Clickables.Item>>()
+        for (item in items) {
+            val valueCell = item.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.OnClick)?.label?.startsWith(TYPE_A_VALUE) == true
+            for (l in if (valueCell) item.own else item.labels) byLabel.getOrPut(l) { mutableListOf() } += item
+        }
+        return byLabel.filter { (l, v) -> v.size > 1 && l !in allowed && l !in UNITS && !VALUE.matches(l) }
+    }
+
+    /**
      * The layer window's own labels of the I10 table (§3.7.11): each on one control while the
      * window is open, whichever version of the window (area F's ibis window or the v1.5 one).
      */
@@ -127,7 +153,7 @@ internal object UniqueLabels {
      * its fold): [check] gets the clickables on screen (the menu's and the editor's) at each
      * position from the menu's top to its end. Returns every menu entry seen, by node.
      */
-    private fun walkMenu(s: ChromeScreen, check: (List<Clickables.Item>) -> Unit): Map<Int, Clickables.Item> {
+    fun walkMenu(s: ChromeScreen, check: (List<Clickables.Item>) -> Unit): Map<Int, Clickables.Item> {
         val decor = s.activity.window.decorView
         val seen = linkedMapOf<Int, Clickables.Item>()
         fun body() = s.placed().firstOrNull {
@@ -150,7 +176,7 @@ internal object UniqueLabels {
     }
 
     /** Back on the More menu's popup window closes it. */
-    private fun closeMenu() {
+    fun closeMenu() {
         SmokeUi.windows().last().let { w ->
             w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
             w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
@@ -387,6 +413,8 @@ internal object UniqueLabels {
             assertEquals(1, SmokeUi.windows().size)
             Smoke.assertQuiet(s.c, "More menu")
         }
+        // v1.7 (§4.8, §6.2): the screens the v1.7 areas add.
+        UniqueLabelsV17.sections(h)
         dog.interrupt()
         h.finish()
     }
