@@ -247,8 +247,8 @@ class FolderFlowsRobolectricTest {
         assertEquals("its pivot moved", 30f, pa.spec.pivotX!!, 1e-4f)
         assertEquals(24f, pa.spec.pivotY!!, 1e-4f)
         assertEquals("its source moved by whole pixels", pixelSource.left + 10, pa.pixels!!.left)
-        assertEquals(pixelSource.top + 4, pa.pixels!!.top)
-        assertArrayEquals("the same source pixels", px(pixelSource.bitmap), px(pa.pixels!!.bitmap))
+        assertEquals(pixelSource.top + 4, pa.pixels.top)
+        assertArrayEquals("the same source pixels", px(pixelSource.bitmap), px(pa.pixels.bitmap))
         assertArrayEquals("the copies moved with it", shifted(pixelArrayBefore, w, h, 10, 4), px(pixelArray.bitmap))
         val sa = shape.array
         assertNotNull("the shape array is live", sa)
@@ -275,9 +275,9 @@ class FolderFlowsRobolectricTest {
             assertArrayEquals("${l.name}: the cache", px(l.bitmap), px(back.bitmap))
         }
         val px2 = twin(pixelArray).array!!.pixels!!
-        assertEquals(pa.pixels!!.left, px2.left)
-        assertEquals(pa.pixels!!.top, px2.top)
-        assertArrayEquals("the source pixels", px(pa.pixels!!.bitmap), px(px2.bitmap))
+        assertEquals(pa.pixels.left, px2.left)
+        assertEquals(pa.pixels.top, px2.top)
+        assertArrayEquals("the source pixels", px(pa.pixels.bitmap), px(px2.bitmap))
         assertArrayEquals("the composite after reopening", flatAfter, flat(c2))
 
         // ONE undo of the transform restores every layer's pixels and data, and the composite.
@@ -333,7 +333,7 @@ class FolderFlowsRobolectricTest {
         assertEquals("the copy offset scales", 37.5f, pa.spec.moveX, 0.01f)
         assertEquals(7.5f, pa.spec.moveY, 0.01f)
         assertEquals("the copies keep their own scale", pixelSpec.scale, pa.spec.scale, 1e-4f)
-        assertTrue("the source is resampled (${pa.pixels!!.bitmap.width} px)", abs(pa.pixels!!.bitmap.width - 20) <= 2)
+        assertTrue("the source is resampled (${pa.pixels!!.bitmap.width} px)", abs(pa.pixels.bitmap.width - 20) <= 2)
         // The shape array: still a shape, scaled, at the scaled distance from the scaled centre.
         val sa = shape.array
         assertNotNull("the shape array is live", sa)
