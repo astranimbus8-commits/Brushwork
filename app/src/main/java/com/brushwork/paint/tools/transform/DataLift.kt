@@ -191,8 +191,11 @@ internal class DataLift(
 
     private val clear = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
 
-    /** A text: move, turn and proportional scale only (no side handles, no flips; §3.11 a). */
-    val uniformOnly: Boolean get() = kind == DataKind.TEXT
+    /**
+     * A text, arrayed or not: move, turn and proportional scale only (no side handles, no flips;
+     * §3.11 a). An arrayed text maps only as its text does (`ArrayTransforms.mapped`).
+     */
+    val uniformOnly: Boolean get() = kind == DataKind.TEXT || (kind == DataKind.ARRAY && layer.textData != null)
 
     /** The last [mapped] answer, kept for the commit that follows it. */
     private var memoState: TransformState? = null
@@ -260,11 +263,14 @@ internal class DataLift(
  * text or a shape only while its map is (otherwise the tool lifts pixels, as in v1.6).
  */
 internal class DataLiftProvider(private val c: EditorController, private val maps: () -> DataMaps) : ObjectLiftProvider {
-    /** What a data lift of [layer] takes, or null to lift its pixels. */
+    /**
+     * What a data lift of [layer] takes, or null to lift its pixels (also a raster array in
+     * "Edit source pixels" mode: its pixels are the source, transformed without baking, §3.3).
+     */
     fun kindOf(layer: Layer): DataKind? {
         val m = maps()
         return when {
-            layer.array != null -> DataKind.ARRAY
+            layer.array != null -> DataKind.ARRAY.takeUnless { layer.array?.spec?.editingSource == true }
             layer.textData != null -> DataKind.TEXT.takeIf { m.textCanMap(DataRender.IDENTITY) }
             layer.shapeData != null -> DataKind.SHAPE.takeIf { layer.shapeData?.let { s -> m.shape(s, DataRender.IDENTITY) } != null }
             else -> null

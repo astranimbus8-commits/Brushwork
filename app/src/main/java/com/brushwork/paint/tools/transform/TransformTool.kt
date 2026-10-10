@@ -515,12 +515,13 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
      * The provider that lifts objects of [layer] for [target], or null to lift pixels (v1.7,
      * design §3.11): an arrayed layer goes to the data lift (which refuses it while its map is not
      * available), vector content to the v1.5 object lift, a text or shape layer to the data lift
-     * while its map is available. A mask is always lifted as pixels.
+     * while its map is available. A mask is always lifted as pixels, and so is a raster array in
+     * "Edit source pixels" mode (its pixels are the source being edited, §3.3, I14).
      */
     private fun objectProviderFor(layer: Layer, target: EditTarget): ObjectLiftProvider? {
         if (target != EditTarget.CONTENT) return null
         if (layer.isFolder) return folderLiftProvider
-        if (layer.array != null) return dataLiftProvider
+        if (dataLiftProvider.kindOf(layer) == DataKind.ARRAY) return dataLiftProvider
         if (layer.isVectorLayer) return objectLiftProvider().takeUnless { it === RefusingLiftProvider }
         return dataLiftProvider.takeIf { it.kindOf(layer) != null }
     }

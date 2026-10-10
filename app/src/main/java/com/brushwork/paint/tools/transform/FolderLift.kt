@@ -58,8 +58,10 @@ internal class FolderLift(
 
     override val floatingScale: Float get() = 1f
 
-    /** A text kept as text is among the children: the folder scales proportionally only (§3.11 a). */
-    val uniformOnly: Boolean get() = children.any { it.rule == ChildRule.DATA && it.kind == DataKind.TEXT }
+    /** A text kept as text (arrayed or not) is among the children: the folder scales proportionally only (§3.11 a). */
+    val uniformOnly: Boolean get() = children.any {
+        it.rule == ChildRule.DATA && (it.kind == DataKind.TEXT || (it.kind == DataKind.ARRAY && it.layer.textData != null))
+    }
 
     /** The layers the preview draws (the children). */
     val layers: Set<Layer> = children.mapTo(LinkedHashSet()) { it.layer }
@@ -241,7 +243,8 @@ internal class FolderLiftProvider(
             // Its own lock or that of a folder inside this one (I11), with the standard message.
             if (!c.checkUsable(l, allowHidden = true)) return false
             if (l.alphaLocked) { c.toast(alphaLockedMessage(l)); return false }
-            if (l.array != null && m.array(l, DataRender.IDENTITY) == null) { c.toast(TransformTool.ARRAY_REFUSAL); return false }
+            // (A raster array whose source is being edited goes as pixels, see [DataLiftProvider.kindOf].)
+            if (data.kindOf(l) == DataKind.ARRAY && m.array(l, DataRender.IDENTITY) == null) { c.toast(TransformTool.ARRAY_REFUSAL); return false }
         }
         // A vector render still running lands first: the crops are then what the layers show.
         c.settleVectorWork()
