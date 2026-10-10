@@ -2154,7 +2154,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
 
     /**
      * A finger goes down in Free deform (§3.1, §3.16): on a gizmo handle it scales or turns the
-     * selection, unless a vertex is closer (as the Curve tool decides); else on a vertex (the
+     * selection, unless a vertex is as close or closer (ties go to the vertex, as the Curve and
+     * Shape tools decide); else on a vertex (the
      * nearest within 22 dp) it moves that vertex, or the group of two or more it belongs to (with
      * "Select several" off, an unselected vertex is selected alone right away); else inside the
      * gizmo it moves the selection; else on empty canvas.
@@ -2170,7 +2171,8 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val part = layout?.let { gizmo.hit(it, screen, t) } ?: PointGizmo.Part.NONE
         val handle = layout?.let { gizmoHandleScreen(it, part) }
         val k = e.mesh.nearest(at.x, at.y, t.screenToDocLength(t.dp(VERTEX_REACH_DP)))
-        val vertexWins = k >= 0 && (handle == null || t.docToScreen(e.mesh.vertex(k)).distanceTo(screen) < handle.distanceTo(screen))
+        // A tie (a vertex lying on the handle) goes to the vertex, as in the Curve and Shape tools.
+        val vertexWins = k >= 0 && (handle == null || t.docToScreen(e.mesh.vertex(k)).distanceTo(screen) <= handle.distanceTo(screen))
         val g = when {
             handle != null && !vertexWins -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
             k >= 0 -> MeshGesture(MeshDrag.POINTS, e, at, k, PointGizmo.Part.NONE, null)

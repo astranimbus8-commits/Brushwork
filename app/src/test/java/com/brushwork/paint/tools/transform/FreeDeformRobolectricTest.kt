@@ -17,6 +17,7 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
@@ -223,6 +224,54 @@ class FreeDeformRobolectricTest {
         // The middle row went down 15 px: the colours' meeting line is unchanged (x = 60), the content below it is pressed.
         assertEquals(red, layer.bitmap.getPixel(40, 70))
         assertEquals(blue, layer.bitmap.getPixel(80, 70))
+    }
+
+    /**
+     * v1.7 final QA polish: a vertex lying exactly on a gizmo handle wins the finger (ties go to
+     * the point, as in the Curve and Shape tools). One cell: the vertices are the square's corners
+     * (0 NW, 1 NE, 2 SW, 3 SE). With 0 and 3 selected, the gizmo's box is the square, so each
+     * corner handle lies exactly on a vertex: two selected, two not.
+     */
+    @Test
+    fun aVertexOnAGizmoHandleWinsTheTapAndTheDrag() {
+        val (c, _) = setup()
+        val tool = freeDeform(c, cells = 1)
+        val start = (0 until tool.pointCount).map { tool.pointAt(it) }
+        assertAt(100f, 20f, start[1])
+        tool.selectSeveral = true
+        tap(c, start[0])
+        tap(c, start[3])
+        assertEquals(listOf(0, 3), tool.pointSelection.indices)
+        // The precondition: the corner handles lie exactly on the vertices on screen (a tie).
+        val t = c.viewTransform
+        val gizmo = PointGizmo()
+        val l = requireNotNull(gizmo.layout(listOf(start[0], start[3]), t))
+        assertEquals("the NW handle is on vertex 0", t.docToScreen(start[0]), l.cornersScreen[0])
+        assertEquals("the NE handle is on vertex 1", t.docToScreen(start[1]), l.cornersScreen[1])
+        assertEquals("a finger on vertex 1 is on the NE handle", PointGizmo.Part.SCALE_NE, gizmo.hit(l, t.docToScreen(start[1]), t))
+        assertEquals("a finger on vertex 0 is on the NW handle", PointGizmo.Part.SCALE_NW, gizmo.hit(l, t.docToScreen(start[0]), t))
+
+        // "Select several": a tap on the vertex under the NE handle toggles it, in and out.
+        tap(c, start[1])
+        assertEquals("the vertex on the handle joins", listOf(0, 1, 3), tool.pointSelection.indices)
+        tap(c, start[1])
+        assertEquals("and leaves", listOf(0, 3), tool.pointSelection.indices)
+        // The selected vertex under the NW handle: out, then back in.
+        tap(c, start[0])
+        assertEquals("the selected vertex on the corner handle leaves", listOf(3), tool.pointSelection.indices)
+        tap(c, start[0])
+        assertEquals(listOf(0, 3), tool.pointSelection.indices)
+        assertFalse("selecting moved nothing", tool.isMeshChanged)
+        assertFalse(tool.canUndoStep)
+
+        // "Select several" off: a drag from the vertex under the NE handle moves that vertex alone
+        // (the handle would have scaled vertices 0 and 3 instead).
+        tool.selectSeveral = false
+        drag(c, start[1], start[1] + Vec2(0f, 15f))
+        assertAt(100f, 35f, tool.pointAt(1), "the dragged vertex")
+        for (i in listOf(0, 2, 3)) assertAt(start[i].x, start[i].y, tool.pointAt(i), "vertex $i")
+        assertEquals("the dragged vertex is selected alone", listOf(1), tool.pointSelection.indices)
+        assertTrue("one in-tool step", tool.canUndoStep)
     }
 
     @Test
