@@ -406,7 +406,9 @@ class ThreadUndoTest {
     }
 
     @Test
-    fun transformingAFrameRasterizesItAndTheStoryHealsInTheSameStep() {
+    fun movingAFrameWithTransformKeepsItInTheStoryInOneStep() {
+        // v1.7 (area F): Transform maps a text frame's data instead of rasterizing it; a move
+        // changes only that frame, so the chain and the story stay whole.
         val s = setup(context)
         val (f1, f2, f3) = chain3(s)
         s.c.selectLayer(f2)
@@ -417,8 +419,8 @@ class ThreadUndoTest {
             tt.moveBy(12f, 0f)
             tt.commit()
         }
-        assertNull(f2.textData)
-        assertEquals(listOf(f1, f3), chainOf(s.c, f1))
+        assertNotNull("the frame stays a text", f2.textData)
+        assertEquals(listOf(f1, f2, f3), chainOf(s.c, f1))
         assertWhole(s.c, storyOf(f1))
     }
 
