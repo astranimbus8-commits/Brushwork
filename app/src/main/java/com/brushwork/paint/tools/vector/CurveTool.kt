@@ -1794,7 +1794,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /**
      * The touch at [pt] belongs to the point group (true; [drag] is set): with "Select several",
      * or with two or more points selected. The gizmo's handles win over a point unless the point
-     * is closer; a touch inside the box that is not on a point moves the group. Otherwise (false)
+     * is at least as close (as in the Shape tool: a point ON a handle, e.g. the lowest of three in
+     * a V on the bottom edge's handle, is still tapped and dragged as a point); a touch inside the
+     * box that is not on a point moves the group. Otherwise (false)
      * the v1.6 gestures apply: a point that is not in the group is dragged alone (and then selected
      * alone), empty canvas adds a point.
      */
@@ -1813,7 +1815,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val screen = t.docToScreen(pt)
             val part = gizmo.hit(layout, screen, t)
             val handle = gizmoHandleAt(layout, part)
-            val pointWins = idx >= 0 && (handle == null || t.docToScreen(pointAt(idx)).distanceTo(screen) < handle.distanceTo(screen))
+            val pointWins = idx >= 0 && (handle == null || t.docToScreen(pointAt(idx)).distanceTo(screen) <= handle.distanceTo(screen))
             if ((handle != null || part == PointGizmo.Part.MOVE) && !pointWins) {
                 drag = Drag.GIZMO
                 gizmoPart = part

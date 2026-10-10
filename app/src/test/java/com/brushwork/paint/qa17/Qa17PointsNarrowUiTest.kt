@@ -37,8 +37,11 @@ import kotlin.math.sqrt
 @Config(qualifiers = "w392dp-h873dp-xxhdpi")
 class Qa17PointsNarrowUiTest {
 
-    /** No point at a corner or edge middle of their box (a point there would win the touch). */
-    private val five = listOf(Vec2(120f, 150f), Vec2(200f, 90f), Vec2(280f, 150f), Vec2(200f, 210f), Vec2(160f, 190f))
+    /**
+     * No point at the corner or the edge middle the gizmo section drags (SE, E): a point there
+     * would win the touch (a point at least as close as a handle wins, as in the Shape tool).
+     */
+    private val five = listOf(Vec2(120f, 150f), Vec2(200f, 90f), Vec2(280f, 130f), Vec2(200f, 210f), Vec2(160f, 190f))
 
     private fun open(s: ChromeScreen, label: String): CurveTool {
         QaCurves.tool(s, label)
