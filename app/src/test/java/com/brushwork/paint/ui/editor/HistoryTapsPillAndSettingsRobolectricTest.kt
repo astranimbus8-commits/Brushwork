@@ -26,14 +26,15 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.7 item 10 (design §3.10; area I), the review's end-to-end checks on the user's phone
  * (392 dp), with real multi-touch events:
- * - the first finger on a pill cell (X, Scale X): one undo, and the cell's tap does not open its
- *   typing dialog when the fingers lift (the cell gives the touch up once the hub claims it);
  * - the UI finger first, then a canvas finger: one undo, the canvas finger draws nothing, and the
  *   canvas' own two-finger tap still undoes afterwards;
  * - the settings (§3.10 "Both respect the twoFingerUndo and threeFingerRedo settings"): with the
  *   two-finger undo off, two fingers on the UI do not undo and the button under the first finger
  *   still fires, while three fingers still redo (no button fires); with the three-finger redo
- *   off, three fingers neither redo nor undo, and no button fires.
+ *   off, three fingers neither redo nor undo, and no button fires;
+ * - the first finger on a pill cell (X, Scale X): one undo, and the cell's tap does not open its
+ *   typing dialog when the fingers lift (the cell gives the touch up once the hub claims it).
+ *   Last, because [FakePillTool] has no options: the options strip goes once it is active.
  * One test (Compose's frame clock serves the first test of a sandbox only), own sandbox.
  */
 @RunWith(RobolectricTestRunner::class)
