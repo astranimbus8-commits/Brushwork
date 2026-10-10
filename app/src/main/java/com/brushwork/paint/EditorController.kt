@@ -2302,6 +2302,13 @@ class EditorController(
             } catch (e: OutOfMemoryError) {
                 p.outOfMemory = true
                 null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // Anything else drops this save (its row goes) instead of leaving it pending for
+                // good and throwing again from every later undo, mark or canvas operation.
+                android.util.Log.w("EditorController", "Saving a selection failed", e)
+                null
             }
         }
         synchronized(pendingSavedLock) { pendingSavedSelections = pendingSavedSelections + p }

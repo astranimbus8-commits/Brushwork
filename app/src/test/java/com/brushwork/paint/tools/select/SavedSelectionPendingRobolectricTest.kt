@@ -9,6 +9,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import org.junit.After
@@ -25,10 +26,11 @@ import org.robolectric.RuntimeEnvironment
 /**
  * v1.7 (§3.14 (c), area G): a saved selection still compressing is `pendingSavedSelections` at
  * once (its name and the id it will have), and lands as ONE step in the order asked for. Undo,
- * redo, a history mark and a canvas operation land it first (waiting for it), so undo takes it
- * back (it never lands on top of what undo took back), a mark keeps it, and a flip maps it.
- * Compression is slowed by the controller's test seam (a delay on the worker); the scope is the
- * app's (main thread, the looper pumped).
+ * redo, a history mark, a rollback and a canvas operation land it first (waiting for it), so undo
+ * takes it back (it never lands on top of what undo took back) and the hotbar's feedback names
+ * it, redo finds the redo stack emptied by it, a mark keeps it, a rollback to an earlier mark
+ * takes it back, and a flip maps it. Compression is slowed or held by the controller's test seam
+ * (on the worker); the scope is the app's (main thread, the looper pumped).
  */
 @RunWith(RobolectricTestRunner::class)
 class SavedSelectionPendingRobolectricTest {
@@ -65,8 +67,9 @@ class SavedSelectionPendingRobolectricTest {
         assertTrue(c.doc.savedSelections.isEmpty())
         assertEquals(steps, c.undoManager.undoCount)
 
-        // Undo while pending: the save lands, then undo takes it back.
-        c.undo()
+        // Undo while pending (the hotbar's): the save lands, then undo takes it back, and the
+        // feedback names it.
+        assertEquals("Undo: ${SavedSelectionLabels.SAVE}", HistoryLabels.performUndo(c))
         assertTrue(c.pendingSavedSelections.isEmpty())
         assertTrue(c.doc.savedSelections.isEmpty())
         assertEquals(steps, c.undoManager.undoCount)
@@ -96,6 +99,22 @@ class SavedSelectionPendingRobolectricTest {
         assertEquals(steps + 1, c.undoManager.undoCount)
         c.redo()
         assertArrayEquals(bytes(rect(Rect(30, 10, 60, 40))), bytes(c.doc.savedSelections.single().toSelection(w, h)))
+
+        // Redo while a save is pending: the save lands first and, as a new edit, empties the redo
+        // stack (the undone update is not applied over it).
+        c.undo()
+        assertSame(saved, c.doc.savedSelections.single())
+        c.beforeSavedSelectionPack = null
+        assertTrue(c.saveSelection())
+        val p2 = c.pendingSavedSelections.single()
+        c.redo()
+        assertTrue(c.pendingSavedSelections.isEmpty())
+        assertEquals(listOf(saved.id, p2.id), c.doc.savedSelections.map { it.id })
+        assertSame(saved, c.doc.savedSelections.first())
+        assertFalse(c.canRedo)
+        assertEquals(SavedSelectionLabels.SAVE, c.undoManager.undoLabel)
+        Smoke.pump(100)
+        assertEquals(steps + 2, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "pending save undo")
     }
 
@@ -104,16 +123,18 @@ class SavedSelectionPendingRobolectricTest {
         val c = controller()
         c.setSelection(rect(Rect(2, 2, 20, 20)), recordUndo = false)
         val steps = c.undoManager.undoCount
-        // The first save compresses longer than the second: the second waits for it.
-        c.slowPacks(500)
+        // The first save is held until the second is done: the second waits for it.
+        val gate = CompletableDeferred<Unit>()
+        c.beforeSavedSelectionPack = { gate.await() }
         assertTrue(c.saveSelection())
-        c.slowPacks(10)
+        c.beforeSavedSelectionPack = null
         assertTrue(c.saveSelection())
         val (p1, p2) = c.pendingSavedSelections
         assertEquals(listOf("Selection 1", "Selection 2"), listOf(p1.name, p2.name))
         assertTrue("second done", Smoke.pumpUntil(10_000) { p2.ready })
         assertTrue("the second waits for the first", c.doc.savedSelections.isEmpty())
         assertEquals(2, c.pendingSavedSelections.size)
+        gate.complete(Unit)
         assertTrue("both landed", Smoke.pumpUntil(10_000) { c.pendingSavedSelections.isEmpty() })
         assertEquals(listOf(p1.id, p2.id), c.doc.savedSelections.map { it.id })
         assertEquals(steps + 2, c.undoManager.undoCount)
@@ -131,13 +152,20 @@ class SavedSelectionPendingRobolectricTest {
         assertEquals(listOf(p1.id, p2.id, p3.id), c.doc.savedSelections.map { it.id })
         val marked = c.undoManager.undoCount
         assertEquals(steps + 3, marked)
+        // A save asked for after the mark, still pending when the tap rolls back: it lands (after
+        // the Deselect that followed it) and is taken back with it, never landing afterwards.
+        c.slowPacks(100)
+        assertTrue(c.saveSelection())
+        assertEquals(1, c.pendingSavedSelections.size)
         c.deselect()
         assertTrue(c.restoreUiMark(m))
         c.releaseUiMark(m)
+        assertTrue(c.pendingSavedSelections.isEmpty())
         assertEquals(marked, c.undoManager.undoCount)
         assertEquals(listOf(p1.id, p2.id, p3.id), c.doc.savedSelections.map { it.id })
         assertTrue("the selection is back", c.selection != null)
         Smoke.pump(400)
+        assertEquals(listOf(p1.id, p2.id, p3.id), c.doc.savedSelections.map { it.id })
         assertEquals(marked, c.undoManager.undoCount)
         Smoke.assertQuiet(c, "pending saves in order")
     }

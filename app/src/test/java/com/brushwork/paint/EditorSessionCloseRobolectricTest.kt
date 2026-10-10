@@ -1,8 +1,10 @@
 package com.brushwork.paint
 
+import android.graphics.Path
 import android.os.Looper
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.core.PackedPoints
+import com.brushwork.paint.model.Selection
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
@@ -12,6 +14,7 @@ import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.PendingRenders
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -118,6 +121,34 @@ class EditorSessionCloseRobolectricTest {
             assertNotNull(v)
             assertEquals("the render landed and the box was deleted", listOf(boxes[1]), v!!.objects.filterIsInstance<VPath>().map { it.id })
             assertEquals(1, v.objects.filterIsInstance<VStroke>().size)
+        } finally {
+            runBlocking { app.repository.delete(id) }
+        }
+    }
+
+    /**
+     * v1.7 (§3.14 (c), review): a saved selection still compressing when Back is pressed lands
+     * before the save, so it is in the reopened project (the cancelled scope would drop it).
+     */
+    @Test
+    fun aSavedSelectionStillCompressingWhenTheEditorClosesIsSaved() {
+        val app = RuntimeEnvironment.getApplication() as BrushworkApp
+        val id = runBlocking { app.repository.create(NewCanvasSpec("Close test 3", 400, 300, 72f)) }
+        try {
+            val session = EditorSession(app, id)
+            pumpUntil("the editor to open") { session.state is EditorSession.State.Ready }
+            val c = (session.state as EditorSession.State.Ready).controller
+            val p = Path().apply { addRect(40f, 30f, 200f, 150f, Path.Direction.CW) }
+            c.setSelection(Selection.fromPath(p, 400, 300, antiAlias = false), recordUndo = false)
+            c.beforeSavedSelectionPack = { delay(200) }
+            assertTrue(c.saveSelection())
+            val pending = c.pendingSavedSelections.single()
+            var closed = false
+            session.close { closed = true }
+            pumpUntil("the editor to close") { closed }
+            val saved = runBlocking { app.repository.load(id) }
+            assertEquals("the pending save is saved", listOf(pending.id), saved.savedSelections.map { it.id })
+            assertEquals(pending.name, saved.savedSelections.single().name)
         } finally {
             runBlocking { app.repository.delete(id) }
         }

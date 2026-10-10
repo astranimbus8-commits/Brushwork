@@ -40,6 +40,9 @@ internal object HistoryLabels {
      */
     fun performUndo(c: EditorController): String {
         historyBlocked(c)?.let { return it }
+        // A saved selection still compressing lands first (v1.7), as undo() would: the feedback
+        // then names the step undo takes back ("Undo: Save selection").
+        c.landSavedSelections()
         val label = undo(c)
         c.undo()
         return label
@@ -48,6 +51,8 @@ internal object HistoryLabels {
     /** Redo counterpart of [performUndo] (the hotbar's Redo, the three-finger tap). */
     fun performRedo(c: EditorController): String {
         historyBlocked(c)?.let { return it }
+        // (As performUndo: the save lands first; as a new edit it empties the redo stack.)
+        c.landSavedSelections()
         val label = redo(c)
         c.redo()
         return label
