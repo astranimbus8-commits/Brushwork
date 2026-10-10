@@ -80,10 +80,8 @@ android {
                 // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
                 // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
                 it.forkEvery = 40
-                // CI runners have 4 cores: two test JVMs at once keep the suite (3687 tests took
-                // 42 min in one JVM at v1.7) under the 45-minute target. Local runs keep one, as
-                // up to four builds share this machine.
-                if (System.getenv("CI") == "true") it.maxParallelForks = 2
+                // One test JVM, on CI too: with two, the timing-ratio QA tests (VectorBudgetQaTest's
+                // local erase against a full render) spiked past their budgets as the JVMs shared cores.
                 // v1.7: the platform android.graphics.PathIterator (Pathfinder's reader on API 34,
                 // the SDK Robolectric runs) allocates through ShadowVMRuntime.newNonMovableArray,
                 // which reads a DirectByteBuffer's address by reflection.
