@@ -98,7 +98,7 @@ class Qa17ShapesNarrow360UiTest {
         settle()
         assertEquals("ONE step", before + 1, c.undoManager.undoCount)
         assertEquals(PathfinderOp.EXCLUDE.historyLabel, c.undoManager.undoLabel)
-        Qa17Shots.screen(s, "shapes-narrow360-pf")
+        Qa17ShapesShots.screen(s, "shapes-narrow360-pf")
         Smoke.assertQuiet(c, "shapes at 360 dp")
     }
 }

@@ -127,7 +127,7 @@ class Qa17ShapesPathfinderMixedUiTest {
         assertEquals("the stroke isn't picked", 0, pf.count)
         // (The editor shows the controller's message as its snackbar at once and clears it.)
         assertTrue("the message shows: ${SmokeUi.shown().take(60)}", has(PathfinderLabels.STROKES_SKIPPED, exact = true))
-        Qa17Shots.screen(s, "shapes-pf-stroke-skipped")
+        Qa17ShapesShots.screen(s, "shapes-pf-stroke-skipped")
         // "Select all objects": the path and the shape (the stroke is skipped, and said so: read
         // before the editor takes the message, as the same text is still showing).
         click(PathfinderLabels.SELECT_ALL, exact = true, settleAfter = false)
@@ -149,7 +149,7 @@ class Qa17ShapesPathfinderMixedUiTest {
         // The union covers the path's corner and the shape's.
         assertEquals(BLUE, result.bitmap.getPixel(100, 80))
         assertEquals(BLUE, result.bitmap.getPixel(295, 220))
-        Qa17Shots.doc(s, "shapes-pf-mixed")
+        Qa17ShapesShots.doc(s, "shapes-pf-mixed")
 
         click("Undo", exact = true)
         assertEquals("one undo", layers, c.doc.layers.toList())
@@ -181,7 +181,7 @@ class Qa17ShapesPathfinderMixedUiTest {
         assertFalse(a in c.doc.layers || b in c.doc.layers)
         assertTrue("under the folder's row", c.doc.indexOf(result) < c.doc.indexOf(folder))
         assertEquals("the top object's colour", BLUE, (result.vector!!.objects.single() as VPath).fill.let { (it as VPaint.Solid).color })
-        Qa17Shots.doc(s, "shapes-pf-folder")
+        Qa17ShapesShots.doc(s, "shapes-pf-folder")
         click("Undo", exact = true)
         assertEquals(layers, c.doc.layers.toList())
         Smoke.assertQuiet(c, "pathfinder folder")

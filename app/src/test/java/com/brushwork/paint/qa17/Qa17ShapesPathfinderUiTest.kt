@@ -140,7 +140,7 @@ class Qa17ShapesPathfinderUiTest {
             press(s, PathfinderLabels.SELECT_ALL)
             assertEquals("$op: three objects picked", 3, pf.count)
             assertTrue(has(PathfinderLabels.picked(3), exact = true))
-            if (op == ops.first()) Qa17Shots.screen(s, "shapes-pf-picked")
+            if (op == ops.first()) Qa17ShapesShots.screen(s, "shapes-pf-picked")
             val before = c.undoManager.undoCount
             press(s, op.description, 40f)
             assertTrue("$op: done", Smoke.pumpUntil(20_000) { settle(1); !pf.busy && !c.vectors.isRendering })
@@ -167,7 +167,7 @@ class Qa17ShapesPathfinderUiTest {
                 val px = IntArray(c.doc.width * c.doc.height).also { result.bitmap.getPixels(it, 0, c.doc.width, 0, 0, c.doc.width, c.doc.height) }
                 assertTrue("$op: the edges are drawn", px.count { it ushr 24 != 0 } > 500)
             }
-            Qa17Shots.doc(s, "shapes-pf-${op.name.lowercase()}")
+            Qa17ShapesShots.doc(s, "shapes-pf-${op.name.lowercase()}")
 
             // One undo: the three shapes as they were.
             if (op == ops.last()) Qa16Ui(s).twoFingerUndo() else click("Undo", exact = true)

@@ -11,7 +11,7 @@ import java.io.FileOutputStream
  * PNGs in the v1.7 QA shots folder, kept out of the repository. Nothing is written where the
  * folder is absent (CI, other machines).
  */
-internal object Qa17Shots {
+internal object Qa17ShapesShots {
     private val SHOTS = File("C:\\Users\\USER\\Documents\\Brushwork\\.wt\\_tools\\v17-qa-shots")
 
     /** The flattened picture of [s] to `<name>-doc.png` (on white); the path written, or null. */

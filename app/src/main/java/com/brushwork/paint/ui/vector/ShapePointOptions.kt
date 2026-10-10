@@ -269,7 +269,7 @@ private fun PointRoundnessControls(tool: ShapeTool, info: PointsInfo) {
         onDrag = { start, now -> tool.dragPointRoundness(start, now) },
         onEnd = { tool.endPointRoundness() },
         onTyped = { text -> tool.typePointRoundness(text) },
-        modifier = Modifier.padding(horizontal = 3.dp).width(ROUNDNESS_FIELD_WIDTH),
+        modifier = Modifier.padding(horizontal = 3.dp).widthIn(min = ROUNDNESS_FIELD_WIDTH),
         enabled = r != null,
     )
     if (r == null) Hint(PointLabels.ROUND_REFUSAL, Modifier.padding(horizontal = 6.dp))
@@ -279,7 +279,7 @@ private fun PointRoundnessControls(tool: ShapeTool, info: PointsInfo) {
 /** The custom increment step of "Point roundness" (px). */
 private const val ROUNDNESS_INCREMENT_KEY = "shape.pointRoundness"
 
-/** "Point roundness" keeps its label and a 3-digit value readable in the strip. */
+/** "Point roundness" is at least this wide in the strip (wider when its value and unit need it). */
 private val ROUNDNESS_FIELD_WIDTH = 220.dp
 
 /**

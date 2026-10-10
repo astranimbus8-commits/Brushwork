@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
@@ -98,6 +99,9 @@ fun MixedNumberField(
 
     Row(
         modifier
+            // As wide as its label, value and arrows: a scrolling strip bounds no width, and a
+            // weighted value would get none. A caller's bounded width still shrinks the value first.
+            .width(IntrinsicSize.Max)
             .heightIn(min = 48.dp)
             .clip(RoundedCornerShape(10.dp))
             .background(if (scrubbing) BrushworkColors.AccentDim else BrushworkColors.ChromeHigh.copy(alpha = 0.6f))

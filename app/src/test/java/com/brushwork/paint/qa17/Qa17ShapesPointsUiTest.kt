@@ -132,7 +132,7 @@ class Qa17ShapesPointsUiTest {
         assertEquals("the shape's own roundness again", listOf<Float?>(null, null, null, null), radii())
         assertEquals(n + 2, steps(tool))
         assertFalse("nothing left to reset", SmokeUi.isEnabled(PointLabels.RESET_ROUNDNESS))
-        Qa17Shots.screen(s, "shapes-points-rectangle")
+        Qa17ShapesShots.screen(s, "shapes-points-rectangle")
 
         // The trash cell: all points selected = the whole shape; one = that point.
         assertNotNull("the trash cell shows", s.tagged(V17Tags.PILL_TRASH))
@@ -236,7 +236,7 @@ class Qa17ShapesPointsUiTest {
         assertEquals("one in-tool step", n + 1, steps(tool))
         val p3 = pts()
         for (i in others) assertTrue("point $i stays: ${p2[i]} -> ${p3[i]}", abs(p2[i].x - p3[i].x) < 0.01f && abs(p2[i].y - p3[i].y) < 0.01f)
-        Qa17Shots.screen(s, "shapes-points-star")
+        Qa17ShapesShots.screen(s, "shapes-points-star")
 
         // The trash cell deletes the three (seven are left), ONE in-tool step; undo gives them back.
         assertTrue("some points: ${SmokeUi.shown().take(80)}", has(PillLabels.DELETE_POINTS, exact = true))

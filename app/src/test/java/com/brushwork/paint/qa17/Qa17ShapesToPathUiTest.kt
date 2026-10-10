@@ -161,7 +161,7 @@ class Qa17ShapesToPathUiTest {
         assertEquals(corner.x - 16f, moved.x, 0.6f)
         assertEquals(corner.y - 16f, moved.y, 0.6f)
         assertEquals(k + 3, steps(path))
-        Qa17Shots.screen(s, "shapes-topath-rounded")
+        Qa17ShapesShots.screen(s, "shapes-topath-rounded")
 
         // ✓: the layer keeps the edited path (ONE step).
         val applied = c.undoManager.undoCount
@@ -171,7 +171,7 @@ class Qa17ShapesToPathUiTest {
         val kept = (layer.vector!!.objects.single() as VPath).spline!!.points[ci]
         assertEquals(2f, kept.weight, 1e-4f)
         assertEquals(2f, kept.width, 1e-4f)
-        Qa17Shots.doc(s, "shapes-topath-rounded")
+        Qa17ShapesShots.doc(s, "shapes-topath-rounded")
 
         // Undo: the path as converted; again: the rectangle is a shape layer (as "Points" left it).
         click("Undo", exact = true)
@@ -244,8 +244,8 @@ class Qa17ShapesToPathUiTest {
         val ub = (next - p).normalized()
         val theta = acos(ua.dot(ub).coerceIn(-1f, 1f))
         assertEquals("weight cos(φ/2), φ the turn", cos((PI.toFloat() - theta) / 2f), cp.weight, 1e-3f)
-        Qa17Shots.screen(s, "shapes-topath-triangle")
-        Qa17Shots.doc(s, "shapes-topath-triangle")
+        Qa17ShapesShots.screen(s, "shapes-topath-triangle")
+        Qa17ShapesShots.doc(s, "shapes-topath-triangle")
 
         // One undo: the triangle is a shape layer again.
         click("Undo", exact = true)
