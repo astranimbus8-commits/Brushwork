@@ -410,20 +410,24 @@ internal fun NumberFieldCore(
     fun setText(s: String) { if (s != textValue.text) textValue = TextFieldValue(s, TextRange(s.length)) }
     var focused by remember { mutableStateOf(false) }
     // Done lets the focus go (the keys row closes with it). The focus-loss commit that follows
-    // re-sends the value Done committed and finishes nothing again (`committed`).
+    // sends nothing again (`committed`).
     val fieldFocus = LocalFocusManager.current
     LaunchedEffect(value, decimals) { if (!focused) setText(format(value)) }
     // Hold-to-repeat buttons and drags run between recompositions: they read the latest values.
     val latestValue by rememberUpdatedState(value)
     val latestChange by rememberUpdatedState(onValueChange)
     val latestFinished by rememberUpdatedState(onValueChangeFinished)
-    // Text already committed (Done), so the focus loss that follows doesn't finish the same edit
-    // a second time (one undo step / save per edit). Cleared by any new change.
+    // Text already committed (Done), so the focus loss that follows doesn't send or finish the
+    // same edit a second time (one undo step / save per edit). Cleared by any new change.
     var committed by remember { mutableStateOf<String?>(null) }
     /** v1.7 (item 15's UI): what [s] gives ("= 150 px") or its error, which refuses the commit. */
     fun readout(s: String): Readout? = ExpressionReadout.of(s, relativeBase[0]) { t -> parse(t)?.coerceIn(min, max) }
     fun commit() {
         val text = textValue.text
+        // Already sent and nothing changed since (the focus loss right after Done, or after a
+        // drag that finished): sending it again would start an edit nothing ends (the Path
+        // point's "Weight" begins a numeric edit on a change and ends it only when finished).
+        if (committed == text) return
         val v = if (ExpressionReadout.blocks(readout(text))) null else parse(text)
         if (v != null) {
             val c = v.coerceIn(min, max)
@@ -438,7 +442,8 @@ internal fun NumberFieldCore(
         }
     }
     // Buttons, slider and scrub set the number directly and show it at once, even in a focused
-    // field, so a later focus-loss commit re-sends this number instead of stale typed text.
+    // field, so a later focus-loss commit never sends stale typed text (once the change finished,
+    // it sends nothing).
     fun set(v: Double) {
         if (!v.isFinite()) return
         val c = v.coerceIn(min, max)

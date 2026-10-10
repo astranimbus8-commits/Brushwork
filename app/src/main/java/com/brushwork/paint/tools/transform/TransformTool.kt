@@ -2155,10 +2155,10 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
     /**
      * A finger goes down in Free deform (§3.1, §3.16): on a gizmo handle it scales or turns the
      * selection, unless a vertex is as close or closer (ties go to the vertex, as the Curve and
-     * Shape tools decide); else on a vertex (the
-     * nearest within 22 dp) it moves that vertex, or the group of two or more it belongs to (with
-     * "Select several" off, an unselected vertex is selected alone right away); else inside the
-     * gizmo it moves the selection; else on empty canvas.
+     * Shape tools decide); else on a vertex (the nearest within 22 dp) it moves that vertex, or
+     * the group of two or more it belongs to (with "Select several" off, an unselected vertex is
+     * selected alone right away); else inside the gizmo it moves the selection; else on empty
+     * canvas.
      */
     private fun meshDown(p: ToolPoint) {
         endMeshGroup()
