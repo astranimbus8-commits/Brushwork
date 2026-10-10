@@ -101,6 +101,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      */
     private fun start(p: ToolPoint, seed: Long, isPath: Boolean = false): Stroke? {
         stroke?.let { stroke = null; it.cancel() }
+        eraserNoteOnLift = false
         val layer = controller.activeLayer
         if (!controller.checkEditable(layer)) return null
         val preset = preset.sanitized()
@@ -125,11 +126,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
         // The vector eraser removes objects (whole strokes, copies and all): it is never replicated.
         val copies = if (maps.isNotEmpty() && recorder?.replacesStroke == true) {
-            // Said once, and not over the eraser's own first hint (that one shows now; this one next time).
-            if (!symmetryEraserNoteShown && controller.message == toastBefore) {
-                symmetryEraserNoteShown = true
-                controller.toast(SymmetryLabels.ERASER_NOTE)
-            }
+            // Said once, and not over the eraser's own first hint (that one shows now; this one
+            // next time). Said when the finger lifts: a touch a second finger joins (a two-finger
+            // undo, a pinch) is cancelled, erased nothing, and must not use the note up.
+            eraserNoteOnLift = !symmetryEraserNoteShown && controller.message == toastBefore
             emptyList()
         } else maps
         // A direct stroke paints each copy with its own painter, whose scratch grows to its
@@ -219,17 +219,27 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     override fun onUp(p: ToolPoint) {
         val s = stroke ?: return
         stroke = null
+        val note = eraserNoteOnLift
+        eraserNoteOnLift = false
+        val toastBefore = controller.message
         s.finish(p)
         store.persist(controller, id)
+        // (Not over what the stroke itself said on lifting: then next time.)
+        if (note && !symmetryEraserNoteShown && controller.message == toastBefore) {
+            symmetryEraserNoteShown = true
+            controller.toast(SymmetryLabels.ERASER_NOTE)
+        }
     }
 
     override fun onCancel() {
+        eraserNoteOnLift = false
         val s = stroke ?: return
         stroke = null
         s.cancel()
     }
 
     override fun onDeactivate() {
+        eraserNoteOnLift = false
         // Only reachable mid-stroke if the editor closes or switches tools under the finger.
         val s = stroke ?: return
         stroke = null
@@ -270,6 +280,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
     /** "Symmetry doesn't apply to erasing vector objects" was said (once per tool). */
     private var symmetryEraserNoteShown = false
+
+    /** The stroke under the finger says "Symmetry doesn't apply…" when it lifts (not if cancelled). */
+    private var eraserNoteOnLift = false
 
     /**
      * v1.7 (item 18, §3.18): the maps a stroke starting at [p] is replicated with (the identity
