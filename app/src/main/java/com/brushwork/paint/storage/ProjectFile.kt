@@ -91,15 +91,16 @@ internal data class LayerEntryDto(
     val maskFileName: String get() = maskFile ?: "mask_$id.bin"
 
     /**
-     * v1.7 QA: an entry whose pixel file is "" is a folder whose v1.7 keys an older version
-     * dropped: v1.6's gallery "Rename" rewrites `project.json` with only the keys it knows (it
-     * keeps `formatVersion` 3, so v1.6 still refuses to open it). Only a v1.7 folder entry has
-     * that file name.
+     * v1.7 QA: an entry whose pixel file is "" in a format-3 project ([formatVersion]) is a folder
+     * whose v1.7 keys an older version dropped: v1.6's gallery "Rename" rewrites `project.json`
+     * with only the keys it knows (it keeps `formatVersion` 3, so v1.6 still refuses to open it).
+     * Only a v1.7 folder entry has that file name; in a format 1 or 2 project it is damage, refused
+     * as v1.6 refuses it.
      */
-    val isStrippedFolder: Boolean get() = folder == null && file == ""
+    fun isStrippedFolder(formatVersion: Int): Boolean = folder == null && file == "" && formatVersion >= 3
 
-    /** v1.7: the folder this entry is ([folder]; a default one when [isStrippedFolder]), else null. */
-    val folderSpec: FolderSpec? get() = folder ?: if (isStrippedFolder) FolderSpec() else null
+    /** v1.7: the folder this entry of a format-[formatVersion] project is ([folder]; a default one when [isStrippedFolder]), else null. */
+    fun folderSpec(formatVersion: Int): FolderSpec? = folder ?: if (isStrippedFolder(formatVersion)) FolderSpec() else null
 }
 
 /** v1.7 (item 14): one saved selection; [file] holds `SavedSelection.packed`, the rows inside the bounds. */
@@ -218,7 +219,7 @@ internal object ProjectFormat {
      */
     fun referencedFiles(dto: ProjectFileDto): Set<String> = buildSet {
         for (e in dto.layers) {
-            if (e.folderSpec != null) continue
+            if (e.folderSpec(dto.formatVersion) != null) continue
             e.contentFileName.takeIf { it.isNotEmpty() }?.let { add(it) }
             if (e.hasMask) add(e.maskFileName)
             e.vectorFile?.let { add(it) }

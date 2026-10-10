@@ -4,6 +4,7 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.qa17.Qa17CompatArtwork.pixels
+import com.brushwork.paint.storage.CorruptProjectException
 import com.brushwork.paint.storage.ProjectFormat
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.text.TextCodec
@@ -11,6 +12,7 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.FolderLabels
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.int
@@ -91,6 +93,8 @@ class Qa17CompatV16ReaderRobolectricTest {
         assertEquals("the folders stay folders", doc.layers.map { it.isFolder }, loaded.layers.map { it.isFolder })
         assertTrue("v1.6 dropped the tree: all at the top level", loaded.layers.all { it.parentId == Layer.ROOT_ID })
         for ((e, a) in doc.layers.zip(loaded.layers)) if (!e.isFolder) assertArrayEquals("${e.name}: pixels", pixels(e.bitmap), pixels(a.bitmap))
+        // The gallery counts the layers with pixels, also before v1.7 saves the folders again.
+        assertEquals(doc.layers.count { !it.isFolder }, runBlocking { ProjectRepository(app).list() }.single { it.id == doc.id }.layerCount)
 
         // Saved by v1.7 again: a valid format-3 project that opens without a warning.
         runBlocking { ProjectRepository(app).save(loaded, null) }
@@ -100,6 +104,32 @@ class Qa17CompatV16ReaderRobolectricTest {
         assertEquals(loaded.layers.map { it.name }, again.layers.map { it.name })
         // The gallery counts the layers with pixels.
         assertEquals(doc.layers.count { !it.isFolder }, runBlocking { ProjectRepository(app).list() }.single { it.id == doc.id }.layerCount)
+    }
+
+    /**
+     * Verifier: only a format-3 project can hold a folder, so only there is an entry with
+     * `"file": ""` a stripped folder. In a format 1 or 2 project (which v1.6 opens) it is damage:
+     * still refused as v1.6 refuses it, not opened as a folder that would make the next save
+     * format 3 (which v1.6 then refuses).
+     */
+    @Test
+    fun anEmptyFileNameInAV16FormatProjectIsStillRefusedAsInV16() {
+        val (c, _) = Qa17CompatArtwork.build(app, "qa17-compat-v16-damaged", folders = false)
+        val doc = c.doc
+        runBlocking { ProjectRepository(app).save(doc, null) }
+        val project = ProjectFormat.json.parseToJsonElement(file(doc.id).readText()).jsonObject
+        assertEquals(1, project.getValue("formatVersion").jsonPrimitive.int)
+        val layers = project.getValue("layers").jsonArray
+        fun JsonObject.has(key: String) = this[key].let { it != null && it !is JsonNull }
+        val damaged = layers.indexOfFirst { e -> listOf("textData", "shapeData", "vectorFile", "array").none { e.jsonObject.has(it) } }
+        assertTrue("a plain raster entry", damaged >= 0)
+        val name = layers[damaged].jsonObject.getValue("name").jsonPrimitive.content
+        val edited = layers.mapIndexed { i, e -> if (i == damaged) JsonObject(e.jsonObject + ("file" to JsonPrimitive(""))) else e }
+        file(doc.id).writeText(JsonObject(project + ("layers" to JsonArray(edited))).toString())
+        val error = runCatching { runBlocking { ProjectRepository(app).load(doc.id) } }.exceptionOrNull()
+        assertTrue("refused: $error", error is CorruptProjectException)
+        assertEquals("Layer \"$name\" refers to an invalid file", error!!.message)
+        assertEquals("the gallery still counts it as a layer", layers.size, runBlocking { ProjectRepository(app).list() }.single { it.id == doc.id }.layerCount)
     }
 
     @Test

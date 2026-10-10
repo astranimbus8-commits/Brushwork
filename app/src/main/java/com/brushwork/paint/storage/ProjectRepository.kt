@@ -91,7 +91,7 @@ class ProjectRepository(private val context: Context) {
                 width = dto.width,
                 height = dto.height,
                 dpi = dto.dpi,
-                layerCount = dto.layers.count { it.folderSpec == null },
+                layerCount = dto.layers.count { it.folderSpec(dto.formatVersion) == null },
                 modifiedAt = dto.modifiedAt,
                 thumbnail = File(dir, ProjectFormat.THUMB_FILE).takeIf { it.isFile },
             )

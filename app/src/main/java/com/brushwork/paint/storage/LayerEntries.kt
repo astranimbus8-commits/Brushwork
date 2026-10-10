@@ -68,7 +68,7 @@ internal object LayerEntries {
         val allocated = ArrayList<Bitmap>()
         try {
             for (entry in dto.layers) {
-                doc.layers += readEntry(dir, entry, doc, scratch, allocated)
+                doc.layers += readEntry(dir, entry, dto.formatVersion, doc, scratch, allocated)
                 doc.ensureNextLayerIdAbove(entry.id)
             }
         } catch (e: Throwable) {
@@ -78,14 +78,14 @@ internal object LayerEntries {
         if (doc.hasFolders) uniqueIds(doc)
         doc.loadWarnings += LayerTree.sanitize(doc.layers)
         // v1.7 QA: folders an older version stripped (LayerEntryDto.isStrippedFolder) open empty.
-        if (dto.layers.any { it.isStrippedFolder } && FOLDERS_REPAIRED !in doc.loadWarnings) doc.loadWarnings += FOLDERS_REPAIRED
+        if (dto.layers.any { it.isStrippedFolder(dto.formatVersion) } && FOLDERS_REPAIRED !in doc.loadWarnings) doc.loadWarnings += FOLDERS_REPAIRED
         sanitizeAdjustmentClipping(doc.layers)
         reserveWrapSourceIds(doc)
     }
 
-    private fun readEntry(dir: File, entry: LayerEntryDto, doc: Document, scratch: ByteArray, allocated: MutableList<Bitmap>): Layer {
+    private fun readEntry(dir: File, entry: LayerEntryDto, formatVersion: Int, doc: Document, scratch: ByteArray, allocated: MutableList<Bitmap>): Layer {
         val props = sanitized(entry.props)
-        entry.folderSpec?.let { spec ->
+        entry.folderSpec(formatVersion)?.let { spec ->
             // A folder has no pixels, mask or editable data (I11); anything else in its entry is ignored.
             return Layer.newFolder(entry.id, entry.props.name, spec).apply {
                 copyPropsFrom(props)

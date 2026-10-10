@@ -66,6 +66,21 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     /** Saves if there are unsaved edits. Runs on the app scope so it completes in the background. */
     fun saveNow(): Job = app.appScope.launch { save() }
 
+    /**
+     * v1.7 QA: the app leaves the screen (Home, app switch, screen off) and may be killed in the
+     * background long before the next autosave. Work the user asked for that is still landing (a
+     * vector or array render, a saved selection compressing) lands first, as on [close], so this
+     * save holds it; then [saveNow]. Pending tool work is left as it is (it is still pending on
+     * return). ("Save now" and the autosave don't wait: they save what has landed, consistently.)
+     */
+    fun saveOnLeaving(): Job {
+        controller?.let { c ->
+            runCatching { c.settleVectorWork() }
+            runCatching { c.landSavedSelections() }
+        }
+        return saveNow()
+    }
+
     suspend fun save() {
         saveMutex.withLock {
             val c = controller ?: return

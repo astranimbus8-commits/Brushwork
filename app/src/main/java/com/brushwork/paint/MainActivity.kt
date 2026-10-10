@@ -46,8 +46,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Autosave whenever the app leaves the screen (home button, app switch, screen off).
-        app.editorSession?.saveNow()
+        // Autosave whenever the app leaves the screen (home button, app switch, screen off),
+        // with the work still landing in the background (v1.7 QA).
+        app.editorSession?.saveOnLeaving()
     }
 }
 
