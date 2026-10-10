@@ -34,6 +34,8 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -49,6 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -159,15 +162,27 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
         ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo point edit", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
         ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point edit", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
         val several = tool.selectSeveral
-        OptionChip(PointLabels.SELECT_SEVERAL, several, {
-            tool.selectSeveral = !several
-            // The one-line hint (the strip is a single scrolling row: it shows as the editor's message).
-            if (!several) tool.controller.toast(PointLabels.SEVERAL_HINT)
-        }, icon = Icons.Filled.Checklist)
+        // "Select several" and "Select all points" are 44 dp each (§3.1a), as on the Curve and
+        // Path strips (a 32 dp chip is under a finger's size).
+        FilterChip(
+            selected = several,
+            onClick = {
+                tool.selectSeveral = !several
+                // The one-line hint (the strip is a single scrolling row: it shows as the editor's message).
+                if (!several) tool.controller.toast(PointLabels.SEVERAL_HINT)
+            },
+            label = { Text(PointLabels.SELECT_SEVERAL, maxLines = 1) },
+            leadingIcon = { Icon(Icons.Filled.Checklist, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White, selectedLeadingIconColor = Color.White),
+            modifier = Modifier.padding(horizontal = 3.dp).heightIn(min = 44.dp),
+        )
         val all = info.count > 0 && info.selectedCount == info.count
-        ActionChip(if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL, if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll) {
-            tool.selectPoints(if (all) PointSelection.none(info.count) else PointSelection.all(info.count))
-        }
+        ToolIconButton(
+            if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll,
+            if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL,
+            onClick = { tool.selectPoints(if (all) PointSelection.none(info.count) else PointSelection.all(info.count)) },
+            size = 44.dp,
+        )
         val smooth = info.smooth
         if (smooth != null) {
             SmoothChip(smooth) { tool.setSelectedSmooth(it) }
