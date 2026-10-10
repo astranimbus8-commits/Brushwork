@@ -285,6 +285,8 @@ class Qa17CompatPendingWorkOnStopUiTest {
         assertNotNull("an array layer", arrayed.array)
         assertEquals(ToolId.ARRAY, c.activeToolId)
         assertEquals(ArrayMode.LINE, arrayed.array!!.spec.mode)
+        val line = pixels(arrayed.bitmap)
+        assertTrue("the line's copies show", line.any { it ushr 24 != 0 })
         // As on the phone: a large array's cache renders on the worker for a while.
         c.arrayRenders.policy = VectorLayers.Policy.ASYNC
         c.arrayRenders.workerHook = { Thread.sleep(RENDER_MS) }
@@ -297,6 +299,7 @@ class Qa17CompatPendingWorkOnStopUiTest {
             val l = old.doc.layerById(arrayed.id)!!
             assertEquals("landed in memory", ArrayMode.CIRCLE, l.array!!.spec.mode)
             landed = pixels(l.bitmap)
+            assertFalse("the circle's pixels, not the line's", landed!!.contentEquals(line))
         }
         val again = c.doc.layerById(arrayed.id) ?: throw AssertionError("the array layer reopens")
         assertEquals("saved on leaving: the circle reopens", ArrayMode.CIRCLE, again.array?.spec?.mode)
