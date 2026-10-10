@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArraySources
+import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -28,6 +29,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.layers.LayerLabels
+import com.brushwork.paint.vector.render.VectorLayerRenderer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -77,6 +79,37 @@ internal class Qa17ArrayUi(private val h: ChromeHarness) {
         s.touch.idle(300)
         SmokeUi.tap(label, exact = true)
         settle(4)
+    }
+
+    /**
+     * Types [value] into the number field [label] like a user: the field first scrolled wholly
+     * into view in its sheet (60 dp at a time, as a finger does), then focus, text and Done.
+     */
+    fun typeField(label: String, value: String) {
+        repeat(40) {
+            val n = SmokeUi.field(label).node
+            val b = n.boundsInWindow
+            val r = s.root
+            if (b.height >= n.size.height - 1f && b.top >= r.top && b.bottom <= r.bottom) {
+                SmokeUi.typeAndDone(label, value)
+                return
+            }
+            var p = n.parent
+            while (p != null && (p.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) == null || p.config.getOrNull(SemanticsActions.ScrollBy) == null)) p = p.parent
+            val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is cut and nothing scrolls it" }
+            val v = p!!.boundsInWindow
+            scroll.invoke(0f, if (b.top < v.top) -60f * s.density else 60f * s.density)
+            settle(2)
+        }
+        throw AssertionError("\"$label\" never came wholly into view")
+    }
+
+    /** The Array sheet shown expanded: its minimized pill "Show Array" tapped, or the strip's "Array settings". */
+    fun showArraySheet() {
+        if (s.tagged(com.brushwork.paint.ui.common.V17Tags.ARRAY_SHEET) != null) return
+        if (SmokeUi.has("Show Array", exact = true)) click("Show Array", exact = true) else click("Array settings", exact = true)
+        settle()
+        assertNotNull("the Array sheet is back; shown: ${SmokeUi.shown().take(60)}", s.tagged(com.brushwork.paint.ui.common.V17Tags.ARRAY_SHEET))
     }
 
     fun steps(): Int = c.undoManager.undoCount
@@ -203,6 +236,14 @@ internal class Qa17ArrayUi(private val h: ChromeHarness) {
                 val bounds = requireNotNull(ArrayDraw.sourceBounds(d)) { "no source bounds" }
                 ArrayDraw.drawWithArray(cv, a, bounds, draw)
             }
+            return out
+        }
+
+        /** A vector layer's cache as it must be (I1, I14): a fresh render of [d]'s expanded content. */
+        fun freshVector(c: EditorController, d: LayerData): Bitmap {
+            val out = BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height)
+            val all = android.graphics.Rect(0, 0, c.doc.width, c.doc.height)
+            VectorLayerRenderer.render(Canvas(out), requireNotNull(ArrayDraw.effectiveVector(d)), all, tips = TipCache(), document = all)
             return out
         }
 
