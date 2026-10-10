@@ -1,11 +1,13 @@
 package com.brushwork.paint.qa17
 
+import android.view.MotionEvent
 import android.view.View
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
@@ -42,6 +44,10 @@ import org.robolectric.shadows.ShadowLog
  *   its "Flip view" and "Canvas…" items close it, and neither item fires; two fingers beside it
  *   (over the canvas) close it too; and so does one finger on "Flip view" with the other beside
  *   the menu (that finger reaches none of the menu's nodes), without flipping. No undo any way.
+ *   The other way round too (v1.7 final QA polish): the FIRST finger beside the menu (the window
+ *   starts closing on that touch-down), the second on "Flip view" while it is still up, at a usual
+ *   and a quick pace: nothing fires (the menu window keeps that gesture for itself: its first
+ *   finger reached no child, so the item never sees the second). The same over "Stroke kind".
  * - **The pill of a real Path tool:** the first finger on the trash ("Delete path"), the second on
  *   "Keep scale proportions": one in-tool undo (the last point goes), the path is not deleted and
  *   the chain keeps its state; three fingers redo the point.
@@ -83,6 +89,35 @@ class Qa17ChromeHistoryTapsUiTest {
     }
 
     private fun Offset.pair(): Pair<Float, Float> = x to y
+
+    /**
+     * A two-finger tap into the open menu's [window] whose FIRST finger lands beside the menu
+     * (120 dp under it, outside its content), the second on the item showing [item]. At a usual
+     * pace (30 ms apart, held 70 ms, the first finger lifts first) or a quick one (10 ms apart, the
+     * item's finger lifts 30 ms later, first). The menu and the item are checked to be still up
+     * when the second finger lands, so a quiet result is not a menu already gone.
+     */
+    private fun besideThenItem(window: View, item: String, density: Float, quick: Boolean) {
+        val beside = window.width * 0.5f to window.height + 120f * density
+        val on = centerOf(window, item).pair()
+        val t = Smoke.Touch(window)
+        t.send(MotionEvent.ACTION_DOWN, P(0, beside.first, beside.second))
+        t.idle(if (quick) 10 else 30)
+        assertTrue("the menu is still up when the second finger lands", window.isAttachedToWindow && textsIn(window, item).isNotEmpty())
+        t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, beside.first, beside.second), P(1, on.first, on.second), index = 1)
+        if (quick) {
+            t.idle(30)
+            t.send(MotionEvent.ACTION_POINTER_UP, P(0, beside.first, beside.second), P(1, on.first, on.second), index = 1)
+            t.idle(10)
+            t.send(MotionEvent.ACTION_UP, P(0, beside.first, beside.second))
+        } else {
+            t.idle(70)
+            t.send(MotionEvent.ACTION_POINTER_UP, P(0, beside.first, beside.second), P(1, on.first, on.second), index = 0)
+            t.idle(20)
+            t.send(MotionEvent.ACTION_UP, P(1, on.first, on.second))
+        }
+        t.idle(50)
+    }
 
     private fun dialog(h: ChromeHarness) {
         val s = h.editor()
@@ -186,6 +221,16 @@ class Qa17ChromeHistoryTapsUiTest {
         settle()
         nothingHappened("one on an item, one beside it")
 
+        // The other way round: the FIRST finger beside the menu (the touch-modal window takes it
+        // outside its content and starts closing on that touch-down), the second on "Flip view"
+        // while the menu is still up. The item does not fire, at a usual pace and at a quick one
+        // (the item's finger lifts while the menu is still fading out).
+        for (quick in listOf(false, true)) {
+            besideThenItem(openMenu(), "Flip view", s.density, quick)
+            settle()
+            nothingHappened("one beside it first, then one on an item (quick $quick)")
+        }
+
         // The menu closed, the same tap over the canvas undoes.
         s.touch.twoFingerTap(s.screen(150f, 150f), s.screen(250f, 150f))
         settle()
@@ -228,6 +273,18 @@ class Qa17ChromeHistoryTapsUiTest {
         assertEquals("the menu closed", 1, SmokeUi.windows().size)
         assertEquals("no kind picked", kind, tool.settings.stroke)
         assertEquals("no redo, no undo", steps, f.steps)
+        // The first finger beside the menu, the second on "Plain": no kind picked, at a usual pace
+        // and at a quick one.
+        for (quick in listOf(false, true)) {
+            Finger.tap(s, CurveLabels17.STROKE_KIND)
+            assertEquals("the menu is open", 2, SmokeUi.windows().size)
+            besideThenItem(SmokeUi.windows().last(), CurveStroke.PLAIN.label, s.density, quick)
+            settle()
+            assertEquals("beside first (quick $quick): the menu closed", 1, SmokeUi.windows().size)
+            assertEquals("beside first (quick $quick): no kind picked", kind, tool.settings.stroke)
+            assertEquals("beside first (quick $quick): no undo, no redo", steps, f.steps)
+            assertFalse(f.saw("Undo: $SEED"))
+        }
         // One finger picks.
         Finger.tap(s, CurveLabels17.STROKE_KIND)
         SmokeUi.windows().last().let { w -> RobolectricUi.tap(w, centerOf(w, CurveStroke.PLAIN.label).x, centerOf(w, CurveStroke.PLAIN.label).y) }
