@@ -4,6 +4,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.PointerInputModifierNode
@@ -109,6 +110,11 @@ private class HistoryTapCanvasNode(var sink: HistoryTapSink, var slot: Int) : Mo
  * second finger is down on the menu, every pointer is consumed from the Initial pass on (the items
  * cancel instead of firing) and [onDismiss] runs once. Put it on the menu's content
  * (`DropdownMenu(modifier = …)`, which is the column around every item).
+ *
+ * A second finger BESIDE the menu counts too. The menu's window is touch-modal, so it gets that
+ * finger, but outside its content the finger hits no node and never reaches this one. What does
+ * reach it is the press itself (`ACTION_POINTER_DOWN`), carried by the fingers already on the menu:
+ * a [PointerEventType.Press] in which none of this node's own pointers went down.
  */
 fun Modifier.closeOnSecondFinger(onDismiss: () -> Unit): Modifier = this then CloseOnSecondFingerElement(onDismiss)
 
@@ -127,8 +133,15 @@ private class CloseOnSecondFingerNode(var onDismiss: () -> Unit) : Modifier.Node
         if (pass != PointerEventPass.Initial) return
         val changes = pointerEvent.changes
         var pressed = 0
-        for (i in changes.indices) if (changes[i].pressed) pressed++
-        if (!closing && pressed > 1) {
+        var landedHere = false
+        for (i in changes.indices) {
+            val c = changes[i]
+            if (c.pressed) pressed++
+            if (c.changedToDownIgnoreConsumed()) landedHere = true
+        }
+        // A finger landed in this window, but not on the menu (see the KDoc).
+        val landedBeside = pointerEvent.type == PointerEventType.Press && !landedHere && pressed > 0
+        if (!closing && (pressed > 1 || landedBeside)) {
             closing = true
             onDismiss()
         }

@@ -40,7 +40,8 @@ import org.robolectric.shadows.ShadowLog
  * - **Over an open dropdown the tap only closes it:** "More options" opens a focusable menu
  *   window that takes every finger while it is up (touch-modal, as on the phone). Two fingers on
  *   its "Flip view" and "Canvas…" items close it, and neither item fires; two fingers beside it
- *   (over the canvas) close it too. No undo either way.
+ *   (over the canvas) close it too; and so does one finger on "Flip view" with the other beside
+ *   the menu (that finger reaches none of the menu's nodes), without flipping. No undo any way.
  * - **The pill of a real Path tool:** the first finger on the trash ("Delete path"), the second on
  *   "Keep scale proportions": one in-tool undo (the last point goes), the path is not deleted and
  *   the chain keeps its state; three fingers redo the point.
@@ -175,6 +176,15 @@ class Qa17ChromeHistoryTapsUiTest {
         Smoke.Touch(again).twoFingerTap(w * 0.3f to hgt + 120f * s.density, w * 0.7f to hgt + 120f * s.density)
         settle()
         nothingHappened("beside it")
+
+        // The first finger on an item, the second beside the menu: the second finger hits no node
+        // of the menu (the window still takes it, outside its content), and the item must not fire
+        // when the first finger lifts.
+        val split = openMenu()
+        val flipped = centerOf(split, "Flip view")
+        Smoke.Touch(split).twoFingerTap(flipped.pair(), split.width * 0.5f to split.height + 120f * s.density)
+        settle()
+        nothingHappened("one on an item, one beside it")
 
         // The menu closed, the same tap over the canvas undoes.
         s.touch.twoFingerTap(s.screen(150f, 150f), s.screen(250f, 150f))
