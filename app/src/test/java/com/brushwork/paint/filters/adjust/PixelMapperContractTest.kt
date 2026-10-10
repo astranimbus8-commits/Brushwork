@@ -62,6 +62,8 @@ class PixelMapperContractTest {
             }
             is FilterParam.Seed -> v.set(p.key, rnd.nextInt(1, 1000))
             is FilterParam.Text -> {}
+            // v1.8: three fringe colors.
+            is FilterParam.Fringes -> v.set(p.key, IntArray(3) { rnd.nextInt() })
         }
         return v
     }

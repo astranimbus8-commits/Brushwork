@@ -204,6 +204,8 @@ internal object Fx {
         is FilterParam.Text -> "Brushwork 42"
         is FilterParam.Seed -> p.default + 17
         is FilterParam.Point -> null
+        // v1.8: a preset other than the default (else the default reversed).
+        is FilterParam.Fringes -> p.presets.map { it.colors }.firstOrNull { !it.contentEquals(p.default) }?.copyOf() ?: p.default.reversedArray()
     }
 
     /** Normalized target of the [index]-th point parameter. */
@@ -241,6 +243,7 @@ internal object Fx {
 
     fun sameValue(a: Any?, b: Any?): Boolean = when {
         a is FloatArray && b is FloatArray -> a.contentEquals(b)
+        a is IntArray && b is IntArray -> a.contentEquals(b)
         a is Number && b is Number -> a.toFloat() == b.toFloat()
         else -> a == b
     }
@@ -256,6 +259,7 @@ internal object Fx {
 
     fun show(v: Any?): String = when (v) {
         is FloatArray -> v.toList().toString()
+        is IntArray -> v.joinToString(prefix = "[", postfix = "]") { "0x" + Integer.toHexString(it) }
         is Int -> if (v.toLong() and 0xFF000000L != 0L) "0x" + Integer.toHexString(v) else v.toString()
         else -> v.toString()
     }

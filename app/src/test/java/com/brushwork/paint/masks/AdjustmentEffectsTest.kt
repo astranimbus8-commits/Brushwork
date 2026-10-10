@@ -41,11 +41,14 @@ class AdjustmentEffectsTest {
         is FilterParam.Curve -> listOf(CurvePoint(0f, rnd.nextFloat()), CurvePoint(0.4f, rnd.nextFloat()), CurvePoint(1f, rnd.nextFloat()))
         is FilterParam.Gradient -> listOf(GradientStop(0f, rnd.nextInt()), GradientStop(0.6f, rnd.nextInt()), GradientStop(1f, rnd.nextInt()))
         is FilterParam.Text -> "text ${rnd.nextInt()}"
+        // v1.8: three fringe colors.
+        is FilterParam.Fringes -> IntArray(3) { rnd.nextInt() }
     }
 
     private fun assertSameValue(p: FilterParam, a: Any?, b: Any?) {
         when (p) {
             is FilterParam.Point -> assertArrayEquals(p.key, a as FloatArray, b as FloatArray, 0f)
+            is FilterParam.Fringes -> assertArrayEquals(p.key, a as IntArray, b as IntArray)
             is FilterParam.Slider -> assertEquals(p.key, (a as Number).toFloat(), (b as Number).toFloat(), 0f)
             else -> assertEquals(p.key, a, b)
         }
