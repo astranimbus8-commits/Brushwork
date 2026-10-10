@@ -3,9 +3,11 @@ package com.brushwork.paint.vector.geom
 import android.graphics.Rect
 import android.graphics.RectF
 import com.brushwork.paint.brush.StrokeRaster
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VStroke
+import com.brushwork.paint.vector.VectorOps
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.max
@@ -75,12 +77,18 @@ class TileSet(val docW: Int, val docH: Int, val tile: Int) {
      * midpoint with the input points as control points (a straight piece from the first point
      * and to the last), each inside the triangle of its control points: those triangles' boxes,
      * grown by the brush reach, hold everything the stroke paints. v1.7: a stroke with symmetry
-     * copies adds the tiles of each copy ([StrokeCopies.expanded]).
+     * copies adds the tiles of each copy ([StrokeCopies.expanded]). v1.8: so does a path or shape
+     * with live copies (each copy's box: [ObjectCopies.eachBounds] of the source's bounds).
      */
     fun addObject(o: VObject, bounds: RectF) {
         if (bounds.isEmpty) return
         if (o is VStroke && o.copies.isNotEmpty()) {
             for (c in StrokeCopies.expanded(o)) addObject(c, StrokeRaster.strokeBounds(c.preset, c.sizeScale, c.points))
+            return
+        }
+        val copies = ObjectCopies.of(o)
+        if (!copies.isEmpty) {
+            for (b in ObjectCopies.eachBounds(VectorOps.bounds(ObjectCopies.source(o)), copies)) if (!b.isEmpty) addRect(b)
             return
         }
         val n = (o as? VStroke)?.points?.size ?: 0

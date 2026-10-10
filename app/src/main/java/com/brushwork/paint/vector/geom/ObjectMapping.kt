@@ -145,6 +145,8 @@ object ObjectMapping {
             brushPreset = o.brushPreset?.let { bp ->
                 VectorOps.turnedBrush(if (scale == 1f) bp else bp.copy(size = bp.size * scale, taperStart = bp.taperStart * scale, taperEnd = bp.taperEnd * scale), floatArrayOf(a, b, c, d))
             },
+            // v1.8 (I15): live copies follow the mirrored shape (M·C_k·M⁻¹; NONE stays NONE).
+            copies = o.copies.conjugated(floatArrayOf(a, b, m[2] * k, c, d, m[5] * k, 0f, 0f, 1f)),
         )
         val candidates = ArrayList<com.brushwork.paint.tools.vector.ShapeObject>(3)
         if (o.points != null) {

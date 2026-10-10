@@ -13,6 +13,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
 
@@ -34,6 +35,10 @@ import kotlin.math.sqrt
  *
  * Widths that cannot follow a non-uniform map exactly (the stroke, the corner radius, each
  * point's own radius, a brush outline's tip) scale by sqrt|det|, as strokes and paths do.
+ *
+ * v1.8 (I15, §4.3): the shape's live copies ([ShapeObject.copies]) are conjugated (M·C_k·M⁻¹), so
+ * they stay where the map puts the old ones; a cog with a hole maps under similarities only (null
+ * otherwise: the vector layer falls back to a compound path).
  */
 object ShapeAffine {
     /** Relative tolerance of "the shape's axes stay perpendicular". */
@@ -73,6 +78,12 @@ object ShapeAffine {
         if (!(len1 > 0.0) || !(len2 > 0.0)) return null
         val axisDeg = Math.toDegrees(atan2(j21, j11))
         val center = mapPoint(Vec2(s.cx, s.cy))
+        // v1.8 (§4.3): a cog with a hole stays a shape under similarities only (its hole is a
+        // circle); under any other map the vector layer falls back to a compound path.
+        if (s.type == ShapeType.COG && s.cogHole > 0f) {
+            val similar = abs(j11 * j12 + j21 * j22) <= ORTHO_EPS * len1 * len2 && abs(len1 - len2) <= ORTHO_EPS * max(len1, len2)
+            if (!similar) return null
+        }
         val brush = s.brushPreset?.let {
             VectorOps.turnedBrush(VectorOps.scaledBrush(it, scale), floatArrayOf(a.toFloat(), c.toFloat(), b.toFloat(), d.toFloat()))
         }
@@ -80,6 +91,8 @@ object ShapeAffine {
             strokeWidth = s.strokeWidth * scale,
             cornerRadius = s.cornerRadius * scale,
             brushPreset = brush,
+            // v1.8 (I15): the live copies follow the shape (M·C_k·M⁻¹; NONE stays NONE).
+            copies = s.copies.conjugated(floatArrayOf(a.toFloat(), c.toFloat(), tx.toFloat(), b.toFloat(), d.toFloat(), ty.toFloat(), 0f, 0f, 1f)),
         )
 
         if (ShapeOutlines.isCustom(s)) return pointShape(common, s, ::mapPoint, ::mapVector, axisDeg, scale)

@@ -28,6 +28,8 @@ import com.brushwork.paint.tools.vector.applyWidthProfile
 import com.brushwork.paint.tools.vector.brushStrokeSamples
 import com.brushwork.paint.tools.vector.profileMax
 import com.brushwork.paint.tools.vector.toAndroidPath
+import com.brushwork.paint.vector.CopyMaps
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPaint
@@ -53,6 +55,9 @@ import kotlin.math.max
  *   index, sized up to the thickest anchor with the widths as pressure, §4.5).
  * - [VShape]: `ShapeOutlines.paintSpec` like the Shape tool, then its brush outline.
  * - opacity < 1 (paths, shapes): `saveLayerAlpha`, one [TILE] square at a time.
+ * - v1.8 (I15): a path or shape with live copies ([ObjectCopies]) draws its plain parts once per
+ *   copy under `canvas.concat(C_k)`, in the same tile and faded layer, and replays its brush
+ *   outline once with every copy in the replay's buffer.
  *
  * Objects are found through the content's spatial index ([ObjectIndex], 128 px cells). Paths and
  * shapes are rasterized per [TILE] grid square (see there: the same pixels whatever the region,
@@ -202,7 +207,9 @@ object VectorLayerRenderer {
                         val d = dabUnits(brush.size, brush.spacing, len.toFloat())
                         u = d.first; n = d.second
                     }
-                    ObjectCost(u, n, fills = o.fill != null || (st != null && st.kind == VStrokeKind.PLAIN))
+                    // v1.8: every copy paints again.
+                    val k = o.copies.count
+                    ObjectCost(u * k, n * k, fills = o.fill != null || (st != null && st.kind == VStrokeKind.PLAIN))
                 }
                 is VShape -> {
                     var u = 0.0
@@ -213,7 +220,8 @@ object VectorLayerRenderer {
                         val d = dabUnits(brush.size, brush.spacing, len.toFloat())
                         u = d.first; n = d.second
                     }
-                    ObjectCost(u, n, fills = true)
+                    val k = o.shape.copies.count
+                    ObjectCost(u * k, n * k, fills = true)
                 }
             }
 
@@ -276,7 +284,10 @@ object VectorLayerRenderer {
         }
         val parts = prepared(o, ctx)
         val faded = opacity < 1f
-        val plain = parts.plain
+        // v1.8 (I15): a path or shape with copies draws its plain parts once per copy
+        // (canvas.concat(C_k)) in the same tile, inside the same faded layer: one group.
+        val copies = ObjectCopies.of(o)
+        val plain = if (copies.isEmpty) parts.plain else parts.plain?.let { p -> { c: Canvas -> ObjectCopies.drawEach(c, copies, p) } }
         if (plain != null || faded) {
             val area = Rect()
             RectF(bounds).roundOut(area)
@@ -293,7 +304,7 @@ object VectorLayerRenderer {
                         canvas.clipRect(tile)
                         if (faded) canvas.saveLayerAlpha(RectF(tile), alpha)
                         plain?.invoke(canvas)
-                        if (faded) drawBrushes(canvas, parts, tile, ctx)
+                        if (faded) drawBrushes(canvas, parts, tile, ctx, copies)
                         canvas.restoreToCount(save)
                     }
                     left += TILE
@@ -301,12 +312,15 @@ object VectorLayerRenderer {
                 top += TILE
             }
         }
-        if (!faded) drawBrushes(canvas, parts, region, ctx)
+        if (!faded) drawBrushes(canvas, parts, region, ctx, copies)
     }
 
-    /** The brush replays of an object within [region]. */
-    private fun drawBrushes(canvas: Canvas, parts: RenderCache.Prepared, region: Rect, ctx: Context) {
-        for (b in parts.brushes) ctx.raster.render(canvas, region, b.preset, b.color, b.seed, true, b.points, cut = ctx.cut)
+    /**
+     * The brush replays of an object within [region]. v1.8: with [copies], each replay paints
+     * every copy into its one buffer (`StrokeRaster.render`'s `copies`, as a symmetric stroke).
+     */
+    private fun drawBrushes(canvas: Canvas, parts: RenderCache.Prepared, region: Rect, ctx: Context, copies: CopyMaps) {
+        for (b in parts.brushes) ctx.raster.render(canvas, region, b.preset, b.color, b.seed, true, b.points, cut = ctx.cut, copies = copies.maps)
     }
 
     // ------------------------------------------------------------------ paths

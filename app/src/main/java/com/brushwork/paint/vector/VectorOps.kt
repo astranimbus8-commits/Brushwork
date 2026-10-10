@@ -60,6 +60,10 @@ import kotlin.math.sqrt
  * - v1.7: a stroke with symmetry copies ([VStroke.copies]) is the union of its copies
  *   ([StrokeCopies]) in [bounds], [hit] and [touching]; [transformed] conjugates the copies, so
  *   they stay attached to the mapped stroke. Without copies every function is v1.6's.
+ * - v1.8 (I17): a path or shape with live copies ([ObjectCopies]) is the union of its copies in
+ *   [bounds], [hit] and [touching]; [transformed] conjugates the copies under an affine map and
+ *   maps the source alone under a homography (callers expand first: [ObjectCopies.transformedAll]).
+ *   Without copies every function is v1.7's.
  */
 object VectorOps {
     /** Flattening tolerance of hit tests and footprints (document px). */
@@ -68,8 +72,9 @@ object VectorOps {
     /** Everything [o] can paint (document px), including the stroke width / brush radius × sizeScale. */
     fun bounds(o: VObject): RectF = when (o) {
         is VStroke -> if (o.copies.isEmpty()) StrokeRaster.strokeBounds(o.preset, o.sizeScale, o.points) else StrokeCopies.bounds(o)
-        is VPath -> pathBounds(o)
-        is VShape -> shapeBounds(o)
+        // v1.8 (I17): a path or shape with copies is the union of its copies' boxes.
+        is VPath -> if (o.copies.isEmpty) pathBounds(o) else ObjectCopies.mappedBounds(pathBounds(o), o.copies)
+        is VShape -> if (o.shape.copies.isEmpty) shapeBounds(o) else ObjectCopies.mappedBounds(shapeBounds(o), o.shape.copies)
     }
 
     /** True when [p] is on [o]: strokes within radius + [tol] of their polyline, filled paths inside. */
@@ -82,8 +87,9 @@ object VectorOps {
         }
         return when (o) {
             is VStroke -> strokeHit(o, p, t)
-            is VPath -> pathHit(o, p, t)
-            is VShape -> ShapeOutlines.hits(o.shape, p, t)
+            // v1.8 (I17): copies are hit by mapping the point back onto the source.
+            is VPath -> if (o.copies.isEmpty) pathHit(o, p, t) else ObjectCopies.hits(o.copies, p, t) { q, tt -> pathHit(o, q, tt) }
+            is VShape -> ObjectCopies.hits(o.shape, p, t)
         }
     }
 
@@ -264,10 +270,25 @@ object VectorOps {
      * mirrors keep their v1.6 results (they are tried first). Exact for affine maps (gradients
      * included); a homography first splits every curved segment into
      * [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles. A non-finite matrix
-     * returns [o].
+     * returns [o]. v1.8: a path or shape with copies keeps them, conjugated, under an affine map;
+     * under a homography only its source is mapped ([ObjectCopies.transformedAll] expands first).
      */
     fun transformed(o: VObject, m: FloatArray): VObject {
         if (m.size < 9 || m.any { !it.isFinite() }) return o
+        val copies = ObjectCopies.of(o)
+        if (!copies.isEmpty) {
+            // v1.8 (I15): the source is mapped and its copies conjugated (M·C_k·M⁻¹), so they stay
+            // attached to it. A homography maps the source alone: its callers expand the copies
+            // first (ObjectCopies.transformedAll).
+            val t = transformedSource(ObjectCopies.source(o), m)
+            val affine = ObjectCopies.affineOf(m) ?: return t
+            return ObjectCopies.withCopies(t, copies.conjugated(affine))
+        }
+        return transformedSource(o, m)
+    }
+
+    /** [transformed] of an object without copies (a VStroke keeps and conjugates its own). */
+    private fun transformedSource(o: VObject, m: FloatArray): VObject {
         val projective = m[6] != 0f || m[7] != 0f
         return when (o) {
             is VStroke -> {
@@ -529,7 +550,16 @@ object VectorOps {
      * What [o] paints, opaque (strokes at their largest width), in document px: its paths are
      * built once, the returned function draws them (with the given paint) as often as needed.
      */
-    private fun footprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
+    private fun footprint(o: VObject): (Canvas, Paint) -> Unit {
+        val base = sourceFootprint(o)
+        val copies = ObjectCopies.of(o)
+        if (copies.isEmpty) return base
+        // v1.8 (I17): a path or shape with copies paints its footprint once per copy.
+        return { c, paint -> ObjectCopies.drawEach(c, copies) { cc -> base(cc, paint) } }
+    }
+
+    /** [footprint] of [o] itself (its copies left out). */
+    private fun sourceFootprint(o: VObject): (Canvas, Paint) -> Unit = when (o) {
         is VStroke -> {
             // The replayed dabs as a chain of capsules (thin tapered ends, wide pressure swells);
             // v1.7: one chain per symmetry copy.
