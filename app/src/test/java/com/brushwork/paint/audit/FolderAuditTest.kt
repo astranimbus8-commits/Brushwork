@@ -502,9 +502,9 @@ class FolderAuditTest {
             "shrink selection" to { c, _ -> SelectionEdits.growOrShrink(c, -3) },
             "feather selection" to { c, _ -> SelectionEdits.feather(c, 2f) },
         )
-        // Opening or closing a folder is a view change (no step); copying is no step either; the
-        // Transform tool lifts a folder only with area F (FolderLiftProvider): until then, nothing.
-        val noStep = setOf("close", "bar: copy", "transform layer")
+        // Opening or closing a folder is a view change (no step); copying is no step either. The
+        // Transform tool lifts a folder's layers together (area F, FolderLiftProvider): one step.
+        val noStep = setOf("close", "bar: copy")
         for ((what, action) in allowed) {
             val added = audit(what, refused = false, action = action)
             if (what !in noStep) assertTrue("$what: one undo away (pushed $added steps)", added >= 1)
