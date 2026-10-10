@@ -428,6 +428,71 @@ the layer's pixels while it is edited, and re-renders it with `EditorController.
 layer). "Points" mode turns any shape into anchors (`ShapePoints.kt`) that can be inserted, moved,
 deleted and made sharp or smooth. As with text, any other pixel edit rasterizes the layer.
 
+## Shapes: roundness, Turn into path, several points (v1.7, area C: `tools/vector/Shape*`)
+
+### Shapes: per-point roundness (v1.7 item 2, area C)
+`ShapeAnchor.radius` (document px, null = none) is a point's own corner radius. `ShapePoints.outline` uses each corner's own radius first, then the shape's "Corner radius" when the corners are treated. With every radius null the outline is exactly v1.6 (`ShapeOutlineParityTest`).
+- `ShapeRoundness` (pure Kotlin) handles targets, values, typed text (`*2`, `/2`), shifting and reset. Only a corner between two straight sides can be rounded (`ShapePoints.roundable`); otherwise the message is "Only corners between straight sides can be rounded".
+- In the Shape tool's Points strip, "Point roundness" is a `MixedNumberField` with `MixedEdit.shifted`, next to "Reset point roundness".
+- Each edit is ONE in-tool step.
+- I13: `ShapePoint.radius` is `@EncodeDefault(NEVER)`. A point without one writes no `"radius"` key, and `ShapeCodec.VERSION` is 2. Radii are saved with the shape (`ShapeCodec`) and survive save and load, also on a `VShape`.
+
+### Shapes: Turn into path (item 6, §3.6)
+`ShapeToSpline.convert(shape, selected)` returns a `ConvertResult`: a `VPath` with an order-4 `VSpline`, plus `selectedSplineIndices`. The conversion is exact:
+- sharp vertices become sharp control points;
+- curved segments become clamped cubic pieces;
+- rounded corners become rational quadratic arcs with weight cos(φ/2), split when the weight would fall below `MIN_ARC_WEIGHT`;
+- selected corners become editable arcs at their own cut or at `SELECTED_CUT` (25 % of the shorter side).
+
+`ShapeTool.turnIntoPath()` ("Turn into path"):
+- A pending edit is committed first, as its own step.
+- The conversion is then ONE undo step, "Turn into path":
+  - a shape layer becomes a vector layer holding the path; a live array is kept (the cache is `ArrayDraw.effectiveVector`) and so is its folder parent;
+  - a shape object of a vector layer is replaced in place (same id, opacity and seed).
+- The Path tool then opens the path through `CurveTool.openPath(layerId, objectId, select)` (body: area B).
+- `turnIntoPathRefusal` refuses before anything is placed:
+  - arrows ("Arrows can't become paths");
+  - outlines painted by a tool that moves pixels (smudge, blur, watercolor), which a vector layer can't hold. The message is the v1.5 vector-layer one: `<Tool> outlines need a raster layer: choose "Plain line" or a painting brush`.
+- On refusal the strip's button is disabled and shows the reason as a hint (`canTurnIntoPath`).
+
+### Shapes: several points in Points mode (item 1, §3.1)
+The selection is a `PointSelection` (tools/points), kept in each in-tool step (`PendingState`).
+- "Select several" toggles points by tap and box-selects by a drag on empty canvas. "Select all points" and "Deselect all points" select or clear every point.
+- Group edits go through `PointGroupMath` and `PointGizmo`: drag, handles with a 56 dp minimum, and pinch. Each gesture is ONE in-tool step.
+- Smooth is three-state ("Mixed").
+- `deleteSelectedPoints` refuses below the minimum with "A shape needs at least N points".
+- `historyMark()` / `rollbackHistory(mark)` (§3.10) restore the options, the pending shape, its points, mode and selection, and the redo stack. A NEW shape that a Numbers field created after the mark is discarded.
+
+### Shapes: the coordinate pill (§3.1, §3.9, §3.13)
+`ShapePill.kt` holds the Shape tool's three pill sources, each owned for the tool's lifetime:
+- `ShapePillPosition` (`PillPositionTool`): X/Y of "Point N", else "Selected points" (box centre), else "Center".
+- `ShapeObjectScale` (`ScaledTool`): Scale in % of the selected points' box, or of the shape's own width and height about its centre. 100 % is taken when the shape opens or the selection changes.
+- `ShapeObjectDeletion` (`DeletingTool`): "Delete selected points" (one in-tool step) or "Delete shape". Deleting a shape layer uses `deleteLayer` and is one controller step, which one undo restores with its data.
+
+Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape is discarded as ✕ discards it (the frozen `undo()` holds in-tool steps only while `hasPendingWork` is true).
+
+### Transforming data layers: shapes (item 11, §3.11)
+`ShapeTransforms.mapped(shapeData, m)` maps a shape through `ShapeAffine.mapped`, so a shape stays a shape under every affine map; a skew gives a custom-points shape. `keepingWidths` keeps the stroke width, the corner radius, each point's radius and the outline's brush in document px, whatever the map's scale.
+
+### Shape tool and folders (§3.8)
+- A new shape with "Editable (own layer)" on goes into its own shape layer at `controller.structure.insertionPoint()`. With an open folder active, that is the folder's top child.
+- With it off, or with a smudge or blur outline, the shape would paint the folder itself. It is refused with `FolderLabels.PAINT_REFUSAL` ("Choose a layer inside the folder to paint"):
+  - on drag (`checkCanPlaceNew`);
+  - on `ensurePending`;
+  - in `update`, when the option is turned off while a new shape is pending; the option is then kept.
+- The preview decisions never treat a folder as plain:
+  - `isPlain(folder)` and `liveBrushForNewLayer(folder)` are false;
+  - `newLayerPreviewInOverlay(open folder)` is false, so the preview is drawn inside the folder through a render override on it.
+
+### Shape layers with a live array (I14)
+- "Edit shape" replays the brush outline inside the `updateShapeLayer` draw (`ShapeTool.outlineReplay`), and `ArrayDraw.drawWithArray` repeats that draw per copy.
+  - The replay uses `StrokeRaster.render` with the shape's brush (`VectorOps.brushPresetOf`), the session seed and the same samples as `VectorLayerRenderer`, ending with the last point once more.
+  - Dabs are clipped and cut at the document ∪ `StrokeRaster.strokeBounds`.
+- The source's pixels equal the same edit on a layer without an array, and the edit is one undo step.
+- An outline whose tool moves pixels (smudge, blur, watercolor) is painted by that tool on the source alone, as in v1.6.
+- While the layer is open for editing, `EditOverride` draws the edited shape once per copy, placed from `VectorOps.bounds(VShape(shape))` as `ArrayDraw.sourceBounds` places it. Its tile regions include `ArrayLayout.bounds`, and the overlay shortcut is off for arrayed layers.
+- On an arrayed VECTOR layer, a brush-outlined shape previews as a guide rather than a live stroke. The commit re-renders the copies.
+
 ## Vector layers (`vector/`, v1.5)
 A vector layer is a normal `Layer` whose `bitmap` is a render cache of `Layer.vector`, an immutable
 `VectorContent` (`vector/VectorModel.kt`): objects in z-order — `VStroke` (a recorded brush stroke:
@@ -577,6 +642,72 @@ pinch that starts within 40 dp of the point or its handle ends are each one in-t
 is relative and rests at 100 %. The Shape tool's Points mode has the same group. "Handle size"
 (`AppSettings.curveHandleScale`, 75–200 %) scales the drawn handles and their grab radii for Curve,
 Polyline and Path.
+
+## Curves: points, conversion and paint (v1.7, area B: `tools/vector/CurveTool.kt`, `tools/vector/spline/`)
+
+### Path conversion (area B, v1.7)
+
+**Where.** `tools/vector/spline/SplineBezier.kt` (`Converter.span`).
+
+**Constant widths.** A span whose control-point widths are all equal (`constantWidth()`) converts exactly as in v1.6: the exact Bézier for order ≤ 4 with constant weights, otherwise the fitted pieces with v1.6's `CHECK_SAMPLES = 16` and `MAX_PIECES_PER_SPAN = 16`. The v1.6 digests (`NurbsPiecesTest` V16_EXACT / V16_ALL over uniform-width splines) were checked bit for bit against 22a791d's converter.
+
+**Varying widths (item 5).** After the geometric conversion, each piece is checked at `WIDTH_CHECK_SAMPLES = 8` parameters:
+- The true width there is the rational blend `h[3]/w`, from homogeneous de Casteljau.
+- It is compared with what `CurveGeometry` draws: a smoothstep blend of the two anchor widths at the ARC-LENGTH fraction of the sample. Arc length comes from 16-step flattening of the piece.
+- The piece with the worst miss above `WIDTH_TOL = 0.01` (relative) is split by homogeneous de Casteljau at the parameter of its worst sample. Every new anchor carries the exact width there.
+- Splitting stops at `WIDTH_MAX_PIECES_PER_SPAN = 32` pieces per span. At the cap, the residual error between anchors is accepted.
+
+Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing below 5 points).
+
+**v1.6-saved paths.** They keep their stored subpaths, and their old look, until their first edit; then they re-convert. They still reopen as Paths: I9's `curvesClose` ignores widths.
+
+**Sharp points and prepend.** Sharp points split the spline into pieces (`NurbsGeometry.pieces`, F3). Each sharp point is one anchor with broken tangents; the ends are always sharp. Path prepend (§3.19, F3): with the first point of an open Path (≥ 2 points) selected, a tap inserts at index 0 and keeps it selected. Curve and Polyline still append.
+
+### Points editing in the curve tools (area B)
+
+**Selection.**
+- `CurveTool` (Curve, Polyline, Path) implements `PointEditor`. Its selection is a `tools/points/PointSelection` sized to `pointCount`. `primary` is the v1.6 `selected` / `selectedPoint`.
+- "Select several" (`PointLabels.SELECT_SEVERAL`) makes taps toggle points. A drag outside the gizmo box draws a marquee (`Drag.MARQUEE`).
+- With ≥ 2 points selected, a `PointGizmo` box is shown. A drag inside it moves the group (`Drag.GIZMO`, it wins over the marquee). A corner drag or a pinch inside the box scales the group about the opposite corner or the centre, honouring the pill's `pill.keepProportions`. A tap inside the box clears the selection.
+
+**One in-tool step per gesture.**
+- A group gesture snapshots the anchors or spline once (`GroupEdit`). Each move maps that base through one `Affine2` (`CurveGroupMath.mappedAnchors` / `mappedPoints`; handles move with their anchor; non-finite values are clamped).
+- On lift it pushes ONE history entry (label "Edit path").
+- The strip's group rows each push one entry: Width ("Mixed" via `Mixed.of`), "Sharp corner" (Mixed), "All points 100 %", "Delete point".
+- I12: with one point selected and Select several off, the strip and gestures are v1.6's.
+
+**Long paths.** Above `LIVE_OUTLINE_MAX_POINTS = 500` points, a group drag draws only the 1 dp centre line. The width outline is rebuilt on lift.
+
+**Deletion.** `deleteSelectedPoints()`:
+- every point selected: `deleteObject()`;
+- one point: `deleteAnchor` (v1.6, no minimum);
+- several points that would leave fewer than `MIN_POINTS = 2`: refused with a toast.
+
+### The pill for curves (area B side)
+
+**Interfaces.** `CurveTool` is a `PillPositionTool`, `ScaledTool` and `DeletingTool`, so the generic `coordinateSourceOf` routes it through its first branch.
+
+**Pill label.** `pillPosition` is labelled:
+- "Point N" with one point selected;
+- "Selected points" with several (it moves the group's centre);
+- "Center" with none (it moves the whole object).
+
+`splinePointPosition` returns the same source in PATH mode.
+
+**Scale row and trash.**
+- The Scale X/Y row scales the selected points about their centre; with 0 or 1 selected it scales the whole object.
+- The trash reads "Delete selected points" for a proper subset, otherwise "Delete path/curve/polyline" (`PillDeletion`).
+
+**History.** `historyMark()` / `rollbackHistory(mark)` capture the tool's history epoch and session identity, so the app's 2- and 3-finger undo over the UI can roll back in-tool steps exactly.
+
+**`openPath(layerId, objectId, selected)`.** Used by the Shape tool's "Turn into path": it selects the layer and the PATH tool, commits pending work, and reopens the object with those points selected; out-of-range indices are dropped.
+
+### Paint mode (item 8)
+
+`CurvePaint { STROKE, FILL, BOTH }` is derived from the existing `CurveSettings` (`stroke`, `fill`); there is no new document data.
+- `setPaintMode` keeps the last stroke kind in `CurveSettings.lastStroke`, a tool preference (not I13).
+- The segments are "Stroke only" / "Fill only" / "Stroke and fill". Fill needs a closed object or a Path.
+- The stroke kind is a 2-item dropdown (Brush / Plain).
 
 ## Pathfinder (v1.7 item 20, area G)
 
