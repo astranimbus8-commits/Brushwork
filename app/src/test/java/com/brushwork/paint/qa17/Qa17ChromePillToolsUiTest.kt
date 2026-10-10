@@ -153,6 +153,13 @@ internal object Qa17ChromePill {
         assertEquals("the ratio kept: Y 50 → 100", b0.h, b2.h, 0.05f)
         assertEquals("the centre stays", b0.cx, b2.cx, 0.05f)
         Qa17Shots.screen(s, "pill-shape-392")
+        // A finger drags Scale X 40 dp to the right (1 % per dp): wider, the ratio kept.
+        val cell = requireNotNull(Finger.element(s, PillLabels.SCALE_X)) { "no Scale X" }
+        Finger.slowDrag(s, cell.center.x to cell.center.y, cell.center.x + 40f to cell.center.y)
+        val b3 = tool.box!!
+        val pct = SmokeUi.find(PillLabels.SCALE_X, exact = true)!!.stateDescription!!.substringBefore(" ").toFloat()
+        assertTrue("dragged wider: $pct %", pct > 220f && b3.w > b2.w * 1.1f)
+        assertEquals("the ratio kept", b2.h / b2.w, b3.h / b3.w, 0.01f)
 
         // Placed, then opened again by a finger on its outline.
         val layers = c.doc.layers.size
@@ -162,7 +169,7 @@ internal object Qa17ChromePill {
         val placed = c.activeLayer
         assertNotNull(placed.shapeData)
         val steps = c.undoManager.undoCount
-        ui.tap(b2.cx - b2.w / 2f, b2.cy)
+        ui.tap(b3.cx - b3.w / 2f, b3.cy)
         assertTrue("the shape is open again", Smoke.pumpUntil(10_000) { settle(1); tool.box != null })
         // Folded: [✥][🗑], and the trash deletes the shape's layer.
         finger(s, "Fold the X / Y strip")
@@ -181,7 +188,7 @@ internal object Qa17ChromePill {
         assertNotNull(c.doc.layers.firstOrNull { it.id == placed.id }?.shapeData)
         assertTrue("the feedback names the step", SmokeUi.has("Undo: ${HistoryLabels.DELETE_SHAPE}", exact = true))
         // Opened again, the pill is still folded (remembered); a finger unfolds it.
-        ui.tap(b2.cx - b2.w / 2f, b2.cy)
+        ui.tap(b3.cx - b3.w / 2f, b3.cy)
         assertTrue("open again", Smoke.pumpUntil(10_000) { settle(1); tool.box != null })
         assertTrue("still folded", SmokeUi.has("Unfold the X / Y strip", exact = true))
         finger(s, "Unfold the X / Y strip")
