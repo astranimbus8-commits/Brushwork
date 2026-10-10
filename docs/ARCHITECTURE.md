@@ -709,6 +709,143 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - The segments are "Stroke only" / "Fill only" / "Stroke and fill". Fill needs a closed object or a Path.
 - The stroke kind is a 2-item dropdown (Brush / Plain).
 
+## Live arrays (`array/`, `tools/array/`, `ui/array/`, v1.7)
+
+**Data vs cache.** A layer's array is DATA: `Layer.array: LayerArray(spec: ArraySpec, pixels: ArrayPixels?)`, carried in `LayerData`. Undo, duplicate and merge carry it with the rest of the data.
+- For text, shape and vector layers the source IS the layer's own `textData` / `shapeData` / `vector`.
+- For an array made from a selection, the source is `ArrayPixels`: the selected pixels cropped to their bounds, plus left/top.
+- The layer bitmap is only the cache (I1).
+- `ArrayLayout.matrices(spec, sourceBounds)` (pure) places the copies. Copy 0 is the identity.
+  - **Line:** relative % of the source size plus constant px.
+  - **Circle:** a centre, "Sweep" and "Rotate copies".
+  - **Curve:** a guide `VSubpath` of at most 64 anchors, either drawn and fitted by `GuideEditor` or copied from a tapped path; plus "Copy spacing" and "Align to curve".
+  - **Transform:** copy k = Mᵏ about the pivot.
+- `sourceBounds` is always the source's CURRENT bounds, so relative offsets follow source edits.
+- Limits: `MAX_COUNT` 200; "Apply array" is refused above 20 000 expanded objects ("Too many copies to apply: lower the count").
+
+**`ArrayDraw` is the one draw seam** (`engine/ArrayDraw.kt`, frozen). Every cache writer draws through it, so no re-render can leave the copies out.
+- `drawWithArray` wraps `updateLayerData`, `updateTextLayer`, `updateShapeLayer` and `addLayerWithContent`. It draws the copies k = N−1 down to 0, so the source is on top.
+- `drawPixels` draws a raster cache (bilinear). In "Edit source pixels" mode it draws copy 0 only.
+- `effectiveVector` is used by `VectorLayers`. Copy k of object `id` gets the id `id + (k shl 53)`; these ids are never encoded.
+- `updateLayerData` clears and redraws `dirty ∪ cacheBounds(before) ∪ cacheBounds(after)`, both computed from the `LayerData`.
+- Raster, text and shape caches render synchronously on the main thread. Vector arrays go through the async vector renderer; meanwhile the Array tool shows "Rendering array…".
+
+**The bake in the same step (I14).** Any raster pixel edit of an arrayed layer bakes the array inside that edit's own step (`rasterizedContent()` drops it), with the toast "Array applied"; undo brings the live array back.
+- The exception is a raster array in "Edit source pixels" mode (`ArraySpec.editingSource`): the cache is the source alone, painting changes the source, and "Finish source edit" takes the layer's non-transparent pixels as the new `ArrayPixels`.
+- Opening the Array tool on such a layer finishes the edit.
+
+**`ArrayOps`: one step per user action**, data and pixels together. The current tool is paused around each operation, and each operation re-reads the array after the pause.
+- **Making ("Array"):**
+  - `fromSelection` cuts the selection from the source and places "Array N" directly above it, at its folder level, through `controller.structure.placed` (rule S), all in one step.
+  - `fromObjects` moves vector objects into a new vector layer directly above.
+  - `fromLayer` arrays a whole text, shape or vector layer in place.
+  - A new array is `ArraySpec()`: count 3, Line mode, relative X 100 %.
+  - Undoing a new array layer selects its source again: `reselectOnUndo` is recorded BEFORE the insert, so its undo runs after the layer is gone. The v1.6 `AddLayerAction` does not restore the active row.
+- **`edit` ("Edit array").**
+- **`apply` ("Apply array"):**
+  - a vector array becomes real objects with new ids;
+  - a shape array becomes a vector layer with one `VShape` per copy;
+  - a text array becomes pixels, after "Apply turns the text into pixels";
+  - a raster array becomes plain pixels.
+- **`remove` ("Remove array")** keeps only the source.
+- **`editSource` / `finishSource`.**
+- **Refusals:** folders, adjustment layers and linked text frames; a plain raster layer without a selection; and the memory rule below.
+
+**`ArrayTool`** (`ToolId.ARRAY`) owns the canvas handles (`ArrayHandles`), the guide input and the Array sheet (`ArraySheet`, `ArrayToolOptions`, `ArrayCurvePicker`). Dragging a handle, or a slider or field, previews live (I7):
+- the render override HIDES the layer: its display tiles re-render once, when the preview starts;
+- the tool's overlay draws the copies over the canvas, in screen space, from a source proxy of at most 1024 px, at the layer's effective opacity;
+- later frames re-render no tile, so a frame costs a few GPU bitmap draws instead of re-compositing every copy at document resolution on the CPU;
+- the release commits ONE "Edit array" step;
+- a vector commit keeps the preview up until its render lands; if the tool stops being current meanwhile, `showAll` hands the copies to the tiles;
+- a two-finger history tap rolls a preview back (`historyMark` / `rollbackHistory`).
+
+`ArrayTransforms` is the Transform tool's data lift. It maps an arrayed layer's spec AND its source, so the layer stays a live array. A text source needs D's `TextTransforms`.
+
+**Canvas operations.** A vector array's spec is mapped (`ArraySpec.mapped`) along with its content. Every other array is baked, just as canvas operations drop text and shape data.
+
+**On disk (no format bump).** An arrayed layer is written as a PLAIN RASTER entry (its cache, with no `textData`, `shapeData` or `vectorFile`), plus two keys:
+- `"array"`: the `ArrayCodec` spec JSON;
+- `"arrayFile": "array_<id>_r<rev>.bin"`: a BWAR container. It holds the magic "BWAR", a version, a kind, then the source:
+  - PIXELS: `LayerCodec` bytes plus left/top;
+  - VECTOR: `VectorCodec` bytes;
+  - TEXT / SHAPE: the codec JSON in UTF-8.
+
+v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode reopens in it.
+
+**What v1.6 sees.** A consistent raster layer showing the copies.
+- Editing and saving there drops `array` / `arrayFile` (unknown keys). The container becomes an orphan, which v1.7's next save deletes.
+- A damaged container loads as a raster layer, with "The array of layer “X” could not be read; its copies are kept as pixels".
+
+**Memory.** `ArrayPixels` bytes count toward `doc.effectiveLayerCount` against `maxLayers` (`ArraySources.hasRoom`). A new array that would pass `maxLayers` is refused with "Not enough memory for another layer".
+
+## Transforming data layers (v1.7, items 11 and 9)
+
+The Transform tool (`tools/transform/TransformTool.kt`) asks an `ObjectLiftProvider` before its v1.6 pixel lift. What was lifted is `TransformTool.Lifted`: `PIXELS`, `PLACEMENT`, `VECTOR`, `TEXT`, `SHAPE`, `ARRAY` or `FOLDER`.
+
+**Data layers** (`DataLift.kt`)
+- `DataLiftProvider.kindOf(layer)` chooses the kind:
+  - an arrayed layer is `ARRAY`;
+  - a text is `TEXT` when `textCanMap(identity)`;
+  - a shape is `SHAPE` when its map of the identity is not null;
+  - anything else keeps the pixel lift.
+- The maps come through the internal `DataMaps` seam. `RealDataMaps` calls D's `TextTransforms`, C's `ShapeTransforms` and E's `ArrayTransforms`. Tests inject fakes with `TransformTool.dataMaps`.
+- The preview is the lifted pixels drawn by the box matrix, as in v1.6.
+- On ✓, `LiftGeometry.matrix(state, left, top)` gives a row-major 3 x 3. The map turns it into new data, and `DataRender.apply` stores it through `controller.updateLayerData`. That is ONE `LayerDataAction`: it checks the effective lock and re-renders the layer from its data, so the pixels are always the data (I1).
+- A text or shape map that declines falls back to the pixel resample: the layer becomes raster in the same step, as in v1.6. An array map that declines refuses with "Apply the array to transform it".
+- Vector layers map their objects with `LayerDataTransforms.mapped` ("Transform objects").
+- A text is proportional only (`uniformOnly`): no side handles and no flips. A shape skewed or scaled unevenly becomes custom points (area C).
+- Linked frames (lead decision):
+  - A SCALE of one frame scales the whole story's type.
+  - The re-flow that `TextThreads.onEdited` heals is folded into the Transform step with `amendLastStep`, so there is one undo.
+  - A pure MOVE changes only that frame.
+- `modeRefusal(mode)` gives the captions:
+  - Distort: "Rasterize to deform" on text and shapes; the array caption on arrays; "Distort works on one layer" on folders.
+  - Free deform: "Rasterize to free deform" on text, shapes and vectors; the array caption on arrays; "Free deform works on one layer" on folders.
+- `canRasterizeFor` / `rasterizeAndDeform` back the "Rasterize and deform" button. The pending transform and the rasterize ("Rasterize text" / "Rasterize shape") are their own steps, then the pixels are lifted again in the new mode.
+- No codec change: the stored text, shape, vector and array data are v1.6 formats, and save→reopen is exact.
+
+**Folders** (`FolderLift.kt`)
+- `FolderLiftProvider.lift(folder)` takes every non-folder, non-adjustment layer of the block. Each child gets a `ChildRule`:
+  - `DATA` (by `kindOf`);
+  - `VECTOR`;
+  - `PIXELS`.
+- Each child's content rect is cropped. The preview is a `MultiLayerRenderOverride` of all children.
+- Lift, commit and delete check every child before anything changes:
+  - `checkUsable(child, allowHidden = true)`, which covers its own lock or a folder inside, with the standard message (I11);
+  - the transparency lock ("Transparency is locked on \"X\". Unlock it to transform.");
+  - each arrayed child's map, computed up front.
+- Any failure refuses the whole step with nothing changed.
+- The commit is ONE `groupUndo("Transform")` CompositeAction holding one `LayerDataAction` or pixel edit per child. A text inside makes the whole folder proportional only.
+
+## Free deform (v1.7, item 16)
+
+Free deform is `TransformTool.Mode.MESH`, shown as the "Free deform" mode chip. It works on one pixel layer. Text, shapes and vectors are rasterized first with "Rasterize and deform"; arrays and folders are refused.
+
+**The mesh** (`MeshDeform.kt`)
+- An immutable grid of (cols + 1) x (rows + 1) vertices over the lift rect, with structural equality, up to `MAX_CELLS` 12 x 12.
+- Surfaces are Catmull-Rom patches (C1 across cells) when "Smooth mesh" is on, bilinear cells otherwise.
+- `resampled(cols, rows, smooth)` evaluates the current surface on a new grid, so changing "Mesh columns" / "Mesh rows" keeps the shape. It keeps a chain to the base, at most `MAX_DEPTH` 6.
+
+**Settings** (`MeshSettings`)
+- The next session's columns, rows and smoothing, stored under `transform.mesh`.
+- Default 3 x 3, smooth on.
+
+**Drawing** (`MeshRenderer.kt`)
+- The source is drawn from a 1 px transparent-padded copy, for clean edges, with `Canvas.drawBitmapMesh`.
+- The preview uses `PREVIEW_SUB` 8 parts per cell (at most 97 x 97 points) and draws the full lift; there is no proxy.
+- The commit uses `COMMIT_SUB` 16.
+
+**Editing**
+- Vertices use the shared points UI (`tools/points`): tap, "Select several", select all, the gizmo and the pill.
+- Each drag, gizmo edit or "Reset mesh" is one in-tool step, `MeshEdit(mesh, ref, selection)`, on `meshUndo` / `meshRedo`.
+- `historyMark()` / `rollbackHistory(mark)` (§3.10) return to a mark.
+- A cell change resamples every stacked step to the new cells.
+
+**Commit**
+- `applyMesh` draws the padded lift through the mesh into the layer: ONE pixel edit labelled "Free deform", and undo restores the exact pixels.
+- It runs synchronously on the main thread, like v1.6 Distort; §3.16 asked for a worker.
+- Budgets (§6.3, device): preview ≤ 33 ms per frame at 12 x 12 on the full lift; commit ≤ 1.5 s for 4000 x 5000.
+
 ## Pathfinder (v1.7 item 20, area G)
 
 - **Geometry: `vector/pathfinder/`**, pure and thread-safe.
