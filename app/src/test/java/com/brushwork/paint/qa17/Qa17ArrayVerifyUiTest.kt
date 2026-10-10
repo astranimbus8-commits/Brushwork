@@ -6,6 +6,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.model.ArrayLayout
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.qa16.item
 import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.RED
 import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.differing
@@ -20,6 +21,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -46,7 +48,8 @@ import kotlin.math.atan2
  *   live text array, the copies turned and spaced with it; a two-finger tap takes it back;
  * - "Edit source pixels" (design §3.3: "Every painting tool, filter, transform and selection edit
  *   then changes the source as ordinary pixel steps, without baking"): the Transform tool turns
- *   the source as pixels, ONE step, nothing baked; "Finish source edit" gives turned copies
+ *   the source as pixels, ONE step, nothing baked; "Free deform" on it is ONE step too;
+ *   "Finish source edit" gives turned copies; four two-finger taps take it all back exactly
  *   (before the fix the tool refused with "Apply the array to transform it");
  * - a folder holding a raster array whose source is being edited and an arrayed text turns as
  *   ONE step, without flips, and a two-finger tap takes both back exactly (before the fix the
@@ -252,20 +255,40 @@ class Qa17ArrayVerifyUiTest {
         assertEquals(wide.height().toFloat(), tall.width().toFloat(), 2f)
         assertSame(t, c.currentTool)
 
+        // "Free deform" works on the source too: a finger drags a vertex; ✓ is ONE "Free deform"
+        // step, nothing baked, the source still being edited.
+        if (t.lifted == null) u.ui.tap(tall.exactCenterX(), tall.exactCenterY())
+        assertTrue("lifted again", Smoke.pumpUntil(Qa17ArrayUi.WAIT_MS) { settle(1); t.lifted != null })
+        assertEquals(TransformTool.Lifted.PIXELS, t.lifted)
+        assertNull("Free deform works on the source pixels", u.stateOf(TransformLabels17.FREE_DEFORM))
+        val turned = pixels(layer.bitmap)
+        u.press(TransformLabels17.FREE_DEFORM)
+        assertEquals(TransformTool.Mode.MESH, t.mode)
+        val v = t.pointAt(5)
+        QaCurves.drag(u.s, v, Vec2(12f, 0f))
+        assertTrue("the vertex followed the finger: $v -> ${t.pointAt(5)}", t.pointAt(5).distanceTo(v + Vec2(12f, 0f)) < 1.5f)
+        u.applyEdit("Apply transform edit")
+        assertEquals(n + 3, u.steps())
+        assertEquals(TransformLabels17.FREE_DEFORM, c.undoManager.undoLabel)
+        assertFalse("nothing baked", has(ArrayLabels.APPLIED, exact = true))
+        assertTrue("still editing the source", layer.array?.spec?.editingSource == true)
+        assertFalse("the source is deformed", turned.contentEquals(pixels(layer.bitmap)))
+        val deformed = inkBounds(layer.bitmap)
+
         // Layer ⋮ "Finish source edit": the turned source, copied.
         u.layerMenu(ArrayLabels.FINISH_SOURCE)
         u.settleRenders("finished")
         assertFalse(layer.array!!.spec.editingSource)
-        assertEquals(n + 3, u.steps())
+        assertEquals(n + 4, u.steps())
         val px = layer.array!!.pixels!!
         assertTrue("the new source is tall: ${px.bitmap.width} × ${px.bitmap.height}", px.bitmap.height > 2 * px.bitmap.width)
         val all = inkBounds(layer.bitmap)
-        assertTrue("copies beside the turned source: $tall -> $all", all.width() >= 2 * tall.width() && all.height() == tall.height())
+        assertTrue("copies beside the turned source: $deformed -> $all", all.width() >= 2 * deformed.width() && all.height() == deformed.height())
         assertEquals("I1: the cache is the array's own render", 0, differing(layer.bitmap, freshRender(c, layer.dataSnapshot())))
         u.shot("verify-source-turned")
 
-        // Three two-finger taps: the finish, the turn, the source edit.
-        repeat(3) { u.ui.twoFingerUndo() }
+        // Four two-finger taps: the finish, the deform, the turn, the source edit.
+        repeat(4) { u.ui.twoFingerUndo() }
         u.settleRenders("undone")
         assertEquals(n, u.steps())
         assertEquals(spec0, layer.array!!.spec)
