@@ -2,6 +2,7 @@ package com.brushwork.paint.audit
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -10,6 +11,9 @@ import android.graphics.RectF
 import android.os.Looper
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.array.ArrayOps
+import com.brushwork.paint.array.ArraySources
+import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CanvasOps
 import com.brushwork.paint.engine.CanvasResult
@@ -27,9 +31,12 @@ import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.AdjustmentHistogram
+import com.brushwork.paint.model.ArraySpec
+import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
@@ -38,11 +45,21 @@ import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.SelectionEdits
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.tools.vector.ShapeStyle
+import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.PathfinderLabels
+import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.layers.LayerOps
+import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -61,6 +78,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
+import kotlin.math.abs
 
 /**
  * v1.7 F2 (§3.8 d, foundation rows; risks R1, R1b, 22, 23, 30): whole-document operations on
@@ -69,6 +87,12 @@ import org.robolectric.Shadows.shadowOf
  * folder's `FOLDER_BITMAP` alive; with a folder active, every refused entry point leaves no step
  * and no change; the eyedropper reads the composite; a child of a locked folder behaves like a
  * locked layer for every tool, and a child of a hidden folder is not snapped to.
+ *
+ * v1.7 (§6.2, after areas A, E, F and G): the same per-operation checks (ONE step, exact undo
+ * and redo of the tree, pixels, data and picture, the tree invariant, nothing drawn into
+ * `FOLDER_BITMAP`) for arrays made and applied inside the folders, a Free deform of a child (a
+ * folder refuses it), saved selections following a canvas rotate / flip / resize, and Pathfinder
+ * on shape layers in two folders.
  */
 @RunWith(RobolectricTestRunner::class)
 class FolderAuditTest {
@@ -76,7 +100,10 @@ class FolderAuditTest {
     private val scope = CoroutineScope(Dispatchers.Unconfined + job)
 
     @After
-    fun tearDown() = scope.cancel()
+    fun tearDown() {
+        scope.cancel()
+        ArrayDraw.clearCaches()
+    }
 
     private val app get() = RuntimeEnvironment.getApplication()
     private val w = 96
@@ -126,6 +153,7 @@ class FolderAuditTest {
         assertNull(what, LayerTree.check(c.doc.layers))
         assertFalse("$what: FOLDER_BITMAP alive", Layer.FOLDER_BITMAP.isRecycled)
         assertEquals("$what: FOLDER_BITMAP is 1 x 1", 1, Layer.FOLDER_BITMAP.width)
+        assertEquals("$what: nothing was drawn into FOLDER_BITMAP", 0, Layer.FOLDER_BITMAP.getPixel(0, 0))
         for (l in c.doc.layers) {
             if (l.isFolder) {
                 assertSame("$what: ${l.name} keeps FOLDER_BITMAP", Layer.FOLDER_BITMAP, l.bitmap)
@@ -598,5 +626,211 @@ class FolderAuditTest {
         c.undo()
         assertEquals("one undo restores the tree", before, picture(c))
         assertFoldersIntact(c, "import undone")
+    }
+
+    // ------------------------------------------------------------------ v1.7 areas (§6.2: after A, E, F and G merge)
+
+    /** Every pixel layer's data (text, shape, vector, array), by id. */
+    private fun data(c: EditorController): Map<Long, LayerData> = c.doc.layers.filter { !it.isFolder }.associate { it.id to it.dataSnapshot() }
+
+    private fun bytes(s: Selection): ByteArray = BitmapUtils.alpha8ToBytes(s.mask)
+
+    /**
+     * Runs [action], one whole-document operation, with the audit's checks: ONE step named
+     * [label]; the tree and every folder intact; undo restores the very tree, pixels, data and
+     * picture, redo what it made (the state it leaves). Returns the layers it changed (pixels or
+     * data, by name).
+     */
+    private fun oneStep(c: EditorController, what: String, label: String, action: () -> Unit): List<String> {
+        val steps = c.undoManager.undoCount
+        val before = picture(c)
+        val dataBefore = data(c)
+        val flatBefore = flat(c)
+        settled(what, action)
+        assertEquals("$what: ONE step", steps + 1, c.undoManager.undoCount)
+        assertEquals(what, label, c.undoManager.undoLabel)
+        assertFoldersIntact(c, what)
+        val after = picture(c)
+        val dataAfter = data(c)
+        val flatAfter = flat(c)
+        settled("$what undone") { c.undo() }
+        assertFoldersIntact(c, "$what undone")
+        assertEquals("$what undone: the tree and pixels", before, picture(c))
+        assertEquals("$what undone: the data", dataBefore, data(c))
+        assertTrue("$what undone: the picture", flatBefore.contentEquals(flat(c)))
+        settled("$what redone") { c.redo() }
+        assertFoldersIntact(c, "$what redone")
+        assertEquals("$what redone: the tree and pixels", after, picture(c))
+        assertEquals("$what redone: the data", dataAfter, data(c))
+        assertTrue("$what redone: the picture", flatAfter.contentEquals(flat(c)))
+        val was = before.associateBy { (it as Triple<*, *, *>).first }
+        val now = after.associateBy { (it as Triple<*, *, *>).first }
+        return c.doc.layers.filter { was[it.id] != now[it.id] || dataBefore[it.id] != dataAfter[it.id] }.map { it.name }
+    }
+
+    @Test
+    fun arraysInsideTheFoldersAreMadeAndAppliedInOneStepEach() {
+        // A raster array: A's red rectangle (in F1) moves into "Array 1", directly above A in F1.
+        val c = nested()
+        val a = c.byName("A")
+        c.selectLayer(a)
+        c.setSelection(rectSelection(Rect(5, 5, 45, 35)), recordUndo = false)
+        oneStep(c, "array from selection", ArrayLabels.BUTTON) { assertTrue(c.arrayFromSelection()) }
+        val arrayed = c.activeLayer
+        assertEquals("in A's folder, directly above A", listOf("Background", "A", arrayed.name, "B", "F2", "F1", "Top"), c.doc.layers.map { it.name })
+        assertEquals(a.parentId, arrayed.parentId)
+        c.setSelection(null, recordUndo = false)
+        val source = arrayed.array!!.pixels!!
+        val copies = px(arrayed.bitmap)
+        assertEquals(listOf(arrayed.name), oneStep(c, "apply array (pixels)", ArrayLabels.APPLY) { assertTrue(ArrayOps.apply(c, arrayed)) })
+        assertNull("plain pixels now", arrayed.array)
+        assertTrue("the copies stay", copies.contentEquals(px(arrayed.bitmap)))
+        settled("apply undone") { c.undo() }
+        assertSame("undo: the very source", source, arrayed.array?.pixels)
+
+        // A shape array in the isolated F2: the shape layer becomes a vector layer, one shape per copy.
+        val d = nested()
+        d.selectLayer(d.byName("B"))
+        val o = ShapeObject(ShapeType.RECTANGLE, cx = 50f, cy = 40f, w = 12f, h = 8f, style = ShapeStyle.FILL, fillColor = blue)
+        val shape = d.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(o), draw = ArraySources.shapeDraw(o, ColorMode.RGB, w, h))!!
+        assertEquals("added in F2", d.byName("F2").id, shape.parentId)
+        oneStep(d, "array a whole shape layer", ArrayLabels.BUTTON) { assertTrue(d.arrayWholeLayer(shape)) }
+        assertNotNull(shape.array)
+        assertEquals(listOf("Shape"), oneStep(d, "apply array (shape)", ArrayLabels.APPLY) { assertTrue(ArrayOps.apply(d, shape)) })
+        assertNull(shape.array)
+        assertNull(shape.shapeData)
+        assertEquals("one shape per copy", ArraySpec().count, shape.vector!!.objects.size)
+        assertEquals(d.byName("F2").id, shape.parentId)
+    }
+
+    @Test
+    fun freeDeformOnALayerInsideTheFoldersIsOneStepAndAFolderRefusesIt() {
+        val c = nested()
+        val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
+        // F1 active: the folder is lifted whole and Free deform is refused, no step, no change.
+        c.selectLayer(c.byName("F1"))
+        val before = picture(c)
+        settled("lift F1") { c.selectTool(ToolId.TRANSFORM) }
+        tool.snapToObjects = false
+        if (!tool.hasPendingWork) settled("start") { tool.start() }
+        assertEquals(TransformTool.Lifted.FOLDER, tool.lifted)
+        assertEquals(TransformLabels17.ONE_LAYER, tool.modeRefusal(TransformTool.Mode.MESH))
+        tool.mode = TransformTool.Mode.MESH
+        assertEquals("refused", TransformTool.Mode.FREE, tool.mode)
+        settled("discarded") { tool.discard(); c.selectTool(ToolId.LASSO) }
+        assertEquals("no step", 0, c.undoManager.undoCount)
+        assertEquals("no change", before, picture(c))
+        assertFoldersIntact(c, "free deform refused")
+
+        // B (in the isolated F2, inside F1): a mesh vertex dragged, applied as ONE "Free deform" step.
+        c.selectLayer(c.byName("B"))
+        val changed = oneStep(c, "free deform", TransformTool.FREE_DEFORM_LABEL) {
+            c.selectTool(ToolId.TRANSFORM)
+            shadowOf(Looper.getMainLooper()).idle()
+            if (!tool.hasPendingWork) tool.start()
+            shadowOf(Looper.getMainLooper()).idle()
+            assertEquals(TransformTool.Lifted.PIXELS, tool.lifted)
+            tool.mode = TransformTool.Mode.MESH
+            assertEquals(TransformTool.Mode.MESH, tool.mode)
+            tool.setMeshCells(2, 2)
+            val v = tool.pointAt(4)
+            assertEquals("the centre vertex", 45f, v.x, 0.5f)
+            c.drag(v.x to v.y, v.x + 4f to v.y + 2f, v.x + 8f to v.y + 4f)
+            assertTrue(tool.isMeshChanged)
+            tool.commit()
+            c.selectTool(ToolId.LASSO)
+        }
+        assertEquals("only B", listOf("B"), changed)
+    }
+
+    @Test
+    fun savedSelectionsFollowACanvasRotateFlipAndResizeWithFoldersPresent() {
+        val ops = listOf<Triple<String, String, (EditorController) -> Boolean>>(
+            Triple("rotate", CanvasRotation.CW_90.label) { c -> CanvasOps.applyRotate(c, CanvasRotation.CW_90) },
+            Triple("flip", "Flip canvas horizontally") { c -> CanvasOps.applyFlip(c, horizontal = true) },
+            Triple("resize", "Resize image") { c -> CanvasOps.applyResizeImage(c, w * 2, h * 2, c.doc.dpi, Resample.BILINEAR) },
+        )
+        for ((what, label, op) in ops) {
+            val c = nested()
+            val shapes = listOf(
+                rectSelection(Rect(4, 6, 30, 20)),
+                Selection.fromPath(Path().apply { addCircle(60f, 40f, 12.5f, Path.Direction.CW) }, w, h, antiAlias = true),
+            )
+            for (s in shapes) settled("$what: save") { c.setSelection(s, recordUndo = false); assertTrue(c.saveSelection()) }
+            c.setSelection(null, recordUndo = false)
+            val saved = c.doc.savedSelections
+            assertEquals(2, saved.size)
+            val masks = saved.map { bytes(it.toSelection(w, h)) }
+
+            oneStep(c, what, label) { assertTrue(op(c)) }
+            val now = c.doc.savedSelections
+            assertEquals("$what: every saved selection is kept", saved.map { it.id }, now.map { it.id })
+            val nw = c.doc.width
+            val nh = c.doc.height
+            for (i in saved.indices) {
+                val got = bytes(now[i].toSelection(nw, nh))
+                when (what) {
+                    "rotate" -> {
+                        // A quarter turn clockwise: new (x, y) is old (y, h - 1 - x).
+                        val expected = ByteArray(nw * nh) { k -> masks[i][(h - 1 - k % nw) * w + k / nw] }
+                        assertTrue("saved selection $i is turned", expected.contentEquals(got))
+                    }
+                    "flip" -> {
+                        val expected = ByteArray(nw * nh) { k -> masks[i][(k / w) * w + (w - 1 - k % w)] }
+                        assertTrue("saved selection $i is flipped", expected.contentEquals(got))
+                    }
+                    else -> {
+                        val b = saved[i].bounds
+                        val e = Rect(b.left * 2, b.top * 2, b.right * 2, b.bottom * 2)
+                        val g = now[i].bounds
+                        for ((x, y) in listOf(e.left to g.left, e.top to g.top, e.right to g.right, e.bottom to g.bottom)) {
+                            assertTrue("saved selection $i is scaled: $g for $e", abs(x - y) <= 2)
+                        }
+                    }
+                }
+            }
+            settled("$what undone") { c.undo() }
+            assertSame("$what: one undo restores the very list", saved, c.doc.savedSelections)
+            settled("$what redone") { c.redo() }
+            assertEquals(now.map { it.id }, c.doc.savedSelections.map { it.id })
+            for (i in now.indices) assertTrue("$what redone: $i", bytes(now[i].toSelection(nw, nh)).contentEquals(bytes(c.doc.savedSelections[i].toSelection(nw, nh))))
+            assertFoldersIntact(c, "$what redone")
+        }
+    }
+
+    @Test
+    fun pathfinderOnShapeLayersInsideTheFoldersIsOneStepAndTheResultStaysInTheTree() {
+        val c = nested()
+        fun shapeLayer(above: String, name: String, r: RectF, color: Int): Layer {
+            c.selectLayer(c.byName(above))
+            val o = ShapeObject(ShapeType.RECTANGLE, cx = r.centerX(), cy = r.centerY(), w = r.width(), h = r.height(), style = ShapeStyle.FILL, fillColor = color)
+            return c.addLayerWithContent(name, "Add shape", shapeData = ShapeCodec.encode(o), draw = ArraySources.shapeDraw(o, ColorMode.RGB, w, h))!!
+        }
+        // S1 in F1 (above A), S2 in the isolated F2 (above B): S2 is the top operand.
+        val s1 = shapeLayer("A", "S1", RectF(8f, 36f, 30f, 58f), red)
+        val s2 = shapeLayer("B", "S2", RectF(22f, 44f, 50f, 62f), blue)
+        val f1 = c.byName("F1")
+        val f2 = c.byName("F2")
+        assertEquals(listOf(f1.id, f2.id), listOf(s1.parentId, s2.parentId))
+        assertEquals(listOf("Background", "A", "S1", "B", "S2", "F2", "F1", "Top"), c.doc.layers.map { it.name })
+
+        oneStep(c, "pathfinder unite", HistoryLabels.pathfinder("Unite")) {
+            c.selectTool(ToolId.PATHFINDER)
+            val t = (c.currentTool as PathfinderTool).also { it.computeDispatcher = Dispatchers.Unconfined }
+            for ((x, y) in listOf(12f to 40f, 45f to 60f)) c.drag(x to y)
+            assertEquals(listOf(s1, s2), t.operands.map { it.layer })
+            t.apply(PathfinderOp.UNITE)
+            c.selectTool(ToolId.LASSO)
+        }
+        val result = c.byName(PathfinderLabels.resultLayer(1))
+        assertTrue(result.isVectorLayer)
+        assertEquals("in the top operand's folder", f2.id, result.parentId)
+        assertEquals("both operands went, the result took the top one's place", listOf("Background", "A", "B", result.name, "F2", "F1", "Top"), c.doc.layers.map { it.name })
+        assertEquals(255, Color.alpha(result.bitmap.getPixel(12, 40)))
+        assertEquals(255, Color.alpha(result.bitmap.getPixel(45, 60)))
+        settled("pathfinder undone again") { c.undo() }
+        assertSame(s1, c.byName("S1"))
+        assertSame(s2, c.byName("S2"))
+        assertEquals(listOf(f1.id, f2.id), listOf(s1.parentId, s2.parentId))
     }
 }
