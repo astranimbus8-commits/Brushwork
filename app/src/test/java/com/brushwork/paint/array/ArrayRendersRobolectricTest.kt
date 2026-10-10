@@ -49,7 +49,8 @@ import kotlin.math.abs
  * synchronous render gives (I1, I2); undo and redo take it back and bring it again exactly, also
  * while it still renders; a newer edit drops it; saving meanwhile writes the layer as it was
  * (data and pixels agreeing) and closing lands it first; "Rendering array…" shows past 300 ms
- * only; a patch the memory can't take, and a small array, render synchronously; another tool, a
+ * only; a patch the memory can't take, and a small array, render synchronously (a long one
+ * without a patch once "Rendering array…" is on screen, still as ONE step); another tool, a
  * pixel edit on the layer and any other step land it first, in order.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -460,6 +461,76 @@ class ArrayRendersRobolectricTest {
         assertEquals(steps + 3, c.undoManager.undoCount)
         assertEquals(6, layer.array!!.spec.count)
         Smoke.assertQuiet(c, "synchronous")
+    }
+
+    /**
+     * A render too long for the main thread whose patch the memory can't take (a 4000 × 5000
+     * document on a 4 GB phone): it is still put off, with "Rendering array…" shown at once and
+     * the preview up, for two frames, then drawn on the main thread as ONE step with exactly the
+     * pixels its data draws. Meanwhile it is pending like a background render: undo lands it
+     * first, and a newer edit drops it.
+     */
+    @Test
+    fun aLongRenderWithoutAPatchShowsRenderingFirstThenDrawsHere() {
+        val (c, layer) = rasterArray()
+        val t = tool(c)
+        val r = c.arrayRenders
+        r.policy = VectorLayers.Policy.AUTO
+        r.patchBudget = { 0L }
+        // A slow device: every array is estimated far over 300 ms.
+        r.nsPerUnit[ArrayRenders.KIND_PIXELS] = 1e5
+        val w = c.doc.width
+        val h = c.doc.height
+        val steps = c.undoManager.undoCount
+        val old = layer.array!!.spec
+        val before = pixels(layer.bitmap)
+        val spec = old.copy(mode = ArrayMode.CIRCLE, count = 8, centerX = 200f, centerY = 150f)
+        t.commit(spec)
+        assertTrue("put off", r.isPending)
+        assertFalse("not on the worker", r.lastStats!!.background)
+        assertTrue(r.lastStats!!.estimateMs > ArrayRenders.SLOW_AFTER_MS)
+        assertTrue("\"${ArrayLabels.RENDERING}\" at once", t.rendering)
+        assertEquals("no step yet", steps, c.undoManager.undoCount)
+        assertEquals(old, layer.array!!.spec)
+        assertArrayEquals("the pixels wait too", before, pixels(layer.bitmap))
+        assertNotNull("the preview stays up", c.renderOverride)
+        land(c)
+        assertFalse(t.rendering)
+        assertEquals("ONE step", steps + 1, c.undoManager.undoCount)
+        assertEquals(ArrayLabels.EDIT, c.undoManager.undoLabel)
+        assertEquals(spec.sanitized(), layer.array!!.spec)
+        assertConsistent("drawn on the main thread", layer, w, h)
+        assertNull(c.renderOverride)
+
+        // Undo while it waits: it lands, then is undone.
+        val landed = pixels(layer.bitmap)
+        t.commit(spec.copy(count = 5))
+        assertTrue(r.isPending)
+        c.undo()
+        assertFalse(r.isPending)
+        assertFalse(r.isSlow)
+        assertEquals(steps + 1, c.undoManager.undoCount)
+        assertEquals(spec.sanitized(), layer.array!!.spec)
+        assertArrayEquals("undo is exact", landed, pixels(layer.bitmap))
+        c.redo()
+        assertEquals(5, layer.array!!.spec.count)
+        assertConsistent("redo", layer, w, h)
+
+        // A newer edit drops it: no step for the dropped one, the newer one lands.
+        var done1: Boolean? = null
+        var done2: Boolean? = null
+        val stepsBefore = c.undoManager.undoCount
+        assertTrue(ArrayOps.edit(c, layer, spec.copy(count = 6), ArrayLabels.EDIT) { done1 = it })
+        assertTrue(r.isPending)
+        assertTrue(ArrayOps.edit(c, layer, spec.copy(count = 7), ArrayLabels.EDIT) { done2 = it })
+        assertEquals("the dropped one hears false at once", false, done1)
+        land(c)
+        assertEquals(true, done2)
+        assertEquals(stepsBefore + 1, c.undoManager.undoCount)
+        assertEquals(7, layer.array!!.spec.count)
+        assertConsistent("the newer edit", layer, w, h)
+        assertFalse(r.isSlow)
+        Smoke.assertQuiet(c, "drawn on the main thread")
     }
 
     /**

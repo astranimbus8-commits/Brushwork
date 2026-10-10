@@ -282,7 +282,9 @@ class ArrayPerfProbeTest {
      * handle or slider released), with the automatic policy: [specs] committed one after the
      * other (the first warms up). Prints the main thread's time (the commit, then the swap), the
      * worker's and the whole edit's; the whole edit stays within five times [budgetMs], the render
-     * goes to the worker, and "Rendering array…" shows once it has run 300 ms, not before.
+     * goes to the worker exactly when its estimate (at the speed learnt so far) is over the sync
+     * budget, and "Rendering array…" shows once it has run 300 ms, not before. (A render kept
+     * synchronous has landed when the commit returns: the edit is the commit.)
      */
     private fun editRow(what: String, c: EditorController, layer: Layer, specs: List<ArraySpec>, budgetMs: Double) {
         val tool = c.tools.getValue(ToolId.ARRAY) as ArrayTool
@@ -293,17 +295,21 @@ class ArrayPerfProbeTest {
             tool.commit(spec)
             val commitMs = (System.nanoTime() - t0) / 1e6
             val s = c.arrayRenders.lastStats!!
-            val est = c.arrayRenders.estimateMs(s.kind, s.units)
-            assertTrue("$what: the automatic policy renders it in the background (estimate ${"%.0f".format(est)} ms)", s.background)
-            assertTrue(c.arrayRenders.isPending)
-            val (total, slowAt) = landInRealTime(c, t0)
+            val est = s.estimateMs
+            assertEquals(
+                "$what: the automatic policy renders it in the background exactly when the estimate (${"%.0f".format(est)} ms) is over the budget",
+                est > c.arrayRenders.syncBudgetMs,
+                s.background,
+            )
+            assertEquals(s.background, c.arrayRenders.isPending)
+            val (total, slowAt) = if (s.background) landInRealTime(c, t0) else commitMs to -1.0
             assertEquals(spec.sanitized(), layer.array!!.spec)
             val workerMs = s.workerNs / 1e6
             val mainMs = s.mainNs / 1e6
             println(
                 "v17 arrayrender probe: $what${if (i == 0) " (warm-up)" else ""}: edit ${"%.1f".format(total)} ms, " +
                     "main thread ${"%.1f".format(mainMs)} ms (commit ${"%.1f".format(commitMs)}, swap about ${"%.1f".format(mainMs - commitMs)}), " +
-                    "worker ${"%.1f".format(workerMs)} ms, ${"%.1f".format(s.units / 1e6)} M units (phone estimate ${"%.0f".format(est)} ms), " +
+                    "${if (s.background) "worker ${"%.1f".format(workerMs)} ms" else "synchronous"}, ${"%.1f".format(s.units / 1e6)} M units (estimate ${"%.0f".format(est)} ms), " +
                     "\"Rendering array…\" ${if (slowAt < 0) "not shown" else "at ${"%.0f".format(slowAt)} ms"}",
             )
             if (i == 0) continue

@@ -29,12 +29,14 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 
 /**
@@ -67,14 +69,17 @@ import kotlin.math.abs
  * - **Memory**: no extra document-size bitmap per render. The patch covers the changed area only
  *   and is reused by the next render (let go [KEEP_MS] after the last one); a patch larger than
  *   [patchBudget] (an eighth of the heap, as an edit session's floating copies) or one that
- *   can't be allocated renders synchronously instead.
+ *   can't be allocated renders synchronously instead; when that render is expected to take
+ *   longer than [SLOW_AFTER_MS] it waits for two frames first ([defer]: "Rendering array…" and
+ *   the preview reach the screen, then the main thread draws it), a deferred step all the same.
  * - **Small arrays stay synchronous** ([syncBudgetMs], [SYNC_BUDGET_MS], as `VectorLayers`): a
  *   background render still costs the main thread its scheduling and the swap (the area's undo
  *   snapshot and the patch copied in: measured on the JVM, 1.9 ms for a small array that draws
  *   in 0.8 ms) and reaches the screen a main-thread turn after it ends (about a frame), so below
  *   about one and a half frames of drawing it would only add latency. The speed starts from the
  *   JVM's measured cost times the phone factor `VectorLayers` uses ([INITIAL_NS_PIXELS],
- *   [INITIAL_NS_SOURCE]) and follows this device's own renders.
+ *   [INITIAL_NS_SOURCE]) and follows this device's own edits: the whole edit's main-thread time
+ *   when synchronous, the worker's drawing plus the swap when not.
  *
  * Main thread (the worker only draws into its patch).
  */
@@ -108,12 +113,15 @@ internal class ArrayRenders(private val c: EditorController) {
     /** Test seam: the bytes a patch may take (larger: synchronous). */
     internal var patchBudget: () -> Long = { Runtime.getRuntime().maxMemory() / 8 }
 
-    /** Nanoseconds per cost unit: [KIND_PIXELS] (bitmap pixels drawn) and [KIND_SOURCE] (text and shape area drawn). */
-    private val nsPerUnit = doubleArrayOf(INITIAL_NS_PIXELS, INITIAL_NS_SOURCE)
+    /**
+     * Nanoseconds per cost unit: [KIND_PIXELS] (bitmap pixels drawn) and [KIND_SOURCE] (text and
+     * shape area drawn). Internal for tests (a slow device).
+     */
+    internal val nsPerUnit = doubleArrayOf(INITIAL_NS_PIXELS, INITIAL_NS_SOURCE)
 
     private val worker: CoroutineDispatcher by lazy { (workerDispatcher ?: Dispatchers.Default).limitedParallelism(1) }
 
-    /** A render running on the worker (at most one). */
+    /** A render running on the worker, or one [defer]red to the main thread (at most one; no [patch] then). */
     private inner class Pending(
         val layer: Layer,
         val before: LayerData,
@@ -122,7 +130,7 @@ internal class ArrayRenders(private val c: EditorController) {
         val dirty: Rect?,
         val area: Rect,
         val cache: Cache,
-        val patch: Bitmap,
+        val patch: Bitmap?,
         val kind: Int,
         val units: Double,
         val supersedable: Boolean,
@@ -155,12 +163,18 @@ internal class ArrayRenders(private val c: EditorController) {
     /** Lands a pending render before any other step (undo and redo too). */
     private val deferredStep = DeferredStep { flush() }
 
-    /** True once a render has run for [SLOW_AFTER_MS] and has not landed (Compose state: "Rendering array…"). */
+    /**
+     * True once a render has run for [SLOW_AFTER_MS] and has not landed, or while a long one
+     * waits to be drawn on the main thread ([defer]) (Compose state: "Rendering array…").
+     */
     var isSlow by mutableStateOf(false)
         private set
 
-    /** What a render cost: its kind and units, and the time it took. */
-    internal class Stats(val kind: Int, val units: Double, val background: Boolean) {
+    /**
+     * What a render cost: its kind and units, the main-thread estimate it was scheduled by
+     * ([estimateMs], ms), whether it was drawn on the worker, and the time it took.
+     */
+    internal class Stats(val kind: Int, val units: Double, val estimateMs: Double, val background: Boolean) {
         /** The main thread's time (ns): the whole render when synchronous, else scheduling it plus the swap. */
         var mainNs = 0L
 
@@ -208,6 +222,7 @@ internal class ArrayRenders(private val c: EditorController) {
         val area = areaOf(before, after, dirty)
         val kind = kindOf(cache)
         val units = unitsOf(after, cache, area)
+        val est = estimateMs(kind, units)
         if (!area.isEmpty && goAsync(kind, units)) {
             if (!c.checkUsable(layer)) {
                 release?.invoke()
@@ -215,15 +230,16 @@ internal class ArrayRenders(private val c: EditorController) {
                 return false
             }
             val patch = patchFor(area)
-            if (patch != null) {
-                val stats = Stats(kind, units, background = true)
+            if (patch != null || est > SLOW_AFTER_MS) {
+                val stats = Stats(kind, units, est, background = patch != null)
                 lastStats = stats
-                schedule(Pending(layer, before, after, label, dirty, area, cache, patch, kind, units, supersedable, release, onDone, stats))
+                val p = Pending(layer, before, after, label, dirty, area, cache, patch, kind, units, supersedable, release, onDone, stats)
+                if (patch != null) schedule(p, patch) else defer(p)
                 stats.mainNs += System.nanoTime() - t0
                 return true
             }
         }
-        val stats = Stats(kind, units, background = false)
+        val stats = Stats(kind, units, est, background = false)
         lastStats = stats
         val ok = timed(kind, units) { c.updateLayerData(layer, after, label, dirty, draw = syncDraw(cache)) }
         release?.invoke()
@@ -301,12 +317,11 @@ internal class ArrayRenders(private val c: EditorController) {
     /** The main-thread time [units] of [kind] would take at this device's measured speed (ms). */
     internal fun estimateMs(kind: Int, units: Double): Double = units * nsPerUnit[kind] / 1e6
 
-    private fun schedule(p: Pending) {
+    private fun schedule(p: Pending, patch: Bitmap) {
         pending = p
         bufferRelease?.cancel()
         c.addDeferredStep(deferredStep)
         val area = Rect(p.area)
-        val patch = p.patch
         val paint = workerPaint(p.after, p.cache)
         val hook = workerHook
         val job = c.scope.async(worker) {
@@ -343,7 +358,26 @@ internal class ArrayRenders(private val c: EditorController) {
         }
     }
 
-    /** Swaps [p]'s patch in (or draws it here when the worker failed, [ns] < 0, or the layer changed). */
+    /**
+     * A long render with no patch (memory is short): drawn on the main thread, but only after
+     * "Rendering array…" and the preview have reached the screen (two frames, bounded: no frames
+     * arrive in the background). Meanwhile it is pending like a background render (a deferred
+     * step; anything else lands it first, [supersede] drops it).
+     */
+    private fun defer(p: Pending) {
+        pending = p
+        c.addDeferredStep(deferredStep)
+        isSlow = true
+        c.scope.launch(Dispatchers.Main) {
+            withTimeoutOrNull(FRAME_WAIT_MS) {
+                awaitFrame()
+                awaitFrame()
+            }
+            if (!p.finished) finish(p, -1L)
+        }
+    }
+
+    /** Swaps [p]'s patch in (or draws it here when there is none, the worker failed, [ns] < 0, or the layer changed). */
     private fun finish(p: Pending, ns: Long) {
         if (p.finished) return
         val t0 = System.nanoTime()
@@ -361,15 +395,20 @@ internal class ArrayRenders(private val c: EditorController) {
             val sameData = present && layer.dataSnapshot() == p.before
             val fresh = sameData && c.doc.width == p.docW && c.doc.height == p.docH &&
                 layer.bitmap === p.bitmap && layer.contentVersion == p.contentVersion
+            val patch = p.patch
             ok = when {
                 // A net, never expected: every other step lands this one first (see the class docs).
                 !sameData -> false
-                ns >= 0 && fresh -> {
-                    learn(p.kind, p.units, ns)
-                    apply(p)
+                patch != null && ns >= 0 && fresh -> {
+                    // The speed learnt is the worker's drawing plus the swap (a synchronous
+                    // render's is its whole edit: both what the main thread would have spent).
+                    val swap = System.nanoTime()
+                    apply(p, patch).also { applied -> if (applied) learn(p.kind, p.units, ns + (System.nanoTime() - swap)) }
                 }
                 // (Hidden meanwhile without a step, by a properties preview: it still lands.)
-                else -> c.updateLayerData(layer, p.after, p.label, p.dirty, allowHidden = true, draw = syncDraw(p.cache))
+                else -> timed(p.kind, p.units) {
+                    c.updateLayerData(layer, p.after, p.label, p.dirty, allowHidden = true, draw = syncDraw(p.cache))
+                }
             }
         } finally {
             flushing = wasFlushing
@@ -386,7 +425,7 @@ internal class ArrayRenders(private val c: EditorController) {
      * The swap (one step, as `updateLayerData`): the area snapshotted, the patch copied over it,
      * the data set; color modes are applied to the touched tiles by `commitEdit`.
      */
-    private fun apply(p: Pending): Boolean = c.editScope {
+    private fun apply(p: Pending, patch: Bitmap): Boolean = c.editScope {
         val layer = p.layer
         // Committed while usable: a layer hidden since (a properties preview, no step) still takes it.
         if (c.doc.indexOf(layer) < 0 || !c.checkUsable(layer, allowHidden = true)) return@editScope false
@@ -394,7 +433,7 @@ internal class ArrayRenders(private val c: EditorController) {
         val rec = c.beginEdit(layer, EditTarget.CONTENT).also { it.preserveData = true }
         try {
             rec.touch(p.area)
-            Canvas(layer.bitmap).drawBitmap(p.patch, Rect(0, 0, p.area.width(), p.area.height()), p.area, SRC)
+            Canvas(layer.bitmap).drawBitmap(patch, Rect(0, 0, p.area.width(), p.area.height()), p.area, SRC)
         } catch (e: OutOfMemoryError) {
             rec.abort()
             c.toast("Not enough memory for \"${p.label}\"")
@@ -550,16 +589,21 @@ internal class ArrayRenders(private val c: EditorController) {
         /** The patch is kept this long after a render for the next one (ms). */
         const val KEEP_MS = 3_000L
 
+        /** The longest a [defer]red render waits for its two frames (ms; none arrive in the background). */
+        const val FRAME_WAIT_MS = 150L
+
         const val KIND_PIXELS = 0
         const val KIND_SOURCE = 1
 
         /**
          * Starting speeds (ns per unit) for a phone: an "Edit array" through the controller
          * (the undo snapshot, the drawing, the commit) measured on the JVM (Robolectric NATIVE,
-         * software Skia; `ArrayPerfProbeTest.theBackgroundRenderCostModel`) costs about 13 ns per
-         * bitmap pixel drawn for a raster cache (bilinear, turned copies) and about 2 ns per pixel
-         * of the copies' area for a text or shape cache (glyphs and outlines cover little of it),
-         * times 3 for a phone (`VectorLayers`' phone factor). Rather too slow than too fast: a
+         * software Skia; `ArrayPerfProbeTest.theBackgroundRenderCostModel`) costs 13 to 24 ns per
+         * bitmap pixel drawn for a raster cache (bilinear, turned copies; larger arrays cost more
+         * per pixel: 13 for 9 copies of a small source, 24 for 50 or 200 copies) and about 2 ns
+         * per pixel of the copies' area for a text or shape cache (glyphs and outlines cover
+         * little of it), times about 2 to 3 for a phone (`VectorLayers`' phone factor is 3; 40
+         * is that factor on the cheap end, about 1.7 on the dear one). Rather too slow than too fast: a
          * render sent to the worker that needn't be costs a frame of latency, one kept on the
          * main thread that shouldn't be drops frames. The device's own renders take over from there.
          */
