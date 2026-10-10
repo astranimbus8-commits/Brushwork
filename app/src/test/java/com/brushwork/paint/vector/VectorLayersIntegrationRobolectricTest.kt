@@ -13,6 +13,8 @@ import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.render.VectorLayerRenderer
@@ -28,6 +30,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -41,6 +44,7 @@ import org.robolectric.Shadows.shadowOf
  * every object of a layer that reaches past the canvas previews the off-canvas parts too.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class VectorLayersIntegrationRobolectricTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -248,13 +252,13 @@ class VectorLayersIntegrationRobolectricTest {
         // load, so a busy machine slows both alike.
         repeat(2) { c.vectors.selectedIds.size; all.count { content.byId(it) != null } }
         val reads = 10
-        val t0 = System.nanoTime()
-        repeat(reads) { assertEquals(n, c.vectors.selectedIds.size) }
-        val indexed = System.nanoTime() - t0
-        val t1 = System.nanoTime()
-        repeat(reads) { assertEquals(n, all.count { content.byId(it) != null }) }
-        val scanned = System.nanoTime() - t1
-        assertTrue("indexed ${indexed / 1e6} ms vs scanned ${scanned / 1e6} ms", indexed * 5 < scanned)
+        // indexed × 5 <= scanned.
+        PerfBudget.ratioWithin(
+            0.2,
+            a = { repeat(reads) { assertEquals(n, c.vectors.selectedIds.size) } },
+            b = { repeat(reads) { assertEquals(n, all.count { content.byId(it) != null }) } },
+            what = "indexed vs scanned",
+        )
         // Vanished ids drop out.
         c.l1.restoreData(c.l1.dataSnapshot().copy(vector = content.without(setOf(7L, 8L))))
         assertEquals(n - 2, c.vectors.selectedIds.size)

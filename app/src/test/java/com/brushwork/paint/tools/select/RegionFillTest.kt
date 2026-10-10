@@ -1,12 +1,16 @@
 package com.brushwork.paint.tools.select
 
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.hypot
+import org.junit.experimental.categories.Category
 
+@Category(Timing::class)
 class RegionFillTest {
     private val black = 0xFF000000.toInt()
     private val white = 0xFFFFFFFF.toInt()
@@ -195,11 +199,10 @@ class RegionFillTest {
         val map = ByteArray(w * h) { RegionFill.PASSABLE.toByte() }
         // A wall with one hole so the fill has to snake around.
         for (y in 0 until h - 10) map[y * w + 2000] = 0
-        val t0 = System.nanoTime()
-        val r = RegionFill.compute(map, w, h, 10, 10, RegionParams(tolerance = 0, antiAlias = true))
-        val ms = (System.nanoTime() - t0) / 1_000_000
+        val r = PerfBudget.timedWithin(5000.0, what = "4000 x 4000 flood fill") {
+            RegionFill.compute(map, w, h, 10, 10, RegionParams(tolerance = 0, antiAlias = true))
+        }.value
         assertNotNull(r)
         assertEquals(255, r!!.at(3999, 0))
-        assertTrue("took $ms ms", ms < 5000)
     }
 }

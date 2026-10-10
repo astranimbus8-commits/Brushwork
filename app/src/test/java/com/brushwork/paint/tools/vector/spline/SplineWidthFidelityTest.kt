@@ -2,6 +2,7 @@ package com.brushwork.paint.tools.vector.spline
 
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.vector.CurveWidths
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
@@ -16,6 +17,7 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /**
  * v1.7 §3.5 (item 5): every Path point's thickness counts. 3 points at 0 / 100 / 0 % draw a lens
@@ -25,6 +27,7 @@ import kotlin.random.Random
  * at 64 parameters per span. Constant widths convert as in v1.6; the incremental converter still
  * equals a fresh one; the budgets hold.
  */
+@Category(Timing::class)
 class SplineWidthFidelityTest {
 
     private val three = listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f))
@@ -248,11 +251,10 @@ class SplineWidthFidelityTest {
         val constant = VSpline(pts.map { it.copy(width = 1f) }, 6)
         repeat(30) { SplineBezier.toSubpath(fifty) }
         repeat(4) { SplineBezier.toSubpath(varying); SplineBezier.toSubpath(constant) }
-        val f = best(40) { SplineBezier.toSubpath(fifty) }
-        assertTrue("50 points with widths: $f ms", f <= PerfBudget.ms(1.0))
-        val v = best(8) { SplineBezier.toSubpath(varying) }
-        val c = best(8) { SplineBezier.toSubpath(constant) }
+        val f = PerfBudget.measuredWithin(PerfBudget.ms(1.0), what = "50 points with widths") { best(40) { SplineBezier.toSubpath(fifty) } }
+        val (v, c) = PerfBudget.measuredRatioWithin(2.0, what = "2 000 points, order 6, with widths vs without") {
+            best(8) { SplineBezier.toSubpath(varying) } to best(8) { SplineBezier.toSubpath(constant) }
+        }
         println("SplineWidthFidelityTest budgets: 50 points $f ms; 2 000 points order 6: $v ms with widths, $c ms without")
-        assertTrue("2 000 points, order 6: $v ms with widths, $c ms without", v <= 2.0 * c)
     }
 }

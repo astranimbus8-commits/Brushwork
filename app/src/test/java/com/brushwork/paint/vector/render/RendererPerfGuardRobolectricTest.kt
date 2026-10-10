@@ -11,6 +11,8 @@ import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
@@ -23,6 +25,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.sin
@@ -34,6 +37,7 @@ import kotlin.math.sin
  * a second render of the same objects without preparing them again — with the same pixels.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class RendererPerfGuardRobolectricTest {
     private val w = 900
     private val h = 600
@@ -65,15 +69,18 @@ class RendererPerfGuardRobolectricTest {
         fun stampAll() { cov.eraseColor(0); for (d in dabs) { stamper.measure(preset, d); stamper.stamp(cc, preset, d) } }
         fun replay() = raster.render(Canvas(out), doc, preset, -16777216, 3L, true, pts, cut = doc)
         repeat(3) { stampAll(); replay() } // warm up (tips, JIT)
-        var base = Long.MAX_VALUE
-        var full = Long.MAX_VALUE
-        repeat(5) {
-            val t0 = System.nanoTime(); stampAll(); val t1 = System.nanoTime(); replay(); val t2 = System.nanoTime()
-            base = minOf(base, t1 - t0); full = minOf(full, t2 - t1)
+        // The replay against stamping alone: full <= 6 × base + 2 ms, on the best of 5 each.
+        PerfBudget.measuredRatioWithin(6.0, slackMs = 2.0, what = "replay vs stamping") {
+            var base = Long.MAX_VALUE
+            var full = Long.MAX_VALUE
+            repeat(5) {
+                val t0 = System.nanoTime(); stampAll(); val t1 = System.nanoTime(); replay(); val t2 = System.nanoTime()
+                base = minOf(base, t1 - t0); full = minOf(full, t2 - t1)
+            }
+            val perDab = full.toDouble() / dabs.size
+            println("replay: ${dabs.size} dabs, ${"%.0f".format(perDab)} ns/dab, ${"%.2f".format(full.toDouble() / base)} x stamping alone")
+            full / 1e6 to base / 1e6
         }
-        val perDab = full.toDouble() / dabs.size
-        println("replay: ${dabs.size} dabs, ${"%.0f".format(perDab)} ns/dab, ${"%.2f".format(full.toDouble() / base)} x stamping alone")
-        assertTrue("replay ${full / 1000} us vs stamping ${base / 1000} us", full <= 6 * base + 2_000_000)
     }
 
     @Test

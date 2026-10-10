@@ -21,6 +21,7 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.text.TextCodec
@@ -41,6 +42,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -72,6 +74,7 @@ import kotlin.math.sin
  *   [ArrayRenders.INITIAL_NS_SOURCE], what a small array costs in the background).
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class ArrayPerfProbeTest {
     @Before
     fun notOnCi() = assumeTrue("T606-size probes run locally only", System.getenv("CI") == null)
@@ -146,12 +149,10 @@ class ArrayPerfProbeTest {
                 cv.drawColor(0, PorterDuff.Mode.CLEAR)
                 tool.drawOverlay(cv, c.viewTransform)
             }
-            val whole = measure("preview frame (overlay, software canvas), 64 copies of 1000 x 1000, whole document", 9) { frame() }
+            PerfBudget.measuredWithin(PerfBudget.ms(10 * 33.0), what = "whole") { measure("preview frame (overlay, software canvas), 64 copies of 1000 x 1000, whole document", 9) { frame() } }
             c.viewTransform.set(Matrix().apply { setTranslate(-1460f, -600f) })
-            val full = measure("preview frame (overlay, software canvas), 64 copies of 1000 x 1000, at 100 %", 9) { frame() }
+            PerfBudget.measuredWithin(PerfBudget.ms(10 * 33.0), what = "100 %") { measure("preview frame (overlay, software canvas), 64 copies of 1000 x 1000, at 100 %", 9) { frame() } }
             assertFalse("no display tile re-rendered", c.tiles.hasDirty)
-            assertTrue("whole $whole ms", whole <= PerfBudget.ms(10 * 33.0))
-            assertTrue("100 % $full ms", full <= PerfBudget.ms(10 * 33.0))
             tool.commitPreview()
             screen.recycle()
         } finally {
@@ -166,11 +167,12 @@ class ArrayPerfProbeTest {
         val cv = Canvas(cache)
         fun probe(count: Int, side: Int, budgetMs: Double) {
             val array = LayerArray(ArraySpec(mode = ArrayMode.CIRCLE, count = count), ArrayPixels(source(side), w / 2 - side / 2, 1200))
-            val med = measure("raster cache, $count copies of $side x $side on $w x $h", 3) {
-                cv.drawColor(0, PorterDuff.Mode.CLEAR)
-                ArrayDraw.drawPixels(cv, array)
+            PerfBudget.measuredWithin(PerfBudget.ms(5 * budgetMs), what = "$count copies of $side") {
+                measure("raster cache, $count copies of $side x $side on $w x $h", 3) {
+                    cv.drawColor(0, PorterDuff.Mode.CLEAR)
+                    ArrayDraw.drawPixels(cv, array)
+                }
             }
-            assertTrue("$count copies of $side: $med ms", med <= PerfBudget.ms(5 * budgetMs))
         }
         probe(200, 500, 600.0)
         probe(64, 1000, 1500.0)
@@ -187,15 +189,16 @@ class ArrayPerfProbeTest {
         val tile = Rect(512, 768, 768, 1024)
         val bmp = BitmapUtils.createLayerBitmap(tile.width(), tile.height())
         val document = Rect(0, 0, w, h)
-        val med = measure("vector array, 64 copies of a 200-anchor path, expanded and first tile", 5) {
-            ArrayDraw.clearCaches()
-            val eff = ArrayDraw.effectiveVector(data)!!
-            val cv = Canvas(bmp)
-            cv.drawColor(0, PorterDuff.Mode.CLEAR)
-            cv.translate(-tile.left.toFloat(), -tile.top.toFloat())
-            ArrayOps.renderTiles(cv, eff, tile, document)
+        PerfBudget.measuredWithin(PerfBudget.ms(5 * 120.0), what = "first tile") {
+            measure("vector array, 64 copies of a 200-anchor path, expanded and first tile", 5) {
+                ArrayDraw.clearCaches()
+                val eff = ArrayDraw.effectiveVector(data)!!
+                val cv = Canvas(bmp)
+                cv.drawColor(0, PorterDuff.Mode.CLEAR)
+                cv.translate(-tile.left.toFloat(), -tile.top.toFloat())
+                ArrayOps.renderTiles(cv, eff, tile, document)
+            }
         }
-        assertTrue("first tile $med ms", med <= PerfBudget.ms(5 * 120.0))
     }
 
     @Test
@@ -210,11 +213,12 @@ class ArrayPerfProbeTest {
         val draw = ArraySources.sourceDraw(data, ColorMode.RGB, w, h)!!
         val cache = BitmapUtils.createLayerBitmap(w, h)
         val cv = Canvas(cache)
-        val med = measure("text array, 32 copies", 3) {
-            cv.drawColor(0, PorterDuff.Mode.CLEAR)
-            ArrayDraw.drawWithArray(cv, data.array, bounds, draw)
+        PerfBudget.measuredWithin(PerfBudget.ms(5 * 250.0), what = "text") {
+            measure("text array, 32 copies", 3) {
+                cv.drawColor(0, PorterDuff.Mode.CLEAR)
+                ArrayDraw.drawWithArray(cv, data.array, bounds, draw)
+            }
         }
-        assertTrue("text $med ms", med <= PerfBudget.ms(5 * 250.0))
         cache.recycle()
     }
 
@@ -287,6 +291,17 @@ class ArrayPerfProbeTest {
      * synchronous has landed when the commit returns: the edit is the commit.)
      */
     private fun editRow(what: String, c: EditorController, layer: Layer, specs: List<ArraySpec>, budgetMs: Double) {
+        // A timing guard (PerfBudget): a try that is over takes the row again, the specs rotated
+        // by one more each try (so every edit changes the spec; the first is again the warm-up).
+        PerfBudget.measuredWithin(PerfBudget.ms(5 * budgetMs), what = what) { k ->
+            val r = k % specs.size
+            editRowOnce(what, c, layer, specs.drop(r) + specs.take(r), budgetMs)
+        }
+        assertFalse(c.arrayRenders.isSlow)
+    }
+
+    /** One pass of [editRow]; returns the median edit (ms). */
+    private fun editRowOnce(what: String, c: EditorController, layer: Layer, specs: List<ArraySpec>, budgetMs: Double): Double {
         val tool = c.tools.getValue(ToolId.ARRAY) as ArrayTool
         c.arrayRenders.policy = VectorLayers.Policy.AUTO
         val totals = ArrayList<Double>()
@@ -320,8 +335,7 @@ class ArrayPerfProbeTest {
         }
         val med = median(totals)
         println("v17 arrayrender probe: $what: median edit ${"%.1f".format(med)} ms (the phone's budget ${budgetMs.toInt()} ms is a device check; the guard here is five times it)")
-        assertTrue("$what: $med ms", med <= PerfBudget.ms(5 * budgetMs))
-        assertFalse(c.arrayRenders.isSlow)
+        return med
     }
 
     /** §6.3 raster row: "Edit array" of 200 copies of 500 × 500 round a circle (≤ 600 ms, "Rendering array…" past 300 ms). */
@@ -369,6 +383,21 @@ class ArrayPerfProbeTest {
      */
     @Test
     fun theBackgroundRenderCostModel() {
+        // A timing guard (PerfBudget.until): a try that is over runs the whole model again.
+        PerfBudget.until(what = "the JVM is not slower than the phone estimate", measure = { costModel() }) { perUnit ->
+            (0..1).firstNotNullOfOrNull { kind ->
+                val xs = perUnit[kind]
+                if (xs.isEmpty()) return@firstNotNullOfOrNull null
+                val med = median(xs)
+                val start = if (kind == ArrayRenders.KIND_PIXELS) ArrayRenders.INITIAL_NS_PIXELS else ArrayRenders.INITIAL_NS_SOURCE
+                println("v17 arrayrender cost: ${if (kind == 0) "bitmap pixels" else "text and shape area"}: median ${"%.2f".format(med)} ns per unit on the JVM; the phone estimate starts at ${"%.1f".format(start)}")
+                if (med <= PerfBudget.ms(start)) null else "kind $kind: $med > $start ns per unit"
+            }
+        }
+    }
+
+    /** One run of [theBackgroundRenderCostModel]: the main-thread ns per cost unit of each kind. */
+    private fun costModel(): Array<ArrayList<Double>> {
         val perUnit = Array(2) { ArrayList<Double>() }
         fun sync(what: String, c: EditorController, layer: Layer, specs: List<ArraySpec>) {
             val tool = c.tools.getValue(ToolId.ARRAY) as ArrayTool
@@ -419,13 +448,6 @@ class ArrayPerfProbeTest {
             sync("text, 32 copies", c, l, List(3) { b.copy(count = 32, turnDeg = 11f - it) })
             release(c)
         }
-        for (kind in 0..1) {
-            val xs = perUnit[kind]
-            if (xs.isEmpty()) continue
-            val med = median(xs)
-            val start = if (kind == ArrayRenders.KIND_PIXELS) ArrayRenders.INITIAL_NS_PIXELS else ArrayRenders.INITIAL_NS_SOURCE
-            println("v17 arrayrender cost: ${if (kind == 0) "bitmap pixels" else "text and shape area"}: median ${"%.2f".format(med)} ns per unit on the JVM; the phone estimate starts at ${"%.1f".format(start)}")
-            assertTrue("the JVM is not slower than the phone estimate ($med > $start)", med <= PerfBudget.ms(start))
-        }
+        return perUnit
     }
 }

@@ -10,6 +10,8 @@ import com.brushwork.paint.exchange.pdf.OwnPdfReader
 import com.brushwork.paint.exchange.svg.SvgParser
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveStroke
@@ -28,6 +30,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -44,6 +47,7 @@ import kotlin.coroutines.CoroutineContext
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h857dp-xxhdpi")
+@Category(Timing::class)
 class VectorExchangeQaTest {
     private lateinit var r: VectorQaRig
     private val c get() = r.c
@@ -160,10 +164,10 @@ class VectorExchangeQaTest {
         // The export commits the transform and writes. Not by waiting for a background render
         // before the overlay shows (the screen would freeze without it): Export returns at once,
         // the overlay is up, the transform lands behind it.
-        val t0 = System.nanoTime()
-        ExportJob(c, ExportOptions(VectorFormat.SVG)).saveTo(r.activity, Uri.fromFile(f))
-        val ms = (System.nanoTime() - t0) / 1e6
-        assertTrue("Export returns at once: $ms ms", ms < 1500.0)
+        // One try: the export is a step of the session, not repeatable.
+        PerfBudget.measuredWithin(1500.0, tries = 1, what = "Export returns at once") {
+            PerfBudget.timeMs { ExportJob(c, ExportOptions(VectorFormat.SVG)).saveTo(r.activity, Uri.fromFile(f)) }
+        }
         assertEquals("Exporting SVG", c.busyMessage)
         assertTrue("exported", Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering && f.length() > 0 })
         Smoke.pump(40)
@@ -185,10 +189,10 @@ class VectorExchangeQaTest {
         c.vectors.policy = VectorLayers.Policy.ASYNC
         val png = File(File(r.activity.cacheDir, "exports"), "${c.doc.name}.png").also { it.delete() }
         // Overflow menu > Share: commits the transform and flattens the artwork.
-        val t0 = System.nanoTime()
-        com.brushwork.paint.ui.editor.EditorActions(c, r.activity).share()
-        val ms = (System.nanoTime() - t0) / 1e6
-        assertTrue("Share returns at once (the overlay first): $ms ms", ms < 1500.0)
+        // One try: sharing is a step of the session, not repeatable.
+        PerfBudget.measuredWithin(1500.0, tries = 1, what = "Share returns at once (the overlay first)") {
+            PerfBudget.timeMs { com.brushwork.paint.ui.editor.EditorActions(c, r.activity).share() }
+        }
         assertEquals("Preparing to share", c.busyMessage)
         assertTrue("shared", Smoke.pumpUntil(30_000) { c.busyMessage == null && !c.vectors.isRendering && png.length() > 0 })
         Smoke.pump(40)

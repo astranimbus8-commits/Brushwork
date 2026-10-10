@@ -26,6 +26,8 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.storage.ProjectFormat
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -47,6 +49,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -63,6 +66,7 @@ import kotlin.math.abs
  * layer" → merge down → save / reload → thumbnails → Safe compositing.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class MaskAdjustmentFlowsQaRobolectricTest {
     private val w = 200
     private val h = 150
@@ -823,16 +827,13 @@ class MaskAdjustmentFlowsQaRobolectricTest {
             nextId = 4,
         )
         val band = IntArray(pw * 64)
-        // Warm up, then time a full render.
-        var y = 0
-        while (y < ph) { val rows = minOf(64, ph - y); MaskSpecs.render(spec, pw, ph, Rect(0, y, pw, y + rows), band, pw); y += rows }
-        val t0 = System.nanoTime()
-        y = 0
-        while (y < ph) { val rows = minOf(64, ph - y); MaskSpecs.render(spec, pw, ph, Rect(0, y, pw, y + rows), band, pw); y += rows }
-        val ms = (System.nanoTime() - t0) / 1e6
+        // A full render, timed after a warm-up one. The design budget is ~8 ms on the T606 with
+        // 4 threads; a loaded test machine gets 40x slack.
+        val ms = PerfBudget.within(1500.0, what = "full render") {
+            var y = 0
+            while (y < ph) { val rows = minOf(64, ph - y); MaskSpecs.render(spec, pw, ph, Rect(0, y, pw, y + rows), band, pw); y += rows }
+        }
         println("[qa] full mask render 1080x2408: ${"%.1f".format(ms)} ms")
-        // The design budget is ~8 ms on the T606 with 4 threads; a loaded test machine gets 40x slack.
-        assertTrue("full render took $ms ms", ms < 1500)
         assertTrue("the estimate stays below the tile fallback for this spec", MaskSpecs.estimateMillis(spec, Rect(0, 0, pw, ph)) < 150.0)
     }
 

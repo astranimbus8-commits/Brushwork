@@ -3,6 +3,7 @@ package com.brushwork.paint.tools.text
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -10,6 +11,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.cos
@@ -22,6 +24,7 @@ import kotlin.math.sin
  * text in a box keeps every line break; anything else is refused (the pixel lift stays).
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class TextTransformsTest {
 
     /** Row-major 3 × 3: scale [s] and turn [deg] about ([px], [py]), then move by ([tx], [ty]). */
@@ -200,10 +203,8 @@ class TextTransformsTest {
             return System.nanoTime() - t0
         }
         repeat(2) { commit() }
-        val times = List(5) { commit() / 1e6 }.sorted()
-        val ms = times[2]
+        val ms = PerfBudget.measuredWithin(PerfBudget.ms(150.0), what = "map + render") { List(5) { commit() / 1e6 }.sorted()[2] }
         println("[perf] TextTransforms 2000 chars: map + layout + draw ${"%.2f".format(ms)} ms")
-        assertTrue("map + render $ms ms", ms < PerfBudget.ms(150.0))
 
         // A typical text (the boxed caption): within the commit budget.
         val small = TextCodec.encode(boxed)
@@ -218,8 +219,7 @@ class TextTransformsTest {
             return System.nanoTime() - t0
         }
         repeat(2) { commitSmall() }
-        val typical = List(5) { commitSmall() / 1e6 }.sorted()[2]
+        val typical = PerfBudget.measuredWithin(PerfBudget.ms(120.0), what = "typical map + render") { List(5) { commitSmall() / 1e6 }.sorted()[2] }
         println("[perf] TextTransforms typical: map + layout + draw ${"%.2f".format(typical)} ms")
-        assertTrue("typical map + render $typical ms", typical < PerfBudget.ms(120.0))
     }
 }

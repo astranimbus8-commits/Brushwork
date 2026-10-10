@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -12,6 +13,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.nio.ByteBuffer
@@ -24,6 +26,7 @@ import java.util.zip.CRC32
  * (format 4) text reads unkerned with the font's kerning on, and the relayout budgets hold.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class TextKernRenderRobolectricTest {
 
     private val w = 500
@@ -194,7 +197,9 @@ class TextKernRenderRobolectricTest {
         val five = TextItem(textOf(500), TextSpec(sizePx = 18f, box = TextBoxSpec(width = 400f)), 250f, 200f, kerns = kernsOf(500))
         repeat(3) { TextRenderer.prepare(five) }
         // A kern stepped: every relayout measures and breaks the text again.
-        val relayout = median(15) { k++; TextRenderer.prepare(five.copy(kerns = kernsOf(500).map { it.copy(value = it.value + k % 7 + 1) })) }
+        val relayout = PerfBudget.measuredWithin(PerfBudget.ms(30.0), what = "relayout") {
+            median(15) { k++; TextRenderer.prepare(five.copy(kerns = kernsOf(500).map { it.copy(value = it.value + k % 7 + 1) })) }
+        }
         val two = textOf(2000)
         val box = TextSpec(sizePx = 14f, box = TextBoxSpec(width = 900f))
         val bmp = BitmapUtils.createLayerBitmap(1000, 1000)
@@ -207,11 +212,12 @@ class TextKernRenderRobolectricTest {
         val kernedItem = TextItem(two, box, 500f, 500f, kerns = kernsOf(2000))
         val scaledItem = TextItem(two, box.copy(letterScale = LetterScaleSpec(smallestPercent = 60f)), 500f, 500f)
         repeat(3) { layOutAndDraw(kernedItem); layOutAndDraw(scaledItem) }
-        val kerned = median(15) { k++; layOutAndDraw(kernedItem.copy(spec = box.copy(sizePx = 14f + (k % 5) * 0.01f))) }
-        val scaled = median(15) { k++; layOutAndDraw(scaledItem.copy(spec = scaledItem.spec.copy(sizePx = 14f + (k % 5) * 0.01f))) }
+        val (kerned, scaled) = PerfBudget.measuredRatioWithin(1.5, slackMs = PerfBudget.ms(2.0), what = "kerned vs scaled") {
+            val kerned = median(15) { k++; layOutAndDraw(kernedItem.copy(spec = box.copy(sizePx = 14f + (k % 5) * 0.01f))) }
+            val scaled = median(15) { k++; layOutAndDraw(scaledItem.copy(spec = scaledItem.spec.copy(sizePx = 14f + (k % 5) * 0.01f))) }
+            kerned to scaled
+        }
         bmp.recycle()
         println("[perf] kerned 500 chars relayout ${"%.2f".format(relayout)} ms; 2000 chars kerned ${"%.2f".format(kerned)} ms vs scaled ${"%.2f".format(scaled)} ms")
-        assertTrue("relayout $relayout ms", relayout <= PerfBudget.ms(30.0))
-        assertTrue("kerned $kerned ms > 1.5 × scaled $scaled ms", kerned <= 1.5 * scaled + PerfBudget.ms(2.0))
     }
 }

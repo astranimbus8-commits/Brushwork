@@ -13,6 +13,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -21,6 +22,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.roundToInt
@@ -34,6 +36,7 @@ import kotlin.math.roundToInt
  * (Replaces the F2 stub's `SavedSelectionOpsStubTest`.)
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class SavedSelectionOpsTest {
     private val w = 40
     private val h = 30
@@ -252,11 +255,7 @@ class SavedSelectionOpsTest {
         assertTrue("the rows it has", half.take(48 * 12).any { it.toInt() != 0 })
         assertTrue("the rest unselected", half.drop(48 * 40).all { it.toInt() == 0 })
         // A 512 × 512 entry's thumbnail, warmed up.
-        SavedSelectionOps.thumbnail(e, n, n, 48, 48)
-        val t0 = System.nanoTime()
-        SavedSelectionOps.thumbnail(e, n, n, 48, 48)
-        val ms = (System.nanoTime() - t0) / 1e6
-        assertTrue("thumbnail of a 512 × 512 entry took $ms ms", ms <= PerfBudget.ms(60.0))
+        PerfBudget.within(PerfBudget.ms(60.0), what = "thumbnail of a 512 × 512 entry") { SavedSelectionOps.thumbnail(e, n, n, 48, 48) }
     }
 
     /** A 512 × 512 document's full-canvas saved selection flips well within the operation's time. */
@@ -269,10 +268,6 @@ class SavedSelectionOpsTest {
         doc.savedSelections = listOf(SavedSelection.of(doc.newSelectionId(), "Selection 1", Selection.fromPath(p, n, n, antiAlias = true), 1L)!!)
         val snap = CanvasSnapshot.of(doc)
         val result = CanvasOps.flip(snap, horizontal = true)
-        SavedSelectionOps.mappedForCanvas(snap.savedSelections, result, n, n)
-        val t0 = System.nanoTime()
-        SavedSelectionOps.mappedForCanvas(snap.savedSelections, result, n, n)
-        val ms = (System.nanoTime() - t0) / 1e6
-        assertTrue("flip of a 512 × 512 entry took $ms ms", ms <= PerfBudget.ms(150.0))
+        PerfBudget.within(PerfBudget.ms(150.0), what = "flip of a 512 × 512 entry") { SavedSelectionOps.mappedForCanvas(snap.savedSelections, result, n, n) }
     }
 }

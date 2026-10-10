@@ -1,16 +1,19 @@
 package com.brushwork.paint.ui.editor
 
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 
 /**
  * v1.7 item 10 (design §3.10; area I): [HistoryTapHub], the two- and three-finger taps over the
  * UI, on plain numbers (slop 36 px, 300 ms): which gestures it claims, when it takes and drops the
  * mark, when it asks the canvas to yield, and the one undo / redo at the end.
  */
+@Category(Timing::class)
 class HistoryTapHubTest {
 
     private class Host(var undoOn: Boolean = true, var redoOn: Boolean = true) : HistoryTapHub.Host {
@@ -245,8 +248,8 @@ class HistoryTapHubTest {
         }
         round(20_000)
         val n = 20_000
-        val perEvent = round(n).toDouble() / (n * 18) / 1e6
-        assertTrue("$perEvent ms per event", perEvent <= PerfBudget.ms(0.02))
-        assertEquals("every round is one two-finger tap", 20_000 + n, quiet.taps.size)
+        var timed = 0
+        PerfBudget.measuredWithin(PerfBudget.ms(0.02), what = "ms per event") { timed++; round(n).toDouble() / (n * 18) / 1e6 }
+        assertEquals("every round is one two-finger tap", 20_000 + timed * n, quiet.taps.size)
     }
 }

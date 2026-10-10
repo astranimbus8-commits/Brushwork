@@ -13,13 +13,14 @@ import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.DisplayTiles
 import com.brushwork.paint.qa16.QaDocs
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.vector.VSpline
 import com.brushwork.paint.vector.VSplinePoint
-import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.cos
@@ -39,6 +40,7 @@ import kotlin.random.Random
  * - one stroke replayed 64 times (item 18's 64-copy symmetry, before copies exist).
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class V17BaselinesTest {
     @Before
     fun notOnCi() = assumeTrue("baselines run locally only", System.getenv("CI") == null)
@@ -66,10 +68,12 @@ class V17BaselinesTest {
         val spline = VSpline(pts, order = 6)
         repeat(3) { SplineBezier.toSubpath(spline) } // warm up (JIT)
         var anchors = 0
-        val times = List(9) { timeMs { anchors = SplineBezier.toSubpath(spline).anchors.size } }
-        val med = median(times)
-        println("v17 F0 baseline: fresh conversion, 2000 points, order 6, random widths: median ${"%.1f".format(med)} ms (${times.joinToString { "%.1f".format(it) }}), $anchors anchors")
-        assertTrue("conversion $med ms", med <= PerfBudget.ms(2_000.0))
+        PerfBudget.measuredWithin(PerfBudget.ms(2_000.0), what = "conversion") {
+            val times = List(9) { timeMs { anchors = SplineBezier.toSubpath(spline).anchors.size } }
+            median(times).also { med ->
+                println("v17 F0 baseline: fresh conversion, 2000 points, order 6, random widths: median ${"%.1f".format(med)} ms (${times.joinToString { "%.1f".format(it) }}), $anchors anchors")
+            }
+        }
     }
 
     @Test
@@ -95,14 +99,21 @@ class V17BaselinesTest {
             return render to show
         }
         redraw() // warm up (tile bitmaps, JIT)
-        val runs = List(3) { redraw() }
-        val render = median(runs.map { it.first })
-        val show = median(runs.map { it.second })
-        println("v17 F0 baseline: 4000 x 5000, 5 layers (1 Multiply), fitted to 1080 x 2408: full tile render median ${"%.0f".format(render)} ms, tiles to screen median ${"%.1f".format(show)} ms (${runs.joinToString { "%.0f+%.1f".format(it.first, it.second) }})")
+        PerfBudget.until(what = "fitted 4000 x 5000", measure = {
+            val runs = List(3) { redraw() }
+            val render = median(runs.map { it.first })
+            val show = median(runs.map { it.second })
+            println("v17 F0 baseline: 4000 x 5000, 5 layers (1 Multiply), fitted to 1080 x 2408: full tile render median ${"%.0f".format(render)} ms, tiles to screen median ${"%.1f".format(show)} ms (${runs.joinToString { "%.0f+%.1f".format(it.first, it.second) }})")
+            render to show
+        }) { (render, show) ->
+            when {
+                render > PerfBudget.ms(60_000.0) -> "full render $render ms"
+                show > PerfBudget.ms(5_000.0) -> "tiles to screen $show ms"
+                else -> null
+            }
+        }
         tiles.release()
         for (l in doc.layers) l.bitmap.recycle()
-        assertTrue("full render $render ms", render <= PerfBudget.ms(60_000.0))
-        assertTrue("tiles to screen $show ms", show <= PerfBudget.ms(5_000.0))
     }
 
     @Test
@@ -121,10 +132,12 @@ class V17BaselinesTest {
         val doc = Rect(0, 0, w, h)
         fun once() = raster.render(Canvas(out), doc, preset, -16777216, 3L, false, pts, cut = doc)
         repeat(5) { once() } // warm up (tips, JIT)
-        val single = median(List(5) { timeMs { once() } })
-        val copies = median(List(3) { timeMs { repeat(64) { once() } } })
-        println("v17 F0 baseline: 400-point softround 24 px stroke on 2000 x 2000: one replay median ${"%.2f".format(single)} ms, 64 replays median ${"%.0f".format(copies)} ms (${"%.2f".format(copies / 64)} ms per copy)")
+        PerfBudget.measuredWithin(PerfBudget.ms(60_000.0), what = "64 replays") {
+            val single = median(List(5) { timeMs { once() } })
+            val copies = median(List(3) { timeMs { repeat(64) { once() } } })
+            println("v17 F0 baseline: 400-point softround 24 px stroke on 2000 x 2000: one replay median ${"%.2f".format(single)} ms, 64 replays median ${"%.0f".format(copies)} ms (${"%.2f".format(copies / 64)} ms per copy)")
+            copies
+        }
         out.recycle()
-        assertTrue("64 replays $copies ms", copies <= PerfBudget.ms(60_000.0))
     }
 }

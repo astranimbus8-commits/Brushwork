@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.CurveTool
@@ -17,6 +18,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.sin
@@ -29,6 +31,7 @@ import kotlin.math.sin
  * phone's budget for both is 0.5 ms a frame, a device row; Robolectric draws in software).
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class CurveLongPathDragRobolectricTest {
 
     /** A Curve plain line of [n] anchors across the document, every other one at 50 % thickness. */
@@ -84,12 +87,14 @@ class CurveLongPathDragRobolectricTest {
         val t = curve(600)
         val canvas = Canvas(Bitmap.createBitmap(W, H, Bitmap.Config.ARGB_8888))
         // (Robolectric draws in software: the v1.6 overlay of one selected point is the yardstick.)
-        val one = overlayMs(t, PointSelection.of(600, 3), canvas)
         val group = PointSelection.none(600).plusAll((50 until 550).toList())
         assertEquals(500, group.count)
-        val ms = overlayMs(t, group, canvas)
-        println("600-anchor curve: overlay %.3f ms with one point selected, %.3f ms with 500 and the gizmo (medians)".format(one, ms))
-        assertTrue("$ms ms against $one ms", ms <= one * NOISE + PerfBudget.ms(GROUP_OVERLAY_MS))
+        PerfBudget.measuredRatioWithin(NOISE, slackMs = PerfBudget.ms(GROUP_OVERLAY_MS), what = "500 points and the gizmo against one point") {
+            val one = overlayMs(t, PointSelection.of(600, 3), canvas)
+            val ms = overlayMs(t, group, canvas)
+            println("600-anchor curve: overlay %.3f ms with one point selected, %.3f ms with 500 and the gizmo (medians)".format(one, ms))
+            ms to one
+        }
         t.discard()
     }
 

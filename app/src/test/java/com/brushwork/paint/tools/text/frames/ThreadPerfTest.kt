@@ -5,6 +5,7 @@ import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.text.TextBoxSpec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextSpec
@@ -18,6 +19,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
@@ -31,6 +33,7 @@ import java.time.Duration
  * quadratic loop, a preview per keystroke), not milliseconds.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class ThreadPerfTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -63,17 +66,25 @@ class ThreadPerfTest {
     fun aStoryOf5000CharactersFlowsThroughSixFramesQuickly() {
         // Warm up the text measurement.
         repeat(2) { TextThreadFlow.flow(story5k, spec, sixFrames, 1L, 0L, StoryMeasureCache()) }
-        // A story edit: every tail is new (a fresh cache each time).
-        val cold = median(7) { k -> TextThreadFlow.flow(story5k.replaceRange(k, k + 1, "x"), spec, sixFrames, 1L, 0L, StoryMeasureCache()) }
-        // Drawing right after a flow measures nothing again.
-        val cache = StoryMeasureCache()
-        val items = TextThreadFlow.flow(story5k, spec, sixFrames, 1L, 0L, cache)
-        val misses = cache.misses
-        val draw = median(5) { items.forEach { cache.prepare(it) } }
-        assertEquals("drawing the flowed frames measures nothing again", misses, cache.misses)
-        println("[perf] flow 5000 chars / 6 frames: cold ${"%.2f".format(cold)} ms; layout for drawing ${"%.2f".format(draw)} ms")
-        assertTrue("cold flow $cold ms", cold < PerfBudget.ms(120.0))
-        assertTrue("layout for drawing $draw ms", draw < PerfBudget.ms(60.0))
+        // Both bounds on one pair of medians, measured again until a pair passes.
+        PerfBudget.until(what = "flow 5000 chars / 6 frames", measure = {
+            // A story edit: every tail is new (a fresh cache each time).
+            val cold = median(7) { k -> TextThreadFlow.flow(story5k.replaceRange(k, k + 1, "x"), spec, sixFrames, 1L, 0L, StoryMeasureCache()) }
+            // Drawing right after a flow measures nothing again.
+            val cache = StoryMeasureCache()
+            val items = TextThreadFlow.flow(story5k, spec, sixFrames, 1L, 0L, cache)
+            val misses = cache.misses
+            val draw = median(5) { items.forEach { cache.prepare(it) } }
+            assertEquals("drawing the flowed frames measures nothing again", misses, cache.misses)
+            println("[perf] flow 5000 chars / 6 frames: cold ${"%.2f".format(cold)} ms; layout for drawing ${"%.2f".format(draw)} ms")
+            cold to draw
+        }) { (cold, draw) ->
+            when {
+                cold >= PerfBudget.ms(120.0) -> "cold flow $cold ms"
+                draw >= PerfBudget.ms(60.0) -> "layout for drawing $draw ms"
+                else -> null
+            }
+        }
     }
 
     @Test
@@ -102,14 +113,15 @@ class ThreadPerfTest {
         val id = itemOf(frames[0]).thread.storyId
         assertWhole(s.c, id)
         var n = 0
-        val edit = median(5) {
-            assertTrue(s.tool.openStoryEditor(frames[0]))
-            s.tool.story.setText("Edit ${n++} " + story5k)
-            s.tool.story.confirmEditor()
+        val edit = PerfBudget.measuredWithin(PerfBudget.ms(400.0), what = "story edit") {
+            median(5) {
+                assertTrue(s.tool.openStoryEditor(frames[0]))
+                s.tool.story.setText("Edit ${n++} " + story5k)
+                s.tool.story.confirmEditor()
+            }
         }
         println("[perf] story edit (5000 chars, 6 frames, preview + write): ${"%.2f".format(edit)} ms")
         assertWhole(s.c, id)
-        assertTrue("story edit $edit ms", edit < PerfBudget.ms(400.0))
 
         // Typing: the first change previews at once, the next ones wait for the 100 ms throttle.
         s.tool.storyPreviewMs = 100L

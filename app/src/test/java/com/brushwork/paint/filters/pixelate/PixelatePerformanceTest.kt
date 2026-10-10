@@ -3,14 +3,18 @@ package com.brushwork.paint.filters.pixelate
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.FilterContext
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 
 /**
  * Sanity check that full-resolution applies stay fast, including the worst-case (smallest) cell
  * and dot sizes, which produce the most cells / dots. Uses 2 MP to keep the suite quick; at
  * 4000x3000 every case measured under 0.4 s on a desktop JVM.
  */
+@Category(Timing::class)
 class PixelatePerformanceTest {
     @Test
     fun largeImagesStayFast() {
@@ -22,7 +26,7 @@ class PixelatePerformanceTest {
         }
         val ctx = FilterContext()
         val report = StringBuilder()
-        var worst = 0L
+        var worst = 0.0
         for (f in pixelateFilters) {
             val cases = listOf(
                 "defaults" to f.defaultValues(),
@@ -36,15 +40,13 @@ class PixelatePerformanceTest {
                     val cur = v.float(p.key)
                     v.set(p.key, cur.coerceIn(p.min, p.max))
                 }
-                val t0 = System.nanoTime()
-                val out = f.apply(src, v, ctx)
-                val ms = (System.nanoTime() - t0) / 1_000_000
+                // Every case within the budget the slowest one had to meet.
+                val (out, ms) = PerfBudget.timedWithin(20_000.0, what = "${f.id} [$label]") { f.apply(src, v, ctx) }
                 assertTrue(out.width == w && out.height == h)
                 worst = maxOf(worst, ms)
                 report.append("${f.id} [$label]: $ms ms\n")
             }
         }
-        println("Pixelate timings for ${w}x$h:\n$report")
-        assertTrue("slowest pixelate filter took $worst ms\n$report", worst < 20_000)
+        println("Pixelate timings for ${w}x$h (slowest $worst ms):\n$report")
     }
 }

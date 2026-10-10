@@ -5,6 +5,8 @@ import android.net.Uri
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.exchange.ExchangeFixtures.app
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.ui.exchange.ExchangeDialog
 import com.brushwork.paint.ui.exchange.ExchangeUiState
 import com.brushwork.paint.vector.VPath
@@ -15,6 +17,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.io.ByteArrayOutputStream
@@ -28,6 +31,7 @@ import java.util.zip.GZIPOutputStream
  * leave a half import, a busy overlay or an undo step behind.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class ExchangeQaHostileFilesRobolectricTest {
 
     private val controllers = ArrayList<EditorController>()
@@ -149,10 +153,13 @@ class ExchangeQaHostileFilesRobolectricTest {
         })
         // Transform is open on every imported object, far-away ones included: ✓ works and keeps them.
         assertTrue(c.currentTool.hasPendingWork)
-        val t0 = System.currentTimeMillis()
-        c.currentTool.commit()
-        assertTrue(Smoke.pumpUntil { c.busyMessage == null && !c.currentTool.hasPendingWork })
-        assertTrue("✓ in ${System.currentTimeMillis() - t0} ms", System.currentTimeMillis() - t0 < 10_000)
+        // One try: the commit is a step of the document, not repeatable.
+        PerfBudget.measuredWithin(10_000.0, tries = 1, what = "✓") {
+            PerfBudget.timeMs {
+                c.currentTool.commit()
+                assertTrue(Smoke.pumpUntil { c.busyMessage == null && !c.currentTool.hasPendingWork })
+            }
+        }
         assertTrue(layer.isVectorLayer)
         assertEquals(6, layer.vector!!.objects.size)
     }

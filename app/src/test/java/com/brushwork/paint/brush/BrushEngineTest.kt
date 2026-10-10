@@ -1,5 +1,7 @@
 package com.brushwork.paint.brush
 
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -8,8 +10,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
 import kotlin.math.hypot
+import org.junit.experimental.categories.Category
 
 /** Pure-JVM tests of the brush engine math (no Android classes involved). */
+@Category(Timing::class)
 class BrushEngineTest {
 
     private data class Sample(val x: Float, val y: Float, val p: Float, val d: Float)
@@ -121,13 +125,14 @@ class BrushEngineTest {
 
     @Test
     fun hugeTipsRasterizeQuicklyWithTheRightShape() {
-        val start = System.nanoTime()
         val n = 1000
-        val square = TipShapes.rasterize(BrushTip.SQUARE, n.toFloat(), n, 1f, 1f, 0f, 0, false)
-        val round = TipShapes.rasterize(BrushTip.ROUND_HARD, n.toFloat(), n, 1f, 1f, 0f, 0, false)
-        val aa = TipShapes.rasterize(BrushTip.ROUND_HARD, TipCache.MAX_AA_TIP, TipCache.MAX_AA_TIP.toInt() + 2, 0.9f, 1f, 0f, 0, true)
-        val ms = (System.nanoTime() - start) / 1_000_000
-        assertTrue("rasterizing took $ms ms", ms < 3000)
+        val (square, round, aa) = PerfBudget.timedWithin(3000.0, what = "rasterizing huge tips") {
+            Triple(
+                TipShapes.rasterize(BrushTip.SQUARE, n.toFloat(), n, 1f, 1f, 0f, 0, false),
+                TipShapes.rasterize(BrushTip.ROUND_HARD, n.toFloat(), n, 1f, 1f, 0f, 0, false),
+                TipShapes.rasterize(BrushTip.ROUND_HARD, TipCache.MAX_AA_TIP, TipCache.MAX_AA_TIP.toInt() + 2, 0.9f, 1f, 0f, 0, true),
+            )
+        }.value
         assertEquals(255, square[0].toInt() and 0xFF)
         assertEquals(255, square[n * n - 1].toInt() and 0xFF)
         assertEquals(255, round[500 * n + 500].toInt() and 0xFF)

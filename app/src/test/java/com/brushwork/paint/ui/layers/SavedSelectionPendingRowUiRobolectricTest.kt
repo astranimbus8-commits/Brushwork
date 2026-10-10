@@ -19,6 +19,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.HistoryLabels
@@ -28,6 +29,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -43,6 +45,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.layers.savedselectionpendingsandbox"])
+@Category(Timing::class)
 class SavedSelectionPendingRowUiRobolectricTest {
     private val w = 64
     private val h = 48
@@ -129,7 +132,7 @@ class SavedSelectionPendingRowUiRobolectricTest {
         assertTrue(row(probe, pending.id).clickable())
         assertFalse(row(probe, pending.id).spinning())
         Smoke.assertQuiet(c, "pending saved selection row")
-        val ms = (System.nanoTime() - started) / 1_000_000
-        assertTrue("took $ms ms", ms < PerfBudget.ms(60_000.0))
+        // One try: the whole UI test is the measurement (one UI test per class).
+        PerfBudget.measuredWithin(PerfBudget.ms(60_000.0), tries = 1, what = "the pending row test") { (System.nanoTime() - started) / 1e6 }
     }
 }

@@ -1,13 +1,17 @@
 package com.brushwork.paint.segmentation
 
 import com.brushwork.paint.segmentation.SegTestImages.mean
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CancellationException
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import org.junit.experimental.categories.Category
 
+@Category(Timing::class)
 class SegmentationPerfTest {
 
     /** Fake scene model: bright blue is sky, the letterbox padding "other", everything else tree. */
@@ -30,16 +34,16 @@ class SegmentationPerfTest {
         val img = SegTestImages.skyOverFoliage(w, h)
         val subject = SubjectBackend { im -> FloatArray(im.size) { if (it % im.width in im.width / 3 until 2 * im.width / 3) 1f else 0f } }
         val pipeline = SegmentationPipeline(parser, subject)
-        val start = System.nanoTime()
-        for (t in SmartTarget.entries) {
-            val t0 = System.nanoTime()
-            val m = pipeline.segment(img, t)!!
-            println("$t ${(System.nanoTime() - t0) / 1_000_000} ms")
-            assertEquals(w * h, m.size)
+        val totalMs = PerfBudget.measuredWithin(20_000.0, what = "all targets") {
+            PerfBudget.timeMs {
+                for (t in SmartTarget.entries) {
+                    val (m, ms) = PerfBudget.timed { pipeline.segment(img, t)!! }
+                    println("$t $ms ms")
+                    assertEquals(w * h, m.size)
+                }
+            }
         }
-        val totalMs = (System.nanoTime() - start) / 1_000_000
         println("all targets on ${w}x$h: $totalMs ms")
-        assertTrue("took $totalMs ms", totalMs < 20_000)
         val sky = pipeline.segment(img, SmartTarget.SKY)!!
         assertTrue(mean(sky, w, 0, 0, w, h / 2 - 20) > 0.99f)
         assertTrue(mean(sky, w, 0, h / 2 + 20, w, h) < 0.01f)

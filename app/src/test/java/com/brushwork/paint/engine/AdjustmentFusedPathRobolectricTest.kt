@@ -31,6 +31,7 @@ import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.mask.MaskPreview
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +42,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -58,6 +60,7 @@ import kotlin.random.Random
  * 512² tile.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class AdjustmentFusedPathRobolectricTest {
     // Two chunks across (CHUNK = 512) and over the parallel threshold.
     private val w = 600
@@ -427,11 +430,14 @@ class AdjustmentFusedPathRobolectricTest {
             }
             return best
         }
-        val v15Ms = stageMs(false)
-        val fusedMs = stageMs(true)
-        println("[perf] masked Tone on a 512² tile: fused ${"%.2f".format(fusedMs)} ms, v1.5 Skia path ${"%.2f".format(v15Ms)} ms")
-        // §3.1(c): "fused Tone on a masked 512² tile takes <= 3 ms x 4" (with the CI allowance on top).
-        assertTrue("fused $fusedMs ms", fusedMs <= PerfBudget.ms(3.0 * 4))
-        assertTrue("fused $fusedMs ms is no slower than the v1.5 path ($v15Ms ms)", fusedMs <= v15Ms * 1.2 + 0.5)
+        PerfBudget.until(what = "masked Tone on a 512² tile", measure = { stageMs(false) to stageMs(true) }) { (v15Ms, fusedMs) ->
+            println("[perf] masked Tone on a 512² tile: fused ${"%.2f".format(fusedMs)} ms, v1.5 Skia path ${"%.2f".format(v15Ms)} ms")
+            when {
+                // §3.1(c): "fused Tone on a masked 512² tile takes <= 3 ms x 4" (with the CI allowance on top).
+                fusedMs > PerfBudget.ms(3.0 * 4) -> "fused $fusedMs ms"
+                fusedMs > v15Ms * 1.2 + 0.5 -> "fused $fusedMs ms is slower than the v1.5 path ($v15Ms ms)"
+                else -> null
+            }
+        }
     }
 }

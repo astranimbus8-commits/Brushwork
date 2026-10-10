@@ -14,6 +14,8 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.points.PointSelection
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +28,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -46,6 +49,7 @@ import kotlin.math.sin
  * Local runs only (T606-size bitmaps): skipped on CI.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class FreeDeformBudgetProbeTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -113,13 +117,14 @@ class FreeDeformBudgetProbeTest {
 
     @Test
     fun aPreviewFrameAtTwelveByTwelveCellsStaysNearAPlainTransformFrame() {
-        val (full, fullPlain) = previewMs(w, h, 720f / w)
         val (proxy, proxyPlain) = previewMs(1024, 1280, 720f / 1024f)
+        val (full, fullPlain) = PerfBudget.measuredRatioWithin(PREVIEW_RATIO, slackMs = 1.0, what = "full lift: Free deform vs a plain frame") {
+            previewMs(w, h, 720f / w)
+        }
         println(
             "[v17f] Free deform preview 12 x 12 (JVM, best frame): full 4000 x 5000 lift ${"%.1f".format(full)} ms " +
                 "(plain transform frame ${"%.1f".format(fullPlain)} ms), 1024 px lift ${"%.1f".format(proxy)} ms (plain ${"%.1f".format(proxyPlain)} ms)",
         )
-        assertTrue("full lift: Free deform $full ms vs a plain frame $fullPlain ms", full <= PREVIEW_RATIO * fullPlain + 1.0)
     }
 
     /** A 4000 x 5000 document with one photo layer, the Transform tool on it with the lift ready. */
@@ -154,26 +159,29 @@ class FreeDeformBudgetProbeTest {
 
     @Test
     fun theCommitOfAFullLayerStaysNearAPlainTransformCommit() {
-        val (c1, free) = lifted()
-        free.setRotation(10.0)
-        free.endNumericEdit()
-        val plain = commitMs(c1, free)
-        c1.dispose()
+        // Each try lifts both layers again (a commit is not repeatable on the same lift).
+        val (mesh, plain) = PerfBudget.measuredRatioWithin(COMMIT_RATIO, slackMs = 50.0, what = "Free deform commit vs a Free transform commit") {
+            val (c1, free) = lifted()
+            free.setRotation(10.0)
+            free.endNumericEdit()
+            val plain = commitMs(c1, free)
+            c1.dispose()
 
-        val (c2, tool) = lifted()
-        tool.mode = TransformTool.Mode.MESH
-        tool.setMeshCells(MeshDeform.MAX_CELLS, MeshDeform.MAX_CELLS)
-        assertEquals(169, tool.pointCount)
-        tool.selectPoints(PointSelection.of(tool.pointCount, 84, 85, 97))
-        tool.beginGroupEdit("Move points")
-        tool.setGroupTransform(Affine2.translate(180f, -120f))
-        tool.endGroupEdit()
-        assertTrue(tool.isMeshChanged)
-        val mesh = commitMs(c2, tool)
-        assertEquals(TransformTool.FREE_DEFORM_LABEL, c2.undoManager.undoLabel)
-        c2.dispose()
+            val (c2, tool) = lifted()
+            tool.mode = TransformTool.Mode.MESH
+            tool.setMeshCells(MeshDeform.MAX_CELLS, MeshDeform.MAX_CELLS)
+            assertEquals(169, tool.pointCount)
+            tool.selectPoints(PointSelection.of(tool.pointCount, 84, 85, 97))
+            tool.beginGroupEdit("Move points")
+            tool.setGroupTransform(Affine2.translate(180f, -120f))
+            tool.endGroupEdit()
+            assertTrue(tool.isMeshChanged)
+            val mesh = commitMs(c2, tool)
+            assertEquals(TransformTool.FREE_DEFORM_LABEL, c2.undoManager.undoLabel)
+            c2.dispose()
+            mesh to plain
+        }
         println("[v17f] Free deform commit 12 x 12 of a full 4000 x 5000 layer: ${"%.0f".format(mesh)} ms (a Free transform commit: ${"%.0f".format(plain)} ms) (JVM)")
-        assertTrue("Free deform commit $mesh ms vs a Free transform commit $plain ms", mesh <= COMMIT_RATIO * plain + 50.0)
     }
 
     private companion object {

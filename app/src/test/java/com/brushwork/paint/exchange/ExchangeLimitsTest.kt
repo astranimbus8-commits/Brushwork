@@ -11,6 +11,8 @@ import com.brushwork.paint.exchange.export.PdfWriter
 import com.brushwork.paint.exchange.export.SceneItem
 import com.brushwork.paint.exchange.export.SceneLayer
 import com.brushwork.paint.model.LayerBlendMode
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.vector.VPaint
 import kotlinx.coroutines.runBlocking
@@ -35,11 +37,13 @@ import java.io.IOException
 import java.util.Base64
 import javax.imageio.ImageIO
 import java.util.concurrent.CancellationException
+import org.junit.experimental.categories.Category
 
 /**
  * v1.5 §4.11b (A8 review): hostile or merely large files stay bounded — `<use>` fan-out, the PDF
  * reader on other apps' files — and percent-encoded data URIs decode (JVM).
  */
+@Category(Timing::class)
 class ExchangeLimitsTest {
 
     /** 7 levels of groups holding [fan] uses of the next level, the last one empty: fan^7 copies, no points. */
@@ -59,12 +63,9 @@ class ExchangeLimitsTest {
     fun referencesThatMultiplyAFileAreCutAtTheVisitLimit() {
         val doc = SvgParser.parse(useBomb(fan = 50))
         assertFalse("a few hundred elements: the parser has no reason to stop", doc.truncated)
-        val t0 = System.nanoTime()
-        val content = SvgToVector.convert(doc, 96f)
-        val ms = (System.nanoTime() - t0) / 1_000_000
+        val content = PerfBudget.timedWithin(20_000.0, what = "converting a use bomb") { SvgToVector.convert(doc, 96f) }.value
         // 50^7 copies would never end; the walk stops at the limit (and says so).
         assertTrue(content.truncated)
-        assertTrue("took $ms ms", ms < 20_000)
         // A smaller limit stops sooner; a file under it is complete.
         assertTrue(SvgToVector.convert(doc, 96f, maxVisits = 1000).truncated)
         val small = SvgParser.parse(useBomb(fan = 2, levels = 3))

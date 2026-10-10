@@ -11,6 +11,8 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
@@ -30,10 +32,10 @@ import kotlinx.coroutines.cancel
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -49,6 +51,7 @@ import org.robolectric.Shadows.shadowOf
  * (JVM-relative). Local runs only (T606-size bitmaps): skipped on CI.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class TransformDataCommitProbeTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -118,28 +121,33 @@ class TransformDataCommitProbeTest {
 
     @Test
     fun aTextAndAShapeCommitNearAPixelCommit() {
-        val textMs = controller().let { c ->
-            assertNotNull(c.addLayerWithContent("Text", "Add text", textData = TextCodec.encode(text)) { drawText(it) })
-            moveCommitMs(c, TransformTool.Lifted.TEXT)
+        // Each try sets both documents up again (a commit is not repeatable on the same lift).
+        val (textMs, textPixelsMs) = PerfBudget.measuredRatioWithin(RATIO, slackMs = 30.0, what = "text vs pixels") {
+            val textMs = controller().let { c ->
+                assertNotNull(c.addLayerWithContent("Text", "Add text", textData = TextCodec.encode(text)) { drawText(it) })
+                moveCommitMs(c, TransformTool.Lifted.TEXT)
+            }
+            val textPixelsMs = controller().let { c ->
+                assertNotNull(c.addLayerWithContent("Text pixels", "Add") { drawText(it) })
+                moveCommitMs(c, TransformTool.Lifted.PIXELS)
+            }
+            textMs to textPixelsMs
         }
-        val textPixelsMs = controller().let { c ->
-            assertNotNull(c.addLayerWithContent("Text pixels", "Add") { drawText(it) })
-            moveCommitMs(c, TransformTool.Lifted.PIXELS)
-        }
-        val shapeMs = controller().let { c ->
-            assertNotNull(c.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(shape)) { drawShape(it) })
-            moveCommitMs(c, TransformTool.Lifted.SHAPE)
-        }
-        val shapePixelsMs = controller().let { c ->
-            assertNotNull(c.addLayerWithContent("Shape pixels", "Add") { drawShape(it) })
-            moveCommitMs(c, TransformTool.Lifted.PIXELS)
+        val (shapeMs, shapePixelsMs) = PerfBudget.measuredRatioWithin(RATIO, slackMs = 30.0, what = "shape vs pixels") {
+            val shapeMs = controller().let { c ->
+                assertNotNull(c.addLayerWithContent("Shape", "Add shape", shapeData = ShapeCodec.encode(shape)) { drawShape(it) })
+                moveCommitMs(c, TransformTool.Lifted.SHAPE)
+            }
+            val shapePixelsMs = controller().let { c ->
+                assertNotNull(c.addLayerWithContent("Shape pixels", "Add") { drawShape(it) })
+                moveCommitMs(c, TransformTool.Lifted.PIXELS)
+            }
+            shapeMs to shapePixelsMs
         }
         println(
             "[v17f] Transform commit on 4000 x 5000 (JVM): text kept as text ${"%.0f".format(textMs)} ms (as pixels ${"%.0f".format(textPixelsMs)} ms), " +
                 "shape kept as shape ${"%.0f".format(shapeMs)} ms (as pixels ${"%.0f".format(shapePixelsMs)} ms)",
         )
-        assertTrue("text $textMs ms vs pixels $textPixelsMs ms", textMs <= RATIO * textPixelsMs + 30.0)
-        assertTrue("shape $shapeMs ms vs pixels $shapePixelsMs ms", shapeMs <= RATIO * shapePixelsMs + 30.0)
     }
 
     private companion object {

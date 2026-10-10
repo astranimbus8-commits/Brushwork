@@ -4,6 +4,8 @@ import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.distort.TableCountFilter
 import com.brushwork.paint.filters.distort.TableSizeFilter
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.transform.SnapAxis
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -14,12 +16,14 @@ import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /**
  * [LineDetector] against the real Table (Count) / Table (Size) filters on transparent, white and
  * noisy backgrounds (Space = 0 and > 0, thin to 100 px lines, with and without margin, both
  * alignments), plus boxes, blank / uniform layers, noise, the line cap and performance.
  */
+@Category(Timing::class)
 class LineDetectorTest {
     private val black = 0xFF000000.toInt()
     private val white = 0xFFFFFFFF.toInt()
@@ -410,13 +414,15 @@ class LineDetectorTest {
         val photo = tableCount(background(Bg.NOISY, w, h), 4, 9, 40f, 0f, 4f)
         val clear = tableCount(PixelBuffer(w, h), 4, 9, 40f, 12f, 6f)
         var found = 0
-        val msWhite = timeMs { found = detect(white).size }
-        assertEquals(10 + 5, found)
-        val msPhoto = timeMs { detect(photo) }
-        val msClear = timeMs { detect(clear) }
-        println("LineDetector 1080x2408: table on white ${"%.1f".format(msWhite)} ms, on grain ${"%.1f".format(msPhoto)} ms, transparent ${"%.1f".format(msClear)} ms")
         // Loose bound: shared build machines are noisy; the target is well under 150 ms.
-        assertTrue("$msWhite / $msPhoto / $msClear ms", max(msWhite, max(msPhoto, msClear)) < 600.0)
+        PerfBudget.until(what = "1080x2408", measure = {
+            val msWhite = timeMs { found = detect(white).size }
+            assertEquals(10 + 5, found)
+            val msPhoto = timeMs { detect(photo) }
+            val msClear = timeMs { detect(clear) }
+            println("LineDetector 1080x2408: table on white ${"%.1f".format(msWhite)} ms, on grain ${"%.1f".format(msPhoto)} ms, transparent ${"%.1f".format(msClear)} ms")
+            Triple(msWhite, msPhoto, msClear)
+        }) { (msWhite, msPhoto, msClear) -> if (max(msWhite, max(msPhoto, msClear)) < 600.0) null else "$msWhite / $msPhoto / $msClear ms" }
     }
 
     /** A photo-like image: smooth random shapes at several scales, hard edges and grain. */
@@ -448,10 +454,9 @@ class LineDetectorTest {
     fun photoLikeImagesStayFastAndCapped() {
         val photo = photoLike(2048, 2048, 5)
         var lines: List<DetectedLine> = emptyList()
-        val ms = timeMs { lines = detect(photo) }
+        val ms = PerfBudget.measuredWithin(2000.0, what = "2048x2048 photo-like") { timeMs { lines = detect(photo) } }
         println("LineDetector 2048x2048 photo-like: ${"%.1f".format(ms)} ms, ${lines.size} lines")
         for (axis in SnapAxis.entries) assertTrue(lines.on(axis).size <= LineDetector.MAX_LINES_PER_AXIS)
-        assertTrue("$ms ms", ms < 2000.0)
         // A table drawn over it is still found.
         val layout = countLayout(2048, 2048, 6, 6, 40f, 0f)!!
         val table = detect(tableCount(photo, 6, 6, 40f, 0f, 6f))

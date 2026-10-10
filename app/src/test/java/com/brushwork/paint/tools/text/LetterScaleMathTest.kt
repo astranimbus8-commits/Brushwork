@@ -1,5 +1,7 @@
 package com.brushwork.paint.tools.text
 
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -7,12 +9,14 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.pow
+import org.junit.experimental.categories.Category
 
 /**
  * v1.6 §3.5(d): which size every character of a text gets ([LetterRamp], pure JVM). The letters
  * are the non-whitespace grapheme clusters; whitespace takes the factor of the letter before it
  * and uses up no step (V2: the space between ELTON and JOHN is no letter of its own).
  */
+@Category(Timing::class)
 class LetterScaleMathTest {
 
     private val elton = LetterScaleSpec(smallestPercent = 26f / 42f * 100f)
@@ -134,19 +138,15 @@ class LetterScaleMathTest {
     @Test
     fun aLongStoryIsLinear() {
         val story = buildString { while (length < 50_000) append("Linked frames flow a story. ") }
-        val t0 = System.nanoTime()
-        val r = LetterRamp.compute(story, elton)
-        val ms = (System.nanoTime() - t0) / 1e6
+        val r = PerfBudget.timedWithin(PerfBudget.ms(400.0), what = "50k characters") { LetterRamp.compute(story, elton) }.value
         assertEquals(story.length, r.factors.size)
         assertEquals(1f, r.factors[0], 0f)
         assertEquals(26f / 42f, r.factors[story.trimEnd().length - 1], 1e-4f)
-        assertTrue("50k characters in $ms ms", ms < com.brushwork.paint.testing.PerfBudget.ms(400.0))
         // Each paragraph: finding where a paragraph ends looks only at each cluster's own
         // characters (one long paragraph without a line break was quadratic before).
-        val t1 = System.nanoTime()
-        val p = LetterRamp.compute(story, elton.copy(scope = LetterScaleScope.EACH_PARAGRAPH))
-        val ms1 = (System.nanoTime() - t1) / 1e6
+        val p = PerfBudget.timedWithin(PerfBudget.ms(400.0), what = "50k characters, each paragraph") {
+            LetterRamp.compute(story, elton.copy(scope = LetterScaleScope.EACH_PARAGRAPH))
+        }.value
         assertArrayEquals("one paragraph: the same ramp as the whole text", r.factors, p.factors, 0f)
-        assertTrue("50k characters, each paragraph, in $ms1 ms", ms1 < com.brushwork.paint.testing.PerfBudget.ms(400.0))
     }
 }

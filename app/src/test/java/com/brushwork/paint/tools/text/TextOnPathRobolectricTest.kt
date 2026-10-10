@@ -7,12 +7,15 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.floor
@@ -20,6 +23,7 @@ import kotlin.math.hypot
 
 /** Text on a path rendered with real Skia: ink placement, both modes, outline, bounds, caching, speed. */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class TextOnPathRobolectricTest {
 
     private fun fill(size: Float = 60f, color: Int = Color.BLACK) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -322,19 +326,17 @@ class TextOnPathRobolectricTest {
         val base = circle.copy(cx = 2000f, cy = 2000f, radius = 900f)
         val bmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        val t0 = System.nanoTime()
-        TextOnPath.draw(canvas, text, f, null, base)
-        val first = (System.nanoTime() - t0) / 1e6
+        // The first layout is the one that counts; a try over the budget is measured again (warm).
+        val first = PerfBudget.timedWithin(2000.0, what = "first layout") { TextOnPath.draw(canvas, text, f, null, base) }.ms
         // Warm up, then time new shapes (every frame of a handle drag re-bends the outline).
         repeat(10) { TextOnPath.draw(canvas, text, f, null, base.copy(radius = 800f + it)) }
-        val times = (0 until 21).map { i ->
-            val s = System.nanoTime()
-            TextOnPath.draw(canvas, text, f, null, base.copy(radius = 700f + i * 3f, startAngleDeg = -90f + i))
-            (System.nanoTime() - s) / 1e6
-        }.sorted()
-        val median = times[times.size / 2]
-        println("text on path: first layout + bend $first ms, re-bend median $median ms (min ${times.first()}, max ${times.last()})")
-        assertTrue("re-bending takes $median ms", median < 50.0)
-        assertTrue("first layout takes $first ms", first < 2000.0)
+        PerfBudget.measuredWithin(50.0, what = "re-bending") {
+            val times = (0 until 21).map { i ->
+                PerfBudget.timeMs { TextOnPath.draw(canvas, text, f, null, base.copy(radius = 700f + i * 3f, startAngleDeg = -90f + i)) }
+            }.sorted()
+            val median = times[times.size / 2]
+            println("text on path: first layout + bend $first ms, re-bend median $median ms (min ${times.first()}, max ${times.last()})")
+            median
+        }
     }
 }

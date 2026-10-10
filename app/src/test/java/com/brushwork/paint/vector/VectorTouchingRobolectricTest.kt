@@ -5,10 +5,13 @@ import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Selection
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.vector.geom.ObjectIndex
 import com.brushwork.paint.vector.geom.StrokeHits
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.cos
@@ -23,6 +26,7 @@ import kotlin.random.Random
  * answers in a few frames instead of seconds, with the same answer.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class VectorTouchingRobolectricTest {
     private fun strokes(count: Int, w: Int, h: Int, seed: Int): VectorContent {
         val rnd = Random(seed)
@@ -79,16 +83,15 @@ class VectorTouchingRobolectricTest {
         val sel = disc(512f, 512f, 300f, w, h)
         // Warm up both (class loading, JIT).
         VectorOps.touching(content, sel)
-        StrokeHits.clear()
-        val t0 = System.nanoTime()
-        for (o in content.objects) StrokeHits.dabs(o as VStroke)
-        val chains = System.nanoTime() - t0
-        val t1 = System.nanoTime()
-        val ids = VectorOps.touching(content, sel)
-        val touching = System.nanoTime() - t1
-        assertTrue(ids.isNotEmpty() && ids.size < content.objects.size)
         // Testing every dab of every stroke against the selection took 30-60 times as long as
-        // computing the dab chains; now it is a few times that (generous bound: busy machines).
-        assertTrue("touching ${touching / 1e6} ms vs dab chains ${chains / 1e6} ms", touching < 25 * chains + 50_000_000L)
+        // computing the dab chains; now it is a few times that (generous bound: busy machines):
+        // touching <= 25 × chains + 50 ms, each try from cleared chains.
+        PerfBudget.measuredRatioWithin(25.0, slackMs = 50.0, what = "touching vs dab chains") {
+            StrokeHits.clear()
+            val chains = PerfBudget.timeMs { for (o in content.objects) StrokeHits.dabs(o as VStroke) }
+            val (ids, touching) = PerfBudget.timed { VectorOps.touching(content, sel) }
+            assertTrue(ids.isNotEmpty() && ids.size < content.objects.size)
+            touching to chains
+        }
     }
 }

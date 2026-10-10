@@ -3,9 +3,11 @@ package com.brushwork.paint.qa16
 import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -21,6 +23,7 @@ import org.robolectric.shadows.ShadowLog
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa16.maskslive20mpsandbox"])
+@Category(Timing::class)
 class MasksLive20MpQaTest {
     private val w = 4000
     private val h = 5000

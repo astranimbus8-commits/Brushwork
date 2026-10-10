@@ -5,6 +5,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.mask.AdjustmentEdit
 import com.brushwork.paint.tools.mask.MaskHandles
@@ -46,10 +47,20 @@ internal class MasksLiveFlow(private val live: LiveCanvas, private val w: Int, p
          * builds loading the machine), so on the JVM its ratio to the exact frame measures host
          * Skia, not the app: it is checked against v1.5 only, with a third of v1.5's frame
          * (13-14 % quiet, 26 % under that load). The other drags keep both bounds.
+         *
+         * v1.8 (F0): a timing guard through [PerfBudget.until], with ONE try: the live frames are
+         * the ones the user's drag drew, and taking the drag again would add an undo step the flow
+         * checks. The classes using this flow are `@Category(Timing::class)`, which CI runs
+         * serially (no second JVM on the cores).
          */
         fun assertCheap(tag: String) {
-            if (!maskMoves) assertTrue("$tag $this", median <= 0.65 * exact)
-            assertTrue("$tag $this", median <= (if (maskMoves) 0.33 else 0.25) * v15)
+            PerfBudget.until(tries = 1, what = "$tag $what", measure = { this }) { d ->
+                when {
+                    !d.maskMoves && d.median > 0.65 * d.exact -> "$d (bound 0.65 of the exact frame)"
+                    d.median > (if (d.maskMoves) 0.33 else 0.25) * d.v15 -> "$d (bound ${if (d.maskMoves) 0.33 else 0.25} of v1.5)"
+                    else -> null
+                }
+            }
         }
 
         override fun toString() =

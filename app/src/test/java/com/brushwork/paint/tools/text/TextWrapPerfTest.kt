@@ -5,10 +5,12 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.text.WrapFixtures.LOREM
 import com.brushwork.paint.tools.text.WrapFixtures.setup
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.cos
@@ -21,6 +23,7 @@ import kotlin.math.sin
  * catch regressions in kind (a quadratic loop, a full re-measure per frame), not milliseconds.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class TextWrapPerfTest {
 
     private val context: Context = ApplicationProvider.getApplicationContext()
@@ -48,13 +51,14 @@ class TextWrapPerfTest {
         var prepared = TextRenderer.prepare(base)
         assertTrue("${prepared.block!!.wrapLines!!.size} lines", prepared.block!!.wrapLines!!.size > 15)
         var dy = 0f
-        val drag = median(31) {
-            dy += 1f
-            prepared = TextRenderer.prepare(base.copy(cy = 700f + dy), prepared)
+        val drag = PerfBudget.measuredWithin(PerfBudget.ms(40.0), what = "drag re-layout") {
+            median(31) {
+                dy += 1f
+                prepared = TextRenderer.prepare(base.copy(cy = 700f + dy), prepared)
+            }
         }
         val cold = median(11) { TextRenderer.prepare(base.copy(cx = 501f + dy++)) }
         println("[perf] wrap layout of 2000 chars: drag ${"%.2f".format(drag)} ms, cold ${"%.2f".format(cold)} ms")
-        assertTrue("drag re-layout $drag ms", drag < PerfBudget.ms(40.0))
     }
 
     @Test
@@ -63,22 +67,24 @@ class TextWrapPerfTest {
         Canvas(s.picture.bitmap).drawCircle(400f, 500f, 260f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WrapFixtures.BLACK })
         s.picture.markChanged()
         val contours = WrapContours()
-        val trace = median(7) {
-            s.picture.markChanged()
-            contours.outline(s.picture)
+        val trace = PerfBudget.measuredWithin(PerfBudget.ms(250.0), what = "outline") {
+            median(7) {
+                s.picture.markChanged()
+                contours.outline(s.picture)
+            }
         }
         val text = WrapFixtures.wrappedText(s, cx = 512f, cy = 500f, width = 900f, size = 18f)
         var grow = 0f
         val reflows = s.c.textWrap.reflowCount
-        val reflow = median(5) {
-            // The picture grows a little every time: its outline changes, the text re-flows.
-            grow += 4f
-            s.c.editWholeLayer(s.picture, "Grow") { b -> Canvas(b).drawCircle(400f, 500f, 260f + grow, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WrapFixtures.BLACK }) }
+        val reflow = PerfBudget.measuredWithin(PerfBudget.ms(600.0), what = "edit + re-flow") {
+            median(5) {
+                // The picture grows a little every time: its outline changes, the text re-flows.
+                grow += 4f
+                s.c.editWholeLayer(s.picture, "Grow") { b -> Canvas(b).drawCircle(400f, 500f, 260f + grow, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = WrapFixtures.BLACK }) }
+            }
         }
         println("[perf] outline of a 1024² layer ${"%.2f".format(trace)} ms; picture edit + re-flow ${"%.2f".format(reflow)} ms")
         assertTrue(text.isTextLayer)
         assertTrue(s.c.textWrap.reflowCount >= reflows + 5)
-        assertTrue("outline $trace ms", trace < PerfBudget.ms(250.0))
-        assertTrue("edit + re-flow $reflow ms", reflow < PerfBudget.ms(600.0))
     }
 }

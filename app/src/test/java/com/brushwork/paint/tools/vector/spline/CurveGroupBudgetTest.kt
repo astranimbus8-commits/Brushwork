@@ -3,6 +3,7 @@ package com.brushwork.paint.tools.vector.spline
 import com.brushwork.paint.core.Affine2
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.CurveAnchor
 import com.brushwork.paint.tools.vector.CurveGroupMath
@@ -10,11 +11,11 @@ import com.brushwork.paint.tools.vector.toCurveAnchor
 import com.brushwork.paint.vector.VSpline
 import com.brushwork.paint.vector.VSplinePoint
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /**
  * v1.7 (item 1 and 12, design §3.1c and §6.3): the model side of the group-drag budgets, per
@@ -27,6 +28,7 @@ import kotlin.random.Random
  * its cached Bézier form is mapped directly, ≤ 2 ms, no conversion until the finger lifts.
  * Medians after a warm-up (the JIT); the device rows of §6.3 measure the whole frame on the phone.
  */
+@Category(Timing::class)
 class CurveGroupBudgetTest {
 
     private fun median(v: DoubleArray): Double = v.sorted().let { it[it.size / 2] }
@@ -49,10 +51,11 @@ class CurveGroupBudgetTest {
         val rnd = Random(17)
         val base = List(2000) { CurveAnchor(rnd.nextFloat() * 1000f, rnd.nextFloat() * 1000f, width = rnd.nextFloat() * 2f) }
         var out: List<CurveAnchor> = base
-        val ms = frames(41) { k -> out = CurveGroupMath.mappedAnchors(base, null, drag(k + 1), 1e6f) }
+        val ms = PerfBudget.measuredWithin(PerfBudget.ms(2.0), what = "2000 anchors, group drag") {
+            frames(41) { k -> out = CurveGroupMath.mappedAnchors(base, null, drag(k + 1), 1e6f) }
+        }
         println("2000 anchors, group drag: %.3f ms per frame (median)".format(ms))
         assertEquals(base.map { it.width }, out.map { it.width })
-        assertTrue("$ms ms", ms <= PerfBudget.ms(2.0))
     }
 
     @Test
@@ -63,13 +66,14 @@ class CurveGroupBudgetTest {
         val inc = SplineBezier.Incremental()
         inc.toSubpath(s)
         var last = s
-        val ms = frames(31) { k ->
-            last = s.copy(points = CurveGroupMath.mappedPoints(s.points, sel, drag(k + 1)))
-            inc.toSubpath(last).anchors.map { it.toCurveAnchor() }
+        val ms = PerfBudget.measuredWithin(PerfBudget.ms(16.0), what = "200 of 2000 Path points") {
+            frames(31) { k ->
+                last = s.copy(points = CurveGroupMath.mappedPoints(s.points, sel, drag(k + 1)))
+                inc.toSubpath(last).anchors.map { it.toCurveAnchor() }
+            }
         }
         println("200 of 2000 Path points (order 4), group drag: %.3f ms per frame (median)".format(ms))
         assertEquals("I9: the fresh conversion", SplineBezier.toSubpath(last), inc.toSubpath(last))
-        assertTrue("$ms ms", ms <= PerfBudget.ms(16.0))
     }
 
     /**
@@ -91,13 +95,14 @@ class CurveGroupBudgetTest {
             val inc = SplineBezier.Incremental()
             inc.toSubpath(s)
             var last = s
-            val ms = frames(21, warm = 60) { k ->
-                last = s.copy(points = CurveGroupMath.mappedPoints(s.points, sel, drag(k + 1)))
-                inc.toSubpath(last).anchors.map { it.toCurveAnchor() }
+            val ms = PerfBudget.measuredWithin(PerfBudget.ms(budget / 2), what = "order $order") {
+                frames(21, warm = 60) { k ->
+                    last = s.copy(points = CurveGroupMath.mappedPoints(s.points, sel, drag(k + 1)))
+                    inc.toSubpath(last).anchors.map { it.toCurveAnchor() }
+                }
             }
             println("500 of 2000 Path points (order $order), gizmo drag: %.3f ms per frame (median)".format(ms))
             assertEquals("I9: the fresh conversion", SplineBezier.toSubpath(last), inc.toSubpath(last))
-            assertTrue("order $order: $ms ms", ms <= PerfBudget.ms(budget / 2))
         }
     }
 
@@ -108,12 +113,13 @@ class CurveGroupBudgetTest {
         val anchors = SplineBezier.toSubpath(s).anchors.map { it.toCurveAnchor() }
         val all = PointSelection.all(2000)
         var mapped: List<CurveAnchor> = anchors
-        val ms = frames(41) { k ->
-            s.copy(points = CurveGroupMath.mappedPoints(s.points, all, drag(k + 1)))
-            mapped = CurveGroupMath.mappedAnchors(anchors, null, drag(k + 1), VSpline.MAX_COORD)
+        val ms = PerfBudget.measuredWithin(PerfBudget.ms(2.0), what = "2000 Path points moved whole") {
+            frames(41) { k ->
+                s.copy(points = CurveGroupMath.mappedPoints(s.points, all, drag(k + 1)))
+                mapped = CurveGroupMath.mappedAnchors(anchors, null, drag(k + 1), VSpline.MAX_COORD)
+            }
         }
         println("2000 Path points moved whole (${anchors.size} anchors): %.3f ms per frame (median)".format(ms))
         assertEquals(anchors.size, mapped.size)
-        assertTrue("$ms ms", ms <= PerfBudget.ms(2.0))
     }
 }

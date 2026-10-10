@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
@@ -20,6 +21,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.math.PI
@@ -36,6 +38,7 @@ import kotlin.math.sin
  * Areas are counted on a raster of the result objects, independent of the code's own area.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class PathfinderOpsRobolectricTest {
     private val red = 0xFFDD2211.toInt()
     private val blue = 0xFF2244CC.toInt()
@@ -217,20 +220,23 @@ class PathfinderOpsRobolectricTest {
     @Test
     fun budgets() {
         val two = listOf(PathfinderOperand(wavy(200f, 200f, 120f, 200), styleA), PathfinderOperand(wavy(280f, 200f, 120f, 200, 1f), styleB))
-        val twoMs = medianMs { assertTrue(PathfinderOps.run(PathfinderOp.UNITE, two) is PathfinderResult.Done) }
-        assertTrue("two operands of 200 cubics: $twoMs ms", twoMs <= PerfBudget.ms(20.0))
+        PerfBudget.measuredWithin(PerfBudget.ms(20.0), what = "two operands of 200 cubics") {
+            medianMs { assertTrue(PathfinderOps.run(PathfinderOp.UNITE, two) is PathfinderResult.Done) }
+        }
 
         val ten = List(10) { i -> PathfinderOperand(wavy(200f + 60f * cos(i * 0.6f), 200f + 60f * sin(i * 0.6f), 100f, 200, i.toFloat()), styleA) }
-        val tenMs = medianMs(3) { assertTrue(PathfinderOps.run(PathfinderOp.UNITE, ten) is PathfinderResult.Done) }
-        assertTrue("Unite of 10 shapes × 200 segments: $tenMs ms", tenMs <= PerfBudget.ms(150.0))
+        PerfBudget.measuredWithin(PerfBudget.ms(150.0), what = "Unite of 10 shapes × 200 segments") {
+            medianMs(3) { assertTrue(PathfinderOps.run(PathfinderOp.UNITE, ten) is PathfinderResult.Done) }
+        }
 
         val twelve = List(12) { i ->
             val a = i * 2 * PI / 12
             PathfinderOperand(wavy((200 + 70 * cos(a)).toFloat(), (200 + 70 * sin(a)).toFloat(), 60f, 24, i.toFloat()), if (i % 2 == 0) styleA else styleB)
         }
         var pieces = 0
-        val divideMs = medianMs(3) { pieces = (PathfinderOps.run(PathfinderOp.DIVIDE, twelve) as PathfinderResult.Done).objects.size }
+        PerfBudget.measuredWithin(PerfBudget.ms(300.0), what = "Divide of 12 operands") {
+            medianMs(3) { pieces = (PathfinderOps.run(PathfinderOp.DIVIDE, twelve) as PathfinderResult.Done).objects.size }
+        }
         assertTrue("Divide makes many pieces ($pieces)", pieces > 24)
-        assertTrue("Divide of 12 operands: $divideMs ms", divideMs <= PerfBudget.ms(300.0))
     }
 }

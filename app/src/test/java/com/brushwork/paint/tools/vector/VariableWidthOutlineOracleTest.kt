@@ -1,6 +1,8 @@
 package com.brushwork.paint.tools.vector
 
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -12,6 +14,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /**
  * v1.5 §4.5 (A4): the production [VariableWidthOutline] against an exact oracle. The area a
@@ -20,6 +23,7 @@ import kotlin.random.Random
  * every point clearly inside it must be filled (non-zero) and every point clearly outside it must
  * not, for random lines, widths, closed loops, U-turns, cusps and discs holding their neighbours.
  */
+@Category(Timing::class)
 class VariableWidthOutlineOracleTest {
 
     /** Non-zero winding of [p] in the flattened [path] (android's default fill). */
@@ -236,10 +240,7 @@ class VariableWidthOutlineOracleTest {
         val ys = FloatArray(n) { 300f + 120f * sin(it / 90f) }
         val ws = FloatArray(n) { 6f + 30f * abs(sin(it / 250f)) }
         repeat(5) { VariableWidthOutline.build(xs, ys, ws, n) } // warm up
-        val t0 = System.nanoTime()
-        repeat(10) { VariableWidthOutline.build(xs, ys, ws, n) }
-        val ms = (System.nanoTime() - t0) / 1e6 / 10
-        assertTrue("$ms ms per 2000-point outline", ms < 25.0)
+        PerfBudget.measuredWithin(25.0, what = "per 2000-point outline") { PerfBudget.timeMs { repeat(10) { VariableWidthOutline.build(xs, ys, ws, n) } } / 10 }
         assertEquals(VectorPath.EMPTY.ops, VariableWidthOutline.build(xs, ys, FloatArray(n), n).ops)
     }
 }

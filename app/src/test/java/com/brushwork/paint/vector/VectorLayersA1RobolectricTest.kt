@@ -13,6 +13,8 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
@@ -29,6 +31,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
@@ -41,6 +44,7 @@ import kotlin.random.Random
  * deleting one of two crossing strokes, z-order moves that repaint one object, and indexed hit tests.
  */
 @RunWith(RobolectricTestRunner::class)
+@Category(Timing::class)
 class VectorLayersA1RobolectricTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -238,18 +242,21 @@ class VectorLayersA1RobolectricTest {
         // Warm up, then time (relative to a scan of every object, so it holds on any machine):
         // a tap among 2000 objects looks at a few of them only.
         repeat(50) { c.vectors.hitTest(c.layer, pts[it % pts.size], 3f); content.objects.lastOrNull { o -> VectorOps.hit(o, pts[it % pts.size], 3f) } }
-        var indexed = Long.MAX_VALUE
-        var scanned = Long.MAX_VALUE
-        repeat(3) {
-            val t0 = System.nanoTime()
-            for (p in pts) c.vectors.hitTest(c.layer, p, 3f)
-            val t1 = System.nanoTime()
-            for (p in pts) content.objects.lastOrNull { VectorOps.hit(it, p, 3f) }
-            val t2 = System.nanoTime()
-            indexed = minOf(indexed, t1 - t0); scanned = minOf(scanned, t2 - t1)
+        // indexed × 4 <= scanned, on the best of 3 each.
+        PerfBudget.measuredRatioWithin(0.25, what = "indexed vs scan") {
+            var indexed = Long.MAX_VALUE
+            var scanned = Long.MAX_VALUE
+            repeat(3) {
+                val t0 = System.nanoTime()
+                for (p in pts) c.vectors.hitTest(c.layer, p, 3f)
+                val t1 = System.nanoTime()
+                for (p in pts) content.objects.lastOrNull { VectorOps.hit(it, p, 3f) }
+                val t2 = System.nanoTime()
+                indexed = minOf(indexed, t1 - t0); scanned = minOf(scanned, t2 - t1)
+            }
+            println("hit test among 2000 objects: ${"%.3f".format(indexed / 1e6 / pts.size)} ms per tap (a scan: ${"%.3f".format(scanned / 1e6 / pts.size)} ms)")
+            indexed / 1e6 to scanned / 1e6
         }
-        println("hit test among 2000 objects: ${"%.3f".format(indexed / 1e6 / pts.size)} ms per tap (a scan: ${"%.3f".format(scanned / 1e6 / pts.size)} ms)")
-        assertTrue("indexed ${indexed / 1000} us vs scan ${scanned / 1000} us", indexed * 4 <= scanned)
     }
 
     @Test

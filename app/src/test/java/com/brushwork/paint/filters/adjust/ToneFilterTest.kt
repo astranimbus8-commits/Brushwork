@@ -4,6 +4,8 @@ import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterValues
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -14,8 +16,10 @@ import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /** v1.5 §4.8: the Tone filter (Exposure, Contrast, Highlights, Shadows, Whites, Blacks). */
+@Category(Timing::class)
 class ToneFilterTest {
     private val tone = ToneFilter()
 
@@ -236,11 +240,10 @@ class ToneFilterTest {
         // A loose guard (the device budget is ~15 ns per pixel and core): every stage enabled.
         val m = ToneMath.mapper(ToneSettings(0.7f, 30f, -40f, 35f, 20f, -15f))!!
         val px = randomImage(512, 512, 1).pixels
-        m.map(px.copyOf(), 0, px.size) // warm up
-        val t0 = System.nanoTime()
-        repeat(4) { m.map(px.copyOf(), 0, px.size) }
-        val nsPerPx = (System.nanoTime() - t0).toDouble() / (4.0 * px.size)
-        println("Tone mapper: %.1f ns/px".format(nsPerPx))
-        assertTrue("Tone mapper took $nsPerPx ns/px", nsPerPx < 1000.0)
+        // 1000 ns per pixel over 4 maps, in ms (within warms up with one run of its own).
+        val ms = PerfBudget.within(1000.0 * 4 * px.size / 1e6, what = "Tone mapper at 1000 ns/px") {
+            repeat(4) { m.map(px.copyOf(), 0, px.size) }
+        }
+        println("Tone mapper: %.1f ns/px".format(ms * 1e6 / (4.0 * px.size)))
     }
 }

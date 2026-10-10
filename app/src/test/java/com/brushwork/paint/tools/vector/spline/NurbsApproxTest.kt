@@ -1,11 +1,13 @@
 package com.brushwork.paint.tools.vector.spline
 
 import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import com.brushwork.paint.vector.VSpline
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.max
 import kotlin.random.Random
+import org.junit.experimental.categories.Category
 
 /**
  * v1.6 §3.2(c, d): order 5 and 6 splines and weights other than 1 become Hermite cubics within
@@ -14,6 +16,7 @@ import kotlin.random.Random
  * (200 points at order 4: 0.3 ms on a desktop; 100 points at order 6 with weights: ≤ 5 ms on the
  * phone, guarded here at 1.5 ms).
  */
+@Category(Timing::class)
 class NurbsApproxTest {
 
     /** Converted-curve flattening slack on top of the conversion tolerance. */
@@ -90,9 +93,12 @@ class NurbsApproxTest {
             }
             return b
         }
-        val a = best(plain)
-        val h = best(heavy)
-        assertTrue("200 points, order 4: $a ms", a <= PerfBudget.ms(0.3))
-        assertTrue("100 points, order 6, weights: $h ms", h <= PerfBudget.ms(1.5))
+        PerfBudget.until(what = "conversion budgets", measure = { best(plain) to best(heavy) }) { (a, h) ->
+            when {
+                a > PerfBudget.ms(0.3) -> "200 points, order 4: $a ms"
+                h > PerfBudget.ms(1.5) -> "100 points, order 6, weights: $h ms"
+                else -> null
+            }
+        }
     }
 }

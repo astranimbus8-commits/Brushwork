@@ -2,14 +2,18 @@ package com.brushwork.paint.exchange
 
 import com.brushwork.paint.exchange.svg.SvgParser
 import com.brushwork.paint.exchange.svg.SvgToVector
+import com.brushwork.paint.testing.PerfBudget
+import com.brushwork.paint.testing.Timing
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.experimental.categories.Category
 
 /**
  * v1.5 §4.11c (A8): a large SVG (5000 styled paths, over half a megabyte) parses and converts in linear
  * time (budget on the phone: 300 ms + 500 ms; here a generous bound that catches quadratic work).
  */
+@Category(Timing::class)
 class SvgScaleTest {
     @Test
     fun fiveThousandPathsParseAndConvertQuickly() {
@@ -30,16 +34,9 @@ class SvgScaleTest {
         assertTrue(bytes.size > 500_000)
         // Warm up the JIT once, then measure.
         SvgToVector.convert(SvgParser.parse(bytes), 350f)
-        val t0 = System.nanoTime()
-        val doc = SvgParser.parse(bytes)
-        val t1 = System.nanoTime()
-        val c = SvgToVector.convert(doc, 350f)
-        val t2 = System.nanoTime()
-        assertEquals(5000, c.shapeCount)
-        val parseMs = (t1 - t0) / 1e6
-        val convertMs = (t2 - t1) / 1e6
-        println("parse $parseMs ms, convert $convertMs ms")
-        assertTrue("parse took $parseMs ms", parseMs < 3000)
-        assertTrue("convert took $convertMs ms", convertMs < 5000)
+        val doc = PerfBudget.timedWithin(3000.0, what = "parse") { SvgParser.parse(bytes) }
+        val c = PerfBudget.timedWithin(5000.0, what = "convert") { SvgToVector.convert(doc.value, 350f) }
+        assertEquals(5000, c.value.shapeCount)
+        println("parse ${doc.ms} ms, convert ${c.ms} ms")
     }
 }

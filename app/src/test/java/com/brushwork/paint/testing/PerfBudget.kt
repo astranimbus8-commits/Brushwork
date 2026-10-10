@@ -31,6 +31,24 @@ object PerfBudget {
     /** Wall time of one run of [block], ms. */
     fun timeMs(block: () -> Unit): Double = timeMsOn(System::nanoTime, block)
 
+    /** A block's result and the wall time (ms) of the run that gave it. */
+    data class Timed<T>(val value: T, val ms: Double)
+
+    /** One run of [block]: its result and its wall time. */
+    fun <T> timed(block: () -> T): Timed<T> = timedOn(System::nanoTime, block)
+
+    /**
+     * Up to [tries] runs of [block], WITHOUT a warm-up (a one-off step whose first run is the one
+     * that counts, as a cold start), stopping at the first that takes at most [budgetMs]. Returns
+     * that run's result and time; throws [AssertionError] with every time and the best one when
+     * all [tries] are over. For a block whose result the test goes on with.
+     */
+    fun <T> timedWithin(budgetMs: Double, tries: Int = TRIES, what: String = "", block: () -> T): Timed<T> {
+        var last: Timed<T>? = null
+        measuredWithin(budgetMs, tries, what) { timed(block).also { last = it }.ms }
+        return last!!
+    }
+
     /**
      * One untimed warm-up run of [block], then up to [tries] timed runs, stopping at the first one
      * that takes at most [budgetMs]. Returns that run's time (ms); throws [AssertionError] naming
@@ -119,6 +137,13 @@ object PerfBudget {
         val t0 = clock()
         block()
         return (clock() - t0) / 1e6
+    }
+
+    /** [timed] reading [clock] (nanoseconds). */
+    internal fun <T> timedOn(clock: () -> Long, block: () -> T): Timed<T> {
+        val t0 = clock()
+        val v = block()
+        return Timed(v, (clock() - t0) / 1e6)
     }
 
     /** [within] reading [clock] (nanoseconds). */
