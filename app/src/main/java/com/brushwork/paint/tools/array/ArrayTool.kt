@@ -23,6 +23,7 @@ import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
+import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -40,11 +41,12 @@ import kotlin.math.roundToInt
  * making an array.
  *
  * - Dragging a handle, or a slider or field of the sheet ([preview] / [commitPreview]),
- *   previews live (I7): the compositor draws the layer as a source proxy (at most
- *   [PROXY_MAX] px) once per copy through `controller.renderOverride`; the release commits ONE
- *   step "Edit array" ([ArrayOps.edit]). A discrete control commits at once ([commit]). A
- *   vector array's re-render may land later: the preview stays up until it does, and
- *   [rendering] shows "Rendering array…" meanwhile.
+ *   previews live (I7): the layer is hidden through `controller.renderOverride` and this
+ *   tool's overlay draws a source proxy (at most [PROXY_MAX] px) once per copy over the canvas,
+ *   so a frame never re-renders the document's tiles; the release commits ONE step "Edit
+ *   array" ([ArrayOps.edit]). A discrete control commits at once ([commit]). A vector array's
+ *   re-render may land later: the preview stays up until it does, and [rendering] shows
+ *   "Rendering array…" meanwhile.
  * - Curve guides: "Draw guide" ([startGuideInput] DRAW) takes the next finger stroke, fitted by
  *   [GuideEditor]; "Use a path" (PICK) takes the first subpath of the vector path tapped next
  *   on any visible layer, copied.
@@ -231,7 +233,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         stroke.clear()
         pickDown = null
         guideInput = GuideInput.NONE
-        if (committing == null) dropPreview()
+        // A vector commit still rendering keeps its preview, drawn in the tiles from now on
+        // (this tool's overlay stops drawing).
+        if (committing == null) dropPreview() else preview?.showAll()
     }
 
     override fun onDispose() {
@@ -333,6 +337,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     }
 
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+        preview?.drawOverlay(canvas, t)
         val layer = target ?: return
         val spec = layer.array?.spec ?: return
         if (spec.editingSource) return
@@ -499,58 +504,111 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     private class Proxy(val key: ProxyKey, val bitmap: Bitmap, val rect: RectF)
 
-    /** What the override draws: the spec and its matrices, swapped as one (the compositor reads it). */
+    /** What the preview draws: the spec and its matrices, swapped as one (the compositor reads it). */
     private class Frame(val spec: ArraySpec, val matrices: List<FloatArray>)
 
     /**
-     * The live preview of [layer]: the compositor draws [proxy] once per matrix of the previewed
-     * spec instead of the layer's bitmap (the copies k = N − 1 down to 0, the source on top, as
-     * `ArrayDraw` draws the cache).
+     * The live preview of [layer], drawn from [proxy] once per matrix of the previewed spec (the
+     * copies k = N − 1 down to 0, the source on top, as `ArrayDraw` draws the cache).
+     *
+     * While a finger drags (§3.3 c, "only the overlay preview runs") the copies are drawn by the
+     * tool's overlay in screen space ([drawOverlay]), on the view's hardware canvas, and the
+     * render override only HIDES the layer: its display tiles re-render once, when the preview
+     * starts, and never again until it ends. Drawing the copies into the document-resolution
+     * tiles instead re-composited every copy's whole area on the CPU at each frame (≈ 0.8 s a
+     * frame on the desktop for 64 copies of a 1000 px source on 4000 × 5000). Meanwhile the
+     * copies show above the layers over them, at the layer's opacity, in normal blending.
+     *
+     * [showAll] switches to the compositor drawing every copy in place of the layer (one tile
+     * re-render): for a vector commit still rendering when the tool stops being current, so its
+     * copies stay on screen without the tool's overlay.
      */
     private inner class Preview(val layer: Layer, val source: RectF, val proxy: Proxy, spec: ArraySpec) {
         @Volatile private var frame = Frame(spec, ArrayLayout.matrices(spec, source))
 
-        /** What the preview covers now (document px), from the layer's own cache at first. */
-        val drawn = RectF(ArrayDraw.cacheBounds(layer.dataSnapshot()) ?: RectF(source))
+        /** True when the compositor draws the copies ([showAll]); false while the overlay does. */
+        @Volatile private var inTiles = false
+
+        /** Where the display tiles may show this preview or the layer's hidden cache (document px). */
+        val drawn = RectF(ArrayDraw.cacheBounds(layer.dataSnapshot()) ?: RectF(source)).apply { union(proxy.rect) }
 
         val spec: ArraySpec get() = frame.spec
 
         private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
         private val m = Matrix()
 
-        /** False until the first [update] (which also hides the layer's old copies). */
+        /** False until the first [update] (which hides the layer's old copies). */
         private var drawnOnce = false
 
         val override = object : LayerRenderOverride {
             override val layer: Layer get() = this@Preview.layer
 
             override fun drawContent(canvas: Canvas): Boolean {
-                val f = frame
+                if (!inTiles) return true // hidden: the overlay draws the copies
                 val bmp = proxy.bitmap
                 if (bmp.isRecycled) return false
-                for (k in f.matrices.size - 1 downTo 0) {
-                    val v = f.matrices[k]
-                    if (v.any { !it.isFinite() }) continue
-                    m.setValues(v)
-                    canvas.save()
-                    canvas.concat(m)
-                    canvas.drawBitmap(bmp, null, proxy.rect, paint)
-                    canvas.restore()
-                }
+                drawCopies(canvas, frame, bmp)
                 return true
+            }
+        }
+
+        private fun drawCopies(canvas: Canvas, f: Frame, bmp: Bitmap) {
+            for (k in f.matrices.size - 1 downTo 0) {
+                val v = f.matrices[k]
+                if (v.any { !it.isFinite() }) continue
+                m.setValues(v)
+                canvas.save()
+                canvas.concat(m)
+                canvas.drawBitmap(bmp, null, proxy.rect, paint)
+                canvas.restore()
             }
         }
 
         fun update(s: ArraySpec) {
             if (s == frame.spec && drawnOnce) return
-            drawnOnce = true
             val ms = ArrayLayout.matrices(s, source)
             frame = Frame(s, ms)
-            val cover = coverOf(ms, proxy.rect)
+            if (inTiles) {
+                val cover = coverOf(ms, proxy.rect)
+                val dirty = RectF(drawn).apply { union(cover) }
+                drawn.set(cover)
+                controller.invalidateDoc(outward(dirty))
+            } else if (!drawnOnce) {
+                // The first frame hides the layer (its old copies) in the tiles, once.
+                controller.invalidateDoc(outward(drawn))
+            }
+            drawnOnce = true
+            controller.invalidateOverlay()
+        }
+
+        /** The compositor draws the copies from now on (see the class docs). */
+        fun showAll() {
+            if (inTiles) return
+            inTiles = true
+            val cover = coverOf(frame.matrices, proxy.rect)
             val dirty = RectF(drawn).apply { union(cover) }
             drawn.set(cover)
-            // The first frame also hides the layer's old copies.
             controller.invalidateDoc(outward(dirty))
+        }
+
+        /** The copies in screen space over the canvas (the tool's overlay), while the tiles hide the layer. */
+        fun drawOverlay(canvas: Canvas, t: ViewTransform) {
+            if (inTiles || !drawnOnce) return
+            val bmp = proxy.bitmap
+            if (bmp.isRecycled) return
+            val doc = controller.doc
+            if (doc.indexOf(layer) < 0 || !doc.effectiveVisible(layer)) return
+            var opacity = layer.opacity
+            for (i in LayerTree.ancestors(doc.layers, doc.indexOf(layer))) opacity *= doc.layers[i].opacity
+            val alpha = (opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+            if (alpha <= 0) return
+            val save = canvas.save()
+            canvas.concat(t.matrix)
+            canvas.clipRect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())
+            // The layer's opacity applies to the copies as one picture, as the compositor would.
+            if (alpha < 255) canvas.saveLayerAlpha(RectF(drawn).apply { union(coverOf(frame.matrices, proxy.rect)) }, alpha)
+            drawCopies(canvas, frame, bmp)
+            canvas.restoreToCount(save)
         }
     }
 

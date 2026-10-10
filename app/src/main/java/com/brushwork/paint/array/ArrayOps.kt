@@ -14,6 +14,8 @@ import com.brushwork.paint.brush.TipCache
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LambdaAction
+import com.brushwork.paint.engine.UndoAction
 import com.brushwork.paint.model.ArrayLayout
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
@@ -167,11 +169,20 @@ object ArrayOps {
      * background; every other kind before this returns) and whether the edit was applied.
      */
     internal fun edit(c: EditorController, layer: Layer, spec: ArraySpec, label: String, onDone: (applied: Boolean) -> Unit = {}): Boolean {
-        val a = layer.array ?: run { onDone(false); return false }
-        val s = spec.sanitized().let { if (it.editingSource != a.spec.editingSource) it.copy(editingSource = a.spec.editingSource) else it }
-        if (s == a.spec) { onDone(true); return true }
-        return paused(c) { setArray(c, layer, a.copy(spec = s), label, onDone) }
+        val a0 = layer.array ?: run { onDone(false); return false }
+        if (keptMode(spec, a0) == a0.spec) { onDone(true); return true }
+        return paused(c) {
+            // Read again after the pause: the work it committed may have changed the array.
+            val a = layer.array ?: run { onDone(false); return@paused false }
+            val s = keptMode(spec, a)
+            if (s == a.spec) { onDone(true); return@paused true }
+            setArray(c, layer, a.copy(spec = s), label, onDone)
+        }
     }
+
+    /** [spec] sanitized, in [a]'s "Edit source pixels" mode (an edit never enters or leaves it). */
+    private fun keptMode(spec: ArraySpec, a: LayerArray): ArraySpec =
+        spec.sanitized().let { if (it.editingSource != a.spec.editingSource) it.copy(editingSource = a.spec.editingSource) else it }
 
     /**
      * "Apply array" (one step): a vector array's copies become real objects (new ids; refused
@@ -211,7 +222,7 @@ object ArrayOps {
     /** "Remove array" (one step): the copies go and the source stays, editable as before. */
     fun remove(c: EditorController, layer: Layer): Boolean {
         if (c.doc.indexOf(layer) < 0 || layer.array == null) return false
-        return paused(c) { setArray(c, layer, null, ArrayLabels.REMOVE) }
+        return paused(c) { layer.array != null && setArray(c, layer, null, ArrayLabels.REMOVE) }
     }
 
     /**
@@ -224,8 +235,11 @@ object ArrayOps {
         if (a.pixels == null) { c.toast(NOT_PIXELS); return false }
         if (a.spec.editingSource) return true
         if (c.doc.indexOf(layer) < 0) return false
-        val editing = a.copy(spec = a.spec.copy(editingSource = true))
         return paused(c) {
+            // Read again after the pause (the work it committed may have changed the array).
+            val cur = layer.array?.takeIf { it.pixels != null } ?: return@paused false
+            if (cur.spec.editingSource) return@paused true
+            val editing = cur.copy(spec = cur.spec.copy(editingSource = true))
             c.updateLayerData(layer, layer.dataSnapshot().copy(array = editing), ArrayLabels.EDIT_SOURCE, Rect()) { cv -> ArrayDraw.drawPixels(cv, editing) }
         }
     }
@@ -240,14 +254,17 @@ object ArrayOps {
         if (!a.spec.editingSource || c.doc.indexOf(layer) < 0) return false
         if (!c.checkUsable(layer)) return false
         return paused(c) {
+            // Read again after the pause: the work it committed may have finished it already.
+            val cur = layer.array ?: return@paused false
+            if (!cur.spec.editingSource) return@paused true
             val px = try { ArraySources.layerPixels(layer.bitmap) } catch (e: OutOfMemoryError) { c.toast(MEMORY_REFUSAL); return@paused false }
             if (px == null) { c.toast(EMPTY_SOURCE); return@paused false }
-            if (!ArraySources.hasRoom(c, 0, px.bytes, freedBytes = a.pixels?.bytes ?: 0L)) {
+            if (!ArraySources.hasRoom(c, 0, px.bytes, freedBytes = cur.pixels?.bytes ?: 0L)) {
                 px.bitmap.recycle()
                 c.toast(MEMORY_REFUSAL)
                 return@paused false
             }
-            val done = finishInto(c, layer, a.spec.copy(editingSource = false), px, ArrayLabels.FINISH_SOURCE)
+            val done = finishInto(c, layer, cur.spec.copy(editingSource = false), px, ArrayLabels.FINISH_SOURCE)
             if (!done) px.bitmap.recycle()
             done
         }
@@ -310,7 +327,8 @@ object ArrayOps {
                     rec.abort()
                     false
                 } else {
-                    if (!c.commitEdit(rec, ArrayLabels.BUTTON, listOf(add))) c.pushUndo(add)
+                    val actions = listOf(reselectOnUndo(src), add)
+                    if (!c.commitEdit(rec, ArrayLabels.BUTTON, actions)) c.groupUndo(ArrayLabels.BUTTON) { actions.forEach(c::pushUndo) }
                     c.queueLayerList(LayerListEvent(LayerListKind.ADDED, layer, null, ArrayLabels.BUTTON))
                     true
                 }
@@ -327,6 +345,22 @@ object ArrayOps {
             bmp?.recycle()
         }
     }
+
+    /**
+     * The undo half of "the new array layer is the active row": recorded BEFORE the new layer's
+     * insert in the same step, so its undo runs after the layer is gone and selects [src] again
+     * (the v1.6 `AddLayerAction` leaves the active row on whatever slid into the removed row's
+     * place; a folder's `LayerTreeAction` already restores it, and this then changes nothing).
+     * Its redo does nothing: the insert's redo selects the new layer.
+     */
+    private fun reselectOnUndo(src: Layer): UndoAction = LambdaAction(
+        ArrayLabels.BUTTON,
+        onUndo = { c ->
+            val i = c.doc.indexOf(src)
+            if (i >= 0 && i != c.doc.activeLayerIndex) c.structural { c.doc.activeLayerIndex = i }
+        },
+        onRedo = {},
+    )
 
     /**
      * The objects [ids] of the vector layer [layer] (null: those the selection touches) into a
@@ -381,8 +415,12 @@ object ArrayOps {
         val view = ArrayDraw.effectiveVector(after) ?: after.vector!!
         var ok = false
         c.groupUndo(ArrayLabels.BUTTON) {
-            if (c.structure.insert(newLayer, c.structure.above(layer), ArrayLabels.BUTTON)) {
+            val add = c.structure.placed(newLayer, c.structure.above(layer), ArrayLabels.BUTTON)
+            if (add != null) {
                 ok = true
+                c.pushUndo(reselectOnUndo(layer))
+                c.pushUndo(add)
+                c.queueLayerList(LayerListEvent(LayerListKind.ADDED, newLayer, null, ArrayLabels.BUTTON))
                 if (!region.isEmpty) c.updateLayerData(layer, after, ArrayLabels.BUTTON, region) { cv -> renderTiles(cv, view, region, doc.bounds) }
                 else c.updateLayerData(layer, after, ArrayLabels.BUTTON, null, draw = null)
             }

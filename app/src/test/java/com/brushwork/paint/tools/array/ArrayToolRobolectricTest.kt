@@ -1,11 +1,16 @@
 package com.brushwork.paint.tools.array
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
+import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.Layer
@@ -20,6 +25,7 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -188,6 +194,75 @@ class ArrayToolRobolectricTest {
         vl.vector = VectorContent.EMPTY
         assertEquals(picked, layer.array!!.spec.guide)
         Smoke.assertQuiet(c, "guides")
+    }
+
+    /**
+     * §3.3 c (review): while a finger drags, only the overlay preview runs. Its first frame hides
+     * the layer in the display tiles once; every later frame re-renders no tile, and the tool's
+     * overlay draws the copies at the layer's opacity. A vector commit still rendering when the
+     * tool stops being current hands its copies to the tiles until the render lands.
+     */
+    @Test
+    fun aPreviewDrawsItsCopiesInTheOverlayAndRendersNoTileAfterItsFirstFrame() {
+        val (c, layer) = rasterArray()
+        val t = tool(c)
+        val all = Rect(0, 0, c.doc.width, c.doc.height)
+        c.tiles.update(c.compositor, all)
+        fun composite(): Bitmap = Bitmap.createBitmap(c.doc.width, c.doc.height, Bitmap.Config.ARGB_8888).also { b ->
+            c.compositor.drawDocument(Canvas(b), all, target = CompositeTarget.identity(b))
+        }
+        assertEquals(red, composite().getPixel(72, 36))
+        t.preview(layer.array!!.spec.copy(count = 4))
+        assertTrue("the first frame hides the layer's copies", c.tiles.hasDirty)
+        c.tiles.update(c.compositor, all)
+        assertEquals("hidden in the tiles", 0, composite().getPixel(72, 36))
+        t.preview(layer.array!!.spec.copy(count = 5))
+        assertFalse("a later frame renders no tile", c.tiles.hasDirty)
+        // Screen = document: the copies 40 px apart from (20, 30), drawn by the overlay.
+        c.viewTransform.set(Matrix())
+        val screen = Bitmap.createBitmap(c.doc.width, c.doc.height, Bitmap.Config.ARGB_8888)
+        t.drawOverlay(Canvas(screen), c.viewTransform)
+        for (k in 0 until 5) assertEquals("copy $k in the overlay", red, screen.getPixel(32 + 40 * k, 36))
+        assertEquals("no sixth copy", 0, screen.getPixel(32 + 40 * 5, 36))
+        layer.opacity = 0.5f
+        screen.eraseColor(0)
+        t.drawOverlay(Canvas(screen), c.viewTransform)
+        assertEquals("at the layer's opacity", 128.0, Color.alpha(screen.getPixel(152, 36)).toDouble(), 2.0)
+        layer.opacity = 1f
+        t.commitPreview()
+        Smoke.pump(20)
+        assertNull(c.renderOverride)
+        assertEquals(red, layer.bitmap.getPixel(192, 36))
+        assertEquals(red, composite().getPixel(192, 36))
+
+        // A vector array: the commit renders in the background; switching tools meanwhile
+        // draws the previewed copies in the tiles until it lands.
+        val vl = Layer(c.doc.newLayerId(), "Boxes", com.brushwork.paint.engine.BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height))
+        vl.vector = VectorContent.EMPTY.plus(listOf(VPath(
+            0, subpaths = listOf(VSubpath(listOf(VAnchor(20f, 200f, true), VAnchor(50f, 200f, true), VAnchor(50f, 230f, true), VAnchor(20f, 230f, true)), closed = true)),
+            fill = VPaint.Solid(red),
+        ))).first
+        assertTrue(c.structure.insert(vl, label = "Test"))
+        assertTrue(c.arrayWholeLayer(vl))
+        Smoke.pumpUntil { !c.vectors.isRendering }
+        Smoke.pump(20)
+        assertEquals(ToolId.ARRAY, c.activeToolId)
+        c.tiles.update(c.compositor, all)
+        c.vectors.policy = VectorLayers.Policy.ASYNC
+        t.commit(vl.array!!.spec.copy(count = 6))
+        assertTrue("rendering in the background", t.rendering)
+        assertNotNull(c.renderOverride)
+        c.tiles.update(c.compositor, all)
+        assertFalse(c.tiles.hasDirty)
+        c.selectTool(ToolId.BRUSH)
+        assertNotNull("the preview stays while the render runs", c.renderOverride)
+        assertTrue("drawn in the tiles now", c.tiles.hasDirty)
+        Smoke.pumpUntil { !c.vectors.isRendering && !t.rendering }
+        Smoke.pump(20)
+        assertNull(c.renderOverride)
+        assertEquals(6, vl.array!!.spec.count)
+        assertEquals(red, vl.bitmap.getPixel(35 + 30 * 5, 215))
+        Smoke.assertQuiet(c, "overlay preview")
     }
 
     @Test
