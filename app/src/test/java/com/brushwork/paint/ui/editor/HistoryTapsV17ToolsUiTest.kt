@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.editor
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -10,7 +11,6 @@ import com.brushwork.paint.model.SavedSelection
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.qa16.Finger
-import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -39,6 +39,7 @@ import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import kotlinx.coroutines.Dispatchers
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -113,6 +114,8 @@ class HistoryTapsV17ToolsUiTest {
 
     private fun HistoryTapFingers.besideIt() = region(ChromeTags.TOP_ROW).at(0.5f, 0.9f)
 
+    private fun pixelsOf(b: Bitmap): IntArray = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
+
     private fun symmetry(h: ChromeHarness) {
         val s = h.editor()
         val c = s.c
@@ -121,7 +124,7 @@ class HistoryTapsV17ToolsUiTest {
         c.selectTool(ToolId.SYMMETRY)
         settle()
         assertEquals("picking the tool turns the mirror on", SymmetryType.MIRROR, c.symmetry.type)
-        Qa16Ui(s).reach(SymmetryType.KALEIDOSCOPE.label, 32f)
+        f.reach(SymmetryType.KALEIDOSCOPE.label, 32f)
         with(f) {
             undoesTheSeed(c, control(SymmetryType.KALEIDOSCOPE.label).at(0.5f), besideIt())
             assertEquals("the chip did nothing", SymmetryType.MIRROR, c.symmetry.type)
@@ -154,7 +157,7 @@ class HistoryTapsV17ToolsUiTest {
         assertEquals(2, tool.count)
         val layers = c.doc.layers.map { it.name }
         val unite = PathfinderOp.UNITE.description
-        Qa16Ui(s).reach(unite)
+        f.reach(unite)
         assertTrue("\"$unite\" acts", SmokeUi.isEnabled(unite))
         with(f) {
             undoesTheSeed(c, control(unite).at(0.5f), besideIt())
@@ -206,27 +209,36 @@ class HistoryTapsV17ToolsUiTest {
         Canvas(layer.bitmap).drawRect(120f, 90f, 260f, 200f, Paint().apply { color = 0xFF2266CC.toInt() })
         layer.markChanged()
         seed(c)
-        c.selectLayer(layer)
-        c.selectTool(ToolId.TRANSFORM)
+        val pixels = pixelsOf(layer.bitmap)
         val tool = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
-        assertTrue("lifted", Smoke.pumpUntil { tool.transformState != null })
-        tool.mode = TransformTool.Mode.MESH
-        settle()
-        assertTrue("Free deform", tool.isMeshShown)
-        assertFalse("an untouched mesh", tool.hasUserChanges)
+        /** The layer lifted again (an undo drops an untouched lift), shown as a Free deform mesh. */
+        fun freeDeform() {
+            if (c.activeToolId == ToolId.TRANSFORM) c.selectTool(ToolId.BRUSH)
+            c.selectLayer(layer)
+            c.selectTool(ToolId.TRANSFORM)
+            assertTrue("lifted", Smoke.pumpUntil { tool.transformState != null })
+            tool.mode = TransformTool.Mode.MESH
+            settle()
+            assertTrue("Free deform", tool.isMeshShown)
+            assertFalse("an untouched mesh", tool.hasUserChanges)
+        }
+        freeDeform()
         val smooth = tool.smoothMesh
         val columns = tool.meshColumns
-        val ui = Qa16Ui(s)
-        ui.reach(TransformLabels17.SMOOTH, 32f)
         with(f) {
-            // The first finger on "Smooth mesh", the second on a mesh stepper when it shows too.
-            val chip = control(TransformLabels17.SMOOTH)
-            val more = Finger.control(s, MeshStepperLabels.MORE_COLUMNS)?.takeIf { it.width >= 30f && it.height >= 30f }
-            undoesTheSeed(c, chip.at(0.5f), more?.at(0.5f) ?: besideIt())
-            assertEquals("the chip did nothing", smooth, tool.smoothMesh)
-            assertEquals("the stepper did nothing", columns, tool.meshColumns)
-            assertFalse("no mesh change", tool.isMeshChanged)
-            redoesTheSeed(s)
+            // The first finger on the "Smooth mesh" chip, then on the "More mesh columns" stepper.
+            for (label in listOf(TransformLabels17.SMOOTH, MeshStepperLabels.MORE_COLUMNS)) {
+                if (tool.transformState == null) freeDeform()
+                reach(label, 32f)
+                undoesTheSeed(c, control(label).at(0.5f), besideIt())
+                assertEquals("$label: the chip did nothing", smooth, tool.smoothMesh)
+                assertEquals("$label: the stepper did nothing", columns, tool.meshColumns)
+                assertFalse("$label: no mesh change", tool.isMeshChanged)
+                // The undo let the untouched lift go (EditorController.undo), the layer as it was.
+                assertFalse("$label: no pending deform", tool.hasPendingWork)
+                assertTrue("$label: the layer as it was", pixels.contentEquals(pixelsOf(layer.bitmap)))
+                redoesTheSeed(s)
+            }
         }
         assertEquals(smooth, tool.smoothMesh)
         assertEquals(columns, tool.meshColumns)
@@ -262,7 +274,7 @@ class HistoryTapsV17ToolsUiTest {
         settle(20, 50)
         select(1, 1)
         val increase = "Increase ${KerningLabels.KERNING}"
-        Qa16Ui(s).reach(increase)
+        f.reach(increase)
         assertTrue("the row acts on a gap", SmokeUi.isEnabled(increase))
         assertFalse("nothing changed yet", tool.hasUserChanges)
         val kerns = tool.item!!.kerns
@@ -274,13 +286,16 @@ class HistoryTapsV17ToolsUiTest {
             // nothing, and the kern its first finger made is put back.
             val title = textIn("Edit text", panel).at(0.5f)
             val steps = this.steps
-            twoFingers(control(increase).at(0.5f), title)
+            holdThenSecondFinger(control(increase).at(0.5f), title) {
+                assertNotEquals("the first finger kerned on touch-down", kerns, tool.item!!.kerns)
+                assertTrue(tool.hasUserChanges)
+            }
             assertTrue("it says why: ${SmokeUi.shown().take(60)}", saw(HistoryLabels.BLOCKED_BY_TEXT_EDITOR))
             assertEquals("nothing undone", steps, this.steps)
             assertEquals("the kern put back", kerns, tool.item!!.kerns)
             assertFalse(tool.hasUserChanges)
             assertTrue("the editor stays open", tool.editorOpen)
-            // Three fingers on the row's − and +: no redo either, and neither steps the kern.
+            // Three fingers on the row's − and +: no redo either, and the kern + made is put back.
             threeFingers(control(increase).at(0.5f), control("Decrease ${KerningLabels.KERNING}").at(0.5f), title)
             assertEquals(steps, this.steps)
             assertEquals("nothing kerned", kerns, tool.item!!.kerns)

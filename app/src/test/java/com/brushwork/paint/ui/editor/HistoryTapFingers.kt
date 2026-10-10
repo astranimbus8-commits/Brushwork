@@ -11,10 +11,11 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.qa16.Finger
+import com.brushwork.paint.qa16.Qa16Ui
+import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
-import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -58,14 +59,17 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
 
     fun sliderValue(name: String): Float = slider(name).config[SemanticsProperties.ProgressBarRangeInfo].current
 
-    /** Scrolls the sheet slider [name] sits in until it shows whole (60 dp at a time). */
+    /** Scrolls the sheet slider [name] sits in until it shows whole (60 dp at a time), and lets the scroll end. */
     fun reachSlider(name: String) {
         repeat(30) {
             val n = slider(name)
             val b = n.boundsInWindow
             val r = s.root
             val top = n.positionInWindow.y
-            if (b.height >= n.size.height - 1f && top >= r.top && top + n.size.height <= r.bottom) return
+            if (b.height >= n.size.height - 1f && top >= r.top && top + n.size.height <= r.bottom) {
+                settle()
+                return
+            }
             var p: SemanticsNode? = n.parent
             while (p != null && p.config.getOrNull(SemanticsActions.ScrollBy) == null) p = p.parent
             val sheet = p ?: throw AssertionError("slider \"$name\" is cut and nothing scrolls it: $b")
@@ -83,14 +87,32 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
         .lastOrNull { region.contains(it.center) && it.width > 0f }
         ?: throw AssertionError("no \"$text\" inside $region; shown: ${SmokeUi.shown().take(60)}")
 
+    /**
+     * Scrolls [label] wholly into view ([Qa16Ui.reach]), then lets the scroll end. A semantics
+     * scroll animates: a control still gliding moves away from where it was measured, and a
+     * finger on a container still scrolling stops the scroll instead of reaching the control.
+     */
+    fun reach(label: String, minDp: Float = 40f) {
+        Qa16Ui(s).reach(label, minDp)
+        settle()
+    }
+
+    /** Scrolls the options strip to the control described [description] ([QaCurves.scrollStripTo]), then lets the scroll end (see [reach]). */
+    fun reachInStrip(description: String) {
+        QaCurves.scrollStripTo(s, description)
+        settle()
+    }
+
+    // The gestures below go down where the caller measured, at once: no time passes between the
+    // measure and the first down (see [reach]). Each ends with a settle, which keeps one
+    // gesture's taps apart from the next one's.
+
     fun twoFingers(a: Pair<Float, Float>, b: Pair<Float, Float>) {
-        s.touch.idle(200)
         s.touch.twoFingerTap(px(a), px(b))
         settle()
     }
 
     fun threeFingers(a: Pair<Float, Float>, b: Pair<Float, Float>, d: Pair<Float, Float>) {
-        s.touch.idle(200)
         s.touch.threeFingerTap(px(a), px(b), px(d))
         settle()
     }
@@ -109,9 +131,7 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
      */
     fun dragThenSecondFinger(first: Pair<Float, Float>, other: Pair<Float, Float>, whileDragging: () -> Unit) {
         val a = px(first)
-        val b = px(other)
         val t = s.touch
-        t.idle(200)
         t.send(MotionEvent.ACTION_DOWN, P(0, a.first, a.second))
         for (i in 1..5) {
             t.idle(16)
@@ -119,10 +139,29 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
         }
         settle(2, 10)
         whileDragging()
-        val dragged = a.first + 10f * s.density
-        t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, dragged, a.second), P(1, b.first, b.second), index = 1)
+        secondFingerTaps(a.first + 10f * s.density to a.second, px(other))
+    }
+
+    /**
+     * The first finger goes down at [first] (editor dp) and stays still, [whileHolding] checks
+     * what its touch-down did (a stepper steps on touch-down), then a second finger lands at
+     * [other] and both lift: a two-finger tap.
+     */
+    fun holdThenSecondFinger(first: Pair<Float, Float>, other: Pair<Float, Float>, whileHolding: () -> Unit) {
+        val a = px(first)
+        val t = s.touch
+        t.send(MotionEvent.ACTION_DOWN, P(0, a.first, a.second))
+        settle(2, 10)
+        whileHolding()
+        secondFingerTaps(a, px(other))
+    }
+
+    /** The first finger is down at [a] (window px): a second one lands at [b], then both lift. */
+    private fun secondFingerTaps(a: Pair<Float, Float>, b: Pair<Float, Float>) {
+        val t = s.touch
+        t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, a.first, a.second), P(1, b.first, b.second), index = 1)
         t.idle(40)
-        t.send(MotionEvent.ACTION_POINTER_UP, P(0, dragged, a.second), P(1, b.first, b.second), index = 0)
+        t.send(MotionEvent.ACTION_POINTER_UP, P(0, a.first, a.second), P(1, b.first, b.second), index = 0)
         t.idle(20)
         t.send(MotionEvent.ACTION_UP, P(1, b.first, b.second))
         settle()
@@ -147,8 +186,5 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
             assertEquals("the seed is one step", before + 1, c.undoManager.undoCount)
             assertEquals(SEED, c.undoManager.undoLabel)
         }
-
-        /** Every placed element that carries test tag [tag]. */
-        fun hasTag(tag: String): Boolean = RobolectricUi.elements().any { it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == tag }
     }
 }

@@ -5,8 +5,6 @@ import android.graphics.Paint
 import android.graphics.Path
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.Selection
-import com.brushwork.paint.qa16.QaCurves
-import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -36,10 +34,11 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.7 item 10 (design §3.10, §6.2) on the user's 392 dp phone, with real multi-touch events, over
  * the v1.7 controls that change something while a finger is still down:
- * - the open Array sheet (hosted: both fingers inside it): the first finger on the Count slider
- *   (it jumps to the finger), then on "Increase Count" (it steps on touch-down), then on "Apply
- *   array": each time exactly one "Edit array" is undone, what the finger moved is put back and
- *   the sheet stays open; three fingers over the sheet redo one;
+ * - the open Array sheet (hosted: both fingers inside it): the first finger drags the Count
+ *   slider (a live preview, checked before the second finger lands), then holds "Increase Count"
+ *   (it steps on touch-down, checked too), then "Apply array": each time exactly one "Edit
+ *   array" is undone, what the finger moved is put back and the sheet stays open; three fingers
+ *   over the sheet redo one;
  * - I's merge-gate check: the Path tool on a path tapped again (nothing changed yet), a point
  *   selected, one finger drags its width slider (a live in-tool step), a second finger lands:
  *   the width goes back, then exactly ONE document step ("Seed") is undone, and the path is as
@@ -66,13 +65,12 @@ class HistoryTapsArrayAndPathUiTest {
         val s = h.editor(Smoke.document(400, 300, layers = 2, whiteBottom = true))
         val c = s.c
         val f = HistoryTapFingers(s)
-        val ui = Qa16Ui(s)
         val src = c.doc.layers[1]
         Canvas(src.bitmap).drawRect(60f, 60f, 100f, 100f, Paint().apply { color = 0xFFDD2211.toInt() })
         src.markChanged()
         c.setSelection(Selection.fromPath(Path().apply { addRect(50f, 50f, 110f, 110f, Path.Direction.CW) }, c.doc.width, c.doc.height, antiAlias = false), recordUndo = false)
         settle(4)
-        ui.reach(ArrayLabels.FROM_SELECTION)
+        f.reach(ArrayLabels.FROM_SELECTION)
         click(ArrayLabels.FROM_SELECTION, exact = true)
         c.setSelection(null, recordUndo = false)
         settle(4)
@@ -84,7 +82,7 @@ class HistoryTapsArrayAndPathUiTest {
         // (The Count slider runs 0..1 over 1..200 copies.)
         fun fraction(n: Int) = (n - 1) / 199f
         // Three array edits: Count 3 → 4 → 5 → 6.
-        ui.reach("Increase Count")
+        f.reach("Increase Count")
         repeat(3) { click("Increase Count", exact = true) }
         assertEquals(6, count())
         assertEquals(ArrayLabels.EDIT, c.undoManager.undoLabel)
@@ -93,10 +91,16 @@ class HistoryTapsArrayAndPathUiTest {
         // The second finger on the sheet's title: a touch outside a hosted sheet minimizes it.
         fun title() = with(f) { textIn("Array", sheet()).at(0.5f) }
         with(f) {
-            // ------------------------------------------------ the first finger on the Count slider
+            // ------------------------------------------------ the first finger drags the Count slider
             reachSlider("Count")
             assertEquals(fraction(6), sliderValue("Count"), 1e-3f)
-            twoFingers(sliderBox("Count").at(0.12f), title())
+            // Robolectric's touch slop is 16 dp, a phone's 8 dp: the 10 dp drag (under the 12 dp
+            // tap slop) moves the slider on the phone only.
+            phoneTouchSlop()
+            dragThenSecondFinger(sliderBox("Count").at(0.3f), title()) {
+                val moved = tool.previewSpec?.count
+                assertTrue("the finger moved Count (a live preview): $moved", moved != null && moved > 6)
+            }
             assertEquals("one array edit undone", 5, count())
             assertEquals(steps - 1, f.steps)
             assertTrue("the feedback: ${SmokeUi.shown().take(60)}", saw("Undo: ${ArrayLabels.EDIT}"))
@@ -105,8 +109,10 @@ class HistoryTapsArrayAndPathUiTest {
             sheet()
 
             // ------------------------------------------------ the first finger on "Increase Count" (it steps on touch-down)
-            ui.reach("Increase Count")
-            twoFingers(control("Increase Count").at(0.5f), title())
+            reach("Increase Count")
+            holdThenSecondFinger(control("Increase Count").at(0.5f), title()) {
+                assertEquals("the stepper stepped on touch-down (a live preview)", 6, tool.previewSpec?.count)
+            }
             assertEquals("the stepper's change put back, then one undo", 4, count())
             assertEquals(steps - 2, f.steps)
             assertNull(tool.previewSpec)
@@ -163,7 +169,7 @@ class HistoryTapsArrayAndPathUiTest {
         assertEquals(1f, width, 1e-4f)
 
         // One finger drags the width slider (an in-tool step), then the second finger lands.
-        QaCurves.scrollStripTo(s, "Point thickness slider")
+        f.reachInStrip("Point thickness slider")
         f.phoneTouchSlop()
         with(f) {
             val track = sliderBox("Point thickness slider")
