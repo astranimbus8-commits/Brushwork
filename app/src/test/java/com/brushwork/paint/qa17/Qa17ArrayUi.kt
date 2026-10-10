@@ -86,14 +86,20 @@ internal class Qa17ArrayUi(private val h: ChromeHarness) {
      * into view in its sheet (60 dp at a time, as a finger does), then focus, text and Done.
      */
     fun typeField(label: String, value: String) {
+        intoView(label) { SmokeUi.field(label).node }
+        SmokeUi.typeAndDone(label, value)
+    }
+
+    /**
+     * The node [node] gives scrolled wholly into view in its sheet (60 dp at a time, as a finger
+     * scrolls), for controls that are no clickables (a field, a scrub handle).
+     */
+    fun intoView(label: String, node: () -> SemanticsNode): SemanticsNode {
         repeat(40) {
-            val n = SmokeUi.field(label).node
+            val n = node()
             val b = n.boundsInWindow
             val r = s.root
-            if (b.height >= n.size.height - 1f && b.top >= r.top && b.bottom <= r.bottom) {
-                SmokeUi.typeAndDone(label, value)
-                return
-            }
+            if (b.height >= n.size.height - 1f && b.top >= r.top && b.bottom <= r.bottom) return n
             var p = n.parent
             while (p != null && (p.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) == null || p.config.getOrNull(SemanticsActions.ScrollBy) == null)) p = p.parent
             val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is cut and nothing scrolls it" }
