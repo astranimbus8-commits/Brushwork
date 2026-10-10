@@ -8,7 +8,9 @@ import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
@@ -158,4 +160,19 @@ internal object HistoryLabels {
         SAVE_SELECTION, UPDATE_SAVED_SELECTION, RENAME_SAVED_SELECTION, DELETE_SAVED_SELECTION, FREE_DEFORM,
         DELETE_SHAPE, DELETE_TEXT, DELETE_CURVE, DELETE_POLYLINE, DELETE_PATH, SCALE,
     ) + PATHFINDER_OPS.map(::pathfinder)
+
+    // ------------------------------------------------------------------ v1.8 step names (I10)
+    // Pre-declared by the foundation (F1, design §4.8) from LabelsV18; this file is frozen after
+    // F1. The new tools' commits ("Magnetic lasso", "Color select") use their ToolId labels, a
+    // new cog its ShapeType label ("Cog").
+
+    /** Every field edit of the Array sheet's Look tab (one array edit step; a slider drag amends it). */
+    const val ARRAY_LOOK = ArrayLabels18.HISTORY_LOOK
+    /** The vector object bar's "Detach mirror copies": the object becomes N plain objects in one step. */
+    const val DETACH_MIRROR_COPIES = MirrorLabels18.DETACH
+    /** The More row's "Remove mirror copies" on an open curve or shape (one in-tool step). */
+    const val REMOVE_MIRROR_COPIES = MirrorLabels18.REMOVE
+
+    /** Every v1.8 step name above. */
+    val V18: List<String> = listOf(ARRAY_LOOK, DETACH_MIRROR_COPIES, REMOVE_MIRROR_COPIES)
 }

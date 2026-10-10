@@ -116,6 +116,7 @@ internal fun FilterParamControl(host: ParamHost, param: FilterParam, enabled: Bo
                 modifier = Modifier.fillMaxWidth(),
             )
             is FilterParam.Seed -> SeedControl(host, param, enabled)
+            is FilterParam.Fringes -> FringeControl(host, param, enabled)
         }
     }
 }

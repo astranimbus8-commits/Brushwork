@@ -68,6 +68,9 @@ object IbisColors {
     /** The floating options strip panel: black α0.55. */
     val OptionsStrip = Color(0x8C000000)
 
+    /** v1.8 (D27): the strip's More row, dropdowns and menus: opaque dark gray. Sheets stay translucent. */
+    val Menu = Color(0xFF1E1E1E)
+
     /** X / Y pill and its beveled cells. */
     val Pill = Color(0x9E000000)
     val PillCell = Color(0xFF3A3A3A)

@@ -136,6 +136,32 @@ sealed class FilterParam {
     data class Seed(override val key: String = "seed", override val label: String = "Random seed", val default: Int = 1) : FilterParam() {
         override fun defaultValue(): Any = default
     }
+
+    /**
+     * v1.8 (item 5): three fringe colors (ARGB; 0 = "No color"), with preset chips. The value is
+     * an `IntArray(3)`: the first (forward), middle and last (back) fringe. Equal by content.
+     */
+    data class Fringes(
+        override val key: String,
+        override val label: String,
+        val presets: List<FringePreset>,
+        val default: IntArray,
+        /** Chromatic aberration: "order", read when [key] is absent (V11). Glitch: null (it never had an order). */
+        val legacyOrderKey: String? = null,
+    ) : FilterParam() {
+        override fun defaultValue(): Any = default.copyOf()
+
+        override fun equals(other: Any?): Boolean = other is Fringes && key == other.key && label == other.label &&
+            presets == other.presets && default.contentEquals(other.default) && legacyOrderKey == other.legacyOrderKey
+
+        override fun hashCode(): Int = ((key.hashCode() * 31 + label.hashCode()) * 31 + presets.hashCode()) * 31 + default.contentHashCode()
+    }
+}
+
+/** v1.8 (item 5): a fringe preset chip of a [FilterParam.Fringes]: its [name] and its 3 colors. Equal by content. */
+data class FringePreset(val name: String, val colors: IntArray) {
+    override fun equals(other: Any?): Boolean = other is FringePreset && name == other.name && colors.contentEquals(other.colors)
+    override fun hashCode(): Int = name.hashCode() * 31 + colors.contentHashCode()
 }
 
 /** Current parameter values. Typed getters fall back gracefully if a value is missing. */
@@ -159,6 +185,10 @@ class FilterValues(initial: Map<String, Any> = emptyMap()) {
     fun gradient(key: String): List<GradientStop> = (map[key] as? List<GradientStop>) ?: listOf(GradientStop(0f, 0xFF000000.toInt()), GradientStop(1f, -1))
     fun text(key: String): String = map[key] as? String ?: ""
     fun seed(key: String = "seed"): Int = int(key)
+
+    /** A Fringes value: 3 colors; anything else gives RGB (pure red, green, blue). A new array each call. */
+    fun colors(key: String): IntArray =
+        (map[key] as? IntArray)?.takeIf { it.size == 3 }?.copyOf() ?: intArrayOf(0xFFFF0000.toInt(), 0xFF00FF00.toInt(), 0xFF0000FF.toInt())
 }
 
 /**
