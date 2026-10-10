@@ -1,6 +1,9 @@
 package com.brushwork.paint.qa17
 
 import android.graphics.Bitmap
+import android.graphics.Color
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.qa16.QaCurves
@@ -13,13 +16,18 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.vector.VPath
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -38,6 +46,8 @@ import kotlin.math.roundToInt
  * Then "Select several", two more points tapped and the three dragged together by the one that
  * sits on the gizmo's corner. ✓ is ONE app step that keeps the path's id and its exact Bézier form
  * (I9); Undo gives back the very path that was saved, pixel for pixel; Redo the edited one.
+ * Then item 7 in the Polyline tool: "Fill only" on an open polyline, applied, reopened by a tap
+ * inside its fill (which shows "Fill only"), turned to "Stroke and fill" as one app step.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa17.pointsreopensandbox"])
@@ -51,6 +61,7 @@ class Qa17PointsReopenUiTest {
         val h = ChromeHarness()
         val qa = PointsQa(h)
         h.section("a saved, reopened Path: prepend and a group drag, one app step") { qa.reopened() }
+        h.section("item 7 on a Polyline: Fill only, reopened by a tap on its fill, then Both") { qa.polylineFill() }
         dog.interrupt()
         h.finish()
     }
@@ -141,5 +152,78 @@ class Qa17PointsReopenUiTest {
         assertEquals("Redo gives the edit back", made, layer.vector!!.objects.single())
         assertEquals(0, differing(editedPixels, composite(c)))
         Smoke.assertQuiet(c, "reopened path")
+    }
+
+    /** Whether the segment [label] is the chosen one. */
+    private fun chosen(label: String): Boolean =
+        SmokeUi.find(label, exact = true)?.node?.config?.getOrNull(SemanticsProperties.Selected) == true
+
+    /** Inked (darker than mid-grey) window pixels over document rect [l, r) × [t, b): what the user sees there. */
+    private fun PointsQa.seen(l: Int, t: Int, r: Int, b: Int): Int {
+        val w = PointsQa.window(s)
+        var n = 0
+        for (y in t until b) for (x in l until r) {
+            val (sx, sy) = s.screen(x + 0.5f, y + 0.5f)
+            val p = w.getPixel(sx.toInt(), sy.toInt())
+            if ((Color.red(p) + Color.green(p) + Color.blue(p)) / 3 < 200) n++
+        }
+        return n
+    }
+
+    /**
+     * Item 7 in the Polyline tool (the strip is the same in Curve, Polyline and Path): three taps,
+     * "Fill only": the open polyline fills to its chord at once, nothing above its peak; ✓ makes
+     * a fill-only polyline. A tap inside that fill opens it again showing "Fill"; "Both" brings
+     * the line back; ✓ is one app step; Undo gives the fill-only polyline back.
+     */
+    private fun PointsQa.polylineFill() {
+        editor(vector = true)
+        c.color = 0xFF2244CC.toInt()
+        c.brush = BrushLibrary.defaultBrush.copy(size = 10f, opacity = 1f)
+        val tool = tool("Polyline")
+        tap(60f, 250f); tap(150f, 80f); tap(240f, 250f)
+        assertEquals(3, tool.pointCount)
+        press(CurveLabels17.FILL_ONLY, 40f)
+        assertEquals(CurvePaint.FILL, tool.paintMode)
+        // What the user sees at once: inside filled, under the chord nothing (the window; the
+        // peak itself is under the point's marker there, so the line is judged after ✓).
+        assertTrue("the fill shows at once", Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); seen(145, 195, 155, 205) == 100 })
+        assertEquals("nothing under the chord", 0, seen(145, 254, 155, 262))
+        apply("Apply polyline")
+        val layer = c.activeLayer
+        val fillOnly = layer.vector!!.objects.single() as VPath
+        assertTrue(fillOnly.polyline)
+        assertNull("a fill alone has no line", fillOnly.stroke)
+        assertNotNull(fillOnly.fill)
+        assertTrue(Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); !c.vectors.isRendering })
+        val filled = composite(c)
+        assertEquals("applied as shown", 100, inked(filled, 145, 195, 155, 205))
+        assertEquals("no line over the peak", 0, inked(filled, 147, 70, 153, 77))
+        assertEquals(0, inked(filled, 145, 254, 155, 262))
+
+        // The user's Stroke back for the next line; then a tap inside the fill opens it again.
+        press(CurveLabels17.STROKE_ONLY, 40f)
+        tap(150f, 200f)
+        assertTrue("a tap on the fill opens the polyline", tool.isReopened)
+        assertTrue("it shows Fill", chosen(CurveLabels17.FILL_ONLY))
+        assertFalse("no stroke kind for a fill", SmokeUi.has(CurveLabels17.STROKE_KIND, exact = true))
+        press(CurveLabels17.BOTH, 40f)
+        assertEquals(CurvePaint.BOTH, tool.paintMode)
+        assertTrue("the line comes back with the stroke kind", SmokeUi.has(CurveLabels17.STROKE_KIND, exact = true))
+        val before = c.undoManager.undoCount
+        apply("Apply polyline")
+        assertEquals("one app step", before + 1, c.undoManager.undoCount)
+        val both = layer.vector!!.objects.single() as VPath
+        assertEquals("the same object", fillOnly.id, both.id)
+        assertNotNull("a line now", both.stroke)
+        assertEquals(fillOnly.fill, both.fill)
+        assertTrue(Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); !c.vectors.isRendering })
+        val lined = composite(c)
+        save(lined, "polyline-both-doc")
+        assertTrue("the line over the peak", inked(lined, 147, 72, 153, 79) > 0)
+        assertEquals("still filled", 100, inked(lined, 145, 195, 155, 205))
+        click("Undo", exact = true)
+        assertEquals("Undo: the fill-only polyline again", fillOnly, layer.vector!!.objects.single())
+        Smoke.assertQuiet(c, "polyline fill")
     }
 }
