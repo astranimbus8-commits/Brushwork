@@ -102,6 +102,7 @@ class FlowLinkedFrameRasterizeRobolectricTest {
         c.undo()
         idle()
         assertNotNull("undo Rasterize text: the frame is back", f2.textData)
+        assertEquals("the pending move's own step", TransformTool.TRANSFORM_LABEL, c.undoManager.undoLabel)
         assertEquals(listOf(f1, f2, f3), chainOf(c, f1))
         assertEquals("the moved frame", f2Item.cx + 12f, itemOf(f2).cx, 1e-3f)
         assertWhole(c, story)
