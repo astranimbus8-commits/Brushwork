@@ -62,9 +62,9 @@ class Qa17TransformObjectsUiTest {
         val dog = Smoke.watchdog(limitMs = 120_000)
         val h = ChromeHarness()
         h.section("text: turned and scaled, still text; Distort asks to rasterize; the Text tool edits it") { text(Qa17ArrayUi(h)) }
-        h.section("shape: moved by a finger and turned, still a shape; the Shape tool edits it") { shape(Qa17ArrayUi(h)) }
-        h.section("vector: turned, still paths; the Path tool edits it") { vector(Qa17ArrayUi(h)) }
-        h.section("array: turned, still an array; the Array sheet edits it") { array(Qa17ArrayUi(h)) }
+        h.section("shape: moved by a finger, turned and scaled, still a shape; the Shape tool edits it") { shape(Qa17ArrayUi(h)) }
+        h.section("vector: turned and scaled, still paths; the Path tool edits it") { vector(Qa17ArrayUi(h)) }
+        h.section("array: turned and scaled, still an array; the Array sheet edits it") { array(Qa17ArrayUi(h)) }
         h.section("folder with a text and pixels: one step, undone exactly") { folder(Qa17ArrayUi(h)) }
         dog.interrupt()
         ArrayDraw.clearCaches()
@@ -168,17 +168,18 @@ class Qa17TransformObjectsUiTest {
 
         transform(u, TransformTool.Lifted.SHAPE)
         assertEquals("Distort on a shape", TransformLabels17.RASTERIZE_TO_DEFORM, u.stateOf("Distort"))
-        // A finger drags the box 40 px right and 20 px down, then a quarter turn.
+        // A finger drags the box 40 px right and 20 px down, then a quarter turn and 150 % (about the centre).
         u.ui.stroke(before.cx to before.cy, before.cx + 20f to before.cy + 10f, before.cx + 40f to before.cy + 20f)
         u.press("Rotate 90° clockwise")
+        scaleByNumbers(u, "150")
         applyTransform(u, TransformTool.TRANSFORM_LABEL)
         val turned = requireNotNull(ShapeCodec.decode(layer.shapeData)) { "still a shape layer" }
         assertEquals(before.type, turned.type)
         assertEquals("moved by the finger", before.cx + 40f, turned.cx, 2f)
         assertEquals(before.cy + 20f, turned.cy, 2f)
         assertEquals("turned a quarter", 90f, norm(turned.rotation - before.rotation), 0.5f)
-        assertEquals("not scaled", before.w, turned.w, 0.5f)
-        assertEquals(before.h, turned.h, 0.5f)
+        assertEquals("150 %", before.w * 1.5f, turned.w, 1f)
+        assertEquals(before.h * 1.5f, turned.h, 1f)
 
         // The Shape tool opens it with a tap; a finger moves it back 40 px; ✓.
         u.tool("Shape")
@@ -211,21 +212,23 @@ class Qa17TransformObjectsUiTest {
         transform(u, TransformTool.Lifted.VECTOR)
         assertNull("Distort is offered for paths", u.stateOf("Distort"))
         u.press("Rotate 90° clockwise")
+        scaleByNumbers(u, "150")
         applyTransform(u, TransformTool.TRANSFORM_OBJECTS_LABEL)
         assertTrue("still a vector layer", layer.isVectorLayer)
         val after = (layer.vector!!.objects.single() as VPath).spline!!.points.map { Vec2(it.x, it.y) }
-        // A quarter turn clockwise on screen (y down): (dx, dy) becomes (-dy, dx).
+        // A quarter turn clockwise on screen (y down) and 150 %: (dx, dy) becomes 1.5 (-dy, dx).
         for (i in 1 until before.size) {
             val d0 = before[i] - before[0]
             val d1 = after[i] - after[0]
-            assertEquals("point $i turned: $before -> $after", -d0.y, d1.x, 0.5f)
-            assertEquals(d0.x, d1.y, 0.5f)
+            assertEquals("point $i turned and scaled: $before -> $after", -1.5f * d0.y, d1.x, 0.75f)
+            assertEquals(1.5f * d0.x, d1.y, 0.75f)
         }
 
         // The Path tool reopens it with a tap on its line; a finger drags its first point 30 px left; ✓.
         u.tool("Path")
         val curve = c.currentTool as CurveTool
-        val onLine = inkNear(layer.bitmap, after[1])
+        // (The drawn line nearest the middle point: a spline point may sit off the curve.)
+        val onLine = inkNear(layer.bitmap, after[1], r = 80)
         u.ui.tap(onLine.x, onLine.y)
         assertTrue("a tap on the line reopens the path (at $onLine)", curve.isReopened)
         val p0 = curve.spline!!.points.map { Vec2(it.x, it.y) }.minBy { it.distanceTo(after[0]) }
@@ -272,9 +275,9 @@ class Qa17TransformObjectsUiTest {
         u.editor()
         val c = u.c
         val painted = c.activeLayer
-        u.seed(painted, 60f, 40f, 100f, 80f, RED)
+        u.seed(painted, 60f, 120f, 100f, 160f, RED)
         // A plain layer arrays what is selected (else "Select some pixels, or pick a text, shape or vector layer").
-        c.setSelection(u.rectSelection(56f, 36f, 104f, 84f), recordUndo = false)
+        c.setSelection(u.rectSelection(56f, 116f, 104f, 164f), recordUndo = false)
         settle(4)
         u.press(ArrayLabels.FROM_SELECTION)
         u.settleRenders("array")
@@ -290,12 +293,14 @@ class Qa17TransformObjectsUiTest {
         transform(u, TransformTool.Lifted.ARRAY)
         assertEquals("Distort on an array", ArrayLabels.DEFORM_REFUSAL, u.stateOf("Distort"))
         u.press("Rotate 90° clockwise")
+        scaleByNumbers(u, "150")
         applyTransform(u, TransformTool.TRANSFORM_LABEL)
         u.settleRenders("turned")
         assertNotNull("still an array", layer.array)
         assertNotEquals("its spec turned with it", spec0, layer.array!!.spec)
         val tall = boundsOf(layer.bitmap, RED)
         assertTrue("copies in a column now: $tall", tall.height() > 2 * tall.width())
+        assertEquals("each copy 150 %: $wide -> $tall", wide.height() * 1.5f, tall.width().toFloat(), 3f)
         assertEquals("I1: the cache is the array's own render", 0, differing(layer.bitmap, freshRender(c, layer.dataSnapshot())))
 
         // Layer ⋮ "Edit array": the Array sheet; Count 5, one step, the column grows.
