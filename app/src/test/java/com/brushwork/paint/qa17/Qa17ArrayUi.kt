@@ -104,7 +104,9 @@ internal class Qa17ArrayUi(private val h: ChromeHarness) {
             while (p != null && (p.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange) == null || p.config.getOrNull(SemanticsActions.ScrollBy) == null)) p = p.parent
             val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is cut and nothing scrolls it" }
             val v = p!!.boundsInWindow
-            scroll.invoke(0f, if (b.top < v.top) -60f * s.density else 60f * s.density)
+            // (Where the node is laid out, clipped or not: a node wholly out of view has empty bounds.)
+            val top = n.positionInWindow.y
+            scroll.invoke(0f, if (top < v.top) -60f * s.density else 60f * s.density)
             settle(2)
         }
         throw AssertionError("\"$label\" never came wholly into view")
