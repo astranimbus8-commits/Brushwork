@@ -24,6 +24,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.text.TextCodec
@@ -132,6 +133,9 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
 
         private const val RED = 0xFFDD2211.toInt()
         private const val BLUE = 0xFF2244CC.toInt()
+
+        /** How long a render or a computed result may take: 10 s on a desktop, scaled on CI. */
+        private val WAIT_MS: Long = PerfBudget.ms(10_000.0).toLong()
     }
 
     private lateinit var s: ChromeScreen
@@ -211,7 +215,7 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
 
     private fun applyEdit(label: String) {
         click(label)
-        assertTrue("$label: done", Smoke.pumpUntil(10_000) { settle(1); !c.currentTool.hasPendingWork && c.busyMessage == null && !c.vectors.isRendering })
+        assertTrue("$label: done", Smoke.pumpUntil(WAIT_MS) { settle(1); !c.currentTool.hasPendingWork && c.busyMessage == null && !c.vectors.isRendering })
         settle()
     }
 
@@ -281,7 +285,7 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         // 6: "Turn into path": a path in a vector layer, open in the Path tool, one step.
         val before = steps()
         press(PointLabels.TO_PATH)
-        assertTrue(Smoke.pumpUntil(10_000) { settle(1); !c.vectors.isRendering })
+        assertTrue(Smoke.pumpUntil(WAIT_MS) { settle(1); !c.vectors.isRendering })
         settle()
         assertEquals(ToolId.PATH, c.activeToolId)
         assertEquals(HistoryLabels.TURN_INTO_PATH, c.undoManager.undoLabel)
@@ -616,13 +620,13 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertEquals(ToolId.ARRAY, c.activeToolId)
         assertNotNull("the Array sheet", s.tagged(V17Tags.ARRAY_SHEET))
         assertEquals(3, layer.array!!.spec.count)
-        assertTrue("the copies are drawn", Smoke.pumpUntil(10_000) { settle(1); count(layer, RED) >= 3 * 1600 })
+        assertTrue("the copies are drawn", Smoke.pumpUntil(WAIT_MS) { settle(1); count(layer, RED) >= 3 * 1600 })
         val three = count(layer, RED)
         // Still editable: one more copy appears at once.
         press("Increase Count")
         assertEquals(4, layer.array!!.spec.count)
         assertEquals(HistoryLabels.EDIT_ARRAY, c.undoManager.undoLabel)
-        assertTrue("a fourth copy ($three red px for three)", Smoke.pumpUntil(10_000) { settle(1); count(layer, RED) >= three * 4 / 3 - 4 })
+        assertTrue("a fourth copy ($three red px for three)", Smoke.pumpUntil(WAIT_MS) { settle(1); count(layer, RED) >= three * 4 / 3 - 4 })
         Smoke.assertQuiet(c, "live array")
     }
 
@@ -757,7 +761,7 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertTrue(has(PathfinderLabels.picked(2), exact = true))
         val before = steps()
         press(PathfinderLabels.UNITE, 40f)
-        assertTrue("united", Smoke.pumpUntil(10_000) { settle(1); c.doc.layers.any { it.name == PathfinderLabels.resultLayer(1) } })
+        assertTrue("united", Smoke.pumpUntil(WAIT_MS) { settle(1); c.doc.layers.any { it.name == PathfinderLabels.resultLayer(1) } })
         settle()
         assertEquals("one step", before + 1, steps())
         assertEquals(HistoryLabels.pathfinder("Unite"), c.undoManager.undoLabel)
