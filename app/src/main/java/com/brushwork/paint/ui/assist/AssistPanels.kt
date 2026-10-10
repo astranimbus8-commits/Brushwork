@@ -77,7 +77,10 @@ import kotlin.math.roundToInt
  * Numeric ruler editor: type, snap mode, exact position/size in any unit, nudge arrows.
  * Every edit is applied live through controller.updateRuler (not undoable, like on canvas).
  * v1.7 (item 18): the five symmetry rulers follow ([SymmetryRulerSection]), as ibisPaint lists
- * them with the rulers.
+ * them with the rulers, so the Brush user reaches them without switching tools. While the
+ * Symmetry tool is active its options strip shows the same rulers and "Reset symmetry", so the
+ * panel leaves the section out: a label names one control on screen (I10), as the More menu over
+ * the layer window leaves out "Import picture".
  */
 @Composable
 fun RulerPanel(controller: EditorController, onDismiss: () -> Unit) {
@@ -86,10 +89,12 @@ fun RulerPanel(controller: EditorController, onDismiss: () -> Unit) {
             onDismiss()
             controller.selectTool(ToolId.RULER)
         })
-        SymmetryRulerSection(controller, onEditOnCanvas = {
-            onDismiss()
-            controller.selectTool(ToolId.SYMMETRY)
-        })
+        if (controller.activeToolId != ToolId.SYMMETRY) {
+            SymmetryRulerSection(controller, onEditOnCanvas = {
+                onDismiss()
+                controller.selectTool(ToolId.SYMMETRY)
+            })
+        }
     }
 }
 

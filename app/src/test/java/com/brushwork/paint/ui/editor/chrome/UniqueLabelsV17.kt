@@ -46,6 +46,7 @@ import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.layers.LayerLabels
 import com.brushwork.paint.ui.layers.LayerWindowTags
 import com.brushwork.paint.ui.placement.KERNING_ROW_TAG
+import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -59,15 +60,18 @@ import org.junit.Assert.assertTrue
  * - a shape in Points mode with one point picked, then two (the strip's "Delete point" beside the
  *   pill's "Delete selected points");
  * - the Array sheet in each of its four modes, with the Array tool's strip;
- * - the Symmetry tool with each ruler chosen, and each ruler's "Label value ▾" chip open;
- * - the Pathfinder with its two operands picked;
+ * - the Symmetry tool with each ruler chosen, and each ruler's "Label value ▾" chip open; then
+ *   the Ruler panel over it (the panel leaves its symmetry rulers to the tool's strip) and over
+ *   the Brush (the panel lists them);
+ * - the Pathfinder with its two operands picked (each operation known by its description);
  * - Transform in Free deform (with its points picked);
  * - the text editor with the Kerning row;
  * - the layer window with an open folder and two saved selections, a saved selection's menu and
  *   the ⋮ over the folder.
  * Where the v1.6 state audits ([StateAudit]) check finger sizes (the X / Y pill with the chrome
  * around it, the layer window and its menus) the v1.7 screens of the same kind are checked too.
- * Each section collects every repeat it finds before failing, so one run lists them all.
+ * Each section collects every repeat it finds before failing, so one run lists them all. A walk
+ * fails when some clickable of the strip or sheet it walks never came on screen.
  */
 internal object UniqueLabelsV17 {
 
@@ -117,14 +121,17 @@ internal object UniqueLabelsV17 {
         return all.firstOrNull { n -> all.none { o -> o.id != n.id && generateSequence(n.parent) { it.parent }.any { it.id == o.id } } }
     }
 
-    private fun stripScroller(s: ChromeScreen) =
-        scroller(s, SemanticsProperties.HorizontalScrollAxisRange) { it.tag() == ChromeTags.OPTIONS_STRIP }
+    private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP }
 
-    /** The shown sheet's body (a hosted sheet carries its title; the Array sheet its tag). */
-    private fun sheetScroller(s: ChromeScreen) =
-        scroller(s, SemanticsProperties.VerticalScrollAxisRange) {
-            it.config.getOrNull(BwSheetTitleKey) != null || it.tag() == V17Tags.ARRAY_SHEET
-        }
+    /** The shown sheet (a hosted sheet carries its title; the Array sheet its tag). */
+    private val isSheet: (SemanticsNode) -> Boolean = {
+        it.config.getOrNull(BwSheetTitleKey) != null || it.tag() == V17Tags.ARRAY_SHEET
+    }
+
+    private fun stripScroller(s: ChromeScreen) = scroller(s, SemanticsProperties.HorizontalScrollAxisRange, isStrip)
+
+    /** The shown sheet's body. */
+    private fun sheetScroller(s: ChromeScreen) = scroller(s, SemanticsProperties.VerticalScrollAxisRange, isSheet)
 
     private fun listScroller(s: ChromeScreen) =
         scroller(s, SemanticsProperties.VerticalScrollAxisRange) { it.tag() == LayerWindowTags.LIST }
@@ -133,24 +140,91 @@ internal object UniqueLabelsV17 {
      * [check]s the clickables on screen at each position of the scroller [find] gives, from its
      * start to its end ([horizontal]: sideways, else up and down), 60 % of its size at a time.
      * Returns every clickable seen, by node (for a scroller that keeps its nodes: not a lazy list).
+     * Up and down, each row inside [container] that scrolls sideways on its own (a sheet's chip
+     * rows: the Ruler panel's rulers, the text editor's fonts) is walked too, from its start to its
+     * end where it first comes on screen, and left at its start.
+     * At the end every clickable inside [container] (the strip, the sheet) has been on screen at
+     * some position: a strip or sheet that overflows without the walk finding its scroller fails
+     * here instead of leaving its far end unchecked.
      */
-    private fun walk(s: ChromeScreen, horizontal: Boolean, find: () -> SemanticsNode?, check: (List<Clickables.Item>) -> Unit): Map<Int, Clickables.Item> {
+    private fun walk(
+        s: ChromeScreen,
+        horizontal: Boolean,
+        container: (SemanticsNode) -> Boolean,
+        find: () -> SemanticsNode?,
+        check: (List<Clickables.Item>) -> Unit,
+    ): Map<Int, Clickables.Item> {
         val axis = if (horizontal) SemanticsProperties.HorizontalScrollAxisRange else SemanticsProperties.VerticalScrollAxisRange
         val seen = linkedMapOf<Int, Clickables.Item>()
+        fun visit() {
+            val all = Clickables.onScreen(s)
+            check(all)
+            all.forEach { seen[it.node.id] = it }
+        }
+        val rowsWalked = mutableSetOf<Int>()
+        assertTrue("what the walk walks is on screen", s.placed().any { container(it.node) })
         find()?.let { n ->
             toStart(n, horizontal)
             assertTrue("the walk starts at the start: ${n.config[axis].value()}", n.config[axis].value() <= 0.5f)
         }
         for (step in 0 until 40) {
-            val all = Clickables.onScreen(s)
-            check(all)
-            all.forEach { seen[it.node.id] = it }
-            val n = find() ?: return seen
-            val r = n.config[axis]
-            if (r.value() >= r.maxValue() - 0.5f) return seen
+            visit()
+            if (!horizontal) {
+                val rows = s.placed().filter { e ->
+                    !e.bounds.isEmpty && e.node.id !in rowsWalked &&
+                        e.node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.let { it.maxValue() > 0f } == true &&
+                        e.node.config.getOrNull(SemanticsActions.ScrollBy) != null &&
+                        generateSequence(e.node) { it.parent }.any(container)
+                }.map { it.node.id }
+                for (id in rows) {
+                    rowsWalked += id
+                    walkRow(s, id) { visit() }
+                }
+            }
+            val n = find()
+            val r = n?.config?.get(axis)
+            if (r == null || r.value() >= r.maxValue() - 0.5f) {
+                val never = s.placed().map { it.node }.filter { m ->
+                    m.config.getOrNull(SemanticsActions.OnClick) != null && m.size.width > 0 && m.size.height > 0 &&
+                        m.id !in seen && generateSequence(m) { it.parent }.any(container)
+                }
+                assertTrue("the walk never showed: ${never.map { describe(it) }}", never.isEmpty())
+                return seen
+            }
             scrollBy(n, horizontal, (if (horizontal) n.size.width else n.size.height) * 0.6f)
         }
         throw AssertionError("the walk never reached the end")
+    }
+
+    /** [visit]s the screen at each position of the row [id] that scrolls sideways, start to end, then puts it back at its start. */
+    private fun walkRow(s: ChromeScreen, id: Int, visit: () -> Unit) {
+        fun row() = s.placed().firstOrNull { it.node.id == id }?.node
+        row()?.let { toStart(it, horizontal = true) }
+        for (step in 0 until 40) {
+            visit()
+            val n = row() ?: return
+            val r = n.config[SemanticsProperties.HorizontalScrollAxisRange]
+            if (r.value() >= r.maxValue() - 0.5f) {
+                // Back at its start (a lazy row composes its first items anew: seen again).
+                toStart(n, horizontal = true)
+                visit()
+                return
+            }
+            scrollBy(n, horizontal = true, n.size.width * 0.6f)
+        }
+        throw AssertionError("a row never reached its end")
+    }
+
+    /** A node's texts and descriptions with its descendants', its size and where it shows (a failure message). */
+    private fun describe(n: SemanticsNode): String {
+        val words = mutableListOf<String>()
+        fun walk(m: SemanticsNode) {
+            words += m.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text }
+            words += m.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty()
+            m.children.forEach(::walk)
+        }
+        walk(n)
+        return "$words ${n.size} at ${n.boundsInWindow} under ${generateSequence(n.parent) { it.parent }.take(4).map { it.boundsInWindow }.toList()}"
     }
 
     /**
@@ -180,7 +254,7 @@ internal object UniqueLabelsV17 {
 
     /** The screen at each position of the options strip, then the whole strip with the rest (the chrome, a pill, a sheet). */
     private fun walkStrip(s: ChromeScreen, a: Audit, what: String, allowed: Set<String> = emptySet(), fingers: Boolean = false): Map<Int, Clickables.Item> {
-        val seen = walk(s, horizontal = true, find = { stripScroller(s) }) { all ->
+        val seen = walk(s, horizontal = true, container = isStrip, find = { stripScroller(s) }) { all ->
             a.unique(what, all, allowed)
             if (fingers) a.fingers(s, what, all)
         }
@@ -193,8 +267,8 @@ internal object UniqueLabelsV17 {
     /** The screen at each position of the shown sheet's body (the strip at its start), then the sheet and the strip whole. */
     private fun walkSheetAndStrip(s: ChromeScreen, a: Audit, what: String, allowed: Set<String> = emptySet()): Map<Int, Clickables.Item> {
         stripScroller(s)?.let { n -> toStart(n, horizontal = true) }
-        val sheet = walk(s, horizontal = false, find = { sheetScroller(s) }) { all -> a.unique("$what, the sheet", all, allowed) }
-        val strip = walk(s, horizontal = true, find = { stripScroller(s) }) { all -> a.unique("$what, the strip", all, allowed) }
+        val sheet = walk(s, horizontal = false, container = isSheet, find = { sheetScroller(s) }) { all -> a.unique("$what, the sheet", all, allowed) }
+        val strip = walk(s, horizontal = true, container = isStrip, find = { stripScroller(s) }) { all -> a.unique("$what, the strip", all, allowed) }
         val whole = LinkedHashMap(sheet).apply { putAll(strip) }
         a.unique("$what, the whole sheet and strip", whole.values.toList(), allowed)
         stripScroller(s)?.let { n -> toStart(n, horizontal = true) }
@@ -267,14 +341,21 @@ internal object UniqueLabelsV17 {
         val anchors = requireNotNull(tool.docAnchors())
         QaCurves.tap(s, anchors[0].pos)
         assertEquals("one point picked", 1, tool.pointSelection.count)
-        walkStrip(s, a, "Shape Points, one point", fingers = true)
+        // The strip's "Delete point" and the pill's trash cell, each one control (§3.13).
+        fun deletes(what: String, seen: Map<Int, Clickables.Item>) {
+            for (label in listOf("Delete point", PillLabels.DELETE_POINTS)) {
+                val n = seen.values.count { label in it.labels }
+                a.check(what, n == 1) { "\"$label\" on $n controls" }
+            }
+        }
+        deletes("Shape Points, one point", walkStrip(s, a, "Shape Points, one point", fingers = true))
         // Two of its four points (the strip's group controls and the pill's "Delete selected points").
         ui.reach(PointLabels.SELECT_SEVERAL, 0f)
         click(PointLabels.SELECT_SEVERAL, exact = true)
         assertTrue("Select several is on", tool.selectSeveral)
         QaCurves.tap(s, anchors[2].pos)
         assertEquals("two points picked", 2, tool.pointSelection.count)
-        walkStrip(s, a, "Shape Points, two points", fingers = true)
+        deletes("Shape Points, two points", walkStrip(s, a, "Shape Points, two points", fingers = true))
         tool.discard()
         settle()
         Smoke.assertQuiet(s.c, "Shape Points")
@@ -326,9 +407,18 @@ internal object UniqueLabelsV17 {
                 val n = seen.values.count { label in it.labels }
                 a.check(type.label, n == 1) { "\"$label\" on $n controls" }
             }
-            // Each "Label value ▾" chip's field, open over the strip.
-            for (chip in listOf(SymmetryLabels.DIVISIONS, "Angle", "Spacing X", "Spacing Y")) {
-                val text = chipText(s, chip) ?: continue
+            // Each "Label value ▾" chip's field, open over the strip: the ruler's numbers of §3.18
+            // (the perspective array is shaped on the canvas).
+            val chips = when (type) {
+                SymmetryType.KALEIDOSCOPE, SymmetryType.ROTATION -> listOf(SymmetryLabels.DIVISIONS, "Angle")
+                SymmetryType.MIRROR -> listOf("Angle")
+                SymmetryType.ARRAY -> listOf("Spacing X", "Spacing Y", "Angle")
+                SymmetryType.PERSPECTIVE_ARRAY, SymmetryType.OFF -> emptyList()
+            }
+            for (chip in chips) {
+                val text = chipText(s, chip)
+                a.check(type.label, text != null) { "no \"$chip …\" chip" }
+                if (text == null) continue
                 ui.reach(text, 0f)
                 click(text, exact = true)
                 a.check("${type.label}, $chip", SmokeUi.windows().size == 2) { "the chip's field did not open" }
@@ -336,7 +426,30 @@ internal object UniqueLabelsV17 {
                 UniqueLabels.closeMenu()
             }
         }
+        // The Ruler panel (the top row's "Ruler") over the tool: the strip's rulers and "Reset
+        // symmetry" are the only ones (the panel lists them for the Brush user, §3.18).
+        ui.reach(SymmetryType.KALEIDOSCOPE.label, 0f)
+        click(SymmetryType.KALEIDOSCOPE.label, exact = true)
+        click("Ruler", exact = true)
+        assertTrue("the Ruler panel", SmokeUi.has("Use ruler", exact = true))
+        assertEquals("the tool stays", ToolId.SYMMETRY, s.c.activeToolId)
+        val panel = walkSheetAndStrip(s, a, "Ruler panel over the Symmetry tool")
+        for (label in SymmetryType.entries.map { it.label } + SymmetryLabels.RESET) {
+            val n = panel.values.count { label in it.labels }
+            a.check("Ruler panel over the Symmetry tool", n == 1) { "\"$label\" on $n controls" }
+        }
+        click("Close", exact = true)
+        assertTrue("the panel closed", !SmokeUi.has("Use ruler", exact = true))
         click("Done", exact = true)
+        // Back at the Brush, the panel lists them (its "Symmetry" button places the ruler).
+        assertEquals(ToolId.BRUSH, s.c.activeToolId)
+        click("Ruler", exact = true)
+        val brush = walkSheetAndStrip(s, a, "Ruler panel over the Brush")
+        for (label in SymmetryType.entries.map { it.label } + SymmetryLabels.RESET + SymmetryLabels.TOOL) {
+            val n = brush.values.count { label in it.labels }
+            a.check("Ruler panel over the Brush", n == 1) { "\"$label\" on $n controls" }
+        }
+        click("Close", exact = true)
         Smoke.assertQuiet(s.c, "Symmetry")
         a.done()
     }
@@ -360,7 +473,12 @@ internal object UniqueLabelsV17 {
         ui.reach(PathfinderLabels.SELECT_ALL, 0f)
         click(PathfinderLabels.SELECT_ALL, exact = true)
         assertEquals("both picked", 2, tool.count)
-        walkStrip(s, a, "Pathfinder strip")
+        val seen = walkStrip(s, a, "Pathfinder strip")
+        // Each operation by its description (its short visible name is not announced, §3.20).
+        for (label in listOf(PathfinderLabels.SELECT_ALL) + PathfinderOp.entries.map { it.description }) {
+            val n = seen.values.count { label in it.labels }
+            a.check("Pathfinder", n == 1) { "\"$label\" on $n controls" }
+        }
         Smoke.assertQuiet(s.c, "Pathfinder")
         a.done()
     }
@@ -404,7 +522,7 @@ internal object UniqueLabelsV17 {
         SmokeUi.field("Text").type("AVATAR")
         settle()
         var row = false
-        val whole = walk(s, horizontal = false, find = { sheetScroller(s) }) { all ->
+        val whole = walk(s, horizontal = false, container = isSheet, find = { sheetScroller(s) }) { all ->
             a.unique("text editor", all)
             if (s.tagged(KERNING_ROW_TAG) != null) row = true
         }
