@@ -342,9 +342,6 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         return true
     }
 
-    /** [MirrorLabels18.PERSPECTIVE_BAKED] was shown (once per session). */
-    private var bakedHintShown = false
-
     /** Where the generator's two canvas handles are (document px). */
     data class GeneratorHandles(
         /** Drag it to move the curve. */
@@ -808,10 +805,24 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         generatorDropped()
     }
 
-    /** The hint was shown (once per session: the tool lives as long as the editor). */
-    private var editedHintShown = false
+    /**
+     * The once-per-session messages this tool showed ([CurveGenLabels18.EDITED_HINT],
+     * [MirrorLabels18.PERSPECTIVE_BAKED]). Each curve tool lives as long as the editor, and
+     * [toastOncePerSession] asks the Curve, Polyline and Path tools alike, so a message shows
+     * once per editor session whichever of them shows it first.
+     */
+    private val hintsShown = HashSet<String>()
 
-    /** The Path strip showed its width caption as a message (once per session, as [editedHintShown]). */
+    /** Shows [message] unless a curve tool of this editor already showed it. */
+    private fun toastOncePerSession(message: String) {
+        if (message in hintsShown) return
+        val peers = listOf(ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH).mapNotNull { controller.tools[it] as? CurveTool }
+        if (peers.any { message in it.hintsShown }) return
+        hintsShown += message
+        controller.toast(message)
+    }
+
+    /** The Path strip showed its width caption as a message (once per session: only Path shows it). */
     internal var widthCaptionShown = false
 
     /** The generator went during the touch in progress: the hint waits until it ends (a cancelled touch shows none). */
@@ -826,9 +837,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** The generator was cleared by a hand edit: the hint, once per session (when the touch ends). */
     private fun generatorDropped() {
         if (touching) { droppedDuringTouch = true; return }
-        if (editedHintShown) return
-        editedHintShown = true
-        controller.toast(CurveGenLabels18.EDITED_HINT)
+        toastOncePerSession(CurveGenLabels18.EDITED_HINT)
     }
 
     /**
@@ -3576,10 +3585,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val ids = controller.vectors.addObjects(layer, objects, label)
             // Refused (no memory...): the path stays pending.
             if (ids.isEmpty()) return
-            if (bake && !bakedHintShown) {
-                bakedHintShown = true
-                controller.toast(MirrorLabels18.PERSPECTIVE_BAKED)
-            }
+            if (bake) toastOncePerSession(MirrorLabels18.PERSPECTIVE_BAKED)
             resetPath()
             brushPreview.end()
             endLook()

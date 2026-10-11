@@ -75,6 +75,25 @@ class CurvePerspectiveBakeTest {
         assertTrue(c.activeLayer.vector!!.objects.size > 2)
     }
 
+    /** Once per editor session, not once per tool: after the Curve tool showed it, Polyline and Path show nothing. */
+    @Test
+    fun theHintShowsOncePerEditorAcrossTheCurveTools() {
+        val c = controller(vector = true)
+        c.updateSymmetry(perspective)
+        for ((k, id) in listOf(ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH).withIndex()) {
+            val t = c.tool(id)
+            t.plainLine()
+            c.drawPath()
+            c.message = null
+            t.commit()
+            assertTrue("$id: baked", c.activeLayer.vector!!.objects.size > 1)
+            if (k == 0) assertEquals(MirrorLabels18.PERSPECTIVE_BAKED, c.message) else assertNull("$id: shown already", c.message)
+            // Undone, so the next tool's taps start a new path (the hint is no document state).
+            c.undo()
+            assertTrue(c.activeLayer.vector!!.objects.isEmpty())
+        }
+    }
+
     @Test
     fun aBrushLineIsBakedAndDrawnByTheLayerToo() {
         val c = controller(vector = true)

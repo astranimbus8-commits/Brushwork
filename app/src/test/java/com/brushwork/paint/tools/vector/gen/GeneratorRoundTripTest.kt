@@ -11,6 +11,7 @@ import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.pixels
 import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.plainLine
 import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tap
 import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tool
+import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.vector.curveFacts
 import com.brushwork.paint.vector.CurveGenKind
 import com.brushwork.paint.vector.VPath
@@ -20,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -170,6 +172,31 @@ class GeneratorRoundTripTest {
             assertEquals("$id: the same strip", facts, curveFacts(t))
             t.endNumericEdit()
         }
+    }
+
+    /**
+     * "Edited by hand" shows once per editor session (§3.7), not once per curve tool: after the
+     * Curve tool showed it, a hand edit of a generated Path shows nothing.
+     */
+    @Test
+    fun theEditedHintShowsOncePerEditorAcrossCurveAndPath() {
+        val c = controller(vector = true)
+        val curve = c.tool(ToolId.CURVE)
+        curve.plainLine()
+        assertTrue(curve.startGenerator(CurveGenKind.ROSE, null))
+        c.message = null
+        curve.deleteAnchor(1)
+        assertNull("the curve: hand edited", curve.generator)
+        assertEquals(CurveGenLabels18.EDITED_HINT, c.message)
+        curve.commit()
+
+        val path = c.tool(ToolId.PATH)
+        path.plainLine()
+        assertTrue(path.startGenerator(CurveGenKind.ROSE, null))
+        c.message = null
+        path.deleteAnchor(1)
+        assertNull("the path: hand edited", path.generator)
+        assertNull("the hint showed already in this editor", c.message)
     }
 
     /** The source of a stored path (its own geometry, without the copies). */
