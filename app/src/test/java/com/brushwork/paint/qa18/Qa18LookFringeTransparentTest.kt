@@ -70,7 +70,7 @@ import kotlin.math.abs
  * - Height 6, Static 100, Magenta/Green, "Color of the static" at half opacity (#80FF2040 typed
  *   in its picker, which has an opacity): the swatch says "#80FF2040"; the static is about half
  *   of the opaque one's, never touches the alpha, never paints the transparent pixels;
- * - "New random random seed": the colors kept, other rows change;
+ * - "New random seed": the colors kept, other rows change;
  * - "Compare with the original (press and hold)" held by a finger: the original while held, the
  *   preview again on release, no step;
  * - the static's swatch tapped, then "Cancel": nothing changes;
@@ -386,7 +386,7 @@ class Qa18LookFringeTransparentTest {
         assertTrue("nor paints the transparent pixels", half.indices.all { a(base[it]) != 0 || half[it] == 0 })
         saveOverWhite(half, w, h, "look-fringe-transparent-glitch.png")
 
-        // "New random random seed": the colors kept, the bands elsewhere.
+        // "New random seed": the colors kept, the bands elsewhere.
         val seed0 = s.values.seed()
         val rows0 = changedRows(src, half, w)
         visible { RobolectricUi.byDescription("New random") }.tap()

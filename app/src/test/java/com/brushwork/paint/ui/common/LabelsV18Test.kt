@@ -13,6 +13,7 @@ import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.ui.filters.newSeedDescription
 import com.brushwork.paint.ui.placement.TransformStripItems
 import com.brushwork.paint.ui.selection.modeDescription
 import org.junit.Assert.assertEquals
@@ -161,7 +162,9 @@ class LabelsV18Test {
         when (p) {
             is FilterParam.Slider -> listOf(p.label, "Decrease ${p.label}", "Increase ${p.label}", "Reset ${p.label}")
             is FilterParam.Choice -> listOf(p.label) + p.options
-            is FilterParam.Seed -> listOf(p.label, "New random ${p.label.lowercase()}")
+            // v18p: the shuffle button reads "New random seed" (its description is composed by
+            // newSeedDescription, no longer "New random " + the label, which said "random" twice).
+            is FilterParam.Seed -> listOf(p.label, newSeedDescription(p.label))
             is FilterParam.Color -> listOf(p.label, "Choose ${p.label.lowercase()}")
             else -> listOf(p.label)
         }

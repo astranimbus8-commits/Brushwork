@@ -217,7 +217,15 @@ private fun SeedControl(host: ParamHost, p: FilterParam.Seed, enabled: Boolean) 
         Text("${host.values.seed(p.key)}", style = MaterialTheme.typography.bodyMedium, color = BrushworkColors.OnChromeDim)
         Spacer(Modifier.width(4.dp))
         IconButton(onClick = { host.update(p.key, Random.nextInt(1, 1_000_000)); host.onChangeFinished() }, enabled = enabled) {
-            Icon(Icons.Filled.Shuffle, contentDescription = "New random ${p.label.lowercase()}")
+            Icon(Icons.Filled.Shuffle, contentDescription = newSeedDescription(p.label))
         }
     }
 }
+
+/**
+ * What a screen reader calls a seed's shuffle button: "New" and the seed's [label] in lowercase,
+ * with "random" added only when the label does not already start with it (v1.7's "Random seed"
+ * reads "New random seed", never "New random random seed").
+ */
+internal fun newSeedDescription(label: String): String =
+    if (label.startsWith("random", ignoreCase = true)) "New ${label.lowercase()}" else "New random ${label.lowercase()}"
