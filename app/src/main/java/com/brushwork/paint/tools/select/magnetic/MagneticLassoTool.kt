@@ -158,6 +158,8 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     // ------------------------------------------------------------------ lifecycle
 
     override fun onActivate() {
+        // A map that ran out of memory is tried again once per activation (memory may be free now).
+        failedKey = null
         ensureEdgeMap()
     }
 
