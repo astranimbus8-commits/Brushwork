@@ -28,11 +28,12 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
 import org.robolectric.Robolectric
 
 /**
- * v1.8 (area H): fake options strips for the qa18 chrome tests. [spec] has one 40 dp item on row 1
- * and [spec]'s `more` items on the More row; at 300 dp each takes a line of its own at 360 and 392
- * dp, so `more` = 1, 2, 3 gives that many lines, and more than 3 still gives 3
- * (`StripLayout.MAX_MORE_LINES`, the last line scrolls). Each item is a tappable box described by
- * its label; [taps] counts the taps per label. With `closer` the More row ends with [CLOSER].
+ * v1.8 (area H): fake options strips for the qa18 chrome tests. [spec] has one item on row 1 (40
+ * dp, or `row1Width`: a whole row 1 budget) and [spec]'s `more` items on the More row; at 300 dp
+ * each takes a line of its own at 360 and 392 dp, so `more` = 1, 2, 3 gives that many lines, and
+ * more than 3 still gives 3 (`StripLayout.MAX_MORE_LINES`, the last line scrolls). Each item is a
+ * tappable box described by its label; [taps] counts the taps per label. With `closer` the More
+ * row ends with [CLOSER].
  */
 internal object FakeStrips {
     const val ROW1 = "Fake row 1 item"
@@ -57,8 +58,8 @@ internal object FakeStrips {
         )
     }
 
-    fun spec(more: Int, moreWidth: Dp = 300.dp, closer: Boolean = false): StripSpec = StripSpec(
-        listOf(StripItem("fake.row1", ROW1, 40.dp, content = cell(ROW1, 40.dp))) +
+    fun spec(more: Int, moreWidth: Dp = 300.dp, closer: Boolean = false, row1Width: Dp = 40.dp): StripSpec = StripSpec(
+        listOf(StripItem("fake.row1", ROW1, row1Width, content = cell(ROW1, row1Width))) +
             (1..more).map { k -> StripItem("fake.more$k", more(k), moreWidth, StripRow.MORE, content = cell(more(k), moreWidth)) } +
             (if (closer) listOf(StripItem("fake.closer", CLOSER, 120.dp, StripRow.MORE, content = cell(CLOSER, 120.dp, closes = true))) else emptyList()),
     )
