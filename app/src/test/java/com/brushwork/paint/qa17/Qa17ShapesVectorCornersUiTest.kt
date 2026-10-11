@@ -118,7 +118,9 @@ class Qa17ShapesVectorCornersUiTest {
         val r = s.dp(value.boundsInWindow)
         val layouts = ArrayList<TextLayoutResult>()
         value.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
-        val overflow = layouts.firstOrNull()?.hasVisualOverflow
+        // v1.8: in a field of fixed width (a More-row item) a single line narrower than its slot
+        // reports hasVisualOverflow; what matters is a whole, unellipsized line.
+        val overflow = layouts.firstOrNull()?.let { it.lineCount != 1 || it.isLineEllipsized(0) || it.didOverflowHeight || it.size.width < kotlin.math.ceil(it.multiParagraph.maxIntrinsicWidth) }
         val why = layouts.firstOrNull()?.let { l ->
             "size ${l.size}, paragraph ${l.multiParagraph.width} x ${l.multiParagraph.height}, width over ${l.didOverflowWidth}, height over ${l.didOverflowHeight}, " +
                 "ellipsized ${l.lineCount > 0 && l.isLineEllipsized(0)}, ${l.layoutInput.constraints}"
@@ -225,11 +227,15 @@ class Qa17ShapesVectorCornersUiTest {
 
         // The group fields of the two points: weight 2, thickness *2, each ONE in-tool step.
         var k = pathSteps(path)
-        press(s, "Type Point weight", 40f)
+        // v1.8: the group's weight field is the popup of the More row's "Point weight" item.
+        click("Point weight", exact = true)
+        click("Type Point weight", exact = true)
         SmokeUi.typeAndDone("Point weight", "2")
         for (ci in sel) assertEquals(2f, path.spline!!.points[ci].weight, 1e-4f)
         assertEquals(k + 1, pathSteps(path))
+        click("Point weight", exact = true)
         assertValueShows(s, "Point weight")
+        Finger.back()
         k = pathSteps(path)
         press(s, "Type Point thickness", 40f)
         SmokeUi.typeAndDone("Point thickness", "*2")
@@ -288,7 +294,12 @@ class Qa17ShapesVectorCornersUiTest {
         press(s, PathfinderLabels.SELECT_ALL)
         assertEquals("the path and the ellipse", 2, pf.count)
         val pfBefore = c.undoManager.undoCount
-        press(s, PathfinderOp.MINUS_FRONT.description, 40f)
+        // v1.8: the ops are a dropdown whose button shows the last op (Unite): a tap opens it. The
+        // menu is a popup window of its own, which the editor's fingers never reach: the entry is
+        // reached whole there, then picked through its click action.
+        press(s, PathfinderOp.UNITE.description, 40f)
+        Qa16Ui(s).reach(PathfinderOp.MINUS_FRONT.description, 40f)
+        click(PathfinderOp.MINUS_FRONT.description, exact = true)
         assertTrue("done", Smoke.pumpUntil(20_000) { settle(1); !pf.busy && !c.vectors.isRendering })
         settle()
         assertEquals("ONE step", pfBefore + 1, c.undoManager.undoCount)

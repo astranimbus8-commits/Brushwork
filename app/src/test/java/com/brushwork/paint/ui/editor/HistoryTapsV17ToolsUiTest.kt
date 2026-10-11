@@ -15,6 +15,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.text.TextCodec
@@ -28,6 +29,7 @@ import com.brushwork.paint.ui.common.KerningLabels
 import com.brushwork.paint.ui.common.PathfinderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.common.TransformLabels18
 import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.HistoryTapFingers.Companion.SEED
 import com.brushwork.paint.ui.editor.HistoryTapFingers.Companion.seed
@@ -53,9 +55,9 @@ import org.robolectric.shadows.ShadowLog
  * v1.7 item 10 (design §3.10) over the v1.7 tools' own controls, on the user's 392 dp phone with
  * real multi-touch events: the first finger on a control that would act (a Symmetry ruler chip,
  * Pathfinder's "Unite shapes", a saved selection's row in the layer window, the Free deform
- * "Smooth mesh" chip and mesh stepper), the second finger beside it. Each time: exactly one undo
- * (the known last step "Seed", named in the feedback), the control under the fingers does
- * nothing, and three fingers then redo that step.
+ * "Smooth mesh" chip and, v1.8, the "Mesh size" button in front of the mesh steppers), the second
+ * finger beside it. Each time: exactly one undo (the known last step "Seed", named in the
+ * feedback), the control under the fingers does nothing, and three fingers then redo that step.
  *
  * The text editor's Kerning row: "Increase Kerning" kerns on touch-down. While the editor is open
  * the history waits for it (v1.3's rule, as for the hotbar's Undo: "Finish the text first: OK or
@@ -228,18 +230,23 @@ class HistoryTapsV17ToolsUiTest {
         val smooth = tool.smoothMesh
         val columns = tool.meshColumns
         with(f) {
-            // The first finger on the "Smooth mesh" chip, then on the "More mesh columns" stepper.
-            for (label in listOf(TransformLabels17.SMOOTH, MeshStepperLabels.MORE_COLUMNS)) {
+            // The first finger on the "Smooth mesh" chip (v1.8: on the More row, which reach
+            // opens), then on the "Mesh size" button. v1.8 (§3.9): the mesh steppers moved into
+            // that button's popup, a window of its own that the editor's fingers never reach, so
+            // the strip control in front of them is the button: it must not open its popup.
+            for (label in listOf(TransformLabels17.SMOOTH, TransformLabels18.MESH_SIZE)) {
                 if (tool.transformState == null) freeDeform()
                 reach(label, 32f)
                 undoesTheSeed(c, control(label).at(0.5f), besideIt())
                 assertEquals("$label: the chip did nothing", smooth, tool.smoothMesh)
                 assertEquals("$label: the stepper did nothing", columns, tool.meshColumns)
+                assertFalse("$label: the mesh popup did not open", SmokeUi.has(MeshStepperLabels.MORE_COLUMNS, exact = true))
                 assertFalse("$label: no mesh change", tool.isMeshChanged)
                 // The undo let the untouched lift go (EditorController.undo), the layer as it was.
                 assertFalse("$label: no pending deform", tool.hasPendingWork)
                 assertTrue("$label: the layer as it was", pixels.contentEquals(pixelsOf(layer.bitmap)))
                 redoesTheSeed(s)
+                StripTestKit.closeMoreRow()
             }
         }
         assertEquals(smooth, tool.smoothMesh)

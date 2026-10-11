@@ -145,11 +145,13 @@ class Qa17ShapesToPathUiTest {
         assertTrue("the arc's ends are sharp", a.sharp && b.sharp)
         assertEquals(30f, dist(a, corner), 0.05f)
         assertEquals(30f, dist(b, corner), 0.05f)
-        assertTrue("its weight shows", SmokeUi.has("Point weight 0.71", exact = true))
+        // v1.8: "Point weight" is a More-row item showing the value; its popup is v1.7's Weight control.
+        assertTrue("its weight shows", SmokeUi.find("Point weight", exact = true) != null && SmokeUi.has("0.71", exact = true))
 
         // Weight, thickness and position, each ONE in-tool step.
         var k = steps(path)
-        press(s, "Type the point weight")
+        click("Point weight", exact = true)
+        click("Type the point weight", exact = true)
         SmokeUi.typeAndDone("Weight", "2")
         assertEquals(2f, path.spline!!.points[ci].weight, 1e-4f)
         assertEquals(k + 1, steps(path))

@@ -85,7 +85,9 @@ class NoStripPointUndoTest {
                     for (p in THREE) assertTrue("$id$at: a point at $p", t.addAnchor(p))
                     rig.settle()
                     // The check sees the strip: its points bar's "Select all points" is found.
-                    assertTrue("$id$at: the points bar", SmokeUi.has(PointLabels.SELECT_ALL, exact = true))
+                    // v1.8: "Select all points" is on the More row (SmokeUi.find opens it).
+                    assertTrue("$id$at: the points bar", SmokeUi.find(PointLabels.SELECT_ALL, exact = true) != null)
+                    StripTestKit.closeMoreRow()
                     check("$id$at, three points")
                     assertTrue("$id$at: a point undone", t.undoStep())
                     rig.settle()

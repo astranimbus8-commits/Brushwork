@@ -98,9 +98,14 @@ class Qa17ShapesNarrow360UiTest {
         pf.computeDispatcher = Dispatchers.Unconfined
         press(s, PathfinderLabels.SELECT_ALL, 32f)
         assertEquals(2, pf.count)
+        // v1.8: the ops are a dropdown whose button shows the last op (Unite); a tap opens it (the open
+        // button leaves the semantics), and every op is an entry of the menu. The menu is a popup
+        // window of its own, which the editor's fingers never reach: the entry is picked through
+        // its click action.
+        press(s, PathfinderOp.UNITE.description, 40f)
         for (op in PathfinderOp.entries) ui.reach(op.description, 40f)
         val before = c.undoManager.undoCount
-        press(s, PathfinderOp.EXCLUDE.description, 40f)
+        click(PathfinderOp.EXCLUDE.description, exact = true)
         assertTrue("done", Smoke.pumpUntil(20_000) { settle(1); !pf.busy && !c.vectors.isRendering })
         settle()
         assertEquals("ONE step", before + 1, c.undoManager.undoCount)

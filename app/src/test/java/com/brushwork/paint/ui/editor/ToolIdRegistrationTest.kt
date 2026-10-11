@@ -36,7 +36,8 @@ import org.robolectric.shadows.ShadowLog
  * factory entry, an icon, a tool-menu cell (v1.6: the menu replaced the tools grid), a history label, an options
  * strip, a coordinate source — and selecting and touching them is safe while they are stubs
  * (Path behaves as Curve; Text frames does nothing). v1.8 F3: Magnetic lasso and Color select
- * are registered the same way, as stubs that draw, commit and push nothing.
+ * are registered the same way; a touch pushes no document step, and whatever in-tool work it
+ * leaves (Magnetic lasso's first anchor, v1.8 area C) is dropped by discard().
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(instrumentedPackages = ["com.brushwork.paint.ui.editor.toolidregistrationsandbox"])
@@ -60,7 +61,7 @@ class ToolIdRegistrationTest {
         assertEquals(CurveKind.CURVE, (c.tools.getValue(ToolId.CURVE) as CurveTool).kind)
         assertTrue((c.tools.getValue(ToolId.POLYLINE) as CurveTool).polyline)
         assertTrue(c.tools.getValue(ToolId.TEXT_FRAMES) is TextFrameTool)
-        // v1.8 F3: the two selection tools, stubs until area C.
+        // v1.8 F3: the two selection tools (area C).
         val v18Ids = listOf(ToolId.MAGNETIC_LASSO, ToolId.COLOR_SELECT)
         assertTrue(c.tools.getValue(ToolId.MAGNETIC_LASSO) is MagneticLassoTool)
         assertTrue(c.tools.getValue(ToolId.COLOR_SELECT) is ColorSelectTool)
@@ -101,8 +102,10 @@ class ToolIdRegistrationTest {
             SmokeUi.settle()
             Smoke.assertQuiet(c, "$id")
             if (id in v18Ids) {
-                assertFalse("$id (a stub) has nothing pending", c.currentTool.hasPendingWork)
-                assertEquals("$id (a stub) pushes no step", steps0, c.undoManager.undoCount)
+                // v1.8 area C: Magnetic lasso's tap places an anchor, pending in-tool work by design (§5.1 C).
+                c.currentTool.discard()
+                assertFalse("$id: discard drops its in-tool steps", c.currentTool.hasPendingWork)
+                assertEquals("$id pushes no document step", steps0, c.undoManager.undoCount)
             }
         }
         // Text frames (a stub) left nothing pending.

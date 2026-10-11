@@ -487,7 +487,13 @@ class SheetHostEditorRobolectricTest {
             for (child in n.children) find(child)?.let { return it }
             return null
         }
-        var n = find(strip) ?: throw AssertionError("no \"$label\" in the options strip")
+        var n = find(strip) ?: run {
+            // v1.8: the label may sit on the strip's More row (a sibling of row 1).
+            com.brushwork.paint.testing.StripTestKit.openMoreRow()
+            RobolectricUi.elements().lastOrNull {
+                it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.TestTag) == com.brushwork.paint.ui.common.V18Tags.STRIP_MORE_ROW
+            }?.node?.let(::find)
+        } ?: throw AssertionError("no \"$label\" in the options strip")
         while (n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent ?: throw AssertionError("\"$label\" is not clickable")
         n.config[SemanticsActions.OnClick].action!!.invoke()
         settle()

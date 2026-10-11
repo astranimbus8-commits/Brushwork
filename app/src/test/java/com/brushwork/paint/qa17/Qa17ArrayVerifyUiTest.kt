@@ -6,6 +6,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.model.ArrayLayout
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.qa16.item
 import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.RED
@@ -184,7 +185,10 @@ class Qa17ArrayVerifyUiTest {
         }
         assertFalse(has("Flip vertically", exact = true))
         assertFalse("no side handles on a text", t.sideHandlesShown)
+        // v1.8: the modes are the entries of the mode dropdown (its button shows the current mode).
+        u.press(TransformTool.Mode.FREE.label)
         assertEquals("Distort on an array", ArrayLabels.DEFORM_REFUSAL, u.stateOf("Distort"))
+        Finger.back()
 
         // "Numbers": no "Keep aspect ratio" (always kept); Rotation 30, Scale 150.
         u.press("Numbers")
@@ -243,7 +247,11 @@ class Qa17ArrayVerifyUiTest {
         assertEquals("only the source shows: $wide", 60, wide.width())
 
         val t = transform(u, TransformTool.Lifted.PIXELS)
+        // v1.8: the modes are the entries of the mode dropdown.
+        u.press(TransformTool.Mode.FREE.label)
+        assertNotNull("the mode dropdown lists Distort", SmokeUi.find("Distort", exact = true))
         assertNull("Distort works on the source pixels", u.stateOf("Distort"))
+        Finger.back()
         u.press("Rotate 90° clockwise")
         applyTransform(u)
         assertEquals(n + 2, u.steps())
@@ -260,6 +268,9 @@ class Qa17ArrayVerifyUiTest {
         if (t.lifted == null) u.ui.tap(tall.exactCenterX(), tall.exactCenterY())
         assertTrue("lifted again", Smoke.pumpUntil(Qa17ArrayUi.WAIT_MS) { settle(1); t.lifted != null })
         assertEquals(TransformTool.Lifted.PIXELS, t.lifted)
+        // v1.8: the modes are the entries of the mode dropdown; the press below picks one in it.
+        u.press(TransformTool.Mode.FREE.label)
+        assertNotNull("the mode dropdown lists Free deform", SmokeUi.find(TransformLabels17.FREE_DEFORM, exact = true))
         assertNull("Free deform works on the source pixels", u.stateOf(TransformLabels17.FREE_DEFORM))
         val turned = pixels(layer.bitmap)
         u.press(TransformLabels17.FREE_DEFORM)

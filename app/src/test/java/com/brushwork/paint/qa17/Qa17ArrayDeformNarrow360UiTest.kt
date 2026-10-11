@@ -1,6 +1,7 @@
 package com.brushwork.paint.qa17
 
 import com.brushwork.paint.model.ArrayMode
+import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.RED
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
@@ -11,6 +12,7 @@ import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.common.TransformLabels18
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.placement.MeshStepperLabels
 import org.junit.Assert.assertEquals
@@ -146,14 +148,20 @@ class Qa17ArrayDeformNarrow360UiTest {
         u.tool("Transform")
         val t = c.currentTool as TransformTool
         assertTrue("lifted", Smoke.pumpUntil(Qa17ArrayUi.WAIT_MS) { settle(1); t.lifted != null })
+        // v1.8: Free deform is an entry of the mode dropdown (its button shows the current mode).
+        u.press(TransformTool.Mode.FREE.label)
         u.press(TransformLabels17.FREE_DEFORM)
         assertEquals(TransformTool.Mode.MESH, t.mode)
         for (label in listOf(
             PointLabels.SELECT_SEVERAL, PointLabels.SELECT_ALL,
-            MeshStepperLabels.FEWER_COLUMNS, MeshStepperLabels.MORE_COLUMNS,
-            MeshStepperLabels.FEWER_ROWS, MeshStepperLabels.MORE_ROWS,
             TransformLabels17.SMOOTH, TransformLabels17.RESET,
             "Apply transform edit", "Discard transform edit",
+        )) reachable(u, label)
+        // v1.8: the steppers are inside the "Mesh size" popup.
+        u.press(TransformLabels18.MESH_SIZE)
+        for (label in listOf(
+            MeshStepperLabels.FEWER_COLUMNS, MeshStepperLabels.MORE_COLUMNS,
+            MeshStepperLabels.FEWER_ROWS, MeshStepperLabels.MORE_ROWS,
         )) reachable(u, label)
         // Fingers on the steppers.
         u.fingerPress(MeshStepperLabels.MORE_COLUMNS)
@@ -161,6 +169,7 @@ class Qa17ArrayDeformNarrow360UiTest {
         assertEquals(4, t.meshColumns)
         assertEquals(4, t.meshRows)
         assertEquals(25, t.pointCount)
+        Finger.back()
         val smooth = t.smoothMesh
         u.fingerPress(TransformLabels17.SMOOTH)
         assertEquals(!smooth, t.smoothMesh)

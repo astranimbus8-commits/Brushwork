@@ -156,7 +156,6 @@ class PillSelectSeveralTest {
 
         h.section("Transform: the cell while Free deform shows its mesh") {
             val s = h.editor()
-            val ui = Qa16Ui(s)
             s.c.selectLayer(0)
             settle()
             QaCurves.tool(s, "Transform")
@@ -164,7 +163,8 @@ class PillSelectSeveralTest {
             assertTrue(Smoke.pumpUntil { settle(1); tool.transformState != null })
             settle()
             assertCell(s, "Transform, Free", tool, shown = false)
-            ui.reach(TransformLabels17.FREE_DEFORM, 0f)
+            // v1.8 (§3.9): Free deform is an entry of the mode dropdown (its button: the current mode).
+            click(TransformTool.Mode.FREE.label, exact = true)
             click(TransformLabels17.FREE_DEFORM, exact = true)
             assertTrue(Smoke.pumpUntil { settle(1); tool.isMeshShown })
             settle()

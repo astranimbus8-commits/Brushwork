@@ -210,6 +210,8 @@ class Qa3StripUndoUiRobolectricTest {
         val (_, c) = editor { Smoke.controller(it, Smoke.document(400, 300, layers = 2)) }
         val tool = pendingCurve(c)
         assertEquals(1f, tool.anchors[1].width, 0f)
+        // v1.8: "Point thickness" is on the Curve strip's More row.
+        com.brushwork.paint.testing.StripTestKit.openMoreRow()
         drag("Point thickness slider", 120f, moves = 10, restMs = 2_000)
         val w = tool.anchors[1].width
         assertTrue("the drag thickened the point: $w", w > 1.05f)

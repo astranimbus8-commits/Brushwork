@@ -12,6 +12,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.masks.LinearMask
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
@@ -420,7 +421,10 @@ class RequestCoverageV15UiTest {
         click("+ Brush", exact = true)
         stroke(60f to 260f, 160f to 260f)
         assertEquals("three components", 3, tone.maskSpec!!.components.size)
-        assertTrue(has("Components (3)", exact = true))
+        // v1.8: "Components (3)" is on the Masks strip's More row (find opens it); an open row
+        // swallows the next canvas touch (D25), so it closes again.
+        assertTrue(SmokeUi.find("Components (3)", exact = true) != null)
+        StripTestKit.closeMoreRow()
         // Editable after: another tool, then back; the linear's end handle dragged.
         tool("Brush")
         tool("Masks")
@@ -517,7 +521,12 @@ class RequestCoverageV15UiTest {
         tool("Transform")
         val tt = c.currentTool as TransformTool
         assertTrue(Smoke.pumpUntil { settle(1); tt.transformState != null })
-        for (label in listOf("Distort", "Delete")) assertTrue("\"$label\" in the Transform strip", has(label, exact = true))
+        // v1.8: "Distort" is an entry of the mode dropdown (its button shows the current mode);
+        // "Delete" is on the More row (find opens it).
+        click(TransformTool.Mode.FREE.label, exact = true)
+        assertTrue("\"Distort\" in the Transform strip", has("Distort", exact = true))
+        Finger.back()
+        assertTrue("\"Delete\" in the Transform strip", SmokeUi.find("Delete", exact = true) != null)
         val options = SmokeUi.find("Delete", exact = true)!!.bounds
         val x = slider("X slider").bounds
         val y = slider("Y slider").bounds
@@ -726,7 +735,11 @@ class RequestCoverageV15UiTest {
             seed(layer, 100f, 80f, 220f, 180f, 0xFF2266CC.toInt())
             tool("Transform")
             assertTrue(Smoke.pumpUntil { settle(1); (c.currentTool as TransformTool).transformState != null })
-            for (label in listOf("Distort", "Delete")) assertReachable(label)
+            // v1.8: "Distort" is an entry of the mode dropdown; "Delete" is on the More row.
+            click(TransformTool.Mode.FREE.label, exact = true)
+            assertReachable("Distort")
+            Finger.back()
+            assertReachable("Delete")
             for (s in listOf("X slider", "Y slider")) {
                 val b = slider(s).bounds
                 assertTrue("$s fits: $b", b.left >= 0f && b.right <= 720.5f && b.bottom <= 1280.5f)

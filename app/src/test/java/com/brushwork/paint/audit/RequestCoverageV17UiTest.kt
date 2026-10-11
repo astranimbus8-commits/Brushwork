@@ -52,6 +52,7 @@ import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.common.TransformLabels18
 import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -296,7 +297,9 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         val path = c.currentTool as CurveTool
         assertTrue("editable in the Path tool", path.isPath && path.pointCount >= 4)
         assertFalse("the converted corner is selected", path.pointSelection.isEmpty)
-        assertTrue("its thickness and weight are there", has(POINT_THICKNESS_LABEL, exact = false))
+        // v1.8: the point's thickness and weight are on the Path strip's More row (find opens it).
+        assertTrue("its thickness and weight are there", SmokeUi.find(POINT_THICKNESS_LABEL, exact = false) != null)
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         Smoke.assertQuiet(c, "shape corner to path")
     }
 
@@ -314,11 +317,13 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         press("Sharp corner")
         assertTrue("a corner", tool.spline!!.points[2].sharp)
         assertTrue(has("Smooth", exact = true))
+        // v1.8: "Sharp corner" is on the More row; an open row swallows the next canvas touch (D25).
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         // The ends are always sharp: the chip says so and is off.
         val first = tool.spline!!.points[0]
         tap(first.x, first.y)
         assertEquals(0, tool.selectedPoint)
-        assertTrue(has(PointLabels.ENDS_SHARP, exact = true))
+        assertTrue(SmokeUi.find(PointLabels.ENDS_SHARP, exact = true) != null)
         assertFalse(SmokeUi.isEnabled(PointLabels.ENDS_SHARP))
         Smoke.assertQuiet(c, "sharp points")
     }
@@ -360,10 +365,13 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         val tool = c.currentTool as CurveTool
         tap(80f, 200f)
         tap(200f, 80f)
-        ui.reach(CurveLabels17.FILL_ONLY, 32f)
+        // v1.8: the paint modes are the entries of the "Stroke kind" dropdown.
+        click("Stroke kind", exact = true)
         assertFalse("two points: no fill yet", SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
+        Finger.back()
         tap(320f, 200f)
-        press(CurveLabels17.FILL_ONLY)
+        click("Stroke kind", exact = true)
+        click(CurveLabels17.FILL_ONLY, exact = true)
         assertTrue(tool.settings.fill)
         applyEdit("Apply path edit")
         val layer = c.activeLayer
@@ -446,6 +454,8 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertTrue(tool.pointSelection.isEmpty)
         assertNotNull(s.tagged(V17Tags.PILL_TRASH))
         assertTrue(has(PillLabels.deleteObject("curve"), exact = true))
+        // v1.8: "Deselect all points" is on the More row; an open row swallows the next canvas touch (D25).
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         tap(tool.pointAt(1))
         assertEquals(listOf(1), tool.pointSelection.indices)
         click(PillLabels.DELETE_POINTS, exact = true)
@@ -473,7 +483,10 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         val tt = c.currentTool as TransformTool
         assertTrue(Smoke.pumpUntil { settle(1); tt.transformState != null })
         assertEquals("a text is transformed as a text", TransformTool.Lifted.TEXT, tt.lifted)
+        // v1.8: the modes are the entries of the mode dropdown (its button shows the current mode).
+        press(TransformTool.Mode.FREE.label)
         assertEquals("Distort says it would rasterize", TransformLabels17.RASTERIZE_TO_DEFORM, stateOf("Distort"))
+        Finger.back()
         var before = steps()
         press("Rotate 90° clockwise")
         applyEdit("Apply transform edit")
@@ -542,12 +555,17 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         tool("Transform")
         val tt = c.currentTool as TransformTool
         assertTrue(Smoke.pumpUntil { settle(1); tt.transformState != null })
+        // v1.8: Free deform is an entry of the mode dropdown.
+        press(TransformTool.Mode.FREE.label)
         press(TransformLabels17.FREE_DEFORM)
         assertEquals(TransformTool.Mode.MESH, tt.mode)
         assertNotNull("the mesh controls", s.tagged(V17Tags.MESH))
+        // v1.8: the steppers are inside the "Mesh size" popup.
+        press(TransformLabels18.MESH_SIZE)
         press(MeshStepperLabels.FEWER_COLUMNS)
         press(MeshStepperLabels.FEWER_ROWS)
         assertEquals("2 x 2 cells", 9, tt.pointCount)
+        Finger.back()
         val centre = tt.pointAt(4)
         assertEquals(160f, centre.x, 1.5f)
         assertEquals(BLUE, layer.bitmap.getPixel(172, centre.y.roundToInt()))
@@ -763,6 +781,9 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         assertEquals(2, pf.count)
         assertTrue(has(PathfinderLabels.picked(2), exact = true))
         val before = steps()
+        // v1.8: the ops are a dropdown whose button shows the last op (Unite): the first press opens
+        // the menu (the open button leaves the semantics), the second runs Unite.
+        press(PathfinderLabels.UNITE, 40f)
         press(PathfinderLabels.UNITE, 40f)
         assertTrue("united", Smoke.pumpUntil(WAIT_MS) { settle(1); c.doc.layers.any { it.name == PathfinderLabels.resultLayer(1) } })
         settle()

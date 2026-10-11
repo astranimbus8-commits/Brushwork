@@ -523,10 +523,21 @@ internal object UniqueLabelsV17 {
         assertEquals("both picked", 2, tool.count)
         val seen = walkStrip(s, a, "Pathfinder strip")
         // Each operation by its description (its short visible name is not announced, §3.20).
-        for (label in listOf(PathfinderLabels.SELECT_ALL) + PathfinderOp.entries.map { it.description }) {
+        // v1.8: the operations are one dropdown whose button shows the last one used (Unite at
+        // first): the strip holds "Select all objects" and that one operation, once each.
+        val shown = PathfinderOp.UNITE.description
+        for (label in listOf(PathfinderLabels.SELECT_ALL, shown)) {
             val n = seen.values.count { label in it.labels }
             a.check("Pathfinder", n == 1) { "\"$label\" on $n controls" }
         }
+        // The open menu (its button leaves the semantics) lists every operation once.
+        click(shown, exact = true)
+        val menu = Clickables.onScreen(s)
+        for (label in PathfinderOp.entries.map { it.description }) {
+            val n = menu.count { label in it.labels }
+            a.check("Pathfinder, the operations menu", n == 1) { "\"$label\" on $n controls" }
+        }
+        UniqueLabels.closeMenu()
         Smoke.assertQuiet(s.c, "Pathfinder")
         a.done()
     }
@@ -541,7 +552,8 @@ internal object UniqueLabelsV17 {
         val tool = s.c.currentTool as TransformTool
         assertTrue(Smoke.pumpUntil { settle(1); tool.transformState != null })
         settle()
-        ui.reach(TransformLabels17.FREE_DEFORM, 0f)
+        // v1.8: Free deform is an entry of the mode dropdown (its button shows the current mode).
+        click(TransformTool.Mode.FREE.label, exact = true)
         click(TransformLabels17.FREE_DEFORM, exact = true)
         assertTrue(Smoke.pumpUntil { settle(1); tool.mode == TransformTool.Mode.MESH })
         settle()

@@ -20,7 +20,7 @@ import org.robolectric.shadows.ShadowLog
  * - Stabilizer: the pointing hand's fingertip with a tap mark beside it;
  * - Grid: the square at the upper left, the circle at the lower right;
  * - Ruler: one diagonal ruler from lower left to upper right, its upper-left corner empty;
- * - More options: the picture with a solid sun;
+ * - More options (v1.8, design §3.9): three dots in a row;
  * - the layers glyph: the number tile at the upper left, the stacked squares at its lower right
  *   (the lower-left corner is empty).
  */
@@ -75,8 +75,11 @@ class IbisGlyphSilhouettesTest {
             )
             glyph(
                 "More options", top,
-                Triple(8.6f, 8.6f, true), // the solid sun
-                Triple(12f, 17.6f, true), // the solid hills
+                Triple(5.5f, 12f, true), // the left dot
+                Triple(12f, 12f, true), // the middle dot
+                Triple(18.5f, 12f, true), // the right dot
+                Triple(12f, 6f, false), // nothing above the dots
+                Triple(12f, 18f, false), // nothing below them
             )
             // The layers glyph (IbisDims.BottomGlyph + 4 = 30 dp box) in dp of its box.
             val layers = Finger.control(s, "Open layers", exact = false)

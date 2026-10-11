@@ -376,7 +376,6 @@ class CopiesReadersAuditTest {
             "array/ArrayTransforms.kt" to "kept, ShapeAffine.mapped conjugates them",
             "tools/array/GuideEditor.kt" to "source only (§4.3): a guide is the source path; its copies are not guides",
             "tools/transform/DataLift.kt" to "kept: drawn by VectorLayerRenderer, measured by VectorOps.bounds",
-            "tools/vector/CurveTool.kt" to "a producer (§4.3); keeping copies when a path is reopened is area E's",
             "tools/vector/ShapeToSpline.kt" to "a producer (§4.3); Turn into path with copies is area F's",
             "tools/vector/ShapeTransforms.kt" to "kept, ShapeAffine.mapped conjugates them",
             "tools/vector/spline/SplineBezier.kt" to "a producer (§4.3): one subpath's spline form",

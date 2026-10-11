@@ -232,7 +232,8 @@ class Qa3StripsReachableUiRobolectricTest {
             tool.setWidth(1, 2f)
             tool.endNumericEdit()
             deviceFrames(a)
-            assertStripReachable(a, "curve", first = listOf("Point thickness slider"))
+            // v1.8: "Point thickness" is on the More row (§3.9); row 1 holds the point actions.
+            assertStripReachable(a, "curve", first = listOf("Add point", "Delete point", "Closed", "Stroke kind"))
         }
         section("masks, a component selected") {
             val (a, c) = open(vector = false)
@@ -260,7 +261,8 @@ class Qa3StripsReachableUiRobolectricTest {
             for (p in listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f))) tool.addAnchor(p)
             tool.select(2)
             deviceFrames(a)
-            assertStripReachable(a, "polyline", first = listOf("Point thickness slider"))
+            // v1.8: "Point thickness" is on the More row (§3.9); row 1 holds the point actions.
+            assertStripReachable(a, "polyline", first = listOf("Add point", "Delete point", "Closed", "Stroke kind"))
         }
         section("text, pending") {
             val (a, c) = open(vector = false)

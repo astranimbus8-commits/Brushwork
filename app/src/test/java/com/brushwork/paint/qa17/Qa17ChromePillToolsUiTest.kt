@@ -174,7 +174,8 @@ internal object Qa17ChromePill {
         // Folded: [✥][🗑], and the trash deletes the shape's layer.
         finger(s, "Fold the X / Y strip")
         assertNull("no row 2 folded", s.tagged(V17Tags.PILL_SCALE_ROW))
-        assertNull("no X folded", SmokeUi.find("X slider", exact = true))
+        // v1.8: SmokeUi.find opens a closed More row when the label is absent, and that row would swallow the two-finger undo (D25).
+        assertFalse("no X folded", SmokeUi.has("X slider", exact = true))
         assertNull("no # folded", Finger.element(s, INCREMENTS_LABEL))
         assertTrue(SmokeUi.has("Unfold the X / Y strip", exact = true))
         assertEquals(PillLabels.deleteObject("shape"), trashLabel())
@@ -268,6 +269,8 @@ internal object Qa17ChromePill {
         tapTrash(s)
         assertEquals("the path is gone", 0, tool.pointCount)
         assertNull("no pill without a path", SmokeUi.find("Unfold the X / Y strip", exact = true))
+        // v1.8: the point chips are on the More row; an open row swallows the next canvas touch (D25).
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         twoFingersOnCanvas(s)
         assertEquals("two fingers bring it back", 3, tool.pointCount)
         assertEquals(-10f, tool.pointAt(i).x, 1e-3f)
@@ -294,6 +297,8 @@ internal object Qa17ChromePill {
         assertEquals("all selected: the whole polyline", PillLabels.deleteObject("polyline"), trashLabel())
         tapTrash(s)
         assertEquals(0, tool.pointCount)
+        // v1.8: "Select all points" is on the More row; an open row swallows the next canvas touch (D25).
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         twoFingersOnCanvas(s)
         assertEquals(3, tool.pointCount)
         Smoke.assertQuiet(c, "polyline")

@@ -5,6 +5,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushLibrary
+import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -139,7 +140,10 @@ internal object VectorUiFlow {
         val t = c.tools.getValue(ToolId.TRANSFORM) as TransformTool
         assertTrue(Smoke.pumpUntil(10_000) { t.transformState != null })
         settle()
+        // v1.8: "Distort" is an entry of the mode dropdown (its button shows the current mode).
+        click(TransformTool.Mode.FREE.label, exact = true)
         onScreen("Distort")
+        Finger.back()
         onScreen("X slider")
         onScreen("Y slider")
         t.setRotation(10.0); t.endNumericEdit()

@@ -54,10 +54,11 @@ class ShapeCopiesTurnIntoPathTest {
             assertArrayEquals("data and pixels together", kit.render(layer.vector!!), kit.rig.pixels(layer.bitmap))
             assertEquals(255, kit.alphaAt(layer.bitmap, 70, 100))
             assertEquals("the copy", 255, kit.alphaAt(layer.bitmap, 250, 100))
-            // One undo: the shape layer, with its copies. (The Path tool, which opened the path,
-            // closes it untouched first: how it holds a path's copies is area E's.)
+            // One undo: the shape layer, with its copies. The Path tool, which opened the path
+            // with its copies (v1.8 area E), holds no change of the user's: the undo needs no
+            // discard first.
             assertEquals(HistoryLabels.TURN_INTO_PATH, c.undoManager.undoLabel)
-            c.currentTool.discard()
+            assertFalse("the opened path is untouched", c.currentTool.hasUserChanges)
             assertEquals(steps + 2, c.undoManager.undoCount)
             c.undo()
             c.vectors.flushPending()

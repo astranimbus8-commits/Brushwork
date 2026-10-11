@@ -258,6 +258,9 @@ class RequestCoverageV16UiTest {
         tap(320f, 150f)
         curve.select(1)
         settle()
+        // v1.8: the Handles group is the popup of the "Handles" item on the Curve strip's More row.
+        click("Handles", exact = true)
+        settle()
         if (areaControl("B", "Longer handles")) {
             val before = curve.anchors
             // ‹ › are hold-to-repeat arrows; a screen reader presses them with their click action
