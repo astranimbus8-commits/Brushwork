@@ -1878,7 +1878,7 @@ Each of these is one step:
 The top row's Undo and Redo walk these steps and bring traced segments back without tracing again. `hasPendingWork` holds while there are anchors, or steps to undo. When an outline is taken back to nothing, its steps end once the tool is left.
 
 **Input.**
-- A tap places an anchor. With "Snap to edge" on, the anchor moves to the strongest edge within "Edge reach" (in screen dp, so the reach is the same at any zoom), unless no edge there passes the contrast floor. An anchor that snaps onto the last one (within 3 dp) is not added twice.
+- A tap places an anchor. With "Snap to edge" on, the anchor moves onto the strongest edge within "Edge reach" (in screen dp, so the reach is the same at any zoom), unless no edge there passes the contrast floor. It lands on that edge's nearest point: the nearest edge-map pixel at least half as strong as the strongest one within reach, then up to 2 px on across the edge, from its flank to its centre line (`snapped`). So the anchor moves across the edge, never along it, where a photo's edge is stronger in one place than another (v1.8 final QA, `Qa18SelectMagneticOutlineUiTest`). An anchor that snaps onto the last one (within 3 dp) is not added twice. A dragged anchor snaps the same way where the finger lifts.
 - Press and drag shows the live segment to the finger.
 - A touch within 24 dp of an anchor drags it, with a 6 dp slop. Its two segments are traced again, and a cancelled touch puts the anchor back. A tap on an anchor makes it the active anchor.
 

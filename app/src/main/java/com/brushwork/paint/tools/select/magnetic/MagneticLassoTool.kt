@@ -409,9 +409,13 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     }
 
     /**
-     * ([x], [y]) moved to the strongest edge within reach (the centre of its edge-map pixel) while
-     * snapping is on and the map is ready; unchanged otherwise, and where no edge reaches the
-     * contrast floor.
+     * ([x], [y]) moved onto the strongest edge within reach while snapping is on and the map is
+     * ready: to the NEAREST edge-map pixel at least half as strong as the strongest one within
+     * reach, then on across the edge to the strongest pixel within [RIDGE_PX] (the edge's centre
+     * line, not its flank), the centre of that pixel. So the point moves across the edge, never
+     * along it (an edge's strength varies along it in a photo, and its single strongest pixel can
+     * sit anywhere in the reach). Unchanged while snapping is off or the map not ready, and where
+     * no edge reaches the contrast floor.
      */
     internal fun snapped(x: Float, y: Float): Vec2 {
         val map = edgeMap
@@ -421,15 +425,32 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         val cx = x * k; val cy = y * k
         val x0 = floor(cx - r).toInt().coerceIn(0, map.width - 1); val x1 = ceil(cx + r).toInt().coerceIn(0, map.width - 1)
         val y0 = floor(cy - r).toInt().coerceIn(0, map.height - 1); val y1 = ceil(cy + r).toInt().coerceIn(0, map.height - 1)
-        var best = 0; var bestD = Float.MAX_VALUE; var bx = -1; var by = -1
-        for (py in y0..y1) for (px in x0..x1) {
+        fun within(px: Int, py: Int): Float {
             val dx = px + 0.5f - cx; val dy = py + 0.5f - cy
-            val d = dx * dx + dy * dy
-            if (d > r * r) continue
-            val g = map.at(px, py)
-            if (g > best || (g == best && g > 0 && d < bestD)) { best = g; bestD = d; bx = px; by = py }
+            return dx * dx + dy * dy
         }
-        if (bx < 0 || best < maxOf(1, floor)) return Vec2(x, y)
+        var best = 0
+        for (py in y0..y1) for (px in x0..x1) if (within(px, py) <= r * r) best = maxOf(best, map.at(px, py))
+        if (best < maxOf(1, floor)) return Vec2(x, y)
+        val strong = maxOf(1, floor, (best + 1) / 2)
+        var bestD = Float.MAX_VALUE; var bx = -1; var by = -1
+        for (py in y0..y1) for (px in x0..x1) {
+            val d = within(px, py)
+            if (d <= r * r && d < bestD && map.at(px, py) >= strong) { bestD = d; bx = px; by = py }
+        }
+        // Then onto the edge's centre line, not its flank: on across the edge (away from the finger)
+        // to the strongest pixel within [RIDGE_PX]. Never along it: the strength varies along an edge.
+        val ux = bx + 0.5f - cx; val uy = by + 0.5f - cy
+        val len = hypot(ux, uy)
+        if (len >= 0.5f) {
+            var g = map.at(bx, by); var rx = bx; var ry = by
+            for (step in 1..RIDGE_PX) {
+                val qx = floor(bx + 0.5f + ux / len * step).toInt(); val qy = floor(by + 0.5f + uy / len * step).toInt()
+                if (qx !in 0 until map.width || qy !in 0 until map.height) break
+                if (map.at(qx, qy) > g) { g = map.at(qx, qy); rx = qx; ry = qy }
+            }
+            bx = rx; by = ry
+        }
         return Vec2((bx + 0.5f) / k, (by + 0.5f) / k)
     }
 
@@ -655,5 +676,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         const val DOUBLE_TAP_MS = 300L
         const val DOUBLE_TAP_DP = 32f
         private const val LIVE = -1
+        /** A snapped anchor moves at most this many edge-map px on across an edge, from its flank to its centre line. */
+        private const val RIDGE_PX = 2
     }
 }
