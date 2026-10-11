@@ -461,8 +461,24 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val mapping: DabMapping? = DabMapping.of(copies, res.stamper, phaseTips)
         /** True when the stroke draws symmetry copies (a rewind can't remove them: see [updatePath]). */
         val hasCopies: Boolean get() = mapping != null
+        /** Paints the coverage with pixels from elsewhere (clone stamp); fixed for the stroke. */
+        private val source: CoverageSource? = coverageSource
+        /**
+         * v1.8 D (design §3.1 D1): the clone stamp's symmetry copies. The coverage holds the
+         * original's dabs only; each copy draws that one buffer again through its map
+         * ([drawCopies]), k = n-1..1, before the original. Null without copies: the stroke is
+         * then the v1.7 one exactly.
+         */
+        private val sourceCopies: CoverageCopies? = (source as? CoverageCopies)?.takeIf { mapping == null && it.copyCount > 0 }
+        private val sourceCopyCount = sourceCopies?.copyCount ?: 0
+        /** Where copy k of a clone stroke lands (document px, clipped; index k = 1..n-1, `[0]` unused). */
+        private val copyDest: Array<Rect> = Array(if (sourceCopies != null) sourceCopyCount + 1 else 0) { Rect() }
+        private val copyArea = Rect()
+        private val copyClip = Rect()
+        private val copyRectF = android.graphics.RectF()
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
-        private val copyTiles: BooleanArray? = mapping?.let { BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) }
+        private val copyTiles: BooleanArray? =
+            if (mapping != null || sourceCopies != null) BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) else null
         /**
          * Where the stroke's own dabs ([ownReach]) and each copy's dabs ([copyReach]) were drawn
          * (unclipped bounds): the end taper redraws each copy's end on its own ([retaperCopies]).
@@ -471,8 +487,6 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val copyReach: Array<Rect>? = mapping?.let { m -> Array(m.copies) { Rect() } }
         /** Union of all dab bounds, clipped to the document. */
         private val bounds = Rect()
-        /** Paints the coverage with pixels from elsewhere (clone stamp); fixed for the stroke. */
-        private val source: CoverageSource? = coverageSource
         private var style = CoverageStyle(
             mode = when {
                 maskTarget -> PorterDuff.Mode.SRC_OVER
@@ -503,6 +517,62 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             return if (clipRect.intersect(bounds)) clipRect else null
         }
 
+        /**
+         * v1.8 D: the copies of a clone stroke within [canvas]'s clip (document px), copy
+         * n-1 first and copy 1 last, each prepared by the source for where it lands; the original
+         * is drawn after them. Nothing without copies.
+         */
+        private fun drawCopies(canvas: Canvas) {
+            val cc = sourceCopies ?: return
+            if (!canvas.getClipBounds(copyClip)) return
+            for (k in sourceCopyCount downTo 1) {
+                copyArea.set(copyDest[k])
+                if (!copyArea.intersect(copyClip)) continue
+                cc.prepareCopy(k, copyArea)
+                res.painter.drawMapped(canvas, coverage, copyArea, cc.copyMap(k), style, cc.copyShader(k), selection?.mask)
+            }
+        }
+
+        /** The copies of a clone stroke within [tile] of a commit (the shaders are the commit's). */
+        private fun commitCopies(canvas: Canvas, tile: Rect, sel: Selection?) {
+            val cc = sourceCopies ?: return
+            for (k in sourceCopyCount downTo 1) {
+                copyArea.set(copyDest[k])
+                if (!copyArea.intersect(tile)) continue
+                res.painter.drawMapped(canvas, coverage, copyArea, cc.copyMap(k), style, cc.copyShader(k), sel?.mask)
+            }
+        }
+
+        /**
+         * v1.8 D: [r] (document px, the original's) has new coverage: where each copy of a clone
+         * stroke shows it is added to that copy's area and to the commit tiles, and redrawn.
+         */
+        private fun markCopies(r: Rect) {
+            val cc = sourceCopies ?: return
+            if (r.isEmpty) return
+            for (k in 1..sourceCopyCount) {
+                copyRectF.set(r)
+                cc.copyMap(k).mapRect(copyRectF)
+                if (!copyRectF.left.isFinite() || !copyRectF.top.isFinite() || !copyRectF.right.isFinite() || !copyRectF.bottom.isFinite()) continue
+                copyRectF.roundOut(copyArea)
+                // (Bilinear sampling spreads a copy's edge by a pixel.)
+                copyArea.inset(-1, -1)
+                if (!copyArea.intersect(0, 0, docW, docH)) continue
+                copyDest[k].union(copyArea)
+                markTiles(copyArea)
+                controller.invalidateDoc(copyArea)
+            }
+        }
+
+        /** Marks the [COMMIT_TILE]s [r] (document px, within the document) touches in [copyTiles]. */
+        private fun markTiles(r: Rect) {
+            val tiles = copyTiles ?: return
+            if (r.isEmpty) return
+            for (row in r.top / COMMIT_TILE..(r.bottom - 1) / COMMIT_TILE) {
+                for (col in r.left / COMMIT_TILE..(r.right - 1) / COMMIT_TILE) tiles[row * tileCols + col] = true
+            }
+        }
+
         /** 1-bit documents: the preview is thresholded like the commit will be (no gray edges). */
         private val monochrome: Paint? =
             if (!maskTarget && controller.doc.colorMode == ColorMode.MONOCHROME) Paint().apply { colorFilter = MONOCHROME_FILTER } else null
@@ -514,6 +584,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 if (maskTarget) return false
                 val save = monochrome?.let { canvas.saveLayer(null, it) }
                 canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
+                drawCopies(canvas)
                 res.painter.draw(canvas, coverage, bounds, styleFor(drawRegion(canvas)), selection?.mask)
                 if (save != null) canvas.restoreToCount(save)
                 return true
@@ -524,6 +595,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 if (!maskTarget || mask == null) return false
                 val save = canvas.saveLayer(null, maskPaint)
                 canvas.drawBitmap(mask, 0f, 0f, null)
+                drawCopies(canvas)
                 res.painter.draw(canvas, coverage, bounds, styleFor(drawRegion(canvas)), selection?.mask)
                 canvas.restoreToCount(save)
                 return true
@@ -890,7 +962,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         }
 
         override fun afterEvent() {
-            if (!isPath) { flushDirty(); return }
+            if (!isPath) {
+                markCopies(dirty)
+                flushDirty()
+                return
+            }
             // A path is redrawn on screen once per update, cell by cell.
             if (dirty.isEmpty) return
             dirtyCells?.mark(dirty)
@@ -926,6 +1002,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             canvas.restore()
             bounds.union(region)
+            // v1.8 D: a clone stroke's copies show the re-rendered part too.
+            markCopies(region)
         }
 
         /**
@@ -1019,6 +1097,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             retaper()
             dirty.setEmpty()
             val commitRect = Rect(bounds)
+            // v1.8 D: a clone stroke's copies are committed with it, in the same step.
+            for (k in 1 until copyDest.size) commitRect.union(copyDest[k])
             val sel = selection
             if (sel != null && !commitRect.intersect(sel.bounds)) commitRect.setEmpty()
             commitThrough(undoLabel(kind), bounds) { commitPixels(commitRect, sel) }
@@ -1033,7 +1113,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             // The clone stamp copies its source region first: painting must never read pixels
             // this very commit has already changed (V13).
             source?.let { src ->
-                src.prepareCommit(commitRect)
+                val cc = sourceCopies
+                // v1.8 D: with copies, every copy's source region is copied first (one commit copy).
+                if (cc != null) cc.prepareCommitCopies(commitDests(commitRect)) else src.prepareCommit(commitRect)
                 styleFor(null)
             }
             // Composite tile by tile, only where dabs landed: long diagonal strokes skip
@@ -1043,9 +1125,17 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val canvas = Canvas(target)
             for (r in touchedTiles(commitRect)) {
                 rec.touch(r)
+                commitCopies(canvas, r, sel)
                 res.painter.draw(canvas, coverage, r, style, sel?.mask)
             }
             return controller.commitEdit(rec, undoLabel(kind))
+        }
+
+        /** Where the original (`[0]`) and each copy k of a clone stroke land within [commitRect]. */
+        private fun commitDests(commitRect: Rect): Array<Rect> = Array(sourceCopyCount + 1) { k ->
+            val r = Rect(if (k == 0) bounds else copyDest[k])
+            if (!r.intersect(commitRect)) r.setEmpty()
+            r
         }
 
         /** [COMMIT_TILE]-aligned tiles (clipped to [clip]) that contain part of a dab. */
@@ -1108,6 +1198,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             res.clear(bounds)
             if (!bounds.isEmpty) controller.invalidateDoc(bounds)
+            // v1.8 D: a clone stroke's copies disappear with it (the layer shows the commit).
+            for (k in 1 until copyDest.size) if (!copyDest[k].isEmpty) controller.invalidateDoc(copyDest[k])
         }
     }
 

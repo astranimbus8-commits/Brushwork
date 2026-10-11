@@ -19,6 +19,8 @@ import com.brushwork.paint.tools.PositionedTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.MirrorLabels18
+import com.brushwork.paint.vector.ObjectCopies
 import kotlin.math.hypot
 import kotlin.math.min
 
@@ -39,6 +41,11 @@ import kotlin.math.min
  *
  * The source, the offset and the armed state are tool state, not document data (no undo).
  * The X / Y strip moves the source ([objectPosition]).
+ *
+ * v1.8 D (design §3.1 D1): with symmetry on, a stroke is also drawn as the ruler's copies (one
+ * coverage buffer drawn once per map, the maps taken where the stroke starts); copy k clones
+ * from the source spot mirrored by its map (it reads S(q − A_k·o)). The ⊕ is drawn once, for
+ * the original. Up to [MAX_MAPS] maps; more refuses the stroke. One undo step for all of them.
  */
 class CloneTool(controller: EditorController) : Tool(controller), PositionedTool {
     override val id = ToolId.CLONE
@@ -209,7 +216,16 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         val layer = controller.activeLayer
         val target = controller.editTargetOf(layer)
         val wanted = if (sampleAllLayers) CloneSource.Sample.ALL_LAYERS else CloneSource.Sample.THIS_LAYER
-        val used = source.beginStroke(layer, target, wanted, offset)
+        // v1.8 D (design §3.1 D1): under a symmetry ruler the stroke is also drawn as copies,
+        // the maps taken where it starts; more than [MAX_MAPS] is refused (no stroke, no step).
+        val maps = ObjectCopies.mapsAt(controller, at.x, at.y)
+        if (maps.size > MAX_MAPS) {
+            controller.toast(MirrorLabels18.CLONE_TOO_MANY)
+            gesture = Gesture.NONE
+            strokeOffset = null
+            return
+        }
+        val used = source.beginStroke(layer, target, wanted, offset, maps)
         // (A mask always clones its own values: that is not a fallback.)
         if (used != wanted && target == EditTarget.CONTENT && !fallbackShown) {
             fallbackShown = true
@@ -429,6 +445,12 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         const val HINT = "Long-press where to copy from"
         const val FALLBACK_MESSAGE = "Not enough memory to sample all layers: copying from this layer"
         const val POSITION_LABEL = "Source"
+
+        /**
+         * v1.8 D: a stroke is drawn with at most this many symmetry maps (the original and 31
+         * copies); a ruler with more refuses the stroke ([MirrorLabels18.CLONE_TOO_MANY]).
+         */
+        const val MAX_MAPS = 32
 
         /** Touching this close to the ⊕ (on screen) drags the source instead of painting. */
         const val GRAB_RADIUS_DP = 28f

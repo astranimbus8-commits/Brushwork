@@ -1,6 +1,7 @@
 package com.brushwork.paint.brush
 
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.Shader
 import com.brushwork.paint.engine.EditTarget
@@ -88,4 +89,34 @@ interface CoverageSource {
 
     /** The stroke ended (committed or cancelled). */
     fun endStroke()
+}
+
+/**
+ * v1.8 D (design §3.1 D1, additive): a [CoverageSource] whose stroke is also drawn as symmetry
+ * copies (the clone stamp under a symmetry ruler). The stroke keeps ONE coverage buffer (the
+ * original's dabs); copy k (1..[copyCount]) draws that buffer again under `canvas.concat(`
+ * [copyMap]`(k))`, painted with [copyShader]`(k)`, for k = [copyCount]..1 and then the original
+ * exactly as without copies. The selection, the paper grain and the clip stay in document space.
+ * Read by `BrushTool` when a stroke starts; [copyCount] is fixed until the stroke ends.
+ */
+interface CoverageCopies {
+    /** The copies drawn besides the original (0: none, the stroke is the v1.7 one exactly). */
+    val copyCount: Int
+
+    /** Copy [k]'s map (1..[copyCount]): the coverage's document px to where the copy lands. */
+    fun copyMap(k: Int): Matrix
+
+    /** Before copy [k] is composited over [destDocRect] (document px where it lands): may swap [copyShader]. */
+    fun prepareCopy(k: Int, destDocRect: Rect)
+
+    /** Paints copy [k]'s coverage: drawn under [copyMap]`(k)`, so its local matrix is in the coverage's space. */
+    fun copyShader(k: Int): Shader
+
+    /**
+     * Replaces [CoverageSource.prepareCommit] for a stroke with copies: [dests]`[k]` is where copy
+     * k lands within the commit (`[0]`: the original's own part). The source regions of all of
+     * them are copied first, so the commit never reads pixels it has already changed (V13);
+     * [CoverageSource.shader] and every [copyShader] may change.
+     */
+    fun prepareCommitCopies(dests: Array<Rect>)
 }

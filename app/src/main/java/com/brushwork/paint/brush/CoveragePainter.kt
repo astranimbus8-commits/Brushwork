@@ -3,6 +3,7 @@ package com.brushwork.paint.brush
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -109,6 +110,53 @@ class CoveragePainter {
         }
         // Don't keep a clone source alive through the shared paint.
         if (style.shader != null) tint.shader = null
+        canvas.restore()
+    }
+
+    /**
+     * v1.8 D (design §3.1 D1): a symmetry copy of a clone stroke. [coverage] is drawn through
+     * [map] (coverage px to document px) into [dest] (document px), painted with [shader] (whose
+     * local matrix is in the coverage's space, as the canvas is while it draws) and sampled
+     * bilinearly; [style]'s mode, opacity and grain and [selectionMask] apply in document space,
+     * as for the original ([draw]).
+     */
+    fun drawMapped(canvas: Canvas, coverage: Bitmap, dest: Rect, map: Matrix, style: CoverageStyle, shader: Shader, selectionMask: Bitmap?) {
+        if (dest.isEmpty) return
+        val alpha = alphaOf(style)
+        if (alpha <= 0) return
+        canvas.save()
+        canvas.clipRect(dest)
+        if (selectionMask == null && style.grain <= 0f) {
+            tint.shader = shader
+            tint.xfermode = xfer(style.mode)
+            tint.color = style.color
+            tint.alpha = alpha
+            canvas.concat(map)
+            canvas.drawBitmap(coverage, 0f, 0f, tint)
+        } else {
+            boundsF.set(dest)
+            layerPaint.xfermode = xfer(style.mode)
+            layerPaint.alpha = alpha
+            canvas.saveLayer(boundsF, layerPaint)
+            tint.shader = shader
+            tint.xfermode = null
+            tint.color = style.color
+            tint.alpha = 255
+            canvas.save()
+            canvas.concat(map)
+            canvas.drawBitmap(coverage, 0f, 0f, tint)
+            canvas.restore()
+            if (style.grain > 0f) {
+                if (grainAmount != style.grain) {
+                    grainPaint.shader = BitmapShader(PaperGrain.tile(style.grain), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+                    grainAmount = style.grain
+                }
+                canvas.drawRect(boundsF, grainPaint)
+            }
+            if (selectionMask != null) com.brushwork.paint.engine.BitmapUtils.maskWith(canvas, selectionMask)
+            canvas.restore()
+        }
+        tint.shader = null
         canvas.restore()
     }
 }

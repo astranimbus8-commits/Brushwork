@@ -8,17 +8,20 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Shader
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.brush.CoverageCopies
 import com.brushwork.paint.brush.CoverageSource
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.hypot
@@ -133,8 +136,18 @@ class CloneAnchor {
  *
  * A source outside the document copies nothing: regions whose source leaves the document are
  * sampled through a copy that is transparent there. Main thread only.
+ *
+ * v1.8 D (design §3.1 D1, [CoverageCopies]): under a symmetry ruler a stroke also has copies,
+ * one per map M_k after the identity ([beginStroke]'s `maps`). Copy k draws the stroke's one
+ * coverage buffer under M_k with a shader whose local matrix is T(o)·M_k⁻¹ (o = the offset), so
+ * a destination pixel q shows S(q − A_k·o): copy k clones from the mirrored source spot (A_k the
+ * linear part of M_k; for a perspective map the same composition, M_k·T(−o)·M_k⁻¹). Copies
+ * sample bilinearly; the original keeps its exact whole-pixel shader. The source rect of copy k
+ * is M_k applied to the original's ([sourceRectOf]); [readsOnlyOutside] checks all of them, the
+ * All-layers snapshot is filled for all of them, and with copies [prepareCommitCopies] always
+ * copies their union first (one commit copy, transparent outside the document).
  */
-class CloneSource(private val controller: EditorController) : CoverageSource {
+class CloneSource(private val controller: EditorController) : CoverageSource, CoverageCopies {
     enum class Sample { THIS_LAYER, ALL_LAYERS }
 
     /** What the current (or last) stroke samples. */
@@ -193,12 +206,42 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
     private val dst = Rect()
     private val tile = Rect()
 
+    // v1.8 D: the copies of the stroke in progress (index k = 1..[copyCount]; `[0]` unused).
+    private var copyN = 0
+    private var copyValues: Array<FloatArray> = emptyArray()
+    private var copyMaps: Array<Matrix> = emptyArray()
+    /** M_k⁻¹. */
+    private var copyInverse: Array<Matrix> = emptyArray()
+    /** G_k = M_k·T(−o)·M_k⁻¹: a destination point of copy k to the source point it shows. */
+    private var copyTexture: Array<Matrix> = emptyArray()
+    private var copyTextureValues: Array<FloatArray> = emptyArray()
+    private var copyDirect: Array<Shader> = emptyArray()
+    private var copyCurrent: Array<Shader> = emptyArray()
+    private var copyScratch: Bitmap? = null
+    private var copyScratchCanvas: Canvas? = null
+    private val copySrc = Rect()
+    private val mapF = RectF()
+    private val pt = FloatArray(2)
+
+    /** Region copies made for the copies' sources (tests). */
+    internal var copyRegionCopies: Int = 0
+        private set
+
+    /** Commit copies made for strokes with copies (tests). */
+    internal var commitCopiesTaken: Int = 0
+        private set
+
     /**
      * Sets up a stroke on [layer] ([target]: its pixels or its mask) that paints with [offset].
      * Returns what it samples: All layers falls back to This layer when the mask is edited (a
      * mask clones its own values) or when the snapshot can't be allocated.
+     *
+     * v1.8 D: [maps] (row-major 3×3, the identity first, as `SymmetryMaps.transforms` gives them
+     * at the stroke's start) make the stroke draw a copy per map after the identity
+     * ([CoverageCopies]); fewer than two maps: no copies, the v1.7 stroke exactly. The caller
+     * caps their number (`CloneTool.MAX_MAPS`).
      */
-    fun beginStroke(layer: Layer, target: EditTarget, wanted: Sample, offset: CloneOffset): Sample {
+    fun beginStroke(layer: Layer, target: EditTarget, wanted: Sample, offset: CloneOffset, maps: List<FloatArray> = emptyList()): Sample {
         endStroke()
         dx = offset.dx
         dy = offset.dy
@@ -217,7 +260,211 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         current = direct
         sample = mode
         isActive = true
+        setUpCopies(bmp, maps)
         return mode
+    }
+
+    /** The copies of [maps] (the identity first), sampling [bmp] directly until a region needs a copy. */
+    private fun setUpCopies(bmp: Bitmap, maps: List<FloatArray>) {
+        val usable = maps.drop(1).filter { it.size == 9 && it.all { v -> v.isFinite() } }
+        val ms = ArrayList<Matrix>()
+        val inv = ArrayList<Matrix>()
+        val vals = ArrayList<FloatArray>()
+        for (m in usable) {
+            val mk = Matrix().apply { setValues(m) }
+            val ik = Matrix()
+            if (!mk.invert(ik)) continue
+            ms += mk
+            inv += ik
+            vals += m
+        }
+        copyN = ms.size
+        if (copyN == 0) {
+            clearCopies()
+            return
+        }
+        val id = Matrix()
+        copyMaps = Array(copyN + 1) { k -> if (k == 0) id else ms[k - 1] }
+        copyInverse = Array(copyN + 1) { k -> if (k == 0) id else inv[k - 1] }
+        copyValues = Array(copyN + 1) { k -> if (k == 0) IDENTITY_VALUES else vals[k - 1] }
+        copyTexture = Array(copyN + 1) { k ->
+            // x ↦ M_k(M_k⁻¹(x) − o)
+            Matrix(copyInverse[k]).apply {
+                postTranslate(-dx.toFloat(), -dy.toFloat())
+                postConcat(copyMaps[k])
+            }
+        }
+        copyTextureValues = Array(copyN + 1) { k -> FloatArray(9).also { copyTexture[k].getValues(it) } }
+        copyDirect = Array(copyN + 1) { k -> if (k == 0) direct else copyShaderOf(bmp, k, 0, 0) }
+        copyCurrent = copyDirect.copyOf()
+    }
+
+    /** No copies (the v1.7 stroke). */
+    private fun clearCopies() {
+        copyN = 0
+        copyValues = emptyArray()
+        copyMaps = emptyArray()
+        copyInverse = emptyArray()
+        copyTexture = emptyArray()
+        copyTextureValues = emptyArray()
+        copyDirect = emptyArray()
+        copyCurrent = emptyArray()
+    }
+
+    /**
+     * Copy [k]'s shader over [bitmap], which holds the source from ([left], [top]) on: local
+     * matrix T(o)·M_k⁻¹·T(left, top), so a destination point q of the copy samples
+     * G_k(q) − (left, top) of [bitmap].
+     */
+    private fun copyShaderOf(bitmap: Bitmap, k: Int, left: Int, top: Int): Shader =
+        BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            setLocalMatrix(
+                Matrix().apply {
+                    setTranslate(left.toFloat(), top.toFloat())
+                    postConcat(copyInverse[k])
+                    postTranslate(dx.toFloat(), dy.toFloat())
+                }
+            )
+        }
+
+    // ------------------------------------------------------------------ CoverageCopies (v1.8 D)
+
+    override val copyCount: Int get() = if (isActive) copyN else 0
+
+    override fun copyMap(k: Int): Matrix = copyMaps[k]
+
+    override fun copyShader(k: Int): Shader = copyCurrent.getOrNull(k) ?: idleShader()
+
+    override fun prepareCopy(k: Int, destDocRect: Rect) {
+        if (!isActive || k !in 1..copyN || destDocRect.isEmpty) return
+        val bounded = sourceRectOf(k, destDocRect, copySrc)
+        if (sample == Sample.ALL_LAYERS) fill(copySrc)
+        copyCurrent[k] = if (bounded && insideDocument(copySrc)) copyDirect[k] else copyRegionShader(k, copySrc) ?: copyDirect[k]
+    }
+
+    override fun prepareCommitCopies(dests: Array<Rect>) {
+        if (!isActive) return
+        if (copyN == 0) {
+            dests.firstOrNull()?.let { prepareCommit(it) }
+            return
+        }
+        // The union of every part's source rect, within the document and a transparent 1 px
+        // border around it (sampling beyond that border repeats it: transparent).
+        val union = Rect()
+        val s = Rect()
+        for (k in 0..min(copyN, dests.size - 1)) {
+            val d = dests[k]
+            if (d.isEmpty) continue
+            if (k == 0) {
+                s.set(d)
+                s.offset(-dx, -dy)
+            } else {
+                sourceRectOf(k, d, s)
+            }
+            if (sample == Sample.ALL_LAYERS) fill(s, onlyNeeded = neededAny)
+            union.union(s)
+        }
+        if (union.isEmpty || !union.intersect(-1, -1, doc.width + 1, doc.height + 1)) {
+            current = direct
+            for (k in 1..copyN) copyCurrent[k] = copyDirect[k]
+            return
+        }
+        val copy = try {
+            Bitmap.createBitmap(union.width(), union.height(), Bitmap.Config.ARGB_8888)
+        } catch (e: OutOfMemoryError) {
+            controller.toast(LOW_MEMORY_MESSAGE)
+            current = direct
+            for (k in 1..copyN) copyCurrent[k] = copyDirect[k]
+            return
+        }
+        copySource(Canvas(copy), union)
+        commitCopy?.recycle()
+        commitCopy = copy
+        commitCopiesTaken++
+        current = shaderOf(copy, dx + union.left, dy + union.top)
+        for (k in 1..copyN) copyCurrent[k] = copyShaderOf(copy, k, union.left, union.top)
+    }
+
+    /**
+     * The source rect (document px, rounded out, a pixel of margin for the bilinear sampling)
+     * that copy [k] reads for its destination [dest]: G_k([dest]), which is M_k applied to the
+     * original's source rect. False (and [out] = the document with a pixel around it) when a
+     * perspective map takes part of it behind its horizon.
+     */
+    private fun sourceRectOf(k: Int, dest: Rect, out: Rect): Boolean {
+        if (!mapBounded(copyTexture[k], copyTextureValues[k], dest, out)) {
+            out.set(-1, -1, doc.width + 1, doc.height + 1)
+            return false
+        }
+        out.inset(-1, -1)
+        return true
+    }
+
+    /**
+     * [out] = [r] mapped through [m] ([v]: its values), rounded out. False when [m] is a
+     * homography that takes part of [r] across its horizon (w changes sign over [r], or the
+     * result is not finite or absurdly large): the image is unbounded.
+     */
+    private fun mapBounded(m: Matrix, v: FloatArray, r: Rect, out: Rect): Boolean {
+        if (v[6] != 0f || v[7] != 0f) {
+            // w is linear, so the corners bound it over the rect: one sign, away from 0.
+            var pos = 0
+            var neg = 0
+            for (c in 0 until 4) {
+                val x = (if (c and 1 == 0) r.left else r.right).toFloat()
+                val y = (if (c and 2 == 0) r.top else r.bottom).toFloat()
+                val w = v[6] * x + v[7] * y + v[8]
+                if (w > HORIZON_EPS) pos++ else if (w < -HORIZON_EPS) neg++
+            }
+            if (pos != 4 && neg != 4) return false
+        }
+        mapF.set(r)
+        m.mapRect(mapF)
+        val l = mapF.left
+        val t = mapF.top
+        val rr = mapF.right
+        val b = mapF.bottom
+        if (!(l > -MAX_MAPPED && t > -MAX_MAPPED && rr < MAX_MAPPED && b < MAX_MAPPED)) return false
+        mapF.roundOut(out)
+        return true
+    }
+
+    /** A shader for copy [k] whose source rect [s] leaves the document: a copy of it, transparent outside the document. */
+    private fun copyRegionShader(k: Int, s: Rect): Shader? {
+        val w = s.width()
+        val h = s.height()
+        if (w <= 0 || h <= 0 || w.toLong() * h > MAX_SCRATCH_PIXELS) return null
+        var bmp = copyScratch
+        if (bmp == null || bmp.width < w || bmp.height < h) {
+            bmp?.recycle()
+            bmp = try {
+                Bitmap.createBitmap(max(w, bmp?.width ?: 0), max(h, bmp?.height ?: 0), Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) {
+                copyScratch = null
+                copyScratchCanvas = null
+                return null
+            }
+            copyScratch = bmp
+            copyScratchCanvas = Canvas(bmp)
+        }
+        // (Each copy is drawn right after its prepare, so one scratch serves them all in turn.)
+        val canvas = copyScratchCanvas!!
+        canvas.save()
+        canvas.clipRect(0, 0, w + 1, h + 1)
+        canvas.drawColor(0, PorterDuff.Mode.CLEAR)
+        canvas.restore()
+        copySource(canvas, s)
+        copyRegionCopies++
+        return copyShaderOf(bmp, k, s.left, s.top)
+    }
+
+    /** Copies the source pixels of [s] (source px, within the document) to (0, 0) of [canvas]. */
+    private fun copySource(canvas: Canvas, s: Rect) {
+        val from = backing ?: return
+        part.set(s)
+        if (!part.intersect(0, 0, min(doc.width, from.width), min(doc.height, from.height))) return
+        dst.set(part.left - s.left, part.top - s.top, part.right - s.left, part.bottom - s.top)
+        canvas.drawBitmap(from, part, dst, copyPaint)
     }
 
     /**
@@ -238,7 +485,22 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         val r = radius + step / 2f + max(PATH_MARGIN, len * 0.5f)
         for (i in 0..n) {
             val t = i.toFloat() / n
-            markNeeded(ax + (bx - ax) * t - dx, ay + (by - ay) * t - dy, r)
+            val sx = ax + (bx - ax) * t - dx
+            val sy = ay + (by - ay) * t - dy
+            markNeeded(sx, sy, r)
+            // v1.8 D: copy k samples M_k(p − o) where the original samples p − o, its dabs
+            // scaled by M_k there (a pixel more for the bilinear sampling).
+            for (k in 1..copyN) {
+                val v = copyValues[k]
+                pt[0] = sx
+                pt[1] = sy
+                copyMaps[k].mapPoints(pt)
+                if (!pt[0].isFinite() || !pt[1].isFinite()) {
+                    needed.fill(true)
+                    return
+                }
+                markNeeded(pt[0], pt[1], r * StrokeCopies.scaleAt(v, sx, sy) + 1f)
+            }
         }
     }
 
@@ -260,11 +522,29 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         }
     }
 
-    /** True when everything [destBounds] (document px) samples lies outside the document: the stroke copies nothing. */
+    /**
+     * True when everything [destBounds] (document px, the original's) samples lies outside the
+     * document: the stroke copies nothing. v1.8 D: with copies, also every copy's (copy k shows
+     * M_k([destBounds]) and samples M_k of the original's source rect).
+     */
     fun readsOnlyOutside(destBounds: Rect): Boolean {
         src.set(destBounds)
         src.offset(-dx, -dy)
-        return !src.intersect(0, 0, doc.width, doc.height)
+        if (src.intersect(0, 0, doc.width, doc.height)) return false
+        if (!isActive || destBounds.isEmpty) return true
+        val shown = Rect()
+        for (k in 1..copyN) {
+            // Where the copy lands within the document, and what that part samples.
+            if (mapBounded(copyMaps[k], copyValues[k], destBounds, shown)) {
+                shown.inset(-1, -1)
+                if (!shown.intersect(0, 0, doc.width, doc.height)) continue
+            } else {
+                shown.set(0, 0, doc.width, doc.height)
+            }
+            if (!sourceRectOf(k, shown, copySrc)) return false
+            if (copySrc.intersect(0, 0, doc.width, doc.height)) return false
+        }
+        return true
     }
 
     override fun prepare(destDocRect: Rect) {
@@ -308,6 +588,7 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         current = direct
         commitCopy?.recycle()
         commitCopy = null
+        clearCopies()
     }
 
     /** Frees the All-layers snapshot (the tool was put away). */
@@ -329,6 +610,9 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         scratch?.recycle()
         scratch = null
         scratchCanvas = null
+        copyScratch?.recycle()
+        copyScratch = null
+        copyScratchCanvas = null
     }
 
     /** True while an All-layers snapshot is allocated (tests). */
@@ -447,6 +731,14 @@ class CloneSource(private val controller: EditorController) : CoverageSource {
         private const val PATH_MARGIN = 32f
 
         const val LOW_MEMORY_MESSAGE = "Low memory: the clone may repeat what it just painted"
+
+        private val IDENTITY_VALUES = floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f, 0f, 0f, 1f)
+
+        /** |w| below this is at a perspective map's horizon. */
+        private const val HORIZON_EPS = 1e-6f
+
+        /** A mapped rect reaching beyond ±this (document px) counts as unbounded. */
+        private const val MAX_MAPPED = 1e7f
 
         private fun shaderOf(bitmap: Bitmap, left: Int, top: Int): Shader =
             BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
