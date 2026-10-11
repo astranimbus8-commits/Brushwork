@@ -83,10 +83,10 @@ class LassoCurveTest {
         (xy.indices step 2).map { CurveAnchor(xy[it], xy[it + 1], sharp = sharp) }
 
     private fun curveMask(a: List<CurveAnchor>, size: Int, aa: Boolean = true): Selection =
-        LassoTool.rasterize(LassoCurveGeometry.path(a), size, size, aa)
+        LassoCommit.rasterize(LassoCurveGeometry.path(a), size, size, aa)
 
     private fun polygonMask(a: List<CurveAnchor>, size: Int): Selection =
-        LassoTool.rasterize(LassoTool.polygonPath(a.flatMap { listOf(it.x, it.y) }.toFloatArray()), size, size, true)
+        LassoCommit.rasterize(LassoTool.polygonPath(a.flatMap { listOf(it.x, it.y) }.toFloatArray()), size, size, true)
 
     private fun area(s: Selection): Long = s.toBytes().sumOf { (it.toInt() and 0xFF).toLong() }
 

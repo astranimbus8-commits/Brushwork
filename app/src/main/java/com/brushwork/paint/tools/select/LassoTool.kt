@@ -9,7 +9,6 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ViewTransform
-import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -387,19 +386,15 @@ class LassoTool(controller: EditorController) : Tool(controller) {
 
     override fun onDispose() = curve.onDeactivate()
 
+    /** Commits a closed outline through [LassoCommit] (v1.8, design §4.7), drawn as committing until it lands. */
     private fun apply(path: Path) {
-        val docW = controller.doc.width; val docH = controller.doc.height
-        val aa = settings.antiAlias
-        val work = Path(path) // the background job gets its own copy
         committing = path
         busy = true
-        SelectionJobs.applyAsync(controller, "Lasso", mode, "Selecting…", onFinished = {
+        LassoCommit.apply(controller, path, mode, settings.antiAlias, ToolId.LASSO.label, onFinished = {
             busy = false
             committing = null
             controller.invalidateOverlay()
-        }, toObjects = true) { cancelled ->
-            if (cancelled()) null else rasterize(work, docW, docH, aa)
-        }
+        })
     }
 
     // ------------------------------------------------------------------ overlay
@@ -447,10 +442,6 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         /** Guide label of the other corners. */
         private const val CORNER_LABEL = "Corner"
         private const val MAX_HISTORY = 200
-
-        /** Rasterizes a closed lasso path into a document-sized selection (blocking; any thread). */
-        internal fun rasterize(path: Path, docW: Int, docH: Int, antiAlias: Boolean): Selection =
-            Selection.fromPath(path, docW, docH, antiAlias)
 
         /** Closed polygon path through [points] (x0, y0, x1, y1, ...) in document coordinates. */
         internal fun polygonPath(points: FloatArray): Path = PointList().apply {

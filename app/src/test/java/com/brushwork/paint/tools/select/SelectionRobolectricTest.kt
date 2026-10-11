@@ -51,7 +51,7 @@ class SelectionRobolectricTest {
     @Test
     fun lassoPolygonRasterization() {
         val path = LassoTool.polygonPath(floatArrayOf(10f, 10f, 50f, 10f, 10f, 50f))
-        val hard = LassoTool.rasterize(path, 64, 64, antiAlias = false)
+        val hard = LassoCommit.rasterize(path, 64, 64, antiAlias = false)
         assertEquals(255, alphaAt(hard, 15, 15))
         assertEquals(255, alphaAt(hard, 11, 45))
         assertEquals(0, alphaAt(hard, 40, 40))
@@ -63,7 +63,7 @@ class SelectionRobolectricTest {
         assertTrue("area $area", abs(area - 800) < 45)
         assertTrue(bytes.all { it.toInt() == 0 || it.toInt() == -1 })
 
-        val soft = LassoTool.rasterize(path, 64, 64, antiAlias = true)
+        val soft = LassoCommit.rasterize(path, 64, 64, antiAlias = true)
         val partial = soft.toBytes().count { (it.toInt() and 0xFF) in 1..254 }
         assertTrue("anti-aliased diagonal edge ($partial partial pixels)", partial >= 30)
     }
