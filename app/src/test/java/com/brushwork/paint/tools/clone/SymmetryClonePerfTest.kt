@@ -181,6 +181,33 @@ class SymmetryClonePerfTest {
         }
     }
 
+    /**
+     * Up and down the right edge (x = 506, y 56..456): the 64 px dabs reach past the canvas, and
+     * the copies turned by 45° take that edge across the canvas, where each copy is clipped to the
+     * canvas's image under its map (review fix: no clamped edge streaks).
+     */
+    private fun alongTheEdge(travel: Float): Pair<Float, Float> {
+        val t = travel % 800f
+        val dy = if (t < 200f) t else if (t < 600f) 400f - t else t - 800f
+        return (size - 6f) to (size / 2f + dy)
+    }
+
+    @Test
+    fun rotation8AlongTheCanvasEdgeStaysWithinAFrame() {
+        // §6.3 Q2 where the copies' clips do work (review).
+        PerfBudget.until(
+            what = "clone, Rotation 8 along the edge, 64 px brush",
+            measure = { frames(SymmetrySettings(type = SymmetryType.ROTATION, divisions = 8), 8, 64f, ::alongTheEdge) },
+        ) { edge ->
+            report("Rotation 8 along the edge, 64 px", edge, 16.0)
+            when {
+                edge.medianMs > PerfBudget.ms(16.0) -> "median frame ${edge.medianMs} ms"
+                edge.commitMs > PerfBudget.ms(300.0) -> "commit ${edge.commitMs} ms"
+                else -> null
+            }
+        }
+    }
+
     @Test
     fun theGuidesOverlayIsASmallPartOfAFrame() {
         // §6.3: the guides overlay ≤ 0.2 ms on the T606 (a device check, on its GPU canvas). Here the

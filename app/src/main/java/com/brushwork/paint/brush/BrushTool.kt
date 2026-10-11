@@ -580,6 +580,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             val clip = clips.clip(k, map)
             if (clip.isEmpty) return
             val save = canvas.save()
+            // The run first: the anti-aliased path clip is then rasterized over the run only,
+            // not over the whole layer (a 2048² commit would build a full-size clip mask per run).
+            canvas.clipRect(run)
             canvas.clipPath(clip)
             res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, selectionMask)
             canvas.restoreToCount(save)
