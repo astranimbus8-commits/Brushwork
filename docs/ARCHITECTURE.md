@@ -183,10 +183,10 @@ integration (`v18I`) and device QA. Everything else is frozen (the lead's), amon
 `EditorController.kt`, `model/**`, `vector/**`, `engine/**` (except B's `ArrayDraw.kt`),
 `exchange/**`, `filters/**` (except A's files), `ui/common/LabelsV17.kt`, `LabelsV18.kt`,
 `LongPressLabel.kt`, `IncrementsLocal.kt`, `ui/editor/HistoryLabels.kt`,
-`ui/tools/strip/StripModel.kt`, `StripLayout.kt` and `ui/tools/ToolStrips.kt`. Seven test helpers
+`ui/tools/strip/StripModel.kt`, `StripLayout.kt` and `ui/tools/ToolStrips.kt`. Eight test helpers
 are frozen too (`$FrozenTests`): `smoke/SmokeUi.kt`, `testing/StripTestKit.kt`,
 `testing/PerfBudget.kt`, `qa16/QaCurves.kt`, `qa16/Qa16Ui.kt`, `ui/editor/HistoryTapFingers.kt`,
-`ui/editor/chrome/UniqueLabelsV17.kt`. `.wt/_tools/ownership-check-v18.ps1 -Area <X> -Worktree <wt>`
+`ui/editor/chrome/UniqueLabelsV17.kt` and (F4) `testing/PillTestKit.kt`. `.wt/_tools/ownership-check-v18.ps1 -Area <X> -Worktree <wt>`
 enforces the tables (design §5.3), the frozen test helpers, rule S (no layer inserted or removed
 by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outside `ui/common/`).
 
@@ -300,6 +300,30 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   the v1.7 guides of Brush, Eraser, Smudge and Blur.
 - Stubs the areas fill: `CurveGenerators.build` (a valid Archimedean polyline) / `matches` (false),
   `CogGeometry.contours` (the interim zigzag, no hole), `FringeControl`.
+
+### "Select several" in the X / Y pill; the strips' point undo removed (F4, gate 2)
+
+- `PointEditor.selectSeveralAvailable` (Compose state; frozen with `PointEditor.kt`): whether
+  "Select several" can be used now. By default `pointCount > 0` (Curve, Polyline and Path, no
+  override); `ShapeTool` overrides it with `pointsMode && pointCount > 0`, `TransformTool` with
+  `isMeshShown` (Free deform).
+- `CoordinatePill` ends row 1 with a 40 dp icon cell (tag `V18Tags.PILL_SEVERAL`, description
+  `PointLabels.SELECT_SEVERAL`, role Switch, state "On" / "Off", the accent fill while on, a
+  long-press label) while the active tool is a `PointEditor` whose `selectSeveralAvailable` is
+  true: `[✥][X][Y][#][🗑][sel]`, folded `[✥][🗑][sel]`. With no position the pill shows only
+  `[sel]` (D5; no tool of the app gets there today). `pillRow1(hasPosition, folded, trash,
+  several)` gives the cells (pure, in `ui/tools/CoordinatePill.kt`). A tap ends the canvas gesture
+  and sets `selectSeveral`, as v1.7's chip did. The pill knows no concrete tool class: Shape's
+  "turn it on" message (`PointLabels.SEVERAL_HINT`) is shown by `ShapeTool.selectSeveral`'s setter.
+- The strips no longer offer "Undo last point" / "Redo point" (Curve, Polyline, Path, the curve
+  lasso), "Undo last corner" / "Redo corner" (the polygon lasso), "Undo point edit" / "Redo point
+  edit" (Shape's Points) or the "Select several" chips (Curve, Polyline, Path, Shape, Free
+  deform). The top row's Undo / Redo reach the same `undoStep` / `redoStep` (V9: one step each).
+  Shape's Points help line names the pill. `NoStripPointUndoTest` matches the six labels exactly
+  on every strip state.
+- Tests click the cell through `testing/PillTestKit.kt` (frozen helper): `severalCell()`,
+  `severalState()`, `toggleSeveral()`. Tests that rendered only a strip and clicked its point
+  undo now call `HistoryLabels.performUndo` / `performRedo`, as the top row does.
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
