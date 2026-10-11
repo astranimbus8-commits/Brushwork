@@ -2399,7 +2399,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val part = layout?.let { gizmo.hit(it, screen, t) } ?: PointGizmo.Part.NONE
         if (layout != null && part != PointGizmo.Part.NONE && part != PointGizmo.Part.MOVE) {
             val handleAt = gizmoHandleAt(layout, part)
-            val pointWins = idx in selection && handleAt != null && t.docToScreen(anchors[idx].pos).distanceTo(screen) <= handleAt.distanceTo(screen)
+            val pointWins = idx in selection && handleAt != null && t.docToScreen(anchors[idx].pos).distanceTo(screen) <= handleAt.distanceTo(screen) + PointGizmo.TIE_PX
             if (!pointWins) {
                 startGizmo(anchors, layout, part)
                 tapIndex = idx

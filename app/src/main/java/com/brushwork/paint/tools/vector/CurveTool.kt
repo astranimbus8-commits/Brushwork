@@ -346,8 +346,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** A reopened path nobody changed yet is not the user's work: undo closes it and goes on (Compose state). */
     override val hasUserChanges: Boolean get() = (anchors.isNotEmpty() && !(reopenedState && pristine)) || (trashedPending && canUndoStep)
 
-    // The app's redo only reaches the tool while a path is pending (see EditorController.redo).
-    override val canRedoStep: Boolean get() = redoCount > 0 && anchors.isNotEmpty()
+    /**
+     * v1.8 (F4, §3.2): true with nothing pending too (every point of a new path taken back): the
+     * strips' "Redo point" is gone, and the app's redo brings the first point back while the
+     * document has nothing to redo (see `EditorController.redo`).
+     */
+    override val canRedoStep: Boolean get() = redoCount > 0
 
     /** True while a path object of a vector layer is reopened for editing (Compose state). */
     val isReopened: Boolean get() = reopenedState
@@ -1815,7 +1819,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val screen = t.docToScreen(pt)
             val part = gizmo.hit(layout, screen, t)
             val handle = gizmoHandleAt(layout, part)
-            val pointWins = idx >= 0 && (handle == null || t.docToScreen(pointAt(idx)).distanceTo(screen) <= handle.distanceTo(screen))
+            val pointWins = idx >= 0 && (handle == null || t.docToScreen(pointAt(idx)).distanceTo(screen) <= handle.distanceTo(screen) + PointGizmo.TIE_PX)
             if ((handle != null || part == PointGizmo.Part.MOVE) && !pointWins) {
                 drag = Drag.GIZMO
                 gizmoPart = part

@@ -2175,7 +2175,7 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         val handle = layout?.let { gizmoHandleScreen(it, part) }
         val k = e.mesh.nearest(at.x, at.y, t.screenToDocLength(t.dp(VERTEX_REACH_DP)))
         // A tie (a vertex lying on the handle) goes to the vertex, as in the Curve and Shape tools.
-        val vertexWins = k >= 0 && (handle == null || t.docToScreen(e.mesh.vertex(k)).distanceTo(screen) <= handle.distanceTo(screen))
+        val vertexWins = k >= 0 && (handle == null || t.docToScreen(e.mesh.vertex(k)).distanceTo(screen) <= handle.distanceTo(screen) + PointGizmo.TIE_PX)
         val g = when {
             handle != null && !vertexWins -> MeshGesture(MeshDrag.GIZMO, e, at, -1, part, layout)
             k >= 0 -> MeshGesture(MeshDrag.POINTS, e, at, k, PointGizmo.Part.NONE, null)

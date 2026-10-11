@@ -216,6 +216,14 @@ class PointGizmo {
         const val ROTATE_OFFSET_DP = 36f
         const val MIN_BOX_DP = 56f
 
+        /**
+         * v1.8 (F4): how much farther from the finger (screen px) a point may be than a handle and
+         * still win it. A point lying ON a handle (a corner point of the box) sits there only up to
+         * float rounding (the corners are found from the box's centre), so the tools' "the point is
+         * at least as close" ties went to the handle about half the time.
+         */
+        const val TIE_PX = 0.5f
+
         private const val MIN_REACH = 1e-4f
         private const val MIN_REACH_SQ = MIN_REACH * MIN_REACH
         private const val ACCENT = 0xFF4DA3FF.toInt()

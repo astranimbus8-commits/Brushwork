@@ -321,9 +321,25 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   deform). The top row's Undo / Redo reach the same `undoStep` / `redoStep` (V9: one step each).
   Shape's Points help line names the pill. `NoStripPointUndoTest` matches the six labels exactly
   on every strip state.
+- Redo from nothing (gate 2 review): v1.7's strip "Redo point" / "Redo corner" also brought back
+  the points of a NEW path, polygon or curve lasso taken back one by one down to nothing (no
+  pending work left). `CurveTool.canRedoStep` is now `redoCount > 0` and `LassoTool.canRedoStep`
+  the redo count of its kind (polygon corners, curve points; freehand false), pending work or
+  not. `EditorController.redo` reaches `tool.redoStep()` with nothing pending when the document
+  has nothing to redo (`!undoManager.canRedo && tool.canRedoStep`); `canRedoNow` and
+  `HistoryLabels.redo` ("Redo: last point" / "last corner") follow the same rule. The document's
+  own redo steps come first, as v1.7's top row had them; with something pending nothing changed.
+- The gizmo's tie (gate 2 review): a point lying ON a handle of the group's box wins the finger
+  when it is at most `PointGizmo.TIE_PX` (0.5 px) farther than the handle (Curve, Shape, Free
+  deform). The corners are found from the box's centre, so a corner point of fractional
+  coordinates (a Free deform vertex) sat a rounding error away and lost to the handle about half
+  the time: the drag scaled the group instead of moving it.
 - Tests click the cell through `testing/PillTestKit.kt` (frozen helper): `severalCell()`,
   `severalState()`, `toggleSeveral()`. Tests that rendered only a strip and clicked its point
   undo now call `HistoryLabels.performUndo` / `performRedo`, as the top row does.
+  `PillSeveralFingerTest` (360 dp) does the whole flow by fingers in the five tools: the cell
+  on, points tapped, one drag, one top-row Undo / Redo, the cell off. `PointRedoFromNothingTest`
+  covers the redo from nothing and the document's redo coming first.
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.

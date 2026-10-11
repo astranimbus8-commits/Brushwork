@@ -75,7 +75,10 @@ internal fun canRedoNow(controller: EditorController): Boolean {
     // A tool that took back a step of its pending work (a curve point) redoes that first; an
     // untouched automatic lift (transform tool) doesn't block redo (see Tool.hasUserChanges).
     if (tool.hasPendingWork && tool.canRedoStep) return true
-    return controller.canRedo && !tool.hasUserChanges
+    if (controller.canRedo) return !tool.hasUserChanges
+    // v1.8 (F4): a new path / polygon whose points were all taken back redoes its first point
+    // (the strips' "Redo point" / "Redo corner" are gone; see EditorController.redo).
+    return !tool.hasPendingWork && tool.canRedoStep
 }
 
 /** Size of the floating ✓ / ✕ buttons (v1.6: 44 dp, y 209–253 above the layer window on the reference phone). */

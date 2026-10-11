@@ -670,12 +670,17 @@ class EditorController(
         // So do vector edits still rendering and the object edits waiting for them (v1.5).
         settleVectorWork()
         val tool = currentTool
-        if (tool.hasPendingWork) {
+        val pending = tool.hasPendingWork
+        if (pending) {
             if (tool.redoStep()) { invalidateOverlay(); return }
             if (tool.hasUserChanges) return
             tool.discard()
             invalidateOverlay()
         }
+        // v1.8 (F4, §3.2): the strips' "Redo point" / "Redo corner" are gone. A new path or
+        // polygon whose points were all taken back has no pending work, yet its first point
+        // comes back here once the document has nothing left to redo (never instead of a step).
+        if (!pending && !undoManager.canRedo && tool.canRedoStep && tool.redoStep()) { invalidateOverlay(); return }
         if (inHistoryDo { undoManager.redo(this) }) { editCount++; doc.touch() }
     }
 

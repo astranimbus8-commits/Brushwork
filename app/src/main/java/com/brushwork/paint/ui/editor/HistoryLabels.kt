@@ -75,6 +75,9 @@ internal object HistoryLabels {
         val tool = c.currentTool
         if (tool.hasPendingWork && tool.canRedoStep) return "Redo: ${stepName(tool)}"
         if (tool.hasUserChanges) return "Apply or discard the ${c.activeToolId.label.lowercase()} edit first"
+        // v1.8 (F4): every point of a new path / polygon taken back, nothing else to redo: redo
+        // brings the first point back (see EditorController.redo).
+        if (!tool.hasPendingWork && !c.undoManager.canRedo && tool.canRedoStep) return "Redo: ${stepName(tool)}"
         return c.undoManager.redoLabel?.let { "Redo: $it" } ?: "Nothing to redo"
     }
 

@@ -88,9 +88,18 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     override val hasPendingWork: Boolean
         get() = if (kind == LassoKind.CURVE) curve.count > 0 else settings.polygon && vertexCount > 0
 
-    // The app's redo only reaches the tool while the polygon / curve is pending (see EditorController.redo).
+    /**
+     * v1.8 (F4, §3.2): true with nothing pending too (every corner / point of a new polygon or
+     * curve taken back): the strips' "Redo corner" / "Redo point" are gone, and the app's redo
+     * brings the first one back while the document has nothing to redo (see
+     * `EditorController.redo`). Freehand has no steps.
+     */
     override val canRedoStep: Boolean
-        get() = (if (kind == LassoKind.CURVE) curve.redoCount else redoCount) > 0 && hasPendingWork
+        get() = when (kind) {
+            LassoKind.CURVE -> curve.redoCount > 0
+            LassoKind.POLYGON -> redoCount > 0
+            LassoKind.FREEHAND -> false
+        }
 
     private val stroke = PointList()
     private val vertices = PointList()
