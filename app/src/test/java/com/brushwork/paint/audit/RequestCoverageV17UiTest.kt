@@ -723,6 +723,8 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         settle(4)
         val want = BitmapUtils.alpha8ToBytes(c.selection!!.mask)
         press(SavedSelectionLabels.SAVE)
+        // The save compresses the mask on Dispatchers.Default: wait for it, then check.
+        assertTrue("the selection was saved", Smoke.pumpUntil(WAIT_MS) { settle(1); c.doc.savedSelections.isNotEmpty() })
         assertEquals(1, c.doc.savedSelections.size)
         val saved = c.doc.savedSelections.single()
         assertEquals("Selection 1", saved.name)
