@@ -522,6 +522,99 @@ exception: Gradation Map's semi-transparent stops lower it, exactly as its `appl
 (`adjust.tone`, first in Color Adjustment) works on luminance in linear light and keeps hue; its
 panel shows the luminance histogram above the sliders and Exposure reads "+0.50 EV".
 
+### Fringe colors (v1.8 item 5, area A)
+
+The filters are Chromatic aberration (Moving and Zooming) and Glitch. The code is in `filters/art/FringeColors.kt`, `ChromaticAberration.kt`, `GlitchFilter.kt` and `ui/filters/FringeControl.kt`.
+
+**Value.** `FilterParam.Fringes(key = "fringes")` holds an `IntArray(3)` of ARGB swatches:
+- index 0 is the first fringe (moves forward: along the angle, or outward when zooming);
+- index 1 is the middle fringe (stays);
+- index 2 is the last fringe (moves back).
+
+`0` means "No color". Only the R, G and B bytes count; a swatch's alpha is ignored.
+
+The presets (`FringeColors.PRESETS`) are RGB (the default: red, green, blue), Red/Cyan, Magenta/Green and Blue/Yellow. The last three have no middle color.
+
+`FringeColors.resolve(values, p)` chooses the colors in this order:
+1. the stored 3-int array;
+2. otherwise, for Chromatic aberration only (`legacyOrderKey = "order"`), v1.7's order index mapped to permuted primaries (`legacyOrder`: letter i of `ArtMath.colorOrderNames[index]` is the primary of fringe i);
+3. otherwise the default.
+
+An out-of-range order gives the default. The control shows the same resolved colors, so a v1.7 order is displayed as its colors until the next change stores them.
+
+Glitch adds `FilterParam.Color("static_color", "Color of the static", white)`.
+
+**Choosing the path.** `allNone` is checked first:
+- Chromatic aberration returns `src.copy()`.
+- Glitch's bands only slide, with no channel split.
+
+Otherwise `oneHotFactors(colors)` returns v1.7's direction factors `k[c] = 1 - i` (+1 first, 0 middle, -1 last) when all of these hold:
+- every swatch channel is 0 or 255;
+- each channel is 255 in exactly one swatch;
+- each colored swatch holds at least one channel.
+
+Otherwise it returns null and the general path runs.
+
+**Fast path.** It runs v1.7's loop unchanged, with `k` as the order factors:
+- `ChannelShift.fast(...)` in both Chromatic aberration filters;
+- in Glitch, `splitRgb` (v1.7's loop verbatim) for RGB, and `split` with per-channel offsets `-k[c]*cs` for the other one-hot sets.
+
+It is bit-exact with v1.7 for the six v1.7 orders: `FringeGoldenTest` checks this against F0's frozen copies. On the two-color presets it equals the general path byte for byte (`FringeGeneralTest`).
+
+**General path.** P_i,c is sample i's alpha-weighted channel c (bilinear, coverage-weighted exactly as v1.7's `sample()`), a_i its alpha, and F_i,c channel c of swatch i.
+- A = the largest a_i among the samples whose swatch is colored. A pixel with A under half a level is transparent.
+- A covered channel (Σ_i F_i,c > 0): out_c = Σ_i w_i,c · P_i,c / A, with w_i,c = F_i,c / Σ_j F_j,c (`FringeColors.Mix.w`).
+- An uncovered channel (no swatch has it; `Mix.uncovered[c]`): out_c = P_1,c / max(A, a_1), the middle sample's channel. Two cases:
+  - Where the colored samples are at least as opaque as the middle, this is v1.7's coverage rule.
+  - Where the middle is more opaque, the channel is capped at the middle's own straight value, so it never comes out brighter than the middle.
+
+In Chromatic aberration, `recombineMix` does this:
+- It samples separably. The column data (left, right and fraction for each of the three samples) is computed once per picture, and the row data once per row, with `sample()`'s arithmetic.
+- `BYTE_FLOAT` turns int-to-float conversions into a table lookup.
+- The pixel loop has no branches on the colors. All three samples are always read, and a swatch's alpha weight is 1f or 0f.
+- Each channel's divisor is `c_c / A + u_c / max(A, a_1)`, where c_c and u_c are the 1f/0f covered and uncovered flags. That is exact for covered channels.
+- It measures about 0.5x v1.7's time.
+
+In Glitch, `mixRow` does this:
+- When a pixel's three samples share their alpha, it uses 16.16 integer weights (`Mix.fixed`, each channel's three summing to 65536). A uniform picture stays exact, and A = a_1 there, so the uncovered rule changes nothing.
+- Otherwise it uses the float formula inline, with the same per-channel divisor.
+- `wrap()` skips `floorMod` when the index is already in range.
+
+**Glitch static.** White uses v1.7's `addStatic` verbatim, so the bytes are v1.7's. Any other color uses `addColoredStatic`, which mixes toward `(n·255)·(S_c/255)`; the color's alpha scales the amount. It adds no random draws, so a seed keeps its bands and blocks.
+
+**Control.** `FringeControl` shows:
+- preset chips in one horizontally scrolling row (like v1.7's ChoiceChips), tagged `V18Tags.FRINGE_PREFIX + name`. Each chip shows three 6 dp dots, with a ring for no color. A chip is selected when its colors equal the current ones.
+- three 40 dp `ColorSwatch`es, with descriptions FIRST, MIDDLE and LAST, and a state description of the hex or "No color";
+- a `FringeLabels18.NO_COLOR` chip after the middle swatch.
+
+A swatch tap opens the frozen `ColorPickerDialog`, unchanged and titled after the swatch. Every change is a whole step: `update`, then `onChangeFinished`.
+
+Applying the filter is the ordinary filter session: one undo step that stores pixels.
+
+**Budgets** (`FringePerfTest`, `Timing`; a small warmed picture, the median of interleaved batches, up to 5 tries):
+
+| Path | Budget | Guarded against |
+|---|---|---|
+| Fast path | v1.8 dispatch ≤ 1.05x | its own `fast(...)` loop |
+| General path | ≤ 1.3x | the frozen v1.7 copies (Moving, Zooming, Glitch) |
+| Colored static | ≤ 1.05x | the frozen v1.7 copy |
+
+The fast path is guarded against its own loop because two separately compiled copies of the same loop measured 0.94 to 1.26x each other in one JVM. The ±5% against the v1.7 release is checked on the phone, together with Q9.
+
+**Compatibility.** Nothing stores these values today (V11): Chromatic aberration and Glitch have no `pixelMapper`, so they are not adjustment-capable, and `FilterValuesCodec` is used only by adjustment layers. A v1.7 Chromatic aberration's "order" still opens as its colors.
+
+**Tests.**
+- `FringeGoldenTest`: bit-exact against the v1.7 frozen copies.
+- `FringeGeneralTest`: the general path's formula, and the presets equal to the fast path.
+- `FringeTranslucentTest`: the general path on translucent pictures, including the uncovered cap and Glitch's float branch.
+- `FringeLegacyOrderTest`: the "order" mapping and the codec.
+- `GlitchStaticColorTest`.
+- `FringesParamCodecTest`.
+- `FringePerfTest` (Timing).
+- `FiltersLabelsTest`.
+- `FringeControlUiTest`: 392 dp, the bare control.
+- `FringePanelSessionUiTest`: 360 dp, the real panel. It covers slide-to-preset, the picker hex, Apply as one undo step each, and exact undo and redo.
+
 ## Text layers (`tools/text/`)
 A text layer is a normal raster layer whose `Layer.textData` holds the serialized text object
 (`TextCodec`: content, style, box, vertical mode, position, path). The text tool re-opens it for
@@ -965,7 +1058,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - `sourceBounds` is always the source's CURRENT bounds, so relative offsets follow source edits.
 - Limits: `MAX_COUNT` 200; "Apply array" is refused above 20 000 expanded objects ("Too many copies to apply: lower the count").
 
-**`ArrayDraw` is the one draw seam** (`engine/ArrayDraw.kt`, frozen). Every cache writer draws through it, so no re-render can leave the copies out.
+**`ArrayDraw` is the one draw seam** (`engine/ArrayDraw.kt`, frozen; v1.8: reads `ArrayInstances`, see Array instances and looks). Every cache writer draws through it, so no re-render can leave the copies out.
 - `drawWithArray` wraps `updateLayerData`, `updateTextLayer`, `updateShapeLayer` and `addLayerWithContent`. It draws the copies k = N−1 down to 0, so the source is on top.
 - `drawPixels` draws a raster cache (bilinear). In "Edit source pixels" mode it draws copy 0 only.
 - `effectiveVector` is used by `VectorLayers`. Copy k of object `id` gets the id `id + (k shl 53)`; these ids are never encoded.
@@ -1004,7 +1097,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - **`editSource` / `finishSource`.**
 - **Refusals:** folders, adjustment layers and linked text frames; a plain raster layer without a selection; and the memory rule below.
 
-**`ArrayTool`** (`ToolId.ARRAY`) owns the canvas handles (`ArrayHandles`), the guide input and the Array sheet (`ArraySheet`, `ArrayToolOptions`, `ArrayCurvePicker`). Dragging a handle, or a slider or field, previews live (I7):
+**`ArrayTool`** (`ToolId.ARRAY`) owns the canvas handles (`ArrayHandles`), the guide input and the Array sheet (`ArraySheet`, `arrayStrip` (`ui/array/ArrayStrip.kt`), `ArrayCurvePicker`). Dragging a handle, or a slider or field, previews live (I7):
 - the render override HIDES the layer: its display tiles re-render once, when the preview starts;
 - the tool's overlay draws the copies over the canvas, in screen space, from a source proxy of at most 1024 px, at the layer's effective opacity;
 - later frames re-render no tile, so a frame costs a few GPU bitmap draws instead of re-compositing every copy at document resolution on the CPU;
@@ -1030,6 +1123,88 @@ v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode r
 - A damaged container loads as a raster layer, with "The array of layer “X” could not be read; its copies are kept as pixels".
 
 **Memory.** `ArrayPixels` bytes count toward `doc.effectiveLayerCount` against `maxLayers` (`ArraySources.hasRoom`). A new array that would pass `maxLayers` is refused with "Not enough memory for another layer".
+
+## Array instances and looks (`model/ArrayInstances`, `engine/ArrayDraw.kt`, `tools/array/`, `ui/array/`, v1.8)
+
+**One list of copies.** `ArrayInstances.of(spec, source)` is pure and thread-safe. It is the only source of per-copy data for every reader.
+- It returns `ArrayInstance(k, matrix, look: CopyLook?)` in DRAW order, k = n−1 down to 0, so the source is on top.
+- The matrix is v1.7's `ArrayLayout.matrices(spec, source)[k]`. With a look it becomes `M_k·T(c)·R(turn_k)·S(size_k)·T(−c)` about the source's centre c, computed in double.
+- With `spec.look == null` every matrix is bit-identical to v1.7 and every look is null (**I19**). The source (k = 0) never has a look.
+- `ArrayInstances.bounds` is the union of the mapped copies. It equals `ArrayLayout.bounds` without a look.
+
+**The look** (`ArraySpec.look: ArrayLook?`) has these fields:
+- Start/End opacity, size and turn.
+- `easing`, the Pace: Even, Speeds up, Slows down, S-curve = linear, t², 1−(1−t)², 3t²−2t³.
+- `tint: List<VStop>`, at most `MAX_STOPS` = 8.
+- `tintStrength`.
+
+**Where each copy sits.** Copy k ≥ 1 sits at t = ease((k−1)/(n−2)), or t = 1 when n = 2. n counts the PLACED copies: a Curve array drops copies past the guide. Copy 1 is "Start" and copy n−1 is "End".
+- `CopyLook(opacity, tintColor, tintStrength)` is what a copy's draw applies besides its matrix.
+- `ArrayTint.sample` picks the tint color at t.
+- `ArrayTint.apply` is the color math for vector restyling. `CopyLook.colorMatrix()` is the same tint as a 4×5 `ColorMatrix` for paints.
+- `ArrayLook.sanitized` turns a look that changes nothing into null, and `ArrayCodec` then writes no look. `isIdentity` ignores the easing.
+
+**The readers (`engine/ArrayDraw.kt`).**
+- **`drawPixels` (raster cache).** Each copy draws with `paintOf(look, base)`: the bilinear base paint, alpha × opacity, and a `ColorMatrixColorFilter` when tinted.
+- **`drawWithArray` (text, shape and `addLayerWithContent` caches).**
+  - A copy that `changesPixels` (opacity < 1 or a tint) draws inside its own `saveLayer`.
+  - The layer's bounds are the copy's mapped source bounds, grown by `layerMargin` = max(4, 10 % of the longer side).
+  - Other copies draw directly, as in v1.7.
+- **`effectiveVector` (R12).** Each copy's objects are restyled: colors through `ArrayTint.apply`, alphas × the copy's opacity. Copy ids remain `id + (k shl 53)`.
+- **Opacity 0.** Every reader leaves out a copy at opacity 0: draw, vector copies, bounds users, apply and export.
+- **Bounds.** `ArrayOps` and `ArrayRenders` (cache bounds, background renders) read `ArrayInstances.bounds`, so a growing size gradient never clips.
+- **Apply bakes the looks.**
+  - A vector array becomes restyled objects placed by the instance matrices.
+  - A shape array becomes one restyled `VShape` per copy.
+  - Text and raster arrays become pixels drawn as above.
+- **Export** (`ExportSceneBuilder`, SVG/PDF) writes each copy restyled. A text copy's opacity applies per part (glyph runs and decorations), because ExportScene has no group item.
+
+**The preview and the draft rule (`ArrayTool`).**
+- The overlay preview builds one `Frame`: the instances' screen matrices plus one `Paint` per copy from `ArrayDraw.paintOf`.
+- **Draft rule (§3.3 c).** A slider or handle may drag a preview of more than `DRAFT_ABOVE` = 64 instances with a tint. The copies then show their opacity, size and turn but WITHOUT the tint (`previewIsDraft`).
+- The release, a rollback and every discrete commit (chips, Reset look, typed values) are never drafts.
+
+**History.**
+- `ArrayOps.labelFor(old, new)` names a step "Array look" (`ArrayLabels18.HISTORY_LOOK`) when only the look changed, and "Edit array" otherwise.
+- A field previews while it moves and records ONE step on release (`preview` / `commitPreview`).
+- A chip and "Reset look" are one step at once.
+
+**The sheet.**
+- `ArraySheet` has a Placement | Look switch (`ArrayLabels18.PLACEMENT` / `LOOK`).
+- `ArrayTool.sheetTab` keeps the tab when the sheet closes and reopens. It resets to Placement on another layer.
+- `ArrayLookTab` (tag `V18Tags.ARRAY_LOOK`) holds:
+  - **Field pairs:** Start/End opacity 0..100 %; Start/End size `ArraySpec.MIN_SCALE..MAX_SCALE` as %; Start/End turn ±3600°.
+  - **Pace:** one ChoiceChip per `ArrayEasing`.
+  - **Tint colors:** the filters' `GradientEditor`, 2..8 stops; a 9th is ignored. With no tint it shows the default warm-to-cool stops.
+  - **Tint strength:** 0..100 %.
+  - **Reset look:** enabled when there is a look or the Pace is not Even.
+- **Two tint rules** stop a tint from doing nothing:
+  - editing the colors while the strength is 0 sets it to 100 % in the same step;
+  - a strength above 0 with no stops takes the default stops.
+- **Pace with no look.** A Pace alone is no look (`ArrayLook.isIdentity` ignores the easing) and records no step.
+  - `ArrayTool.plainPace` keeps the chip lit.
+  - The tab edits through `ArrayTool.previewLook` / `commitLook` / `resetLook`. They start from `lookBase()`: the look, or else no look at `plainPace`.
+  - They keep `plainPace` in step with the look's Pace, so a look edited back to nothing keeps its Pace for the next edit.
+  - "Reset look" and another layer bring it back to Even.
+
+**The strip (`ui/array/ArrayStrip.kt`, `arrayStrip`)** is a converted `StripSpec`: one row 1 of 236 dp, with no More row and no toggle at 360 and 392 dp, with or without the VECTOR cell.
+- **`array.settings`, 120 dp.** A chip showing "Line × 3", spoken "Array settings", that opens the sheet. While a raster source is being edited it reads "Finish source edit" instead, one step.
+- **`array.rendering`, 112 dp.** "Rendering array…" while `ArrayTool.rendering`. Its room is kept, so the chip never moves.
+- **Without an array: `array.hint`, 236 dp.** The how-to hint, up to 2 lines. It is a row-1 item rather than `StripSpec.hint`, which would force the toggle.
+- **Text sizing.** Each text auto-shrinks (down to 8 sp) to fit its declared width.
+- **Overlays.** `StripSpec.overlays` hosts the Array sheet and the "Apply turns the text into pixels" dialog.
+- ArrayToolOptions.kt is gone.
+
+**Costs.**
+- With no look, the copies cost what they did in v1.7: `ArrayLookPerfTest` holds drawPixels and drawWithArray within 5 % of the v1.7 draws at T606 sizes.
+- A look costs its paints and nothing more.
+- A draft frame costs about a plain frame.
+- The host runs `ColorMatrixColorFilter` at about 1.4 µs/px. The absolute tinted budgets are therefore device checks: §6.3 Q5 and Q6, and 32 tinted text copies ≤ 320 ms.
+
+**On disk.**
+- The look is saved in the array spec JSON (`ArrayCodec`). An identity look is not written.
+- `ArrayLookPersistenceTest` saves and reopens all four source kinds with a look: same spec, same caches, and still live after reopening.
+- A v1.8 file opened in v1.7 shows plain copies, and a v1.7 save loses the look (Formats row "Array with a look").
 
 ## Transforming data layers (v1.7, items 11 and 9)
 
@@ -1384,6 +1559,54 @@ sheet ("Increment steps", More › Increments…), in Settings, and behind the X
 - Mirror, 100 px brush: about 2.7 ms (budget 16).
 - 32 copies of a 50 px brush: about 2.9 ms (budget 33).
 - 64 copies of a 64 px brush: about 5 ms (budget 16).
+
+### Mirrors for raster tools, the clone and the guides (v1.8 item 1a, area D)
+
+#### Clone with symmetry
+
+**What a copy samples (D1).** Under a symmetry ruler, a clone stroke draws one copy for each map M_k after the identity.
+- The maps come from `ObjectCopies.mapsAt(c, x, y)`, which is `SymmetryMaps.transforms` at the stroke's first point: identity first, row-major 3x3.
+- Copy k samples through the conjugated map G_k = M_k·T(−o)·M_k⁻¹, where o is the clone offset (destination − source).
+- A destination pixel q of copy k therefore shows S(q − A_k·o), with A_k the linear part of M_k. Copy k clones from the source spot mirrored by its own map. A perspective map uses the same composition as a homography.
+- The original keeps v1.7's exact whole-pixel shader, so a clone stroke without symmetry is bit-identical to v1.7.
+- Copies sample bilinearly (`FILTER_BITMAP_FLAG`).
+
+**One buffer, drawn per copy.** A stroke still has ONE ALPHA_8 coverage buffer. `BrushTool` composites it once for the original, then once per copy (k = n..1, then the original). Copy k's paint is `CoveragePainter.masked(mappedCoverage, sourceShader_k)`:
+- It is `ComposeShader(BitmapShader(coverage) under M_k, source, SRC_IN)`.
+- It is filled only over the 32 px cells (`COPY_CELL`) that copy k has landed on, as runs of cells along each row.
+- `CoveragePainter.drawMapped` applies the stroke's mode, opacity, grain and the selection mask in document space, as for the original.
+
+The seam is `CoverageCopies` in `brush/StrokeHooks.kt` (`copyCount`, `copyMap`, `prepareCopy`, `copyShader`, `prepareCommitCopies`). `CloneSource` implements it.
+
+**Clip to the document's image (`brush/CopyDocumentClips.kt`).** The coverage buffer is the document's size and its shader CLAMPs. Under a map that turns or tilts the document, a copy's runs reach places whose preimage lies off the canvas, where the clamp would smear the edge's coverage into streaks. Copy k therefore shows only over the image of the document under M_k:
+- `covers(k, map, run)` is the fast path. It is true when the run's four corners map back onto the document on one side of the horizon, so no clip is needed (almost always).
+- Otherwise `clip(k, map)` gives a cached Path. It is the mapped document rect for an affine map. For a homography, it is the document clipped to w ≥ ε and to w ≤ −ε (ε = 1e-3 of the largest |w|), with each part mapped.
+- `BrushTool.drawCopyRun` clips to the run first, then to that path. The anti-aliased clip mask is then only run-sized, never layer-sized.
+- The same code runs live (display tiles) and at commit, so the commit equals the preview.
+
+**Sources and the snapshot.**
+- Copy k's source rect is M_k applied to the original's source rect (`CloneSource.sourceRectOf`), rounded out, plus a pixel for bilinear sampling. A homography whose horizon crosses the rect reads the whole document.
+- `readsOnlyOutside` checks every copy.
+- *This layer* samples the layer directly. With copies, `prepareCommitCopies` always makes one commit copy of the union of the copies' sources first, transparent outside the document. The commit never reads pixels it has already changed.
+- *All layers* uses v1.5's lazily filled composite snapshot, now filled for every copy's source rect, within the same snapshot budget (fallback: This layer).
+
+**The cap.** `CloneTool.MAX_MAPS = 32`. `CloneTool.copiesCounted(type, maps, x, y, w, h)` decides the count at the stroke's start:
+- Mirror, Kaleidoscope and Rotation count every map. A stroke starting in a corner may go on to where all of them show. Kaleidoscope n has 2n maps; Rotation stops at 32 divisions.
+- Array and Perspective array count the maps that take the start onto the canvas (`copiesOnCanvas`). Their margin ring of cells is free, so an Array of 4 x 8 cells is 32.
+- More than 32 refuses the stroke: no paint, no undo step, and the toast `MirrorLabels18.CLONE_TOO_MANY` ("Clone stamp mirrors up to 32 copies").
+
+**Undo and the source marker.** All copies commit in one `PixelEditAction` step. Aligned and the offset belong to the original stroke; the copies follow it. The source marker (⊕) is drawn once, for the original.
+
+**Known gap.** The buffer is document-sized, so parts of the original that fall off the canvas have no coverage, and their copies are missing.
+
+**Path strokes with maps.** `BrushTool.beginPath(input, seed, draftBudget, maps)` places every copy's dabs into the same single buffer, right after the dab they copy (n maps give n times the original's dabs), through `DabMapping`. A stroke with copies is always exact, per the frozen contract: `draftBudget` is ignored and `updatePath` returns false. The design's `draftBudget / n` is a lead decision. Cancelling or committing clears the coverage under the copies too.
+
+**Guides.** `SymmetryGuides.showsFor(id)` is true for the nine replicating tools: Brush, Eraser, Smudge, Blur, Clone stamp, Curve, Polyline, Path and Shape. `EditorController.drawOverlays` calls `drawFor` for the active tool, which draws the ruler's guides faintly while symmetry is on. The Symmetry tool keeps its full guides and handles.
+
+**Tests:**
+- `CloneMirrorTest`, `CloneMirrorEdgeTest`, `CloneMirrorReviewTest` (edge streaks under Rotation and a perspective array, the cap per ruler kind, alpha lock, layer mask, save and reopen);
+- `PathStrokeMapsTest`, `MirrorGuidesForToolsTest`;
+- `SymmetryClonePerfTest` (`Timing`): Q2 Rotation 8, Q2 along the canvas edge, Q3 Array 4 x 8, Rotation 32 overlap, guides overlay.
 
 ## Storage (`storage/`)
 Each project is a folder in app-private storage: `project.json` (document + layer properties),
