@@ -20,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,6 +40,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.state.ToggleableState
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -228,9 +230,13 @@ internal fun snapItem(key: String, on: () -> Boolean, set: (Boolean) -> Unit): S
         StripTextButton(SNAP_LABEL, SNAP_DP.dp, onClick = { set(!now) }, checked = now, state = snapState(now))
     }
 
-/** A status or hint text that stays on row 1 (not a control), [width] wide, up to two lines at 11 sp. */
+/**
+ * A status or hint text that stays on row 1 (not a control), [width] wide, up to two lines at 11 sp.
+ * [balanced]: two lines of even length instead of a full first line and a lone last word (a v1.7
+ * text that may not be reworded, v1.8 polish).
+ */
 @Composable
-internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -> Unit)? = null) {
+internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -> Unit)? = null, balanced: Boolean = false) {
     Row(Modifier.width(width).heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
         if (leading != null) {
             leading()
@@ -243,10 +249,14 @@ internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -
             color = BrushworkColors.OnChromeDim,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
+            style = if (balanced) LocalTextStyle.current.copy(lineBreak = BALANCED_LINES) else LocalTextStyle.current,
             modifier = Modifier.fillMaxWidth(),
         )
     }
 }
+
+/** [StripStatusText]'s balanced breaking: even lines, the usual rules for where a line may end. */
+private val BALANCED_LINES = LineBreak(LineBreak.Strategy.Balanced, LineBreak.Strictness.Normal, LineBreak.WordBreak.Default)
 
 /**
  * For a strip state with nothing on the More row (Transform once nothing is transformed, after ✓):

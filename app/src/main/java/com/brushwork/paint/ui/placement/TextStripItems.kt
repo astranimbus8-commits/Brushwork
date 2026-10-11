@@ -241,7 +241,7 @@ internal fun frameDividerSpec(tool: FrameDividerTool): StripSpec {
                     StripItem(F.NEW_LAYER, F.NEW_LAYER_LABEL, F.NEW_LAYER_DP.dp) {
                         StripTextButton(F.NEW_LAYER_LABEL, F.NEW_LAYER_DP.dp, onClick = openSettings, icon = Icons.Filled.Add)
                     },
-                    StripItem(F.STATUS, F.THEN_DIVIDE, F.STATUS_DP.dp) { StripStatusText(F.THEN_DIVIDE, F.STATUS_DP.dp) },
+                    StripItem(F.STATUS, F.THEN_DIVIDE, F.STATUS_DP.dp) { StripStatusText(F.THEN_DIVIDE, F.STATUS_DP.dp, balanced = true) },
                 ),
                 overlays = overlays,
             )

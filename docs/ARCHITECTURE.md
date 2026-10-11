@@ -2492,7 +2492,7 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
   - More row: "Snap to objects", then "Numbers" (80 dp, its word on one line) while a text is open. Without an open text the item is left out, not kept as an empty slot; Snap stays first in both states (v1.8 polish; `Qa18PolishChromeTextTest`).
   - The editor dialog and the Numbers, Wrap and Letter scaling sheets are overlays.
 - **Frame divider.**
-  - Without a frame layer: "New frame layer" and the status (no toggle).
+  - Without a frame layer: "New frame layer" and the status (no toggle). The status is v1.7's text (never reworded); `StripStatusText(balanced = true)` breaks it into two even lines, not a full line and a lone "it" (v1.8 polish).
   - Ready: "Rows × columns", "Remove panels mode" and "Frame settings / new frame layer" on row 1; "Snap to objects" on the More row under the divide or remove hint.
   - Edited by hand: "Redraw", "New frame" and the status (184 dp).
   - The settings sheet and the grid dialog are overlays.
