@@ -1,5 +1,7 @@
 package com.brushwork.paint.qa18
 
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
@@ -8,6 +10,8 @@ import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.select.ObjectTestKit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -26,7 +30,8 @@ import org.robolectric.shadows.ShadowLog
  * its items act and while a finger lands on its empty part. A canvas touch while it is open only
  * closes it: one finger paints nothing, two fingers neither zoom nor undo; the next touch acts.
  * A tool change, the More menu, the tool menu, the layer window, a panel, hiding the interface and
- * an item's `closeMore` (what an item opening a sheet calls) close it too.
+ * an item's `closeMore` (what an item opening a sheet calls) close it too. Beside the vector object
+ * bar's own More row, one row shows at a time, and the bar going takes its row along at once.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.morerowclosesandbox"])
@@ -40,6 +45,7 @@ class MoreRowCloseTest {
         val h = ChromeHarness()
         h.section("canvas touches") { canvasTouches() }
         h.section("chrome surfaces") { chromeSurfaces() }
+        h.section("the object bar's More row beside the strip's") { besideTheObjectBar() }
         dog.interrupt()
         h.finish()
     }
@@ -179,5 +185,66 @@ class MoreRowCloseTest {
         assertEquals("the item acted", 1, FakeStrips.taps[FakeStrips.CLOSER])
         assertClosed(s, "closeMore")
         Smoke.assertQuiet(c, "More row chrome surfaces")
+    }
+
+    private fun objectExpanded(s: ChromeScreen): Boolean = when (Fingers18.state(s, StripLabels18.MORE_OBJECT)) {
+        StripLabels18.EXPANDED -> true
+        StripLabels18.COLLAPSED -> false
+        else -> throw AssertionError("no \"${StripLabels18.MORE_OBJECT}\" with a state")
+    }
+
+    /**
+     * Selected vector objects with a strip that has a More row: two toggles, one More row at a time
+     * (each toggle closes the other's row). And the object bar going (Deselect) takes its row along
+     * at once: a pinch while the bar still fades out zooms.
+     */
+    private fun besideTheObjectBar() {
+        val kit = ObjectTestKit(400, 300)
+        val doc = Smoke.document(400, 300, layers = 1, whiteBottom = true).also { d ->
+            d.layers += Layer(d.newLayerId(), "Vector 1", BitmapUtils.createLayerBitmap(400, 300)).also { it.vector = VectorContent.EMPTY }
+            d.activeLayerIndex = 1
+        }
+        try {
+            FakeStripEditor.open(doc, FakeStrips.spec(1)) { c ->
+                val layer = c.doc.layers[1]
+                c.vectors.addObjects(layer, listOf(kit.box(40f, 40f, 120f, 110f), kit.stroke(60f, 200f, 200f, 230f)), "Add")
+                c.vectors.setSelection(layer, setOf(1L))
+            }.use { e ->
+                val s = e.screen
+                val c = s.c
+                Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+                SmokeUi.settle()
+                assertFalse(objectExpanded(s))
+
+                // The strip's row, then the object bar's: the second closes the first.
+                open(s)
+                Finger.tap(s, StripLabels18.MORE_OBJECT)
+                Smoke.pump(300); SmokeUi.settle()
+                assertTrue("the object bar's toggle opens its row", objectExpanded(s))
+                assertFalse("…and closes the strip's", expanded(s))
+                assertNull("the strip's More row went", Finger.control(s, FakeStrips.more(1)))
+                // The strip's toggle closes the object bar's row in turn.
+                Finger.tap(s, StripLabels18.MORE_TOGGLE)
+                Smoke.pump(300); SmokeUi.settle()
+                assertTrue("the strip's toggle opens its row", expanded(s))
+                assertFalse("…and closes the object bar's", objectExpanded(s))
+                assertNull("the object bar's More row went", Finger.control(s, "Bring forward"))
+                Finger.tap(s, StripLabels18.MORE_TOGGLE)
+                assertClosed(s, "the strip's toggle again")
+
+                // Deselect with the object bar's row open, then at once (the bar still fading) a pinch.
+                Finger.tap(s, StripLabels18.MORE_OBJECT)
+                Smoke.pump(300); SmokeUi.settle()
+                assertTrue(objectExpanded(s))
+                val zoom = c.viewTransform.zoom
+                Fingers18.quickTap(s, "Deselect the objects")
+                assertTrue("deselected", c.vectors.selectedIds.isEmpty())
+                Fingers18.pinch(s, 200f, 150f)
+                assertNotEquals("the bar going left nothing open: the pinch zooms", zoom, c.viewTransform.zoom)
+                Smoke.assertQuiet(c, "the object bar's More row")
+            }
+        } finally {
+            kit.close()
+        }
     }
 }

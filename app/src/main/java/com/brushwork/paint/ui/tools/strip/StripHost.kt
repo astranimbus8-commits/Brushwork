@@ -67,7 +67,8 @@ import com.brushwork.paint.ui.theme.IbisDims
  * pill and the selection and object bars down.
  *
  * The vector object bar's own More row ([StripLabels18.MORE_OBJECT], [objectRowOpen]) follows the
- * same rules: [anyOpen] counts it, [closeAll] closes it.
+ * same rules: [anyOpen] counts it, [closeAll] closes it. One More row shows at a time: opening the
+ * strip's closes the object bar's ([toggle]), and the other way round ([toggleObjectRow]).
  */
 @Stable
 class StripState {
@@ -75,6 +76,16 @@ class StripState {
 
     /** The vector object bar's More row is open (`VectorObjectBar`; closed whenever the bar leaves). */
     var objectRowOpen by mutableStateOf(false)
+
+    /** The object bar's toggle: opens its More row (closing the strip's) or closes it. */
+    fun toggleObjectRow() {
+        if (objectRowOpen) {
+            objectRowOpen = false
+        } else {
+            if (open.isNotEmpty()) open.clear()
+            objectRowOpen = true
+        }
+    }
 
     /** The More row's height (dp) as the host draws it now: 0 while it is closed or the strip is not shown. */
     var moreRowDp by mutableFloatStateOf(0f)
@@ -86,7 +97,12 @@ class StripState {
     val anyOpen: Boolean get() = objectRowOpen || open.values.any { it }
 
     fun toggle(id: ToolId) {
-        if (isOpen(id)) open.remove(id) else open[id] = true
+        if (isOpen(id)) {
+            open.remove(id)
+        } else {
+            open[id] = true
+            if (objectRowOpen) objectRowOpen = false
+        }
     }
 
     fun closeAll() {

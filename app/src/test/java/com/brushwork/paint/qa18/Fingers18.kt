@@ -65,6 +65,21 @@ internal object Fingers18 {
         Smoke.pump(300); SmokeUi.settle()
     }
 
+    /**
+     * A tap (down, 50 ms, up) on the control labelled [label], then only [afterMs] for the screen to
+     * react, not a settle: what the test does next lands inside the chrome's 150 ms fades.
+     */
+    fun quickTap(s: ChromeScreen, label: String, afterMs: Long = 48) {
+        val r = Finger.control(s, label) ?: throw AssertionError("no \"$label\" on screen")
+        val (x, y) = Finger.px(s, r.center.x, r.center.y)
+        val v = s.activity.window.decorView
+        val t0 = SystemClock.uptimeMillis()
+        send(v, t0, MotionEvent.ACTION_DOWN, x, y)
+        idle(50)
+        send(v, t0, MotionEvent.ACTION_UP, x, y)
+        idle(afterMs)
+    }
+
     /** The placed node whose content description is [label] (the last one), or null. */
     fun described(s: ChromeScreen, label: String): SemanticsNode? =
         s.placed().lastOrNull { e -> e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(label) == true }?.node

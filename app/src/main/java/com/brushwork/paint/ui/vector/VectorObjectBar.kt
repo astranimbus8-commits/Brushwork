@@ -98,7 +98,8 @@ import kotlin.math.max
  * Deselect; Forward, Backward, Array and the detach button are one tap away. The More row's open
  * state is [state]'s ([StripState.objectRowOpen], the options strip's state, so the same rules
  * close it, D25: a canvas touch that is then consumed, a tool change, a menu or panel opening);
- * it closes when the bar leaves. A long press on a button shows what it does in a bubble (Recolor
+ * it closes when the bar leaves, and only one More row shows at a time (opening this one closes the
+ * strip's, and the other way round). A long press on a button shows what it does in a bubble (Recolor
  * keeps its own long press).
  *
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
@@ -200,7 +201,7 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     for (i in split.row1) buttons[i].content(item * buttons[i].units)
-                    if (split.toggle) ObjectMoreToggle(open) { strip.objectRowOpen = !strip.objectRowOpen }
+                    if (split.toggle) ObjectMoreToggle(open) { strip.toggleObjectRow() }
                 }
             }
             if (open) {
