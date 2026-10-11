@@ -2,6 +2,7 @@ package com.brushwork.paint.qa17
 
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Looper
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -40,10 +41,15 @@ import org.junit.runner.RunWith
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 import java.io.File
+import java.io.IOException
+import java.time.Duration
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * v1.7 QA (compat, process death): work the user asked for that is still landing in the
@@ -57,6 +63,9 @@ import java.io.File
  * saved ("V15 plain"). The two test seams only make the work slow, as on the T606: the
  * saved-selection compressor waits [PACK_MS] and the array worker [RENDER_MS] (and the array
  * renders in the background, as on the phone, instead of Robolectric's synchronous default).
+ * v1.8 QA: both start that wait only when Home is pressed, and the onStop save is awaited for up
+ * to 10 s of real time without opening `project.json` while a save may replace it (the test was
+ * flaky on loaded Windows runners: a 5 s wait, and a file "used by another process").
  *
  * - A marquee drag, "Save selection", Home before it lands, process death: the reopened artwork
  *   lists the saved selection.
@@ -191,6 +200,55 @@ class Qa17CompatPendingWorkOnStopUiTest {
     private fun dto(): ProjectFileDto = ProjectFormat.json.decodeFromString(ProjectFileDto.serializer(), File(projectDir, ProjectFormat.PROJECT_FILE).readText())
 
     /**
+     * v1.8 QA: the slow work waits for Home ([slowWork], released by [homeThenProcessDeath]), then
+     * still takes [PACK_MS] / [RENDER_MS]. On a loaded runner a fixed delay alone could run out
+     * before the "still landing" checks; now the work is surely still landing when Home is pressed.
+     */
+    private var slowWork = CountDownLatch(1)
+
+    private fun awaitHome() {
+        slowWork.await(GATE_S, TimeUnit.SECONDS)
+    }
+
+    /**
+     * v1.8 QA: waits for the onStop save as `Qa17CompatSessionUiTest.onStopSave` does: up to 10 s of
+     * real time (a loaded runner can take more than 5 s), letting at most 30 s of fake time pass,
+     * well short of the autosave (120 s here), so only the onStop save can make [done] true.
+     */
+    private fun onStopSave(done: () -> Boolean): Boolean {
+        val end = System.currentTimeMillis() + 10_000
+        var fakeMs = 0L
+        while (System.currentTimeMillis() < end) {
+            if (fakeMs < 30_000) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20))
+                fakeMs += 20
+            } else {
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            if (done()) return true
+            Thread.sleep(5)
+        }
+        return done()
+    }
+
+    private fun projectStamp(): Pair<Long, Long> = File(projectDir, ProjectFormat.PROJECT_FILE).let { it.lastModified() to it.length() }
+
+    /**
+     * v1.8 QA: `project.json` was replaced after revision [rev]. Its time and size are looked at
+     * first, so the file is never opened while a save may be replacing it (on Windows an open
+     * reader makes the save's replace fail, and a reader fails while the file is replaced:
+     * "being used by another process").
+     */
+    private fun savedAfter(rev: Long, stamp: Pair<Long, Long>): Boolean {
+        if (projectStamp() == stamp) return false
+        return try {
+            dto().revision > rev
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    /**
      * Home (the onStop save), a moment in the background (what was still landing lands in the
      * app's memory), then the process dies and a new activity starts from the saved state: the
      * artwork reopens from disk. [inMemory] runs just before the death, on the old controller.
@@ -199,9 +257,11 @@ class Qa17CompatPendingWorkOnStopUiTest {
         val old = session
         val oldC = c
         val rev = dto().revision
+        val stamp = projectStamp()
         val t0 = System.nanoTime()
+        slowWork.countDown()
         ctl.pause().stop()
-        assertTrue("the onStop save", Smoke.pumpUntil(5_000) { dto().revision > rev })
+        assertTrue("the onStop save", onStopSave { savedAfter(rev, stamp) })
         val onStopMs = (System.nanoTime() - t0) / 1_000_000
         // Still alive in the background for a moment (well short of the 120 s autosave).
         Smoke.pumpUntil(1_500) { false }
@@ -262,8 +322,9 @@ class Qa17CompatPendingWorkOnStopUiTest {
 
     private fun savedSelection() {
         marquee()
-        // As on the phone: compressing the mask takes a while.
-        c.beforeSavedSelectionPack = { delay(PACK_MS) }
+        // As on the phone: compressing the mask takes a while (still compressing at Home).
+        slowWork = CountDownLatch(1)
+        c.beforeSavedSelectionPack = { awaitHome(); delay(PACK_MS) }
         ui().reach(SavedSelectionLabels.SAVE)
         click(SavedSelectionLabels.SAVE, exact = true)
         val pending = c.pendingSavedSelections.singleOrNull() ?: throw AssertionError("the save is still compressing")
@@ -287,9 +348,11 @@ class Qa17CompatPendingWorkOnStopUiTest {
         assertEquals(ArrayMode.LINE, arrayed.array!!.spec.mode)
         val line = pixels(arrayed.bitmap)
         assertTrue("the line's copies show", line.any { it ushr 24 != 0 })
-        // As on the phone: a large array's cache renders on the worker for a while.
+        // As on the phone: a large array's cache renders on the worker for a while (still
+        // rendering at Home).
+        slowWork = CountDownLatch(1)
         c.arrayRenders.policy = VectorLayers.Policy.ASYNC
-        c.arrayRenders.workerHook = { Thread.sleep(RENDER_MS) }
+        c.arrayRenders.workerHook = { awaitHome(); Thread.sleep(RENDER_MS) }
         ui().reach(ArrayLabels.CIRCLE, 44f)
         click(ArrayLabels.CIRCLE, exact = true)
         assertTrue("the circle renders in the background", c.arrayRenders.isPendingOn(arrayed))
@@ -313,5 +376,8 @@ class Qa17CompatPendingWorkOnStopUiTest {
     private companion object {
         const val PACK_MS = 400L
         const val RENDER_MS = 400L
+
+        /** At most this long held until Home (a failed step before Home must not hang the run). */
+        const val GATE_S = 30L
     }
 }
