@@ -23,11 +23,12 @@ import kotlin.math.sin
 /**
  * The symmetry rulers' guides and handles (v1.7 item 18, §3.18; area H): thin dashed lines in
  * the theme accent over the canvas while symmetry is on and a tool that replicates its strokes
- * is active (brush, eraser, smudge, blur; v1.8: the controller's overlay pass calls [drawFor]
- * for the active tool, [showsFor] names the tools), and with
+ * is active (brush, eraser, smudge, blur; v1.8: also curve, polyline, path, shape and the clone
+ * stamp; the controller's overlay pass calls [drawFor] for the active tool, [showsFor] names the
+ * tools), and with
  * the [SymmetryHandles.HANDLE_DP] handles while the Symmetry tool is (the controller's overlay
  * pass calls [draw] right after the ruler, `EditorController.drawOverlays`; there is no global
- * hook, V30). Other tools (fill, shapes, text, selections…) show no guides: they don't repeat.
+ * hook, V30). Other tools (fill, text, selections…) show no guides: they don't repeat.
  *
  * - Mirror: the axis. Kaleidoscope n: the n mirror axes. Rotation n: the n spokes.
  * - Array: the grid's lines (every k-th one when they would crowd closer than
@@ -100,14 +101,19 @@ object SymmetryGuides {
      * active tool [id]. `EditorController.drawOverlays` calls it for every frame, right before the
      * tool's own overlay, for a tool that [showsFor].
      *
-     * Foundation body (F3): the v1.7 guides of the brush, smudge and blur, and of the eraser
-     * except on a vector layer's content (there it removes whole objects and is not replicated),
-     * exactly as `BrushTool.drawOverlay` drew them in v1.7. The five other tools draw nothing
-     * yet: area D (MIRRORS) gives them their guides.
+     * v1.8 D (design §3.1 "Guides"): the faint guides of [drawGuides] (no handles), the same for
+     * all nine tools, as the brush has drawn them since v1.7. The one exception stays the v1.7
+     * one: the eraser on a vector layer's content removes whole objects and is not replicated, so
+     * it shows none. Curve, Polyline, Path and Shape repeat on raster and vector layers alike; the
+     * Clone stamp shows them on every layer, as Smudge and Blur do (a vector layer refuses those
+     * three with its own message). Nothing new goes in any strip: the guides are the only
+     * indicator.
      */
     fun drawFor(canvas: Canvas, t: ViewTransform, doc: Document, id: ToolId) {
         when (id) {
-            ToolId.BRUSH, ToolId.SMUDGE, ToolId.BLUR -> drawGuides(canvas, t, doc)
+            ToolId.BRUSH, ToolId.SMUDGE, ToolId.BLUR,
+            ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH, ToolId.SHAPE, ToolId.CLONE,
+            -> drawGuides(canvas, t, doc)
             ToolId.ERASER -> {
                 val layer = doc.activeLayer
                 // `EditorController.editTargetOf`: the mask is edited when there is one and it is
