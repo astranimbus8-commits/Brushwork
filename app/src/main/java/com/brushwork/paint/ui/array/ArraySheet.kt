@@ -35,6 +35,7 @@ import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.SectionHeader
@@ -61,6 +62,10 @@ import com.brushwork.paint.ui.vector.Hint
  * ONE "Edit array" step when done; a segment or toggle is one step at once. A raster array also
  * offers "Edit source pixels" (and "Finish source edit" while its source is being edited). The
  * footer applies or removes the array (one step each).
+ *
+ * v1.8 (item 2, design §3.3 a; area B): a [ArrayLabels18.PLACEMENT] | [ArrayLabels18.LOOK] switch at the top
+ * ([ArrayTool.sheetTab]). Placement is the sheet above, unchanged; Look is [ArrayLookTab].
+ * The footer stays under both.
  */
 @Composable
 fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> Unit) {
@@ -84,6 +89,11 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
         if (spec.editingSource) {
             Hint(EDITING_HINT)
             Button(onClick = { tool.finishSource() }, modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp)) { Text(ArrayLabels.FINISH_SOURCE) }
+            return@BwSheet
+        }
+        SheetTabs(tool.sheetTab) { tool.sheetTab = it }
+        if (tool.sheetTab == ArrayTool.SheetTab.LOOK) {
+            ArrayLookTab(tool, spec)
             return@BwSheet
         }
         ModeSegments(spec.mode) { m -> tool.shownSpec()?.let { cur -> if (m != cur.mode) tool.commit(cur.copy(mode = m)) } }
@@ -114,6 +124,19 @@ fun ArraySheet(tool: ArrayTool, layer: Layer, spec: ArraySpec, onDismiss: () -> 
 /** "Line | Circle | Curve | Transform": one selectable segment per mode, 44 dp tall, spoken as [ArrayLabels]. */
 @Composable
 private fun ModeSegments(selected: ArrayMode, onSelect: (ArrayMode) -> Unit) {
+    Segments(ArrayMode.entries.map { modeWord(it) to spokenName(it) }, ArrayMode.entries.indexOf(selected), Role.RadioButton) { i -> onSelect(ArrayMode.entries[i]) }
+}
+
+/** v1.8: "Placement | Look", the sheet's switch (each segment says its own word). */
+@Composable
+private fun SheetTabs(selected: ArrayTool.SheetTab, onSelect: (ArrayTool.SheetTab) -> Unit) {
+    val words = listOf(ArrayLabels18.PLACEMENT, ArrayLabels18.LOOK)
+    Segments(words.map { it to it }, ArrayTool.SheetTab.entries.indexOf(selected), Role.Tab) { i -> onSelect(ArrayTool.SheetTab.entries[i]) }
+}
+
+/** One selectable segment per (shown word, spoken name) of [items], 44 dp tall; [selected] is lit. */
+@Composable
+private fun Segments(items: List<Pair<String, String>>, selected: Int, role: Role, onSelect: (Int) -> Unit) {
     val shape = RoundedCornerShape(8.dp)
     Row(
         Modifier
@@ -123,19 +146,19 @@ private fun ModeSegments(selected: ArrayMode, onSelect: (ArrayMode) -> Unit) {
             .selectableGroup(),
         horizontalArrangement = Arrangement.spacedBy(0.dp),
     ) {
-        for (m in ArrayMode.entries) {
-            val on = m == selected
+        items.forEachIndexed { i, (word, spoken) ->
+            val on = i == selected
             Box(
                 Modifier
                     .weight(1f)
                     .heightIn(min = 44.dp)
                     .background(if (on) BrushworkColors.AccentDim else Color.Transparent, shape)
-                    .selectable(selected = on, role = Role.RadioButton, onClick = { onSelect(m) })
-                    .semantics { contentDescription = spokenName(m) },
+                    .selectable(selected = on, role = role, onClick = { onSelect(i) })
+                    .semantics { contentDescription = spoken },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    modeWord(m),
+                    word,
                     maxLines = 1,
                     textAlign = TextAlign.Center,
                     color = if (on) Color.White else BrushworkColors.OnChrome,

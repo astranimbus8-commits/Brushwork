@@ -162,7 +162,7 @@ object ArrayOps {
      * "Edit array": [layer]'s array takes [spec] (sanitized; "Edit source pixels" mode is kept as
      * it is) and the copies re-render, as ONE step "Edit array". True without a step when nothing
      * changes. While the source is being edited the spec changes alone (the layer keeps showing
-     * the source being painted). v1.8: a change of the look alone is named "Array look"
+     * the source being painted). v1.8: a change of the look alone is named [ArrayLabels18.HISTORY_LOOK]
      * ([labelFor]).
      */
     fun edit(c: EditorController, layer: Layer, spec: ArraySpec): Boolean {
@@ -172,8 +172,8 @@ object ArrayOps {
 
     /**
      * v1.8 (area B, design §3.3): the step name of an array edit from [old] to [new] (sanitized):
-     * "Array look" ([ArrayLabels18.HISTORY_LOOK]) when only the look changes (a Look field, the
-     * Pace, the tint, "Reset look"), else "Edit array".
+     * [ArrayLabels18.HISTORY_LOOK] when only the look changes (a field of the Look tab, the
+     * Pace, the tint, [ArrayLabels18.RESET_LOOK]), else "Edit array".
      */
     internal fun labelFor(old: ArraySpec, new: ArraySpec): String =
         if (new.look != old.look && new.copy(look = old.look, editingSource = old.editingSource) == old) ArrayLabels18.HISTORY_LOOK else ArrayLabels.EDIT

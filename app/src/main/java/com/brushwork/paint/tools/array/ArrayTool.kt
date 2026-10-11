@@ -28,6 +28,7 @@ import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VectorContent
 import kotlin.math.max
@@ -59,7 +60,8 @@ import kotlin.math.roundToInt
  *   alpha, the tint as a color filter, as `ArrayDraw` draws a raster copy). The draft rule: while
  *   a slider or a handle drags a preview of more than [DRAFT_ABOVE] copies, the copies show
  *   their opacity and size only; the tint returns on release (the commit's preview and the
- *   cache). A change of the look alone commits as ONE step "Array look" ([ArrayOps.labelFor]).
+ *   cache). A change of the look alone commits as ONE step [ArrayLabels18.HISTORY_LOOK]
+ *   ([ArrayOps.labelFor]).
  *
  * On a layer without an array it draws nothing and takes no touches. Opening it on a layer whose
  * raster source is being edited runs "Finish source edit" (§3.3 a). Nothing is ever pending
@@ -78,6 +80,12 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /** The Array sheet is open (Compose state; opened with the tool on an arrayed layer). */
     var sheetOpen by mutableStateOf(false)
+
+    /** v1.8 (area B, design §3.3 a): the Array sheet's [ArrayLabels18.PLACEMENT] | [ArrayLabels18.LOOK] switch. */
+    enum class SheetTab { PLACEMENT, LOOK }
+
+    /** The tab the Array sheet shows (Compose state; back to Placement on another layer). */
+    var sheetTab by mutableStateOf(SheetTab.PLACEMENT)
 
     /** What the next canvas gesture does for the guide (Compose state). */
     var guideInput by mutableStateOf(GuideInput.NONE)
@@ -171,7 +179,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
      */
     val previewIsDraft: Boolean get() = preview?.isDraft == true
 
-    /** Commits what [preview] shows as ONE step "Edit array" ("Array look" for the look alone; a slider released, a field done). */
+    /** Commits what [preview] shows as ONE step "Edit array" ([ArrayLabels18.HISTORY_LOOK] for the look alone; a slider released, a field done). */
     fun commitPreview() {
         val p = preview ?: return
         // Already on its way (a vector re-render): the same release twice records nothing more.
@@ -179,7 +187,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         commitOn(p.layer, p.spec)
     }
 
-    /** Sets the active layer's array to [spec] as ONE step "Edit array" ("Array look" for the look alone; a chip, a toggle, a segment). */
+    /** Sets the active layer's array to [spec] as ONE step "Edit array" ([ArrayLabels18.HISTORY_LOOK] for the look alone; a chip, a toggle, a segment). */
     fun commit(spec: ArraySpec) {
         val layer = target ?: return
         commitOn(layer, spec)
@@ -245,6 +253,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             stroke.clear()
             pickDown = null
             guideInput = GuideInput.NONE
+            sheetTab = SheetTab.PLACEMENT
             finishSourceOf(layer)
             if (layer.array != null && !layer.isFolder) sheetOpen = true
         }
