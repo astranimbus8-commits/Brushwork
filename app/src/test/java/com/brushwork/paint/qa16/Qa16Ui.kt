@@ -137,7 +137,8 @@ internal class Qa16Ui(val s: ChromeScreen) {
             val across = scroller(n, SemanticsProperties.HorizontalScrollAxisRange)
             val down = scroller(n, SemanticsProperties.VerticalScrollAxisRange)
             // v1.8: a converted strip never scrolls (I18): with no scroller around it, the control is already in view.
-            if (across == null && down == null && StripTestKit.inConvertedStrip(n)) return
+            // Nor does the vector object bar's More row (open it first: StripTestKit.openObjectRow).
+            if (across == null && down == null && (StripTestKit.inConvertedStrip(n) || StripTestKit.inObjectRow(n))) return
             val dx = across?.boundsInWindow?.let { v ->
                 when {
                     at.x + n.size.width > minOf(v.right, s.root.right) -> step

@@ -91,7 +91,9 @@ class VectorObjectBarUiRobolectricTest {
         assertTrue("the toggle follows Deselect", toggle.bounds.left >= buttons.last().bounds.right - 1)
         assertTrue("the toggle is on screen (${toggle.bounds.right} of $screen)", toggle.bounds.right <= screen - 8 * density + 1)
         assertTrue("row 1 never scrolls", buttons.all { StripTestKit.horizontalScroller(it.node) == null })
-        assertTrue("the toggle opens the More row", StripTestKit.openMoreRow())
+        assertTrue("the toggle opens the More row", StripTestKit.openObjectRow())
+        assertTrue("the object bar's More row shows", StripTestKit.objectRowShown())
+        assertFalse("it is not the options strip's", StripTestKit.moreRowShown())
         for (label in listOf("Bring forward", "Send backward")) {
             val b = clickableOf(label)
             assertTrue("\"$label\" finger-sized, under row 1", b.bounds.width >= 40 * density - 1 && b.bounds.top >= buttons[0].bounds.bottom)

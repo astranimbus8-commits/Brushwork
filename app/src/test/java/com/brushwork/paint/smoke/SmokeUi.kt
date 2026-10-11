@@ -14,6 +14,7 @@ import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.BwSheetPillKey
 import com.brushwork.paint.ui.common.BwSheetTitleKey
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import org.junit.Assert.assertTrue
@@ -111,7 +112,8 @@ internal object SmokeUi {
     /**
      * The (last) element labelled [label] on screen. v1.8: when there is none and the options strip
      * shows its More-row toggle closed, the More row is opened ([openMoreRow]) and the search is
-     * tried once more.
+     * tried once more. Only the strip's row: a label on the vector object bar's More row is reached
+     * by opening that row first ([StripTestKit.openObjectRow]).
      */
     fun find(label: String, exact: Boolean = false): RobolectricUi.Element? =
         findNow(label, exact) ?: if (openMoreRow()) findNow(label, exact) else null
@@ -126,10 +128,12 @@ internal object SmokeUi {
 
     /**
      * v1.8 (design §4.9): opens the options strip's More row through its toggle (tag
-     * [V18Tags.STRIP_TOGGLE]) when the toggle shows and the row is closed. True when it opened it.
+     * [V18Tags.STRIP_TOGGLE] on the strip's row 1) when the toggle shows and the row is closed. True
+     * when it opened it. The vector object bar's toggle shares the tag and is never the one clicked
+     * ([StripTestKit.isStripToggle]); its row opens through [StripTestKit.openObjectRow].
      */
     fun openMoreRow(): Boolean {
-        val toggle = elements().lastOrNull { it.node.config.getOrNull(SemanticsProperties.TestTag) == V18Tags.STRIP_TOGGLE } ?: return false
+        val toggle = elements().lastOrNull { StripTestKit.isStripToggle(it.node) } ?: return false
         if (toggle.node.config.getOrNull(SemanticsProperties.StateDescription) == StripLabels18.EXPANDED) return false
         val action = toggle.node.config.getOrNull(SemanticsActions.OnClick)?.action ?: return false
         action.invoke()

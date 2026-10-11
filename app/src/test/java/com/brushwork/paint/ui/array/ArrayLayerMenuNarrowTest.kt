@@ -12,6 +12,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.text.TextCodec
@@ -166,6 +167,8 @@ class ArrayLayerMenuNarrowTest {
         val first = vl.vector!!.objects.first().id
         c.vectors.setSelection(vl, setOf(first))
         settle(4)
+        // v1.8: "Array from objects" waits on the object bar's More row, opened by its toggle.
+        assertTrue("the object bar's toggle opens its More row", StripTestKit.openObjectRow())
         ui.reach(ArrayLabels.FROM_OBJECTS)
         oneStep(c, ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS) { click(ArrayLabels.FROM_OBJECTS, exact = true) }
         val made = c.activeLayer

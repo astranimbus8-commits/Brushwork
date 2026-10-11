@@ -11,6 +11,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
@@ -126,7 +127,11 @@ internal object VectorUiFlow {
         assertTrue(Smoke.pumpUntil(10_000) { c.vectors.selectedIds.isNotEmpty() })
         settle()
         assertEquals(1, c.vectors.selectedIds.size)
-        for (b in listOf("Delete", "Duplicate", "Forward", "Backward", "Front", "Back", "Recolor", "Transform", "Deselect")) onScreen(b)
+        for (b in listOf("Delete", "Duplicate", "Front", "Back", "Recolor", "Transform", "Deselect")) onScreen(b)
+        // v1.8: Forward and Backward wait on the object bar's own More row, which opens through the
+        // bar's toggle (SmokeUi.find only ever opens the options strip's).
+        assertTrue("the object bar's toggle opens its More row", StripTestKit.openObjectRow())
+        for (b in listOf("Forward", "Backward")) onScreen(b)
         val steps = c.undoManager.undoCount
         click("Duplicate", exact = true)
         assertTrue(Smoke.pumpUntil(10_000) { !c.vectors.isRendering })

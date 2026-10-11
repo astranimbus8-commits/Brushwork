@@ -126,9 +126,10 @@ internal object UniqueLabelsV17 {
 
     /**
      * The options strip: its panel (row 1) or, v1.8, the strip's More row, which hangs under the
-     * panel, outside it (design §3.9).
+     * panel, outside it (design §3.9). The vector object bar's More row shares the More row's tag
+     * ([V18Tags.STRIP_MORE_ROW]) and is not the strip's ([StripTestKit.isStripMoreRow]).
      */
-    private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP || it.tag() == V18Tags.STRIP_MORE_ROW }
+    private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP || StripTestKit.isStripMoreRow(it) }
 
     /** The shown sheet (a hosted sheet carries its title; the Array sheet its tag). */
     private val isSheet: (SemanticsNode) -> Boolean = {
