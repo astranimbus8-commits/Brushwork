@@ -40,8 +40,8 @@ import com.brushwork.paint.vector.VStop
  * ([ArrayTool.preview] / [ArrayTool.commitPreview]); a chip and the reset are one step at once.
  * Two rules keep a tint from doing nothing: editing the colors while the strength is 0 sets the
  * strength to 100 % in the same step, and a strength above 0 with no colors takes the default
- * stops. A Pace alone is no look (the copies would not change), so its chip does not stick
- * until another field changes the look.
+ * stops. A Pace alone is no look (the copies would not change) and records no step: its chip
+ * lights ([ArrayTool.plainPace]) and the next field that changes the look starts from it.
  */
 @Composable
 internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
@@ -66,15 +66,15 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
         SectionHeader(ArrayLabels18.PACE)
         ChoiceChips(
             options = PACES.map { it.second },
-            selected = PACES.indexOfFirst { it.first == look.easing },
-            onSelect = { i -> commitLook(tool) { it.copy(easing = PACES[i].first) } },
+            selected = PACES.indexOfFirst { it.first == (spec.look?.easing ?: tool.plainPace) },
+            onSelect = { i -> tool.commitLook { it.copy(easing = PACES[i].first) } },
         )
         SectionHeader(ArrayLabels18.TINT_COLORS)
         GradientEditor(
             stops = look.tint.map { GradientStop(it.offset, it.color) }.ifEmpty { DEFAULT_TINT },
             onChange = { stops ->
                 if (stops.size in 2..ArrayLook.MAX_STOPS) {
-                    previewLook(tool) { l -> l.copy(tint = stops.map { VStop(it.position, it.color) }, tintStrength = if (l.tintStrength > 0f) l.tintStrength else 1f) }
+                    tool.previewLook { l -> l.copy(tint = stops.map { VStop(it.position, it.color) }, tintStrength = if (l.tintStrength > 0f) l.tintStrength else 1f) }
                 }
             },
             defaultStops = DEFAULT_TINT,
@@ -85,7 +85,7 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
             value = look.tintStrength * 100.0,
             onValueChange = { v ->
                 if (v.isFinite()) {
-                    previewLook(tool) { l ->
+                    tool.previewLook { l ->
                         val s = (v / 100.0).toFloat().coerceIn(0f, 1f)
                         l.copy(tintStrength = s, tint = if (s > 0f && l.tint.isEmpty()) DEFAULT_TINT.map { VStop(it.position, it.color) } else l.tint)
                     }
@@ -98,8 +98,8 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
             onValueChangeFinished = { tool.commitPreview() },
         )
         OutlinedButton(
-            onClick = { tool.shownSpec()?.let { cur -> if (cur.look != null) tool.commit(cur.copy(look = null)) } },
-            enabled = spec.look != null,
+            onClick = { tool.resetLook() },
+            enabled = spec.look != null || tool.plainPace != ArrayEasing.LINEAR,
             modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
         ) { Text(ArrayLabels18.RESET_LOOK) }
     }
@@ -124,7 +124,7 @@ private fun LookPair(tool: ArrayTool, start: LookField, end: LookField) {
             NumberField(
                 label = f.label,
                 value = f.value,
-                onValueChange = { v -> if (v.isFinite()) previewLook(tool) { l -> f.change(l, v) } },
+                onValueChange = { v -> if (v.isFinite()) tool.previewLook { l -> f.change(l, v) } },
                 modifier = Modifier.weight(1f),
                 decimals = f.decimals,
                 suffix = f.suffix,
@@ -134,21 +134,6 @@ private fun LookPair(tool: ArrayTool, start: LookField, end: LookField) {
             )
         }
     }
-}
-
-/**
- * Previews [change] of the look shown NOW (no look: the identity), read at call time as the
- * Placement fields read their spec.
- */
-private fun previewLook(tool: ArrayTool, change: (ArrayLook) -> ArrayLook) {
-    val cur = tool.shownSpec() ?: return
-    tool.preview(cur.copy(look = change(cur.look ?: ArrayLook.IDENTITY)))
-}
-
-/** Commits [change] of the look shown now (a chip): one step. */
-private fun commitLook(tool: ArrayTool, change: (ArrayLook) -> ArrayLook) {
-    val cur = tool.shownSpec() ?: return
-    tool.commit(cur.copy(look = change(cur.look ?: ArrayLook.IDENTITY)))
 }
 
 /** The Pace chips: each easing and its word. */

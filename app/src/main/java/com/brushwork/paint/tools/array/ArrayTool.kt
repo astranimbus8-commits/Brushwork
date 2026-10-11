@@ -17,8 +17,10 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.model.ArrayEasing
 import com.brushwork.paint.model.ArrayInstance
 import com.brushwork.paint.model.ArrayInstances
+import com.brushwork.paint.model.ArrayLook
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
@@ -86,6 +88,54 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /** The tab the Array sheet shows (Compose state; back to Placement on another layer). */
     var sheetTab by mutableStateOf(SheetTab.PLACEMENT)
+
+    /**
+     * v1.8 (area B, design §3.3 a): the [ArrayLabels18.PACE] the Look tab shows and starts from
+     * while the array has no look (Compose state). A Pace alone changes no copy, so it is no look
+     * (`ArrayLook.isIdentity` ignores the easing) and records no step; the tab keeps it here, and
+     * the next field that changes the look starts from it ([lookBase]). Every edit of the look
+     * through [previewLook] / [commitLook] keeps it in step with the look's own Pace, so a look
+     * edited back to nothing keeps its Pace for the next edit. Back to Even on another layer and
+     * on [ArrayLabels18.RESET_LOOK] ([resetLook]).
+     */
+    var plainPace by mutableStateOf(ArrayEasing.LINEAR)
+        private set
+
+    /** The Pace the Look tab shows: the look's own, else [plainPace]. */
+    val shownPace: ArrayEasing get() = shownSpec()?.look?.easing ?: plainPace
+
+    /** The look the Look tab's next edit starts from: the shown one, else no look at [plainPace]. */
+    fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace)
+
+    /**
+     * The Look tab: previews [change] of [lookBase] (a field moving; nothing recorded until
+     * [commitPreview], one step [ArrayLabels18.HISTORY_LOOK]) and keeps its Pace in [plainPace].
+     */
+    fun previewLook(change: (ArrayLook) -> ArrayLook) {
+        val cur = shownSpec() ?: return
+        val next = change(lookBase())
+        plainPace = next.easing
+        preview(cur.copy(look = next))
+    }
+
+    /**
+     * The Look tab: commits [change] of [lookBase] (a chip) as ONE step
+     * [ArrayLabels18.HISTORY_LOOK] and keeps its Pace in [plainPace]. A change that leaves no look
+     * (a Pace chip with no look) records nothing: only the tab's Pace changes.
+     */
+    fun commitLook(change: (ArrayLook) -> ArrayLook) {
+        val cur = shownSpec() ?: return
+        val next = change(lookBase())
+        plainPace = next.easing
+        commit(cur.copy(look = next))
+    }
+
+    /** [ArrayLabels18.RESET_LOOK]: no look (ONE step when there was one) and the Pace back to Even. */
+    fun resetLook() {
+        plainPace = ArrayEasing.LINEAR
+        val cur = shownSpec() ?: return
+        if (cur.look != null) commit(cur.copy(look = null))
+    }
 
     /** What the next canvas gesture does for the guide (Compose state). */
     var guideInput by mutableStateOf(GuideInput.NONE)
@@ -254,6 +304,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             pickDown = null
             guideInput = GuideInput.NONE
             sheetTab = SheetTab.PLACEMENT
+            plainPace = ArrayEasing.LINEAR
             finishSourceOf(layer)
             if (layer.array != null && !layer.isFolder) sheetOpen = true
         }

@@ -1,5 +1,8 @@
 package com.brushwork.paint.ui.array
 
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.model.ArrayEasing
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.qa17.Qa17ArrayUi
@@ -30,9 +33,10 @@ import org.robolectric.shadows.ShadowLog
  * v1.8 (area B, item 2, design §3.3 a) on a narrow 360 dp phone, by label and by finger: the
  * Array sheet's "Placement" | "Look" switch, both tabs' controls wholly in view (fields side by
  * side, each at least 64 dp wide, inside the screen), and the Look tab's controls each recording
- * ONE step "Array look": a typed End opacity, End size and End turn, the "Speeds up" chip, a
+ * ONE step "Array look": a typed End opacity, End size and End turn, the "Slows down" chip, a
  * Tint colors preset (its strength set to 100 % with it), a typed Tint strength, "Reset look";
- * undone with two fingers. The tab is kept while the sheet closes and reopens.
+ * undone with two fingers. "Speeds up" tapped with no look records nothing yet stays lit, and the
+ * first field takes it. The tab is kept while the sheet closes and reopens.
  * One test, own sandbox (Compose's frame clock serves the first test of a sandbox only).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -72,6 +76,16 @@ class ArrayLookSheetUiTest {
         val s = field(u, start)
         assertEquals("\"$start\" and \"$end\" on one row", s.top, e.top, 2f * u.s.density)
         assertTrue("\"$start\" left of \"$end\"", s.right <= e.left + 0.5f)
+    }
+
+    /** True when the chip [label] is the chosen one (its text, or the chip around it, says Selected). */
+    private fun selected(label: String): Boolean {
+        var n: SemanticsNode? = SmokeUi.find(label, exact = true)?.node
+        while (n != null) {
+            n.config.getOrNull(SemanticsProperties.Selected)?.let { return it }
+            n = n.parent
+        }
+        return false
     }
 
     /** Runs [block] and asserts it recorded ONE step "Array look". */
@@ -122,15 +136,28 @@ class ArrayLookSheetUiTest {
         reachable(u, ArrayLabels.REMOVE)
         reachable(u, ArrayLabels.APPLY)
 
+        // A Pace with no look (review fix): no step, as it changes no copy, but the chip stays lit
+        // and the next field starts from it.
+        assertTrue("Even at first", selected(ArrayLabels18.EVEN))
+        val alone = u.steps()
+        u.fingerPress(ArrayLabels18.SPEEDS_UP)
+        u.settleRenders("a Pace alone")
+        assertEquals("a Pace alone records nothing", alone, u.steps())
+        assertNull("a Pace alone is no look", layer.array!!.spec.look)
+        assertTrue("\"Speeds up\" stays lit", selected(ArrayLabels18.SPEEDS_UP))
+        assertFalse(selected(ArrayLabels18.EVEN))
+
         // Each control: one step "Array look".
         lookStep(u, ArrayLabels18.END_OPACITY) { u.typeField(ArrayLabels18.END_OPACITY, "40") }
         assertEquals(0.4f, layer.array!!.spec.look!!.opacityEnd, 1e-4f)
+        assertEquals("the Pace tapped first", ArrayEasing.EASE_IN, layer.array!!.spec.look!!.easing)
         lookStep(u, ArrayLabels18.END_SIZE) { u.typeField(ArrayLabels18.END_SIZE, "150") }
         assertEquals(1.5f, layer.array!!.spec.look!!.sizeEnd, 1e-4f)
         lookStep(u, ArrayLabels18.END_TURN) { u.typeField(ArrayLabels18.END_TURN, "30") }
         assertEquals(30f, layer.array!!.spec.look!!.turnEnd, 1e-4f)
-        lookStep(u, ArrayLabels18.SPEEDS_UP) { u.fingerPress(ArrayLabels18.SPEEDS_UP) }
-        assertEquals(ArrayEasing.EASE_IN, layer.array!!.spec.look!!.easing)
+        lookStep(u, ArrayLabels18.SLOWS_DOWN) { u.fingerPress(ArrayLabels18.SLOWS_DOWN) }
+        assertEquals(ArrayEasing.EASE_OUT, layer.array!!.spec.look!!.easing)
+        assertTrue(selected(ArrayLabels18.SLOWS_DOWN))
         val sunset = GradientEditing.presets.first { it.first == SUNSET }.second
         lookStep(u, SUNSET) { u.press(SUNSET) }
         assertEquals("the preset's stops", sunset.map { it.position to it.color }, layer.array!!.spec.look!!.tint.map { it.offset to it.color })
@@ -141,6 +168,7 @@ class ArrayLookSheetUiTest {
         val before = layer.array!!.spec.look
         lookStep(u, ArrayLabels18.RESET_LOOK) { u.press(ArrayLabels18.RESET_LOOK) }
         assertNull(layer.array!!.spec.look)
+        assertTrue("reset: Even again", selected(ArrayLabels18.EVEN))
         u.ui.twoFingerUndo()
         u.settleRenders("undo")
         assertEquals("one undo brings the look back", before, layer.array!!.spec.look)
