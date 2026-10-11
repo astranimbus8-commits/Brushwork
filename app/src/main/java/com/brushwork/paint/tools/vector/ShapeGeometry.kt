@@ -135,11 +135,10 @@ object ShapeGeometry {
     const val MAX_SIDES = 64
 
     /**
-     * v1.8: the shape types the Shape tool offers (its dropdown and the settings icon row). Every
-     * type but [ShapeType.COG] until the cog's own geometry lands; codecs and renderers still
-     * handle every entry.
+     * v1.8: the shape types the Shape tool offers (its dropdown and the settings icon row): every
+     * type, the cog last (area F, design §3.8).
      */
-    val pickerTypes: List<ShapeType> = ShapeType.entries.filter { it != ShapeType.COG }
+    val pickerTypes: List<ShapeType> = ShapeType.entries
 
     /** Regular polygon on the unit circle, first vertex at the top, clockwise on screen (y down). */
     fun unitPolygon(sides: Int): List<Vec2> {
@@ -187,15 +186,10 @@ object ShapeGeometry {
     fun vertices(type: ShapeType, w: Float, h: Float, params: OutlineParams): List<Vec2> = when (type) {
         ShapeType.POLYGON -> fitToBox(unitPolygon(params.sides), w, h)
         ShapeType.STAR -> fitToBox(unitStar(params.starPoints, params.innerRatio), w, h)
-        ShapeType.COG -> fitToBox(interimCog(params.cog), w, h)
+        // v1.8: the cog's outer contour without the hole (Points mode and the v1.7 fallback points).
+        ShapeType.COG -> CogGeometry.outer(w, h, params.cog)
         else -> rectVertices(w, h)
     }
-
-    /**
-     * v1.8 interim cog (replaced by the cog's own geometry): a star zigzag of [CogParams.teeth]
-     * tips on the unit circle with inner vertices at 1 - [CogParams.depth]. No hole.
-     */
-    private fun interimCog(cog: CogParams): List<Vec2> = unitStar(cog.teeth, 1f - cog.depth)
 
     /** The effective cut-back distance at each vertex (radius clamped to half the shorter adjacent edge). */
     fun cornerCuts(v: List<Vec2>, radius: Float): FloatArray {
@@ -346,9 +340,10 @@ object ShapeGeometry {
     fun outline(type: ShapeType, box: ShapeBox, params: OutlineParams): VectorPath {
         val local = when (type) {
             ShapeType.ELLIPSE -> ellipsePath(box.w, box.h)
-            // COG: v1.8 interim, the zigzag of vertices(COG) (no hole).
-            ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR, ShapeType.COG ->
+            ShapeType.RECTANGLE, ShapeType.POLYGON, ShapeType.STAR ->
                 cornerPath(vertices(type, box.w, box.h, params), params.corner, params.cornerRadius)
+            // v1.8: the teeth, then the hole as a second contour (CogGeometry).
+            ShapeType.COG -> CogGeometry.local(box.w, box.h, params)
             ShapeType.LINE, ShapeType.ARROW -> VectorPath.polyline(listOf(Vec2(-box.w / 2f, 0f), Vec2(box.w / 2f, 0f)))
         }
         return local.transformed { box.toDoc(it) }
@@ -531,7 +526,8 @@ object ShapeGeometry {
     /**
      * The outline a brush paints for a shape: one continuous sub-path (a brush tool can only have
      * one stroke in progress). Box shapes use their [outline] (corner styles included), lines a
-     * straight path, arrows [arrowBrushOutline].
+     * straight path, arrows [arrowBrushOutline]. v1.8: a cog with a hole is the one exception, two
+     * sub-paths (the teeth, then the hole); the Shape tool paints each as a stroke of its own.
      */
     fun brushOutline(
         type: ShapeType,

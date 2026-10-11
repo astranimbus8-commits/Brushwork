@@ -16,7 +16,7 @@ import java.security.MessageDigest
  * a grid, feature points) is hashed on fixture shapes of every type, corner style, arrowhead
  * combination and custom points; the hashes were taken on the code before the move (v1.8 F1,
  * 580fcc35). Coordinates are rounded to 1e-3 px so the hash only moves with the geometry. (The
- * COG entry is the interim zigzag: the cog's own geometry, when it lands, updates that one hash.)
+ * COG entry was the interim zigzag; v1.8 F's cog geometry updated that one hash.)
  */
 class ShapeOutlinesParityTest {
 
@@ -38,14 +38,15 @@ class ShapeOutlinesParityTest {
         assertTrue("tools/vector/CogGeometry.kt exists", File(dir, "tools/vector/CogGeometry.kt").isFile)
     }
 
+    /** v1.8 F: the cog's own geometry landed; `outline(COG)` is [CogGeometry.contours], with the hole as a second contour. */
     @Test
-    fun cogGeometryStubIsTheInterimOutlineWithoutAHole() {
+    fun cogOutlineIsTheCogGeometryWithItsHole() {
         val box = ShapeBox(80f, 60f, 120f, 100f, 30f)
         for (hole in floatArrayOf(0f, 0.5f)) for (corner in CornerStyle.entries) {
             val p = OutlineParams(corner = corner, cornerRadius = 6f, cog = CogParams(teeth = 9, depth = 0.3f, hole = hole))
             val contours = CogGeometry.contours(box, p)
             assertEquals("$corner hole=$hole", ShapeGeometry.outline(ShapeType.COG, box, p).ops, contours.ops)
-            assertEquals("one contour (no hole yet)", 1, contours.ops.count { it is PathOp.MoveTo })
+            assertEquals("contours with hole=$hole", if (hole > 0f) 2 else 1, contours.ops.count { it is PathOp.MoveTo })
         }
     }
 
@@ -153,7 +154,7 @@ class ShapeOutlinesParityTest {
             "POLYGON" to "e01b798429624487c0b6481750797cdc",
             "STAR" to "5214b1603e6e4678e698e661c44909fe",
             "ARROW" to "7c66a923b669adef8a992b246b383688",
-            "COG" to "539d4b39c5c7538e4ec3a144165ea25f",
+            "COG" to "e36887d09a08051022c7fb659fafe934",
         )
     }
 }
