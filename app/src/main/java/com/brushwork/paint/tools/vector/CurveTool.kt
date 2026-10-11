@@ -581,7 +581,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // start's, a path handed over by To Bézier: [ownSettings]), the strip shows THAT look:
         // only the unit and the nudge step are the user's own settings then.
         val user = reopened?.userSettings ?: ownSettings
-        val toSave = if (user != null) user.copy(unit = new.unit, nudgeStepPx = new.nudgeStepPx) else new
+        val toSave = when {
+            user != null -> user.copy(unit = new.unit, nudgeStepPx = new.nudgeStepPx)
+            // (A generated curve's own Closed is not saved: [userClosed].)
+            else -> userClosed?.let { new.copy(closed = it) } ?: new
+        }
         val r = reopened
         if (r != null) r.userSettings = toSave else if (ownSettings != null) ownSettings = toSave
         runCatching { controller.settings.putObject(prefsKey, CurveSettings.serializer(), toSave) }
@@ -638,16 +642,30 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      */
     private var ownSettings: CurveSettings? = null
 
+    /**
+     * Curve: the user's own Closed setting while a pending generated curve shows the one its kind
+     * has instead (a rose is closed, a spiral open: [showClosed]) and no other look is shown; null
+     * otherwise. Only Closed is that curve's own: the strip's other edits on it (stroke kind,
+     * width, Taper ends...) stay the tool's settings, as on any curve ([update]); Closed comes back
+     * when the curve ends ([endLook]).
+     */
+    private var userClosed: Boolean? = null
+
     /** The pending path shows [look] (see [ownSettings]); the unit and nudge step stay the user's. */
     private fun showLook(look: CurveSettings) {
         if (reopened != null) return
-        val own = ownSettings ?: settings
+        val own = ownSettings ?: userClosed?.let { settings.copy(closed = it) } ?: settings
+        userClosed = null
         ownSettings = own
         settings = look.copy(unit = own.unit, nudgeStepPx = own.nudgeStepPx).sanitized(fallback = own)
     }
 
-    /** The pending path is gone: the tool's own settings come back (see [ownSettings]). */
+    /** The pending path is gone: the tool's own settings come back (see [ownSettings], [userClosed]). */
     private fun endLook() {
+        userClosed?.let { c ->
+            userClosed = null
+            settings = settings.copy(closed = c)
+        }
         val own = ownSettings ?: return
         ownSettings = null
         settings = own.sanitized()
@@ -856,7 +874,16 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** Curve: the Closed setting the open path shows becomes [closed] (a generated rose is closed, a spiral open). */
     private fun showClosed(closed: Boolean) {
         if (isPath || settings.closed == closed) return
-        if (reopened != null) settings = settings.copy(closed = closed) else showLook(settings.copy(closed = closed))
+        when {
+            reopened != null -> settings = settings.copy(closed = closed)
+            ownSettings != null -> showLook(settings.copy(closed = closed))
+            else -> {
+                // Closed alone is the curve's own ([userClosed]): the user's comes back when it ends.
+                val own = userClosed ?: settings.closed
+                userClosed = if (closed == own) null else own
+                settings = settings.copy(closed = closed)
+            }
+        }
     }
 
     /**

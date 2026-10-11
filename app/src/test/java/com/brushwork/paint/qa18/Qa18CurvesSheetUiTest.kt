@@ -118,7 +118,7 @@ class Qa18CurvesSheetUiTest {
             }
             seen += after
         }
-        assertFalse("$what: no hint that the settings are gone", c.message == CurveGenLabels18.EDITED_HINT)
+        assertFalse("$what: no hint that the settings are gone", has(CurveGenLabels18.EDITED_HINT, exact = true))
         Finger.back()
         assertFalse("$what: Back closed the sheet", has(CurveGenLabels18.POINTS_PER_TURN, exact = true))
         assertEquals("$what: the open curve is not stored yet", stepsBefore, q.steps())
