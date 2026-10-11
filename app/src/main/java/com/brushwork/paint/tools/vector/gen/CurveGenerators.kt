@@ -25,7 +25,8 @@ class CurveBuild(val subpath: VSubpath, val spline: VSpline?)
  *
  * Foundation stub (F3): [build] gives every kind a valid polyline approximation of an
  * Archimedean spiral (sharp anchors; a spline through the same points for the Path tool), and
- * [matches] is always false, so no generator survives a reopen until E lands.
+ * [matches] is always false. Nothing calls either yet: E's `CurveTool` places generated curves and
+ * wires the reopen check (I16), so until then a stored generator is kept but unused.
  */
 object CurveGenerators {
     /** Samples per turn of the stub's spiral when the generator says 0 ([CurveGenerator.density]). */

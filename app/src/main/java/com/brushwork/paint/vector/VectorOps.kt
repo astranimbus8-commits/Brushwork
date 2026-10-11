@@ -272,6 +272,8 @@ object VectorOps {
      * [ObjectMapping.HOMOGRAPHY_PIECES] cubics, then maps anchors and handles. A non-finite matrix
      * returns [o]. v1.8: a path or shape with copies keeps them, conjugated, under an affine map;
      * under a homography only its source is mapped ([ObjectCopies.transformedAll] expands first).
+     * A path's curve generator is mapped under a similarity and dropped under any other map
+     * ([CurveGenerator.mapped], I16).
      */
     fun transformed(o: VObject, m: FloatArray): VObject {
         if (m.size < 9 || m.any { !it.isFinite() }) return o
@@ -676,7 +678,12 @@ object VectorOps {
         // v1.6 (I9): an affine map maps the spline's control points too (NURBS are affine-invariant);
         // a homography bends the curve away from any spline, so the path becomes a plain Bézier path.
         val spline = if (m[6] == 0f && m[7] == 0f) p.spline?.mapped(m) else null
-        return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke, spline = spline)
+        // v1.8 (I16, design §3.7): a similarity keeps the curve generator, mapped with the geometry
+        // (CurveGenerator.mapped); any other map (a skew, a non-uniform scale, a homography) drops
+        // it, as the curve is no longer the generator's. Under a skew the spline is kept and the
+        // generator is not. A path without a generator stays without one.
+        val generator = p.generator?.mapped(m)
+        return p.copy(subpaths = subs, fill = p.fill?.let { mapPaint(it, m, cx, cy) }, stroke = stroke, spline = spline, generator = generator)
     }
 
     /** [b] with its size and tapers scaled by [s] (the same instance at 1). */
