@@ -39,6 +39,7 @@ import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.tools.vector.ShapeGeometry
+import com.brushwork.paint.tools.vector.ShapePoints
 import com.brushwork.paint.tools.vector.ShapeStroke
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeTool
@@ -65,8 +66,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * ellipse), "15°", "Snap to objects", "Numbers" and "Shape settings"; in Points mode "Select all
  * points" / "Deselect all points" and the selected points' actions ("Sharp corner" / "Smooth",
  * "Auto tangent", "Delete point", "Deselect point", "Point roundness" and its reset, the
- * "Handles" popup), "Reset shape" (a shape with its own points) and "Turn into path"; and
- * [MirrorLabels18.REMOVE] while the open shape has copies (§3.1, one in-tool step).
+ * "Handles" popup), "Reset shape" (a shape with its own points) and "Turn into path" (also for
+ * an open cog with a hole, whose Points mode is refused: D21 keeps its Turn into path, a compound
+ * path); and [MirrorLabels18.REMOVE] while the open shape has copies (§3.1, one in-tool step).
  *
  * Every handle is the v1.7 one (StripHandlesV17 "SHAPE"; "Snap" became "Snap to objects"). The
  * Shape settings and Numbers sheets and the typed handle scale are overlays: they outlive the
@@ -133,6 +135,8 @@ internal data class ShapeStripInfo(
     val smooth: Mixed<Boolean>?,
     val explicitHandles: Boolean,
     val anyHandles: Boolean,
+    /** "Turn into path" shows: in Points mode, or for an open shape whose Points mode is refused (a cog with a hole, D21). */
+    val toPathShown: Boolean,
     val toPathRefusal: String?,
     val hasCopies: Boolean,
 ) {
@@ -150,6 +154,8 @@ internal data class ShapeStripInfo(
             val pointsMode = pending && tool.pointsMode
             val sel = tool.pointSelection.resized(n)
             val widthShown = s.strokes && (s.strokeWith == ShapeStroke.PLAIN || s.type == ShapeType.ARROW)
+            // v1.8 (D21): a holed cog never reaches Points mode, yet it turns into a (compound) path.
+            val toPathShown = pointsMode || (pending && ShapePoints.refusal(s.type, s.outlineParams) != null)
             return ShapeStripInfo(
                 type = s.type,
                 strokes = s.strokes,
@@ -164,7 +170,8 @@ internal data class ShapeStripInfo(
                 smooth = if (pointsMode) tool.selectionSmooth else null,
                 explicitHandles = pointsMode && tool.selectionHasExplicitHandles,
                 anyHandles = pointsMode && pts?.any { it.smooth || it.handleIn != null || it.handleOut != null } == true,
-                toPathRefusal = if (pointsMode) tool.turnIntoPathRefusal else null,
+                toPathShown = toPathShown,
+                toPathRefusal = if (toPathShown) tool.turnIntoPathRefusal else null,
                 hasCopies = tool.hasCopies,
             )
         }
@@ -390,7 +397,7 @@ internal object ShapeStripItems {
         if (info.custom) {
             add(more(RESET_SHAPE, RESET_SHAPE_LABEL) { ShapeIconAction(Icons.Filled.RestartAlt, RESET_SHAPE_LABEL) { tool.resetShape() } })
         }
-        if (info.pointsMode) {
+        if (info.toPathShown) {
             // A refused conversion (an arrow, an outline of a tool that moves pixels) greys the
             // cell and says why; a tap says it again (ShapeTool.turnIntoPath's message).
             val refusal = info.toPathRefusal
