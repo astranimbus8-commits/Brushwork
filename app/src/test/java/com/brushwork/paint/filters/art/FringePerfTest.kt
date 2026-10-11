@@ -21,9 +21,9 @@ import kotlin.math.max
  * How it measures. Each guard runs on one thread named as Parallel's workers (the rows run
  * serially), on a small picture (192 x 144), warmed up by [WARM_UP] runs of each side so both
  * loops get the JIT's full compile (one run a call over a large picture would leave each loop to
- * on-stack replacement, whose code differs from compile to compile). A try is the median of
- * [BATCHES] interleaved batches of [RUNS] runs; [PerfBudget.measuredRatioWithin] passes at the
- * first of up to 5 tries within the budget.
+ * on-stack replacement, whose code differs from compile to compile). A try is the median of the
+ * ratios of [BATCHES] interleaved batches of [RUNS] runs (each batch pairs both sides back to
+ * back); [PerfBudget.measuredRatioWithin] passes at the first of up to 5 tries within the budget.
  *
  * - The fast path: v1.7's loop, byte for byte ([FringeGoldenTest]). Two copies of one loop
  *   compiled apart (the filter's and F0's frozen copy) measured 0.94 to 1.26 x each other here, so
@@ -44,15 +44,22 @@ class FringePerfTest {
 
     private fun values(f: Filter, vararg kv: Pair<String, Any>): FilterValues = f.defaultValues().apply { for ((k, v) in kv) set(k, v) }
 
-    /** Median times (ms) of [BATCHES] interleaved batches of [RUNS] runs of [a] and of [b]. */
+    /**
+     * [BATCHES] interleaved batches of [RUNS] runs of [a] and of [b]: the median of the batches'
+     * own ratios (a batch's two halves run back to back, so a slow spell of the machine — another
+     * JVM, a GC, a throttled core — slows both and cancels out), returned as (that ratio x b's
+     * median, b's median) in ms.
+     */
     private fun medians(a: () -> Unit, b: () -> Unit): Pair<Double, Double> {
         val ta = DoubleArray(BATCHES); val tb = DoubleArray(BATCHES)
         val ra = { repeat(RUNS) { a() } }; val rb = { repeat(RUNS) { b() } }
         for (i in 0 until BATCHES) {
             if (i % 2 == 0) { ta[i] = PerfBudget.timeMs(ra); tb[i] = PerfBudget.timeMs(rb) } else { tb[i] = PerfBudget.timeMs(rb); ta[i] = PerfBudget.timeMs(ra) }
         }
-        ta.sort(); tb.sort()
-        return ta[BATCHES / 2] to tb[BATCHES / 2]
+        val ratios = DoubleArray(BATCHES) { ta[it] / tb[it] }.also { it.sort() }
+        tb.sort()
+        val b50 = tb[BATCHES / 2]
+        return ratios[BATCHES / 2] * b50 to b50
     }
 
     /** [a] (v1.8) within [limit] x [b] (the reference), measured as the class comment says. */
