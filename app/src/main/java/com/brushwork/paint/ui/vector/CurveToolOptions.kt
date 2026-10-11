@@ -853,6 +853,12 @@ private data class SelectedAnchor(val index: Int, val sharp: Boolean, val custom
 private const val MAX_THICKNESS_PERCENT = 300f
 private const val THICKNESS_STEP = 5f
 
+/**
+ * How far the thickness slider reaches past the end of its 128 dp box: its thumb's half width
+ * (the slider's node is 148 dp wide, centred on the box).
+ */
+private val SLIDER_OVERHANG = 10.dp
+
 /** [percent] moved by one step up or down, on the step grid, within 0..300 %. */
 internal fun stepThickness(percent: Float, up: Boolean): Float = stepThickness(percent, up, THICKNESS_STEP)
 
@@ -899,15 +905,26 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringInt
         tool.endNumericEdit()
     }
     // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
-    // chip in front, or on a narrow phone, its slider would start off the screen).
+    // chip in front, or on a narrow phone, its slider would start off the screen). The request
+    // reaches [SLIDER_OVERHANG] past the row's end, where the slider's thumb goes (v1.8, F4:
+    // without the strip's point Undo / Redo the row can end just inside a 360 dp screen while
+    // the slider's end does not).
     val bring = remember { BringIntoViewRequester() }
+    val rowSize = remember { IntArray(2) }
+    val overhang = with(LocalDensity.current) { SLIDER_OVERHANG.toPx() }
     if (bringIntoView) {
         LaunchedEffect(index) {
             withFrameNanos { }
-            bring.bringIntoView()
+            bring.bringIntoView(if (rowSize[0] > 0) Rect(0f, 0f, rowSize[0] + overhang, rowSize[1].toFloat()) else null)
         }
     }
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.bringIntoViewRequester(bring).padding(horizontal = 2.dp)) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .bringIntoViewRequester(bring)
+            .onSizeChanged { rowSize[0] = it.width; rowSize[1] = it.height }
+            .padding(horizontal = 2.dp),
+    ) {
         Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
             setPercent(stepThickness(current(), up = false, step))
