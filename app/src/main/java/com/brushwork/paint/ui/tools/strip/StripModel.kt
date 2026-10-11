@@ -8,7 +8,8 @@ import androidx.compose.ui.unit.Dp
 /**
  * v1.8 (items 8 and 9, design §3.9 and §4.6): the options strip as data. Each tool's builder
  * (`ToolStrips`) describes its controls as [StripItem]s; [StripLayout] splits them between row 1
- * (one fixed row that never scrolls, I18) and the More row under it; `StripHost` draws both.
+ * (one fixed row, I18; in a window narrower than the design's 360 dp its cells scroll, see
+ * `StripHost`) and the More row under it; `StripHost` draws both.
  * Frozen from F3 on (§4.5): areas fill specs, they never change these declarations.
  */
 enum class StripRow { ROW1, MORE }

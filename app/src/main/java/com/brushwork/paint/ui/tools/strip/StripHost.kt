@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -125,8 +126,12 @@ class StripState {
  * The options strip (v1.8, design §3.9 and §4.6): row 1 and the More row of [spec], the active
  * tool's ([toolId]).
  *
- * Row 1 is one fixed row that never scrolls (I18): the VECTOR cell while [vectorMode], the items
- * [StripLayout.split] keeps, and the toggle at the end when anything goes to the More row.
+ * Row 1 is one row: the VECTOR cell while [vectorMode], the items [StripLayout.split] keeps, and
+ * the toggle at the end when anything goes to the More row. While the window is
+ * [FIXED_ROW1_MIN_DP] wide or wider it is fixed and never scrolls (I18; a debug build checks that
+ * it fits its budget). In a narrower window (a larger Display size) the budgets do not hold: the
+ * VECTOR cell and the items scroll sideways in the room the toggle leaves, and the toggle stays
+ * pinned at the end, in view.
  * [modifier] is row 1's, [panelModifier] its container's. The More row (opaque [IbisColors.Menu],
  * tag [V18Tags.STRIP_MORE_ROW]) drops down under row 1, 4 dp apart, while [state] has it open for
  * [toolId].
@@ -188,12 +193,17 @@ private fun ConvertedStrip(
             // it would swallow the next canvas touch (D25).
             if (!canOpen) state.drop(toolId)
         }
-        if (debuggable) {
-            val budget = inner - chip - if (split.toggle) StripLayout.TOGGLE_DP + StripLayout.GAP_DP else 0f
+        // Below FIXED_ROW1_MIN_DP (display-size scaling) the design's budgets do not hold: row 1 scrolls.
+        val narrow = screenDp < FIXED_ROW1_MIN_DP
+        val toggleDp = if (split.toggle) StripLayout.TOGGLE_DP + StripLayout.GAP_DP else 0f
+        if (debuggable && !narrow) {
+            val budget = inner - chip - toggleDp
             check(StripLayout.rowWidth(split.row1) <= budget + 0.5f) {
                 "Row 1 of ${toolId.name} is ${StripLayout.rowWidth(split.row1)} dp wide, over its $budget dp (I18)"
             }
         }
+        // The scroll starts over for each tool and vector mode.
+        val row1Scroll = key(toolId, vectorMode) { rememberScrollState() }
         Column {
             Box(panelModifier) {
                 Row(
@@ -204,19 +214,20 @@ private fun ConvertedStrip(
                         .reportContentWidth(onContentWidth),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    var first = true
-                    if (vectorMode) {
-                        VectorCell()
-                        first = false
-                    }
-                    for (item in split.row1) {
-                        if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
-                        first = false
-                        // Keyed: an item that comes or goes before an open popup never resets it.
-                        key(item.key) { ItemCell(item) }
+                    if (!narrow) {
+                        Row1Cells(vectorMode, split.row1)
+                    } else {
+                        // Too narrow for the design's budgets: the cells scroll sideways, the
+                        // toggle stays pinned at the end, in view.
+                        Row(
+                            Modifier
+                                .widthIn(max = (inner - toggleDp).coerceAtLeast(0f).dp)
+                                .horizontalScroll(row1Scroll),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) { Row1Cells(vectorMode, split.row1) }
                     }
                     if (split.toggle) {
-                        if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
+                        if (vectorMode || split.row1.isNotEmpty()) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
                         // The toggle sits at row 1's end, the same place for every tool.
                         Spacer(Modifier.weight(1f))
                         MoreToggle(open) { state.toggle(toolId) }
@@ -318,6 +329,22 @@ private fun MoreToggle(open: Boolean, onToggle: () -> Unit) {
     }
 }
 
+/** Row 1's cells: the VECTOR cell while [vectorMode], then [items], [StripLayout.GAP_DP] apart. */
+@Composable
+private fun Row1Cells(vectorMode: Boolean, items: List<StripItem>) {
+    var first = true
+    if (vectorMode) {
+        VectorCell()
+        first = false
+    }
+    for (item in items) {
+        if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
+        first = false
+        // Keyed: an item that comes or goes before an open popup never resets it.
+        key(item.key) { ItemCell(item) }
+    }
+}
+
 /** The VECTOR cell of a converted row 1 (D30): a 40 dp accent icon cell, not clickable. */
 @Composable
 private fun VectorCell() {
@@ -345,6 +372,13 @@ private fun Modifier.reportContentWidth(onContentWidth: ((Int) -> Unit)?): Modif
             layout(maxOf(p.width, constraints.minWidth), p.height) { p.place(0, 0) }
         }
     }
+
+/**
+ * The narrowest window (dp, `screenWidthDp`) the design's row-1 budgets are for (§3.9's table). At
+ * this width and wider row 1 is fixed and a debug build checks that it fits (I18); below it (a
+ * larger Display size) row 1's cells scroll sideways.
+ */
+private const val FIXED_ROW1_MIN_DP = 360f
 
 /** The rows' side padding (dp): row 1's content width is the panel's minus twice this. */
 private const val ROW_PADDING = 8f
