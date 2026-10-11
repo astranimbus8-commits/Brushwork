@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -63,8 +64,9 @@ import com.brushwork.paint.ui.theme.IbisDims
 /**
  * The More row's open state (v1.8, design §3.9 (b)): per tool, for the session, never persisted.
  * `EditorScreen` hoists one and closes it on the chrome's events (D25); the host closes it on a
- * tool or vector-mode change and reports the row's height in [moreRowDp], which moves the X / Y
- * pill and the selection and object bars down.
+ * tool or vector-mode change, drops a tool's entry while its spec shows no More toggle ([drop]),
+ * and reports the row's height in [moreRowDp], which moves the X / Y pill and the selection and
+ * object bars down.
  *
  * The vector object bar's own More row ([StripLabels18.MORE_OBJECT], [objectRowOpen]) follows the
  * same rules: [anyOpen] counts it, [closeAll] closes it. One More row shows at a time: opening the
@@ -103,6 +105,15 @@ class StripState {
             open[id] = true
             if (objectRowOpen) objectRowOpen = false
         }
+    }
+
+    /**
+     * Drops [id]'s open entry. The host calls it while [id]'s spec shows no More toggle (nothing
+     * goes to the More row, the strip got wide enough, or a legacy spec): a row that cannot show
+     * must not stay open unseen, or [anyOpen] stays true and the next canvas touch only closes it (D25).
+     */
+    fun drop(id: ToolId) {
+        if (open.containsKey(id)) open.remove(id)
     }
 
     fun closeAll() {
@@ -151,7 +162,11 @@ fun StripHost(
     }
     val legacy = spec.legacyContent
     if (legacy != null) {
-        SideEffect { if (state.moreRowDp != 0f) state.moreRowDp = 0f }
+        SideEffect {
+            if (state.moreRowDp != 0f) state.moreRowDp = 0f
+            // No toggle, no More row: an entry left open by the tool's converted strip goes.
+            state.drop(toolId)
+        }
         Box(panelModifier) {
             Row(
                 modifier = modifier
@@ -197,7 +212,7 @@ private fun ConvertedStrip(
             if (state.moreRowDp != moreDp) state.moreRowDp = moreDp
             // A row that can no longer show (the strip got wide enough) must not stay open unseen:
             // it would swallow the next canvas touch (D25).
-            if (!canOpen && state.isOpen(toolId)) state.toggle(toolId)
+            if (!canOpen) state.drop(toolId)
         }
         if (debuggable) {
             val budget = inner - chip - if (split.toggle) StripLayout.TOGGLE_DP + StripLayout.GAP_DP else 0f
@@ -223,7 +238,8 @@ private fun ConvertedStrip(
                     for (item in split.row1) {
                         if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
                         first = false
-                        ItemCell(item)
+                        // Keyed: an item that comes or goes before an open popup never resets it.
+                        key(item.key) { ItemCell(item) }
                     }
                     if (split.toggle) {
                         if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
@@ -282,14 +298,18 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float)
                 for (item in line) {
                     if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
                     first = false
-                    ItemCell(item)
+                    key(item.key) { ItemCell(item) }
                 }
             }
         }
     }
 }
 
-/** One item at its declared width; a hidden item keeps its room (neighbours never jump). */
+/**
+ * One item at its declared width; a hidden item keeps its room (neighbours never jump). Each cell
+ * is composed under key(item.key), so an item inserted or removed before it in the same line
+ * keeps its state (an open popup or dropdown stays open).
+ */
 @Composable
 private fun ItemCell(item: StripItem) {
     Box(Modifier.width(item.width), contentAlignment = Alignment.Center) {
