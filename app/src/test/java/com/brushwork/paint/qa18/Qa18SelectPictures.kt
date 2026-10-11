@@ -103,6 +103,60 @@ internal object Qa18SelectPictures {
         bmp.setPixels(px, 0, SIZE, 0, 0, SIZE, SIZE)
     }
 
+    /**
+     * Color select's picture ([colors]): eight shaded discs of radius [DISC_R] on a neutral gray
+     * ground, and [GRAY] where no disc is (the ground itself). No disc's hue is within 75° of
+     * magenta (300°): the red is at 18°, the blue at 215°, the dark a warm 30°; the ground is a
+     * true gray. Rounding moves a few rim pixels toward 0°: "Magentas" takes in no pixel up to
+     * Fuzziness 100 (`Qa18SelectColorUiTest` checks it).
+     */
+    enum class Disc(val x: Float, val y: Float, base: Long) {
+        RED(96f, 96f, 0xFFDC6432), // 220, 100, 50: hue 18°
+        YELLOW(256f, 96f, 0xFFE6CD32), // 230, 205, 50: 52°
+        GREEN(416f, 96f, 0xFF3CA546), // 60, 165, 70: 126°
+        CYAN(96f, 256f, 0xFF28BEC8), // 40, 190, 200: 184°
+        BLUE(256f, 256f, 0xFF2878E6), // 40, 120, 230: 215°
+        SKIN(416f, 256f, 0xFFE0AC8C), // 224, 172, 140: 23°, a skin tone
+        WHITE(96f, 416f, 0xFFEEECE6), // a warm white (highlight)
+        DARK(256f, 416f, 0xFF262422), // a warm near-black (shadow)
+        GRAY(416f, 416f, 0xFF787878), // no disc: the ground (a midtone)
+        ;
+
+        val color: Int = base.toInt()
+    }
+
+    const val DISC_R = 62f
+
+    /**
+     * [Disc]s lit from the top left (1.05 to 0.85) with a fine, lightness-only grain on a gray
+     * ground with soft blotches; edges are anti-aliased against the gray, which keeps each disc's
+     * hue (a blend with a gray changes no hue).
+     */
+    fun colors(bmp: Bitmap) {
+        require(bmp.width == SIZE && bmp.height == SIZE)
+        val blotch = ValueNoise(21, 24)
+        val fine = ValueNoise(22, 5)
+        val grain = Random(23)
+        val px = IntArray(SIZE * SIZE)
+        for (y in 0 until SIZE) for (x in 0 until SIZE) {
+            val l = 7f * blotch.at(x.toFloat(), y.toFloat()) + 3f * fine.at(x.toFloat(), y.toFloat()) + (grain.nextFloat() * 4f - 2f)
+            val g = (120 + l).roundToInt()
+            var c = argb(g, g, g)
+            for (d in Disc.entries) {
+                if (d == Disc.GRAY) continue
+                val cv = cover(x, y, d.x, d.y, DISC_R)
+                if (cv <= 0f) continue
+                val t = ((x - d.x) * 0.6f + (y - d.y) * 0.8f) / DISC_R
+                val shade = 1.05f - 0.1f * (t + 1f)
+                val n = 3f * fine.at(x * 1.7f, y * 1.7f) + (grain.nextFloat() * 4f - 2f)
+                fun ch(s: Int) = (((d.color shr s) and 0xFF) * shade + n).roundToInt()
+                c = mix(c, argb(ch(16), ch(8), ch(0)), cv)
+            }
+            px[y * SIZE + x] = c
+        }
+        bmp.setPixels(px, 0, SIZE, 0, 0, SIZE, SIZE)
+    }
+
     /** Distance (px) from ([x], [y]) to the orange's rim. */
     fun fromFruitRim(x: Float, y: Float): Float = kotlin.math.abs(hypot(x - FRUIT_X, y - FRUIT_Y) - FRUIT_R)
 
