@@ -103,9 +103,9 @@ internal object PlacementStripKit {
         .sortedWith(compareBy({ it.positionInWindow.y.toInt() / 8 }, { it.positionInWindow.x }))
         .mapNotNull(StripInventory::handle)
 
-    /** The texts on the More row now that are not controls (the hint). */
+    /** The texts on the More row now that are not in controls (the hint). */
     fun moreTexts(): List<String> = RobolectricUi.elements().map { it.node }
-        .filter { n -> n.layoutInfo.isPlaced && under(n, V18Tags.STRIP_MORE_ROW) && !StripInventory.isControl(n) }
+        .filter { n -> n.layoutInfo.isPlaced && under(n, V18Tags.STRIP_MORE_ROW) && generateSequence(n) { it.parent }.none(StripInventory::isControl) }
         .flatMap { n -> n.config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } }
 
     /** The texts on row 1 now that are not controls (a status text). */
@@ -142,6 +142,13 @@ internal object PlacementStripKit {
 
     /** Whether a window (a popup, a dialog, a sheet) shows over the rig's activity. */
     fun overlayWindowShown(rig: StripRig): Boolean = RobolectricUi.windowRoots().lastOrNull().let { it != null && it !== rig.activity.window.decorView }
+
+    /**
+     * Whether the sheet titled [title] shows: hosted (the editor's sheet host), or, as in the rig
+     * (no host), a modal window of its own with the title.
+     */
+    fun sheetShown(rig: StripRig, title: String): Boolean =
+        title in SmokeUi.sheetTitles() || (overlayWindowShown(rig) && SmokeUi.has(title, exact = true))
 
     /**
      * §3.9 "Overlays": opens the More row, clicks [label] on it, and checks the row closed and
