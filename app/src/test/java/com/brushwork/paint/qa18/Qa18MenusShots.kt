@@ -20,9 +20,17 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.StripLabels18
+import com.brushwork.paint.ui.common.V18Tags
+import com.brushwork.paint.ui.editor.ToolMenu
+import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
+import com.brushwork.paint.ui.editor.chrome.Clickables
+import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.vector.VectorContent
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import java.io.File
 import java.io.FileOutputStream
 
@@ -150,5 +158,78 @@ internal object Qa18MenusShots {
         val f = File(DIR, "menus-$name.png")
         FileOutputStream(f).use { small.compress(Bitmap.CompressFormat.PNG, 100, it) }
         return f.absolutePath
+    }
+
+    /** [r] (dp) lies on the screen of [s]. */
+    fun onScreen(s: ChromeScreen, what: String, r: androidx.compose.ui.geometry.Rect) {
+        assertTrue("$what on screen: $r", r.left >= -0.5f && r.right <= s.widthDp + 0.5f && r.top >= -0.5f && r.bottom <= s.heightDp + 0.5f)
+    }
+
+    /** [items] by their names, top to bottom then left to right ("?" for a text-only button: its name is its text). */
+    fun names(items: List<Clickables.Item>): String =
+        items.sortedWith(compareBy({ (it.bounds.top / 8f).toInt() }, { it.bounds.left })).joinToString(" | ") { it.own.firstOrNull() ?: "?" }
+
+    /**
+     * Opens the strip's More row by a finger on its toggle and checks what the user sees: the toggle
+     * says the row is open, the row sits 4 dp under row 1 in 1 to [StripLayout.MAX_MORE_LINES]
+     * lines, every control on it is whole and on screen. Returns its controls and its lines.
+     */
+    fun openMore(s: ChromeScreen, what: String): Pair<List<Clickables.Item>, Int> {
+        val row1 = s.tagged(ChromeTags.OPTIONS_STRIP) ?: throw AssertionError("$what: no strip")
+        assertEquals("$what: the toggle is collapsed", StripLabels18.COLLAPSED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
+        Finger.tap(s, StripLabels18.MORE_TOGGLE)
+        Smoke.pump(300); SmokeUi.settle()
+        assertEquals("$what: the toggle says the row is open", StripLabels18.EXPANDED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
+        val more = s.tagged(V18Tags.STRIP_MORE_ROW) ?: throw AssertionError("$what: the toggle opens no More row")
+        onScreen(s, "$what: the More row", more)
+        assertEquals("$what: 4 dp under row 1", row1.bottom + StripLayout.GAP_DP, more.top, 1f)
+        val lines = Math.round((more.height + StripLayout.GAP_DP) / (StripLayout.LINE_DP + StripLayout.GAP_DP))
+        assertTrue("$what: $lines lines", lines in 1..StripLayout.MAX_MORE_LINES)
+        val items = Clickables.onScreen(s, inside = more)
+        items.forEach {
+            onScreen(s, "$what: \"${it.own.firstOrNull()}\" on the More row", it.bounds)
+            assertEquals("$what: \"${it.own.firstOrNull()}\" whole", it.width, it.bounds.width, 0.5f)
+        }
+        return items to lines
+    }
+
+    /** Closes the strip's More row by a second tap on its toggle. */
+    fun closeMore(s: ChromeScreen, what: String) {
+        Finger.tap(s, StripLabels18.MORE_TOGGLE)
+        Smoke.pump(300); SmokeUi.settle()
+        assertEquals("$what: a second tap closes it", null, s.tagged(V18Tags.STRIP_MORE_ROW))
+    }
+
+    /**
+     * Every tool of the tool menu, picked by a finger, on a raster (or [vector]) layer of a
+     * [widthDp] screen: row 1's controls on screen; where the strip has a toggle, the More row
+     * opened by it ([openMore]), rendered (`menus-<width>-<nn>-<tool>[-vector].png`), closed by it.
+     */
+    fun walkStrips(h: ChromeHarness, vector: Boolean, widthDp: Float) {
+        val s = h.editor(doc(vector))
+        assertEquals("$widthDp dp wide", widthDp, s.widthDp, 1f)
+        var withRow = 0
+        for ((i, id) in ToolMenu.tools.withIndex()) {
+            pick(s, id)
+            val what = "${id.label}${if (vector) " (vector)" else ""} at ${widthDp.toInt()} dp"
+            val row1 = s.tagged(ChromeTags.OPTIONS_STRIP)?.takeIf { it.width > 0f && it.height > 0f }
+            val row1Items = row1?.let { Clickables.onScreen(s, inside = it) }.orEmpty()
+            row1Items.forEach { onScreen(s, "$what: \"${it.own.firstOrNull()}\" on row 1", it.bounds) }
+            val toggle = s.tagged(V18Tags.STRIP_TOGGLE)?.takeIf { row1 != null && row1.contains(it.center) }
+            var moreItems = emptyList<Clickables.Item>()
+            var lines = 0
+            if (toggle != null) {
+                val (items, n) = openMore(s, what)
+                moreItems = items
+                lines = n
+                withRow++
+            }
+            save(capture(), s.density, "%d-%02d-%s%s".format(widthDp.toInt(), i, id.name.lowercase(), if (vector) "-vector" else ""))
+            System.err.println("[menus] $what | row 1: ${names(row1Items)} || More ($lines lines): ${names(moreItems)}")
+            if (toggle != null) closeMore(s, what)
+        }
+        System.err.println("[menus] ${if (vector) "vector" else "raster"} at ${widthDp.toInt()} dp: $withRow strips with a More row")
+        assertTrue("strips with a More row: $withRow", withRow >= 12)
+        Smoke.assertQuiet(s.c, "every strip at ${widthDp.toInt()} dp")
     }
 }
