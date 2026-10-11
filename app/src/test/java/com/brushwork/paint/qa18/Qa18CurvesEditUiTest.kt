@@ -38,7 +38,8 @@ import org.robolectric.shadows.ShadowLog
  *   carry the settings along;
  * - the stroke kind, Use brush size, the line width and Taper ends leave the settings alone and
  *   stay the tool's after ✓, on a spiral and on a rose alike (only a rose's Closed is its own),
- *   also when the rose was undone away and redone.
+ *   also when the rose was undone away and redone; and with the user's own Closed on, a spiral
+ *   shows open, keeps the look set on it and gives the user's Closed back after ✓.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.curveseditsandbox"])
@@ -248,6 +249,11 @@ class Qa18CurvesEditUiTest {
             q.applyEdit("Apply curve edit")
             keptLook(q, tool, redone, "a redone rose")
         }
+        h.section("the user's Closed on: a spiral shows open, its look stays, Closed comes back") {
+            q.editor(Qa18CurvesUi.vectorDoc())
+            q.tool("Curve")
+            ownClosedOn(q, q.c.currentTool as CurveTool)
+        }
         dog.interrupt()
         h.finish()
     }
@@ -256,8 +262,43 @@ class Qa18CurvesEditUiTest {
      * After the ✓ of a generated curve whose look was set up as [shown]: the next curve looks the
      * same (only a rose's Closed was its own), in the tool and in its saved settings.
      */
-    private fun keptLook(q: Qa18CurvesUi, tool: CurveTool, shown: CurveSettings, what: String) {
-        assertEquals("$what: the look set on it stays the tool's", shown.copy(closed = false), tool.settings)
-        assertEquals("$what: and is saved", tool.settings, q.c.settings.getObject("vec.curve", CurveSettings.serializer()))
+    private fun keptLook(q: Qa18CurvesUi, tool: CurveTool, shown: CurveSettings, what: String, closed: Boolean = false) {
+        assertEquals("$what: the look set on it stays the tool's", shown.copy(closed = closed), tool.settings)
+        assertEquals("$what: and is saved", tool.settings, saved(q))
+    }
+
+    private fun saved(q: Qa18CurvesUi): CurveSettings? = q.c.settings.getObject("vec.curve", CurveSettings.serializer())
+
+    /**
+     * The other way round from the rose: the user's curves are Closed (the More row's "Closed"
+     * with nothing open), a spiral shows open while it is open; its stroke kind, changed on it,
+     * stays the tool's and is saved WITH the user's Closed; after ✓ the spiral is stored open and
+     * the next curve is Closed again.
+     */
+    private fun ownClosedOn(q: Qa18CurvesUi, tool: CurveTool) {
+        assertFalse(tool.settings.closed)
+        q.tap("Closed")
+        StripTestKit.closeMoreRow()
+        assertTrue("Closed on for the next curve", tool.settings.closed)
+        assertEquals(true, saved(q)?.closed)
+        q.tap(CurveGenLabels18.CURVES_DESC)
+        q.tap(CurveGenLabels18.ARCHIMEDEAN)
+        StripTestKit.closeMoreRow()
+        val g = requireNotNull(tool.generator) { "a spiral" }
+        assertFalse("a spiral shows open", tool.settings.closed)
+        val other = if (tool.settings.stroke == CurveStroke.PLAIN) CurveStroke.BRUSH else CurveStroke.PLAIN
+        q.tap(CurveLabels17.STROKE_KIND)
+        q.tap(other.label)
+        StripTestKit.closeMoreRow()
+        assertEquals(other, tool.settings.stroke)
+        assertEquals("the stroke kind is no edit of the curve", g, tool.generator)
+        val shown = tool.settings
+        assertEquals("saved meanwhile: the look, with the user's own Closed", shown.copy(closed = true), saved(q))
+        val layer = q.c.activeLayer
+        q.applyEdit("Apply curve edit")
+        val stored = layer.vector!!.objects.last() as VPath
+        assertEquals("stored with its settings", g, stored.generator)
+        assertFalse("the spiral is stored open", stored.subpaths[0].closed)
+        keptLook(q, tool, shown, "a spiral with the user's Closed on", closed = true)
     }
 }
