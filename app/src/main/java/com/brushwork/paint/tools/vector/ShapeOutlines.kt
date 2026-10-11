@@ -37,12 +37,36 @@ object ShapeOutlines {
         else ShapeGeometry.arrow(box.start, box.end, o.strokeWidth, o.arrowHeads, o.arrowHeadStyle, o.arrowHeadScale)
     }
 
-    /** The path a painting tool follows for the outline (one continuous sub-path). */
+    /**
+     * The path a painting tool follows for the outline (one continuous sub-path). v1.8: a cog
+     * with a hole has two (the teeth, then the hole); [brushContours] splits them, and each is
+     * painted as a stroke of its own.
+     */
     fun brushOutline(o: ShapeObject): VectorPath = when {
         o.type == ShapeType.ARROW && isCustom(o) ->
             ShapeGeometry.arrowBrushOutlineAlong(centerline(o), o.strokeWidth, o.arrowHeads, o.arrowHeadStyle, o.arrowHeadScale)
         o.type == ShapeType.ARROW -> ShapeGeometry.arrowBrushOutline(o.box.start, o.box.end, o.strokeWidth, o.arrowHeads, o.arrowHeadStyle, o.arrowHeadScale)
         else -> outline(o)
+    }
+
+    /**
+     * v1.8 (D21): [brushOutline] split into its sub-paths, each one brush stroke: one for every
+     * shape but a cog with a hole (two: the teeth, then the hole).
+     */
+    fun brushContours(o: ShapeObject): List<VectorPath> = contoursOf(brushOutline(o))
+
+    /** [path] split at each MoveTo (the same list of one path when it has one sub-path). */
+    fun contoursOf(path: VectorPath): List<VectorPath> {
+        val ops = path.ops
+        if (ops.count { it is PathOp.MoveTo } <= 1) return listOf(path)
+        val out = ArrayList<VectorPath>(2)
+        var start = 0
+        for (i in 1 until ops.size) if (ops[i] is PathOp.MoveTo) {
+            out += VectorPath(ops.subList(start, i).toList())
+            start = i
+        }
+        out += VectorPath(ops.subList(start, ops.size).toList())
+        return out
     }
 
     /**
@@ -100,7 +124,10 @@ object ShapeOutlines {
             if (poly.closed && pts.size > 2 && Geometry.distanceToSegment(p, pts.last(), pts[0]) <= reach) return true
         }
         if (!o.type.isLineLike && o.style.fill) {
-            for (poly in polys) if (poly.points.size > 2 && Geometry.pointInPolygon(p, poly.points)) return true
+            // v1.8: inside an odd number of contours (a cog's hole is not its fill). One contour: as in v1.7.
+            var inside = false
+            for (poly in polys) if (poly.points.size > 2 && Geometry.pointInPolygon(p, poly.points)) inside = !inside
+            if (inside) return true
         }
         if (o.type == ShapeType.ARROW) {
             val heads = arrow(o)

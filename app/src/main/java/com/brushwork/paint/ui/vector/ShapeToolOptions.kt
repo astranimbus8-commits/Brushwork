@@ -55,6 +55,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.vector.ArrowHeadStyle
 import com.brushwork.paint.tools.vector.ArrowHeads
+import com.brushwork.paint.tools.vector.CogParams
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.CurveStroke
@@ -70,6 +71,7 @@ import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
+import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LengthField
@@ -306,7 +308,7 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
     val range = ShapeGeometry.MIN_SIDES..ShapeGeometry.MAX_SIDES
     // A shape with its own points has no sides / star points any more (Reset shape brings them back).
     val custom by remember(tool) { derivedStateOf { tool.points != null && tool.box != null } }
-    if (custom && (s.type == ShapeType.POLYGON || s.type == ShapeType.STAR)) {
+    if (custom && (s.type == ShapeType.POLYGON || s.type == ShapeType.STAR || s.type == ShapeType.COG)) {
         Hint("This shape has its own points: \"Reset shape\" goes back to a regular ${s.type.label.lowercase()}", Modifier.padding(top = 8.dp))
     } else when (s.type) {
         ShapeType.POLYGON -> {
@@ -331,6 +333,15 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
                 )
             }
         }
+        ShapeType.COG -> {
+            // v1.8 (design §3.8): the teeth and the hole; roundness is the corners below.
+            SectionHeader(ShapeType.COG.label)
+            IntSliderField(CogLabels18.TEETH, s.cogTeeth, { n -> set { it.copy(cogTeeth = n) } }, CogParams.MIN_TEETH..CogParams.MAX_TEETH)
+            CogPercentSlider(CogLabels18.TOOTH_DEPTH, s.cogDepth, CogParams.MIN_DEPTH, CogParams.MAX_DEPTH) { v -> set { it.copy(cogDepth = v) } }
+            CogPercentSlider(CogLabels18.TOOTH_WIDTH, s.cogToothWidth, CogParams.MIN_TOOTH_WIDTH, CogParams.MAX_TOOTH_WIDTH) { v -> set { it.copy(cogToothWidth = v) } }
+            CogPercentSlider(CogLabels18.TOOTH_TAPER, s.cogTaper, 0f, CogParams.MAX_TAPER) { v -> set { it.copy(cogTaper = v) } }
+            CogPercentSlider(CogLabels18.HOLE_SIZE, s.cogHole, 0f, CogParams.MAX_HOLE) { v -> set { it.copy(cogHole = v) } }
+        }
         else -> {}
     }
     if (s.type.hasCorners) {
@@ -347,6 +358,22 @@ private fun ShapeParamFields(tool: ShapeTool, compact: Boolean = false) {
         )
         if (s.corner != CornerStyle.SHARP) Hint("Limited to half of the shorter edge at each corner")
     }
+}
+
+/**
+ * v1.8: a cog fraction [value] (in [min]..[max]) as a slider in whole percent (the value lands on
+ * whole percents, so the same slider position always builds the same teeth).
+ */
+@Composable
+private fun CogPercentSlider(label: String, value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
+    val percent = (value * 100f).roundToInt()
+    LabeledSlider(
+        label = label,
+        value = value * 100f,
+        onValueChange = { v -> onChange((v.roundToInt() / 100f).coerceIn(min, max)) },
+        valueRange = (min * 100f)..(max * 100f),
+        valueText = "$percent %",
+    )
 }
 
 /** Numeric placement of the pending shape (hosted by [ShapeToolOptions]). */

@@ -2,6 +2,7 @@ package com.brushwork.paint.tools.vector
 
 import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.ui.common.CogLabels18
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
@@ -144,6 +145,8 @@ object ShapePoints {
      * points with the exact handles of their cubic arcs, lines and arrows their two ends.
      */
     fun fromRegular(type: ShapeType, params: OutlineParams): List<ShapePoint> = when (type) {
+        // v1.8: a cog's outer contour (CogGeometry, through ShapeGeometry.vertices) falls to the
+        // else branch: its teeth as sharp points; [refusal] keeps a cog with a hole out.
         ShapeType.LINE, ShapeType.ARROW -> listOf(ShapePoint(-0.5f, 0f), ShapePoint(0.5f, 0f))
         ShapeType.ELLIPSE -> {
             // The same handle length as ShapeGeometry.ellipsePath (four quarter arcs).
@@ -158,6 +161,14 @@ object ShapePoints {
         }
         else -> ShapeGeometry.vertices(type, 1f, 1f, params).map { ShapePoint(it.x, it.y) }
     }
+
+    /**
+     * v1.8 (D21, design §3.8): why a regular shape of [type] can't turn into points, or null when
+     * it can. A cog with a hole is two contours, and points make one: "Set the hole size to 0 to
+     * edit points" ([CogLabels18.HOLE_REFUSAL]).
+     */
+    fun refusal(type: ShapeType, params: OutlineParams): String? =
+        if (type == ShapeType.COG && CogGeometry.hasHole(params.cog)) CogLabels18.HOLE_REFUSAL else null
 
     // ------------------------------------------------------------------ outline
 

@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VSpline
 import com.brushwork.paint.vector.VSplinePoint
 import com.brushwork.paint.vector.VStrokeKind
@@ -70,6 +71,8 @@ object ShapeToSpline {
     fun convert(shape: ShapeObject, selected: IntArray): ConvertResult? {
         if (shape.type == ShapeType.ARROW) return null
         val o = shape.sanitized() ?: return null
+        // v1.8 (D21): a cog with a hole is two contours: one compound plain path (no spline).
+        if (isCompound(o)) return ConvertResult(compound(o), IntArray(0))
         val built = controlPoints(o, selected) ?: return null
         val spline = VSpline(built.points, order = VSpline.DEFAULT_ORDER, endpoint = true, cyclic = o.closed).sanitized()
         val path = VPath(
@@ -83,6 +86,24 @@ object ShapeToSpline {
             spline = spline,
         )
         return ConvertResult(path, built.selected)
+    }
+
+    /**
+     * v1.8 (D21, design §3.8): true when [shape] turns into a compound path: a cog drawn from its
+     * fields (no custom points) with a hole. Its outline is two contours, which a spline can't be.
+     */
+    fun isCompound(shape: ShapeObject): Boolean =
+        shape.type == ShapeType.COG && !ShapeOutlines.isCustom(shape) && CogGeometry.hasHole(shape.cogParams)
+
+    /**
+     * v1.8: a holed cog as ONE plain path (no spline, so the Path tool can't open it as points):
+     * its two contours ([ShapeOutlines.outline], the hole reversed so it stays a hole under the
+     * non-zero rule), its fill and its line ([strokeOf]). Like [convert], it reads the source
+     * shape only: the caller (ShapeTool) keeps the live symmetry copies.
+     */
+    private fun compound(o: ShapeObject): VPath {
+        val p = VectorOps.toPaths(VShape(0L, shape = o)).first()
+        return p.copy(fillRule = VFillRule.NONZERO, stroke = strokeOf(o), spline = null)
     }
 
     /** The outline style of [o] as a path's (§3.6 (b) "Style"). */

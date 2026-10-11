@@ -29,7 +29,7 @@ import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
-import com.brushwork.paint.model.ArrayLayout
+import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.GridType
 import com.brushwork.paint.model.IncrementKind
@@ -61,6 +61,7 @@ import com.brushwork.paint.tools.transform.SnapHit
 import com.brushwork.paint.tools.transform.SnapLine
 import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
+import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
@@ -129,8 +130,21 @@ data class ShapeSettings(
      * (tap it with the shape tool to edit it again); off = painted into the active layer.
      */
     val editable: Boolean = true,
+    /** v1.8 (item 7): the cog's teeth, 3..64 ("Number of teeth"). */
+    val cogTeeth: Int = CogParams.DEFAULT.teeth,
+    /** v1.8: the teeth's depth, 0.05..0.5 of the outer radius ("Tooth depth"). */
+    val cogDepth: Float = CogParams.DEFAULT.depth,
+    /** v1.8: a tooth's width, 0.2..0.8 of the pitch ("Tooth width"). */
+    val cogToothWidth: Float = CogParams.DEFAULT.toothWidth,
+    /** v1.8: how much a tooth narrows toward its tip, 0..0.9 ("Tooth taper"). */
+    val cogTaper: Float = CogParams.DEFAULT.taper,
+    /** v1.8: the hole's radius, 0..0.8 of the root radius; 0 = no hole ("Hole size"). */
+    val cogHole: Float = CogParams.DEFAULT.hole,
 ) {
-    val outlineParams: OutlineParams get() = OutlineParams(sides, starPoints, innerRatio, corner, cornerRadius)
+    /** v1.8: the cog fields as one value. */
+    val cogParams: CogParams get() = CogParams(cogTeeth, cogDepth, cogToothWidth, cogTaper, cogHole)
+
+    val outlineParams: OutlineParams get() = OutlineParams(sides, starPoints, innerRatio, corner, cornerRadius, cogParams)
 
     /** The shape has an outline (lines and arrows always do). */
     val strokes: Boolean get() = type.isLineLike || style.stroke
@@ -144,6 +158,11 @@ data class ShapeSettings(
         innerRatio = innerRatio.finiteOr(fallback.innerRatio).coerceIn(0.05f, 0.95f),
         arrowHeadScale = arrowHeadScale.finiteOr(fallback.arrowHeadScale).coerceIn(2f, 12f),
         nudgeStepPx = nudgeStepPx.finiteOr(fallback.nudgeStepPx).coerceIn(0.01f, MAX_LENGTH),
+        cogTeeth = cogTeeth.coerceIn(CogParams.MIN_TEETH, CogParams.MAX_TEETH),
+        cogDepth = cogDepth.finiteOr(fallback.cogDepth).coerceIn(CogParams.MIN_DEPTH, CogParams.MAX_DEPTH),
+        cogToothWidth = cogToothWidth.finiteOr(fallback.cogToothWidth).coerceIn(CogParams.MIN_TOOTH_WIDTH, CogParams.MAX_TOOTH_WIDTH),
+        cogTaper = cogTaper.finiteOr(fallback.cogTaper).coerceIn(0f, CogParams.MAX_TAPER),
+        cogHole = cogHole.finiteOr(fallback.cogHole).coerceIn(0f, CogParams.MAX_HOLE),
     )
 
     /** These options with the drawing options of [o] (the ones that are not part of a shape). */
@@ -173,7 +192,7 @@ data class ShapeSettings(
         arrowHeads = s.arrowHeads,
         arrowHeadStyle = s.arrowHeadStyle,
         arrowHeadScale = s.arrowHeadScale,
-    )
+    ).let { if (s.type == ShapeType.COG) it.copy(cogTeeth = s.cogTeeth, cogDepth = s.cogDepth, cogToothWidth = s.cogToothWidth, cogTaper = s.cogTaper, cogHole = s.cogHole) else it }
 
     companion object {
         const val MIN_STROKE = 0.25f
@@ -660,6 +679,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val brush = s.strokeWith == ShapeStroke.BRUSH && s.strokes
         val tool = if (!brush) null else own?.first ?: controller.lastPaintTool
         val preset = if (!brush) null else own?.second ?: controller.presetFor(controller.lastPaintTool)
+        val cog = s.type == ShapeType.COG
         return ShapeObject(
             type = s.type,
             cx = b.cx, cy = b.cy, w = b.w, h = b.h, rotation = b.rotationDeg,
@@ -681,6 +701,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             brushTool = tool?.name,
             brushPreset = preset,
             points = pts,
+            // v1.8: only a cog carries the cog fields (any other shape writes exactly as in v1.7).
+            cogTeeth = if (cog) s.cogTeeth else CogParams.DEFAULT.teeth,
+            cogDepth = if (cog) s.cogDepth else CogParams.DEFAULT.depth,
+            cogToothWidth = if (cog) s.cogToothWidth else CogParams.DEFAULT.toothWidth,
+            cogTaper = if (cog) s.cogTaper else CogParams.DEFAULT.taper,
+            cogHole = if (cog) s.cogHole else CogParams.DEFAULT.hole,
             copies = copies,
         )
     }
@@ -793,6 +819,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (box == null || on == pointsMode) return
         if (on) {
             if (points == null) {
+                // v1.8 (D21): a cog with a hole is two contours; points are one.
+                ShapePoints.refusal(settings.type, settings.outlineParams)?.let {
+                    controller.toast(it)
+                    return
+                }
                 pushHistory()
                 points = ShapePoints.fromRegular(settings.type, settings.outlineParams)
             }
@@ -1229,7 +1260,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val doc = controller.doc
         if (doc.indexOf(layer) < 0) return false
         val o = decoded(layer) ?: return false
-        val result = ShapeToSpline.convert(o, selected) ?: run {
+        val result = converted(o, selected) ?: run {
             controller.toast(CANT_CONVERT_MESSAGE)
             return false
         }
@@ -1242,7 +1273,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val dirty = Rect()
         inkOf(layer, o)?.let { dirty.union(it) }
         paintRect(o)?.let { dirty.union(it) }
-        VectorOps.bounds(result.path).let { r ->
+        ObjectCopies.mappedBounds(VectorOps.bounds(result.path), result.path.copies).let { r ->
             if (!r.isEmpty) dirty.union(Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt()))
         }
         dirty.inset(-2, -2)
@@ -1252,6 +1283,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         }
         if (!ok || layer.vector !== content) return false
         openInPathTool(layer, ids.first(), result.selectedSplineIndices)
+        compoundHint(o)
         return true
     }
 
@@ -1260,7 +1292,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (controller.doc.indexOf(layer) < 0) return false
         val content = layer.vector ?: return false
         val vs = content.byId(id) as? VShape ?: return false
-        val result = ShapeToSpline.convert(vs.shape, selected) ?: run {
+        val result = converted(vs.shape, selected) ?: run {
             controller.toast(CANT_CONVERT_MESSAGE)
             return false
         }
@@ -1270,9 +1302,26 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val path = result.path.copy(id = vs.id, opacity = vs.opacity, stroke = stroke)
         var refused = false
         controller.vectors.update(layer, content.replaced(mapOf(id to listOf(path))), HistoryLabels.TURN_INTO_PATH) { ok ->
-            if (ok) openInPathTool(layer, id, result.selectedSplineIndices) else refused = true
+            if (ok) {
+                openInPathTool(layer, id, result.selectedSplineIndices)
+                compoundHint(vs.shape)
+            } else {
+                refused = true
+            }
         }
         return !refused
+    }
+
+    /**
+     * [o] as a path ([ShapeToSpline.convert], which reads the source shape only); v1.8 (I15): its
+     * live symmetry copies stay the path's.
+     */
+    private fun converted(o: ShapeObject, selected: IntArray): ConvertResult? =
+        ShapeToSpline.convert(ObjectCopies.source(o), selected)?.let { ConvertResult(it.path.copy(copies = o.copies), it.selectedSplineIndices) }
+
+    /** v1.8 (D21): a holed cog became a compound path, which the Path tool can't open as points: says why. */
+    private fun compoundHint(o: ShapeObject) {
+        if (ShapeToSpline.isCompound(o)) controller.toast(CogLabels18.COMPOUND_HINT)
     }
 
     /** The Path tool opens path [id] of [layer] with the control points [select] selected (area B's `openPath`). */
@@ -2526,16 +2575,21 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             // pending one is shown as a plain outline until it is committed.
             val older = if (creating != null) pending else null
             overlaySpecs = listOfNotNull(older?.let { ShapeOutlines.paintSpec(it, brush = false) }, ShapeOutlines.paintSpec(brushObj, brush = true))
-            val path = ShapeOutlines.brushOutline(brushObj)
+            val whole = ShapeOutlines.brushOutline(brushObj)
+            // v1.8 (D21): a cog with a hole is two strokes: the teeth are the live one, the hole
+            // is a guide until the shape is placed (then both are painted).
+            val contours = ShapeOutlines.contoursOf(whole)
+            val path = contours.first()
             if (asNew && !liveBrushForNewLayer(layer)) {
                 // The brush would paint the active layer differently from the new layer the
                 // shape goes into (locked, hidden, alpha lock, mask): its outline is shown as a
                 // guide and painted exactly when the shape is placed.
                 brushPreview.cancel()
                 specOverlay.setBand(null, 0f)
-                brushGuide = path.toAndroidPath(brushGuidePath)
+                brushGuide = whole.toAndroidPath(brushGuidePath)
             } else {
-                if (overlaySpecs.isNotEmpty()) specOverlay.setBand(path.toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
+                if (overlaySpecs.isNotEmpty()) specOverlay.setBand(whole.toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
+                brushGuide = restOf(contours)?.toAndroidPath(brushGuidePath)
                 brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
             }
         } else {
@@ -2618,10 +2672,36 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         setEditSpecs(ov, if (inOverlay) emptyList() else specs, arraySource)
         // A new shape dragged out meanwhile looks as it will once the opened one is closed.
         overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { ShapeOutlines.paintSpec(newObject(it), brush = false) })
-        val path = if (brush) ShapeOutlines.brushOutline(o) else null
-        editGuide = if (path != null && !live) path.toAndroidPath(guidePath) else null
+        val whole = if (brush) ShapeOutlines.brushOutline(o) else null
+        // v1.8 (D21): a cog's hole is a guide while the teeth are the live stroke.
+        val contours = whole?.let { ShapeOutlines.contoursOf(it) }
+        val path = contours?.first()
+        editGuide = when {
+            whole == null -> null
+            !live -> whole.toAndroidPath(guidePath)
+            else -> restOf(contours)?.toAndroidPath(guidePath)
+        }
         if (path != null && live) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
+    }
+
+    /** v1.8 (D21): every contour of [contours] after the first (a cog's hole) as one path; null with one contour. */
+    private fun restOf(contours: List<VectorPath>?): VectorPath? =
+        if (contours == null || contours.size < 2) null else VectorPath(contours.drop(1).flatMap { it.ops })
+
+    /**
+     * v1.8 (D21): paints [contours] for real, a stroke each (a cog with a hole: the teeth, then the
+     * hole), the first with the session's random values and contour i with those + i, as the
+     * vector renderer seeds a path's sub-paths and [outlineReplay] seeds them; the session's own
+     * come back afterwards. One contour: exactly the v1.7 commit.
+     */
+    private fun commitContours(contours: List<VectorPath>) {
+        val seed = brushPreview.sessionSeed
+        contours.forEachIndexed { i, path ->
+            if (i > 0) brushPreview.useSeed(seed + i)
+            brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) }
+        }
+        if (contours.size > 1) brushPreview.useSeed(seed)
     }
 
     /**
@@ -2701,17 +2781,26 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val live = brushObj != null && opaque && liveBrushOnVector(layer)
         val specs = ArrayList<VectorPaintSpec>(2)
         val guides = ArrayList<Path>(2)
+        var path: VectorPath? = null
         for (o in listOfNotNull(pending, creating)) {
             ShapeOutlines.paintSpec(o, o.paintsWithBrush)?.let { specs += it }
-            if (o.paintsWithBrush && !(live && o === brushObj)) guides += ShapeOutlines.brushOutline(o).toAndroidPath()
+            if (!o.paintsWithBrush) continue
+            if (live && o === brushObj) {
+                // v1.8 (D21): the teeth are the live stroke. A cog's hole gets no guide here: an
+                // object's brush replay paints its first contour only (VectorLayerRenderer's
+                // shapeBrushReplays, frozen), so the preview shows what the commit renders.
+                path = ShapeOutlines.brushContours(o).first()
+            } else {
+                guides += ShapeOutlines.brushOutline(o).toAndroidPath()
+            }
         }
         val inOverlay = dragging && !live && opaque && specs.isNotEmpty() && editDrawsInOverlay(layer)
         setVectorSpecs(layer, if (inOverlay) emptyList() else specs)
         if (inOverlay) overlaySpecs = specs
         vectorGuides = guides
-        // (live implies brushObj != null.)
-        val path = if (live) ShapeOutlines.brushOutline(brushObj) else null
-        if (path != null) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
+        // (path is set only when live.)
+        val livePath = path
+        if (livePath != null) brushPreview.request(livePath.ops) { brushStrokeInput(livePath, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
     }
 
@@ -2964,9 +3053,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             controller.toast("The shape is outside the canvas")
             return
         }
-        val path = if (o.paintsWithBrush) ShapeOutlines.brushOutline(o) else null
+        val contours = if (o.paintsWithBrush) ShapeOutlines.brushContours(o) else emptyList()
         // Kept live only when nothing plain goes under the stroke (a fill must be drawn first).
-        val livePath = path?.takeIf { ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer) }
+        // v1.8 (D21): and only with one contour (a cog with a hole is rendered from the object:
+        // the live stroke is its teeth alone).
+        val livePath = contours.singleOrNull()?.takeIf { ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer) }
         val shape = VShape(0, shape = o, seed = brushPreview.sessionSeed)
         val pendingPoints = points
         val pendingTarget = targetLayer
@@ -3120,7 +3211,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val array = ov.layer.array
         if (array != null && arraySource != null && specs.isNotEmpty() && !arraySource.isEmpty) {
             // Every copy's tiles are redrawn too.
-            val all = ArrayLayout.bounds(array.spec, arraySource)
+            val all = ArrayInstances.bounds(array.spec, arraySource)
             if (all.left.isFinite() && all.top.isFinite() && all.right.isFinite() && all.bottom.isFinite()) {
                 regions += Rect().also { r -> all.roundOut(r); r.inset(-2, -2) }
             }
@@ -3413,7 +3504,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val o = objectFor(b, points)
         val brush = paintsWithBrush(layer)
         val spec = ShapeOutlines.paintSpec(o, brush)
-        val path = if (brush) ShapeOutlines.brushOutline(o) else null
+        // v1.8 (D21): one stroke per contour (a cog with a hole: the teeth, then the hole).
+        val contours = if (brush) ShapeOutlines.brushContours(o) else emptyList()
         resetPending()
         // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
         controller.undoStepNamed("Shape") {
@@ -3422,7 +3514,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 brushPreview.cancel()
                 VectorCommit.commit(controller, layer, listOf(spec), "Shape")
             }
-            if (path != null) brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) }
+            commitContours(contours)
         }
         brushPreview.end()
         controller.invalidateOverlay()
@@ -3438,7 +3530,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val o = objectFor(b, points)
         val brush = o.paintsWithBrush
         val spec = ShapeOutlines.paintSpec(o, brush)
-        val path = if (brush) ShapeOutlines.brushOutline(o) else null
+        val contours = if (brush) ShapeOutlines.brushContours(o) else emptyList()
         val doc = controller.doc
         val area = paintRect(o)
         if (area == null || !area.intersect(0, 0, doc.width, doc.height)) {
@@ -3465,7 +3557,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 }
                 added = layer
                 // The brush paints the active layer: the new one.
-                if (layer != null && path != null) controller.keepLayerData(layer) { brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) } }
+                if (layer != null && contours.isNotEmpty()) controller.keepLayerData(layer) {
+                    commitContours(contours)
+                }
             }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for another layer")
@@ -3530,7 +3624,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // v1.8 (I17): the fill and plain line are drawn once per live copy (none: once, as in v1.7).
         val copies = o.copies
         val spec = ShapeOutlines.paintSpec(ObjectCopies.source(o), brush)
-        val path = if (brush) ShapeOutlines.brushOutline(o) else null
+        // v1.8 (D21): one stroke per contour (a cog with a hole: the teeth, then the hole).
+        val contours = if (brush) ShapeOutlines.brushContours(o) else emptyList()
+        val path = contours.firstOrNull()
         // Everything the old shape covered (its real pixels) plus the new shape.
         val dirty = Rect()
         loadedInk?.let { dirty.union(it) }
@@ -3553,7 +3649,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // v1.8 (I17): live copies are replayed there too (into the one stroke buffer, as the vector
         // renderer replays them).
         val perCopy = path != null && (layer.array != null || !copies.isEmpty) && !brushMovesPixels()
-        val replay = if (perCopy) outlineReplay(o, path, brushPreview.sessionSeed) else null
+        val replay = if (perCopy) outlineReplay(o, contours, brushPreview.sessionSeed) else null
         var done = false
         inCommit = true
         val maskEditing = layer.editingMask
@@ -3574,7 +3670,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                     val sel = controller.selection
                     if (sel != null) controller.setSelection(null, recordUndo = false)
                     try {
-                        controller.keepLayerData(layer) { brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) } }
+                        controller.keepLayerData(layer) {
+                            commitContours(contours)
+                        }
                     } finally {
                         layer.editingMask = maskEditing
                         layer.alphaLocked = alphaLocked
@@ -3606,28 +3704,37 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * stroke's full reach (`StrokeRaster.strokeBounds`, scatter included), in source coordinates:
      * a stroke within the document is cut exactly as the live stroke cuts it (at the document),
      * and a copy is never cut where its source lies outside the document. Null when the outline
-     * has fewer than two samples.
+     * has fewer than two samples. v1.8 (D21): one stroke per contour of [contours] (a cog with a
+     * hole: the teeth with [seed], the hole with [seed] + 1, as the vector renderer seeds the
+     * sub-paths of a path).
      */
-    private fun outlineReplay(o: ShapeObject, path: VectorPath, seed: Long): ((Canvas) -> Unit)? {
-        val input = brushStrokeInput(path, out = PathStrokeInput())
-        val n = input.size
-        if (n < 2) return null
-        val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
-        input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
-        xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
-        val points = PackedPoints(xs, ys, ps)
+    private fun outlineReplay(o: ShapeObject, contours: List<VectorPath>, seed: Long): ((Canvas) -> Unit)? {
+        val strokes = contours.mapNotNull { path ->
+            val input = brushStrokeInput(path, out = PathStrokeInput())
+            val n = input.size
+            if (n < 2) return@mapNotNull null
+            val xs = FloatArray(n + 1); val ys = FloatArray(n + 1); val ps = FloatArray(n + 1)
+            input.x.copyInto(xs, 0, 0, n); input.y.copyInto(ys, 0, 0, n); input.pressure.copyInto(ps, 0, 0, n)
+            xs[n] = xs[n - 1]; ys[n] = ys[n - 1]; ps[n] = ps[n - 1]
+            PackedPoints(xs, ys, ps)
+        }
+        if (strokes.isEmpty()) return null
         val preset = VectorOps.brushPresetOf(o)
         val color = o.strokeColor
         val doc = controller.doc
         val area = Rect(0, 0, doc.width, doc.height)
-        // (v1.8: with live copies, the reach of every copy.)
-        val reach = ObjectCopies.mappedBounds(StrokeRaster.strokeBounds(preset, 1f, points), o.copies)
-        if (!reach.isEmpty && reach.left.isFinite() && reach.top.isFinite() && reach.right.isFinite() && reach.bottom.isFinite()) {
-            area.union(Rect().also { reach.roundOut(it) })
+        for (points in strokes) {
+            // (v1.8: with live copies, the reach of every copy.)
+            val reach = ObjectCopies.mappedBounds(StrokeRaster.strokeBounds(preset, 1f, points), o.copies)
+            if (!reach.isEmpty && reach.left.isFinite() && reach.top.isFinite() && reach.right.isFinite() && reach.bottom.isFinite()) {
+                area.union(Rect().also { reach.roundOut(it) })
+            }
         }
         val raster = StrokeRaster(TipCache())
         val maps = o.copies.maps
-        return { c -> raster.render(c, area, preset, color, seed, true, points, cut = area, copies = maps) }
+        return { c ->
+            strokes.forEachIndexed { i, points -> raster.render(c, area, preset, color, seed + i, true, points, cut = area, copies = maps) }
+        }
     }
 
     override fun discard() {
