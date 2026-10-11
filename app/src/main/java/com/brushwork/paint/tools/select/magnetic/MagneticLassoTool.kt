@@ -1,5 +1,6 @@
 package com.brushwork.paint.tools.select.magnetic
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -101,6 +102,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     /** Used on [worker] only. */
     private var wire = LiveWire()
     private var mapKey: MapKey? = null
+    private var failedKey: MapKey? = null
     private var mapJob: Job? = null
     private var traceJob: Job? = null
 
@@ -123,7 +125,16 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         var y = downY
     }
 
-    private data class MapKey(val source: SampleSource, val layer: Layer?, val layersVersion: Int, val width: Int, val height: Int)
+    /** What the edge map was built from: the Refer pixels and their version (a paint stroke, an undo changes it). */
+    private data class MapKey(
+        val source: SampleSource,
+        val layer: Layer?,
+        val bitmap: Bitmap?,
+        val pixels: Long,
+        val layersVersion: Int,
+        val width: Int,
+        val height: Int,
+    )
 
     /** One segment to trace: anchor [index] to the next ([LIVE]: the last anchor to the finger). */
     private class Seg(val index: Int, val ax: Float, val ay: Float, val bx: Float, val by: Float)
@@ -163,6 +174,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         traceJob?.cancel()
         dropEdgeMap()
         mapKey = null
+        failedKey = null
     }
 
     private fun dropEdgeMap() {
@@ -171,12 +183,31 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         wire = LiveWire()
     }
 
-    /** Builds the edge map of the pixels Refer names, unless the one built (or building) is of them. */
+    /** The pixels Refer names now: the active layer's (not a folder's), else the canvas. */
+    private fun currentKey(): MapKey {
+        val c = controller
+        val layer = c.activeLayer
+        return if (settings.source == SampleSource.LAYER && layer.bitmap !== Layer.FOLDER_BITMAP) {
+            MapKey(SampleSource.LAYER, layer, layer.bitmap, layer.contentVersion, 0, c.doc.width, c.doc.height)
+        } else {
+            var sum = 0L
+            for (l in c.doc.layers) sum += l.contentVersion
+            MapKey(SampleSource.CANVAS, null, null, sum, c.layersVersion, c.doc.width, c.doc.height)
+        }
+    }
+
+    /**
+     * Builds the edge map of the pixels Refer names, unless the one built (or building) is of
+     * them as they are now: called on activation, on a new Refer and on every finger-down, so a
+     * stroke painted with another tool or an undo is seen.
+     */
     private fun ensureEdgeMap() {
         val c = controller
         val source = settings.source
-        val key = MapKey(source, if (source == SampleSource.LAYER) c.activeLayer else null, c.layersVersion, c.doc.width, c.doc.height)
+        val key = currentKey()
         if (key == mapKey && (edgeMap != null || mapJob?.isActive == true)) return
+        // Out of memory for these pixels once: segments stay straight, no new try on every touch.
+        if (key == failedKey) return
         mapJob?.cancel()
         dropEdgeMap()
         points.forgetSegments()
@@ -186,6 +217,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
             PixelSnapshot.take(c, source, c.activeLayer.bitmap)
         } catch (e: OutOfMemoryError) {
             mapKey = null
+            failedKey = key
             return
         }
         val docW = c.doc.width
@@ -200,7 +232,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
                     c.invalidateOverlay()
                 }
             } catch (e: OutOfMemoryError) {
-                mapKey = null
+                if (mapKey == key) { mapKey = null; failedKey = key }
             } finally {
                 snapshot.recycle()
             }
@@ -282,19 +314,23 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
 
     override fun onDown(p: ToolPoint) {
         if (busy) return
+        // The pixels may have changed since the map was built (an undo, a layer's late render).
+        ensureEdgeMap()
         val grabbed = points.nearest(p.x, p.y, docLength(GRAB_DP))
         touch = Touch(grabbed, p.x, p.y)
         if (grabbed >= 0) points.activate(grabbed)
         livePath = null
-        loupe = Loupe.at(Vec2(p.x, p.y), controller.viewTransform)
+        loupe = loupeAt(p)
         requestTrace()
         controller.invalidateOverlay()
     }
 
+    private fun loupeAt(p: ToolPoint) = Loupe.at(Vec2(p.x, p.y), controller.viewTransform, Loupe.chromeTop(controller))
+
     override fun onMove(p: ToolPoint) {
         val t = touch ?: return
         t.x = p.x; t.y = p.y
-        loupe = Loupe.at(Vec2(p.x, p.y), controller.viewTransform)
+        loupe = loupeAt(p)
         if (!t.moved && hypot(p.x - t.downX, p.y - t.downY) >= docLength(SLOP_DP)) {
             t.moved = true
             if (t.grabbed >= 0) points.beginEdit()

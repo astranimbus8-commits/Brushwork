@@ -64,6 +64,7 @@ import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
@@ -120,10 +121,19 @@ internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): Strip
             FuzzinessChip(s.fuzziness) { set(tool.settings.copy(fuzziness = it)) }
         },
         StripItem(ColorSelectStrip.PICKER, ColorSelectLabels18.FROM_PICKER, IconItemWidth) {
-            ToolIconButton(Icons.Outlined.Palette, ColorSelectLabels18.FROM_PICKER, onClick = { picker = true }, size = IconItemWidth)
+            // A dialog: the More row closes first (§3.9), the dialog lives in the overlays.
+            val ctx = LocalStripContext.current
+            ToolIconButton(Icons.Outlined.Palette, ColorSelectLabels18.FROM_PICKER, onClick = {
+                ctx.closeMore()
+                picker = true
+            }, size = IconItemWidth)
         },
         StripItem(ColorSelectStrip.SELECT, ColorSelectLabels18.SELECT_COLORS, IconItemWidth) {
-            ToolIconButton(Icons.Filled.Check, ColorSelectLabels18.SELECT_COLORS, onClick = { tool.selectColors() }, enabled = !tool.busy, size = IconItemWidth)
+            // Off while no color counts (no sample on "Sampled colors"): it would only empty the selection.
+            ToolIconButton(
+                Icons.Filled.Check, ColorSelectLabels18.SELECT_COLORS, onClick = { tool.selectColors() },
+                enabled = !tool.busy && tool.canSelect, size = IconItemWidth,
+            )
         },
         StripItem(ColorSelectStrip.CURRENT, ColorSelectLabels18.USE_CURRENT, IconItemWidth, row = StripRow.MORE) {
             CurrentColorButton(c.color) { tool.useCurrentColor() }

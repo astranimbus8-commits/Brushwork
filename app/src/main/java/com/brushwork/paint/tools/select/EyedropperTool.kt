@@ -169,6 +169,12 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
         chromeInsets.set(left.coerceAtLeast(0f), top.coerceAtLeast(0f), right.coerceAtLeast(0f), bottom.coerceAtLeast(0f))
     }
 
+    /**
+     * v1.8: the canvas view's top px under the editor's bars (0 until the editor measures them).
+     * The magnetic lasso's and Color select's loupes flip below the finger near it (`Loupe.at`).
+     */
+    internal val chromeTop: Float get() = chromeInsets.top
+
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
         if (!active) return
         val at = t.docToScreen(posX, posY)

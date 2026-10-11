@@ -6,9 +6,12 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.tools.select.EyedropperTool
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -17,7 +20,9 @@ import kotlin.math.floor
  * anchor, a [DIAMETER_DP] circle shows the canvas under it at [MAGNIFICATION] times the view's
  * zoom, with the outline, the live segment and a crosshair on the finger's point. It sits
  * [OFFSET_DP] above the finger, and below it when the finger is in the top [FLIP_DP] of the
- * canvas: the finger never hides the edge being traced.
+ * canvas: the finger never hides the edge being traced. The canvas view runs under the editor's
+ * top bars, so "the top of the canvas" is the bars' lower edge ([chromeTop]): the loupe is never
+ * drawn under them.
  *
  * Immutable; the tool makes one per finger position. Positions are canvas-view px.
  */
@@ -89,7 +94,7 @@ class Loupe internal constructor(
         /** From the finger to the circle's centre (dp). */
         const val OFFSET_DP = 96f
 
-        /** A finger this close (dp) to the canvas's top flips the loupe below it. */
+        /** A finger this close (dp) to the canvas's top (under the editor's bars) flips the loupe below it. */
         const val FLIP_DP = 140f
 
         private const val CROSS_DP = 9f
@@ -105,12 +110,23 @@ class Loupe internal constructor(
         private val line = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
         private val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; color = 0xFF4DA3FF.toInt() }
 
-        /** The loupe for a finger on document point [focus] in view [t]. */
-        fun at(focus: Vec2, t: ViewTransform): Loupe {
+        /**
+         * The loupe for a finger on document point [focus] in view [t]; [top]: the view px the
+         * editor's top bars cover ([chromeTop]), the canvas's top for the flip.
+         */
+        fun at(focus: Vec2, t: ViewTransform, top: Float = 0f): Loupe {
             val f = t.docToScreen(focus)
-            val flipped = f.y < t.dp(FLIP_DP)
+            val flipped = f.y < top + t.dp(FLIP_DP)
             val dy = t.dp(OFFSET_DP)
             return Loupe(Vec2(f.x, if (flipped) f.y + dy else f.y - dy), flipped, focus, f)
         }
+
+        /**
+         * The view px of the canvas the editor's top bars cover (the top row and the options
+         * strip), as the editor last measured them (`CanvasView.setFitInsets` tells the
+         * eyedropper, whose color preview keeps clear of them too); 0 before that.
+         */
+        internal fun chromeTop(controller: EditorController): Float =
+            (controller.tools[ToolId.EYEDROPPER] as? EyedropperTool)?.chromeTop ?: 0f
     }
 }

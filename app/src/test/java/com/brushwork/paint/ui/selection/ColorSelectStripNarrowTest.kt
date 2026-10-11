@@ -35,7 +35,8 @@ import org.robolectric.shadows.ShadowLog
  * A tap on the canvas adds the color under it (on the vector layer, with Refer: Canvas). The More
  * row: the fuzziness (its value as its state, its panel opens and the row stays), the brush
  * color's add, clearing the samples (one step), invert, Refer and anti-alias, on the screen. Each
- * item's content fits its declared width. The check selects the colors: one step "Color select".
+ * item's content fits its declared width. The check selects the colors: one step "Color select";
+ * it is off while no color counts (no sample, not inverted).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -93,11 +94,16 @@ class ColorSelectStripNarrowTest {
                 assertFalse(StripTestKit.moreRowShown())
                 assertFalse("$where: the fuzziness left row 1", has(ColorSelectLabels18.FUZZINESS, exact = true))
 
+                // No sample yet: nothing to select, the check is off (review fix).
+                assertEquals(emptyList<Int>(), tool.sampleColors)
+                assertFalse("$where: nothing to select", SmokeUi.isEnabled(ColorSelectLabels18.SELECT_COLORS))
+
                 // A tap adds the color under the finger.
                 c.pointerDown(ToolPoint(50f, 150f))
                 c.pointerUp(ToolPoint(50f, 150f))
                 rig.settle()
                 assertEquals("$where: the tapped color", listOf(red), tool.sampleColors)
+                assertTrue("$where: a sample to select", SmokeUi.isEnabled(ColorSelectLabels18.SELECT_COLORS))
 
                 // The More row: every item on the screen.
                 assertTrue(StripTestKit.openMoreRow())

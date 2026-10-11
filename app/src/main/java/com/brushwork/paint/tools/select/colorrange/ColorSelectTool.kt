@@ -164,11 +164,27 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     override fun commit() = selectColors()
 
     /**
-     * The strip's check: ONE selection step "Color select" at full resolution, combined by [mode]
-     * (no samples and no preset: an empty selection). The samples stay; their steps end.
+     * False while no color counts ("Sampled colors" with no sample, not inverted): "Select colors"
+     * is off then, as there is nothing to select (Compose state).
+     */
+    val canSelect: Boolean
+        get() {
+            val s = settings
+            return s.preset != ColorPreset.SAMPLED || s.invert || samples.list.isNotEmpty()
+        }
+
+    /**
+     * The strip's check: ONE selection step "Color select" at full resolution, combined by [mode].
+     * The samples stay; their steps end. With nothing to select ([canSelect] false: the ✓ of the
+     * pending bar after "Clear samples", a layer operation landing the steps) only the steps end:
+     * the selection there is kept, never replaced by an empty one.
      */
     fun selectColors() {
         if (busy) return
+        if (!canSelect) {
+            samples.resetHistory()
+            return
+        }
         val c = controller
         val p = params()
         val snapshot = try {
@@ -304,15 +320,18 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     override fun onDown(p: ToolPoint) {
         if (busy) return
         touching = true
-        loupe = Loupe.at(Vec2(p.x, p.y), controller.viewTransform)
+        loupe = loupeAt(p)
         controller.invalidateOverlay()
     }
 
     override fun onMove(p: ToolPoint) {
         if (!touching) return
-        loupe = Loupe.at(Vec2(p.x, p.y), controller.viewTransform)
+        loupe = loupeAt(p)
         controller.invalidateOverlay()
     }
+
+    /** The loupe over [p], flipped below the finger near the canvas's top (under the editor's bars). */
+    private fun loupeAt(p: ToolPoint) = Loupe.at(Vec2(p.x, p.y), controller.viewTransform, Loupe.chromeTop(controller))
 
     override fun onUp(p: ToolPoint) {
         if (!touching) return
