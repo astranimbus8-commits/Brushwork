@@ -16,6 +16,7 @@ import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -97,8 +98,14 @@ internal class HistoryTapFingers(private val s: ChromeScreen) {
         settle()
     }
 
-    /** Scrolls the options strip to the control described [description] ([QaCurves.scrollStripTo]), then lets the scroll end (see [reach]). */
+    /**
+     * Scrolls the options strip to the control described [description] ([QaCurves.scrollStripTo]),
+     * then lets the scroll end (see [reach]). v1.8 (design §4.9): when it is not on screen and the
+     * strip has a closed More row, the row is opened once first; on a converted strip (no scroller)
+     * the control is already in view.
+     */
     fun reachInStrip(description: String) {
+        StripTestKit.reach { if (SmokeUi.has(description)) true else null }
         QaCurves.scrollStripTo(s, description)
         settle()
     }

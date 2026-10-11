@@ -21,6 +21,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.text.TextTool
@@ -43,6 +44,7 @@ import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.layers.LayerLabels
 import com.brushwork.paint.ui.layers.LayerWindowTags
 import com.brushwork.paint.ui.placement.KERNING_ROW_TAG
@@ -121,7 +123,11 @@ internal object UniqueLabelsV17 {
         return all.firstOrNull { n -> all.none { o -> o.id != n.id && generateSequence(n.parent) { it.parent }.any { it.id == o.id } } }
     }
 
-    private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP }
+    /**
+     * The options strip: its panel (row 1; a legacy strip's whole row) or, v1.8, a converted
+     * strip's More row, which hangs under the panel, outside it (design §3.9).
+     */
+    private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP || it.tag() == V18Tags.STRIP_MORE_ROW }
 
     /** The shown sheet (a hosted sheet carries its title; the Array sheet its tag). */
     private val isSheet: (SemanticsNode) -> Boolean = {
@@ -252,8 +258,15 @@ internal object UniqueLabelsV17 {
         if (range.value() > 0f) scrollBy(n, horizontal, -maxOf(range.value(), range.maxValue()) - 1f)
     }
 
-    /** The screen at each position of the options strip, then the whole strip with the rest (the chrome, a pill, a sheet). */
+    /**
+     * The screen at each position of the options strip, then the whole strip with the rest (the
+     * chrome, a pill, a sheet). v1.8: a converted strip's More row is opened through its toggle
+     * first, so row 1 and the More row are walked together, and closed again at the end (an open
+     * row would swallow the section's next canvas touch). A converted strip has no horizontal
+     * scroller (I18: row 1 never scrolls), so it is all on screen at once, which is no failure.
+     */
     private fun walkStrip(s: ChromeScreen, a: Audit, what: String, allowed: Set<String> = emptySet(), fingers: Boolean = false): Map<Int, Clickables.Item> {
+        val opened = StripTestKit.openMoreRow()
         val seen = walk(s, horizontal = true, container = isStrip, find = { stripScroller(s) }) { all ->
             a.unique(what, all, allowed)
             if (fingers) a.fingers(s, what, all)
@@ -261,11 +274,16 @@ internal object UniqueLabelsV17 {
         a.unique("$what, the whole strip", seen.values.toList(), allowed)
         // Back at its start, where a finger finds the strip's first controls again.
         stripScroller(s)?.let { n -> toStart(n, horizontal = true) }
+        if (opened) StripTestKit.closeMoreRow()
         return seen
     }
 
-    /** The screen at each position of the shown sheet's body (the strip at its start), then the sheet and the strip whole. */
+    /**
+     * The screen at each position of the shown sheet's body (the strip at its start), then the
+     * sheet and the strip whole. v1.8: with a converted strip's More row open, as [walkStrip].
+     */
     private fun walkSheetAndStrip(s: ChromeScreen, a: Audit, what: String, allowed: Set<String> = emptySet()): Map<Int, Clickables.Item> {
+        val opened = StripTestKit.openMoreRow()
         stripScroller(s)?.let { n -> toStart(n, horizontal = true) }
         val sheet = walk(s, horizontal = false, container = isSheet, find = { sheetScroller(s) }) { all -> a.unique("$what, the sheet", all, allowed) }
         val strip = walk(s, horizontal = true, container = isStrip, find = { stripScroller(s) }) { all -> a.unique("$what, the strip", all, allowed) }
@@ -273,6 +291,7 @@ internal object UniqueLabelsV17 {
         a.unique("$what, the whole sheet and strip", whole.values.toList(), allowed)
         stripScroller(s)?.let { n -> toStart(n, horizontal = true) }
         sheetScroller(s)?.let { n -> toStart(n, horizontal = false) }
+        if (opened) StripTestKit.closeMoreRow()
         return whole
     }
 
@@ -292,6 +311,32 @@ internal object UniqueLabelsV17 {
         h.section("v1.7: Transform in Free deform") { freeDeform(h) }
         h.section("v1.7: the text editor with the Kerning row") { kerning(h) }
         h.section("v1.7: the layer window with an open folder and two saved selections") { folderAndSaved(h) }
+    }
+
+    /**
+     * v1.8 (F3, design §4.9; [UniqueLabelsV18] runs it): every tool's strip on a raster layer, row 1
+     * and its opened More row, walked as the v1.7 sections walk theirs ([walkStrip]): unique labels
+     * among the visible clickables at every position, and over the whole strip. A tool whose
+     * panel is not shown (a tool without options: the panel takes no room) is skipped. Areas add
+     * their tools' other states in their own `*StripTest`s.
+     */
+    fun everyStrip(h: ChromeHarness) {
+        h.section("v1.8: every tool's strip, row 1 and the More row") {
+            val s = h.editor()
+            val a = Audit("v1.8: every tool's strip")
+            var walked = 0
+            for (id in ToolId.entries) {
+                s.c.selectTool(id)
+                settle()
+                if (s.placed().none { isStrip(it.node) }) continue
+                walkStrip(s, a, "${id.label} strip")
+                walked++
+            }
+            s.c.selectTool(ToolId.BRUSH)
+            settle()
+            assertTrue("the v1.7 tools' strips were walked: $walked", walked >= 20)
+            a.done()
+        }
     }
 
     /** No point at a corner or edge middle of their box (a point there would win the touch). */

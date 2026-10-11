@@ -12,6 +12,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.ui.color.RobolectricUi
@@ -128,12 +129,15 @@ internal class Qa16Ui(val s: ChromeScreen) {
     fun reach(label: String, minDp: Float = 40f) {
         repeat(40) {
             if (wholly(label, minDp)) return
-            val n = cell(label) ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(60)}")
+            // v1.8: [cell] finds through SmokeUi.find, which opens a closed More row once.
+            val n = StripTestKit.reach { cell(label) } ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(60)}")
             val at = n.positionInWindow
             val step = 60f * s.density
             // Sideways: the nearest strip that scrolls sideways; up and down: the nearest sheet that does.
             val across = scroller(n, SemanticsProperties.HorizontalScrollAxisRange)
             val down = scroller(n, SemanticsProperties.VerticalScrollAxisRange)
+            // v1.8: a converted strip never scrolls (I18): with no scroller around it, the control is already in view.
+            if (across == null && down == null && StripTestKit.inConvertedStrip(n)) return
             val dx = across?.boundsInWindow?.let { v ->
                 when {
                     at.x + n.size.width > minOf(v.right, s.root.right) -> step

@@ -14,6 +14,8 @@ import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.BwSheetPillKey
 import com.brushwork.paint.ui.common.BwSheetTitleKey
+import com.brushwork.paint.ui.common.StripLabels18
+import com.brushwork.paint.ui.common.V18Tags
 import org.junit.Assert.assertTrue
 import kotlin.coroutines.ContinuationInterceptor
 import kotlin.coroutines.EmptyCoroutineContext
@@ -106,9 +108,34 @@ internal object SmokeUi {
         RobolectricUi.windowRoots().indexOf(e.window) >= baseline && e.node.layoutInfo.isPlaced
     }
 
-    fun find(label: String, exact: Boolean = false): RobolectricUi.Element? = elements().lastOrNull { matches(it.node, label, exact) }
+    /**
+     * The (last) element labelled [label] on screen. v1.8: when there is none and the options strip
+     * shows its More-row toggle closed, the More row is opened ([openMoreRow]) and the search is
+     * tried once more.
+     */
+    fun find(label: String, exact: Boolean = false): RobolectricUi.Element? =
+        findNow(label, exact) ?: if (openMoreRow()) findNow(label, exact) else null
 
-    fun has(label: String, exact: Boolean = false): Boolean = find(label, exact) != null
+    private fun findNow(label: String, exact: Boolean): RobolectricUi.Element? = elements().lastOrNull { matches(it.node, label, exact) }
+
+    /**
+     * Whether [label] is on screen now. Unlike [find] it never opens the More row: a check for
+     * absence must not leave the row open (it would swallow the next canvas touch, D25).
+     */
+    fun has(label: String, exact: Boolean = false): Boolean = findNow(label, exact) != null
+
+    /**
+     * v1.8 (design §4.9): opens the options strip's More row through its toggle (tag
+     * [V18Tags.STRIP_TOGGLE]) when the toggle shows and the row is closed. True when it opened it.
+     */
+    fun openMoreRow(): Boolean {
+        val toggle = elements().lastOrNull { it.node.config.getOrNull(SemanticsProperties.TestTag) == V18Tags.STRIP_TOGGLE } ?: return false
+        if (toggle.node.config.getOrNull(SemanticsProperties.StateDescription) == StripLabels18.EXPANDED) return false
+        val action = toggle.node.config.getOrNull(SemanticsActions.OnClick)?.action ?: return false
+        action.invoke()
+        settle()
+        return true
+    }
 
     /** Taps the (last) element labelled [label] at its center with real touch events. */
     fun tap(label: String, exact: Boolean = false) {
@@ -123,7 +150,9 @@ internal object SmokeUi {
      */
     fun click(label: String, exact: Boolean = false, settleAfter: Boolean = true) {
         Smoke.step("click \"$label\"")
-        val candidates = elements().filter { matches(it.node, label, exact) }
+        // v1.8: a label on the closed More row is reached by opening it, then trying once more.
+        val now = elements().filter { matches(it.node, label, exact) }
+        val candidates = if (now.isEmpty() && openMoreRow()) elements().filter { matches(it.node, label, exact) } else now
         for (e in candidates.asReversed()) {
             var n: SemanticsNode? = e.node
             while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent

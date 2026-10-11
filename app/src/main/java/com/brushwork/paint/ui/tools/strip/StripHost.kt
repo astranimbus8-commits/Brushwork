@@ -264,7 +264,7 @@ private fun ItemCell(item: StripItem) {
     }
 }
 
-/** "Show more tool options": 44 dp, the one control every strip with a More row shares. */
+/** The toggle ([StripLabels18.MORE_TOGGLE]): 44 dp, the one control every strip with a More row shares. */
 @Composable
 private fun MoreToggle(open: Boolean, onToggle: () -> Unit) {
     Box(

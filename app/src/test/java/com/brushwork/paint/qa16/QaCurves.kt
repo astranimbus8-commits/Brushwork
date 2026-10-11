@@ -14,6 +14,7 @@ import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
@@ -71,20 +72,31 @@ internal object QaCurves {
 
     // ------------------------------------------------------------------ strip controls
 
-    /** The (last placed) node described [description] (content description containing it), else the one whose text is [description] (a chip). */
-    fun node(description: String): SemanticsNode = RobolectricUi.elements().lastOrNull { e ->
+    /**
+     * The (last placed) node described [description] (content description containing it), else the
+     * one whose text is [description] (a chip). v1.8: when there is none and the strip has a closed
+     * More row, it is opened and the search tried once more ([StripTestKit.reach]).
+     */
+    fun node(description: String): SemanticsNode = StripTestKit.reach { nodeNow(description) }
+        ?: throw AssertionError("nothing described or labelled \"$description\"")
+
+    private fun nodeNow(description: String): SemanticsNode? = RobolectricUi.elements().lastOrNull { e ->
         e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { it.contains(description) } == true
     }?.node ?: RobolectricUi.elements().lastOrNull { e ->
         e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == description } == true
-    }?.node ?: throw AssertionError("nothing described or labelled \"$description\"")
+    }?.node
 
-    /** Scrolls the (horizontally scrolling) options strip until [description] shows whole. */
+    /**
+     * Scrolls the (horizontally scrolling) options strip until [description] shows whole. v1.8: a
+     * control with no scroller around it is on a converted strip, whose rows never scroll: it is
+     * already in view (I18).
+     */
     fun scrollStripTo(s: ChromeScreen, description: String) {
         fun whole() = node(description).let { it.boundsInWindow.width >= it.size.width - 1f && it.boundsInWindow.height >= it.size.height - 1f }
         if (whole()) return
         var p: SemanticsNode? = node(description)
         while (p != null && p.config.getOrNull(SemanticsActions.ScrollBy) == null) p = p.parent
-        val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$description\" is clipped and does not scroll" }
+        val scroll = p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action ?: return
         // Towards it: from the strip's left half rightwards, else back (by its unclipped position:
         // a control scrolled wholly out of the strip has empty visible bounds).
         val dir = if (node(description).positionInWindow.x > p!!.boundsInWindow.center.x) 1f else -1f

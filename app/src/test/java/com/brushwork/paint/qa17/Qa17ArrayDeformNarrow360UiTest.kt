@@ -5,6 +5,7 @@ import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.RED
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.ArrayLabels
@@ -47,6 +48,9 @@ class Qa17ArrayDeformNarrow360UiTest {
 
     /** A button, chip, segment or toggle [label]: scrolled wholly into view, at least 32 dp, inside the screen. */
     private fun reachable(u: Qa17ArrayUi, label: String) {
+        // v1.8 (design §4.9): when [label] is not on screen and the strip has a closed More row, open it once
+        // (Qa16Ui.reach also does, through SmokeUi.find, and takes a converted strip's controls as in view).
+        if (!SmokeUi.has(label, exact = true)) StripTestKit.openMoreRow()
         u.ui.reach(label, 32f)
         assertTrue("\"$label\" wholly on the 360 dp screen", u.ui.wholly(label, 32f))
     }

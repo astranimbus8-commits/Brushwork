@@ -6,7 +6,7 @@ package com.brushwork.paint.ui.tools.strip
  * F3 on (§4.5).
  */
 object StripLayout {
-    /** The More-row toggle at row 1's end ("Show more tool options"). */
+    /** The More-row toggle at row 1's end (`StripLabels18.MORE_TOGGLE`). */
     const val TOGGLE_DP = 44f
 
     /** Between neighbouring items, and between the More row's lines. */

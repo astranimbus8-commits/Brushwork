@@ -18,6 +18,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.text.TextCodec
@@ -88,7 +89,8 @@ class ArrayUiNarrowTest {
      */
     private fun reachField(s: ChromeScreen, label: String) {
         repeat(40) {
-            val n = SmokeUi.field(label).node
+            // v1.8 (design §4.9): a field on a closed More row is reached by opening it, once.
+            val n = StripTestKit.reach { runCatching { SmokeUi.field(label).node }.getOrNull() } ?: SmokeUi.field(label).node
             val r = s.root
             val top = n.positionInWindow.y
             val bottom = top + n.size.height
@@ -99,7 +101,8 @@ class ArrayUiNarrowTest {
             }
             var p: SemanticsNode? = n.parent
             while (p != null && !(p.config.getOrNull(SemanticsProperties.VerticalScrollAxisRange)?.let { it.maxValue() > 0f } == true && p.config.getOrNull(SemanticsActions.ScrollBy) != null)) p = p.parent
-            val sheet = p ?: throw AssertionError("\"$label\" is cut and nothing scrolls it: $b")
+            // v1.8: a converted strip never scrolls (I18): with no scroller around it, the field is already in view.
+            val sheet = p ?: if (StripTestKit.inConvertedStrip(n)) return else throw AssertionError("\"$label\" is cut and nothing scrolls it: $b")
             val v = sheet.boundsInWindow
             val dy = when {
                 bottom > minOf(v.bottom, r.bottom) -> 60f * s.density
