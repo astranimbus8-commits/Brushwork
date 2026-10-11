@@ -790,10 +790,12 @@ Applying the filter is the ordinary filter session: one undo step that stores pi
 | Path | Budget | Guarded against |
 |---|---|---|
 | Fast path | v1.8 dispatch ≤ 1.05x | its own `fast(...)` loop |
-| General path | ≤ 1.3x | the frozen v1.7 copies (Moving, Zooming, Glitch) |
+| General path | ≤ 1.3x (Glitch on CI: ≤ 1.6x) | the frozen v1.7 copies (Moving, Zooming, Glitch) |
 | Colored static | ≤ 1.05x | the frozen v1.7 copy |
 
 The fast path is guarded against its own loop because two separately compiled copies of the same loop measured 0.94 to 1.26x each other in one JVM. The ±5% against the v1.7 release is checked on the phone, together with Q9.
+
+On CI the two Glitch rows of the general path assert 1.6x (`FringePerfTest.GLITCH_CI_LIMIT`); Moving and Zooming keep 1.3x. v1.7's Glitch row is three `Math.floorMod` divisions and masks, so its ratio measures the runner's division against its multiplies. On an EPYC 9V74 runner a loop that only loads the three samples and stores was already 1.24x v1.7, and lookup tables, branchless maxima and a deferred translucent loop gave nothing measurable on CI. The class comment has the runner table. The 1.3x target holds on the desktop, and the phone checks it: Q9, plus Glitch with a custom color set.
 
 **Compatibility.** Nothing stores these values today (V11): Chromatic aberration and Glitch have no `pixelMapper`, so they are not adjustment-capable, and `FilterValuesCodec` is used only by adjustment layers. A v1.7 Chromatic aberration's "order" still opens as its colors.
 
