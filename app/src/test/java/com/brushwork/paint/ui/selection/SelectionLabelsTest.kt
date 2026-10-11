@@ -45,6 +45,9 @@ class SelectionLabelsTest {
         "MARQUEE" to listOf(MagneticLabels18.SELECTION_MODE),
         "OBJECT_SELECT" to listOf(MagneticLabels18.SELECTION_MODE, "Refer:"),
         "MAGNETIC_LASSO" to listOf(MagneticLabels18.SELECTION_MODE, MagneticLabels18.EDGE_REACH, MagneticLabels18.EDGE_CONTRAST, "Refer:"),
+        "COLOR_SELECT" to listOf(
+            MagneticLabels18.SELECTION_MODE, ColorSelectLabels18.COLOR_RANGE, ColorSelectLabels18.FUZZINESS, ColorSelectLabels18.FROM_PICKER, "Refer:",
+        ),
     )
 
     /** Everything a person reads or hears on the placed nodes. */

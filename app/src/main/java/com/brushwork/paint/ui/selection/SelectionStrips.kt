@@ -32,7 +32,6 @@ import com.brushwork.paint.tools.select.MarqueeShape
 import com.brushwork.paint.tools.select.MarqueeTool
 import com.brushwork.paint.tools.select.ObjectSelectTool
 import com.brushwork.paint.tools.select.SampleSource
-import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -274,9 +273,6 @@ internal fun objectSelectStrip(tool: ObjectSelectTool, c: EditorController): Str
         movedInto = modesMovedInto,
     )
 }
-
-@Composable
-internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): StripSpec = StripSpec.EMPTY
 
 /** The More row's app-wide "Snap to objects" (one name per tool, design §3.9). */
 internal fun snapItem(key: String, c: EditorController): StripItem =

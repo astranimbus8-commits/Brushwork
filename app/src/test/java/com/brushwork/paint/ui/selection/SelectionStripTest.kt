@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
+import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
 import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.tools.strip.StripInventory
@@ -108,6 +109,12 @@ class SelectionStripTest {
             "magnetic lasso", ToolId.MAGNETIC_LASSO, magneticRow1, magneticMore,
         ),
         State("magnetic lasso, 3 anchors", ToolId.MAGNETIC_LASSO, magneticRow1, magneticMore) { tapAll(it) },
+        State(
+            "color select", ToolId.COLOR_SELECT,
+            listOf(MODE_KEY, ColorSelectStrip.RANGE, ColorSelectStrip.FUZZINESS, ColorSelectStrip.PICKER, ColorSelectStrip.SELECT),
+            listOf(ColorSelectStrip.CURRENT, ColorSelectStrip.CLEAR, ColorSelectStrip.INVERT, ColorSelectStrip.REFER, ColorSelectStrip.ANTI_ALIAS) + shortcuts,
+            leaving = listOf("360", "360+chip", "392+chip").associateWith { listOf(ColorSelectStrip.FUZZINESS) },
+        ),
     )
 
     private fun available(screen: Float, chip: Boolean) =
@@ -199,6 +206,7 @@ class SelectionStripTest {
             if (full && s.more.any { it.endsWith(".refer") }) problems += dropdownKeepsRow(where, rig)
             (rig.c.currentTool as? LassoTool)?.let { if (it.hasPendingWork) it.discard() }
             (rig.c.currentTool as? MagneticLassoTool)?.let { if (it.hasPendingWork) it.discard() }
+            (rig.c.currentTool as? ColorSelectTool)?.let { if (it.hasPendingWork) it.discard() }
             rig.settle()
         }
         return problems

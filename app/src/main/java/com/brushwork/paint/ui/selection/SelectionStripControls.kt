@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -116,7 +117,8 @@ internal fun StripMenuItem(text: String, checked: Boolean, icon: ImageVector? = 
 
 /**
  * A two-line button: a small [label] over its [value] and a ▾, known by [description] (the v1.7
- * handle, "Tolerance 32", "Refer: Layer") and, when given, [state].
+ * handle, "Tolerance 32", "Refer: Layer") and, when given, [state]. [fixed]: exactly [width] wide,
+ * a long value cut with an ellipsis (its [state] says it whole).
  */
 @Composable
 internal fun StripValueButton(
@@ -126,10 +128,11 @@ internal fun StripValueButton(
     width: Dp,
     onClick: () -> Unit,
     state: String? = null,
+    fixed: Boolean = false,
 ) {
     Row(
         Modifier
-            .widthIn(min = width)
+            .then(if (fixed) Modifier.width(width) else Modifier.widthIn(min = width))
             .stripButton()
             .clickable(role = Role.Button, onClick = onClick)
             .clearAndSetSemantics {
@@ -144,7 +147,11 @@ internal fun StripValueButton(
         Column {
             Text(label, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim, maxLines = 1, softWrap = false)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(value, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
+                Text(
+                    value, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = BrushworkColors.OnChrome,
+                    maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                    modifier = if (fixed) Modifier.weight(1f, fill = false) else Modifier,
+                )
                 Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(12.dp))
             }
         }
