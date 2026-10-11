@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.vector
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
@@ -33,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import com.brushwork.paint.vector.draw.VectorEraserModes
 
@@ -89,6 +91,49 @@ private fun ModeChip(label: String, selected: Boolean, icon: ImageVector?, onCli
             Spacer(Modifier.width(6.dp))
         }
         Text(label, style = MaterialTheme.typography.labelLarge, color = content, maxLines = 1)
+    }
+}
+
+/**
+ * v1.8 (design §3.9; area D): the vector eraser's modes on the converted strip, one row-1 item of
+ * three 40 dp icon buttons (120 dp) described by the mode labels ("Object", "Partial", "To
+ * intersection", unchanged), the chosen one accent and selected.
+ */
+internal object VectorEraserStrip {
+    const val KEY = "eraser.modes"
+    const val WIDTH_DP = 120f
+
+    /** The eraser removes [controller]'s vector objects: a vector layer, its content (not its mask). */
+    fun erasesObjects(controller: EditorController): Boolean {
+        controller.layersVersion
+        val layer = controller.activeLayer
+        return layer.isVectorLayer && controller.editTargetOf(layer) == EditTarget.CONTENT
+    }
+
+    fun modesItem(controller: EditorController): StripItem =
+        StripItem(KEY, VectorEraserModes.mode(controller).label, WIDTH_DP.dp) { ModeButtons(controller) }
+
+    @Composable
+    private fun ModeButtons(controller: EditorController) {
+        val mode = VectorEraserModes.mode(controller)
+        Row(Modifier.width(WIDTH_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+            VectorEraseMode.entries.forEach { m -> ModeButton(m, m == mode) { VectorEraserModes.setMode(controller, m) } }
+        }
+    }
+
+    @Composable
+    private fun ModeButton(m: VectorEraseMode, selected: Boolean, onClick: () -> Unit) {
+        val shape = RoundedCornerShape(8.dp)
+        Box(
+            Modifier
+                .size(40.dp)
+                .clip(shape)
+                .background(if (selected) BrushworkColors.AccentDim else Color.Transparent)
+                .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(iconOf(m), contentDescription = m.label, modifier = Modifier.size(22.dp), tint = if (selected) Color.White else BrushworkColors.OnChrome)
+        }
     }
 }
 
