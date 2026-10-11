@@ -493,6 +493,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val copyCoverage = arrayOfNulls<Shader>(copyDest.size)
         private val copyMasked = arrayOfNulls<Shader>(copyDest.size)
         private val copyMaskedFor = arrayOfNulls<Shader>(copyDest.size)
+        /** Each copy shows the coverage only over the document's image under its map (no clamped edge streaks). */
+        private val copyClips: CopyDocumentClips? = if (sourceCopies != null) CopyDocumentClips(docW, docH, copyDest.size) else null
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
         private val copyTiles: BooleanArray? =
             if (mapping != null || sourceCopies != null) BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) else null
@@ -547,7 +549,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 if (!copyArea.intersect(copyClip)) continue
                 forEachCopyRun(k, copyArea) { run ->
                     cc.prepareCopy(k, run)
-                    res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, selection?.mask)
+                    drawCopyRun(canvas, k, cc, run, selection?.mask)
                 }
             }
         }
@@ -559,9 +561,28 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 copyArea.set(copyDest[k])
                 if (!copyArea.intersect(tile)) continue
                 forEachCopyRun(k, copyArea) { run ->
-                    res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, sel?.mask)
+                    drawCopyRun(canvas, k, cc, run, sel?.mask)
                 }
             }
+        }
+
+        /**
+         * Copy [k] over [run] (document px): clipped to the document's image under its map where
+         * [run] reaches past it (beyond the document the coverage's clamped edge would show).
+         */
+        private fun drawCopyRun(canvas: Canvas, k: Int, cc: CoverageCopies, run: Rect, selectionMask: Bitmap?) {
+            val clips = copyClips ?: return
+            val map = cc.copyMap(k)
+            if (clips.covers(k, map, run)) {
+                res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, selectionMask)
+                return
+            }
+            val clip = clips.clip(k, map)
+            if (clip.isEmpty) return
+            val save = canvas.save()
+            canvas.clipPath(clip)
+            res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, selectionMask)
+            canvas.restoreToCount(save)
         }
 
         /**
