@@ -33,7 +33,12 @@ import org.robolectric.shadows.ShadowLog
  * - a three-finger tap closes it AND redoes, exactly once;
  * - one finger (a tap or a drag) only closes it: no dot, no stroke, no step, the selection kept;
  * - a pinch or a two-finger pan only closes it: no zoom, no pan, no paint, no step;
- * - with the two-finger undo setting off, a two-finger tap only closes it.
+ * - with the two-finger undo setting off, a two-finger tap only closes it; with the three-finger
+ *   redo off, a three-finger tap only closes it;
+ * - a canvas finger first, then a finger on a control (HistoryTapHub's tap, the canvas yields its
+ *   own): a two-finger tap closes the row and undoes exactly once, two canvas fingers and a UI
+ *   finger close it and redo exactly once (two steps to undo and redo, so a double shows), and the
+ *   control under the UI finger does not fire.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.morerowhistorytapssandbox"])
@@ -91,14 +96,22 @@ class MoreRowHistoryTapsTest {
         return Fingers18.canvasState(s)
     }
 
+    /** Window px of the middle of the fake strip's row-1 item: a control, so a finger there is on the UI. */
+    private fun uiFinger(s: ChromeScreen): Pair<Float, Float> {
+        val r = Finger.control(s, FakeStrips.ROW1) ?: throw AssertionError("no \"${FakeStrips.ROW1}\" on row 1")
+        return Finger.px(s, r.center.x, r.center.y)
+    }
+
     /**
-     * The touches every row is put through, with the canvas at [two] (two steps to undo, the
-     * second one's state [one] below it): each closes the row; only the history taps act.
+     * The touches every row is put through, with the canvas at [two] (two steps to undo: [one]
+     * below it, [zero] below that, the row's toggle on screen at each): each closes the row; only
+     * the history taps act.
      */
-    private fun touches(s: ChromeScreen, row: Row, one: Fingers18.CanvasState, two: Fingers18.CanvasState) {
+    private fun touches(s: ChromeScreen, row: Row, zero: Fingers18.CanvasState, one: Fingers18.CanvasState, two: Fingers18.CanvasState) {
         val c = s.c
         val view = Matrix(c.viewTransform.matrix)
         assertEquals("${row.toggle}: two steps apart", one.undo + 1, two.undo)
+        assertEquals("${row.toggle}: three states", zero.undo + 1, one.undo)
         assertFalse(two.redo)
 
         // One finger: a tap, then a drag. Only closes.
@@ -129,6 +142,17 @@ class MoreRowHistoryTapsTest {
         assertClosed(s, row, "a two-finger tap")
         assertEquals("a two-finger tap: exactly one undo", one.copy(redo = true), state(s))
 
+        // The three-finger redo off: a three-finger tap only closes.
+        c.settings.threeFingerRedo = false
+        try {
+            open(s, row)
+            Fingers18.threeFingerTap(s, 200f, 150f)
+            assertClosed(s, row, "a three-finger tap with the redo off")
+            assertEquals("the three-finger redo off: no redo", one.copy(redo = true), state(s))
+        } finally {
+            c.settings.threeFingerRedo = true
+        }
+
         // A three-finger tap: closes and redoes once.
         open(s, row)
         Fingers18.threeFingerTap(s, 200f, 150f)
@@ -145,6 +169,39 @@ class MoreRowHistoryTapsTest {
         } finally {
             c.settings.twoFingerUndo = true
         }
+
+        // A canvas finger, then one on a control: HistoryTapHub's two-finger tap. The canvas
+        // finger closes the row; the hub undoes once (a canvas tap as well would undo twice, to
+        // [zero]); the control under the UI finger does not fire.
+        open(s, row)
+        FakeStrips.taps.clear()
+        s.touch.twoFingerTap(s.screen(200f, 150f), uiFinger(s))
+        assertClosed(s, row, "a canvas finger and a UI finger")
+        assertEquals("a canvas finger and a UI finger: exactly one undo", one.copy(redo = true), state(s))
+        assertNull("the control under the UI finger did not fire", FakeStrips.taps[FakeStrips.ROW1])
+
+        // Down to [zero], so two redos are there to take.
+        open(s, row)
+        Fingers18.twoFingerTap(s, 200f, 150f)
+        assertClosed(s, row, "a two-finger tap at one")
+        assertEquals("a two-finger tap at one: one undo", zero.copy(redo = true), state(s))
+
+        // Two canvas fingers, then one on a control: HistoryTapHub's three-finger tap. It redoes
+        // once (a canvas tap as well would undo that redo, or redo a second time to [two]); the
+        // control does not fire.
+        open(s, row)
+        val (cx, cy) = s.screen(200f, 150f)
+        val d = 40f * s.density
+        s.touch.threeFingerTap((cx - d) to cy, (cx + d) to cy, uiFinger(s))
+        assertClosed(s, row, "two canvas fingers and a UI finger")
+        assertEquals("two canvas fingers and a UI finger: exactly one redo", one.copy(redo = true), state(s))
+        assertNull("the control under the UI finger did not fire", FakeStrips.taps[FakeStrips.ROW1])
+
+        // Back to [two] with the canvas' own three-finger tap.
+        open(s, row)
+        Fingers18.threeFingerTap(s, 200f, 150f)
+        assertClosed(s, row, "a three-finger tap at one")
+        assertEquals("a three-finger tap at one: one redo", two, state(s))
         assertEquals("the view never moved", view, c.viewTransform.matrix)
     }
 
@@ -160,7 +217,7 @@ class MoreRowHistoryTapsTest {
         Fingers18.stroke(s, 60f, 200f, 340f, 220f)
         val two = state(s)
         assertNotEquals("the second stroke paints", one.pixels, two.pixels)
-        touches(s, strip, one, two)
+        touches(s, strip, blank, one, two)
         Smoke.assertQuiet(c, "the strip's More row")
     }
 
@@ -176,22 +233,29 @@ class MoreRowHistoryTapsTest {
         }.use { e ->
             val s = e.screen
             val c = s.c
-            val one = state(s)
-            assertEquals("one object selected", setOf(1L), one.objects)
+            val zero = state(s)
+            assertEquals("one object selected", setOf(1L), zero.objects)
             assertFalse(expanded(s, objects))
-            // A step that keeps the selection: recolor it with another main color.
+            // Two steps that keep the selection: recolor it with one main color, then another.
             c.color = RECOLOR
             Smoke.pump(100); SmokeUi.settle()
             Finger.tap(s, "Recolor with the main color")
+            val one = state(s)
+            assertNotEquals("the recolor shows", zero.pixels, one.pixels)
+            assertEquals("the selection stays", zero.objects, one.objects)
+            c.color = RECOLOR_AGAIN
+            Smoke.pump(100); SmokeUi.settle()
+            Finger.tap(s, "Recolor with the main color")
             val two = state(s)
-            assertNotEquals("the recolor shows", one.pixels, two.pixels)
+            assertNotEquals("the second recolor shows", one.pixels, two.pixels)
             assertEquals("the selection stays", one.objects, two.objects)
-            touches(s, objects, one, two)
+            touches(s, objects, zero, one, two)
             Smoke.assertQuiet(c, "the object bar's More row")
         }
     }
 
     private companion object {
         const val RECOLOR = 0xFF0000FF.toInt()
+        const val RECOLOR_AGAIN = 0xFF00AA00.toInt()
     }
 }

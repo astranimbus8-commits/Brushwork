@@ -59,7 +59,10 @@ object StripTestKit {
      */
     fun <T : Any> reach(find: () -> T?): T? = find() ?: if (openMoreRow()) find() else null
 
-    /** [node] sits on a converted strip: its row 1 or its More row (neither scrolls, except a crowded last More line). */
+    /**
+     * [node] sits on a converted strip: its row 1 or its More row (neither scrolls at 360 dp and
+     * wider, except a crowded last More line; below 360 dp row 1 scrolls sideways).
+     */
     fun inConvertedStrip(node: SemanticsNode): Boolean {
         var p: SemanticsNode? = node
         while (p != null) {
@@ -70,7 +73,10 @@ object StripTestKit {
         return false
     }
 
-    /** The nearest ancestor of [node] (itself included) that takes ScrollBy, or null (row 1 never scrolls). */
+    /**
+     * The nearest ancestor of [node] (itself included) that takes ScrollBy, or null (row 1 never
+     * scrolls at 360 dp and wider; below 360 dp this is row 1's scroller).
+     */
     fun horizontalScroller(node: SemanticsNode): SemanticsNode? {
         var p: SemanticsNode? = node
         while (p != null && p.config.getOrNull(SemanticsActions.ScrollBy) == null) p = p.parent

@@ -63,6 +63,15 @@ internal object FakeStrips {
             (1..more).map { k -> StripItem("fake.more$k", more(k), moreWidth, StripRow.MORE, content = cell(more(k), moreWidth)) } +
             (if (closer) listOf(StripItem("fake.closer", CLOSER, 120.dp, StripRow.MORE, content = cell(CLOSER, 120.dp, closes = true))) else emptyList()),
     )
+
+    /**
+     * Row-1 items [row1] (label to width; none ever leaves row 1, so they can be wider than its
+     * budget) and More items [more], each a tappable box described by its label that [taps] counts.
+     */
+    fun items(row1: List<Pair<String, Dp>>, more: List<Pair<String, Dp>>): StripSpec = StripSpec(
+        row1.map { (label, w) -> StripItem("fake.$label", label, w, content = cell(label, w)) } +
+            more.map { (label, w) -> StripItem("fake.$label", label, w, StripRow.MORE, content = cell(label, w)) },
+    )
 }
 
 /**
