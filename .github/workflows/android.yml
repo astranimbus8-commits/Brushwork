@@ -49,6 +49,14 @@ jobs:
       - name: Timing tests
         run: ./gradlew --no-daemon testDebugUnitTest -PtimingOnly
 
+      # On a red run, the JUnit XMLs (messages, and what the timing tests printed).
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: test-results
+          path: app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
+
       - name: Build release APK
         env:
           BW_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}

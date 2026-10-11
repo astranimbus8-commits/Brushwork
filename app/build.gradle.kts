@@ -94,6 +94,9 @@ android {
                 // Task inputs, so the build cache never hands back a run made with other settings.
                 it.systemProperty("bw.testForks", it.maxParallelForks.toString())
                 it.systemProperty("bw.testSet", if (timingOnly) "timing" else if (ci) "main" else "all")
+                // A failure prints its whole message (a timing guard's every measurement), so a CI
+                // log says why without the reports.
+                it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
                 // v1.7: the platform android.graphics.PathIterator (Pathfinder's reader on API 34,
                 // the SDK Robolectric runs) allocates through ShadowVMRuntime.newNonMovableArray,
                 // which reads a DirectByteBuffer's address by reflection.
