@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.Polyline
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +36,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -43,13 +45,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.ToolId
@@ -183,7 +189,14 @@ private fun ConvertedStrip(
         val inner = widthDp - 2 * ROW_PADDING
         val chip = if (vectorMode) StripLayout.VECTOR_CHIP_DP + StripLayout.GAP_DP else 0f
         val split = StripLayout.split(spec, inner - chip)
-        val lines = StripLayout.moreLines(split, spec.hint, inner)
+        // The hint's lines as the More row lays it out (its text style, the row's content width).
+        val hintPx = if (constraints.hasBoundedWidth) {
+            constraints.maxWidth - 2 * with(LocalDensity.current) { ROW_PADDING.dp.roundToPx() }
+        } else {
+            with(LocalDensity.current) { inner.dp.roundToPx() }
+        }
+        val measuredHint = rememberHintLines(spec.hint, hintPx)
+        val lines = StripLayout.moreLines(split, spec.hint, inner, measuredHint)
         val canOpen = split.toggle && lines.isNotEmpty()
         val open = state.isOpen(toolId) && canOpen
         val moreDp = if (open) StripLayout.moreRowDp(lines.size) else 0f
@@ -236,15 +249,20 @@ private fun ConvertedStrip(
             }
             if (open) {
                 Spacer(Modifier.height(StripLayout.GAP_DP.dp))
-                MoreRow(lines, spec.hint, inner)
+                MoreRow(lines, spec.hint, StripLayout.hintLineCount(split, measuredHint), inner)
             }
         }
     }
 }
 
-/** The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first; opaque, with a 1 dp edge. */
+/**
+ * The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first;
+ * opaque, with a 1 dp edge. The hint alone on its [hintLines] lines (see
+ * [StripLayout.hintLineCount]) is one block that tall, its text in up to that many lines, then an
+ * ellipsis.
+ */
 @Composable
-private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float) {
+private fun MoreRow(lines: List<List<StripItem>>, hint: String?, hintLines: Int, innerDp: Float) {
     val shape = RoundedCornerShape(IbisDims.OptionsStripRadius)
     Column(
         Modifier
@@ -258,10 +276,19 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float)
             .padding(horizontal = ROW_PADDING.dp),
     ) {
         lines.forEachIndexed { i, line ->
+            // The hint's further lines are part of its block, drawn with its first.
+            if (hint != null && i in 1 until hintLines) return@forEachIndexed
             if (i > 0) Spacer(Modifier.height(StripLayout.GAP_DP.dp))
+            if (i == 0 && hint != null && line.isEmpty()) {
+                Box(Modifier.fillMaxWidth().height(StripLayout.moreRowDp(hintLines).dp), contentAlignment = Alignment.CenterStart) {
+                    HintText(hint, hintLines, TextOverflow.Ellipsis)
+                }
+                return@forEachIndexed
+            }
+            // The hint shares its line only when MAX_MORE_LINES leaves no other.
             val hintHere = i == 0 && hint != null
             // Only the last line can be too wide (MAX_MORE_LINES reached): it scrolls sideways.
-            val scrolls = hintHere && line.isNotEmpty() || StripLayout.rowWidth(line) > innerDp + 0.5f
+            val scrolls = hintHere || StripLayout.rowWidth(line) > innerDp + 0.5f
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -271,13 +298,7 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float)
             ) {
                 var first = true
                 if (hintHere) {
-                    Text(
-                        hint.orEmpty(),
-                        color = Color.White.copy(alpha = 0.8f),
-                        fontSize = 13.sp,
-                        maxLines = 1,
-                        overflow = if (line.isEmpty()) TextOverflow.Ellipsis else TextOverflow.Clip,
-                    )
+                    HintText(hint.orEmpty(), 1, TextOverflow.Clip)
                     first = false
                 }
                 for (item in line) {
@@ -286,6 +307,36 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float)
                     key(item.key) { ItemCell(item) }
                 }
             }
+        }
+    }
+}
+
+/** The hint's text, [HINT_SP] in the theme's style. */
+@Composable
+private fun HintText(hint: String, maxLines: Int, overflow: TextOverflow) {
+    Text(hint, color = Color.White.copy(alpha = 0.8f), fontSize = HINT_SP, maxLines = maxLines, overflow = overflow)
+}
+
+/**
+ * The lines [hint] takes on the More row: laid out as [HintText] lays it out ([HINT_SP] in the
+ * theme's text style) in [widthPx], at most [StripLayout.MAX_HINT_LINES]; 1 without a hint. The
+ * host passes it to [StripLayout.moreLines]; tests measure a hint at another width the same way.
+ */
+@Composable
+internal fun rememberHintLines(hint: String?, widthPx: Int): Int {
+    val measurer = rememberTextMeasurer()
+    val style = LocalTextStyle.current.merge(TextStyle(fontSize = HINT_SP))
+    return remember(hint, widthPx, style, measurer) {
+        if (hint == null || widthPx <= 0) {
+            1
+        } else {
+            measurer.measure(
+                hint,
+                style = style,
+                overflow = TextOverflow.Ellipsis,
+                maxLines = StripLayout.MAX_HINT_LINES,
+                constraints = Constraints(maxWidth = widthPx),
+            ).lineCount
         }
     }
 }
@@ -379,6 +430,9 @@ private fun Modifier.reportContentWidth(onContentWidth: ((Int) -> Unit)?): Modif
  * larger Display size) row 1's cells scroll sideways.
  */
 private const val FIXED_ROW1_MIN_DP = 360f
+
+/** The hint's text size on the More row. */
+private val HINT_SP = 13.sp
 
 /** The rows' side padding (dp): row 1's content width is the panel's minus twice this. */
 private const val ROW_PADDING = 8f

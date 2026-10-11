@@ -79,6 +79,13 @@ internal class StripRig(private val panel: Boolean = true) {
     var spec: StripSpec = StripSpec.EMPTY
         private set
 
+    /**
+     * The lines [spec]'s hint takes on the More row at 360 and 392 dp (by screen width), measured
+     * as the host measures it ([rememberHintLines] at [StripInventory.content]); 1 without a hint.
+     */
+    var hintLines: Map<Int, Int> = emptyMap()
+        private set
+
     /** A fake spec shown instead of the tool's ([panel] false only). */
     var override: StripSpec? by mutableStateOf(null)
 
@@ -109,13 +116,21 @@ internal class StripRig(private val panel: Boolean = true) {
                     OptionsStripPanel(c, state = state)
                     CompositionLocalProvider(LocalStripContext provides probe) {
                         val s = ToolStrips.of(c)
-                        SideEffect { spec = s }
+                        val h = hintLinesAtEachWidth(s)
+                        SideEffect {
+                            spec = s
+                            hintLines = h
+                        }
                         Measure(s)
                     }
                 } else {
                     CompositionLocalProvider(LocalStripContext provides probe) {
                         val s = override ?: ToolStrips.of(c)
-                        SideEffect { spec = s }
+                        val h = hintLinesAtEachWidth(s)
+                        SideEffect {
+                            spec = s
+                            hintLines = h
+                        }
                         // The panel's 6 dp side margins, as in the editor (row 1's content: the screen less 28 dp).
                         Box(Modifier.padding(horizontal = 6.dp)) {
                             StripHost(
@@ -132,6 +147,12 @@ internal class StripRig(private val panel: Boolean = true) {
                 }
             }
         }
+    }
+
+    @Composable
+    private fun hintLinesAtEachWidth(s: StripSpec): Map<Int, Int> {
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        return WIDTHS.associateWith { w -> rememberHintLines(s.hint, with(density) { StripInventory.content(w.toFloat()).dp.roundToPx() }) }
     }
 
     /** The measuring copies: each item's content at its own width (44 dp tall at most), out of sight. */
@@ -168,5 +189,8 @@ internal class StripRig(private val panel: Boolean = true) {
     companion object {
         /** + an item's key: the box of its measuring copy. */
         const val MEASURE_PREFIX = "test.strip.measure."
+
+        /** The screen widths (dp) of [hintLines]. */
+        val WIDTHS = listOf(360, 392)
     }
 }

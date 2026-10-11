@@ -34,7 +34,7 @@ class StripItem(
 /** What a tool's strip shows: its items, an optional hint, and the sheets and dialogs it opens. */
 class StripSpec(
     val items: List<StripItem>,
-    /** Optional one-line hint, the More row's first line. */
+    /** Optional hint, the More row's first line (or two: [StripLayout.MAX_HINT_LINES]). */
     val hint: String? = null,
     /**
      * Every sheet and dialog the strip opens (§3.9 "Overlays"). The host composes it whenever the

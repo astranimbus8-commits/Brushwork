@@ -178,6 +178,43 @@ class StripLayoutTest {
     }
 
     @Test
+    fun aTwoLineHintTakesTwoOfTheLinesAndTheItemsKeepOne() {
+        assertEquals(2, StripLayout.MAX_HINT_LINES)
+        fun lines(spec: StripSpec, hintLines: Int) =
+            StripLayout.moreLines(StripLayout.split(spec, 332f), spec.hint, 332f, hintLines).map { keys(it) }
+        val seven = (1..7).map { more("m$it", 100f) }
+        // A two-line hint alone: two empty lines (one block), none with items.
+        assertEquals(listOf(emptyList<String>(), emptyList()), lines(StripSpec(listOf(item("a", 40f)), hint = "h"), 2))
+        // With one line of items: the hint's two lines, then the items' (three in all).
+        assertEquals(
+            listOf(emptyList(), emptyList(), listOf("m1", "m2")),
+            lines(StripSpec(seven.take(2), hint = "h"), 2),
+        )
+        // Items that need more lines: the third line takes them all (it scrolls); never a fourth.
+        val crowded = lines(StripSpec(seven, hint = "h"), 2)
+        assertEquals(StripLayout.MAX_MORE_LINES, crowded.size)
+        assertEquals(listOf(emptyList(), emptyList(), seven.map { it.key }), crowded)
+        // A one-line hint (the default) leaves the items two lines, as before.
+        assertEquals(
+            listOf(emptyList(), listOf("m1", "m2", "m3"), listOf("m4", "m5", "m6", "m7")),
+            lines(StripSpec(seven, hint = "h"), 1),
+        )
+        // The measured count is kept within 1 .. MAX_HINT_LINES, and leaves the items a line.
+        for (measured in listOf(0, 1, 2, 3, 9)) {
+            val withItems = lines(StripSpec(seven, hint = "h"), measured)
+            assertTrue("$measured: at most ${StripLayout.MAX_MORE_LINES} lines", withItems.size <= StripLayout.MAX_MORE_LINES)
+            val hinted = StripLayout.hintLineCount(StripLayout.split(StripSpec(seven, hint = "h"), 332f), measured)
+            assertEquals("$measured: the hint's lines", measured.coerceIn(1, StripLayout.MAX_HINT_LINES), hinted)
+            assertTrue("$measured: the hint's lines hold no items", withItems.take(hinted).all { it.isEmpty() })
+            assertEquals("$measured: every item placed", seven.map { it.key }, withItems.flatten())
+            val alone = lines(StripSpec(listOf(item("a", 40f)), hint = "h"), measured)
+            assertEquals("$measured: a hint alone", measured.coerceIn(1, StripLayout.MAX_HINT_LINES), alone.size)
+        }
+        // The pill and bars move by the hint's lines too: a two-line hint and one line of items.
+        assertEquals(140f, StripLayout.moreRowDp(lines(StripSpec(seven.take(2), hint = "h"), 2).size), 0f)
+    }
+
+    @Test
     fun moreRowHeightAndThePillOffset() {
         assertEquals(0f, StripLayout.moreRowDp(0), 0f)
         assertEquals(44f, StripLayout.moreRowDp(1), 0f)

@@ -54,9 +54,10 @@ internal object StripInventory {
      * The rules a converted [spec] breaks, pure (I18): 1 the non-AUTO sum, and every configuration
      * (360 or 392 dp, VECTOR cell or not) fits; 2 no AUTO item leaves row 1 at 392 dp without the
      * cell; 4 declared widths rounded to 4 dp; 5 the More row within [StripLayout.MAX_MORE_LINES]
-     * lines; plus unique keys and `movedInto` naming items.
+     * lines, the hint's lines counted ([hintLines]: the lines it takes at a screen width, as
+     * [StripRig.hintLines] measures them); plus unique keys and `movedInto` naming items.
      */
-    fun rules(spec: StripSpec): List<String> {
+    fun rules(spec: StripSpec, hintLines: (screenDp: Int) -> Int = { 1 }): List<String> {
         val p = mutableListOf<String>()
         val row1 = spec.items.filter { it.row == StripRow.ROW1 }
         val hasMore = spec.items.any { it.row == StripRow.MORE } || spec.hint != null || row1.any { it.overflowRank > 0 }
@@ -69,9 +70,12 @@ internal object StripInventory {
             val used = StripLayout.rowWidth(s.row1) + if (s.toggle) TOGGLE else 0f
             val where = "${screen.toInt()} dp${if (chip) " with the VECTOR cell" else ""}"
             if (used > available + EPS) p += "rule 1: at $where row 1 takes $used dp, over $available"
-            val lines = StripLayout.moreLines(s, spec.hint, content(screen))
+            val measured = hintLines(screen.toInt())
+            val lines = StripLayout.moreLines(s, spec.hint, content(screen), measured)
+            val hinted = if (spec.hint == null) 0 else StripLayout.hintLineCount(s, measured)
+            if (lines.size > StripLayout.MAX_MORE_LINES) p += "rule 5: at $where the More row has ${lines.size} lines"
             lines.forEachIndexed { i, line ->
-                if (i == 0 && spec.hint != null && line.isNotEmpty()) p += "rule 5: at $where the hint's line holds items (over ${StripLayout.MAX_MORE_LINES} lines)"
+                if (i < hinted && line.isNotEmpty()) p += "rule 5: at $where the hint's line holds items (over ${StripLayout.MAX_MORE_LINES} lines)"
                 val w = StripLayout.rowWidth(line)
                 if (w > content(screen) + EPS) p += "rule 5: at $where More line ${i + 1} takes $w dp, over ${content(screen)} (over ${StripLayout.MAX_MORE_LINES} lines)"
             }
@@ -151,7 +155,7 @@ internal object StripInventory {
     fun inspect(rig: StripRig, key: String, record: Set<String>?): Pair<Set<String>, List<String>> {
         val spec = rig.spec
         val p = mutableListOf<String>()
-        rules(spec).forEach { p += "$key: $it" }
+        rules(spec) { rig.hintLines[it] ?: 1 }.forEach { p += "$key: $it" }
         // Rule 4: each item's own width.
         rig.measuring = true
         rig.settle()
@@ -225,6 +229,11 @@ class StripInventoryRulesTest {
         broken(StripSpec(listOf(item("a", 42f))), "rule 4")
         // 5: more than three lines of More items.
         broken(StripSpec(listOf(item("a", 40f)) + (1..13).map { item("m$it", 100f, StripRow.MORE) }), "rule 5")
+        // 5: a hint measured at two lines leaves the items one line, which 5 × 100 dp overflow
+        // (with a one-line hint they fit on two).
+        val hinted = StripSpec(listOf(item("a", 40f)) + (1..5).map { item("m$it", 100f, StripRow.MORE) }, hint = "Probe hint")
+        assertEquals(emptyList<String>(), StripInventory.rules(hinted))
+        assertTrue(StripInventory.rules(hinted) { 2 }.any { it.startsWith("rule 5") })
         // movedInto names an item.
         broken(StripSpec(listOf(item("a", 40f)), movedInto = mapOf("x" to "nope")), "movedInto")
     }

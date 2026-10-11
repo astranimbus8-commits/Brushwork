@@ -19,6 +19,7 @@ import com.brushwork.paint.ui.placement.PlacementStripKit.popupKeepsRow
 import com.brushwork.paint.ui.placement.PlacementStripKit.row1Handles
 import com.brushwork.paint.ui.placement.PlacementStripKit.row1Texts
 import com.brushwork.paint.ui.placement.SNAP_LABEL
+import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.ui.tools.strip.StripRig
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,11 +114,12 @@ class TextFrameStripTest {
         assertTrue(StripTestKit.openMoreRow())
         assertEquals("$sel: the hint heads the More row", listOf(F.FRAME_HINT), moreTexts())
         assertEquals("$sel at $dp dp: the More row", more, moreHandles())
-        // v1.7's hint (70 characters, the host's one line at 13 sp) is a few dp wider than the
-        // More row's line in the test font (332 dp at 360 dp, 364 dp at 392 dp). The host ends a
-        // hint alone on its line with "…" (a host rule, not an item's width).
-        val clipped = clippedTexts().filterNot { it.startsWith(F.FRAME_HINT) }
-        assertEquals("$sel at $dp dp: texts fit", emptyList<String>(), clipped)
+        // v1.7's hint (70 characters at 13 sp) is a few dp wider than one More-row line in the
+        // test font (332 dp at 360 dp, 364 dp at 392 dp): it takes two lines and shows whole, the
+        // items keep the third (v18I).
+        assertEquals("$sel at $dp dp: the hint takes two lines", 2, rig.hintLines[dp])
+        assertEquals("$sel at $dp dp: the hint's two lines and the items' one", StripLayout.moreRowDp(3), rig.state.moreRowDp, 0.5f)
+        assertEquals("$sel at $dp dp: texts fit, the hint whole", emptyList<String>(), clippedTexts())
         StripTestKit.closeMoreRow()
         popupKeepsRow(rig, F.wrapLabel(false), "$sel: the wrap dropdown") { SmokeUi.has("No wrap", exact = true) }
 

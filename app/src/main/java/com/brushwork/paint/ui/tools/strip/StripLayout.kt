@@ -60,15 +60,19 @@ object StripLayout {
         return Split(kept, moved + more, toggle)
     }
 
+    /** v1.8 integration: the most lines the hint takes; a longer hint ends in an ellipsis. */
+    const val MAX_HINT_LINES = 2
+
     /**
-     * The More row's lines: items wrapped in order at [availableDp]; the hint takes line 1 (index
-     * 0 is its line, with no items unless [MAX_MORE_LINES] leaves no other). At most
-     * [MAX_MORE_LINES] lines: the items that do not fit go on the last line, which then scrolls
-     * sideways. No hint and no items: no lines.
+     * The More row's lines: the hint's first, then the items wrapped in order at [availableDp].
+     * The hint takes [hintLines] lines (as the host measures it at [availableDp]), empty ones,
+     * counted like any other line: see [hintLineCount]. Items share the hint's line only when
+     * [MAX_MORE_LINES] leaves no other. At most [MAX_MORE_LINES] lines in all: the items that do
+     * not fit go on the last line, which then scrolls sideways. No hint and no items: no lines.
      */
-    fun moreLines(split: Split, hint: String?, availableDp: Float): List<List<StripItem>> {
+    fun moreLines(split: Split, hint: String?, availableDp: Float, hintLines: Int = 1): List<List<StripItem>> {
         val lines = ArrayList<MutableList<StripItem>>()
-        if (hint != null) lines += mutableListOf<StripItem>()
+        if (hint != null) repeat(hintLineCount(split, hintLines)) { lines += mutableListOf<StripItem>() }
         var line: MutableList<StripItem>? = null
         var width = 0f
         for (item in split.more) {
@@ -93,6 +97,16 @@ object StripLayout {
             }
         }
         return lines
+    }
+
+    /**
+     * The lines the hint takes in [moreLines]: [hintLines] kept within 1 .. [MAX_HINT_LINES], and
+     * within [MAX_MORE_LINES] less one while [split] sends items to the More row, so they keep a
+     * line of their own (with 3, a two-line hint leaves the items one line).
+     */
+    fun hintLineCount(split: Split, hintLines: Int): Int {
+        val room = if (split.more.isEmpty()) MAX_MORE_LINES else MAX_MORE_LINES - 1
+        return hintLines.coerceAtMost(MAX_HINT_LINES).coerceAtMost(room).coerceAtLeast(1)
     }
 
     /** lines·44 + (lines-1)·4 dp; 0 for no lines. The pill and bars move by this + 4 dp. */
