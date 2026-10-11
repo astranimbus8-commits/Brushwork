@@ -33,8 +33,10 @@ import com.brushwork.paint.vector.VStop
  * (`ArraySpec.MIN_SCALE..MAX_SCALE` as %), [ArrayLabels18.START_TURN] / [ArrayLabels18.END_TURN]
  * (±3600°); the [ArrayLabels18.PACE] chips (one per [ArrayEasing]); [ArrayLabels18.TINT_COLORS]
  * (the filters' [GradientEditor], 2 to [ArrayLook.MAX_STOPS] stops: a stop past them is not
- * added; empty shows the default stops) and [ArrayLabels18.TINT_STRENGTH] (0..100 %);
- * [ArrayLabels18.RESET_LOOK] (no look: plain copies).
+ * added; empty shows the colors kept in [ArrayTool.plainTint], else the default stops) and
+ * [ArrayLabels18.TINT_STRENGTH] (0..100 %); [ArrayLabels18.RESET_LOOK] (no look: plain copies;
+ * it also forgets [ArrayTool.plainPace] and [ArrayTool.plainTint], so it stays enabled while
+ * either holds something).
  *
  * A field previews while it moves and records ONE step [ArrayLabels18.HISTORY_LOOK] when done
  * ([ArrayTool.preview] / [ArrayTool.commitPreview]); a chip and the reset are one step at once.
@@ -42,6 +44,8 @@ import com.brushwork.paint.vector.VStop
  * strength to 100 % in the same step, and a strength above 0 with no colors takes the default
  * stops. A Pace alone is no look (the copies would not change) and records no step: its chip
  * lights ([ArrayTool.plainPace]) and the next field that changes the look starts from it.
+ * Likewise a tint whose strength goes to 0 is no look: [ArrayTool.plainTint] keeps its colors,
+ * so a strength raised again finds them.
  */
 @Composable
 internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
