@@ -9,7 +9,6 @@ import android.graphics.PorterDuff
 import android.graphics.Rect
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
-import com.brushwork.paint.assist.SymmetryGuides
 import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
@@ -97,9 +96,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
     /**
      * Cancels any stroke and creates a new one starting at [p] (null when the layer or the
-     * [strokeHook] refuses). [isPath]: a stroke along a vector path (never hooked).
+     * [strokeHook] refuses). [isPath]: a stroke along a vector path (never hooked), replicated
+     * with [pathMaps] (v1.8, design §4.4; empty: no copies, the v1.7 path stroke).
      */
-    private fun start(p: ToolPoint, seed: Long, isPath: Boolean = false): Stroke? {
+    private fun start(p: ToolPoint, seed: Long, isPath: Boolean = false, pathMaps: List<FloatArray> = emptyList()): Stroke? {
         stroke?.let { stroke = null; it.cancel() }
         eraserNoteOnLift = false
         val layer = controller.activeLayer
@@ -116,7 +116,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             return null
         }
         // v1.7 (item 18): the symmetry copies, placed from the first point (after the ruler).
-        val maps = symmetryMaps(p, isPath)
+        // v1.8: a path stroke is replicated with the maps its caller gives (none by default).
+        val maps = if (isPath) StrokeCopies.sanitized(pathMaps) else symmetryMaps(p, isPath = false)
         val toastBefore = controller.message
         val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false, copies = maps))
         val recorder = when (hook) {
@@ -164,13 +165,19 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      * With a [draftBudget] (> 0, in [pathDabCost] units) a long path is drawn with fewer dabs
      * while a finger drags it (see [updatePath]). Returns false when nothing was started
      * (fewer than two points, or the layer refused with a message).
+     *
+     * v1.8 (design §4.4, frozen): [maps] replicates the stroke as a symmetric brush stroke is
+     * (row-major 3×3 maps, the identity first, as `SymmetryMaps.transforms` gives them; each copy
+     * drawn through `DabMapping`). Empty (the default) is the v1.7 path stroke exactly. A stroke
+     * with copies is always exact (no draft) and is never updated in place: [updatePath]
+     * returns false for it, so the caller starts it again.
      */
-    fun beginPath(input: PathStrokeInput, seed: Long, draftBudget: Float = 0f): Boolean {
+    fun beginPath(input: PathStrokeInput, seed: Long, draftBudget: Float = 0f, maps: List<FloatArray> = emptyList()): Boolean {
         if (input.size < 2) return false
         val first = ToolPoint(input.x[0], input.y[0], input.pressure[0], isStylus = true)
-        val s = start(first, seed, isPath = true) ?: return false
+        val s = start(first, seed, isPath = true, pathMaps = maps) ?: return false
         if (s is BufferStroke) {
-            s.startPath(input, draftBudget)
+            s.startPath(input, if (s.hasCopies) 0f else draftBudget)
         } else {
             // Smudge / blur / watercolor dabs change the pixels as they go: no rewinding.
             s.begin(first)
@@ -190,12 +197,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      * when drawing it exactly would cost more than [draftBudget] ([pathDabCost] units per dab); an
      * update with no budget, or [onUp], redraws the draft parts exactly.
      *
-     * Returns false when the stroke can't be updated (no path stroke in progress, or a
-     * smudge / blur / watercolor stroke): the caller cancels it and starts again.
+     * Returns false when the stroke can't be updated (no path stroke in progress, a
+     * smudge / blur / watercolor stroke, or a stroke with copies, v1.8): the caller cancels it
+     * and starts again.
      */
     fun updatePath(input: PathStrokeInput, draftBudget: Float = 0f): Boolean {
         val s = stroke as? BufferStroke ?: return false
-        if (!s.isPath || input.size < 2) return false
+        if (!s.isPath || s.hasCopies || input.size < 2) return false
         s.updatePath(input, draftBudget)
         return true
     }
@@ -253,19 +261,13 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
     }
 
     /**
-     * The symmetry guides while this tool replicates its strokes (v1.7 item 18: not for the
-     * clone stamp, nor the vector-layer eraser, which removes whole objects), then a recorded
-     * stroke's own feedback (e.g. what the vector eraser will remove).
+     * A recorded stroke's own feedback (e.g. what the vector eraser will remove). v1.8: the
+     * symmetry guides (v1.7 drew them here first, while the tool replicated its strokes) are
+     * drawn by `SymmetryGuides.drawFor`, which the controller calls right before this, so the
+     * overlay is the same.
      */
     override fun drawOverlay(canvas: Canvas, t: ViewTransform) {
-        if (replicates()) SymmetryGuides.drawGuides(canvas, t, controller.doc)
         stroke?.recorder?.drawOverlay(canvas, t)
-    }
-
-    private fun replicates(): Boolean {
-        if (id !in REPLICATED || coverageSource != null || controller.symmetry.type == SymmetryType.OFF) return false
-        val layer = controller.activeLayer
-        return !(id == ToolId.ERASER && layer.isVectorLayer && controller.editTargetOf(layer) != EditTarget.MASK)
     }
 
     // ------------------------------------------------------------------ strokes
@@ -451,6 +453,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
          * whenever they are drawn; [copyTiles] remembers the [COMMIT_TILE]s they reached.
          */
         private val mapping: DabMapping? = DabMapping.of(copies, res.stamper, phaseTips)
+        /** True when the stroke draws symmetry copies (a rewind can't remove them: see [updatePath]). */
+        val hasCopies: Boolean get() = mapping != null
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
         private val copyTiles: BooleanArray? = mapping?.let { BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) }
         /**

@@ -24,6 +24,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.vector.StrokeCopies
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.max
@@ -331,8 +332,17 @@ internal class BrushStrokePreview(
         }
     }
 
-    /** A replay waiting to run: [key] identifies the geometry, [points] computes the input. */
-    private class Request(val key: Any, val points: (PathStrokeInput) -> Unit)
+    /** A replay waiting to run: [key] identifies the geometry, [maps] its copies (v1.8), [points] computes the input. */
+    private class Request(val key: Any, val maps: List<FloatArray>, val points: (PathStrokeInput) -> Unit)
+
+    /**
+     * The copies a stroke is replicated with (v1.8, [BrushTool.beginPath]), compared by content
+     * (a FloatArray equals only itself): the same maps computed again are the same stroke.
+     */
+    private class StrokeMaps(val list: List<FloatArray>) {
+        override fun equals(other: Any?): Boolean = other is StrokeMaps && StrokeCopies.sameMaps(list, other.list)
+        override fun hashCode(): Int = list.fold(list.size) { h, m -> 31 * h + m.contentHashCode() }
+    }
 
     /** The unfinished stroke on screen; [exact] is false for a draft ([BrushTool.isDraft]). */
     private class Live(val tool: Tool, val key: Key, val request: Request, val exact: Boolean, val last: ToolPoint)
@@ -352,11 +362,14 @@ internal class BrushStrokePreview(
         val target: EditTarget,
         val selection: Selection?,
         val colorMode: ColorMode,
+        /** v1.8: the stroke's copies (empty: none, the v1.7 stroke). */
+        val maps: StrokeMaps = NO_MAPS,
     ) {
         /** Same stroke apart from the path: an update of the live stroke can follow it. */
         fun sameStroke(o: Key): Boolean =
             toolId == o.toolId && tool === o.tool && preset == o.preset && color == o.color && layer === o.layer &&
-                props == o.props && target == o.target && selection == o.selection && colorMode == o.colorMode
+                props == o.props && target == o.target && selection == o.selection && colorMode == o.colorMode &&
+                maps == o.maps
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -429,11 +442,12 @@ internal class BrushStrokePreview(
         return id to t
     }
 
-    private fun keyFor(geometry: Any, id: ToolId, tool: Tool): Key {
+    private fun keyFor(geometry: Any, id: ToolId, tool: Tool, maps: List<FloatArray> = emptyList()): Key {
         val layer = controller.doc.activeLayer
         return Key(
             geometry, id, tool, presetOf(id), controller.color, layer, layer.props(),
             controller.editTargetOf(layer), controller.selection, controller.doc.colorMode,
+            if (maps.isEmpty()) NO_MAPS else StrokeMaps(maps),
         )
     }
 
@@ -442,13 +456,14 @@ internal class BrushStrokePreview(
      * path's ops). [points] must fill its argument with the input computed from captured,
      * immutable values; it runs when the coalesced replay happens, not before [minDelayMs] from
      * now (a point added under a finger that may still turn into a two-finger tap or pinch waits
-     * for that to be ruled out).
+     * for that to be ruled out). v1.8 (design §4.4): [maps] replicates the stroke
+     * ([BrushTool.beginPath]); empty, the default, is the v1.7 stroke.
      */
-    fun request(geometry: Any, minDelayMs: Long = 0L, points: (PathStrokeInput) -> Unit) {
+    fun request(geometry: Any, minDelayMs: Long = 0L, maps: List<FloatArray> = emptyList(), points: (PathStrokeInput) -> Unit) {
         val cur = live
         val tool = paintTool()
-        val req = Request(geometry, points)
-        val shown = cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second)
+        val req = Request(geometry, maps, points)
+        val shown = cur != null && tool != null && cur.key == keyFor(geometry, tool.first, tool.second, maps)
         // The stroke changes (also without a finger on the canvas: nudge arrows held down, numeric
         // fields scrubbed, sliders): a draft is only refined once the changes stop for a moment,
         // instead of refining parts that the next change throws away again.
@@ -508,7 +523,7 @@ internal class BrushStrokePreview(
         val req = pending ?: return
         pending = null
         val (id, tool) = paintTool() ?: run { cancelLive(); return }
-        val key = keyFor(req.key, id, tool)
+        val key = keyFor(req.key, id, tool, req.maps)
         val cur = live
         if (cur != null && cur.key == key) {
             if (cur.exact || interacting) return
@@ -573,7 +588,7 @@ internal class BrushStrokePreview(
         val before = controller.message
         withPreset(key.toolId) {
             clipFree(key.layer) {
-                if (tool is BrushTool) tool.beginPath(input, seed, budget)
+                if (tool is BrushTool) tool.beginPath(input, seed, budget, key.maps.list)
                 else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
             }
         }
@@ -600,14 +615,15 @@ internal class BrushStrokePreview(
      * Paints the stroke for real (one undo step made by the painting tool). When the preview on
      * screen is this stroke it is finished as is (a draft is redrawn exactly first; identical
      * result, no second pass); otherwise the live stroke follows the path first, or the path is
-     * painted from scratch. Returns false if there was nothing to paint.
+     * painted from scratch. Returns false if there was nothing to paint. v1.8: [maps] as in
+     * [request] (the stroke's copies; empty, the default, is the v1.7 stroke).
      */
-    fun commit(geometry: Any, points: (PathStrokeInput) -> Unit): Boolean {
+    fun commit(geometry: Any, maps: List<FloatArray> = emptyList(), points: (PathStrokeInput) -> Unit): Boolean {
         pending = null
         deferred = false
         unschedule()
         val (id, tool) = paintTool() ?: run { cancelLive(); return false }
-        val key = keyFor(geometry, id, tool)
+        val key = keyFor(geometry, id, tool, maps)
         val cur = live
         if (cur != null && cur.key == key) {
             if (!cur.exact && tool is BrushTool) {
@@ -632,7 +648,7 @@ internal class BrushStrokePreview(
         }
         cancelLive()
         if (tool is BrushTool) {
-            if (withPreset(id) { clipFree(key.layer) { tool.beginPath(input, seed) } }) tool.onUp(lastPoint(t0))
+            if (withPreset(id) { clipFree(key.layer) { tool.beginPath(input, seed, maps = key.maps.list) } }) tool.onUp(lastPoint(t0))
         } else {
             withPreset(id) { clipFree(key.layer) { tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], t0, isStylus = true)) } }
             for (i in 1 until input.size - 1) tool.onMove(ToolPoint(input.x[i], input.y[i], input.pressure[i], t0 + i, isStylus = true))
@@ -676,6 +692,9 @@ internal class BrushStrokePreview(
     }
 
     internal companion object {
+        /** A stroke without copies (v1.8). */
+        private val NO_MAPS = StrokeMaps(emptyList())
+
         /** Minimum time between two replays (one frame); 1.5 times the last replay's cost if larger. */
         private const val MIN_INTERVAL_MS = 16L
         private const val MAX_INTERVAL_MS = 250L

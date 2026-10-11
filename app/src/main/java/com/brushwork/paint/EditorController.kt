@@ -967,6 +967,9 @@ class EditorController(
         SymmetryGuides.draw(canvas, t, doc, activeToolId == ToolId.SYMMETRY)
         if (!hideSelectionOutline) selection?.let { SelectionOutline.draw(canvas, t, it, antsPhase) }
         vectors.drawOverlay(canvas, t)
+        // v1.8 (design §4.4): the guides of the tools the rulers repeat, right under the tool's own
+        // overlay (where `BrushTool.drawOverlay` drew them in v1.7).
+        if (SymmetryGuides.showsFor(activeToolId)) SymmetryGuides.drawFor(canvas, t, doc, activeToolId)
         currentTool.drawOverlay(canvas, t)
         if (holdPicking) tools[ToolId.EYEDROPPER]?.drawOverlay(canvas, t)
         if (gestureAssisted && gestureTool != null) strokeAssist.drawOverlay(canvas, t)

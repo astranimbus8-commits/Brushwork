@@ -10,6 +10,7 @@ import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.model.SymmetryType
+import com.brushwork.paint.tools.ToolId
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
@@ -22,7 +23,8 @@ import kotlin.math.sin
 /**
  * The symmetry rulers' guides and handles (v1.7 item 18, §3.18; area H): thin dashed lines in
  * the theme accent over the canvas while symmetry is on and a tool that replicates its strokes
- * is active (brush, eraser, smudge, blur: they call [drawGuides] from their overlay), and with
+ * is active (brush, eraser, smudge, blur; v1.8: the controller's overlay pass calls [drawFor]
+ * for the active tool, [showsFor] names the tools), and with
  * the [SymmetryHandles.HANDLE_DP] handles while the Symmetry tool is (the controller's overlay
  * pass calls [draw] right after the ruler, `EditorController.drawOverlays`; there is no global
  * hook, V30). Other tools (fill, shapes, text, selections…) show no guides: they don't repeat.
@@ -75,10 +77,47 @@ object SymmetryGuides {
     }
 
     /**
-     * `doc.symmetry`'s guides alone (no handles), as the brush, eraser, smudge and blur draw them
-     * while they replicate their strokes (`BrushTool.drawOverlay`).
+     * `doc.symmetry`'s guides alone (no handles), as the brush, eraser, smudge and blur show them
+     * while they replicate their strokes ([drawFor]).
      */
     fun drawGuides(canvas: Canvas, t: ViewTransform, doc: Document) = render(canvas, t, doc, editing = false)
+
+    /** v1.8 (design §3.1): the tools whose strokes or objects the symmetry rulers repeat. */
+    private val SHOWS_FOR: Set<ToolId> = setOf(
+        ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR,
+        ToolId.CURVE, ToolId.POLYLINE, ToolId.PATH, ToolId.SHAPE, ToolId.CLONE,
+    )
+
+    /**
+     * v1.8 (design §4.4, frozen): true for the tools that show the symmetry guides while they are
+     * active, the nine tools the rulers repeat: Brush, Eraser, Smudge, Blur, Curve, Polyline,
+     * Path, Shape and Clone stamp.
+     */
+    fun showsFor(id: ToolId): Boolean = id in SHOWS_FOR
+
+    /**
+     * v1.8 (design §4.4, frozen signature): the guides of `doc.symmetry` (no handles) for the
+     * active tool [id]. `EditorController.drawOverlays` calls it for every frame, right before the
+     * tool's own overlay, for a tool that [showsFor].
+     *
+     * Foundation body (F3): the v1.7 guides of the brush, smudge and blur, and of the eraser
+     * except on a vector layer's content (there it removes whole objects and is not replicated),
+     * exactly as `BrushTool.drawOverlay` drew them in v1.7. The five other tools draw nothing
+     * yet: area D (MIRRORS) gives them their guides.
+     */
+    fun drawFor(canvas: Canvas, t: ViewTransform, doc: Document, id: ToolId) {
+        when (id) {
+            ToolId.BRUSH, ToolId.SMUDGE, ToolId.BLUR -> drawGuides(canvas, t, doc)
+            ToolId.ERASER -> {
+                val layer = doc.activeLayer
+                // `EditorController.editTargetOf`: the mask is edited when there is one and it is
+                // chosen (or the layer is an adjustment layer).
+                val onMask = layer.mask != null && (layer.editingMask || layer.isAdjustmentLayer)
+                if (!layer.isVectorLayer || onMask) drawGuides(canvas, t, doc)
+            }
+            else -> Unit
+        }
+    }
 
     private fun render(canvas: Canvas, t: ViewTransform, doc: Document, editing: Boolean) {
         val s = doc.symmetry.sanitized()
