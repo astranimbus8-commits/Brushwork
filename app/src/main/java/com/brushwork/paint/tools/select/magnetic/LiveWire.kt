@@ -34,6 +34,10 @@ class LiveWire {
     var lastHalf = false
         private set
 
+    /** The bytes the search's buffers hold now (they grow to the largest window searched, [MAX_NODES] at most). */
+    internal val bytes: Long
+        get() = dist.size * 4L + from.size + (poolNode.size + poolNext.size + head.size) * 4L
+
     /**
      * The path from ([ax], [ay]) to ([bx], [by]) (proxy px of [map], clamped into it) as x, y
      * pairs, both ends included, straight runs reduced to their ends. [floor] 0..255: the

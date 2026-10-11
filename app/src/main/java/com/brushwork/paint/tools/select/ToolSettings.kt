@@ -62,3 +62,26 @@ data class EyedropperSettings(
     /** Switch back to the last painting tool after picking. */
     val returnToBrush: Boolean = true,
 )
+
+/** Magnetic lasso options (persisted; v1.8, design §3.4). */
+@Serializable
+data class MagneticSettings(
+    /** How far (screen dp) a placed anchor looks for the strongest edge, [MIN_REACH_DP]..[MAX_REACH_DP]. */
+    val edgeReachDp: Int = 24,
+    /** Edges weaker than this (% of the strongest) count as flat paper, 0..[MAX_CONTRAST]. */
+    val edgeContrast: Int = 10,
+    /** A placed anchor snaps to the strongest edge within reach. */
+    val snapToEdge: Boolean = true,
+    /** The pixels whose edges the outline follows (as Magic wand's Refer). */
+    val source: SampleSource = SampleSource.LAYER,
+    val antiAlias: Boolean = true,
+) {
+    /** The contrast floor on the edge map's 0..255 scale. */
+    val floor: Int get() = edgeContrast.coerceIn(0, MAX_CONTRAST) * 255 / 100
+
+    companion object {
+        const val MIN_REACH_DP = 8
+        const val MAX_REACH_DP = 64
+        const val MAX_CONTRAST = 50
+    }
+}
