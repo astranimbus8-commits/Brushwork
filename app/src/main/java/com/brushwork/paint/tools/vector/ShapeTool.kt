@@ -64,6 +64,8 @@ import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.vector.CopyMaps
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorContent
@@ -337,6 +339,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private var loadedInk: Rect? = null
     /** The painting tool and brush a re-opened brush-stroked shape was drawn with. */
     private var editBrush: Pair<ToolId, BrushPreset>? = null
+    /** v1.8 (I15): the live copies of a re-opened shape; they stay its copies when it is committed. */
+    private var openCopies: CopyMaps = CopyMaps.NONE
     private var editOverride: EditOverride? = null
     /** The outline a brush follows, drawn as a guide when the brush can't be shown live. */
     private var editGuide: Path? = null
@@ -643,7 +647,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * The pending shape [b] (with custom [pts]) as it would be placed now: with the options [s],
      * main color [color] and, for a brush outline, the opened shape's own brush [own] (else the
-     * current one).
+     * current one). v1.8: [copies], the re-opened shape's live copies (none for a new shape).
      */
     private fun objectFor(
         b: ShapeBox,
@@ -651,6 +655,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         s: ShapeSettings = settings,
         color: Int = controller.color,
         own: Pair<ToolId, BrushPreset>? = editBrush,
+        copies: CopyMaps = openCopies,
     ): ShapeObject {
         val brush = s.strokeWith == ShapeStroke.BRUSH && s.strokes
         val tool = if (!brush) null else own?.first ?: controller.lastPaintTool
@@ -676,6 +681,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             brushTool = tool?.name,
             brushPreset = preset,
             points = pts,
+            copies = copies,
         )
     }
 
@@ -683,7 +689,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     fun pendingObject(): ShapeObject? = box?.let { objectFor(it, points) }
 
     /** A NEW shape being dragged out in [b] (the user's own options and color, also while a shape layer is open). */
-    private fun newObject(b: ShapeBox): ShapeObject = objectFor(b, null, newShapeSettings(), newShapeColor(), own = null)
+    private fun newObject(b: ShapeBox): ShapeObject = objectFor(b, null, newShapeSettings(), newShapeColor(), own = null, copies = CopyMaps.NONE)
 
     // ------------------------------------------------------------------ numeric editing
 
@@ -2822,7 +2828,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         for (i in content.objects.indices.reversed()) {
             val o = content.objects[i] as? VShape ?: continue
             if (o.id == skip) continue
-            if (ShapeOutlines.hits(o.shape, p, tol)) return editShapeObject(layer, o.id)
+            if (ObjectCopies.hits(o.shape, p, tol)) return editShapeObject(layer, o.id)
         }
         return false
     }
@@ -2888,6 +2894,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         userColor = controller.color
         openedColor = shape.strokeColor
         controller.color = shape.strokeColor
+        openCopies = shape.copies
         loadedObject = objectFor(shape.box, shape.points)
         // The outline is shown with its own texture (its replay's random values).
         brushPreview.useSeed(current.seed)
@@ -2923,6 +2930,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         vectorGuides = emptyList()
         loadedObject = null
         editBrush = null
+        openCopies = CopyMaps.NONE
         restoreUserOptions()
         controller.invalidateOverlay()
     }
@@ -3214,6 +3222,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         userColor = controller.color
         openedColor = obj.strokeColor
         controller.color = obj.strokeColor
+        openCopies = obj.copies
         loadedObject = objectFor(obj.box, obj.points)
         loadedInk = inkOf(layer, obj)
         // v1.7 (I14): the hidden pixels include every copy of a live array.
@@ -3233,7 +3242,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         fun hits(l: Layer): Boolean {
             if (l === skip || !l.isShapeLayer || !doc.effectiveVisible(l) || doc.effectiveLocked(l)) return false
             val o = decoded(l) ?: return false
-            return ShapeOutlines.hits(o, p, tol)
+            return ObjectCopies.hits(o, p, tol)
         }
         if (hits(active)) return active
         for (i in doc.layers.indices.reversed()) {
@@ -3265,8 +3274,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         return lines
     }
 
-    /** Document rect of everything [o] paints (plain parts and the brush's reach), or null. */
+    /**
+     * Document rect of everything [o] paints (plain parts and the brush's reach), or null; v1.8
+     * (I17): every live copy's too.
+     */
     private fun paintRect(o: ShapeObject): Rect? {
+        if (!o.copies.isEmpty) {
+            val src = paintRect(ObjectCopies.source(o)) ?: return null
+            val all = ObjectCopies.mappedBounds(RectF(src), o.copies)
+            return Rect().also { all.roundOut(it); it.inset(-1, -1) }.takeUnless { it.isEmpty }
+        }
         val r = Rect()
         val tmp = Rect()
         ShapeOutlines.paintSpec(o, brush = false)?.let { it.boundsRect(tmp); r.union(tmp) }
@@ -3321,6 +3338,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         loadedObject = null
         editingLayer = null
         editBrush = null
+        openCopies = CopyMaps.NONE
         editGuide = null
         restoreUserOptions()
         controller.invalidateOverlay()
@@ -3497,7 +3515,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (o == loaded) { discard(); return }
         if (!controller.checkEditable(layer)) return
         val brush = o.paintsWithBrush
-        val spec = ShapeOutlines.paintSpec(o, brush)
+        // v1.8 (I17): the fill and plain line are drawn once per live copy (none: once, as in v1.7).
+        val copies = o.copies
+        val spec = ShapeOutlines.paintSpec(ObjectCopies.source(o), brush)
         val path = if (brush) ShapeOutlines.brushOutline(o) else null
         // Everything the old shape covered (its real pixels) plus the new shape.
         val dirty = Rect()
@@ -3518,7 +3538,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // updateShapeLayer repeats for every copy (the painting tool's stroke would reach the
         // source alone). Without an array it is painted exactly as in v1.6, below, and so is an
         // outline whose tool moves pixels (smudge, blur, watercolor: a replay can't paint it).
-        val perCopy = path != null && layer.array != null && !brushMovesPixels()
+        // v1.8 (I17): live copies are replayed there too (into the one stroke buffer, as the vector
+        // renderer replays them).
+        val perCopy = path != null && (layer.array != null || !copies.isEmpty) && !brushMovesPixels()
         val replay = if (perCopy) outlineReplay(o, path, brushPreview.sessionSeed) else null
         var done = false
         inCommit = true
@@ -3527,7 +3549,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         try {
             controller.undoStepNamed("Edit shape") {
                 done = controller.updateShapeLayer(layer, data, "Edit shape", dirty) { c ->
-                    spec?.let { renderer.draw(c, it, false, doc.colorMode) }
+                    spec?.let { s -> ObjectCopies.drawEach(c, copies) { cc -> renderer.draw(cc, s, false, doc.colorMode) } }
                     replay?.invoke(c)
                 }
                 if (done && path != null && !perCopy) {
@@ -3586,12 +3608,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val color = o.strokeColor
         val doc = controller.doc
         val area = Rect(0, 0, doc.width, doc.height)
-        val reach = StrokeRaster.strokeBounds(preset, 1f, points)
+        // (v1.8: with live copies, the reach of every copy.)
+        val reach = ObjectCopies.mappedBounds(StrokeRaster.strokeBounds(preset, 1f, points), o.copies)
         if (!reach.isEmpty && reach.left.isFinite() && reach.top.isFinite() && reach.right.isFinite() && reach.bottom.isFinite()) {
             area.union(Rect().also { reach.roundOut(it) })
         }
         val raster = StrokeRaster(TipCache())
-        return { c -> raster.render(c, area, preset, color, seed, true, points, cut = area) }
+        val maps = o.copies.maps
+        return { c -> raster.render(c, area, preset, color, seed, true, points, cut = area, copies = maps) }
     }
 
     override fun discard() {

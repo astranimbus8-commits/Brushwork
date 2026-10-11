@@ -10,10 +10,10 @@ import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.transform.ObjectLift
 import com.brushwork.paint.tools.transform.TransformState
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayers
-import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.select.PendingRenders
 
@@ -88,7 +88,8 @@ internal class VectorObjectLift(
         val m = if (shift != null) LiftGeometry.translation(shift[0].toFloat(), shift[1].toFloat()) else m0
         val content = currentContent() ?: return finish(false)
         val map = HashMap<Long, List<VObject>>()
-        for (o in content.objects) if (o.id in ids) map[o.id] = listOf(VectorOps.transformed(o, m))
+        // v1.8 (I17): under Distort an object with live copies becomes its mapped pieces.
+        for (o in content.objects) if (o.id in ids) map[o.id] = ObjectCopies.transformedAll(o, m)
         if (map.isEmpty()) return finish(false)
         val hint = shift?.let { VectorLayers.ShiftHint(map.keys.toSet(), it[0], it[1]) }
         return apply(content.replaced(map), label, m, hint) {}

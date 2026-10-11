@@ -27,6 +27,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.model.LayerTree
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
@@ -334,10 +335,8 @@ object PayloadImport {
     /** Farthest coordinate a restored object may reach (document px), as SVG import clamps numbers. */
     private const val MAX_COORD = 1e6f
 
-    private fun transformed(content: VectorContent, place: Affine): VectorContent {
-        val m = place.toMatrix3()
-        return content.copy(objects = content.objects.map { VectorOps.transformed(it, m) })
-    }
+    /** [content] placed by [place] (v1.8, I17: through [ObjectCopies.mapped], live copies follow). */
+    private fun transformed(content: VectorContent, place: Affine): VectorContent = ObjectCopies.mapped(content, place.toMatrix3())
 
     private fun matrixOf(a: Affine): Matrix = Matrix().apply { setValues(floatArrayOf(a.a, a.c, a.e, a.b, a.d, a.f, 0f, 0f, 1f)) }
 

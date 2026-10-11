@@ -43,6 +43,7 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.VariableWidthOutline
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.brushStrokeSamples
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
@@ -706,7 +707,8 @@ class ExportSceneBuilder(
     }
 
     private sealed class Part {
-        class Item(val item: SceneItem) : Part()
+        /** [brush]: a brush line's outline (drawn after the fills and plain lines of every copy). */
+        class Item(val item: SceneItem, val brush: Boolean = false) : Part()
         class Picture(val obj: VObject) : Part()
     }
 
@@ -736,7 +738,29 @@ class ExportSceneBuilder(
         return if (pieces.isEmpty()) null else VectorPath(pieces.flatMap { it.ops })
     }
 
-    private fun partsOf(o: VObject): List<Part> = when (o) {
+    private fun partsOf(o: VObject): List<Part> = if (ObjectCopies.hasCopies(o)) copiesParts(o) else sourceParts(o)
+
+    /**
+     * v1.8 (I17): an object with live copies in the order the canvas draws it: every copy's fill
+     * and plain line (the source first), then every copy's brush line outline; a brush line kept
+     * as a picture is ONE picture of the source's brush line with the copies (the renderer replays
+     * them into one stroke buffer, so overlapping copies blend the same way).
+     */
+    private fun copiesParts(o: VObject): List<Part> {
+        val copies = ObjectCopies.of(o)
+        val plain = ArrayList<Part>()
+        val brush = ArrayList<Part>()
+        val pictures = ArrayList<Part>()
+        ObjectCopies.expanded(o).forEachIndexed { k, piece ->
+            for (part in sourceParts(piece)) when (part) {
+                is Part.Item -> if (part.brush) brush += part else plain += part
+                is Part.Picture -> if (k == 0) pictures += Part.Picture(ObjectCopies.withCopies(part.obj, copies))
+            }
+        }
+        return plain + brush + pictures
+    }
+
+    private fun sourceParts(o: VObject): List<Part> = when (o) {
         is VStroke -> {
             val env = if (options.strokes == StrokeExport.OUTLINES) strokeEnvelope(o) else null
             if (env != null) listOf(Part.Item(SceneItem.Shape(env, fill = VPaint.Solid(StrokeEnvelopeExport.fillColor(o.color, o.preset, o.opacity)))))
@@ -765,7 +789,7 @@ class ExportSceneBuilder(
         }
         if (st != null && st.kind == VStrokeKind.BRUSH) {
             val env = if (options.strokes == StrokeExport.OUTLINES && uniform) brushEnvelope(p, st) else null
-            if (env != null) out += Part.Item(SceneItem.Shape(env, fill = VPaint.Solid(StrokeEnvelopeExport.fillColor(st.color, VectorOps.brushOf(st), opacity))))
+            if (env != null) out += Part.Item(SceneItem.Shape(env, fill = VPaint.Solid(StrokeEnvelopeExport.fillColor(st.color, VectorOps.brushOf(st), opacity))), brush = true)
             else out += Part.Picture(p.copy(fill = null))
         }
         return out

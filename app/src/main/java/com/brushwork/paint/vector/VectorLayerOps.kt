@@ -212,7 +212,7 @@ object VectorLayerOps {
      */
     fun flipped(content: VectorContent, w: Int, h: Int, horizontal: Boolean): VectorContent? {
         val m = if (horizontal) floatArrayOf(-1f, 0f, w.toFloat(), 0f, 1f, 0f, 0f, 0f, 1f) else floatArrayOf(1f, 0f, 0f, 0f, -1f, h.toFloat(), 0f, 0f, 1f)
-        return content.copy(objects = content.objects.map { VectorOps.transformed(it, m) })
+        return ObjectCopies.mapped(content, m)
     }
 
     /**

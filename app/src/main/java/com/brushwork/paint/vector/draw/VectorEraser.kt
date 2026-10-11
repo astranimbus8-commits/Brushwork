@@ -195,10 +195,12 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         if (session.isWhole(i)) {
             val w = max(1f, 2f * tg.reach)
             for (line in tg.lines) out += item(pathOf(line, 0f, line.uMax, line.closed), w, fill = false, butt = false)
-            if (tg.fills.isNotEmpty()) {
+            // (v1.8: an object with live copies dims each copy's fill on its own.)
+            for (part in tg.parts ?: listOf(tg)) {
+                if (part.fills.isEmpty()) continue
                 val p = Path()
-                p.fillType = if (tg.evenOdd) Path.FillType.EVEN_ODD else Path.FillType.WINDING
-                for (f in tg.fills) p.addPath(pathOf(f, 0f, f.uMax, true))
+                p.fillType = if (part.evenOdd) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+                for (f in part.fills) p.addPath(pathOf(f, 0f, f.uMax, true))
                 out += item(p, 0f, fill = true, butt = false)
             }
             return out

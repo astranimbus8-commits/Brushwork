@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector.pathfinder
 
+import android.graphics.Matrix
 import android.graphics.Path
 import android.graphics.RectF
 import android.os.Build
@@ -10,6 +11,7 @@ import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.VectorPath
 import com.brushwork.paint.tools.vector.toAndroidPath
+import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPath
@@ -51,11 +53,36 @@ object PathConvert {
         is VStroke -> null
     }
 
-    /** The interior of [p]'s outline under its fill rule (whether or not it is filled). */
-    fun region(p: VPath): Path = VectorOps.toVectorPath(p).toAndroidPath(Path()).also { it.fillType = fillTypeOf(p.fillRule) }
+    /**
+     * The interior of [p]'s outline under its fill rule (whether or not it is filled); v1.8 (I17):
+     * united with each live copy's.
+     */
+    fun region(p: VPath): Path {
+        val src = VectorOps.toVectorPath(p).toAndroidPath(Path()).also { it.fillType = fillTypeOf(p.fillRule) }
+        return if (p.copies.isEmpty) src else united(src, p.copies)
+    }
 
-    /** The interior of a shape's outline (a shape layer's, or a [VShape]'s). */
-    fun region(shape: ShapeObject): Path = ShapeOutlines.outline(shape).toAndroidPath(Path()).also { it.fillType = Path.FillType.WINDING }
+    /** The interior of a shape's outline (a shape layer's, or a [VShape]'s); v1.8: with its copies'. */
+    fun region(shape: ShapeObject): Path {
+        val src = ShapeOutlines.outline(shape).toAndroidPath(Path()).also { it.fillType = Path.FillType.WINDING }
+        return if (shape.copies.isEmpty) src else united(src, shape.copies)
+    }
+
+    /**
+     * [src] united with its image under each copy map (`Path.op` UNION: a mirrored copy turns the
+     * other way, so adding it under the nonzero rule could cancel where they overlap).
+     */
+    private fun united(src: Path, copies: CopyMaps): Path {
+        val out = Path(src)
+        val m = Matrix()
+        for (k in 1 until copies.maps.size) {
+            m.setValues(copies.maps[k])
+            val t = Path()
+            src.transform(m, t)
+            if (!out.op(t, Path.Op.UNION)) out.addPath(t)
+        }
+        return out
+    }
 
     fun fillTypeOf(rule: VFillRule): Path.FillType = if (rule == VFillRule.EVENODD) Path.FillType.EVEN_ODD else Path.FillType.WINDING
 

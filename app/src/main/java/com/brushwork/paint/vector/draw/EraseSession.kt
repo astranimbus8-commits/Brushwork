@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector.draw
 
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
@@ -27,13 +28,35 @@ enum class VectorEraseMode(val label: String, val description: String) {
  * One gesture of the vector eraser over [content] (pure Kotlin): every eraser point grows what
  * will go ([add]), [result] is the content without it. Main thread (it reads nothing shared but
  * [targets], the per-editor cache of object geometry).
+ *
+ * v1.8 (§3.1): the object eraser erases a path or shape with live copies whole, all copies with it
+ * (its target is every copy: [EraseTarget.parts]). The partial and "to intersection" erasers
+ * expand the copies first: the session works on each copy as a plain object of its own
+ * ([ObjectCopies.expanded]), and [result] replaces an object whose copies were touched by all of
+ * its copies' pieces, in the same step. Without copies the session is v1.7's.
  */
 internal class EraseSession(
     val content: VectorContent,
     val mode: VectorEraseMode,
     private val targets: TargetCache = TargetCache(),
 ) {
-    private val objects: List<VObject> = content.objects
+    /** Per object of [objects] when copies were expanded: the index of the object of [content] it comes from; null otherwise. */
+    private val origin: IntArray?
+    private val objects: List<VObject>
+
+    init {
+        if (mode != VectorEraseMode.OBJECT && content.objects.any { ObjectCopies.hasCopies(it) }) {
+            val list = ArrayList<VObject>(content.objects.size + 8)
+            val from = ArrayList<Int>(content.objects.size + 8)
+            content.objects.forEachIndexed { j, o -> for (piece in ObjectCopies.expanded(o)) { list += piece; from += j } }
+            objects = list
+            origin = from.toIntArray()
+        } else {
+            objects = content.objects
+            origin = null
+        }
+    }
+
     private val n = objects.size
 
     init {
@@ -198,6 +221,7 @@ internal class EraseSession(
      */
     fun result(): VectorContent? {
         if (!hasEffect) return null
+        if (origin != null) return expandedResult(origin)
         val map = HashMap<Long, List<VObject>>()
         for (i in 0 until n) {
             val o = objects[i]
@@ -206,6 +230,30 @@ internal class EraseSession(
             if (set.isEmpty) continue
             val pieces = ErasePieces.pieces(target(i), set) ?: continue
             map[o.id] = pieces
+        }
+        if (map.isEmpty()) return null
+        return content.replaced(map)
+    }
+
+    /** What is left of erased objects (pieces in place) when [objects] are the expanded copies ([from]: their object in [content]). */
+    private fun expandedResult(from: IntArray): VectorContent? {
+        val map = HashMap<Long, List<VObject>>()
+        var i = 0
+        while (i < n) {
+            val j = from[i]
+            var end = i
+            while (end < n && from[end] == j) end++
+            // The pieces of every copy of content object j, when one of them was erased.
+            val out = ArrayList<VObject>(end - i)
+            var changedHere = false
+            for (k in i until end) {
+                if (whole[k]) { changedHere = true; continue }
+                val set = removed[k]
+                val pieces = if (set == null || set.isEmpty) null else ErasePieces.pieces(target(k), set)
+                if (pieces == null) out += objects[k] else { changedHere = true; out += pieces }
+            }
+            if (changedHere) map[content.objects[j].id] = out
+            i = end
         }
         if (map.isEmpty()) return null
         return content.replaced(map)
@@ -249,7 +297,8 @@ internal class TargetCache {
                 val e = EraseTarget.strokeRadius(o)
                 floatArrayOf(l - e, t - e, r + e, bt + e)
             }
-            is VPath -> {
+            // v1.8: a path with live copies: the box around every copy.
+            is VPath -> if (ObjectCopies.hasCopies(o)) of(o).let { tg -> floatArrayOf(tg.left, tg.top, tg.right, tg.bottom) } else {
                 // The control box (it holds the curves) plus the paint's reach: no flattening,
                 // so a layer of many imported paths is not flattened whole at the first touch,
                 // only the paths near the finger are.

@@ -8,6 +8,7 @@ import com.brushwork.paint.tools.vector.PathOp
 import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.tools.vector.VectorPath
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.StrokeCopies
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VFillRule
@@ -28,7 +29,10 @@ internal enum class CutKind {
     STROKE,
     /** A path of one open sub-path with an outline and no fill: its curve is split. */
     OPEN_PATH,
-    /** Closed or filled paths, paths of several sub-paths, shapes, single-point strokes and (v1.7) strokes with symmetry copies: erased whole. */
+    /**
+     * Closed or filled paths, paths of several sub-paths, shapes, single-point strokes, (v1.7)
+     * strokes with symmetry copies and (v1.8) paths and shapes with live copies: erased whole.
+     */
     WHOLE,
 }
 
@@ -61,6 +65,12 @@ internal class EraseTarget private constructor(
     /** [CutKind.OPEN_PATH]: index in lines[0] of each segment's first point, and its uniform t steps. */
     val segStart: IntArray? = null,
     val segSteps: IntArray? = null,
+    /**
+     * v1.8 (I17): a path or shape with live copies: the target of each copy ([ObjectCopies.expanded],
+     * the source first). The object is touched when one of them is, and goes whole; [lines] holds
+     * every copy's centerlines, [fills] none (each part tests its own).
+     */
+    val parts: List<EraseTarget>? = null,
 ) {
     val left: Float
     val top: Float
@@ -88,6 +98,7 @@ internal class EraseTarget private constructor(
     /** True when the eraser capsule C->D of radius [r] touches what this object paints. */
     fun touchedBy(cx: Float, cy: Float, dx: Float, dy: Float, r: Float): Boolean {
         if (!intersects(min(cx, dx) - r, min(cy, dy) - r, max(cx, dx) + r, max(cy, dy) + r)) return false
+        parts?.let { ps -> return ps.any { it.touchedBy(cx, cy, dx, dy, r) } }
         val rho = r + reach
         for (line in lines) if (EraseMath.touches(line, cx, cy, dx, dy, rho)) return true
         if (fills.isNotEmpty() && (EraseMath.inside(fills, cx, cy, evenOdd) || EraseMath.inside(fills, dx, dy, evenOdd))) return true
@@ -98,10 +109,25 @@ internal class EraseTarget private constructor(
         /** Flattening tolerance of the centerlines (document px). */
         const val FLATTEN = 0.25f
 
-        fun of(o: VObject): EraseTarget = when (o) {
-            is VStroke -> ofStroke(o)
-            is VPath -> ofPath(o)
-            is VShape -> ofShape(o)
+        fun of(o: VObject): EraseTarget {
+            if (ObjectCopies.hasCopies(o)) return ofObjectCopies(o)
+            return when (o) {
+                is VStroke -> ofStroke(o)
+                is VPath -> ofPath(o)
+                is VShape -> ofShape(o)
+            }
+        }
+
+        /**
+         * v1.8 (I17): a path or shape with live copies: one part per copy, erased whole (the object
+         * eraser takes every copy; the partial erasers expand the copies before they cut).
+         */
+        private fun ofObjectCopies(o: VObject): EraseTarget {
+            val parts = ObjectCopies.expanded(o).map { of(it) }
+            return EraseTarget(
+                o, CutKind.WHOLE, parts.flatMap { it.lines }, emptyList(), false,
+                parts.maxOf { it.reach }, parts.maxOf { it.cutReach }, isLine = false, parts = parts,
+            )
         }
 
         /** A stroke's visible radius: its largest dab, with the scatter (as VectorOps' hit tests). */

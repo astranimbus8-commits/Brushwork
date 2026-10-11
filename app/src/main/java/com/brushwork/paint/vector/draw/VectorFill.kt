@@ -261,6 +261,12 @@ internal object FillHits {
     }
 
     private fun partAt(o: VObject, tg: EraseTarget, p: Vec2, tol: Float): FillPart? {
+        // v1.8 (I17): an object with live copies is hit on any copy (the last drawn first); the
+        // recolor then applies to the object, every copy with it.
+        tg.parts?.let { parts ->
+            for (k in parts.indices.reversed()) partAt(parts[k].obj, parts[k], p, tol)?.let { return it }
+            return null
+        }
         val d = distance(tg.lines, p)
         return when (o) {
             is VStroke -> if (d <= tg.reach + tol) FillPart.LINE else null

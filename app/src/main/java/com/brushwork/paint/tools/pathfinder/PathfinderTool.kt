@@ -18,8 +18,8 @@ import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.vector.ShapeCodec
-import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.ui.common.PathfinderLabels
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
@@ -150,7 +150,7 @@ class PathfinderTool(controller: EditorController) : Tool(controller) {
             if (!usable(layer)) continue
             if (layer.isShapeLayer) {
                 val shape = ShapeCodec.decode(layer.shapeData) ?: continue
-                if (!ShapeOutlines.hits(shape, p, tol)) continue
+                if (!ObjectCopies.hits(shape, p, tol)) continue
                 if (layer.array != null) { skipped = skipped ?: PathfinderLabels.ARRAY_SKIPPED; continue }
                 toggle(Pick(layer, null))
                 return

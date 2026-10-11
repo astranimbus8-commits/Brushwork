@@ -24,6 +24,7 @@ import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeOutlines
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.VectorRenderer
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorOps
@@ -71,17 +72,20 @@ internal object ArraySources {
         return null
     }
 
-    /** [sourceDraw] of the shape [o]. */
+    /**
+     * [sourceDraw] of the shape [o]; v1.8 (I17): its live copies too (the paint spec drawn once per
+     * copy, the brush outline replayed with the copies).
+     */
     fun shapeDraw(o: ShapeObject, colorMode: ColorMode, docW: Int, docH: Int): (Canvas) -> Unit {
         val brush = o.paintsWithBrush
-        val spec = ShapeOutlines.paintSpec(o, brush)
+        val spec = ShapeOutlines.paintSpec(ObjectCopies.source(o), brush)
         val renderer = VectorRenderer()
         // The brush outline alone (no fill): the vector renderer's replay of the shape's brush.
         val outline = if (brush) VectorContent(objects = listOf(VShape(0L, shape = o.copy(style = ShapeStyle.STROKE)))) else null
         val region = Rect().also { r -> VectorOps.bounds(VShape(0L, shape = o)).roundOut(r); r.inset(-2, -2) }
         val document = Rect(0, 0, docW, docH)
         return { cv ->
-            spec?.let { renderer.draw(cv, it, false, colorMode) }
+            spec?.let { s -> ObjectCopies.drawEach(cv, o.copies) { c -> renderer.draw(c, s, false, colorMode) } }
             if (outline != null && !region.isEmpty) {
                 val tips = TipCache(8L shl 20)
                 try {

@@ -75,8 +75,7 @@ object LayerDataTransforms {
     }
 
     /** [content] with every object mapped by [m] (3x3 row-major); ids and order kept. */
-    fun mapped(content: VectorContent, m: FloatArray): VectorContent =
-        content.copy(objects = content.objects.map { VectorOps.transformed(it, m) })
+    fun mapped(content: VectorContent, m: FloatArray): VectorContent = ObjectCopies.mapped(content, m)
 
     /**
      * True when moving a vector layer's cache by whole ([dx], [dy]) document px gives the

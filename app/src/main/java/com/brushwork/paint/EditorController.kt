@@ -2666,6 +2666,7 @@ class EditorController(
         val content: VectorContent = when {
             layer.isShapeLayer -> {
                 val shape = ShapeCodec.decode(layer.shapeData) ?: run { toast("This shape can't be converted"); return false }
+                // v1.8 (I15): the shape's live copies stay its copies (`ShapeObject.copies` goes with it).
                 VectorContent.EMPTY.plus(listOf(VShape(id = 0, shape = shape))).first
             }
             isEmptyPlainLayer(layer) -> VectorContent.EMPTY
