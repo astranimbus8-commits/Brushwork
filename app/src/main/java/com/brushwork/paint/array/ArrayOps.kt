@@ -28,6 +28,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.array.ArrayTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -161,12 +162,24 @@ object ArrayOps {
      * "Edit array": [layer]'s array takes [spec] (sanitized; "Edit source pixels" mode is kept as
      * it is) and the copies re-render, as ONE step "Edit array". True without a step when nothing
      * changes. While the source is being edited the spec changes alone (the layer keeps showing
-     * the source being painted).
+     * the source being painted). v1.8: a change of the look alone is named "Array look"
+     * ([labelFor]).
      */
-    fun edit(c: EditorController, layer: Layer, spec: ArraySpec): Boolean = edit(c, layer, spec, ArrayLabels.EDIT)
+    fun edit(c: EditorController, layer: Layer, spec: ArraySpec): Boolean {
+        val a = layer.array
+        return edit(c, layer, spec, if (a == null) ArrayLabels.EDIT else labelFor(a.spec, keptMode(spec, a)))
+    }
 
     /**
-     * [edit] as a step named [label] (the tool's handles and the sheet use "Edit array").
+     * v1.8 (area B, design §3.3): the step name of an array edit from [old] to [new] (sanitized):
+     * "Array look" ([ArrayLabels18.HISTORY_LOOK]) when only the look changes (a Look field, the
+     * Pace, the tint, "Reset look"), else "Edit array".
+     */
+    internal fun labelFor(old: ArraySpec, new: ArraySpec): String =
+        if (new.look != old.look && new.copy(look = old.look, editingSource = old.editingSource) == old) ArrayLabels18.HISTORY_LOOK else ArrayLabels.EDIT
+
+    /**
+     * [edit] as a step named [label] (the tool's handles and the sheet: [labelFor]).
      * [onDone] tells when the new copies are on the layer (a large cache renders in the
      * background, [ArrayRenders]; a small one before this returns) and whether the edit was
      * applied. An earlier edit of [layer]'s array still rendering is superseded: dropped (no

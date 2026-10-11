@@ -17,7 +17,8 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.ViewTransform
-import com.brushwork.paint.model.ArrayLayout
+import com.brushwork.paint.model.ArrayInstance
+import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ArrayMode
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
@@ -27,7 +28,6 @@ import com.brushwork.paint.model.LayerTree
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
-import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VectorContent
 import kotlin.math.max
@@ -54,6 +54,12 @@ import kotlin.math.roundToInt
  *   [GuideEditor]; "Use a path" (PICK) takes the first subpath of the vector path tapped next
  *   on any visible layer, copied.
  * - Copies are not hit-testable: a touch away from the handles does nothing.
+ * - v1.8 (area B, design §3.3): the preview places the copies by the [ArrayInstances] matrices
+ *   (each copy's size and turn in them) and draws each through its look's paint (opacity as
+ *   alpha, the tint as a color filter, as `ArrayDraw` draws a raster copy). The draft rule: while
+ *   a slider or a handle drags a preview of more than [DRAFT_ABOVE] copies, the copies show
+ *   their opacity and size only; the tint returns on release (the commit's preview and the
+ *   cache). A change of the look alone commits as ONE step "Array look" ([ArrayOps.labelFor]).
  *
  * On a layer without an array it draws nothing and takes no touches. Opening it on a layer whose
  * raster source is being edited runs "Finish source edit" (§3.3 a). Nothing is ever pending
@@ -152,14 +158,20 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     /**
      * Previews [spec] on the active layer's array (a slider or field moving): nothing is
-     * recorded until [commitPreview].
+     * recorded until [commitPreview]. Above [DRAFT_ABOVE] copies it is a draft (no tint).
      */
     fun preview(spec: ArraySpec) {
         val layer = target ?: return
-        previewOn(layer, spec)
+        previewOn(layer, spec, draft = true)
     }
 
-    /** Commits what [preview] shows as ONE step "Edit array" (a slider released, a field done). */
+    /**
+     * True while the preview is a draft (design §3.3 c: more than [DRAFT_ABOVE] copies while a
+     * slider or a handle drags): its copies show their opacity and size, not their tint.
+     */
+    val previewIsDraft: Boolean get() = preview?.isDraft == true
+
+    /** Commits what [preview] shows as ONE step "Edit array" ("Array look" for the look alone; a slider released, a field done). */
     fun commitPreview() {
         val p = preview ?: return
         // Already on its way (a vector re-render): the same release twice records nothing more.
@@ -167,7 +179,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         commitOn(p.layer, p.spec)
     }
 
-    /** Sets the active layer's array to [spec] as ONE step "Edit array" (a chip, a toggle, a segment). */
+    /** Sets the active layer's array to [spec] as ONE step "Edit array" ("Array look" for the look alone; a chip, a toggle, a segment). */
     fun commit(spec: ArraySpec) {
         val layer = target ?: return
         commitOn(layer, spec)
@@ -329,7 +341,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             return
         }
         val d = drag ?: return
-        previewOn(d.layer, ArrayHandles.dragged(d.base, d.source, d.handle, at + d.offset))
+        previewOn(d.layer, ArrayHandles.dragged(d.base, d.source, d.handle, at + d.offset), draft = true)
         controller.invalidateOverlay()
     }
 
@@ -415,7 +427,8 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         return null
     }
 
-    private fun previewOn(layer: Layer, spec: ArraySpec) {
+    /** Previews [spec] on [layer]; [draft]: a slider or handle dragging (the draft rule may apply). */
+    private fun previewOn(layer: Layer, spec: ArraySpec, draft: Boolean = false) {
         val a = layer.array ?: return
         if (a.spec.editingSource) return
         val s = spec.sanitized()
@@ -424,7 +437,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         // nothing: no step would ever end that preview.
         if (running == null && s == a.spec) return
         val p = running ?: startPreview(layer) ?: return
-        p.update(s)
+        p.update(s, draft)
         previewSpec = p.spec
         previewChanges++
     }
@@ -442,7 +455,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         shownAtCommit = -1
         selfEdit = true
         try {
-            ArrayOps.edit(controller, layer, s, ArrayLabels.EDIT) { _ ->
+            ArrayOps.edit(controller, layer, s, ArrayOps.labelFor(a.spec, s)) { _ ->
                 if (committing === token) {
                     committing = null
                     inFlight = null
@@ -554,8 +567,13 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
     private class Proxy(val key: ProxyKey, val bitmap: Bitmap, val rect: RectF)
 
-    /** What the preview draws: the spec and its matrices, swapped as one (the compositor reads it). */
-    private class Frame(val spec: ArraySpec, val matrices: List<FloatArray>)
+    /**
+     * What the preview draws, swapped as one (the compositor reads it): the spec, its instances'
+     * matrices in draw order and each one's paint (built once per [Preview.update], never per
+     * frame; alpha 0 = not drawn), and whether it was asked for while dragging ([dragging]) and
+     * shows as a draft ([draft]: no tint).
+     */
+    private class Frame(val spec: ArraySpec, val matrices: List<FloatArray>, val paints: List<Paint>, val dragging: Boolean, val draft: Boolean)
 
     /**
      * The live preview of [layer], drawn from [proxy] once per matrix of the previewed spec (the
@@ -574,7 +592,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
      * copies stay on screen without the tool's overlay.
      */
     private inner class Preview(val layer: Layer, val source: RectF, val proxy: Proxy, spec: ArraySpec) {
-        @Volatile private var frame = Frame(spec, ArrayLayout.matrices(spec, source))
+        private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+
+        @Volatile private var frame = frameOf(spec, dragging = false)
 
         /** True when the compositor draws the copies ([showAll]); false while the overlay does. */
         @Volatile private var inTiles = false
@@ -584,7 +604,9 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
 
         val spec: ArraySpec get() = frame.spec
 
-        private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        /** The copies show without their tint (the draft rule). */
+        val isDraft: Boolean get() = frame.draft
+
         private val m = Matrix()
 
         /** False until the first [update] (which hides the layer's old copies). */
@@ -603,21 +625,44 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
         }
 
         private fun drawCopies(canvas: Canvas, f: Frame, bmp: Bitmap) {
-            for (k in f.matrices.size - 1 downTo 0) {
-                val v = f.matrices[k]
+            for (i in f.matrices.indices) {
+                val v = f.matrices[i]
                 if (v.any { !it.isFinite() }) continue
+                val p = f.paints[i]
+                if (p.alpha == 0) continue
                 m.setValues(v)
                 canvas.save()
                 canvas.concat(m)
-                canvas.drawBitmap(bmp, null, proxy.rect, paint)
+                canvas.drawBitmap(bmp, null, proxy.rect, p)
                 canvas.restore()
             }
         }
 
-        fun update(s: ArraySpec) {
-            if (s == frame.spec && drawnOnce) return
-            val ms = ArrayLayout.matrices(s, source)
-            frame = Frame(s, ms)
+        /**
+         * [s]'s frame: its instances (copy N − 1 first, the source last, as `ArrayDraw` draws
+         * them) and their paints: the shared [paint] for a copy without a look, else the look's
+         * ([ArrayDraw.paintOf]); a draft (more than [DRAFT_ABOVE] instances while [dragging])
+         * keeps the opacity only.
+         */
+        private fun frameOf(s: ArraySpec, dragging: Boolean): Frame {
+            val instances: List<ArrayInstance> = ArrayInstances.of(s, source)
+            val draft = dragging && instances.size > DRAFT_ABOVE && s.look?.let { it.tintStrength > 0f && it.tint.isNotEmpty() } == true
+            val paints = instances.map { inst ->
+                val look = inst.look
+                when {
+                    look == null || inst.k == 0 || !ArrayDraw.changesPixels(look) -> paint
+                    draft -> Paint(paint).apply { alpha = (look.opacity.coerceIn(0f, 1f) * 255f).roundToInt() }
+                    else -> ArrayDraw.paintOf(look, paint)
+                }
+            }
+            return Frame(s, instances.map { it.matrix }, paints, dragging, draft)
+        }
+
+        fun update(s: ArraySpec, dragging: Boolean = false) {
+            if (s == frame.spec && dragging == frame.dragging && drawnOnce) return
+            val f = frameOf(s, dragging)
+            frame = f
+            val ms = f.matrices
             if (inTiles) {
                 val cover = coverOf(ms, proxy.rect)
                 val dirty = RectF(drawn).apply { union(cover) }
@@ -665,6 +710,12 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     private companion object {
         /** The largest side of the source proxy a preview draws (§3.3 c). */
         const val PROXY_MAX = 1024
+
+        /**
+         * The draft rule (design §3.3 c): a preview of more copies than this, while a slider or
+         * a handle drags, shows their opacity and size only (the tint returns on release).
+         */
+        const val DRAFT_ABOVE = 64
 
         /** The tap of "Use a path" found no path. */
         const val NO_PATH = "Tap a vector path to use it as the guide"
