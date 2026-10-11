@@ -141,6 +141,9 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
     companion object {
         /** v1.8 (item 5): the param key of the static's color (default white). */
         const val STATIC_COLOR_KEY = "static_color"
+
+        /** `1f / a` for an alpha a in 1..255 (the general path's two divisions a pixel, looked up). */
+        private val INV = FloatArray(256) { if (it == 0) 0f else 1f / it }
     }
 
     /** Splits a band into blocks 5–30 % of the width wide, each with its own offset. */
@@ -238,8 +241,8 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                     val r = w0r * p0 * ((c0 shr 16) and 0xFF) + w1r * p1 * ((c1 shr 16) and 0xFF) + w2r * p2 * ((c2 shr 16) and 0xFF)
                     val g = w0g * p0 * ((c0 shr 8) and 0xFF) + w1g * p1 * ((c1 shr 8) and 0xFF) + w2g * p2 * ((c2 shr 8) and 0xFF)
                     val b = w0b * p0 * (c0 and 0xFF) + w1b * p1 * (c1 and 0xFF) + w2b * p2 * (c2 and 0xFF)
-                    val inv = 1f / a
-                    val invU = 1f / max(a, a1)
+                    val inv = INV[a]
+                    val invU = INV[max(a, a1)]
                     (a shl 24) or (ChannelShift.clamp(r * (if (ur) invU else inv)) shl 16) or
                         (ChannelShift.clamp(g * (if (ug) invU else inv)) shl 8) or ChannelShift.clamp(b * (if (ub) invU else inv))
                 }
@@ -262,17 +265,23 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
-    /** Digital static: short horizontal dashes of random gray mixed in by [amount] (v1.7's, for white). */
+    /**
+     * Digital static: short horizontal dashes of random gray mixed in by [amount] (v1.7's bytes, for
+     * white). The dash's gray changes every 3 full-resolution pixels and its strength every 11, so
+     * each hash is kept until its cell changes (the same values as v1.7's hash per pixel).
+     */
     private fun addStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int) {
         val fy = floor(row / scale).toInt()
         val inv = 1f / scale
+        var cellN = Int.MIN_VALUE; var v = 0f
+        var cellK = Int.MIN_VALUE; var hk = 0f
         for (x in 0 until w) {
             val c = dp[o + x]
             if (c ushr 24 == 0) continue
             val fx = floor(x * inv).toInt()
-            val n = FilterMath.hash01(fx / 3, fy, seed * 13 + 5)
-            val k = amount * FilterMath.hash01(fx / 11, fy, seed * 13 + 9)
-            val v = n * 255f
+            if (fx / 3 != cellN) { cellN = fx / 3; v = FilterMath.hash01(cellN, fy, seed * 13 + 5) * 255f }
+            if (fx / 11 != cellK) { cellK = fx / 11; hk = FilterMath.hash01(cellK, fy, seed * 13 + 9) }
+            val k = amount * hk
             val r = ((c shr 16) and 0xFF); val g = ((c shr 8) and 0xFF); val b = c and 0xFF
             dp[o + x] = (c and 0xFF000000.toInt()) or
                 (ChannelShift.clamp(r + (v - r) * k) shl 16) or
@@ -289,18 +298,25 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
     private fun addColoredStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int, sr: Float, sg: Float, sb: Float) {
         val fy = floor(row / scale).toInt()
         val inv = 1f / scale
+        // As [addStatic]: each hash kept until its cell changes, and the dash's color with it.
+        var cellN = Int.MIN_VALUE; var vr = 0f; var vg = 0f; var vb = 0f
+        var cellK = Int.MIN_VALUE; var hk = 0f
         for (x in 0 until w) {
             val c = dp[o + x]
             if (c ushr 24 == 0) continue
             val fx = floor(x * inv).toInt()
-            val n = FilterMath.hash01(fx / 3, fy, seed * 13 + 5)
-            val k = amount * FilterMath.hash01(fx / 11, fy, seed * 13 + 9)
-            val v = n * 255f
+            if (fx / 3 != cellN) {
+                cellN = fx / 3
+                val v = FilterMath.hash01(cellN, fy, seed * 13 + 5) * 255f
+                vr = v * sr; vg = v * sg; vb = v * sb
+            }
+            if (fx / 11 != cellK) { cellK = fx / 11; hk = FilterMath.hash01(cellK, fy, seed * 13 + 9) }
+            val k = amount * hk
             val r = ((c shr 16) and 0xFF); val g = ((c shr 8) and 0xFF); val b = c and 0xFF
             dp[o + x] = (c and 0xFF000000.toInt()) or
-                (ChannelShift.clamp(r + (v * sr - r) * k) shl 16) or
-                (ChannelShift.clamp(g + (v * sg - g) * k) shl 8) or
-                ChannelShift.clamp(b + (v * sb - b) * k)
+                (ChannelShift.clamp(r + (vr - r) * k) shl 16) or
+                (ChannelShift.clamp(g + (vg - g) * k) shl 8) or
+                ChannelShift.clamp(b + (vb - b) * k)
         }
     }
 }
