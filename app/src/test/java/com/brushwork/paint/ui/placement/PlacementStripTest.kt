@@ -42,7 +42,8 @@ import org.robolectric.shadows.ShadowLog
  * with this test's own record for the states [StripHandlesV17] did not record), no label cut by
  * its item's width.
  * - Transform: nothing to transform (its status alone on row 1, no toggle); the box modes (row 1
- *   the mode, "Keep aspect ratio", "From center", the flips; the More row under the status text);
+ *   the mode, "Keep aspect ratio", "From center", the flips; the More row under
+ *   [TransformLabels18.BOX_HINT]);
  *   Free deform (row 1 the mode, [TransformLabels18.MESH_SIZE], "Reset mesh"; the steppers in its
  *   popup, `movedInto`). The other modes are inside the mode dropdown (`movedInto`, rule 5). The
  *   Numbers sheet outlives the More row; "Choose interpolation" keeps it open.
@@ -107,9 +108,9 @@ class PlacementStripTest {
         inspect(rig, box, (boxRow1 + boxMore + boxModes).toSet())
         assertSplits(box, rig.spec) { _, _ -> listOf(T.MODE, T.ASPECT, T.CENTER, T.FLIP_H, T.FLIP_V) }
         assertEquals("$box at $dp dp: row 1", boxRow1, row1Handles())
-        assertEquals("$box: the status text is the hint", t.statusText, rig.spec.hint)
+        assertEquals("$box: the box hint", TransformLabels18.BOX_HINT, rig.spec.hint)
         assertTrue(StripTestKit.openMoreRow())
-        assertEquals("$box: the hint heads the More row", t.statusText, moreTexts().firstOrNull())
+        assertEquals("$box: the hint heads the More row", TransformLabels18.BOX_HINT, moreTexts().firstOrNull())
         assertEquals("$box at $dp dp: the More row", boxMore, moreHandles())
         assertEquals("$box at $dp dp: texts fit", emptyList<String>(), clippedTexts())
         StripTestKit.closeMoreRow()

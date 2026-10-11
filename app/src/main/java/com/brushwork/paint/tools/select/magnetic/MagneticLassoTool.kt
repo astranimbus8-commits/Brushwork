@@ -26,6 +26,7 @@ import com.brushwork.paint.tools.select.PersistedOption
 import com.brushwork.paint.tools.select.PixelSnapshot
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.SelectionOverlay
+import com.brushwork.paint.ui.common.MagneticLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -103,6 +104,8 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private var wire = LiveWire()
     private var mapKey: MapKey? = null
     private var failedKey: MapKey? = null
+    /** Copies the pixels the edge map is built from ([PixelSnapshot.take]); a test makes it run out of memory. */
+    internal var takeSnapshot: (SampleSource, Bitmap) -> Bitmap = { source, layerBitmap -> PixelSnapshot.take(controller, source, layerBitmap) }
     private var mapJob: Job? = null
     private var traceJob: Job? = null
 
@@ -217,7 +220,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         livePath = null
         mapKey = key
         val snapshot = try {
-            PixelSnapshot.take(c, source, c.activeLayer.bitmap)
+            takeSnapshot(source, c.activeLayer.bitmap)
         } catch (e: OutOfMemoryError) {
             mapFailed(key)
             return
@@ -242,13 +245,14 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     }
 
     /**
-     * No memory for the edge map of [key]'s pixels: said once, and segments stay straight (no new
-     * try on every touch; the next activation or other pixels try again).
+     * No memory for the edge map of [key]'s pixels: said once ([MagneticLabels18.OUT_OF_MEMORY]),
+     * and segments stay straight (no new try on every touch; the next activation or other pixels
+     * try again).
      */
     private fun mapFailed(key: MapKey) {
         mapKey = null
         failedKey = key
-        controller.toast("Not enough memory for \"${ToolId.MAGNETIC_LASSO.label}\"")
+        controller.toast(MagneticLabels18.OUT_OF_MEMORY)
     }
 
     // ------------------------------------------------------------------ tracing

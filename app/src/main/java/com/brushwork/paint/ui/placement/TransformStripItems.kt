@@ -59,8 +59,8 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * - The box modes: row 1 the mode dropdown, "Keep aspect ratio", "From center", the flips (their
  *   width kept while a text kept as text can't be mirrored); the More row "Delete" ("Delete
  *   picture" while placing), the quarter turns, "Fit to canvas", "Reset transform", "Snap to
- *   objects", "Choose interpolation" and "Numbers" (the Numbers sheet, an overlay), under the
- *   status text as its hint.
+ *   objects", "Choose interpolation" and "Numbers" (the Numbers sheet, an overlay), under
+ *   [TransformLabels18.BOX_HINT] as its hint.
  * - Free deform: row 1 the mode dropdown, [TransformLabels18.MESH_SIZE] (the mesh's "3 × 3"
  *   opening the v1.7 "Mesh columns" / "Mesh rows" steppers) and "Reset mesh"; the More row
  *   "Smooth mesh", "Select all points" / "Deselect all points", "Delete" and "Choose
@@ -98,9 +98,9 @@ internal fun transformSpec(tool: TransformTool): StripSpec {
             T.delete(tool), T.rotate(tool, clockwise = false), T.rotate(tool, clockwise = true), T.fit(tool), T.reset(tool),
             T.snap(tool), T.interpolation(tool), T.numbers(tool),
         ),
-        // Design §3.9: the v1.7 status text ("Touch the canvas to transform the layer", "... the
-        // selection", "... the layer mask"): still true while transforming, and it names what moves.
-        hint = tool.statusText,
+        // v1.8 integration: how the box works while it is active (the idle status text names the
+        // first touch, which has happened by now).
+        hint = TransformLabels18.BOX_HINT,
         overlays = overlays,
         movedInto = T.modesInside(tool.mode),
     )

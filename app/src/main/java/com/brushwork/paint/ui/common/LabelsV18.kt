@@ -47,6 +47,8 @@ object MagneticLabels18 {
     const val DISCARD = "Discard outline"; const val CLOSE = "Close outline"
     const val EDGE_REACH = "Edge reach"; const val EDGE_CONTRAST = "Edge contrast"; const val SNAP_TO_EDGE = "Snap to edge"
     const val SELECTION_MODE = "Selection mode"
+    /** v1.8 integration: the toast, said once, when the edge map has no memory (the segments stay straight). */
+    const val OUT_OF_MEMORY = "Not enough memory to find edges: the outline stays straight"
 }
 
 /** The Color select strip and its presets popup (item 3). */
@@ -59,6 +61,8 @@ object ColorSelectLabels18 {
     const val FUZZINESS = "Fuzziness"; const val SELECT_COLORS = "Select colors"
     const val USE_CURRENT = "Use the current color"; const val FROM_PICKER = "Add from the color picker"
     const val CLEAR_SAMPLES = "Clear samples"; const val INVERT_RANGE = "Invert range"
+    /** v1.8 integration: the toast when the samples or the preset match no pixel (no selection step). */
+    const val NO_MATCH = "No pixels match these colors"
 }
 
 /** The fringe colors of Chromatic aberration and Glitch (item 5). The preset chips' names are [RGB] .. [BLUE_YELLOW]. */
@@ -94,6 +98,12 @@ object CogLabels18 {
 object TransformLabels18 {
     /** Free deform's mesh chip, whose visible text is the size ("3 × 3"). */
     const val MESH_SIZE = "Mesh size"
+    /**
+     * v1.8 integration: the More-row hint while a box-mode transform (Free, Distort) is active.
+     * A drag off the handles moves the content; a corner or side handle scales it (Free) or moves
+     * that corner or side (Distort); the round handle turns it.
+     */
+    const val BOX_HINT = "Drag to move; drag a handle to reshape or turn"
 }
 
 /** The two-row tool strip (item 7). */

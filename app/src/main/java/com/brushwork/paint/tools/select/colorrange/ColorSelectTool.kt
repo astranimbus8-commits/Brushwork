@@ -25,6 +25,7 @@ import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.SelectionJobs
 import com.brushwork.paint.tools.select.SelectionMasks
 import com.brushwork.paint.tools.select.magnetic.Loupe
+import com.brushwork.paint.ui.common.ColorSelectLabels18
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
@@ -177,7 +178,8 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
      * The strip's check: ONE selection step "Color select" at full resolution, combined by [mode].
      * The samples stay; their steps end. With nothing to select ([canSelect] false: the ✓ of the
      * pending bar after ColorSelectLabels18.CLEAR_SAMPLES, a layer operation landing the steps) only the steps end:
-     * the selection there is kept, never replaced by an empty one.
+     * the selection there is kept, never replaced by an empty one. When the samples or the preset
+     * match no pixel, [ColorSelectLabels18.NO_MATCH] is shown and the selection stays (no step).
      */
     fun selectColors() {
         if (busy) return
@@ -197,7 +199,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
         samples.resetHistory()
         val w = snapshot.width; val h = snapshot.height
         busy = true
-        SelectionJobs.applyAsync(c, ToolId.COLOR_SELECT.label, mode, LassoCommit.BUSY_LABEL, onFinished = {
+        SelectionJobs.applyAsync(c, ToolId.COLOR_SELECT.label, mode, LassoCommit.BUSY_LABEL, emptyMessage = ColorSelectLabels18.NO_MATCH, onFinished = {
             snapshot.recycle()
             busy = false
             c.invalidateOverlay()

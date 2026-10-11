@@ -8,10 +8,12 @@ import com.brushwork.paint.filters.art.GlitchFilter
 import com.brushwork.paint.model.SelectionMode
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.select.SampleSource
+import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.ui.placement.TransformStripItems
 import com.brushwork.paint.ui.selection.modeDescription
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -50,7 +52,10 @@ class LabelsV18Test {
     @Test
     fun everyV18LabelIsUniqueAndNotBlank() {
         val all = labels
-        assertEquals("the objects have their labels: ${all.keys}", 95, all.size)
+        // 95 from F1, and three from the integration (v18I): the Color select no-match toast, the
+        // Magnetic lasso's out-of-memory toast and the Transform box hint.
+        assertEquals("the objects have their labels: ${all.keys}", 98, all.size)
+        assertTrue(all.keys.containsAll(listOf("ColorSelectLabels18.NO_MATCH", "MagneticLabels18.OUT_OF_MEMORY", "TransformLabels18.BOX_HINT")))
         val dups = all.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
         assertTrue("labels declared twice: $dups", dups.isEmpty())
         assertTrue("blank: ${all.filterValues { it.isBlank() }}", all.values.none { it.isBlank() || it != it.trim() })
@@ -262,6 +267,22 @@ class LabelsV18Test {
                 "Fewer mesh columns", "More mesh columns", "Fewer mesh rows", "More mesh rows", "Select all points", "Deselect all points",
                 "Delete", "Choose interpolation", "Transform", "3 × 3",
             ),
+        )
+    }
+
+    @Test
+    fun theTransformStripInABoxMode() {
+        // v18I: the box hint heads the More row of an active Free or Distort transform.
+        val t = TransformStripItems
+        assertNoSubstrings(
+            "Transform strip, box modes",
+            v18 = listOf(TransformLabels18.BOX_HINT, StripLabels18.MORE_TOGGLE),
+            v17 = TransformTool.Mode.entries.map { it.label } + TransformTool.Interpolation.entries.flatMap { listOf(it.label, it.description) } +
+                listOf(
+                    t.keepAspectLabel(true), t.keepAspectLabel(false), t.FROM_CENTER, t.FLIP_HORIZONTALLY, t.FLIP_VERTICALLY,
+                    t.DELETE_LABEL, t.DELETE_PICTURE, t.ROTATE_CCW_LABEL, t.ROTATE_CW_LABEL, t.FIT_LABEL, t.RESET_LABEL,
+                    "Snap to objects", t.INTERPOLATION_LABEL, t.NUMBERS_LABEL, "Transform", "On", "Off",
+                ),
         )
     }
 
