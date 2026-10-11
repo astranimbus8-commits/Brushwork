@@ -50,8 +50,11 @@ internal object Fingers18 {
     }
 
     /** A finger held still on the control labelled [label] for 800 ms; [held] runs before it lifts. */
-    fun longPress(s: ChromeScreen, label: String, held: () -> Unit = {}) {
-        val r = Finger.control(s, label) ?: throw AssertionError("no \"$label\" on screen")
+    fun longPress(s: ChromeScreen, label: String, held: () -> Unit = {}) =
+        longPressAt(s, Finger.control(s, label) ?: throw AssertionError("no \"$label\" on screen"), held)
+
+    /** A finger held still in the middle of [r] (dp) for 800 ms (a cell that is no clickable too); [held] runs before it lifts. */
+    fun longPressAt(s: ChromeScreen, r: Rect, held: () -> Unit = {}) {
         val (x, y) = Finger.px(s, r.center.x, r.center.y)
         val v = s.activity.window.decorView
         val t0 = SystemClock.uptimeMillis()
