@@ -1,5 +1,7 @@
 package com.brushwork.paint.ui.symmetry
 
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.testing.StripTestKit
@@ -12,6 +14,7 @@ import com.brushwork.paint.ui.brush.MirrorsStripKit.inspect
 import com.brushwork.paint.ui.brush.MirrorsStripKit.key
 import com.brushwork.paint.ui.brush.MirrorsStripKit.moreHandles
 import com.brushwork.paint.ui.brush.MirrorsStripKit.row1Handles
+import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.tools.strip.StripInventory
 import com.brushwork.paint.ui.tools.strip.StripRow
@@ -48,6 +51,13 @@ class SymmetryStripTest {
         SymmetryType.ARRAY ->
             listOf(SymmetryStripItems.TYPE, SymmetryStripItems.SPACING_X, SymmetryStripItems.SPACING_Y, SymmetryStripItems.DONE) to SymmetryStripItems.SPACING_Y
         SymmetryType.OFF, SymmetryType.PERSPECTIVE_ARRAY -> listOf(SymmetryStripItems.TYPE, SymmetryStripItems.DONE) to null
+    }
+
+    /** The semantics nodes, every window, whose text or description is [label]. */
+    private fun labelled(label: String): Int = RobolectricUi.elements().count { e ->
+        val n = e.node
+        label in n.config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() ||
+            n.config.getOrNull(SemanticsProperties.Text).orEmpty().any { it.text == label }
     }
 
     @Test
@@ -104,11 +114,24 @@ class SymmetryStripTest {
             SmokeUi.click(SymmetryType.MIRROR.label, exact = true)
             rig.settle()
             for (type in SymmetryType.entries) assertTrue("$dp dp: the entry \"${type.label}\"", SmokeUi.has(type.label, exact = true))
+            // Open, the button leaves the semantics: the current type's label is its entry's alone.
+            assertEquals("open: one \"Mirror ruler\"", 1, labelled(SymmetryType.MIRROR.label))
+            assertFalse(row1Handles().contains(SymmetryType.MIRROR.label))
             SmokeUi.click(SymmetryType.KALEIDOSCOPE.label, exact = true)
             rig.settle()
             assertEquals(SymmetryType.KALEIDOSCOPE, c.symmetry.type)
             assertTrue(SmokeUi.has(SymmetryType.KALEIDOSCOPE.label, exact = true))
             assertFalse("the dropdown closed", SmokeUi.has(SymmetryType.ROTATION.label, exact = true))
+            assertEquals("closed: the button", SymmetryType.KALEIDOSCOPE.label, row1Handles().first())
+            // The current type picked again: nothing changes, the dropdown closes.
+            SmokeUi.click(SymmetryType.KALEIDOSCOPE.label, exact = true)
+            rig.settle()
+            assertEquals(1, labelled(SymmetryType.KALEIDOSCOPE.label))
+            SmokeUi.click(SymmetryType.KALEIDOSCOPE.label, exact = true)
+            rig.settle()
+            assertEquals(SymmetryType.KALEIDOSCOPE, c.symmetry.type)
+            assertFalse("the dropdown closed", SmokeUi.has(SymmetryType.ROTATION.label, exact = true))
+            assertEquals(1, labelled(SymmetryType.KALEIDOSCOPE.label))
 
             // A value control opens its field (with its slider) in a dropdown.
             SmokeUi.click("Divisions 6", exact = true)

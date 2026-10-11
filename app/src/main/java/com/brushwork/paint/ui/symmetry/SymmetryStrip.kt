@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -180,7 +181,11 @@ private fun StripItem.on(row: StripRow, overflowRank: Int = 0) =
 
 private val chipShape = RoundedCornerShape(8.dp)
 
-/** The type button (the current type's icon and ▾, described by its label) and its dropdown of the six types. */
+/**
+ * The type button (the current type's icon and ▾, described by its label) and its dropdown of the
+ * six types. While the dropdown is open the button leaves the semantics (a tap outside the menu
+ * only closes it), so the current type's label belongs to its entry alone: one control per label.
+ */
 @Composable
 private fun TypeMenu(c: EditorController, current: SymmetryType) {
     var open by remember { mutableStateOf(false) }
@@ -191,6 +196,7 @@ private fun TypeMenu(c: EditorController, current: SymmetryType) {
                 .heightIn(min = 40.dp)
                 .clip(chipShape)
                 .border(1.dp, MaterialTheme.colorScheme.outline, chipShape)
+                .then(if (open) Modifier.clearAndSetSemantics { } else Modifier)
                 .clickable { open = true }
                 .semantics { contentDescription = current.label }
                 .padding(start = 6.dp, end = 1.dp),
