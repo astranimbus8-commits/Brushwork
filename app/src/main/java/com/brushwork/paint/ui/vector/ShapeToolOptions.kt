@@ -181,7 +181,7 @@ fun ShapeToolOptions(tool: ShapeTool) {
 }
 
 @Composable
-private fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
+internal fun ShapeSettingsSheet(tool: ShapeTool, onDismiss: () -> Unit) {
     val s = tool.settings
     val controller = tool.controller
     val dpi = controller.doc.dpi
@@ -376,9 +376,9 @@ private fun CogPercentSlider(label: String, value: Float, min: Float, max: Float
     )
 }
 
-/** Numeric placement of the pending shape (hosted by [ShapeToolOptions]). */
+/** Numeric placement of the pending shape (hosted by [ShapeToolOptions] and by the v1.8 strip's overlays). */
 @Composable
-private fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
+internal fun ShapeNumbersSheet(tool: ShapeTool, onDismiss: () -> Unit) {
     val b = tool.box
     // Committed or discarded from elsewhere (✓ / ✕, tool switch): nothing left to edit.
     LaunchedEffect(b == null) { if (b == null) onDismiss() }

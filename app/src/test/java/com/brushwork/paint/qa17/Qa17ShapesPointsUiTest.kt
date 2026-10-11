@@ -8,6 +8,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -95,7 +96,7 @@ class Qa17ShapesPointsUiTest {
         assertEquals("the phone is 392 dp wide", 392f, s.widthDp, 1f)
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         assertEquals(ShapeType.RECTANGLE, tool.settings.type)
         QaCurves.drag(s, Vec2(100f, 80f), Vec2(200f, 140f))
         assertNotNull("a pending rectangle", tool.box)
@@ -138,6 +139,7 @@ class Qa17ShapesPointsUiTest {
         // The trash cell: all points selected = the whole shape; one = that point.
         assertNotNull("the trash cell shows", s.tagged(V17Tags.PILL_TRASH))
         assertTrue("all selected: ${SmokeUi.shown().take(80)}", has(PillLabels.deleteObject("shape"), exact = true))
+        QaShapeStripKit.closeRow()
         QaCurves.tap(s, tool.pointAt(1))
         assertEquals(listOf(1), tool.pointSelection.indices)
         assertTrue(has(PillLabels.DELETE_POINTS, exact = true))
@@ -175,7 +177,7 @@ class Qa17ShapesPointsUiTest {
         val c = s.c
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         click("Shape type", exact = true)
         click(ShapeType.STAR.label, exact = true)
         assertEquals(ShapeType.STAR, tool.settings.type)

@@ -6,6 +6,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -95,7 +96,7 @@ class Qa17ShapesPathfinderUiTest {
         val c = s.c
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         click("Shape type", exact = true)
         click(ShapeType.ELLIPSE.label, exact = true)
         click("Shape style", exact = true)

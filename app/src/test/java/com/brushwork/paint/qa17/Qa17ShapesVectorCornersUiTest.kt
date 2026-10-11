@@ -13,6 +13,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -118,8 +119,12 @@ class Qa17ShapesVectorCornersUiTest {
         val layouts = ArrayList<TextLayoutResult>()
         value.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)
         val overflow = layouts.firstOrNull()?.hasVisualOverflow
+        val why = layouts.firstOrNull()?.let { l ->
+            "size ${l.size}, paragraph ${l.multiParagraph.width} x ${l.multiParagraph.height}, width over ${l.didOverflowWidth}, height over ${l.didOverflowHeight}, " +
+                "ellipsized ${l.lineCount > 0 && l.isLineEllipsized(0)}, ${l.layoutInput.constraints}"
+        }
         assertTrue(
-            "\"$label\" shows \"$state\" whole: its text at $r (overflow $overflow) in the field at $field",
+            "\"$label\" shows \"$state\" whole: its text at $r (overflow $overflow: $why) in the field at $field",
             r.width > 4f && overflow == false && r.right <= field.right - 28f,
         )
     }
@@ -145,7 +150,7 @@ class Qa17ShapesVectorCornersUiTest {
         assertTrue(vec.isVectorLayer)
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         click("Shape style", exact = true)
         click(ShapeStyle.FILL.label, exact = true)
         assertEquals(ShapeType.RECTANGLE, tool.settings.type)

@@ -54,14 +54,17 @@ class QaShapePointHandlesEditorUiTest {
             click("Shape type", exact = true)
             click(ShapeType.ELLIPSE.label, exact = true)
             assertEquals(ShapeType.ELLIPSE, tool.settings.type)
-            QaCurves.snapOff(c)
+            QaShapeStripKit.snapOff(c)
             QaCurves.drag(s, Vec2(100f, 80f), Vec2(200f, 150f))
             assertTrue("a pending ellipse", tool.box != null)
             click("Points", exact = true)
             assertTrue(tool.pointsMode)
+            // v1.8 (§3.9): the Handles group is the More row's "Handles" popup.
+            QaShapeStripKit.openHandles()
             for (label in listOf("Shorter handles", "Type handle scale", "Longer handles", "Handle scale", "In and out", "In", "Out", "All points")) {
                 assertTrue("\"$label\" in the strip: ${SmokeUi.shown()}", has(label, exact = true))
             }
+            QaShapeStripKit.closeHandles()
             val p0 = tool.docAnchors()!![0].pos
             QaCurves.tap(s, p0)
             assertEquals("the tap selected point 1", 0, tool.selectedPoint)
@@ -70,6 +73,7 @@ class QaShapePointHandlesEditorUiTest {
             assertTrue("an ellipse's point has handles: $base", base > 10f)
 
             // › : one Scale step (25 %), back to 100 % at rest; one in-tool step.
+            QaShapeStripKit.openHandles()
             click("Longer handles")
             assertEquals("› : 125 %", base * 1.25f, out0().length, 1e-3f * base)
             assertEquals(1f, tool.handleScale, 0f)

@@ -4,6 +4,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -92,7 +93,7 @@ class Qa17ShapesToPathUiTest {
         val c = s.c
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         click("Shape settings", exact = true)
         press(s, CornerStyle.ROUND.label)
         assertEquals(CornerStyle.ROUND, tool.settings.corner)
@@ -189,7 +190,7 @@ class Qa17ShapesToPathUiTest {
         val c = s.c
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         click("Shape type", exact = true)
         click(ShapeType.POLYGON.label, exact = true)
         click("Shape settings", exact = true)
@@ -199,6 +200,7 @@ class Qa17ShapesToPathUiTest {
         click("Stroke with", exact = true)
         click(ShapeStroke.BRUSH.label, exact = true)
         assertEquals(ShapeStroke.BRUSH, tool.settings.strokeWith)
+        QaShapeStripKit.closeRow()
         QaCurves.drag(s, Vec2(110f, 50f), Vec2(180f, 200f))
         assertNotNull("a pending triangle", tool.box)
         press(s, "Points")

@@ -84,7 +84,7 @@ import com.brushwork.paint.ui.theme.IbisDims
  */
 
 /** What the strip shows about the pending shape's points (only these changes recompose it). */
-private data class PointsInfo(
+internal data class PointsInfo(
     val pending: Boolean,
     val pointsMode: Boolean,
     val custom: Boolean,
@@ -110,7 +110,7 @@ private data class PointsInfo(
 )
 
 @Composable
-private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
+internal fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
     val info by remember(tool) {
         derivedStateOf {
             val pts = tool.points
@@ -275,16 +275,28 @@ private val ROUNDNESS_FIELD_WIDTH = 220.dp
 @Composable
 private fun ShapeHandlesGroup(tool: ShapeTool, hasSelection: Boolean) {
     var typing by remember { mutableStateOf(false) }
-    val percent = tool.handleScale * 100f
-    // A selected sharp point between straight edges has no handle: nothing to scale until another
-    // point (or "All points") is chosen, so the arrows, value and slider rest disabled.
-    val canScale by remember(tool) { derivedStateOf { tool.canScaleHandles } }
     Icon(
         Icons.Filled.SwapHoriz,
         contentDescription = null,
         tint = BrushworkColors.OnChromeDim,
         modifier = Modifier.padding(start = 8.dp, end = 2.dp).size(20.dp),
     )
+    ShapeHandleScaleControls(tool) { typing = true }
+    ShapeHandleSideControls(tool, hasSelection)
+    if (typing) ShapeHandleScaleDialog(tool) { typing = false }
+}
+
+/**
+ * The Handles group's scale: ‹ "Shorter handles", the value (tap: "Type handle scale", which
+ * calls [onType]; long-press: the Scale step), › "Longer handles" and the "Handle scale" slider.
+ * Shared by the v1.7 row ([ShapeHandlesGroup]) and the v1.8 strip's "Handles" popup.
+ */
+@Composable
+internal fun ShapeHandleScaleControls(tool: ShapeTool, onType: () -> Unit) {
+    val percent = tool.handleScale * 100f
+    // A selected sharp point between straight edges has no handle: nothing to scale until another
+    // point (or "All points") is chosen, so the arrows, value and slider rest disabled.
+    val canScale by remember(tool) { derivedStateOf { tool.canScaleHandles } }
     RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = false) }
     Box(
         Modifier
@@ -292,7 +304,7 @@ private fun ShapeHandlesGroup(tool: ShapeTool, hasSelection: Boolean) {
             .widthIn(min = 56.dp)
             .clip(RoundedCornerShape(8.dp))
             .stepOnLongPress(IncrementKind.SCALE)
-            .clickable(enabled = canScale, onClickLabel = "Type handle scale", role = Role.Button) { typing = true },
+            .clickable(enabled = canScale, onClickLabel = "Type handle scale", role = Role.Button) { onType() },
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -304,28 +316,36 @@ private fun ShapeHandlesGroup(tool: ShapeTool, hasSelection: Boolean) {
     }
     RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", enabled = canScale, onRelease = { tool.endHandleScale() }) { tool.stepHandles(longer = true) }
     HandleScaleSlider(tool, canScale)
+}
+
+/** The Handles group's side ("In and out" / "In" / "Out") and "All points" ([hasSelection]: some point is selected). */
+@Composable
+internal fun ShapeHandleSideControls(tool: ShapeTool, hasSelection: Boolean) {
     for (side in ShapeHandleSide.entries) {
         OptionChip(sideLabel(side), tool.handleSide == side, { tool.handleSide = side })
     }
     // Without a selected point the group acts on all of them anyway.
     OptionChip("All points", tool.handlesAllPoints || !hasSelection, { tool.handlesAllPoints = !tool.handlesAllPoints }, enabled = hasSelection)
-    if (typing) {
-        ValueInputDialog(
-            title = "Handle scale",
-            label = "Scale",
-            initial = 100f,
-            format = { Units.formatNumber(it.toDouble(), 1) },
-            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(TYPED_MIN, TYPED_MAX) },
-            step = { v, up -> if (up) v * 1.1f else v * 0.9f },
-            toFraction = { v -> HandleScaleRange.fraction(v / 100.0) },
-            fromFraction = { f -> (HandleScaleRange.value(f) * 100.0).toFloat() },
-            rangeText = "10 – 400 % of the handles now",
-            suffix = "%",
-            onApply = { v -> tool.scaleHandles(v / 100f) },
-            onDismiss = { typing = false },
-            incrementKind = IncrementKind.SCALE,
-        )
-    }
+}
+
+/** "Handle scale" typed: 10–400 % of the handles now, exact; one in-tool step. */
+@Composable
+internal fun ShapeHandleScaleDialog(tool: ShapeTool, onDismiss: () -> Unit) {
+    ValueInputDialog(
+        title = "Handle scale",
+        label = "Scale",
+        initial = 100f,
+        format = { Units.formatNumber(it.toDouble(), 1) },
+        parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(TYPED_MIN, TYPED_MAX) },
+        step = { v, up -> if (up) v * 1.1f else v * 0.9f },
+        toFraction = { v -> HandleScaleRange.fraction(v / 100.0) },
+        fromFraction = { f -> (HandleScaleRange.value(f) * 100.0).toFloat() },
+        rangeText = "10 – 400 % of the handles now",
+        suffix = "%",
+        onApply = { v -> tool.scaleHandles(v / 100f) },
+        onDismiss = onDismiss,
+        incrementKind = IncrementKind.SCALE,
+    )
 }
 
 /** The mini slider of the Handles group: 10–400 % of the handles when the drag began, logarithmic. */

@@ -131,15 +131,15 @@ data class ShapeSettings(
      * (tap it with the shape tool to edit it again); off = painted into the active layer.
      */
     val editable: Boolean = true,
-    /** v1.8 (item 7): the cog's teeth, 3..64 ("Number of teeth"). */
+    /** v1.8 (item 7): the cog's teeth, 3..64 ([CogLabels18.TEETH]). */
     val cogTeeth: Int = CogParams.DEFAULT.teeth,
-    /** v1.8: the teeth's depth, 0.05..0.5 of the outer radius ("Tooth depth"). */
+    /** v1.8: the teeth's depth, 0.05..0.5 of the outer radius ([CogLabels18.TOOTH_DEPTH]). */
     val cogDepth: Float = CogParams.DEFAULT.depth,
-    /** v1.8: a tooth's width, 0.2..0.8 of the pitch ("Tooth width"). */
+    /** v1.8: a tooth's width, 0.2..0.8 of the pitch ([CogLabels18.TOOTH_WIDTH]). */
     val cogToothWidth: Float = CogParams.DEFAULT.toothWidth,
-    /** v1.8: how much a tooth narrows toward its tip, 0..0.9 ("Tooth taper"). */
+    /** v1.8: how much a tooth narrows toward its tip, 0..0.9 ([CogLabels18.TOOTH_TAPER]). */
     val cogTaper: Float = CogParams.DEFAULT.taper,
-    /** v1.8: the hole's radius, 0..0.8 of the root radius; 0 = no hole ("Hole size"). */
+    /** v1.8: the hole's radius, 0..0.8 of the root radius; 0 = no hole ([CogLabels18.HOLE_SIZE]). */
     val cogHole: Float = CogParams.DEFAULT.hole,
 ) {
     /** v1.8: the cog fields as one value. */
@@ -469,7 +469,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val points: List<ShapePoint>?,
         val pointsMode: Boolean,
         val selection: PointSelection,
-        // v1.8 (§3.1): the shape's live copies ("Remove mirror copies" is an in-tool step).
+        // v1.8 (§3.1): the shape's live copies ([MirrorLabels18.REMOVE] is an in-tool step).
         val copies: CopyMaps = CopyMaps.NONE,
         val perspective: List<FloatArray> = emptyList(),
     )

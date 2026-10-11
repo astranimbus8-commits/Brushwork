@@ -5,6 +5,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -55,7 +56,7 @@ class Qa17ShapesPathfinderMixedUiTest {
     private fun shapeTool(s: ChromeScreen): ShapeTool {
         QaCurves.tool(s, "Shape")
         val tool = s.c.currentTool as ShapeTool
-        QaCurves.snapOff(s.c)
+        QaShapeStripKit.snapOff(s.c)
         click("Shape style", exact = true)
         click(ShapeStyle.FILL.label, exact = true)
         assertEquals(ShapeStyle.FILL, tool.settings.style)

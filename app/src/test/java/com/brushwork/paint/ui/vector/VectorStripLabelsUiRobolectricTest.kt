@@ -5,6 +5,7 @@ import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -261,8 +262,10 @@ class VectorStripLabelsUiRobolectricTest {
             shape.setPointEditing(true)
             settle()
             assertTrue("points mode", shape.pointsMode)
-            // The Shape tool's handle sides read as the Curve tool's.
+            // The Shape tool's handle sides read as the Curve tool's (v1.8 §3.9: in the More row's "Handles" popup).
+            QaShapeStripKit.openHandles()
             for (label in listOf("In and out", "In", "Out", "All points")) assertTrue("\"$label\": ${SmokeUi.shown()}", SmokeUi.has(label, exact = true))
+            QaShapeStripKit.closeHandles()
             audit(s, ToolId.SHAPE, "Shape (points mode)")
             shape.discard()
             settle()

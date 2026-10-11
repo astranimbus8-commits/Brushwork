@@ -4,6 +4,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
+import com.brushwork.paint.qa16.QaShapeStripKit
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -64,7 +65,7 @@ class Qa17ShapesNarrow360UiTest {
         val ui = Qa16Ui(s)
         QaCurves.tool(s, "Shape")
         val tool = c.currentTool as ShapeTool
-        QaCurves.snapOff(c)
+        QaShapeStripKit.snapOff(c)
         QaCurves.drag(s, Vec2(60f, 70f), Vec2(170f, 150f))
         assertNotNull("a pending rectangle", tool.box)
         press(s, "Points", 32f)
@@ -83,6 +84,7 @@ class Qa17ShapesNarrow360UiTest {
         assertTrue("the trash cell is on screen: $trash", trash.left >= 0f && trash.right <= s.widthDp && trash.top >= 0f)
         assertTrue("a finger's size: $trash", trash.width >= 40f && trash.height >= 40f)
         click("Apply shape edit")
+        QaShapeStripKit.closeRow()
         // A second shape over the first: two operands.
         click("Shape type", exact = true)
         click(ShapeType.ELLIPSE.label, exact = true)
