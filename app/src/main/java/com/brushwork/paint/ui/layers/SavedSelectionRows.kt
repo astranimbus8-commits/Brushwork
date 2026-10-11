@@ -207,7 +207,7 @@ private fun SavedSelectionRow(controller: EditorController, entry: SavedSelectio
                 Icon(Icons.Filled.MoreVert, contentDescription = null, tint = DIM, modifier = Modifier.padding(end = 10.dp).size(22.dp))
             }
         }
-        DropdownMenu(expanded = menuOpen && !updating, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = menuOpen && !updating, onDismissRequest = close, modifier = Modifier.closeOnSecondFinger(close), containerColor = IbisColors.Menu) {
             Item(SavedSelectionLabels.LOAD, Icons.Filled.FileDownload) { act { c.loadSavedSelection(entry.id, SelectionMode.REPLACE) } }
             Item(SavedSelectionLabels.ADD, Icons.Filled.AddCircleOutline) { act { c.loadSavedSelection(entry.id, SelectionMode.ADD) } }
             // Without an active selection there is nothing to subtract from or intersect with.

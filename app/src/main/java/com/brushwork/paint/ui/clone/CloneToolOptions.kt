@@ -38,6 +38,7 @@ import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.ui.brush.BrushToolOptions
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisColors
 
 /**
  * Options strip of the clone stamp (v1.5 §4.2):
@@ -116,7 +117,7 @@ private fun SampleChip(allLayers: Boolean, onChange: (Boolean) -> Unit) {
                 .heightIn(min = 40.dp)
                 .semantics { contentDescription = "Sample from: $current" },
         )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }, containerColor = BrushworkColors.ChromeHigh) {
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }, containerColor = IbisColors.Menu) {
             for ((label, all) in listOf(THIS_LAYER to false, ALL_LAYERS to true)) {
                 DropdownMenuItem(
                     text = { Text(label) },
