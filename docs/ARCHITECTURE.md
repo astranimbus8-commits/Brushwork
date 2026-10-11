@@ -1528,9 +1528,9 @@ v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode r
 - `ArrayLookTab` (tag `V18Tags.ARRAY_LOOK`) holds:
   - **Field pairs:** Start/End opacity 0..100 %; Start/End size `ArraySpec.MIN_SCALE..MAX_SCALE` as %; Start/End turn ±3600°.
   - **Pace:** one ChoiceChip per `ArrayEasing`.
-  - **Tint colors:** the filters' `GradientEditor`, 2..8 stops; a 9th is ignored. With no tint it shows the default warm-to-cool stops.
+  - **Tint colors:** the filters' `GradientEditor`, 2..8 stops; a 9th is ignored. With no tint it shows the colors kept in `plainTint` (below), else the default warm-to-cool stops.
   - **Tint strength:** 0..100 %.
-  - **Reset look:** enabled when there is a look or the Pace is not Even.
+  - **Reset look:** enabled when there is a look, the Pace is not Even or `plainTint` holds colors.
 - **Two tint rules** stop a tint from doing nothing:
   - editing the colors while the strength is 0 sets it to 100 % in the same step;
   - a strength above 0 with no stops takes the default stops.
@@ -1539,6 +1539,9 @@ v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode r
   - The tab edits through `ArrayTool.previewLook` / `commitLook` / `resetLook`. They start from `lookBase()`: the look, or else no look at `plainPace`.
   - They keep `plainPace` in step with the look's Pace, so a look edited back to nothing keeps its Pace for the next edit.
   - "Reset look" and another layer bring it back to Even.
+- **Tint with no look.** A tint at strength 0 is no look either (`sanitized()` drops it).
+  - `lookBase()` and the bar also start from `ArrayTool.plainTint`, the last stops chosen, so a strength raised again (dragged through 0 or typed) finds the same colors.
+  - "Reset look" and another layer forget them.
 
 **The strip (`ui/array/ArrayStrip.kt`, `arrayStrip`)** is a converted `StripSpec`: one row 1 of 236 dp, with no More row and no toggle at 360 and 392 dp, with or without the VECTOR cell.
 - **`array.settings`, 120 dp.** A chip showing "Line × 3", spoken "Array settings", that opens the sheet. While a raster source is being edited it reads "Finish source edit" instead, one step.

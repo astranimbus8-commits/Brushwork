@@ -100,7 +100,8 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
         )
         OutlinedButton(
             onClick = { tool.resetLook() },
-            enabled = spec.look != null || tool.plainPace != ArrayEasing.LINEAR,
+            // Also while tint colors are remembered with no look: the bar shows them, and this forgets them.
+            enabled = spec.look != null || tool.plainPace != ArrayEasing.LINEAR || tool.plainTint.isNotEmpty(),
             modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
         ) { Text(ArrayLabels18.RESET_LOOK) }
     }

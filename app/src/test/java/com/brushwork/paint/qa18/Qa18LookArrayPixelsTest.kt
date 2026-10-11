@@ -422,6 +422,24 @@ class Qa18LookArrayPixelsTest {
         u.typeField(ArrayLabels18.TINT_STRENGTH, "50")
         u.settleRenders("strength 50 after a reset")
         assertEquals("after Reset look: the default colors", listOf(VStop(0f, 0xFFFF6A3D.toInt()), VStop(1f, 0xFF3D7BFF.toInt())), look!!.tint)
+        // Colors remembered with no look (Sunset, then 0 %): the bar still shows them, so "Reset look"
+        // must stay usable to forget them (verifier fix); with no look it records no step.
+        lookStep(SUNSET) { u.press(SUNSET) }
+        u.typeField(ArrayLabels18.TINT_STRENGTH, "0")
+        u.settleRenders("strength 0, Sunset kept")
+        assertNull("0 %: no look", look)
+        assertEquals("the colors remembered", sunset, tool.plainTint)
+        u.ui.reach(ArrayLabels18.RESET_LOOK, 32f)
+        assertTrue("no look but remembered colors: Reset look enabled", SmokeUi.isEnabled(ArrayLabels18.RESET_LOOK))
+        val beforeForget = u.steps()
+        u.fingerPress(ArrayLabels18.RESET_LOOK)
+        u.settleRenders("forget the colors")
+        assertEquals("no look: Reset look records no step", beforeForget, u.steps())
+        assertTrue("the colors forgotten", tool.plainTint.isEmpty())
+        assertFalse("nothing left to reset: Reset look disabled", SmokeUi.isEnabled(ArrayLabels18.RESET_LOOK))
+        u.typeField(ArrayLabels18.TINT_STRENGTH, "50")
+        u.settleRenders("strength 50 after forgetting")
+        assertEquals("forgotten: the default colors", listOf(VStop(0f, 0xFFFF6A3D.toInt()), VStop(1f, 0xFF3D7BFF.toInt())), look!!.tint)
         Smoke.assertQuiet(c, "the selection array's look")
     }
 
