@@ -54,7 +54,7 @@ class LassoCurve internal constructor(
     var selected by mutableIntStateOf(-1)
         private set
 
-    /** Point edits [redoStep] can bring back (Compose state; the in-tool redo button). */
+    /** Point edits [redoStep] can bring back (Compose state; the top row's Redo through `LassoTool.canRedoStep`). */
     var redoCount by mutableIntStateOf(0)
         private set
 

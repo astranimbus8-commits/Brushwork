@@ -333,7 +333,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     override var canUndoStep by mutableStateOf(false)
         private set
 
-    /** Number of edits [redoStep] can bring back (Compose state; the in-tool redo button). */
+    /** Number of edits [redoStep] can bring back (Compose state; the top row's Redo, see [canRedoStep]). */
     var redoCount by mutableIntStateOf(0)
         private set
 
@@ -699,7 +699,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         return true
     }
 
-    /** Brings back the edit last taken back by [undoStep] (the app's redo, or the in-tool button). */
+    /** Brings back the edit last taken back by [undoStep] (the app's redo: the top row's Redo, a three-finger tap). */
     override fun redoStep(): Boolean {
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size

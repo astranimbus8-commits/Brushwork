@@ -77,7 +77,7 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     var vertexCount by mutableIntStateOf(0)
         private set
 
-    /** Corner edits [redoStep] can bring back (Compose state; the in-tool redo button). */
+    /** Corner edits [redoStep] can bring back (Compose state; the top row's Redo, see [canRedoStep]). */
     var redoCount by mutableIntStateOf(0)
         private set
 
@@ -320,8 +320,8 @@ class LassoTool(controller: EditorController) : Tool(controller) {
     override val canUndoStep: Boolean get() = if (kind == LassoKind.CURVE) curve.count > 0 else vertexCount > 0
 
     /**
-     * The in-tool undo button: the last corner / point edit, or the whole polygon / curve if its
-     * history ran out.
+     * v1.7's in-tool undo button (v1.8: the strips have none; the app's undo steps the same way):
+     * the last corner / point edit, or the whole polygon / curve if its history ran out.
      */
     fun undoLastCorner() {
         if (!undoStep()) discard()
