@@ -4,8 +4,6 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,26 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.AspectRatio
-import androidx.compose.material.icons.filled.Category
-import androidx.compose.material.icons.filled.Brush
-import androidx.compose.material.icons.filled.CenterFocusStrong
-import androidx.compose.material.icons.filled.ChangeHistory
-import androidx.compose.material.icons.filled.Deselect
-import androidx.compose.material.icons.filled.Gesture
-import androidx.compose.material.icons.filled.LineWeight
-import androidx.compose.material.icons.filled.Loop
-import androidx.compose.material.icons.filled.Pin
-import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.SelectAll
-import androidx.compose.material.icons.filled.Straighten
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -51,40 +30,27 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.AppSettings
-import com.brushwork.paint.core.Geometry
 import com.brushwork.paint.core.IncrementMath
-import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.model.IncrementKind
@@ -92,11 +58,10 @@ import com.brushwork.paint.tools.vector.HandleSide
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.ui.common.stepOnLongPress
 import com.brushwork.paint.ui.common.PointLabels
-import com.brushwork.paint.ui.common.CurveLabels17
-import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.MixedEdit
 import com.brushwork.paint.ui.points.MixedNumberField
+import com.brushwork.paint.ui.points.MixedValueDialog
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VSpline
@@ -104,27 +69,13 @@ import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.ln
 import kotlin.math.min
-import com.brushwork.paint.tools.vector.ArrowHeadStyle
-import com.brushwork.paint.tools.vector.ArrowHeads
-import com.brushwork.paint.tools.vector.CornerStyle
-import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
-import com.brushwork.paint.tools.vector.LineCapStyle
-import com.brushwork.paint.tools.vector.ShapeBox
-import com.brushwork.paint.tools.vector.ShapeGeometry
 import com.brushwork.paint.tools.vector.ShapeSettings
-import com.brushwork.paint.tools.vector.ShapeStroke
-import com.brushwork.paint.tools.vector.ShapeStyle
-import com.brushwork.paint.tools.vector.ShapeTool
-import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.BwSheet
-import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.LabeledSlider
-import com.brushwork.paint.ui.common.LengthField
-import com.brushwork.paint.ui.common.NudgePad
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.PanelCard
 import com.brushwork.paint.ui.common.RepeatIconButton
@@ -133,255 +84,39 @@ import com.brushwork.paint.ui.common.SliderTyping
 import com.brushwork.paint.ui.common.ToggleRow
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.UnitSelector
-import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.editor.CanvasView
 import com.brushwork.paint.ui.editor.ValueInputDialog
 import com.brushwork.paint.ui.theme.BrushworkColors
-import kotlin.math.cos
 import kotlin.math.roundToInt
-import kotlin.math.sin
 
 /*
- * Options strip and sheets of the curve, polyline and path tools (split out of VectorOptions.kt
- * in v1.5; v1.6: the Path tool's strip and the Curve tool's Handles group, area B).
+ * The curve, polyline and path tools' controls and sheets (split out of VectorOptions.kt in v1.5;
+ * v1.6: the Path tool's controls and the Curve tool's Handles group, area B). v1.8 (design §3.9,
+ * area E): the strip itself is [curveStrip] (CurveStrips.kt); this file keeps the controls its
+ * items show, the contents of their popups, the dialogs its overlays show, and the settings and
+ * Numbers sheets.
  */
 
 // ====================================================================== curve / polyline / path tools
 
-/**
- * Options strip of the curve tools: the Curve and Polyline strip, or the Path tool's
- * ([PathToolOptions]) for [CurveTool.isPath].
- */
-@Composable
-fun CurveToolOptions(tool: CurveTool) {
-    // v1.7: a one-line hint under the bar ("Select several", or the Path thickness caption).
-    val hint by remember(tool) { derivedStateOf { stripHint(tool) } }
-    Column {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            if (tool.isPath) PathToolOptions(tool) else BezierToolOptions(tool)
-        }
-        hint?.let {
-            Text(
-                it,
-                style = MaterialTheme.typography.labelSmall,
-                color = BrushworkColors.OnChromeDim,
-                maxLines = 2,
-                modifier = Modifier.widthIn(max = HINT_MAX_WIDTH).padding(start = 6.dp, bottom = 2.dp),
-            )
-        }
-    }
-}
+/** The stroke kinds of the "Stroke kind" menu ("No stroke" is the Fill paint mode). */
+internal val STROKE_KINDS = listOf(CurveStroke.BRUSH, CurveStroke.PLAIN)
 
-/** The hint line under the strip: "Select several"'s, or (v1.7, item 5) the caption of a smooth middle Path point's thickness. */
-private fun stripHint(tool: CurveTool): String? {
-    if (tool.selectSeveral) return PointLabels.SEVERAL_HINT
-    if (!tool.isPath || !tool.pointSelection.isSingle) return null
-    val i = tool.selectedPoint
-    val p = tool.spline?.points?.getOrNull(i) ?: return null
-    return if (tool.canBeSharp(i) && !p.sharp) PATH_WIDTH_CAPTION else null
-}
-
-/** v1.7 (item 5): why a smooth middle point's thickness isn't reached (shown under the Path strip). */
+/** v1.7 (item 5): why a smooth middle point's thickness isn't reached (v1.8: a toast, once per session). */
 internal const val PATH_WIDTH_CAPTION = "The line reaches a point's full thickness only where it passes through it (sharp points)"
 
-/** The hint line wraps to a second line rather than run past a phone's width. */
-private val HINT_MAX_WIDTH = 360.dp
-
 /**
- * Options strip of the curve and polyline tools: closed path, actions for the selected anchor
- * (sharp / smooth / automatic tangent / delete), the Handles group (Curve), stroke mode, fill,
- * and the "Numbers" / settings sheets. (v1.8, F4: the point Undo / Redo left for the top row's,
- * "Select several" for the X / Y pill.)
+ * True when [PATH_WIDTH_CAPTION] applies (v1.7, item 5): a Path with exactly one point selected,
+ * a smooth middle point (one that can be a corner and is not).
  */
-@Composable
-private fun BezierToolOptions(tool: CurveTool) {
-    val s = tool.settings
-    // Only what the row shows about the selected point: dragging anchors doesn't recompose it.
-    val selInfo by remember(tool) {
-        derivedStateOf {
-            // (One point: the v1.6 controls. Two or more: the group's, [GroupPointControls].)
-            val i = if (tool.pointSelection.isSingle) tool.selected else -1
-            tool.anchors.getOrNull(i)?.let { SelectedAnchor(i, it.sharp, it.hasCustomTangent, it.width) }
-        }
-    }
-    val anyThickness by remember(tool) { derivedStateOf { !CurveGeometry.isUniformWidth(tool.anchors) } }
-    // (Derived: dragging points doesn't recompose the strip.)
-    val handlesShown by remember(tool) { derivedStateOf { tool.canScaleHandles } }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showNumbers by rememberSaveable { mutableStateOf(false) }
-    fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
-
-    // (v1.8, F4: no point Undo / Redo here; the top row's take back one point edit at a time.)
-    val a = selInfo
-    // v1.7 (item 1): "Select all points" starts the points bar, then the group's controls. With
-    // exactly one point selected it follows that point's controls, which keep their v1.6 places
-    // (I12). (v1.8, F4: "Select several" is the X / Y pill's cell.)
-    if (a == null) {
-        PointSelectionControls(tool)
-        GroupPointControls(tool, anyThickness)
-    }
-    if (a != null) {
-        val sel = a.index
-        // First, so it shows without scrolling on a phone: the selected point's thickness.
-        ThicknessControl(tool, sel, a.width)
-        if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
-        if (!tool.polyline) {
-            if (a.sharp) ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharp(sel, false) }
-            else ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharp(sel, true) }
-            if (a.customTangent) ActionChip("Auto tangent", Icons.Filled.Restore) { tool.resetTangent(sel) }
-        }
-        ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(sel) }
-        ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
-        PointSelectionControls(tool)
-    }
-    // v1.6 §3.3: the selected point's handles (all points' with none selected).
-    if (handlesShown) HandlesGroup(tool)
-    OptionChip("Closed", s.closed, { tool.setClosed(!s.closed) }, icon = Icons.Filled.Loop)
-    StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
-
-    if (showSettings) CurveSettingsSheet(tool) { showSettings = false; tool.persistBrushSize() }
-    if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
-}
-
-/** Stroke mode, the plain line's width, Fill, Snap to objects, Numbers and Settings (every curve tool). */
-@Composable
-private fun StrokeFillAndSheets(tool: CurveTool, onSettings: () -> Unit, onNumbers: () -> Unit) {
-    val s = tool.settings
-    // v1.7 (item 7): Stroke / Fill / Both, then the stroke kind for a line (Stroke, Both).
-    PaintSegments(tool)
-    if (s.stroke != CurveStroke.NONE) {
-        DropdownChip(
-            label = s.stroke.label,
-            options = STROKE_KINDS,
-            selected = s.stroke,
-            optionLabel = { it.label },
-            onSelect = { m -> tool.setStrokeKind(m) },
-            leading = { Icon(Icons.Filled.LineWeight, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            contentDescription = CurveLabels17.STROKE_KIND,
-        )
-    }
-    if (s.stroke == CurveStroke.PLAIN) {
-        // The line width: the brush size while linked (brush icon), else the line's own.
-        val dpi = tool.controller.doc.dpi.toDouble()
-        val linked = tool.widthLinked
-        ActionChip(
-            Units.format(tool.lineWidth.toDouble(), s.unit, dpi),
-            if (linked) Icons.Filled.Brush else Icons.Filled.LineWeight,
-        ) { onSettings() }
-    }
-    SnapToObjectsChip(tool.controller)
-    ActionChip("Numbers", Icons.Filled.Pin) { onNumbers() }
-    // I10: shows "Settings", known as "Curve settings" / "Polyline settings" / "Path settings".
-    ActionChip("Settings", Icons.Filled.Tune, contentDescription = "${tool.id.label} settings") { onSettings() }
-}
-
-/** The stroke kinds of the strip's dropdown ("No stroke" is the Fill segment now). */
-private val STROKE_KINDS = listOf(CurveStroke.BRUSH, CurveStroke.PLAIN)
-
-/**
- * v1.7 (item 7, §3.7a): the three segments "Stroke", "Fill", "Both" (known as "Stroke only",
- * "Fill only", "Stroke and fill"; 40 dp tall, about 64 dp wide). With 1 or 2 points Fill and Both
- * are greyed (disabled for TalkBack); a tap on one says "Fill needs 3 points".
- */
-@Composable
-private fun PaintSegments(tool: CurveTool) {
-    val mode = tool.paintMode
-    val fillOk by remember(tool) { derivedStateOf { tool.fillPossible } }
-    fun pick(m: CurvePaint) {
-        if (m != CurvePaint.STROKE && !fillOk) tool.controller.toast(CurveLabels17.FILL_NEEDS_3) else tool.setPaintMode(m)
-    }
-    Row(
-        Modifier
-            .padding(horizontal = 3.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(BrushworkColors.ChromeHigh.copy(alpha = 0.6f)),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        PaintSegment("Stroke", CurveLabels17.STROKE_ONLY, mode == CurvePaint.STROKE, available = true) { pick(CurvePaint.STROKE) }
-        PaintSegment("Fill", CurveLabels17.FILL_ONLY, mode == CurvePaint.FILL, available = fillOk) { pick(CurvePaint.FILL) }
-        PaintSegment("Both", CurveLabels17.BOTH, mode == CurvePaint.BOTH, available = fillOk) { pick(CurvePaint.BOTH) }
-    }
-}
-
-/** One segment of [PaintSegments]: [text] shown, known by [description] alone (I10, as [ActionChip]). */
-@Composable
-private fun PaintSegment(text: String, description: String, selected: Boolean, available: Boolean, onClick: () -> Unit) {
-    Box(
-        Modifier
-            .heightIn(min = 40.dp)
-            .widthIn(min = 64.dp)
-            .background(if (selected) BrushworkColors.AccentDim else Color.Transparent)
-            .clickable(role = Role.RadioButton, onClick = onClick)
-            .semantics {
-                contentDescription = description
-                this.selected = selected
-                if (!available) {
-                    stateDescription = CurveLabels17.FILL_NEEDS_3
-                    disabled()
-                }
-            }
-            .padding(horizontal = 10.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            maxLines = 1,
-            color = when {
-                !available -> BrushworkColors.OnChromeDim.copy(alpha = 0.5f)
-                selected -> Color.White
-                else -> BrushworkColors.OnChrome
-            },
-            modifier = Modifier.clearAndSetSemantics {},
-        )
-    }
+internal fun pathCaptionApplies(tool: CurveTool): Boolean {
+    if (!tool.isPath || !tool.pointSelection.isSingle) return false
+    val i = tool.selectedPoint
+    val p = tool.spline?.points?.getOrNull(i) ?: return false
+    return tool.canBeSharp(i) && !p.sharp
 }
 
 // ====================================================================== several points (v1.7, item 1)
-
-/** What the selection controls show (derived: dragging points doesn't recompose them). */
-private data class SelectionInfo(val points: Int, val selected: Int)
-
-/**
- * The start of the points bar (§3.1a), 44 dp: "Select all points" ("Deselect all points" when
- * every point is selected). Nothing while no point exists. With exactly one point selected the
- * strips show it after that point's controls instead, so those keep their v1.6 places (I12).
- * (v1.8, F4: "Select several" left for the X / Y pill's cell.)
- */
-@Composable
-private fun PointSelectionControls(tool: CurveTool) {
-    val info by remember(tool) { derivedStateOf { SelectionInfo(tool.pointCount, tool.pointSelection.count) } }
-    val i = info
-    if (i.points == 0) return
-    val all = i.selected == i.points
-    ToolIconButton(
-        if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll,
-        if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL,
-        onClick = { tool.toggleSelectAll() },
-        size = SELECTION_CONTROL_SIZE,
-    )
-}
-
-/** "Select all points" is 44 dp (§3.1a). */
-private val SELECTION_CONTROL_SIZE = 44.dp
-
-/**
- * Two or more points selected (§3.1a): their thickness (and a Path's weights) as one
- * [MixedNumberField] each, the sharp chip in three states (not for a Polyline, whose points are
- * all corners), "All points 100 %", "Delete point" (the selected ones, one in-tool step) and
- * "Deselect point" (clears the selection). Nothing with fewer than two selected.
- */
-@Composable
-private fun GroupPointControls(tool: CurveTool, anyThickness: Boolean) {
-    val selected by remember(tool) { derivedStateOf { tool.pointSelection.count } }
-    if (selected < 2) return
-    if (tool.isPath) GroupWeightField(tool)
-    GroupThicknessField(tool)
-    if (!tool.polyline) GroupSharpChip(tool)
-    if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
-    ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteSelectedPoints() }
-    ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
-}
 
 /** The custom increment key of the group thickness field (a control without a kind, as the weight's). */
 internal const val POINT_THICKNESS_KEY = "curve.pointThickness"
@@ -395,10 +130,11 @@ private fun factors(percents: FloatArray) = FloatArray(percents.size) { percents
 /**
  * "Point thickness" of the selected points: the shared value or "Mixed"; a scrub multiplies each
  * point's thickness (0 stays 0), a typed value sets all of them (`*2` / `/2`: each). One in-tool
- * step per scrub or typed value.
+ * step per scrub or typed value. v1.8 (§3.9): a tap calls [onOpenDialog] (the field sits on the
+ * More row); the strip's overlays show [GroupThicknessDialog].
  */
 @Composable
-private fun GroupThicknessField(tool: CurveTool) {
+internal fun GroupThicknessField(tool: CurveTool, onOpenDialog: () -> Unit, modifier: Modifier = Modifier) {
     val value by remember(tool) { derivedStateOf { Mixed.of(percents(tool.selectedWidths())) } }
     // The selected points and their thickness when the scrub began (every event scales those).
     val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
@@ -422,17 +158,35 @@ private fun GroupThicknessField(tool: CurveTool) {
             base[0] = null
             tool.endNumericEdit()
         },
-        onTyped = typed@{ text ->
-            val v = MixedEdit.typed(percents(tool.selectedWidths()), text, 0f, MAX_THICKNESS_PERCENT) ?: return@typed
-            tool.setWidths(tool.pointSelection.indices, factors(v))
-            tool.endNumericEdit()
-        },
+        onTyped = { text -> typeGroupThickness(tool, text) },
+        modifier = modifier,
+        onOpenDialog = onOpenDialog,
     )
+}
+
+/** The dialog of [GroupThicknessField] (in the strip's overlays): its typed text sets the selected points' thickness, one in-tool step. */
+@Composable
+internal fun GroupThicknessDialog(tool: CurveTool, onDismiss: () -> Unit) {
+    MixedValueDialog(
+        label = POINT_THICKNESS_LABEL,
+        value = Mixed.of(percents(tool.selectedWidths())),
+        unit = "%",
+        range = 0f..MAX_THICKNESS_PERCENT,
+        incrementKey = POINT_THICKNESS_KEY,
+        onTyped = { text -> typeGroupThickness(tool, text) },
+        onDismiss = onDismiss,
+    )
+}
+
+private fun typeGroupThickness(tool: CurveTool, text: String) {
+    val v = MixedEdit.typed(percents(tool.selectedWidths()), text, 0f, MAX_THICKNESS_PERCENT) ?: return
+    tool.setWidths(tool.pointSelection.indices, factors(v))
+    tool.endNumericEdit()
 }
 
 /** PATH: "Point weight" of the selected control points (0.1–10), as [GroupThicknessField]. */
 @Composable
-private fun GroupWeightField(tool: CurveTool) {
+internal fun GroupWeightField(tool: CurveTool, onOpenDialog: () -> Unit, modifier: Modifier = Modifier) {
     val value by remember(tool) { derivedStateOf { Mixed.of(tool.selectedWeights()) } }
     val base = remember(tool) { arrayOfNulls<FloatArray>(1) }
     val indices = remember(tool) { arrayOf(emptyList<Int>()) }
@@ -455,132 +209,47 @@ private fun GroupWeightField(tool: CurveTool) {
             base[0] = null
             tool.endNumericEdit()
         },
-        onTyped = typed@{ text ->
-            val v = MixedEdit.typed(tool.selectedWeights(), text, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) ?: return@typed
-            tool.setWeights(tool.pointSelection.indices, v)
-            tool.endNumericEdit()
-        },
+        onTyped = { text -> typeGroupWeight(tool, text) },
+        modifier = modifier,
+        onOpenDialog = onOpenDialog,
     )
+}
+
+/** The dialog of [GroupWeightField] (in the strip's overlays), as [GroupThicknessDialog]. */
+@Composable
+internal fun GroupWeightDialog(tool: CurveTool, onDismiss: () -> Unit) {
+    MixedValueDialog(
+        label = POINT_WEIGHT_LABEL,
+        value = Mixed.of(tool.selectedWeights()),
+        unit = "",
+        range = VSpline.MIN_WEIGHT..VSpline.MAX_WEIGHT,
+        incrementKey = PATH_WEIGHT_KEY,
+        onTyped = { text -> typeGroupWeight(tool, text) },
+        onDismiss = onDismiss,
+    )
+}
+
+private fun typeGroupWeight(tool: CurveTool, text: String) {
+    val v = MixedEdit.typed(tool.selectedWeights(), text, VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) ?: return
+    tool.setWeights(tool.pointSelection.indices, v)
+    tool.endNumericEdit()
 }
 
 /** The labels of the group fields (the v1.6 single-point controls say the same). */
 internal const val POINT_THICKNESS_LABEL = "Point thickness"
 internal const val POINT_WEIGHT_LABEL = "Point weight"
 
-/**
- * The sharp chip for several points (§3.1a, §3.4a): "Sharp corner" when all are smooth,
- * "Smooth" when all are corners, "Mixed" (known as "Sharp corner: Mixed") when they differ; a
- * tap on "Mixed" makes all of them corners. One in-tool step. Only the points that can be
- * corners count: on a Path selection of open ends only it is disabled ("Ends are always sharp").
- */
-@Composable
-private fun GroupSharpChip(tool: CurveTool) {
-    val state by remember(tool) { derivedStateOf { Mixed.of(tool.selectedSharp()) } }
-    when (val st = state) {
-        null -> ActionChip(PointLabels.ENDS_SHARP, Icons.Filled.ChangeHistory, enabled = false) {}
-        is Mixed.Same -> if (st.value) {
-            ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharpPoints(tool.pointSelection.indices, false) }
-        } else {
-            ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharpPoints(tool.pointSelection.indices, true) }
-        }
-        is Mixed.Spread -> ActionChip(PointLabels.MIXED, Icons.Filled.ChangeHistory, contentDescription = SHARP_MIXED) {
-            tool.setSharpPoints(tool.pointSelection.indices, true)
-        }
-    }
-}
-
 /** What the three-state sharp chip is known as while the selected points differ. */
 internal const val SHARP_MIXED = "Sharp corner: ${PointLabels.MIXED}"
 
 // ====================================================================== the Path tool (v1.6, §3.2)
 
-/** What the path options row shows about the selected control point. */
-private data class SelectedPathPoint(val index: Int, val weight: Float, val width: Float, val sharp: Boolean, val canSharp: Boolean)
-
 /**
- * Options strip of the Path tool (§3.2a, in order): the Order stepper, Endpoint, Cyclic, the
- * selected point's Weight and Thickness, Delete point / Deselect, stroke, Fill, Snap, Numbers,
- * Settings, "To Bézier", and while no point exists the "Shapes" quick starts. (v1.8, F4: the
- * point Undo / Redo left for the top row's, "Select several" for the X / Y pill.)
+ * "Order 4" with ‹ ›: 2–6 (2 is the straight control polygon; the effective order is limited by
+ * the points). v1.8 (§3.9): the popup of the strip's "Order N" item.
  */
 @Composable
-private fun PathToolOptions(tool: CurveTool) {
-    val selInfo by remember(tool) {
-        derivedStateOf {
-            // (One point: the v1.6 controls. Two or more: the group's, [GroupPointControls].)
-            val i = if (tool.pointSelection.isSingle) tool.selectedPoint else -1
-            tool.spline?.points?.getOrNull(i)?.let { SelectedPathPoint(i, it.weight, it.width, it.sharp, tool.canBeSharp(i)) }
-        }
-    }
-    val anyThickness by remember(tool) { derivedStateOf { !tool.uniformWidth } }
-    val count by remember(tool) { derivedStateOf { tool.pointCount } }
-    // (Derived: dragging control points doesn't recompose the strip.)
-    val flags by remember(tool) { derivedStateOf { PathFlags(tool.pathOrder, tool.pathEndpoint, tool.pathCyclic) } }
-    var showSettings by rememberSaveable { mutableStateOf(false) }
-    var showNumbers by rememberSaveable { mutableStateOf(false) }
-
-    val f = flags
-    val a = selInfo
-    // v1.7 (item 1): "Select all points" starts the points bar (with exactly one point selected it
-    // follows that point's controls, as in the Curve strip).
-    if (a == null) PointSelectionControls(tool)
-    OrderStepper(tool, f.order)
-    // (Endpoint only matters for an open curve: greyed while Cyclic is on.)
-    OptionChip("Endpoint", f.endpoint, { tool.setEndpoint(!f.endpoint) }, enabled = !f.cyclic)
-    OptionChip("Cyclic", f.cyclic, { tool.setCyclic(!f.cyclic) }, icon = Icons.Filled.Loop)
-    if (a != null) {
-        // A point just got selected: the strip scrolls so its controls start near the left edge
-        // (the whole Weight control, then the Thickness arrows and value). The two together are
-        // wider than a phone: the strip is asked to show their first screen width (a part that
-        // fits, so it lands there exactly), not all of them (it would show the Thickness slider
-        // and push Weight off).
-        val bring = remember { BringIntoViewRequester() }
-        val groupSize = remember { IntArray(2) }
-        val shownWidth = with(LocalDensity.current) { (LocalConfiguration.current.screenWidthDp.dp - POINT_GROUP_MARGIN).toPx() }
-        LaunchedEffect(a.index) {
-            withFrameNanos { }
-            val w = min(groupSize[0].toFloat(), shownWidth)
-            bring.bringIntoView(if (w > 0f) Rect(0f, 0f, w, groupSize[1].toFloat()) else null)
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .bringIntoViewRequester(bring)
-                .onSizeChanged { groupSize[0] = it.width; groupSize[1] = it.height },
-        ) {
-            WeightControl(tool, a.index, a.weight)
-            ThicknessControl(tool, a.index, a.width, bringIntoView = false)
-        }
-        // v1.7 (item 4): a middle point can be a corner (the ends of an open path always are).
-        when {
-            !a.canSharp -> ActionChip(PointLabels.ENDS_SHARP, Icons.Filled.ChangeHistory, enabled = false) {}
-            a.sharp -> ActionChip("Smooth", Icons.Filled.Gesture) { tool.setSharp(a.index, false) }
-            else -> ActionChip("Sharp corner", Icons.Filled.ChangeHistory) { tool.setSharp(a.index, true) }
-        }
-        if (anyThickness) ActionChip("All points 100 %", Icons.Filled.Restore) { tool.resetAllWidths() }
-        ActionChip("Delete point", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { tool.deleteAnchor(a.index) }
-        ToolIconButton(Icons.Filled.Deselect, "Deselect point", onClick = { tool.deselect() }, size = 44.dp)
-        PointSelectionControls(tool)
-    } else {
-        GroupPointControls(tool, anyThickness)
-    }
-    StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
-    if (count >= 2) ActionChip("To Bézier", Icons.Filled.Gesture) { tool.toBezier() }
-    if (count == 0) ShapesChip(tool)
-
-    if (showSettings) CurveSettingsSheet(tool) { showSettings = false; tool.persistBrushSize() }
-    if (showNumbers) CurveNumbersSheet(tool) { showNumbers = false }
-}
-
-/** The Path strip's order, Endpoint and Cyclic (pending path's, else the next path's). */
-private data class PathFlags(val order: Int, val endpoint: Boolean, val cyclic: Boolean)
-
-/** The screen width the strip does not show (its panel's margins, with room to spare). */
-private val POINT_GROUP_MARGIN = 24.dp
-
-/** "Order 4" with ‹ ›: 2–6 (2 is the straight control polygon; the effective order is limited by the points). */
-@Composable
-private fun OrderStepper(tool: CurveTool, order: Int) {
+internal fun OrderStepper(tool: CurveTool, order: Int) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
         ToolIconButton(
             Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Lower order",
@@ -616,13 +285,13 @@ internal fun stepWeight(w: Float, up: Boolean, step: Float?): Float {
 private const val WEIGHT_STEP = 0.1f
 
 /**
- * The selected control point's weight (§3.2a): the value (tap to type it; long-press for its
- * step) and a log slider 0.1–10 (1 in the middle). Higher pulls the curve towards the point. One
- * in-tool step per drag or typed value.
+ * The selected control point's weight (§3.2a): the value (tap to type it, [onType]; long-press
+ * for its step) and a log slider 0.1–10 (1 in the middle). Higher pulls the curve towards the
+ * point. One in-tool step per drag or typed value. v1.8 (§3.9): the popup of the strip's "Point
+ * weight" item; the typing dialog is [WeightDialog], in the strip's overlays.
  */
 @Composable
-private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
-    var typing by remember { mutableStateOf(false) }
+internal fun WeightControl(tool: CurveTool, index: Int, weight: Float, onType: () -> Unit) {
     val sliding = remember(index) { booleanArrayOf(false) }
     val step = tool.controller.increments.customStep(PATH_WEIGHT_KEY)
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
@@ -633,7 +302,7 @@ private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
                 .widthIn(min = 48.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .stepOnLongPress(null, PATH_WEIGHT_KEY)
-                .clickable(onClickLabel = "Type the point weight", role = Role.Button) { typing = true },
+                .clickable(onClickLabel = "Type the point weight", role = Role.Button) { onType() },
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -666,60 +335,35 @@ private fun WeightControl(tool: CurveTool, index: Int, weight: Float) {
                 .semantics { contentDescription = "Point weight slider" },
         )
     }
-    if (typing) {
-        ValueInputDialog(
-            title = "Point weight",
-            label = "Weight",
-            initial = weight,
-            format = { formatWeight(it) },
-            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) },
-            step = { v, up -> stepWeight(v, up, step) },
-            toFraction = { SplineEditing.weightToFraction(it) },
-            fromFraction = { SplineEditing.fractionToWeight(it) },
-            rangeText = "0.1 – 10",
-            suffix = "",
-            onApply = { v ->
-                tool.setWeight(index, v)
-                tool.endNumericEdit()
-            },
-            onDismiss = { typing = false },
-            // The weight's own step: − / + and the slider land on its multiples (as the strip's slider).
-            incrementKey = PATH_WEIGHT_KEY,
-        )
-    }
 }
 
-/** "Shapes ▾" while the path has no point: the Circle and Capsule quick starts, fitted to the visible canvas. */
+/** The typing dialog of [WeightControl] for point [index] (in the strip's overlays). One in-tool step. */
 @Composable
-private fun ShapesChip(tool: CurveTool) {
-    var open by remember { mutableStateOf(false) }
-    val view = LocalView.current
-    Box(Modifier.padding(horizontal = 3.dp)) {
-        AssistChip(
-            onClick = { open = true },
-            label = { Text("Shapes", maxLines = 1) },
-            leadingIcon = { Icon(Icons.Filled.Category, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            colors = AssistChipDefaults.assistChipColors(labelColor = BrushworkColors.OnChrome, leadingIconContentColor = BrushworkColors.OnChrome, trailingIconContentColor = BrushworkColors.OnChromeDim),
-            modifier = Modifier.semantics { contentDescription = "Path shapes" },
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
-            for (shape in CurveTool.PathShape.entries) {
-                DropdownMenuItem(
-                    text = { Text(shape.label) },
-                    onClick = {
-                        open = false
-                        // The part of the canvas that shows: the canvas view less the chrome over it.
-                        tool.startShape(shape, tool.shapeArea(findCanvasView(view.rootView)?.freeArea()))
-                    },
-                )
-            }
-        }
-    }
+internal fun WeightDialog(tool: CurveTool, index: Int, onDismiss: () -> Unit) {
+    val step = tool.controller.increments.customStep(PATH_WEIGHT_KEY)
+    ValueInputDialog(
+        title = "Point weight",
+        label = "Weight",
+        initial = tool.weightOf(index),
+        format = { formatWeight(it) },
+        parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT) },
+        step = { v, up -> stepWeight(v, up, step) },
+        toFraction = { SplineEditing.weightToFraction(it) },
+        fromFraction = { SplineEditing.fractionToWeight(it) },
+        rangeText = "0.1 – 10",
+        suffix = "",
+        onApply = { v ->
+            tool.setWeight(index, v)
+            tool.endNumericEdit()
+        },
+        onDismiss = onDismiss,
+        // The weight's own step: − / + and the slider land on its multiples (as the strip's slider).
+        incrementKey = PATH_WEIGHT_KEY,
+    )
 }
 
 /** The editor's canvas view under [root] (a depth-first walk), or null when none is shown. */
-private fun findCanvasView(root: View): CanvasView? {
+internal fun findCanvasView(root: View): CanvasView? {
     if (root is CanvasView) return root
     if (root is ViewGroup) for (i in 0 until root.childCount) findCanvasView(root.getChildAt(i))?.let { return it }
     return null
@@ -745,91 +389,95 @@ internal fun fractionToHandleScale(f: Float): Float {
 }
 
 /**
- * The Curve tool's Handles group (§3.3): ⟷, ‹ "Shorter handles", the value (tap: "Type handle
- * scale"), › "Longer handles", the "Handle scale" mini slider (10–400 %, log), and the chips
- * In and out / In / Out (as the Shape tool's) and All points. The value is relative to the lengths when a change began and
- * goes back to 100 % at rest; ‹ › multiply by 0.9 / 1.1 (or step by the Scale increment) and
- * repeat while held. One in-tool step per slider drag, held arrow or typed value.
+ * The Curve tool's Handles group (§3.3): ‹ "Shorter handles", the value (tap: "Type handle
+ * scale", [onType]), › "Longer handles", the "Handle scale" mini slider (10–400 %, log), and the
+ * chips In and out / In / Out (as the Shape tool's) and All points. The value is relative to the
+ * lengths when a change began and goes back to 100 % at rest; ‹ › multiply by 0.9 / 1.1 (or step
+ * by the Scale increment) and repeat while held. One in-tool step per slider drag, held arrow or
+ * typed value. v1.8 (§3.9): the popup of the strip's "Handles" item, in two lines; the typing
+ * dialog is [HandleScaleDialog], in the strip's overlays.
  */
 @Composable
-private fun HandlesGroup(tool: CurveTool) {
-    var typing by remember { mutableStateOf(false) }
+internal fun HandlesPanel(tool: CurveTool, onType: () -> Unit) {
     val sliding = remember(tool) { booleanArrayOf(false) }
     val k = tool.handleScale
     val percent = (k * 100f).roundToInt()
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
-        Text(
-            "⟷",
-            style = MaterialTheme.typography.titleMedium,
-            color = BrushworkColors.OnChromeDim,
-            modifier = Modifier.padding(horizontal = 2.dp).semantics { contentDescription = "Handles" },
-        )
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", onRelease = { tool.endHandleScale() }) {
-            tool.stepHandleScale(up = false)
-        }
-        Box(
-            Modifier
-                .heightIn(min = 40.dp)
-                .widthIn(min = 52.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .stepOnLongPress(IncrementKind.SCALE)
-                .clickable(onClickLabel = "Type handle scale", role = Role.Button) { typing = true }
-                .semantics { contentDescription = "Type handle scale" },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "$percent %",
-                style = MaterialTheme.typography.bodyMedium,
-                color = BrushworkColors.OnChrome,
-                maxLines = 1,
+    Column(Modifier.padding(horizontal = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Shorter handles", onRelease = { tool.endHandleScale() }) {
+                tool.stepHandleScale(up = false)
+            }
+            Box(
+                Modifier
+                    .heightIn(min = 40.dp)
+                    .widthIn(min = 52.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .stepOnLongPress(IncrementKind.SCALE)
+                    .clickable(onClickLabel = "Type handle scale", role = Role.Button) { onType() }
+                    .semantics { contentDescription = "Type handle scale" },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "$percent %",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = BrushworkColors.OnChrome,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(BrushworkColors.ChromeHigh)
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                )
+            }
+            RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", onRelease = { tool.endHandleScale() }) {
+                tool.stepHandleScale(up = true)
+            }
+            Slider(
+                value = handleScaleToFraction(k),
+                onValueChange = { f ->
+                    // The whole drag is one step, relative to the lengths when it began.
+                    if (!sliding[0]) { sliding[0] = true; tool.beginHandleScale() }
+                    tool.scaleHandles(tool.steppedHandleScale(fractionToHandleScale(f)))
+                },
+                onValueChangeFinished = {
+                    sliding[0] = false
+                    tool.endHandleScale()
+                },
+                colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BrushworkColors.ChromeHigh)
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                    .width(IbisDims.HandleScaleSlider)
+                    .semantics { contentDescription = "Handle scale" },
             )
         }
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Longer handles", onRelease = { tool.endHandleScale() }) {
-            tool.stepHandleScale(up = true)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            for (side in HandleSide.entries) {
+                HandlesChip(side.label, tool.handleSide == side) { tool.handleSide = side }
+            }
         }
-        Slider(
-            value = handleScaleToFraction(k),
-            onValueChange = { f ->
-                // The whole drag is one step, relative to the lengths when it began.
-                if (!sliding[0]) { sliding[0] = true; tool.beginHandleScale() }
-                tool.scaleHandles(tool.steppedHandleScale(fractionToHandleScale(f)))
-            },
-            onValueChangeFinished = {
-                sliding[0] = false
-                tool.endHandleScale()
-            },
-            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
-            modifier = Modifier
-                .width(IbisDims.HandleScaleSlider)
-                .semantics { contentDescription = "Handle scale" },
-        )
-        for (side in HandleSide.entries) {
-            HandlesChip(side.label, tool.handleSide == side) { tool.handleSide = side }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            HandlesChip("All points", tool.handleAllPoints) { tool.handleAllPoints = !tool.handleAllPoints }
         }
-        HandlesChip("All points", tool.handleAllPoints) { tool.handleAllPoints = !tool.handleAllPoints }
     }
-    if (typing) {
-        ValueInputDialog(
-            title = "Handle scale",
-            label = "Handles",
-            initial = 100f,
-            format = { Units.formatNumber(it.toDouble(), 0) },
-            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() && it > 0f }?.coerceIn(1f, 10_000f) },
-            step = { v, up -> if (up) v * CurveTool.HANDLE_STEP_UP else v * CurveTool.HANDLE_STEP_DOWN },
-            toFraction = { handleScaleToFraction(it / 100f) },
-            fromFraction = { fractionToHandleScale(it) * 100f },
-            rangeText = "1 – 10000 % of the lengths now",
-            suffix = "%",
-            onApply = { v -> tool.applyHandleScale(v) },
-            onDismiss = { typing = false },
-            // − / + and the slider step by the Scale increment while increments are on (as ‹ ›).
-            incrementKind = IncrementKind.SCALE,
-        )
-    }
+}
+
+/** The typing dialog of [HandlesPanel] (in the strip's overlays): a scale of the lengths now, one in-tool step. */
+@Composable
+internal fun HandleScaleDialog(tool: CurveTool, onDismiss: () -> Unit) {
+    ValueInputDialog(
+        title = "Handle scale",
+        label = "Handles",
+        initial = 100f,
+        format = { Units.formatNumber(it.toDouble(), 0) },
+        parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() && it > 0f }?.coerceIn(1f, 10_000f) },
+        step = { v, up -> if (up) v * CurveTool.HANDLE_STEP_UP else v * CurveTool.HANDLE_STEP_DOWN },
+        toFraction = { handleScaleToFraction(it / 100f) },
+        fromFraction = { fractionToHandleScale(it) * 100f },
+        rangeText = "1 – 10000 % of the lengths now",
+        suffix = "%",
+        onApply = { v -> tool.applyHandleScale(v) },
+        onDismiss = onDismiss,
+        // − / + and the slider step by the Scale increment while increments are on (as ‹ ›).
+        incrementKind = IncrementKind.SCALE,
+    )
 }
 
 /** A chip of the Handles group (its label reads "Handles: …", unique among the strip's controls). */
@@ -846,18 +494,9 @@ private fun HandlesChip(label: String, selected: Boolean, onClick: () -> Unit) {
     )
 }
 
-/** What the curve options row shows about the selected anchor. */
-private data class SelectedAnchor(val index: Int, val sharp: Boolean, val customTangent: Boolean, val width: Float)
-
 /** Thickness range of a point in percent (§4.5) and the step of its slider and arrows. */
 private const val MAX_THICKNESS_PERCENT = 300f
 private const val THICKNESS_STEP = 5f
-
-/**
- * How far the thickness slider reaches past the end of its 128 dp box: its thumb's half width
- * (the slider's node is 148 dp wide, centred on the box).
- */
-private val SLIDER_OVERHANG = 10.dp
 
 /** [percent] moved by one step up or down, on the step grid, within 0..300 %. */
 internal fun stepThickness(percent: Float, up: Boolean): Float = stepThickness(percent, up, THICKNESS_STEP)
@@ -877,15 +516,14 @@ private fun thicknessSliderSteps(step: Float): Int {
 }
 
 /**
- * The selected point's thickness in the options strip (§4.5): ‹ › steps of 5 % (hold to
- * repeat), the value (tap to type it) and a 0–300 % slider (double-tap it for 100 %). While the
- * slider is dragged the canvas shows a ring of the real line diameter at the point. One undo
- * step per drag, held arrow or typed value. With [bringIntoView] a newly selected point scrolls
- * the strip so the whole control shows (the Path strip scrolls its point group instead).
+ * The selected point's thickness (§4.5): ‹ › steps of 5 % (hold to repeat), the value (tap to
+ * type it, [onType]) and a 0–300 % slider (double-tap it for 100 %). While the slider is dragged
+ * the canvas shows a ring of the real line diameter at the point. One undo step per drag, held
+ * arrow or typed value. v1.8 (§3.9): an item of the More row, which never scrolls (the v1.7
+ * bring-into-view is gone); the typing dialog is [ThicknessDialog], in the strip's overlays.
  */
 @Composable
-private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringIntoView: Boolean = true) {
-    var typing by remember { mutableStateOf(false) }
+internal fun ThicknessControl(tool: CurveTool, index: Int, width: Float, onType: () -> Unit) {
     val percent = width * 100f
     // v1.6 §3.4: with increments on, the slider and ‹ › use the Percent step (5 % by default, as before).
     val step = tool.controller.increments.step(IncrementKind.PERCENT) ?: THICKNESS_STEP
@@ -904,28 +542,7 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringInt
         setPercent(100f)
         tool.endNumericEdit()
     }
-    // A point just got selected: the scrolling strip shows the whole control (with the VECTOR
-    // chip in front, or on a narrow phone, its slider would start off the screen). The request
-    // reaches [SLIDER_OVERHANG] past the row's end, where the slider's thumb goes (v1.8, F4:
-    // without the strip's point Undo / Redo the row can end just inside a 360 dp screen while
-    // the slider's end does not).
-    val bring = remember { BringIntoViewRequester() }
-    val rowSize = remember { IntArray(2) }
-    val overhang = with(LocalDensity.current) { SLIDER_OVERHANG.toPx() }
-    if (bringIntoView) {
-        LaunchedEffect(index) {
-            withFrameNanos { }
-            bring.bringIntoView(if (rowSize[0] > 0) Rect(0f, 0f, rowSize[0] + overhang, rowSize[1].toFloat()) else null)
-        }
-    }
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .bringIntoViewRequester(bring)
-            .onSizeChanged { rowSize[0] = it.width; rowSize[1] = it.height }
-            .padding(horizontal = 2.dp),
-    ) {
-        Icon(Icons.Filled.LineWeight, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
         RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
             setPercent(stepThickness(current(), up = false, step))
         }
@@ -935,7 +552,7 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringInt
                 .widthIn(min = 52.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .stepOnLongPress(IncrementKind.PERCENT)
-                .clickable(onClickLabel = "Type the point thickness", role = Role.Button) { typing = true },
+                .clickable(onClickLabel = "Type the point thickness", role = Role.Button) { onType() },
             contentAlignment = Alignment.Center,
         ) {
             Text(
@@ -970,32 +587,39 @@ private fun ThicknessControl(tool: CurveTool, index: Int, width: Float, bringInt
             steps = thicknessSliderSteps(step),
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             modifier = Modifier
-                .width(128.dp)
+                .width(THICKNESS_SLIDER)
                 // (The gesture handler outlives recompositions: it calls the newest callbacks,
                 // which act on the point selected now.)
                 .onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() }
                 .semantics { contentDescription = "Point thickness slider" },
         )
     }
-    if (typing) {
-        ValueInputDialog(
-            title = "Point thickness",
-            label = "Thickness",
-            initial = percent,
-            format = { Units.formatNumber(it.toDouble(), 0) },
-            parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(0f, MAX_THICKNESS_PERCENT) },
-            step = { v, up -> stepThickness(v, up, step) },
-            toFraction = { it / MAX_THICKNESS_PERCENT },
-            fromFraction = { f -> (((f * MAX_THICKNESS_PERCENT) / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT) },
-            rangeText = "0 – 300 %",
-            suffix = "%",
-            onApply = { v ->
-                setPercent(v)
-                tool.endNumericEdit()
-            },
-            onDismiss = { typing = false },
-        )
-    }
+}
+
+/** The thickness slider's width (v1.7: 128 dp). */
+private val THICKNESS_SLIDER = 128.dp
+
+/** The typing dialog of [ThicknessControl] for point [index] (in the strip's overlays). One in-tool step. */
+@Composable
+internal fun ThicknessDialog(tool: CurveTool, index: Int, onDismiss: () -> Unit) {
+    val step = tool.controller.increments.step(IncrementKind.PERCENT) ?: THICKNESS_STEP
+    ValueInputDialog(
+        title = "Point thickness",
+        label = "Thickness",
+        initial = tool.widthOf(index) * 100f,
+        format = { Units.formatNumber(it.toDouble(), 0) },
+        parse = { t -> Units.parse(t)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(0f, MAX_THICKNESS_PERCENT) },
+        step = { v, up -> stepThickness(v, up, step) },
+        toFraction = { it / MAX_THICKNESS_PERCENT },
+        fromFraction = { f -> (((f * MAX_THICKNESS_PERCENT) / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT) },
+        rangeText = "0 – 300 %",
+        suffix = "%",
+        onApply = { v ->
+            tool.setWidth(index, v / 100f)
+            tool.endNumericEdit()
+        },
+        onDismiss = onDismiss,
+    )
 }
 
 /**
@@ -1037,8 +661,9 @@ private fun Modifier.onDoubleTap(onFirstDown: () -> Unit = {}, action: () -> Uni
     }
 }
 
+/** The settings sheet of the curve tools (stroke, fill, thickness, points, path; v1.8: shown in [curveStrip]'s overlays). */
 @Composable
-private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
+internal fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val s = tool.settings
     val controller = tool.controller
     val dpi = controller.doc.dpi
@@ -1186,9 +811,9 @@ private fun PathSettingsSection(tool: CurveTool) {
     )
 }
 
-/** Numeric editing of the curve / polyline anchors (hosted by [CurveToolOptions]). */
+/** Numeric editing of the curve, polyline and path points (v1.8: shown in [curveStrip]'s overlays). */
 @Composable
-private fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
+internal fun CurveNumbersSheet(tool: CurveTool, onDismiss: () -> Unit) {
     val s = tool.settings
     val controller = tool.controller
     val count = tool.pointCount

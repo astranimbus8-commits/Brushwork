@@ -60,6 +60,7 @@ import com.brushwork.paint.tools.vector.spline.SplinePresets
 import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.CopyMaps
@@ -382,12 +383,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** v1.7 (item 1): "Select several" (Compose state; off whenever the edited path changes or ends). */
     private var severalState by mutableStateOf(false)
 
+    /**
+     * Turning it on shows its hint as the editor's message (v1.8, §3.9: the converted strip has
+     * no hint line of its own; the X / Y pill's cell turns it on, as for Shape).
+     */
     override var selectSeveral: Boolean
         get() = severalState
         set(v) {
             val on = v && pointCount > 0
             if (on == severalState) return
             severalState = on
+            if (on) controller.toast(PointLabels.SEVERAL_HINT)
             controller.invalidateOverlay()
         }
 
@@ -805,6 +811,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /** The hint was shown (once per session: the tool lives as long as the editor). */
     private var editedHintShown = false
 
+    /** The Path strip showed its width caption as a message (once per session, as [editedHintShown]). */
+    internal var widthCaptionShown = false
+
     /** The generator went during the touch in progress: the hint waits until it ends (a cancelled touch shows none). */
     private var droppedDuringTouch = false
 
@@ -1078,6 +1087,70 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (targetLayer == null) targetLayer = controller.doc.activeLayer
         anchors = anchors + CurveAnchor(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), sharp = polyline)
         selected = anchors.lastIndex
+        changed()
+        return true
+    }
+
+    /**
+     * v1.8 (§3.9, the strip's "Add point"): a new point midway along the segment after the
+     * selected point (with several selected, the one selected last; the segment before it when
+     * it ends an open path; the last segment with none selected), on the line with the thickness
+     * the line has there (Path: midway between the two control points, its weight and thickness
+     * between theirs); after a lone point, [ADD_POINT_GAP_DP] to its right. The new point is
+     * selected. One in-tool step, a hand edit of the geometry ([editGeometry]: a generated curve
+     * loses its generator). False when nothing is open or the path is full.
+     */
+    fun addPointAfterSelected(): Boolean {
+        val n = pointCount
+        if (n == 0 || groupEdit != null) return false
+        val lim = ShapeSettings.MAX_LENGTH
+        val primary = pointSelection.primary
+        if (isPath) {
+            val s = spline ?: return false
+            if (s.points.size >= VSpline.MAX_POINTS) {
+                controller.toast(TOO_MANY_POINTS)
+                return false
+            }
+            val pts = s.points
+            val at: Int
+            val point: VSplinePoint
+            if (pts.size == 1) {
+                val p = pts[0]
+                at = 1
+                point = p.copy(x = (p.x + controller.docLength(ADD_POINT_GAP_DP)).coerceIn(-lim, lim))
+            } else {
+                val segs = if (s.cyclic && pts.size >= 3) pts.size else pts.size - 1
+                val seg = (if (primary in pts.indices) primary else segs - 1).coerceAtMost(segs - 1)
+                val a = pts[seg]
+                val b = pts[(seg + 1) % pts.size]
+                val mid = Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f)
+                at = seg + 1
+                point = SplineEditing.pointOnPolygon(s, SplineEditing.PolygonHit(seg, 0.5f, mid, 0f), mid)
+            }
+            editGeometry()
+            setSplineState(SplineEditing.inserted(s, at, point))
+            selectedPoint = at
+            changed()
+            return true
+        }
+        val list = anchors.toMutableList()
+        val at: Int
+        if (list.size == 1) {
+            val a = list[0]
+            at = 1
+            list.add(CurveAnchor((a.x + controller.docLength(ADD_POINT_GAP_DP)).coerceIn(-lim, lim), a.y, sharp = polyline, width = a.width))
+        } else {
+            val segs = CurveGeometry.segmentCount(list.size, isClosed)
+            val seg = (if (primary in list.indices) primary else segs - 1).coerceAtMost(segs - 1)
+            val (p0, c1, c2, p1) = CurveGeometry.segment(list, seg, isClosed, tension, polyline)
+            // The cubic at t = 0.5.
+            val mid = (p0 + c1 * 3f + c2 * 3f + p1) / 8f
+            at = seg + 1
+            list.add(at, CurveAnchor(mid.x.coerceIn(-lim, lim), mid.y.coerceIn(-lim, lim), sharp = polyline, width = insertedWidth(CurveHit(seg, 0.5f, mid, 0f))))
+        }
+        editGeometry()
+        anchors = list
+        selected = at
         changed()
         return true
     }
@@ -3898,6 +3971,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         private const val TOUCH_SLOP_DP = 6f
         /** Grab radius of anchors and tangent handles (screen dp): generous for fingers. */
         private const val HANDLE_TOUCH_DP = 24f
+        /** How far right of a lone point [addPointAfterSelected] puts the next one (screen dp). */
+        private const val ADD_POINT_GAP_DP = 48f
         /** How close to a path object a tap reopens it (screen dp). */
         private const val PATH_HIT_DP = 12f
         /** How long the brush stroke waits for a point just placed under a finger (see onDown). */

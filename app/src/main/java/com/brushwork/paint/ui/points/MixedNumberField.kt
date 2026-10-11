@@ -79,12 +79,17 @@ fun MixedNumberField(
     relative: Float? = (value as? Mixed.Same)?.value,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    /**
+     * v1.8 (§3.9): where a tap goes. Null: the field's own [ValueInputDialog]. Set (a strip item
+     * on the More row, which leaves composition when the row closes): it is called instead, and
+     * the caller shows [MixedValueDialog] in its strip's overlays.
+     */
+    onOpenDialog: (() -> Unit)? = null,
 ) {
     val min = range.start
     val max = range.endInclusive
     val dragStep = MixedFieldMath.dragStep(min, max)
     val decimals = MixedFieldMath.decimals(dragStep)
-    fun fmt(v: Float): String = Units.formatNumber(v.toDouble(), decimals)
     val shown = MixedFieldMath.shown(value, unit, decimals)
     val state = MixedFieldMath.stateDescription(value, unit, decimals)
     val active = enabled && value != null
@@ -109,7 +114,7 @@ fun MixedNumberField(
                 contentDescription = label
                 stateDescription = state
             }
-            .clickable(enabled = active, onClickLabel = "Type $label") { dialog = true }
+            .clickable(enabled = active, onClickLabel = "Type $label") { if (onOpenDialog != null) onOpenDialog() else dialog = true }
             .pointerInput(active, incStep, dragStep, min, max) {
                 if (!active) return@pointerInput
                 var start = 0f
@@ -152,29 +157,51 @@ fun MixedNumberField(
         }
     }
 
-    if (dialog) {
-        // The dialog opens at the shared value, or a spread's middle (only its -/+ and slider start there).
-        val initial = relative ?: MixedFieldMath.dialogStart(value, min, max)
-        ValueInputDialog(
-            title = label,
-            label = label,
-            initial = initial,
-            format = { fmt(it) },
-            parse = { s -> Units.parse(s)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(min, max) },
-            step = { v, up -> (if (up) v + dragStep.toFloat() else v - dragStep.toFloat()).coerceIn(min, max) },
-            toFraction = { v -> if (max > min) (v - min) / (max - min) else 0f },
-            fromFraction = { f -> MixedFieldMath.roundTo(min + f * (max - min), dragStep).coerceIn(min, max) },
-            rangeText = "${fmt(min)} – ${fmt(max)}${if (unit.isEmpty()) "" else " $unit"}",
-            suffix = unit,
-            onApply = {},
-            onDismiss = { dialog = false },
-            incrementKey = incrementKey,
-            onApplyText = { text ->
-                val r = relative
-                onTyped(if (r != null) Expressions.resolveRelative(text, r) ?: text else text)
-            },
-        )
-    }
+    if (dialog) MixedValueDialog(label, value, unit, range, incrementKey, onTyped, relative, onDismiss = { dialog = false })
+}
+
+/**
+ * The [ValueInputDialog] a tap on a [MixedNumberField] opens, on its own: v1.8 (§3.9) a strip
+ * item's field passes `onOpenDialog`, and its strip shows this in its overlays, so the dialog
+ * outlives the More row. The parameters are the field's.
+ */
+@Composable
+fun MixedValueDialog(
+    label: String,
+    value: Mixed<Float>?,
+    unit: String,
+    range: ClosedFloatingPointRange<Float>,
+    incrementKey: String,
+    onTyped: (String) -> Unit,
+    relative: Float? = (value as? Mixed.Same)?.value,
+    onDismiss: () -> Unit,
+) {
+    val min = range.start
+    val max = range.endInclusive
+    val dragStep = MixedFieldMath.dragStep(min, max)
+    val decimals = MixedFieldMath.decimals(dragStep)
+    fun fmt(v: Float): String = Units.formatNumber(v.toDouble(), decimals)
+    // The dialog opens at the shared value, or a spread's middle (only its -/+ and slider start there).
+    val initial = relative ?: MixedFieldMath.dialogStart(value, min, max)
+    ValueInputDialog(
+        title = label,
+        label = label,
+        initial = initial,
+        format = { fmt(it) },
+        parse = { s -> Units.parse(s)?.toFloat()?.takeIf { it.isFinite() }?.coerceIn(min, max) },
+        step = { v, up -> (if (up) v + dragStep.toFloat() else v - dragStep.toFloat()).coerceIn(min, max) },
+        toFraction = { v -> if (max > min) (v - min) / (max - min) else 0f },
+        fromFraction = { f -> MixedFieldMath.roundTo(min + f * (max - min), dragStep).coerceIn(min, max) },
+        rangeText = "${fmt(min)} – ${fmt(max)}${if (unit.isEmpty()) "" else " $unit"}",
+        suffix = unit,
+        onApply = {},
+        onDismiss = onDismiss,
+        incrementKey = incrementKey,
+        onApplyText = { text ->
+            val r = relative
+            onTyped(if (r != null) Expressions.resolveRelative(text, r) ?: text else text)
+        },
+    )
 }
 
 /** The pure parts of [MixedNumberField] (tests). */
