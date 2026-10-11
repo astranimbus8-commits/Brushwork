@@ -18,6 +18,10 @@ class ChromaticNoiseTest {
     private val zooming = ChromaticAberrationZoomingFilter()
     private val noise = NoiseFilter()
 
+    // v1.8 (item 5): the v1.7 color orders RGB and BGR, as fringe colors (first, middle, last).
+    private fun rgbOrder() = intArrayOf(FringeColors.RED, FringeColors.GREEN, FringeColors.BLUE)
+    private fun bgrOrder() = intArrayOf(FringeColors.BLUE, FringeColors.GREEN, FringeColors.RED)
+
     /** Opaque black image with a white vertical line at x = 10. */
     private fun whiteLine(): PixelBuffer {
         val b = PixelBuffer.filled(21, 5, 0xFF000000.toInt())
@@ -33,7 +37,7 @@ class ChromaticNoiseTest {
 
     @Test
     fun movingSeparatesChannelsAlongAngle() {
-        val out = run(moving, whiteLine(), "distance" to 3f, "angle" to 0f, "order" to 0)
+        val out = run(moving, whiteLine(), "distance" to 3f, "angle" to 0f, "fringes" to rgbOrder())
         // RGB order: red moves forward (+x), green stays, blue moves backward.
         assertEquals(255, r(out[13, 2])); assertEquals(0, g(out[13, 2])); assertEquals(0, b(out[13, 2]))
         assertEquals(0, r(out[10, 2])); assertEquals(255, g(out[10, 2])); assertEquals(0, b(out[10, 2]))
@@ -44,8 +48,8 @@ class ChromaticNoiseTest {
     @Test
     fun movingOrderMirrorsWithOppositeAngle() {
         val src = ArtTestUtil.gradient(25, 18)
-        val rgb = run(moving, src, "distance" to 4f, "angle" to 30f, "order" to 0)
-        val bgr = run(moving, src, "distance" to 4f, "angle" to 210f, "order" to 5)
+        val rgb = run(moving, src, "distance" to 4f, "angle" to 30f, "fringes" to rgbOrder())
+        val bgr = run(moving, src, "distance" to 4f, "angle" to 210f, "fringes" to bgrOrder())
         for (i in rgb.pixels.indices) {
             val p = rgb.pixels[i]; val q = bgr.pixels[i]
             assertTrue(abs(r(p) - r(q)) <= 1 && abs(g(p) - g(q)) <= 1 && abs(b(p) - b(q)) <= 1 && abs(a(p) - a(q)) <= 1)
@@ -56,7 +60,7 @@ class ChromaticNoiseTest {
     fun movingGrowsFringesOnTransparentLayer() {
         val src = PixelBuffer(15, 3)
         src[7, 1] = -1
-        val out = run(moving, src, "distance" to 2f, "angle" to 0f, "order" to 0)
+        val out = run(moving, src, "distance" to 2f, "angle" to 0f, "fringes" to rgbOrder())
         assertEquals(0xFFFF0000.toInt(), out[9, 1])
         assertEquals(0xFF00FF00.toInt(), out[7, 1])
         assertEquals(0xFF0000FF.toInt(), out[5, 1])
@@ -85,7 +89,7 @@ class ChromaticNoiseTest {
         // A white dot on the right of the center: the red channel moves outward (to the right).
         val src = PixelBuffer.filled(41, 21, 0xFF000000.toInt())
         src[35, 10] = -1
-        val out = run(zooming, src, "distance" to 6f, "order" to 0, "center" to floatArrayOf(0.5f, 0.5f))
+        val out = run(zooming, src, "distance" to 6f, "fringes" to rgbOrder(), "center" to floatArrayOf(0.5f, 0.5f))
         var redX = -1; var blueX = -1
         for (x in 0 until 41) {
             if (r(out[x, 10]) > 128) redX = x
