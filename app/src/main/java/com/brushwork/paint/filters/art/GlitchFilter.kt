@@ -200,7 +200,9 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
      * The general path's split: the first sample at `sx - cs`, the middle at `sx`, the last at
      * `sx + cs`. Channel c is the swatch-weighted mean `Σ_i w[3i + c] · P_i,c` of the three
      * samples' coverage-weighted channels over the output alpha, the largest alpha among the
-     * colored samples (design §3.6 (c), as Chromatic aberration's). Where the three share one alpha
+     * colored samples (design §3.6 (c), as Chromatic aberration's); an uncovered channel (the
+     * middle sample's) over the larger of that and the middle sample's alpha, so it never exceeds
+     * the middle sample's straight value ([FringeColors.Mix.uncovered]). Where the three share one alpha
      * (an opaque picture) that is the weighted mean of the straight channels, here in 16.16 fixed
      * point ([FringeColors.Mix.fixed]: a uniform picture stays exact); elsewhere in floats. The
      * weights live in locals, and a sample inside the row skips [Math.floorMod]'s division
@@ -214,6 +216,7 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         val w0r = m[0]; val w0g = m[1]; val w0b = m[2]; val w1r = m[3]; val w1g = m[4]; val w1b = m[5]
         val w2r = m[6]; val w2g = m[7]; val w2b = m[8]
         val k0 = mix.colored[0]; val k1 = mix.colored[1]; val k2 = mix.colored[2]
+        val ur = mix.uncovered[0]; val ug = mix.uncovered[1]; val ub = mix.uncovered[2]
         for (x in 0 until w) {
             val sx = x - dxRow[x]
             val c0 = sp[so + wrap(sx - cs, w)]
@@ -236,7 +239,9 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                     val g = w0g * p0 * ((c0 shr 8) and 0xFF) + w1g * p1 * ((c1 shr 8) and 0xFF) + w2g * p2 * ((c2 shr 8) and 0xFF)
                     val b = w0b * p0 * (c0 and 0xFF) + w1b * p1 * (c1 and 0xFF) + w2b * p2 * (c2 and 0xFF)
                     val inv = 1f / a
-                    (a shl 24) or (ChannelShift.clamp(r * inv) shl 16) or (ChannelShift.clamp(g * inv) shl 8) or ChannelShift.clamp(b * inv)
+                    val invU = 1f / max(a, a1)
+                    (a shl 24) or (ChannelShift.clamp(r * (if (ur) invU else inv)) shl 16) or
+                        (ChannelShift.clamp(g * (if (ug) invU else inv)) shl 8) or ChannelShift.clamp(b * (if (ub) invU else inv))
                 }
             }
         }

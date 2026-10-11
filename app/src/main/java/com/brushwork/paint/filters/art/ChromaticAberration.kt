@@ -65,11 +65,15 @@ internal object ChannelShift {
      * and the rows once per row, with [sample]'s arithmetic (the same values). Each sample is read
      * once for its alpha and its three coverage-weighted channels; channel c is
      * `Σ_i w[3i + c] · P_i,c` over the output alpha, the largest alpha among the
-     * [FringeColors.Mix.colored] samples. With [mix] one-hot this equals [recombine] byte for byte
-     * (the weights are 1 and 0, and the same samples give the alpha).
+     * [FringeColors.Mix.colored] samples; a [FringeColors.Mix.uncovered] channel (the middle
+     * sample's) over the larger of the output alpha and the middle sample's alpha, so it never
+     * exceeds the middle sample's straight value. With [mix] one-hot this equals [recombine] byte
+     * for byte (the weights are 1 and 0, no channel is uncovered, and the same samples give the
+     * alpha).
      *
      * The pixel loop has no branch on the colors: every sample is read (a sample of weight 0 adds
-     * 0) and an uncolored sample's alpha counts times 0 (alphas are never negative), so the JIT
+     * 0), an uncolored sample's alpha counts times 0 (alphas are never negative) and each channel
+     * picks its divisor by a factor of 1 or 0 (`x · 1 + y · 0` is `x`, exactly), so the JIT
      * compiles one loop, not a copy per color case; each sample is added as it is read.
      */
     inline fun recombineMix(
@@ -89,6 +93,9 @@ internal object ChannelShift {
         val k0 = if (mix.colored[0]) 1f else 0f
         val k1 = if (mix.colored[1]) 1f else 0f
         val k2 = if (mix.colored[2]) 1f else 0f
+        // Per channel: 1 when it is uncovered (divided by max(alpha, the middle's alpha)), else 0.
+        val ur = if (mix.uncovered[0]) 1f else 0f; val ug = if (mix.uncovered[1]) 1f else 0f; val ub = if (mix.uncovered[2]) 1f else 0f
+        val cr = 1f - ur; val cg = 1f - ug; val cb = 1f - ub
         // Fringe i's columns at i·w + x: the left and right source column and the fraction.
         val left = IntArray(3 * w); val right = IntArray(3 * w); val frac = FloatArray(3 * w)
         for (i in 0 until 3) for (x in 0 until w) {
@@ -111,13 +118,15 @@ internal object ChannelShift {
                 val u2 = ArtMath.clampInt(qf2.toInt(), 0, h - 1) * w; val v2 = ArtMath.clampInt(qf2.toInt() + 1, 0, h - 1) * w
                 val row = y * w
                 for (x in 0 until w) {
-                    var a = 0f; var pr = 0f; var pg = 0f; var pb = 0f
+                    var a = 0f; var a1 = 0f; var pr = 0f; var pg = 0f; var pb = 0f
                     bilinear(s, u0, v0, left[x], right[x], frac[x], ty0) { r, g, b, sa -> pr = w0r * r; pg = w0g * g; pb = w0b * b; a = k0 * sa }
-                    bilinear(s, u1, v1, left[w + x], right[w + x], frac[w + x], ty1) { r, g, b, sa -> pr += w1r * r; pg += w1g * g; pb += w1b * b; val t = k1 * sa; if (t > a) a = t }
+                    bilinear(s, u1, v1, left[w + x], right[w + x], frac[w + x], ty1) { r, g, b, sa -> pr += w1r * r; pg += w1g * g; pb += w1b * b; a1 = sa; val t = k1 * sa; if (t > a) a = t }
                     bilinear(s, u2, v2, left[w2 + x], right[w2 + x], frac[w2 + x], ty2) { r, g, b, sa -> pr += w2r * r; pg += w2g * g; pb += w2b * b; val t = k2 * sa; if (t > a) a = t }
                     d[row + x] = if (a < 0.5f) 0 else {
                         val inv = 1f / a
-                        (clamp(a) shl 24) or (clamp(pr * inv) shl 16) or (clamp(pg * inv) shl 8) or clamp(pb * inv)
+                        val invU = 1f / max(a, a1)
+                        (clamp(a) shl 24) or (clamp(pr * (cr * inv + ur * invU)) shl 16) or
+                            (clamp(pg * (cg * inv + ug * invU)) shl 8) or clamp(pb * (cb * inv + ub * invU))
                     }
                 }
             }

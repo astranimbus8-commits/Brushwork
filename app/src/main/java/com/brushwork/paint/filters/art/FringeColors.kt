@@ -19,6 +19,10 @@ import com.brushwork.paint.ui.common.FringeLabels18
  *   samples' (coverage-weighted) channel c, `Σ_i F_i,c · P_i,c / Σ_i F_i,c`; a channel no swatch
  *   covers comes from the middle (unshifted) sample. The alpha is the largest alpha among the
  *   samples whose swatch is colored. With no colored swatch at all the filter returns the source.
+ *   Each channel keeps its own coverage, as in v1.7 (its alpha-weighted value over the output
+ *   alpha); an uncovered channel's middle sample, whose alpha the output alpha may not include
+ *   (a middle swatch with no color), is divided by the larger of the two, so it never comes out
+ *   brighter than that sample's own straight value ([Mix.uncovered]).
  *
  * Only the swatches' red, green and blue bytes count: a swatch's alpha is ignored (the picker
  * opens without alpha), and only the exact value 0 has no color.
@@ -114,12 +118,15 @@ internal object FringeColors {
      * in channel c: `F_i,c / Σ_j F_j,c`, or 1 for the middle sample of a channel no swatch covers.
      * [colored] marks the samples whose alpha counts. [fixed] is [w] in 1/65536 with each
      * channel's three summing to exactly 65536 (Glitch's pixels whose three samples share their
-     * alpha: integer arithmetic, a uniform picture stays exact).
+     * alpha: integer arithmetic, a uniform picture stays exact). [uncovered] marks the channels no
+     * swatch covers (taken from the middle sample, divided by the larger of the output alpha and
+     * the middle sample's alpha).
      */
     class Mix(colors: IntArray) {
         val w = FloatArray(9)
         val fixed = IntArray(9)
         val colored = BooleanArray(3) { colors[it] != NONE }
+        val uncovered = BooleanArray(3)
 
         init {
             for (c in 0 until 3) {
@@ -128,6 +135,7 @@ internal object FringeColors {
                 for (i in 0 until 3) if (colors[i] != NONE) sum += (colors[i] shr shift) and 0xFF
                 if (sum == 0) {
                     w[3 + c] = 1f
+                    uncovered[c] = true
                 } else {
                     for (i in 0 until 3) {
                         val f = if (colors[i] == NONE) 0 else (colors[i] shr shift) and 0xFF

@@ -96,7 +96,6 @@ class FringeLegacyOrderTest {
         }
     }
 
-
     @Test
     fun glitchHasNoLegacyOrder() {
         val glitch = GlitchFilter()
