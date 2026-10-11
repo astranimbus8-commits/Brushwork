@@ -102,6 +102,7 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         val k = if (none) null else FringeColors.oneHotFactors(colors)
         val rgb = k != null && k[0] == 1 && k[1] == 0 && k[2] == -1
         val mix = if (none || k != null) null else FringeColors.Mix(colors)
+        val outer = mix != null && !mix.colored[1] && mix.uncovered.none { it }
         val static = (values.raw(STATIC_COLOR_KEY) as? Number)?.toInt() ?: FringeColors.WHITE
         val sr = ((static shr 16) and 0xFF) / 255f; val sg = ((static shr 8) and 0xFF) / 255f; val sb = (static and 0xFF) / 255f
         val sa = (static ushr 24) / 255f
@@ -126,7 +127,7 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                     when {
                         rgb -> splitRgb(sp, so, dp, o, w, dxRow, cs)
                         k != null -> split(sp, so, dp, o, w, dxRow, -k[0] * cs, -k[1] * cs, -k[2] * cs)
-                        mix != null -> mixRow(sp, so, dp, o, w, dxRow, cs, mix)
+                        mix != null -> if (outer) mixRowOuter(sp, so, dp, o, w, dxRow, cs, mix) else mixRow(sp, so, dp, o, w, dxRow, cs, mix)
                         else -> for (x in 0 until w) dp[o + x] = sp[so + Math.floorMod(x - dxRow[x], w)]
                     }
                 } else if (srcRow != row) {
@@ -245,6 +246,45 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                     val invU = INV[max(a, a1)]
                     (a shl 24) or (ChannelShift.clamp(r * (if (ur) invU else inv)) shl 16) or
                         (ChannelShift.clamp(g * (if (ug) invU else inv)) shl 8) or ChannelShift.clamp(b * (if (ub) invU else inv))
+                }
+            }
+        }
+    }
+
+    /**
+     * [mixRow] when the middle sample feeds no channel (no middle color, and the outer two cover
+     * every channel): the middle's weights are zero, so its terms are left out (the same bytes: a
+     * zero term changes no sum), and only its alpha still picks the opaque path. A method of its
+     * own, so it is compiled on its own.
+     */
+    private fun mixRowOuter(sp: IntArray, so: Int, dp: IntArray, o: Int, w: Int, dxRow: IntArray, cs: Int, mix: FringeColors.Mix) {
+        val f = mix.fixed
+        val f0r = f[0]; val f0g = f[1]; val f0b = f[2]; val f2r = f[6]; val f2g = f[7]; val f2b = f[8]
+        val m = mix.w
+        val w0r = m[0]; val w0g = m[1]; val w0b = m[2]; val w2r = m[6]; val w2g = m[7]; val w2b = m[8]
+        val k0 = mix.colored[0]; val k2 = mix.colored[2]
+        for (x in 0 until w) {
+            val sx = x - dxRow[x]
+            val c0 = sp[so + wrap(sx - cs, w)]
+            val a1 = sp[so + wrap(sx, w)] ushr 24
+            val c2 = sp[so + wrap(sx + cs, w)]
+            val a0 = c0 ushr 24; val a2 = c2 ushr 24
+            dp[o + x] = if (a0 == a1 && a0 == a2) {
+                if (a0 == 0) 0 else (a0 shl 24) or
+                    (((f0r * ((c0 shr 16) and 0xFF) + f2r * ((c2 shr 16) and 0xFF) + 0x8000) ushr 16) shl 16) or
+                    (((f0g * ((c0 shr 8) and 0xFF) + f2g * ((c2 shr 8) and 0xFF) + 0x8000) ushr 16) shl 8) or
+                    ((f0b * (c0 and 0xFF) + f2b * (c2 and 0xFF) + 0x8000) ushr 16)
+            } else {
+                var a = 0
+                if (k0) a = a0
+                if (k2 && a2 > a) a = a2
+                if (a == 0) 0 else {
+                    val p0 = a0.toFloat(); val p2 = a2.toFloat()
+                    val r = w0r * p0 * ((c0 shr 16) and 0xFF) + w2r * p2 * ((c2 shr 16) and 0xFF)
+                    val g = w0g * p0 * ((c0 shr 8) and 0xFF) + w2g * p2 * ((c2 shr 8) and 0xFF)
+                    val b = w0b * p0 * (c0 and 0xFF) + w2b * p2 * (c2 and 0xFF)
+                    val inv = INV[a]
+                    (a shl 24) or (ChannelShift.clamp(r * inv) shl 16) or (ChannelShift.clamp(g * inv) shl 8) or ChannelShift.clamp(b * inv)
                 }
             }
         }
