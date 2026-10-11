@@ -111,6 +111,7 @@ import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.LocalSheetGroup
 import com.brushwork.paint.ui.common.LocalSheetHost
 import com.brushwork.paint.ui.common.LongPressLabelHost
+import com.brushwork.paint.ui.common.MenuLabels18
 import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
 import com.brushwork.paint.ui.common.SheetPill
@@ -558,7 +559,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             // the menu's "Settings", I10). The layer window stays, as it does for every chrome
             // button: "Fit to screen" or "Paste" with the layers in view. Its own "Import picture"
             // button is then the only one: the menu leaves that entry out (moreMenuEntries).
-            TopButton(TopSlot.MORE, "More options", ChromeGlyphs.Picture) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
+            TopButton(TopSlot.MORE, "More options", ChromeGlyphs.MoreDots) { controller.endCanvasGesture(); toolMenuOpen = false; moreOpen = true },
         )
         controller.docVersion // size changes (canvas resize) refresh the More menu's header
         val doc = controller.doc
@@ -954,6 +955,10 @@ private fun FeedbackChips(
  * Increments…). The narrow-screen top-row circles that fold into it come first (TopRow adds them).
  * While the layer window is shown ([layerWindowShown]) "Import picture" is left out: the window has
  * the same button, and two controls never share a label (I10).
+ *
+ * v1.8 (D28): five sections, each headed by its name ([MenuLabels18]): "Clipboard", "Bring in",
+ * "Send out", "View" and "This artwork". The entries keep their labels and, within a section,
+ * their order; "Canvas…" moves from before "Flip view" to the head of "This artwork".
  */
 private fun moreMenuEntries(
     controller: EditorController,
@@ -972,31 +977,31 @@ private fun moreMenuEntries(
     onSaveNow: () -> Unit,
     onSettings: () -> Unit,
 ): List<MenuEntry> = listOfNotNull(
-    MenuEntry(if (hasSelection) "Copy selection" else "Copy layer", Icons.Filled.ContentCopy, enabled = docActionsEnabled) {
+    MenuEntry(if (hasSelection) "Copy selection" else "Copy layer", Icons.Filled.ContentCopy, section = MenuLabels18.CLIPBOARD, enabled = docActionsEnabled) {
         controller.endCanvasGesture()
         controller.copySelection()
     },
-    MenuEntry("Paste", Icons.Filled.ContentPaste, enabled = docActionsEnabled && canPaste) {
+    MenuEntry("Paste", Icons.Filled.ContentPaste, section = MenuLabels18.CLIPBOARD, enabled = docActionsEnabled && canPaste) {
         controller.endCanvasGesture()
         controller.paste()
     },
-    if (layerWindowShown) null else MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, enabled = docActionsEnabled, dividerBefore = true) { onImportPicture() },
-    MenuEntry("Import SVG or PDF…", Icons.Filled.FileOpen, enabled = docActionsEnabled, dividerBefore = layerWindowShown) { onImportVector() },
-    MenuEntry("Export PNG", Icons.Filled.SaveAlt, enabled = docActionsEnabled) { onExport(ExportFormat.PNG) },
-    MenuEntry("Export JPG", Icons.Filled.Image, enabled = docActionsEnabled) { onExport(ExportFormat.JPEG) },
-    MenuEntry("Export SVG…", Icons.Filled.Polyline, enabled = docActionsEnabled) { onExportVector(VectorFormat.SVG) },
-    MenuEntry("Export PDF…", Icons.Filled.PictureAsPdf, enabled = docActionsEnabled) { onExportVector(VectorFormat.PDF) },
-    MenuEntry("Share", Icons.Filled.Share, enabled = docActionsEnabled) { onShare() },
-    MenuEntry("Canvas…", Icons.Filled.AspectRatio, enabled = docActionsEnabled, dividerBefore = true) { onCanvas() },
-    MenuEntry("Flip view", Icons.Filled.Flip, checked = controller.viewMirrored, dividerBefore = true) {
+    if (layerWindowShown) null else MenuEntry("Import picture", Icons.Filled.AddPhotoAlternate, section = MenuLabels18.BRING_IN, enabled = docActionsEnabled) { onImportPicture() },
+    MenuEntry("Import SVG or PDF…", Icons.Filled.FileOpen, section = MenuLabels18.BRING_IN, enabled = docActionsEnabled) { onImportVector() },
+    MenuEntry("Export PNG", Icons.Filled.SaveAlt, section = MenuLabels18.SEND_OUT, enabled = docActionsEnabled) { onExport(ExportFormat.PNG) },
+    MenuEntry("Export JPG", Icons.Filled.Image, section = MenuLabels18.SEND_OUT, enabled = docActionsEnabled) { onExport(ExportFormat.JPEG) },
+    MenuEntry("Export SVG…", Icons.Filled.Polyline, section = MenuLabels18.SEND_OUT, enabled = docActionsEnabled) { onExportVector(VectorFormat.SVG) },
+    MenuEntry("Export PDF…", Icons.Filled.PictureAsPdf, section = MenuLabels18.SEND_OUT, enabled = docActionsEnabled) { onExportVector(VectorFormat.PDF) },
+    MenuEntry("Share", Icons.Filled.Share, section = MenuLabels18.SEND_OUT, enabled = docActionsEnabled) { onShare() },
+    MenuEntry("Flip view", Icons.Filled.Flip, checked = controller.viewMirrored, section = MenuLabels18.VIEW) {
         controller.viewMirrored = !controller.viewMirrored
     },
-    MenuEntry("Fit to screen", Icons.Filled.FitScreen) { canvasRef[0]?.fitToScreen() },
-    MenuEntry("100% (actual pixels)", Icons.Filled.CenterFocusStrong) { canvasRef[0]?.actualPixels() },
-    MenuEntry("Reset rotation", Icons.Filled.CropRotate) { canvasRef[0]?.resetRotation() },
-    MenuEntry("Increments…", Icons.Filled.Numbers, checked = controller.increments.enabled, dividerBefore = true) { onIncrements() },
-    MenuEntry("Save now", Icons.Filled.Save) { onSaveNow() },
-    MenuEntry("Settings", Icons.Filled.Settings) { onSettings() },
+    MenuEntry("Fit to screen", Icons.Filled.FitScreen, section = MenuLabels18.VIEW) { canvasRef[0]?.fitToScreen() },
+    MenuEntry("100% (actual pixels)", Icons.Filled.CenterFocusStrong, section = MenuLabels18.VIEW) { canvasRef[0]?.actualPixels() },
+    MenuEntry("Reset rotation", Icons.Filled.CropRotate, section = MenuLabels18.VIEW) { canvasRef[0]?.resetRotation() },
+    MenuEntry("Canvas…", Icons.Filled.AspectRatio, section = MenuLabels18.THIS_ARTWORK, enabled = docActionsEnabled) { onCanvas() },
+    MenuEntry("Increments…", Icons.Filled.Numbers, checked = controller.increments.enabled, section = MenuLabels18.THIS_ARTWORK) { onIncrements() },
+    MenuEntry("Save now", Icons.Filled.Save, section = MenuLabels18.THIS_ARTWORK) { onSaveNow() },
+    MenuEntry("Settings", Icons.Filled.Settings, section = MenuLabels18.THIS_ARTWORK) { onSettings() },
 )
 
 /** Where a floating window is, relative to the editor's root box (both set by onGloballyPositioned). */

@@ -134,15 +134,16 @@ internal object ChromeGlyphs {
         }
     }
 
-    /** Slot 8, More options: ibisPaint's picture (a frame with a white sun and white hills). */
-    val Picture: ImageVector by lazy {
-        glyph("Picture") {
-            stroke(1.5f) {
-                moveTo(3.5f, 3.5f); lineTo(20.5f, 3.5f); lineTo(20.5f, 20.5f); lineTo(3.5f, 20.5f); close()
-            }
+    /**
+     * Slot 8, More options (v1.8, design §3.9): three dots in a row, the sign of "more" (v1.6's
+     * ibisPaint picture read as an image import). The circle's label stays "More options".
+     */
+    val MoreDots: ImageVector by lazy {
+        glyph("MoreDots") {
             solid {
-                circle(8.6f, 8.6f, 2.1f)
-                moveTo(5.4f, 12.6f); lineTo(12f, 16.6f); lineTo(18.6f, 11.8f); lineTo(18.6f, 18.6f); lineTo(5.4f, 18.6f); close()
+                circle(5.5f, 12f, 2.1f)
+                circle(12f, 12f, 2.1f)
+                circle(18.5f, 12f, 2.1f)
             }
         }
     }

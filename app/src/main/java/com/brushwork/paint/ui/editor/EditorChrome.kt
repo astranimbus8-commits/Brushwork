@@ -42,12 +42,17 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlin.math.roundToInt
 
-/** A More-menu entry; [checked] non-null shows a check mark when true (toggles). */
+/**
+ * A More-menu entry; [checked] non-null shows a check mark when true (toggles). [section] is the
+ * name of the menu section the entry belongs to (v1.8, D28: `MenuLabels18`): the menu heads each
+ * run of entries of one section with that name. Entries without one (the top-row circles folded
+ * into the menu on a narrow screen) come first, under no header.
+ */
 data class MenuEntry(
     val label: String,
     val icon: ImageVector,
     val checked: Boolean? = null,
-    val dividerBefore: Boolean = false,
+    val section: String? = null,
     val enabled: Boolean = true,
     val onClick: () -> Unit,
 )

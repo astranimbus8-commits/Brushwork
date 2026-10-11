@@ -37,6 +37,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -45,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.editor.MenuEntry
 import com.brushwork.paint.ui.editor.blockCanvasTouches
@@ -91,12 +93,12 @@ internal fun TopRow(
                 if (slot == ChromeLayout.TopSlot.REDO && spec.gap > 0f) Spacer(Modifier.width(spec.gap.dp))
             }
         }
-        // The More menu drops from the row's left end (ibisPaint's dropdown position).
+        // The More menu drops from the row's left end (ibisPaint's dropdown position). The folded
+        // circles have no section: they come first, and the first section's header follows them.
         val folded = spec.folded.mapNotNull { bySlot[it] }.map { b ->
             MenuEntry(b.label, b.icon, checked = b.on, enabled = b.enabled, onClick = b.onClick)
         }
-        val entries = if (folded.isEmpty()) moreEntries else folded + moreEntries.mapIndexed { i, e -> if (i == 0) e.copy(dividerBefore = true) else e }
-        MoreMenu(moreOpen, { onMoreOpenChange(false) }, moreHeader, entries, moreMaxHeight)
+        MoreMenu(moreOpen, { onMoreOpenChange(false) }, moreHeader, folded + moreEntries, moreMaxHeight)
     }
 }
 
@@ -145,10 +147,14 @@ private fun TopCircle(b: TopButton, spec: ChromeLayout.TopRow) {
 }
 
 /**
- * The More menu (v1.6 §3.7.6): a dark dropdown ([IbisColors.Sheet]) 280 dp wide under the top
- * row's left end, scrolling; the document's name and size head it (moved from the v1.5 top bar).
- * An entry closes the menu and acts. [maxHeight] (ChromeLayout.moreMenuMaxHeight) keeps it between
- * the top row and the bottom bar.
+ * The More menu (v1.6 §3.7.6): a dark dropdown 280 dp wide under the top row's left end,
+ * scrolling; the document's name and size head it (moved from the v1.5 top bar). An entry closes
+ * the menu and acts. [maxHeight] (ChromeLayout.moreMenuMaxHeight) keeps it between the top row and
+ * the bottom bar.
+ *
+ * v1.8 (design §3.9, D27, D28): opaque ([IbisColors.Menu]), legible over any canvas; each run of
+ * entries of one [MenuEntry.section] is headed by the section's name ([SectionHeader]) where v1.7
+ * drew a divider.
  */
 @Composable
 private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, entries: List<MenuEntry>, maxHeight: Dp) {
@@ -162,7 +168,7 @@ private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, e
         onDismissRequest = onDismiss,
         offset = DpOffset(IbisDims.OptionsStripSide, 0.dp),
         scrollState = scroll,
-        containerColor = IbisColors.Sheet,
+        containerColor = IbisColors.Menu,
         shape = RoundedCornerShape(IbisDims.OptionsStripRadius),
         modifier = Modifier.width(IbisDims.MoreMenuWidth).heightIn(max = maxHeight).closeOnSecondFinger(onDismiss),
     ) {
@@ -170,8 +176,10 @@ private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, e
             Text(header, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = BrushworkColors.OnChrome, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         HorizontalDivider(color = BrushworkColors.ChromeBorder)
+        var section: String? = null
         entries.forEach { e ->
-            if (e.dividerBefore) HorizontalDivider(color = BrushworkColors.ChromeBorder)
+            if (e.section != null && e.section != section) SectionHeader(e.section)
+            section = e.section
             DropdownMenuItem(
                 text = { Text(e.label) },
                 leadingIcon = { Icon(e.icon, contentDescription = null) },
@@ -186,5 +194,33 @@ private fun MoreMenu(expanded: Boolean, onDismiss: () -> Unit, header: String, e
                 ),
             )
         }
+    }
+}
+
+/**
+ * A More-menu section header (v1.8, D28): the section's [name] ([com.brushwork.paint.ui.common.MenuLabels18])
+ * at 12 sp in the dim chrome color, in a 24 dp row that takes no touch (a heading for screen
+ * readers, tag [V18Tags.MENU_SECTION_PREFIX] + [name]).
+ */
+@Composable
+private fun SectionHeader(name: String) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(IbisDims.MoreMenuSection)
+            .testTag(V18Tags.MENU_SECTION_PREFIX + name)
+            .semantics(mergeDescendants = true) { heading() }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.CenterStart,
+    ) {
+        Text(
+            name,
+            color = BrushworkColors.OnChromeDim,
+            fontSize = IbisDims.MoreMenuSectionText,
+            lineHeight = IbisDims.MoreMenuSectionText,
+            fontWeight = FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }

@@ -145,6 +145,10 @@ object IbisDims {
     /** More menu: a dropdown 280 wide under the top row. */
     val MoreMenuWidth: Dp = 280.dp
 
+    /** v1.8 (design §3.9, D28): a More-menu section header, 24 tall, its name at 12 sp. */
+    val MoreMenuSection: Dp = 24.dp
+    val MoreMenuSectionText: TextUnit = 12.sp
+
     // ------------------------------------------------------------------ §3.7.7 layer window (382 × 520)
 
     /** Width min(382, w − 10) at x 5; height min(520, available below the top row − 8). */

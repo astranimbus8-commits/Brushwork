@@ -102,7 +102,8 @@ private val scheme = darkColorScheme(
     onSurface = BrushworkColors.OnChrome,
     surfaceVariant = BrushworkColors.ChromeHigh,
     onSurfaceVariant = BrushworkColors.OnChromeDim,
-    surfaceContainer = BrushworkColors.Chrome,
+    // v1.8 (D27): Material's menus and dropdowns take this color unless told otherwise: opaque.
+    surfaceContainer = IbisColors.Menu,
     surfaceContainerHigh = BrushworkColors.ChromeHigh,
     surfaceContainerHighest = Color(0xFF33363B),
     surfaceContainerLow = Color(0xFF1A1B1E),
