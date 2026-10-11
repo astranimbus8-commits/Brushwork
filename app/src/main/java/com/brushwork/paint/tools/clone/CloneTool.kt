@@ -21,6 +21,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.vector.ObjectCopies
+import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
 
@@ -45,7 +46,8 @@ import kotlin.math.min
  * v1.8 D (design §3.1 D1): with symmetry on, a stroke is also drawn as the ruler's copies (one
  * coverage buffer drawn once per map, the maps taken where the stroke starts); copy k clones
  * from the source spot mirrored by its map (it reads S(q − A_k·o)). The ⊕ is drawn once, for
- * the original. Up to [MAX_MAPS] maps; more refuses the stroke. One undo step for all of them.
+ * the original. Up to [MAX_MAPS] copies on the canvas ([copiesOnCanvas]); more refuses the
+ * stroke. One undo step for all of them.
  */
 class CloneTool(controller: EditorController) : Tool(controller), PositionedTool {
     override val id = ToolId.CLONE
@@ -217,9 +219,9 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         val target = controller.editTargetOf(layer)
         val wanted = if (sampleAllLayers) CloneSource.Sample.ALL_LAYERS else CloneSource.Sample.THIS_LAYER
         // v1.8 D (design §3.1 D1): under a symmetry ruler the stroke is also drawn as copies,
-        // the maps taken where it starts; more than [MAX_MAPS] is refused (no stroke, no step).
+        // the maps taken where it starts; more than [MAX_MAPS] copies on the canvas is refused (no stroke, no step).
         val maps = ObjectCopies.mapsAt(controller, at.x, at.y)
-        if (maps.size > MAX_MAPS) {
+        if (copiesOnCanvas(maps, at.x, at.y, controller.doc.width, controller.doc.height) > MAX_MAPS) {
             controller.toast(MirrorLabels18.CLONE_TOO_MANY)
             gesture = Gesture.NONE
             strokeOffset = null
@@ -447,10 +449,25 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         const val POSITION_LABEL = "Source"
 
         /**
-         * v1.8 D: a stroke is drawn with at most this many symmetry maps (the original and 31
-         * copies); a ruler with more refuses the stroke ([MirrorLabels18.CLONE_TOO_MANY]).
+         * v1.8 D: a stroke is drawn with at most this many copies on the canvas (the original
+         * and 31 more, [copiesOnCanvas]); a ruler with more refuses the stroke
+         * ([MirrorLabels18.CLONE_TOO_MANY]).
          */
         const val MAX_MAPS = 32
+
+        /**
+         * v1.8 D (design §3.1 D4): the copies a stroke starting at ([x], [y]) has on a [w] × [h]
+         * canvas: the [maps] that take its start onto the canvas, the copies the user sees appear.
+         * An Array lattice of 4 × 8 cells is 32 of them; its margin ring of cells (maps that only
+         * paint where a stroke crosses into them) does not count, nor do copies off the canvas.
+         */
+        fun copiesOnCanvas(maps: List<FloatArray>, x: Float, y: Float, w: Int, h: Int): Int = maps.count { m ->
+            val z = m[6] * x + m[7] * y + m[8]
+            if (!(abs(z) > 1e-6f)) return@count false
+            val px = (m[0] * x + m[1] * y + m[2]) / z
+            val py = (m[3] * x + m[4] * y + m[5]) / z
+            px >= 0f && py >= 0f && px < w && py < h
+        }
 
         /** Touching this close to the ⊕ (on screen) drags the source instead of painting. */
         const val GRAB_RADIUS_DP = 28f

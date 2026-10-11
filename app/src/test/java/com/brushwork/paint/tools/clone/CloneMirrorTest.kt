@@ -249,6 +249,37 @@ class CloneMirrorTest {
         }
     }
 
+    @Test
+    fun anArrayCountsTheCopiesOnTheCanvasNotItsMarginRing() {
+        // §6.3 Q3: a 4 × 8 lattice is 32 copies. On 256 px, 64 × 32 px cells about the centre fill
+        // the canvas 4 × 8; the margin ring around it adds maps that only paint where a stroke
+        // crosses into them, and they don't count. 6 × 6 cells are 36 copies: refused.
+        val c = setup(scope, 256, 256, 10f)
+        pattern(c.activeLayer.bitmap)
+        c.updateSymmetry(SymmetrySettings(type = SymmetryType.ARRAY, spacingX = 64f, spacingY = 32f))
+        tool(c).setSource(Vec2(66f, 50f))
+        val maps = ObjectCopies.mapsAt(c, 100f, 50f)
+        assertTrue("the margin ring adds maps: ${maps.size}", maps.size > CloneTool.MAX_MAPS)
+        assertEquals(32, CloneTool.copiesOnCanvas(maps, 100f, 50f, 256, 256))
+        val before = pixels(c.activeLayer.bitmap)
+        stroke(c, 100f, 50f, 110f, 50f)
+        assertTrue(c.message != MirrorLabels18.CLONE_TOO_MANY)
+        assertEquals("32 copies paint", 1, c.undoManager.undoCount)
+        val after = pixels(c.activeLayer.bitmap)
+        // Every cell's copy (same offset: the source moved with it) painted; the far corner's too.
+        for (i in 0 until 4) for (j in 0 until 8) {
+            val x = 105 + (i - 1) * 64
+            val y = 50 + (j - 1) * 32
+            assertTrue("cell ($i, $j) at ($x, $y)", before[y * 256 + x] != after[y * 256 + x])
+        }
+        c.updateSymmetry(SymmetrySettings(type = SymmetryType.ARRAY, spacingX = 256f / 6, spacingY = 256f / 6))
+        val six = ObjectCopies.mapsAt(c, 100f, 50f)
+        assertEquals(36, CloneTool.copiesOnCanvas(six, 100f, 50f, 256, 256))
+        stroke(c, 100f, 50f, 110f, 50f)
+        assertEquals(MirrorLabels18.CLONE_TOO_MANY, c.message)
+        assertEquals("refused: no second step", 1, c.undoManager.undoCount)
+    }
+
     /** The document's pixels after one stroke (symmetry off), through [useV17Interface] the plain CoverageSource. */
     private fun offStroke(useV17Interface: Boolean): Pair<IntArray, IntArray?> {
         val c = gradientController(SymmetrySettings(), size = 14f)

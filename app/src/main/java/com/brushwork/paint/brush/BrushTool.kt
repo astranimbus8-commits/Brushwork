@@ -1,12 +1,14 @@
 package com.brushwork.paint.brush
 
 import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.graphics.Shader
 import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.SymmetryMaps
@@ -475,7 +477,22 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val copyDest: Array<Rect> = Array(if (sourceCopies != null) sourceCopyCount + 1 else 0) { Rect() }
         private val copyArea = Rect()
         private val copyClip = Rect()
+        private val copyRun = Rect()
         private val copyRectF = android.graphics.RectF()
+        private val copyCellCols = (docW + COPY_CELL - 1) / COPY_CELL
+        /**
+         * Per copy, the [COPY_CELL] px cells of the document it has landed on: a copy is drawn
+         * only there ([forEachCopyRun]), so a redraw costs what the copies cover in it, not every
+         * copy's whole bounding box (copies spread around the canvas would make that n² work).
+         */
+        private val copyCells: Array<BooleanArray> =
+            Array(copyDest.size) { k -> if (k == 0) BooleanArray(0) else BooleanArray(copyCellCols * ((docH + COPY_CELL - 1) / COPY_CELL)) }
+        // [forEachCopyRun]'s runs of two rows (start, end, top) and [maskedCopy]'s shaders per copy.
+        private val copyRunsA = IntArray(if (sourceCopies != null) 3 * (copyCellCols / 2 + 1) else 0)
+        private val copyRunsB = IntArray(copyRunsA.size)
+        private val copyCoverage = arrayOfNulls<Shader>(copyDest.size)
+        private val copyMasked = arrayOfNulls<Shader>(copyDest.size)
+        private val copyMaskedFor = arrayOfNulls<Shader>(copyDest.size)
         private val tileCols = (docW + COMMIT_TILE - 1) / COMMIT_TILE
         private val copyTiles: BooleanArray? =
             if (mapping != null || sourceCopies != null) BooleanArray(tileCols * ((docH + COMMIT_TILE - 1) / COMMIT_TILE)) else null
@@ -528,8 +545,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             for (k in sourceCopyCount downTo 1) {
                 copyArea.set(copyDest[k])
                 if (!copyArea.intersect(copyClip)) continue
-                cc.prepareCopy(k, copyArea)
-                res.painter.drawMapped(canvas, coverage, copyArea, cc.copyMap(k), style, cc.copyShader(k), selection?.mask)
+                forEachCopyRun(k, copyArea) { run ->
+                    cc.prepareCopy(k, run)
+                    res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, selection?.mask)
+                }
             }
         }
 
@@ -539,7 +558,77 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             for (k in sourceCopyCount downTo 1) {
                 copyArea.set(copyDest[k])
                 if (!copyArea.intersect(tile)) continue
-                res.painter.drawMapped(canvas, coverage, copyArea, cc.copyMap(k), style, cc.copyShader(k), sel?.mask)
+                forEachCopyRun(k, copyArea) { run ->
+                    res.painter.drawMapped(canvas, run, maskedCopy(k, cc), style, sel?.mask)
+                }
+            }
+        }
+
+        /**
+         * What paints copy [k] now: its source shader masked by the coverage under its map. Both
+         * are kept while the source keeps its shader (the coverage buffer is fixed for the stroke).
+         */
+        private fun maskedCopy(k: Int, cc: CoverageCopies): Shader {
+            val src = cc.copyShader(k)
+            val kept = copyMasked[k]
+            if (kept != null && copyMaskedFor[k] === src) return kept
+            val mapped = copyCoverage[k]
+                ?: BitmapShader(coverage, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply { setLocalMatrix(cc.copyMap(k)) }.also { copyCoverage[k] = it }
+            return res.painter.masked(mapped, src).also {
+                copyMasked[k] = it
+                copyMaskedFor[k] = src
+            }
+        }
+
+        /**
+         * Calls [draw] for the rectangles of cells copy [k] landed on within [area] (document px,
+         * within the document), clipped to [area]: runs of cells along each row, a run continued
+         * by the same columns in the rows below drawn as one rectangle.
+         */
+        private inline fun forEachCopyRun(k: Int, area: Rect, draw: (Rect) -> Unit) {
+            val cells = copyCells[k]
+            val c0 = area.left / COPY_CELL
+            val c1 = (area.right - 1) / COPY_CELL
+            val r1 = (area.bottom - 1) / COPY_CELL
+            // Open runs (start column, end column, top row), sorted by column: the rows above.
+            var above = copyRunsA
+            var here = copyRunsB
+            var nAbove = 0
+            for (row in area.top / COPY_CELL..r1 + 1) {
+                var nHere = 0
+                if (row <= r1) {
+                    val base = row * copyCellCols
+                    var col = c0
+                    while (col <= c1) {
+                        if (!cells[base + col]) {
+                            col++
+                            continue
+                        }
+                        val start = col
+                        while (col <= c1 && cells[base + col]) col++
+                        here[3 * nHere] = start
+                        here[3 * nHere + 1] = col
+                        here[3 * nHere + 2] = row
+                        nHere++
+                    }
+                }
+                // A run of the rows above ends unless this row has one with the same columns.
+                var j = 0
+                for (i in 0 until nAbove) {
+                    val s = above[3 * i]
+                    val e = above[3 * i + 1]
+                    while (j < nHere && here[3 * j] < s) j++
+                    if (j < nHere && here[3 * j] == s && here[3 * j + 1] == e) {
+                        here[3 * j + 2] = above[3 * i + 2]
+                    } else {
+                        copyRun.set(s * COPY_CELL, above[3 * i + 2] * COPY_CELL, e * COPY_CELL, row * COPY_CELL)
+                        if (copyRun.intersect(area)) draw(copyRun)
+                    }
+                }
+                val t = above
+                above = here
+                here = t
+                nAbove = nHere
             }
         }
 
@@ -559,6 +648,10 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 copyArea.inset(-1, -1)
                 if (!copyArea.intersect(0, 0, docW, docH)) continue
                 copyDest[k].union(copyArea)
+                val cells = copyCells[k]
+                for (row in copyArea.top / COPY_CELL..(copyArea.bottom - 1) / COPY_CELL) {
+                    for (col in copyArea.left / COPY_CELL..(copyArea.right - 1) / COPY_CELL) cells[row * copyCellCols + col] = true
+                }
                 markTiles(copyArea)
                 controller.invalidateDoc(copyArea)
             }
@@ -1356,6 +1449,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
 
         /** Commit tile size; matches the undo recorder's tiles so each touch snapshots one tile. */
         private const val COMMIT_TILE = 256
+
+        /** v1.8 D: the cells (document px) a clone stroke's copies are drawn in ([BufferStroke]'s copy cells). */
+        private const val COPY_CELL = 32
 
         /** A path stroke keeps its state every this many input points (to restart from there). */
         private const val CHECKPOINT_EVERY = 32

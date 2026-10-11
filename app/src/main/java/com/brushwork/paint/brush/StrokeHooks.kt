@@ -94,8 +94,8 @@ interface CoverageSource {
 /**
  * v1.8 D (design §3.1 D1, additive): a [CoverageSource] whose stroke is also drawn as symmetry
  * copies (the clone stamp under a symmetry ruler). The stroke keeps ONE coverage buffer (the
- * original's dabs); copy k (1..[copyCount]) draws that buffer again under `canvas.concat(`
- * [copyMap]`(k))`, painted with [copyShader]`(k)`, for k = [copyCount]..1 and then the original
+ * original's dabs); copy k (1..[copyCount]) draws that buffer again mapped by [copyMap]`(k)`,
+ * painted with [copyShader]`(k)`, for k = [copyCount]..1 and then the original
  * exactly as without copies. The selection, the paper grain and the clip stay in document space.
  * Read by `BrushTool` when a stroke starts; [copyCount] is fixed until the stroke ends.
  */
@@ -109,7 +109,7 @@ interface CoverageCopies {
     /** Before copy [k] is composited over [destDocRect] (document px where it lands): may swap [copyShader]. */
     fun prepareCopy(k: Int, destDocRect: Rect)
 
-    /** Paints copy [k]'s coverage: drawn under [copyMap]`(k)`, so its local matrix is in the coverage's space. */
+    /** Paints copy [k]'s coverage where it lands: document anchored (its local matrix places the source for document px). */
     fun copyShader(k: Int): Shader
 
     /**

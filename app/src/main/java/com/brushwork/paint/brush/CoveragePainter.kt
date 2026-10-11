@@ -3,7 +3,7 @@ package com.brushwork.paint.brush
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
-import android.graphics.Matrix
+import android.graphics.ComposeShader
 import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
@@ -114,38 +114,40 @@ class CoveragePainter {
     }
 
     /**
-     * v1.8 D (design §3.1 D1): a symmetry copy of a clone stroke. [coverage] is drawn through
-     * [map] (coverage px to document px) into [dest] (document px), painted with [shader] (whose
-     * local matrix is in the coverage's space, as the canvas is while it draws) and sampled
-     * bilinearly; [style]'s mode, opacity and grain and [selectionMask] apply in document space,
-     * as for the original ([draw]).
+     * v1.8 D (design §3.1 D1): what paints a symmetry copy of a clone stroke: [source] (document
+     * anchored) where [mappedCoverage] (the coverage under the copy's map, document anchored) is,
+     * both sampled bilinearly. Only the coverage's alpha counts (an alpha-only bitmap).
+     *
+     * One compose shader filling the copy's area is about twice as fast in Skia's software path
+     * as drawing the coverage bitmap under the map with the source as the paint's shader.
      */
-    fun drawMapped(canvas: Canvas, coverage: Bitmap, dest: Rect, map: Matrix, style: CoverageStyle, shader: Shader, selectionMask: Bitmap?) {
+    fun masked(mappedCoverage: Shader, source: Shader): Shader = ComposeShader(mappedCoverage, source, PorterDuff.Mode.SRC_IN)
+
+    /**
+     * v1.8 D: fills [dest] (document px) with [masked] ([masked]: a copy of a clone stroke);
+     * [style]'s mode, opacity and grain and [selectionMask] apply in document space, as for the
+     * original ([draw]).
+     */
+    fun drawMapped(canvas: Canvas, dest: Rect, masked: Shader, style: CoverageStyle, selectionMask: Bitmap?) {
         if (dest.isEmpty) return
         val alpha = alphaOf(style)
         if (alpha <= 0) return
-        canvas.save()
-        canvas.clipRect(dest)
+        boundsF.set(dest)
         if (selectionMask == null && style.grain <= 0f) {
-            tint.shader = shader
+            tint.shader = masked
             tint.xfermode = xfer(style.mode)
             tint.color = style.color
             tint.alpha = alpha
-            canvas.concat(map)
-            canvas.drawBitmap(coverage, 0f, 0f, tint)
+            canvas.drawRect(boundsF, tint)
         } else {
-            boundsF.set(dest)
             layerPaint.xfermode = xfer(style.mode)
             layerPaint.alpha = alpha
             canvas.saveLayer(boundsF, layerPaint)
-            tint.shader = shader
+            tint.shader = masked
             tint.xfermode = null
             tint.color = style.color
             tint.alpha = 255
-            canvas.save()
-            canvas.concat(map)
-            canvas.drawBitmap(coverage, 0f, 0f, tint)
-            canvas.restore()
+            canvas.drawRect(boundsF, tint)
             if (style.grain > 0f) {
                 if (grainAmount != style.grain) {
                     grainPaint.shader = BitmapShader(PaperGrain.tile(style.grain), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
@@ -157,6 +159,5 @@ class CoveragePainter {
             canvas.restore()
         }
         tint.shader = null
-        canvas.restore()
     }
 }

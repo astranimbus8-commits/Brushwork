@@ -312,9 +312,10 @@ class CloneSource(private val controller: EditorController) : CoverageSource, Co
     }
 
     /**
-     * Copy [k]'s shader over [bitmap], which holds the source from ([left], [top]) on: local
-     * matrix T(o)·M_k⁻¹·T(left, top), so a destination point q of the copy samples
-     * G_k(q) − (left, top) of [bitmap].
+     * Copy [k]'s shader over [bitmap], which holds the source from ([left], [top]) on, document
+     * anchored: local matrix M_k·T(o)·M_k⁻¹·T(left, top) = G_k⁻¹·T(left, top), so a destination
+     * point q of the copy samples G_k(q) − (left, top) of [bitmap]. (In the coverage's space,
+     * under M_k, that is T(o)·M_k⁻¹·T(left, top): design §3.1's T(o)·M_k⁻¹.)
      */
     private fun copyShaderOf(bitmap: Bitmap, k: Int, left: Int, top: Int): Shader =
         BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
@@ -323,6 +324,7 @@ class CloneSource(private val controller: EditorController) : CoverageSource, Co
                     setTranslate(left.toFloat(), top.toFloat())
                     postConcat(copyInverse[k])
                     postTranslate(dx.toFloat(), dy.toFloat())
+                    postConcat(copyMaps[k])
                 }
             )
         }
