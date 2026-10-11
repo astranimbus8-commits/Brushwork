@@ -377,6 +377,12 @@ class LassoTool(controller: EditorController) : Tool(controller) {
         curve.onDeactivate()
         snap.end()
         super.onDeactivate()
+        // v1.8 (F4): the steps of a polygon / curve taken back to nothing end with the tool, as the
+        // Curve tool's do: the top row's Redo (see [canRedoStep]) never brings back an old one later.
+        if (!hasPendingWork) {
+            if (redoCount > 0) clearHistory()
+            if (curve.redoCount > 0) curve.clear()
+        }
     }
 
     override fun onDispose() = curve.onDeactivate()

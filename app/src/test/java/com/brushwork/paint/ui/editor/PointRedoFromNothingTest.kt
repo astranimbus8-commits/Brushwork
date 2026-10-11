@@ -7,6 +7,7 @@ import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.vector.CurveTool
@@ -30,6 +31,7 @@ import kotlin.math.abs
  * lasso and the curve lasso, the button enabled and its feedback naming the point / corner. The
  * document's own redo steps come first, as v1.7's top row had them (a step undone after the
  * points is redone before them), and nothing changes while there is nothing to bring back.
+ * Another tool ends those steps (Curve, as in v1.7; the lasso's too since this change).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -126,6 +128,43 @@ class PointRedoFromNothingTest {
             settle()
             assertFalse("freehand has no steps", canRedoNow(c))
             Smoke.assertQuiet(c, "Lasso")
+        }
+
+        h.section("another tool ends the steps taken back to nothing") {
+            val s = h.editor()
+            val c = s.c
+            QaCurves.tool(s, "Curve")
+            val curve = c.currentTool as CurveTool
+            QaCurves.snapOff(c)
+            QaCurves.tap(s, three[0])
+            undo(s)
+            assertTrue("Curve: the point can come back", canRedoNow(c))
+            c.selectTool(ToolId.BRUSH)
+            settle()
+            c.selectTool(ToolId.CURVE)
+            settle()
+            assertEquals(0, curve.redoCount)
+            assertFalse("Curve: after another tool, nothing to redo", canRedoNow(c))
+            QaCurves.tool(s, "Lasso")
+            val lasso = c.currentTool as LassoTool
+            for (kind in listOf(LassoKind.POLYGON, LassoKind.CURVE)) {
+                lasso.setKind(kind)
+                settle()
+                QaCurves.tap(s, three[0])
+                QaCurves.tap(s, three[1])
+                repeat(2) { undo(s) }
+                assertFalse("$kind: nothing pending", lasso.hasPendingWork)
+                assertTrue("$kind: the corners can come back", canRedoNow(c))
+                c.selectTool(ToolId.BRUSH)
+                settle()
+                c.selectTool(ToolId.LASSO)
+                settle()
+                assertEquals(kind, lasso.kind)
+                assertFalse("$kind: after another tool, nothing to redo", canRedoNow(c))
+            }
+            lasso.setKind(LassoKind.FREEHAND)
+            settle()
+            Smoke.assertQuiet(c, "another tool")
         }
 
         h.section("the document's redo comes first, then the point") {

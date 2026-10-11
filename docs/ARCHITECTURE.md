@@ -329,6 +329,9 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   has nothing to redo (`!undoManager.canRedo && tool.canRedoStep`); `canRedoNow` and
   `HistoryLabels.redo` ("Redo: last point" / "last corner") follow the same rule. The document's
   own redo steps come first, as v1.7's top row had them; with something pending nothing changed.
+  Another tool ends those steps: Curve's already ended with the tool (v1.7), and
+  `LassoTool.onDeactivate` now drops a polygon's / curve's steps taken back to nothing, so the
+  top row's Redo never brings back an old lasso after a tool switch.
 - The gizmo's tie (gate 2 review): a point lying ON a handle of the group's box wins the finger
   when it is at most `PointGizmo.TIE_PX` (0.5 px) farther than the handle (Curve, Shape, Free
   deform). The corners are found from the box's centre, so a corner point of fractional
@@ -339,7 +342,7 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   undo now call `HistoryLabels.performUndo` / `performRedo`, as the top row does.
   `PillSeveralFingerTest` (360 dp) does the whole flow by fingers in the five tools: the cell
   on, points tapped, one drag, one top-row Undo / Redo, the cell off. `PointRedoFromNothingTest`
-  covers the redo from nothing and the document's redo coming first.
+  covers the redo from nothing, another tool ending it and the document's redo coming first.
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
