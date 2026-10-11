@@ -104,7 +104,8 @@ class SavedSelectionPendingRobolectricTest {
         // stack (the undone update is not applied over it).
         c.undo()
         assertSame(saved, c.doc.savedSelections.single())
-        c.beforeSavedSelectionPack = null
+        // The slow pack stays on: without it a small mask can compress and land (the landing
+        // coroutine runs at once when the work is already done) before the line below reads it.
         assertTrue(c.saveSelection())
         val p2 = c.pendingSavedSelections.single()
         c.redo()
