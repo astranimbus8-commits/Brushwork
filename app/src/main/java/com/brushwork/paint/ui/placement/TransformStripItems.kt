@@ -71,6 +71,8 @@ internal fun transformSpec(tool: TransformTool): StripSpec {
     // transformState changes on every drag frame; the strip only cares whether one exists.
     val active by remember(tool) { derivedStateOf { tool.transformState != null } }
     val mesh by remember(tool) { derivedStateOf { tool.isMeshShown } }
+    // (The mesh changes on every drag frame too: its selection is read the same way.)
+    val allPoints by remember(tool) { derivedStateOf { tool.allPointsSelected } }
     // As in v1.7, the Numbers sheet belongs to the box modes of a transform in progress.
     val overlays: @Composable () -> Unit = { if (tool.numbersOpen && active && !mesh) TransformNumbersSheet(tool) }
     if (!active) {
@@ -83,7 +85,7 @@ internal fun transformSpec(tool: TransformTool): StripSpec {
         return StripSpec(
             items = listOf(
                 T.mode(tool), T.meshSize(tool), T.meshReset(tool),
-                T.smooth(tool), T.selectPoints(tool), T.delete(tool), T.interpolation(tool),
+                T.smooth(tool), T.selectPoints(tool, allPoints), T.delete(tool), T.interpolation(tool),
             ),
             hint = if (tool.selectSeveral) PointLabels.SEVERAL_HINT else null,
             overlays = overlays,
@@ -266,8 +268,8 @@ internal object TransformStripItems {
         StripTextButton(TransformLabels17.SMOOTH, SMOOTH_DP.dp, onClick = { tool.smoothMesh = !on }, checked = on)
     }
 
-    fun selectPoints(tool: TransformTool): StripItem {
-        val all = tool.allPointsSelected
+    /** "Select all points", or "Deselect all points" when [all] of them are. */
+    fun selectPoints(tool: TransformTool, all: Boolean): StripItem {
         val label = if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL
         return StripItem(SELECT_POINTS, label, SELECT_POINTS_DP.dp, row = StripRow.MORE) {
             StripTextButton(label, SELECT_POINTS_DP.dp, onClick = { tool.selectAllPoints() })
