@@ -1,0 +1,144 @@
+// v1.8 QA (compat), kept as text so it never runs again. It made qa18/compat/v17-compat: run ONCE
+// on the v1.7.0 sources (tag v1.7.0, 46837d75; its main code is 885793b4's) with that tag's
+// qa17/Qa17CompatArtwork.kt (unchanged since). It builds the v1.7 QA's compat artwork (every v1.7
+// datum: folders, the four kinds of live array, saved selections, per-point roundness, sharp
+// Path points, kerning, a Rotation x 6 vector stroke, transformed text and shape kept as data, the
+// symmetry setting) plus a raster layer with a painted mask and an Invert adjustment layer with an
+// editable radial mask, saves it with v1.7's ProjectRepository, loads it back, and writes every
+// file v1.7 saved plus probe.tsv: what v1.7 draws from the loaded project (the composite, every
+// layer's stored pixels and mask, and a fresh rendering of every text, shape, vector and array
+// layer from its data; CRC32 of the ARGB ints, big-endian).
+
+package com.brushwork.paint.qa17
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.RectF
+import com.brushwork.paint.array.ArraySources
+import com.brushwork.paint.brush.TipCache
+import com.brushwork.paint.engine.ArrayDraw
+import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.masks.AdjustmentSpec
+import com.brushwork.paint.masks.MaskSpec
+import com.brushwork.paint.masks.RadialMask
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
+import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.vector.render.VectorLayerRenderer
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.File
+import java.nio.ByteBuffer
+import java.util.zip.CRC32
+
+@RunWith(RobolectricTestRunner::class)
+class V17GoldenProbeTest {
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val ex = File(System.getenv("TEMP"), "v18qa_compat_exchange/v17-compat")
+
+    private fun pixels(b: Bitmap): IntArray = IntArray(b.width * b.height).also { b.getPixels(it, 0, b.width, 0, 0, b.width, b.height) }
+
+    private fun crc(p: IntArray): Long {
+        val buf = ByteBuffer.allocate(p.size * 4)
+        buf.asIntBuffer().put(p)
+        return CRC32().apply { update(buf.array()) }.value
+    }
+
+    /** A fresh rendering of [l]'s data (null: no data to draw from). The same code runs in the v1.8 test. */
+    private fun fresh(doc: Document, l: Layer): IntArray? {
+        val d = l.dataSnapshot()
+        val area = Rect(0, 0, doc.width, doc.height)
+        val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
+        try {
+            val cv = Canvas(out)
+            val a = d.array
+            when {
+                a != null && a.pixels != null -> ArrayDraw.drawPixels(cv, a)
+                d.vector != null -> VectorLayerRenderer.render(cv, ArrayDraw.effectiveVector(d)!!, area, tips = TipCache(), document = area)
+                d.text != null && a == null -> {
+                    val item = TextCodec.decode(d.text)!!
+                    TextRenderer.drawItem(cv, item, TextRenderer.prepare(item), null)
+                }
+                d.text != null || d.shape != null -> {
+                    val draw = ArraySources.sourceDraw(d, doc.colorMode, doc.width, doc.height)!!
+                    ArrayDraw.drawWithArray(cv, a, ArrayDraw.sourceBounds(d) ?: RectF(), draw)
+                }
+                else -> return null
+            }
+            return pixels(out)
+        } finally {
+            out.recycle()
+        }
+    }
+
+    @Test
+    fun writeV17Golden() {
+        val (c, _) = Qa17CompatArtwork.build(app, id = "qa18-compat-v17", folders = true)
+        val doc = c.doc
+        // A painted mask on a raster layer, and an Invert adjustment layer with an editable mask.
+        c.selectLayer(doc.layers.single { it.name == "Symmetric" })
+        val masked = c.addLayer("Masked")!!
+        Canvas(masked.bitmap).drawCircle(80f, 80f, 50f, Paint().apply { color = 0xFFCC3355.toInt() })
+        c.addMask(masked, fromSelection = false)
+        val mask = masked.mask
+        assertNotNull(mask)
+        // The first save writes every layer: drawn straight into the mask.
+        Canvas(mask!!).drawRect(40f, 40f, 90f, 130f, Paint().apply { color = 0xFF000000.toInt() })
+        c.selectLayer(masked)
+        val inv = c.addAdjustmentLayer(AdjustmentSpec(filterId = "adjust.invert"), MaskSpec(components = listOf(RadialMask(1, cx = 300f, cy = 150f, rx = 90f, ry = 70f)), nextId = 2))
+        assertNotNull(inv)
+        Qa17CompatArtwork.settle(c)
+        runBlocking { ProjectRepository(app).save(doc, null) }
+        c.dispose()
+
+        val dir = File(app.filesDir, "projects/${doc.id}")
+        ex.deleteRecursively()
+        ex.mkdirs()
+        val names = dir.list()!!.filter { it != ProjectFormat.THUMB_FILE }.sorted()
+        for (n in names) File(dir, n).copyTo(File(ex, n), overwrite = true)
+
+        val loaded = runBlocking { ProjectRepository(app).load(doc.id) }
+        assertEquals(emptyList<String>(), loaded.loadWarnings)
+        val sb = StringBuilder()
+        sb.append("warnings\t").append(loaded.loadWarnings).append('\n')
+        sb.append("files\t").append(names.joinToString(",")).append('\n')
+        val flat = Compositor(loaded) { null }.renderFlattened()
+        sb.append("composite\t").append(crc(pixels(flat))).append('\n')
+        flat.recycle()
+        for (l in loaded.layers) {
+            if (l.isFolder) {
+                sb.append("layer\t${l.id}\t${l.name.take(20)}\t-\t-\t-\tfolder\n")
+                continue
+            }
+            val stored = crc(pixels(l.bitmap))
+            val maskCrc = l.mask?.let { crc(pixels(it)) }?.toString() ?: "-"
+            val f = fresh(loaded, l)?.let { crc(it) }?.toString() ?: "-"
+            val d = l.dataSnapshot()
+            val kind = when {
+                d.array != null -> "array-" + (ArraySources.kindOf(d)?.name ?: "?")
+                d.adjustment != null -> "adjustment"
+                d.text != null -> "text"
+                d.shape != null -> "shape"
+                d.vector != null -> "vector"
+                else -> "raster"
+            }
+            val fonts = d.text != null
+            sb.append("layer\t${l.id}\t${l.name.take(20)}\t$stored\t$maskCrc\t$f\t$kind\t$fonts\n")
+        }
+        File(ex, "probe.tsv").writeText(sb.toString())
+        println(sb)
+        assertTrue(File(ex, "project.json").isFile)
+    }
+}

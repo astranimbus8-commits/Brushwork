@@ -1,0 +1,23 @@
+warnings	[]
+files	array_10_r1.bin,array_12_r1.bin,array_8_r1.bin,array_9_r1.bin,layer_10_r1.bin,layer_11_r1.bin,layer_12_r1.bin,layer_13_r1.bin,layer_14_r1.bin,layer_15_r1.bin,layer_16_r1.bin,layer_17_r1.bin,layer_18_r1.bin,layer_19_r1.bin,layer_1_r1.bin,layer_20_r1.bin,layer_2_r1.bin,layer_4_r1.bin,layer_6_r1.bin,layer_7_r1.bin,layer_8_r1.bin,layer_9_r1.bin,mask_19_r1.bin,mask_20_r1.bin,project.json,sel_1_r1.bin,sel_2_r1.bin,vector_11_r1.vec,vector_15_r1.vec,vector_18_r1.vec
+composite	1243917464
+layer	1	Background	1311562205	-	-	raster	false
+layer	7	Source	1629467680	-	-	raster	false
+layer	8	Array 1	3617682643	-	3617682643	array-PIXELS	false
+layer	9	Text array	320016796	-	320016796	array-TEXT	true
+layer	10	Shape array	2009165330	-	2009165330	array-SHAPE	false
+layer	11	Vector source	3377537167	-	3377537167	vector	false
+layer	12	Array 2	2577977482	-	2577977482	array-VECTOR	false
+layer	13	Kerned	4223918336	-	4223918336	text	true
+layer	14	Rounded	1521380781	-	1521380781	shape	false
+layer	15	Paths	1741242847	-	1741242847	vector	false
+layer	16	Turned	374214062	-	374214062	text	true
+layer	17	Skewed	2179368831	-	2179368831	shape	false
+layer	18	Symmetric	3897312361	-	3897312361	vector	false
+layer	19	Masked	3765865189	2452922831	-	raster	false
+layer	20	Invert Color 1	1629467680	1010208560	-	adjustment	false
+layer	2	Under	3384307824	-	-	raster	false
+layer	4	Painted	2461514464	-	-	raster	false
+layer	6	Clip	2277704410	-	-	raster	false
+layer	5	Folder 2	-	-	-	folder
+layer	3	Folder 1	-	-	-	folder
