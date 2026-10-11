@@ -3,6 +3,7 @@ package com.brushwork.paint.qa17
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.view.KeyEvent
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.model.Document
@@ -13,10 +14,12 @@ import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.testing.PerfBudget
 import com.brushwork.paint.tools.vector.CurveTool
+import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.vector.VectorContent
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import java.io.File
 import java.io.FileOutputStream
@@ -59,6 +62,37 @@ internal class PointsQa(private val h: ChromeHarness) {
     fun press(label: String, minDp: Float = 32f) {
         ui.reach(label, minDp)
         click(label, exact = true)
+    }
+
+    /** v1.8: opens the Stroke kind dropdown (the paint modes are its entries) unless it is open. */
+    fun menu() {
+        if (!SmokeUi.has(CurveLabels17.STROKE_ONLY, exact = true)) click(CurveLabels17.STROKE_KIND, exact = true)
+        assertTrue("the Stroke kind dropdown: ${SmokeUi.shown().take(60)}", SmokeUi.has(CurveLabels17.STROKE_ONLY, exact = true))
+    }
+
+    /** Closes the Stroke kind dropdown when it is open (Back on its window). */
+    fun closeMenu() {
+        if (!SmokeUi.has(CurveLabels17.STROKE_ONLY, exact = true)) return
+        SmokeUi.windows().last().let { w ->
+            w.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_BACK))
+            w.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_BACK))
+        }
+        settle()
+        assertFalse("the dropdown closed", SmokeUi.has(CurveLabels17.STROKE_ONLY, exact = true))
+    }
+
+    /** v1.8: picks the paint mode [label] from the Stroke kind dropdown (a pick closes it). */
+    fun mode(label: String) {
+        menu()
+        click(label, exact = true)
+    }
+
+    /** What [read] says of the open Stroke kind dropdown; the dropdown is closed again after. */
+    fun <T> inMenu(read: () -> T): T {
+        menu()
+        val r = read()
+        closeMenu()
+        return r
     }
 
     /** "Apply …" in the top bar, then waits until the path has landed. */

@@ -2,7 +2,6 @@ package com.brushwork.paint.ui.vector
 
 import android.view.MotionEvent
 import androidx.compose.ui.semantics.SemanticsActions
-import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.core.Vec2
@@ -59,25 +58,6 @@ class VectorIncrementsEditorUiRobolectricTest {
         s.touch.send(MotionEvent.ACTION_UP, P(0, b.first, b.second))
         s.touch.idle(50)
         settle()
-    }
-
-    private fun node(description: String): SemanticsNode = RobolectricUi.elements().last { e ->
-        e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains(description) == true
-    }.node
-
-    /** Scrolls the options strip until the node described [description] shows whole. */
-    private fun scrollStripTo(s: ChromeScreen, description: String) {
-        fun whole() = node(description).let { it.boundsInWindow.width >= it.size.width - 1f && it.boundsInWindow.height >= it.size.height - 1f }
-        if (whole()) return
-        var p: SemanticsNode? = node(description)
-        while (p != null && p.config.getOrNull(SemanticsActions.ScrollBy) == null) p = p.parent
-        val scroll = requireNotNull(p?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$description\" is clipped and does not scroll" }
-        repeat(40) {
-            if (whole()) return
-            scroll.invoke(120f * s.density, 0f)
-            settle(8)
-        }
-        throw AssertionError("\"$description\" never scrolled into view")
     }
 
     @Test
@@ -138,6 +118,8 @@ class VectorIncrementsEditorUiRobolectricTest {
             settle()
             s.c.increments.update { it.copy(enabled = true) }
             settle()
+            // v1.8 (§3.9): the Handles group is the popup of the More row's "Handles".
+            click("Handles", exact = true)
             val out0 = tool.handlesOf(1).second.length
 
             // The slider at 127 %: 130 % (Scale 10 %), one step, back to 100 % at rest.
@@ -154,18 +136,20 @@ class VectorIncrementsEditorUiRobolectricTest {
             assertEquals(out0, tool.handlesOf(1).second.length, 1e-3f * out0)
 
             // › pressed (not held long enough to repeat): one Scale step, shown while held.
-            scrollStripTo(s, "Longer handles")
-            val r = node("Longer handles").boundsInWindow
+            // (In the popup's own window: the finger lands there.)
+            val longer = RobolectricUi.elements().last { e -> e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Longer handles") == true }
+            val popup = Smoke.Touch(longer.window)
+            val r = longer.node.boundsInWindow
             val x = (r.left + r.right) / 2f
             val y = (r.top + r.bottom) / 2f
-            s.touch.send(MotionEvent.ACTION_DOWN, P(0, x, y))
-            s.touch.idle(100)
+            popup.send(MotionEvent.ACTION_DOWN, P(0, x, y))
+            popup.idle(100)
             settle(2)
             assertEquals(1.1f, tool.handleScale, 1e-4f)
             assertEquals("110 %", s.c.increments.readout)
             assertTrue("the info chip shows it: ${SmokeUi.shown()}", SmokeUi.has("110 %", exact = true))
-            s.touch.send(MotionEvent.ACTION_UP, P(0, x, y))
-            s.touch.idle(50)
+            popup.send(MotionEvent.ACTION_UP, P(0, x, y))
+            popup.idle(50)
             settle()
             assertNull("the readout goes on release", s.c.increments.readout)
             assertEquals("back to 100 % at rest", 1f, tool.handleScale, 0f)
@@ -186,6 +170,8 @@ class VectorIncrementsEditorUiRobolectricTest {
             settle()
             s.c.increments.update { it.copy(enabled = true) }
             settle()
+            // v1.8 (§3.9): the weight is the popup of the More row's "Point weight".
+            click(POINT_WEIGHT_LABEL, exact = true)
             // A long-press on the weight opens its Step popup ("path.weight" → "Step for Weight").
             val hold = RobolectricUi.elements().last { e -> e.node.config.getOrNull(SemanticsActions.OnLongClick)?.label == "Step for Weight" }
             requireNotNull(hold.node.config[SemanticsActions.OnLongClick].action).invoke()

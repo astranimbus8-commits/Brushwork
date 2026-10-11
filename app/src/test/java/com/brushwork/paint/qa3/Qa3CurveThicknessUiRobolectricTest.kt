@@ -12,6 +12,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
@@ -59,6 +60,9 @@ class Qa3CurveThicknessUiRobolectricTest {
             tool.setWidth(1, 2f)
             tool.endNumericEdit()
             repeat(10) { settle(2); shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16)) }
+            // v1.8 (§3.9): the thickness control is on the More row.
+            assertTrue("the More row opens", StripTestKit.openMoreRow())
+            repeat(4) { settle(2); shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(16)) }
             val slider = RobolectricUi.elements().last { e ->
                 e.node.layoutInfo.isPlaced && e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("Point thickness slider") == true
             }
@@ -93,6 +97,7 @@ class Qa3CurveThicknessUiRobolectricTest {
             tool.select(2)
             tool.setWidth(2, 2.5f)
             tool.endNumericEdit()
+            StripTestKit.openMoreRow()
             repeat(10) { settle(2); idle(16) }
             val t1 = SystemClock.uptimeMillis()
             fun send2(down: Long, at: Long, action: Int) {

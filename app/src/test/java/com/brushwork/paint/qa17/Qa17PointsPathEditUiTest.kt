@@ -12,9 +12,11 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.vector.PATH_WIDTH_CAPTION
+import com.brushwork.paint.ui.vector.pathCaptionApplies
 import com.brushwork.paint.vector.VPath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -120,12 +122,14 @@ class Qa17PointsPathEditUiTest {
         press("Sharp corner")
         assertTrue("sharp", tool.spline!!.points[2].sharp)
         assertTrue("the chip says Smooth now", has("Smooth", exact = true))
-        assertFalse("no caption for a sharp point", has(PATH_WIDTH_CAPTION, exact = true))
+        // v1.8: the caption is a message (it may still show): the rule itself no longer applies.
+        assertFalse("no caption for a sharp point", pathCaptionApplies(tool))
         assertEquals("one step", n + 1, steps(tool))
         assertTrue("sharp: the line passes through the point at once", Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); inked(composite(c), 196, 214, 204, 222) > 0 })
         save(composite(c), "sharp-doc")
 
         // Dragged: it keeps its corner; one step; the line follows through it.
+        StripTestKit.closeMoreRow()
         QaCurves.drag(s, Vec2(200f, 220f), Vec2(0f, 40f))
         assertEquals(200 to 260, tool.spline!!.points[2].let { it.x.roundToInt() to it.y.roundToInt() })
         assertTrue("still sharp after the drag", tool.spline!!.points[2].sharp)
@@ -145,6 +149,7 @@ class Qa17PointsPathEditUiTest {
         // The ends: always sharp; the chip says so and is off.
         tap(60f, 150f)
         assertEquals(0, tool.selectedPoint)
+        StripTestKit.openMoreRow()
         assertTrue(has(PointLabels.ENDS_SHARP, exact = true))
         assertFalse(SmokeUi.isEnabled(PointLabels.ENDS_SHARP))
 

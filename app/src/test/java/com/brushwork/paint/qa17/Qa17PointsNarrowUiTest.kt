@@ -5,6 +5,7 @@ import com.brushwork.paint.qa16.Qa16Ui
 import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PillTestKit
@@ -89,7 +90,7 @@ class Qa17PointsNarrowUiTest {
         val tool = open(s, label)
         val ui = Qa16Ui(s)
         val all = PointLabels.SELECT_ALL
-        assertTrue("$label: \"$all\" on screen without sliding, 44 dp: ${where(all)}", ui.wholly(all, SELECTION_DP))
+        assertTrue("$label: \"$all\" on screen without sliding, $SELECTION_DP dp: ${where(all)}", ui.wholly(all, SELECTION_DP))
         // v1.8 (F4): "Select several" is the X / Y pill's 40 dp cell, not a strip chip.
         val several = requireNotNull(s.tagged(V18Tags.PILL_SEVERAL)) { "$label: the pill's \"${PointLabels.SELECT_SEVERAL}\" cell" }
         assertTrue("$label: the cell is on screen: $several", several.left >= -0.5f && several.right <= s.widthDp + 0.5f && several.top >= -0.5f)
@@ -109,13 +110,15 @@ class Qa17PointsNarrowUiTest {
             add(POINT_THICKNESS_LABEL to FIELD_DP)
             if (!tool.polyline) add("Sharp corner" to CHIP_DP)
             add("Delete point" to CHIP_DP)
-            add(CurveLabels17.STROKE_ONLY to FIELD_DP)
-            add(CurveLabels17.FILL_ONLY to FIELD_DP)
-            add(CurveLabels17.BOTH to FIELD_DP)
         }
         for ((l, size) in group) {
             ui.reach(l, size)
             assertTrue("$label: \"$l\" reached and at least $size dp: ${where(l)}", ui.wholly(l, size))
+        }
+        // v1.8: Stroke / Fill / Both are entries of the Stroke kind dropdown.
+        click(CurveLabels17.STROKE_KIND, exact = true)
+        for (l in listOf(CurveLabels17.STROKE_ONLY, CurveLabels17.FILL_ONLY, CurveLabels17.BOTH)) {
+            assertTrue("$label: \"$l\" in the dropdown and at least $FIELD_DP dp: ${where(l)}", ui.wholly(l, FIELD_DP))
         }
         // The group controls work from where the finger reached them.
         ui.reach(CurveLabels17.FILL_ONLY)
@@ -128,6 +131,8 @@ class Qa17PointsNarrowUiTest {
         val c = s.c
         val tool = open(s, "Path")
         click(PointLabels.SELECT_ALL, exact = true)
+        // (v1.8: a More-row item; the row closes before the canvas drags.)
+        StripTestKit.closeMoreRow()
         val t = c.viewTransform
         val gizmo = PointGizmo()
         fun layout() = requireNotNull(gizmo.layout(points(tool), t))
@@ -172,8 +177,8 @@ class Qa17PointsNarrowUiTest {
     }
 
     private companion object {
-        /** "Select all points" / "Deselect all points" (§3.1a). */
-        const val SELECTION_DP = 44f
+        /** "Select all points" / "Deselect all points": v1.8 More-row icons, the 40 dp touch minimum (§3.9). */
+        const val SELECTION_DP = 40f
         /** v1.8 (F4): the X / Y pill's "Select several" cell (`IbisDims.PillIconTouch`). */
         const val PILL_CELL_DP = 40f
         /** The thickness and weight fields and the Stroke / Fill / Both segments (§3.7a). */

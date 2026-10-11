@@ -16,6 +16,7 @@ import com.brushwork.paint.ui.vector.PATH_WIDTH_CAPTION
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import com.brushwork.paint.ui.vector.SHARP_MIXED
+import com.brushwork.paint.ui.vector.pathCaptionApplies
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -69,10 +70,10 @@ class CurvePointsStripUiRobolectricTest {
             assertFalse(has(PointLabels.SEVERAL_HINT, exact = true))
             PillTestKit.toggleSeveral()
             assertTrue(tool.selectSeveral)
-            assertTrue("the hint under the bar", has(PointLabels.SEVERAL_HINT, exact = true))
+            // v1.8: the hint is the editor's message (v1.7: a line under the bar).
+            assertTrue("the hint", has(PointLabels.SEVERAL_HINT, exact = true))
             PillTestKit.toggleSeveral()
             assertFalse(tool.selectSeveral)
-            assertFalse(has(PointLabels.SEVERAL_HINT, exact = true))
 
             click(PointLabels.SELECT_ALL, exact = true)
             assertEquals(5, tool.pointSelection.count)
@@ -114,8 +115,14 @@ class CurvePointsStripUiRobolectricTest {
             val tool = open(s, "Path")
             tool.select(2)
             settle()
+            // v1.8: the caption is the editor's message, once per session.
+            assertTrue(pathCaptionApplies(tool))
             assertTrue("caption: ${SmokeUi.shown()}", has(PATH_WIDTH_CAPTION, exact = true))
+            assertTrue(tool.widthCaptionShown)
             val n = steps(tool)
+            // (Undoing everything empties the path, and so its selection: select it again.)
+            tool.select(2)
+            settle()
             click("Sharp corner", exact = true)
             assertTrue(tool.spline!!.points[2].sharp)
             assertEquals("one in-tool step", n + 1, steps(tool))
@@ -123,13 +130,13 @@ class CurvePointsStripUiRobolectricTest {
             tool.select(2)
             settle()
             assertTrue(has("Smooth", exact = true))
-            assertFalse("a corner is reached: no caption", has(PATH_WIDTH_CAPTION, exact = true))
+            assertFalse("a corner is reached: no caption", pathCaptionApplies(tool))
             // The open path's ends are always reached.
             tool.select(0)
             settle()
             assertTrue(has(PointLabels.ENDS_SHARP, exact = true))
             assertFalse(SmokeUi.isEnabled(PointLabels.ENDS_SHARP))
-            assertFalse(has(PATH_WIDTH_CAPTION, exact = true))
+            assertFalse(pathCaptionApplies(tool))
             // Several: weight and thickness fields, the sharp chip counts the middle points only.
             tool.selectPoints(PointSelection.of(5, 0, 1, 2))
             settle()
@@ -138,6 +145,8 @@ class CurvePointsStripUiRobolectricTest {
             assertTrue("1 smooth, 2 sharp: ${SmokeUi.shown()}", has(SHARP_MIXED, exact = true))
             click(SHARP_MIXED, exact = true)
             assertEquals(listOf(false, true, true, false, false), tool.spline!!.points.map { it.sharp })
+            // v1.8: the weight is a popup of the More row's "Point weight" item.
+            click(POINT_WEIGHT_LABEL, exact = true)
             click("Type $POINT_WEIGHT_LABEL", exact = true)
             SmokeUi.typeAndDone(POINT_WEIGHT_LABEL, "*2")
             assertEquals(listOf(2f, 2f, 2f, 1f, 1f), tool.spline!!.points.map { it.weight })

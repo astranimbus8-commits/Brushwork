@@ -14,6 +14,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.ui.common.CurveLabels17
@@ -139,10 +140,15 @@ class Qa3CurveWidthUiRobolectricTest {
         val (_, c) = editor { Smoke.controller(it, Smoke.document(400, 300, layers = 2)) }
         val layer = c.addVectorLayer()!!
         c.brush = c.brush.copy(size = 8f)
+        // v1.8: the width chip is on the empty Curve strip with a plain line (an open curve has it
+        // in its settings).
+        c.selectTool(ToolId.CURVE)
+        (c.tools.getValue(ToolId.CURVE) as CurveTool).update { it.copy(stroke = CurveStroke.PLAIN) }
+        settle()
+        assertTrue("the width chip shows the brush size", SmokeUi.has("8 px", exact = true))
         val tool = pendingCurve(c)
         assertTrue(tool.widthLinked)
         assertEquals(8f, tool.lineWidth, 0f)
-        assertTrue("the width chip shows the brush size", SmokeUi.has("8 px", exact = true))
         drag("Brush size", 120f)
         val w = c.brush.size
         assertTrue("the slider made the brush bigger: $w", w > 8f)
@@ -182,8 +188,10 @@ class Qa3CurveWidthUiRobolectricTest {
         SmokeUi.click("Close", exact = true)
         settle()
         assertFalse("the chip shows the line's own width (no brush icon)", tool.widthLinked)
-        assertTrue(SmokeUi.has("5 px", exact = true))
+        // v1.8: the chip is on the empty Curve strip.
         tool.discard()
+        settle()
+        assertTrue(SmokeUi.has("5 px", exact = true))
     }
 
     private fun brushStroke() {
@@ -196,7 +204,10 @@ class Qa3CurveWidthUiRobolectricTest {
         SmokeUi.click("Current brush", exact = true)
         assertEquals(CurveStroke.BRUSH, tool.settings.stroke)
         assertEquals("the points keep their thickness", before, tool.anchors.map { it.width })
+        // v1.8: the thickness slider is in the More row.
+        StripTestKit.openMoreRow()
         assertTrue("the thickness control stays", SmokeUi.has("Point thickness slider"))
+        StripTestKit.closeMoreRow()
         assertEquals("the ring is the brush size times the thickness", 16f, tool.diameterAt(1), 0.01f)
         val steps = c.undoManager.undoCount
         tool.commit()

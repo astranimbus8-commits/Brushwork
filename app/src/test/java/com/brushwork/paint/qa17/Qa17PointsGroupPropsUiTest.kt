@@ -15,6 +15,7 @@ import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PillTestKit
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.ui.common.PillLabels
@@ -128,6 +129,8 @@ class Qa17PointsGroupPropsUiTest {
         }
 
         // Point 2 alone made smooth again; then every point: the chip reads "Mixed".
+        // (v1.8: the chips are More-row items; the row closes before a canvas touch.)
+        StripTestKit.closeMoreRow()
         tap(moved[2].x, moved[2].y)
         assertEquals(listOf(2), tool.pointSelection.indices)
         press("Smooth")
@@ -142,12 +145,17 @@ class Qa17PointsGroupPropsUiTest {
         assertEquals("the selection stays", 5, tool.pointSelection.count)
 
         // Weights: point 2 alone at 5; then every point reads "Mixed"; "*4" multiplies each (10 at most).
+        StripTestKit.closeMoreRow()
         tap(moved[2].x, moved[2].y)
         assertEquals(listOf(2), tool.pointSelection.indices)
+        // v1.8: the weight is the popup of the More row's "Point weight" item.
+        StripTestKit.openMoreRow()
+        click(POINT_WEIGHT_LABEL, exact = true)
         press("Type the point weight")
         SmokeUi.typeAndDone("Weight", "5")
         assertEquals(5f, tool.spline!!.points[2].weight, 1e-4f)
         press(PointLabels.SELECT_ALL, 44f)
+        click(POINT_WEIGHT_LABEL, exact = true)
         // (The field's own node carries the state; its visible label is a child text node.)
         var field = SmokeUi.find(POINT_WEIGHT_LABEL, exact = true)?.node
         while (field != null && field.config.getOrNull(SemanticsProperties.StateDescription) == null) field = field.parent

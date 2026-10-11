@@ -10,6 +10,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
@@ -28,7 +29,9 @@ import org.robolectric.annotation.Config
  * v1.6 review fix (area B, §3.2a): selecting a Path control point scrolls the strip so the
  * point's controls START at the left edge: the whole Weight control and the Thickness arrows and
  * value (the two controls together are wider than a phone; before, the whole Thickness slider
- * showed and Weight's value was off the screen). Both work where they are.
+ * showed and Weight's value was off the screen). Both work where they are. v1.8 (§3.9): the
+ * thickness control is whole on the More row (at 360 dp too) and the weight is the popup of its
+ * "Point weight" item.
  */
 // One test per class, each in its own sandbox (the test recomposer policy and paused
 // Choreographer are global).
@@ -76,15 +79,18 @@ private object PathPointControlsVisibleCheck {
         settle()
         for (p in listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f), Vec2(380f, 60f))) tool.addAnchor(p)
         tool.select(1)
-        // (The strip's scroll animation springs into place.)
-        frames(40)
+        frames(12)
+        // v1.8 (§3.9): the thickness control is whole on the More row; the weight is its item's popup.
+        assertTrue("the More row opens", StripTestKit.openMoreRow())
+        SmokeUi.click(POINT_WEIGHT_LABEL, exact = true)
+        frames(12)
         val screenW = activity.window.decorView.width
         assertOnScreen("the weight value", RobolectricUi.byDescription("Point weight 1"), screenW)
         val weight = RobolectricUi.byDescription("Point weight slider")
         assertOnScreen("the weight slider", weight, screenW)
         assertOnScreen("the thinner arrow", RobolectricUi.byDescription("Thinner point"), screenW)
         assertOnScreen("the thickness value", RobolectricUi.byDescription("Point thickness 100"), screenW)
-        if (!narrow) assertOnScreen("the thicker arrow", RobolectricUi.byDescription("Thicker point"), screenW)
+        assertOnScreen(if (narrow) "the thicker arrow at 360 dp" else "the thicker arrow", RobolectricUi.byDescription("Thicker point"), screenW)
         // The weight slider works where it is: one in-tool step.
         requireNotNull(weight.node.config.getOrNull(SemanticsActions.SetProgress)?.action).invoke(1f)
         frames(4)
@@ -93,7 +99,9 @@ private object PathPointControlsVisibleCheck {
         assertEquals(1f, tool.spline!!.points[1].weight, 0f)
         // Another point: its controls start at the left edge too.
         tool.select(3)
-        frames(40)
+        frames(12)
+        SmokeUi.click(POINT_WEIGHT_LABEL, exact = true)
+        frames(12)
         assertOnScreen("the weight value of point 4", RobolectricUi.byDescription("Point weight 1"), screenW)
         assertOnScreen("the thinner arrow of point 4", RobolectricUi.byDescription("Thinner point"), screenW)
     }

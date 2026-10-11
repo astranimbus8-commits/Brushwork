@@ -5,6 +5,7 @@ import com.brushwork.paint.qa16.QaCurves
 import com.brushwork.paint.qa17.PointsQa.Companion.steps
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.tools.points.PointGizmo
@@ -121,6 +122,8 @@ class Qa17PointsWholeUiTest {
             // "Select all points": the gizmo; a drag inside its box (not on a point) moves the path.
             press(PointLabels.SELECT_ALL, 44f)
             assertEquals(4, tool.pointSelection.count)
+            // (v1.8: a More-row item; the row closes before the canvas drags.)
+            StripTestKit.closeMoreRow()
             val inside = centre(scaled)
             assertTrue("no point at the box centre", scaled.all { it.distanceTo(inside) > 40f })
             QaCurves.drag(s, inside, Vec2(-25f, 15f))

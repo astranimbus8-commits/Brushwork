@@ -86,7 +86,8 @@ class QaPathCapsuleByHandUiTest {
             val tool = c.currentTool as CurveTool
             c.color = grey
             settle()
-            QaCurves.snapOff(c)
+            // v1.8: "Snap to objects" is in the More row of the curve strips.
+            if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(c) else c.snapping.enabled = false
             assertFalse("increments off (v1.5)", c.increments.enabled)
             val target = SplinePresets.capsule(centre, height).map { Vec2(it.x, it.y) }
             val radius = c.docLength(24f * tool.handleSize)
@@ -158,6 +159,8 @@ class QaPathCapsuleByHandUiTest {
             assertTrue(tool.spline!!.cyclic)
             assertEquals("the default order is Blender's capsule's", 4, tool.spline!!.order)
             // v1.7: the "Fill" segment (known as "Fill only") is a fill without a stroke.
+            // v1.8: the paint modes are in the "Stroke kind" dropdown.
+            if (!has(CurveLabels17.FILL_ONLY, exact = true)) click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveLabels17.FILL_ONLY, exact = true)
             assertTrue(tool.settings.fill)
             assertEquals(CurveStroke.NONE, tool.settings.stroke)
@@ -194,6 +197,8 @@ class QaPathCapsuleByHandUiTest {
             click("Path shapes", exact = true)
             click("Capsule", exact = true)
             assertEquals(12, tool.spline!!.points.size)
+            // v1.8: the paint modes are in the "Stroke kind" dropdown.
+            if (!has(CurveLabels17.FILL_ONLY, exact = true)) click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveLabels17.FILL_ONLY, exact = true)
             val steps = c.undoManager.undoCount
             click("Apply path edit")
@@ -215,6 +220,8 @@ class QaPathCapsuleByHandUiTest {
             click("Path shapes", exact = true)
             click("Circle", exact = true)
             assertEquals(SplinePresets.CIRCLE_POINTS, tool.spline!!.points.size)
+            // v1.8: the paint modes are in the "Stroke kind" dropdown (a pick closes it).
+            click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveLabels17.STROKE_ONLY, exact = true)
             click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveStroke.PLAIN.label, exact = true)

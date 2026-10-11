@@ -22,9 +22,11 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.7 (item 7, design §3.7a) on the real editor at the user's phone width: the curve tools'
- * "Stroke", "Fill", "Both" segments (known as "Stroke only", "Fill only", "Stroke and fill"),
- * "Stroke kind" with the brush and the plain line only, shown for a line; Fill and Both greyed
- * with 1 or 2 points (a tap says why), and Fill then Both bringing the brush back.
+ * "Stroke", "Fill", "Both" (known as "Stroke only", "Fill only", "Stroke and fill") and the
+ * stroke kinds (the brush and the plain line only). v1.8 (§3.9): they are the entries of the
+ * "Stroke kind" dropdown on row 1; a pick closes it. Fill and Both are greyed with 1 or 2 points
+ * (a tap says why), the stroke kinds while the curve is a fill only, and Fill then Both brings the
+ * brush back.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi")
@@ -32,6 +34,12 @@ class CurvePaintSegmentsUiRobolectricTest {
 
     private fun selected(label: String): Boolean =
         SmokeUi.find(label, exact = true)?.node?.config?.getOrNull(SemanticsProperties.Selected) == true
+
+    /** Opens the Stroke kind dropdown (unless it is open). */
+    private fun menu() {
+        if (!has(CurveLabels17.STROKE_ONLY, exact = true)) click(CurveLabels17.STROKE_KIND, exact = true)
+        assertTrue("the Stroke kind dropdown: ${SmokeUi.shown()}", has(CurveLabels17.STROKE_ONLY, exact = true))
+    }
 
     @Test
     fun theSegments() {
@@ -43,34 +51,40 @@ class CurvePaintSegmentsUiRobolectricTest {
             val s = h.editor()
             QaCurves.tool(s, "Curve")
             val tool = s.c.currentTool as CurveTool
+            assertFalse("closed, the dropdown shows no entry", has(CurveLabels17.STROKE_ONLY, exact = true))
+            menu()
             for (l in listOf(CurveLabels17.STROKE_ONLY, CurveLabels17.FILL_ONLY, CurveLabels17.BOTH)) {
-                assertTrue("$l: ${SmokeUi.shown()}", has(l, exact = true))
                 assertTrue("$l with no points (for the next curve)", SmokeUi.isEnabled(l))
             }
             assertTrue(selected(CurveLabels17.STROKE_ONLY))
             assertFalse(selected(CurveLabels17.FILL_ONLY))
-            // The stroke kind: the brush or a plain line, "No stroke" is the Fill segment now.
-            click(CurveLabels17.STROKE_KIND, exact = true)
+            // The stroke kind: the brush or a plain line, "No stroke" is the Fill entry now.
             assertTrue(has(CurveStroke.PLAIN.label, exact = true))
             assertFalse(has(CurveStroke.NONE.label, exact = true))
             click(CurveStroke.PLAIN.label, exact = true)
             assertEquals(CurveStroke.PLAIN, tool.settings.stroke)
+            assertFalse("a pick closes the dropdown", has(CurveLabels17.STROKE_ONLY, exact = true))
             // Fill: no stroke kind to pick; Both brings the plain line back.
+            menu()
             click(CurveLabels17.FILL_ONLY, exact = true)
             assertEquals(CurveStroke.NONE, tool.settings.stroke)
             assertTrue(tool.settings.fill)
+            menu()
             assertTrue(selected(CurveLabels17.FILL_ONLY))
-            assertFalse("a fill has no stroke kind", has(CurveLabels17.STROKE_KIND, exact = true))
+            assertFalse("a fill has no stroke kind", SmokeUi.isEnabled(CurveStroke.PLAIN.label))
             click(CurveLabels17.BOTH, exact = true)
             assertEquals(CurveStroke.PLAIN, tool.settings.stroke)
             assertTrue(tool.settings.fill)
+            menu()
             assertTrue(selected(CurveLabels17.BOTH))
             // Fill then Both restores the brush.
-            click(CurveLabels17.STROKE_KIND, exact = true)
             click(CurveStroke.BRUSH.label, exact = true)
+            menu()
             click(CurveLabels17.FILL_ONLY, exact = true)
+            menu()
             click(CurveLabels17.BOTH, exact = true)
             assertEquals(CurveStroke.BRUSH, tool.settings.stroke)
+            menu()
             click(CurveLabels17.STROKE_ONLY, exact = true)
             assertFalse(tool.settings.fill)
             assertEquals(CurveStroke.BRUSH, tool.settings.stroke)
@@ -79,6 +93,7 @@ class CurvePaintSegmentsUiRobolectricTest {
             assertTrue(tool.addAnchor(Vec2(60f, 60f)))
             assertTrue(tool.addAnchor(Vec2(200f, 80f)))
             settle()
+            menu()
             assertFalse(SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
             assertFalse(SmokeUi.isEnabled(CurveLabels17.BOTH))
             assertTrue(SmokeUi.isEnabled(CurveLabels17.STROKE_ONLY))
@@ -90,6 +105,7 @@ class CurvePaintSegmentsUiRobolectricTest {
             // A third point: Fill is there.
             assertTrue(tool.addAnchor(Vec2(140f, 200f)))
             settle()
+            menu()
             assertTrue(SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
             click(CurveLabels17.FILL_ONLY, exact = true)
             assertTrue(tool.settings.fill)

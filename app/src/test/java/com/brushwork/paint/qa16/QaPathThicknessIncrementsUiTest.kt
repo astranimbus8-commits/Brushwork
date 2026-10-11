@@ -6,6 +6,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.color.RobolectricUi
@@ -52,6 +53,8 @@ class QaPathThicknessIncrementsUiTest {
         val p3 = tool.spline!!.points[3]
         QaCurves.tap(s, p3.x, p3.y)
         assertEquals("the tap selected point 4", 3, tool.selectedPoint)
+        // v1.8: the thickness controls are in the More row.
+        StripTestKit.openMoreRow()
         assertTrue(has("Point thickness 100 %", exact = true))
         return tool
     }

@@ -18,6 +18,7 @@ import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.vector.CurvePaint
+import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.ui.common.CurveLabels17
@@ -154,9 +155,10 @@ class Qa17PointsReopenUiTest {
         Smoke.assertQuiet(c, "reopened path")
     }
 
-    /** Whether the segment [label] is the chosen one. */
-    private fun chosen(label: String): Boolean =
+    /** Whether the paint mode [label] is the chosen one (v1.8: an entry of the Stroke kind dropdown). */
+    private fun PointsQa.chosen(label: String): Boolean = inMenu {
         SmokeUi.find(label, exact = true)?.node?.config?.getOrNull(SemanticsProperties.Selected) == true
+    }
 
     /** Inked (darker than mid-grey) window pixels over document rect [l, r) × [t, b): what the user sees there. */
     private fun PointsQa.seen(l: Int, t: Int, r: Int, b: Int): Int {
@@ -184,7 +186,7 @@ class Qa17PointsReopenUiTest {
         val tool = tool("Polyline")
         tap(60f, 250f); tap(150f, 80f); tap(240f, 250f)
         assertEquals(3, tool.pointCount)
-        press(CurveLabels17.FILL_ONLY, 40f)
+        mode(CurveLabels17.FILL_ONLY)
         assertEquals(CurvePaint.FILL, tool.paintMode)
         // What the user sees at once: inside filled, under the chord nothing (the window; the
         // peak itself is under the point's marker there, so the line is judged after ✓).
@@ -203,14 +205,14 @@ class Qa17PointsReopenUiTest {
         assertEquals(0, inked(filled, 145, 254, 155, 262))
 
         // The user's Stroke back for the next line; then a tap inside the fill opens it again.
-        press(CurveLabels17.STROKE_ONLY, 40f)
+        mode(CurveLabels17.STROKE_ONLY)
         tap(150f, 200f)
         assertTrue("a tap on the fill opens the polyline", tool.isReopened)
         assertTrue("it shows Fill", chosen(CurveLabels17.FILL_ONLY))
-        assertFalse("no stroke kind for a fill", SmokeUi.has(CurveLabels17.STROKE_KIND, exact = true))
-        press(CurveLabels17.BOTH, 40f)
+        assertFalse("no stroke kind for a fill", inMenu { SmokeUi.isEnabled(CurveStroke.PLAIN.label) })
+        mode(CurveLabels17.BOTH)
         assertEquals(CurvePaint.BOTH, tool.paintMode)
-        assertTrue("the line comes back with the stroke kind", SmokeUi.has(CurveLabels17.STROKE_KIND, exact = true))
+        assertTrue("the line comes back with the stroke kind", inMenu { SmokeUi.isEnabled(CurveStroke.PLAIN.label) })
         val before = c.undoManager.undoCount
         apply("Apply polyline")
         assertEquals("one app step", before + 1, c.undoManager.undoCount)

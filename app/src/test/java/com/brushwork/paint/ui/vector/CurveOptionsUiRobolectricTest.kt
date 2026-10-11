@@ -15,6 +15,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveGeometry
 import com.brushwork.paint.tools.vector.CurveStroke
@@ -37,7 +38,7 @@ import java.time.Duration
  * v1.5 §4.4 / §4.5 (A4): the curve options strip at the user's phone size. The width chip shows
  * the brush size (linked); with a point selected its thickness control shows first, within the
  * screen: the slider (one undo step per drag), the ‹ › steps, the typed value, a double tap back
- * to 100 % and "All points 100 %".
+ * to 100 % and "All points 100 %". v1.8 (§3.9): the thickness control is on the More row.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
@@ -72,6 +73,8 @@ class CurveOptionsUiRobolectricTest {
         for (p in listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f))) tool.addAnchor(p)
         tool.select(1)
         settle()
+        // v1.8 (§3.9): the point controls are on the More row.
+        assertTrue("the More row opens", StripTestKit.openMoreRow())
         val s = slider("Point thickness slider")
         val screenW = activity.window.decorView.width
         // (Its real place: boundsInWindow is clipped to the scrolling strip, so it can't tell.)
@@ -101,7 +104,8 @@ class CurveOptionsUiRobolectricTest {
         SmokeUi.typeAndDone("Thickness", "40")
         assertEquals(0.4f, tool.anchors[1].width, 1e-4f)
 
-        // A double tap on the slider: back to 100 %.
+        // A double tap on the slider: back to 100 %. (The typing dialog closed the More row.)
+        StripTestKit.openMoreRow()
         val b = slider("Point thickness slider")
         val x = b.bounds.left + b.bounds.width * 0.8f
         val y = b.bounds.center.y

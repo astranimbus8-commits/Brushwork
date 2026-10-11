@@ -14,6 +14,7 @@ import com.brushwork.paint.tools.vector.docLength
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import com.brushwork.paint.ui.vector.handleScaleToFraction
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -44,7 +45,8 @@ class QaCurveHandlesGroupUiTest {
         QaCurves.tool(s, "Curve")
         assertEquals(ToolId.CURVE, s.c.activeToolId)
         val tool = s.c.currentTool as CurveTool
-        QaCurves.snapOff(s.c)
+        // v1.8: "Snap to objects" is in the More row of the curve strips.
+        if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(s.c) else s.c.snapping.enabled = false
         for (p in pts) QaCurves.tap(s, p)
         assertEquals(4, tool.anchors.size)
         if (select >= 0) {
@@ -52,6 +54,18 @@ class QaCurveHandlesGroupUiTest {
             assertEquals("the tap selected point ${select + 1}", select, tool.selected)
         }
         return tool
+    }
+
+    /** v1.8: opens the Handles popup (the More row's "Handles" item) unless it is open. */
+    private fun handlesPopup() {
+        if (!has("Longer handles", exact = true)) click("Handles", exact = true)
+        assertTrue("the Handles popup: ${SmokeUi.shown()}", has("Longer handles", exact = true))
+    }
+
+    /** Clicks [label] in the Handles popup (opened first). */
+    private fun inPopup(label: String, exact: Boolean = false) {
+        handlesPopup()
+        click(label, exact = exact)
     }
 
     private fun CurveTool.outLen(i: Int = 1) = handlesOf(i).second.length
@@ -66,52 +80,55 @@ class QaCurveHandlesGroupUiTest {
         h.section("increments off: ‹ › × 0.9 / × 1.1, slider, typed, In / Out, All points") {
             val s = h.editor()
             val tool = curve(s)
+            // v1.8: the Handles group is the popup of the More row's "Handles" item.
+            handlesPopup()
             for (label in listOf("Handles", "Shorter handles", "Longer handles", "Type handle scale", "Handles: In and out", "Handles: In", "Handles: Out", "Handles: All points")) {
                 assertTrue("\"$label\": ${SmokeUi.shown()}", has(label, exact = true))
             }
             val out0 = tool.outLen()
             val in0 = tool.inLen()
-            click("Longer handles")
+            inPopup("Longer handles")
             assertEquals("› × 1.1", out0 * 1.1f, tool.outLen(), 1e-3f)
             assertEquals("both sides", in0 * 1.1f, tool.inLen(), 1e-3f)
             assertTrue("back to 100 % at rest", has("100 %", exact = true))
-            click("Shorter handles")
+            inPopup("Shorter handles")
             assertEquals("‹ × 0.9", out0 * 1.1f * 0.9f, tool.outLen(), 1e-3f)
             click("Undo", exact = true)
             click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // The slider: 200 % in one drag (one step).
+            handlesPopup()
             QaCurves.setSlider("Handle scale", handleScaleToFraction(2f))
             assertEquals(out0 * 2f, tool.outLen(), 1e-2f)
             click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // Typed: exact.
-            click("Type handle scale")
+            inPopup("Type handle scale")
             SmokeUi.typeAndDone("Handles", "137")
             assertEquals(out0 * 1.37f, tool.outLen(), 1e-3f)
             // The dialog's + (no increments): × 1.1.
             val out1 = tool.outLen()
-            click("Type handle scale")
+            inPopup("Type handle scale")
             click("Increase Handles")
             click("OK", exact = true)
             assertEquals(out1 * 1.1f, tool.outLen(), 1e-3f)
             // Out only.
-            click("Handles: Out", exact = true)
+            inPopup("Handles: Out", exact = true)
             assertEquals(HandleSide.OUT, tool.handleSide)
             val o2 = tool.outLen()
             val i2 = tool.inLen()
-            click("Longer handles")
+            inPopup("Longer handles")
             assertEquals(o2 * 1.1f, tool.outLen(), 1e-3f)
             assertEquals("In untouched", i2, tool.inLen(), 1e-3f)
-            click("Handles: In", exact = true)
-            click("Shorter handles")
+            inPopup("Handles: In", exact = true)
+            inPopup("Shorter handles")
             assertEquals(i2 * 0.9f, tool.inLen(), 1e-3f)
-            click("Handles: In and out", exact = true)
+            inPopup("Handles: In and out", exact = true)
             // All points: point 3's handles too.
-            click("Handles: All points", exact = true)
+            inPopup("Handles: All points", exact = true)
             assertTrue(tool.handleAllPoints)
             val other = tool.outLen(2)
-            click("Longer handles")
+            inPopup("Longer handles")
             assertEquals(other * 1.1f, tool.outLen(2), 1e-3f)
             Smoke.assertQuiet(s.c, "off")
         }
@@ -120,21 +137,22 @@ class QaCurveHandlesGroupUiTest {
             QaCurves.incrementsOn(scale = "25")
             val tool = curve(s)
             val out0 = tool.outLen()
-            click("Longer handles")
+            inPopup("Longer handles")
             assertEquals("› = 125 %", out0 * 1.25f, tool.outLen(), 1e-3f)
             click("Undo", exact = true)
             // The slider lands on 25 % multiples (160 % → 150 %).
+            handlesPopup()
             QaCurves.setSlider("Handle scale", handleScaleToFraction(1.6f))
             assertEquals(out0 * 1.5f, tool.outLen(), 1e-2f)
             click("Undo", exact = true)
             // Typed: exact.
-            click("Type handle scale")
+            inPopup("Type handle scale")
             SmokeUi.typeAndDone("Handles", "137")
             assertEquals("typed stays exact", out0 * 1.37f, tool.outLen(), 1e-3f)
             click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // The dialog: + goes to the next Scale multiple (125), − to the one below (75).
-            click("Type handle scale")
+            inPopup("Type handle scale")
             click("Increase Handles")
             assertTrue("+ → 125: ${SmokeUi.shown()}", SmokeUi.field("Handles").node.config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text == "125")
             click("Decrease Handles")
@@ -208,10 +226,13 @@ class QaCurveHandlesGroupUiTest {
             val s = h.editor()
             QaCurves.tool(s, "Path")
             val tool = s.c.currentTool as CurveTool
-            QaCurves.snapOff(s.c)
+            // v1.8: "Snap to objects" is in the More row of the curve strips.
+            if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(s.c) else s.c.snapping.enabled = false
             for (p in pts) QaCurves.tap(s, p)
             QaCurves.tap(s, pts[1])
             assertEquals(1, tool.selectedPoint)
+            // v1.8: the weight's controls are the popup of the More row's "Point weight" item.
+            click(POINT_WEIGHT_LABEL, exact = true)
             // Long-press the weight: the Step popup ("Step for Weight"), increments on, 0.25.
             val hold = com.brushwork.paint.ui.color.RobolectricUi.elements().last { e ->
                 e.node.config.getOrNull(androidx.compose.ui.semantics.SemanticsActions.OnLongClick)?.label == "Step for Weight"
@@ -223,6 +244,7 @@ class QaCurveHandlesGroupUiTest {
             SmokeUi.typeAndDone("Weight step", "0.25")
             if (SmokeUi.has("OK", exact = true)) click("OK", exact = true)
             assertEquals(0.25f, s.c.increments.customStep("path.weight")!!, 0f)
+            if (!has("Type the point weight")) click(POINT_WEIGHT_LABEL, exact = true)
             click("Type the point weight")
             click("Increase Weight")
             assertEquals("+ → 1.25", "1.25", SmokeUi.field("Weight").node.config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text)
@@ -230,6 +252,7 @@ class QaCurveHandlesGroupUiTest {
             assertEquals("its slider lands on 0.25 multiples (1.6 → 1.5)", "1.5", SmokeUi.field("Weight").node.config[androidx.compose.ui.semantics.SemanticsProperties.EditableText].text)
             click("OK", exact = true)
             assertEquals(1.5f, tool.spline!!.points[1].weight, 1e-6f)
+            if (!has("Type the point weight")) click(POINT_WEIGHT_LABEL, exact = true)
             click("Type the point weight")
             SmokeUi.typeAndDone("Weight", "1.37")
             assertEquals("typed: exact", 1.37f, tool.spline!!.points[1].weight, 0f)

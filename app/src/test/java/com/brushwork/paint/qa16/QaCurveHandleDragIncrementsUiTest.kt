@@ -64,7 +64,8 @@ class QaCurveHandleDragIncrementsUiTest {
         h.section("increments off: the handle follows the finger (v1.5)") {
             val s = h.editor()
             val tool = curveWithSelectedMiddle(s)
-            QaCurves.snapOff(s.c)
+            // v1.8: "Snap to objects" is in the More row of the curve strips.
+            if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(s.c) else s.c.snapping.enabled = false
             val (start, end, held) = dragOutHandle(s, tool, Vec2(37f, 12f))
             assertEquals(start.x + 37f, end.x, 0.05f)
             assertEquals(start.y + 12f, end.y, 0.05f)
@@ -76,7 +77,8 @@ class QaCurveHandleDragIncrementsUiTest {
             QaCurves.incrementsOn(length = "25")
             assertEquals(25f, s.c.increments.step(com.brushwork.paint.model.IncrementKind.LENGTH)!!, 0f)
             val tool = curveWithSelectedMiddle(s)
-            QaCurves.snapOff(s.c)
+            // v1.8: "Snap to objects" is in the More row of the curve strips.
+            if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(s.c) else s.c.snapping.enabled = false
             val (start, end, held) = dragOutHandle(s, tool, Vec2(37f, 12f))
             assertEquals("x: +37 → one 25 px step", start.x + 25f, end.x, 0.01f)
             assertEquals("y: +12 → no step", start.y, end.y, 0.01f)

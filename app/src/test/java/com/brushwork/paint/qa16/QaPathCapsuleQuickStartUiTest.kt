@@ -11,6 +11,8 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
+import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveKind
@@ -56,6 +58,15 @@ class QaPathCapsuleQuickStartUiTest {
 
     private val grey = 0xFF8C8C8C.toInt()
 
+    /** Back on the top window (a popup closes). */
+    private fun back() {
+        SmokeUi.windows().last().let { w ->
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+        }
+        settle()
+    }
+
     @Test
     fun theBlenderCapsuleByQuickStartSavedReopenedConvertedAndExported() {
         ShadowLog.stream = null
@@ -98,11 +109,15 @@ class QaPathCapsuleQuickStartUiTest {
             val hh = poly.maxOf { it.y } - poly.minOf { it.y }
             assertEquals("3 : 1", 3f, w / hh, 0.03f)
             assertFalse("Shapes ▾ goes once a point exists", has("Path shapes", exact = true))
+            // v1.8: To Bézier and Endpoint are in the More row.
+            StripTestKit.openMoreRow()
             assertTrue(has("To Bézier", exact = true))
             assertFalse("Endpoint is greyed while Cyclic is on", SmokeUi.isEnabled("Endpoint"))
             QaCurves.shot(s, "path-capsule-quickstart")
 
             // Order ‹ ›: in-tool steps; the strip reads the order.
+            // v1.8: the arrows are in the popup of "Order 4".
+            click("Order 4", exact = true)
             click("Higher order")
             assertEquals(5, tool.spline!!.order)
             assertTrue(has("Order 5", exact = true))
@@ -115,6 +130,7 @@ class QaPathCapsuleQuickStartUiTest {
             assertEquals("redo: 3", 3, tool.spline!!.order)
             click("Higher order")
             assertEquals(4, tool.spline!!.order)
+            back()
 
             // Cyclic off: open, Endpoint comes back and switches the clamped ends; then back on.
             click("Cyclic", exact = true)
@@ -131,10 +147,15 @@ class QaPathCapsuleQuickStartUiTest {
             assertEquals("the points are the capsule's still", sp.points, tool.spline!!.points)
 
             // A tap on point 4 selects it: its Weight and Thickness show.
+            // v1.8: a canvas touch with the More row open only closes it.
+            StripTestKit.closeMoreRow()
             val p3 = tool.spline!!.points[3]
             QaCurves.tap(s, p3.x, p3.y)
             assertEquals("the tap selected point 4 (no new point)", 3, tool.selectedPoint)
             assertEquals(12, tool.spline!!.points.size)
+            // v1.8: the weight is in the popup of the More row's Weight item, the thickness in the More row.
+            StripTestKit.openMoreRow()
+            click(POINT_WEIGHT_LABEL, exact = true)
             assertTrue("Weight: ${SmokeUi.shown()}", has("Point weight 1", exact = true))
             assertTrue(has("Point thickness 100 %", exact = true))
             click("Type the point weight")
@@ -145,7 +166,9 @@ class QaPathCapsuleQuickStartUiTest {
             click("Type the point thickness")
             SmokeUi.typeAndDone("Thickness", "137")
             assertEquals("typed: exact", 1.37f, tool.spline!!.points[3].width, 1e-6f)
+            StripTestKit.openMoreRow()
             assertTrue(has("Point thickness 137 %", exact = true))
+            StripTestKit.closeMoreRow()
 
             // ✓: one undo step "Path", one VPath whose Bézier form is its spline's (I9).
             val steps = c.undoManager.undoCount
@@ -188,7 +211,8 @@ class QaPathCapsuleQuickStartUiTest {
             assertTrue("reopened", path.isReopened)
             assertEquals(p0.spline, path.spline)
             // Drag point 1 down 12 px (Snap to objects off in the strip): a different path; ✓ = "Edit path".
-            QaCurves.snapOff(c)
+            // v1.8: "Snap to objects" is in the More row of the curve strips.
+            if (SmokeUi.has("Snap to objects", exact = true) || SmokeUi.has("Snap", exact = true)) QaCurves.snapOff(c) else c.snapping.enabled = false
             val q0 = path.spline!!.points[0]
             QaCurves.drag(s, Vec2(q0.x, q0.y), Vec2(0f, 12f))
             assertEquals(q0.y + 12f, path.spline!!.points[0].y, 0.05f)

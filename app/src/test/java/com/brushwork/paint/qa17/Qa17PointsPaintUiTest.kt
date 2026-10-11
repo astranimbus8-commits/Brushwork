@@ -20,6 +20,7 @@ import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
@@ -74,8 +75,10 @@ class Qa17PointsPaintUiTest {
 
     private val blue = 0xFF2244CC.toInt()
 
-    private fun selected(label: String): Boolean =
+    /** v1.8: whether the paint mode [label] is the selected entry of the Stroke kind dropdown. */
+    private fun PointsQa.selected(label: String): Boolean = inMenu {
         SmokeUi.find(label, exact = true)?.node?.config?.getOrNull(SemanticsProperties.Selected) == true
+    }
 
     /** Waits (frames) until [b] holds on the composite. */
     private fun PointsQa.until(what: String, b: (Bitmap) -> Boolean) =
@@ -91,7 +94,7 @@ class Qa17PointsPaintUiTest {
         // Two points: Fill and Both are off and say why; a tap changes nothing.
         tap(80f, 230f)
         tap(200f, 50f)
-        ui.reach(CurveLabels17.FILL_ONLY, 40f)
+        menu()
         assertFalse(SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
         assertFalse(SmokeUi.isEnabled(CurveLabels17.BOTH))
         for (l in listOf(CurveLabels17.FILL_ONLY, CurveLabels17.BOTH)) {
@@ -100,10 +103,11 @@ class Qa17PointsPaintUiTest {
         click(CurveLabels17.FILL_ONLY, exact = true, settleAfter = false)
         assertEquals(CurveLabels17.FILL_NEEDS_3, c.message)
         settle()
+        closeMenu()
         assertEquals(CurvePaint.STROKE, tool.paintMode)
         tap(320f, 230f)
         assertEquals(3, tool.pointCount)
-        assertTrue(SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
+        assertTrue(inMenu { SmokeUi.isEnabled(CurveLabels17.FILL_ONLY) })
 
         // The open path's peak is at (200, 140); its fill is closed by the chord at y = 230.
         // Above the peak (4..7 px): only the 16 px line; inside: only the fill; under the chord: nothing.
@@ -134,13 +138,13 @@ class Qa17PointsPaintUiTest {
         }
         shows("brush, Stroke only", stroke = true, fill = false)
 
-        press(CurveLabels17.FILL_ONLY, 40f)
+        mode(CurveLabels17.FILL_ONLY)
         assertEquals(CurvePaint.FILL, tool.paintMode)
-        assertFalse("a fill has no stroke kind", has(CurveLabels17.STROKE_KIND, exact = true))
+        assertFalse("a fill has no stroke kind", inMenu { SmokeUi.isEnabled(CurveStroke.PLAIN.label) })
         shows("Fill only", stroke = false, fill = true)
         save(composite(c), "fill-only-doc")
 
-        press(CurveLabels17.BOTH, 40f)
+        mode(CurveLabels17.BOTH)
         assertEquals("Both brings the brush back", CurveStroke.BRUSH, tool.settings.stroke)
         shows("brush, Stroke and fill", stroke = true, fill = true)
         save(PointsQa.window(s), "fill-brush-both-pending-screen")
@@ -151,15 +155,15 @@ class Qa17PointsPaintUiTest {
         assertEquals(CurveStroke.PLAIN, tool.settings.stroke)
         assertEquals(CurvePaint.BOTH, tool.paintMode)
         shows("plain, Stroke and fill", stroke = true, fill = true)
-        press(CurveLabels17.FILL_ONLY, 40f)
+        mode(CurveLabels17.FILL_ONLY)
         shows("plain, Fill only", stroke = false, fill = true)
-        press(CurveLabels17.STROKE_ONLY, 40f)
+        mode(CurveLabels17.STROKE_ONLY)
         assertEquals("Stroke brings the plain line back", CurveStroke.PLAIN, tool.settings.stroke)
         shows("plain, Stroke only", stroke = true, fill = false)
         save(composite(c), "fill-plain-stroke-doc")
 
         // ✓ with the brush and the fill: one app step, drawn as shown.
-        press(CurveLabels17.BOTH, 40f)
+        mode(CurveLabels17.BOTH)
         press(CurveLabels17.STROKE_KIND, 32f)
         click(CurveStroke.BRUSH.label, exact = true)
         shows("brush, Stroke and fill again", stroke = true, fill = true)
@@ -185,10 +189,10 @@ class Qa17PointsPaintUiTest {
 
         // A fill alone.
         tap(30f, 280f); tap(100f, 120f); tap(170f, 280f)
-        press(CurveLabels17.FILL_ONLY, 40f)
+        mode(CurveLabels17.FILL_ONLY)
         apply("Apply path")
         // A plain line, thicker at its second point, with a sharp third point.
-        press(CurveLabels17.STROKE_ONLY, 40f)
+        mode(CurveLabels17.STROKE_ONLY)
         press(CurveLabels17.STROKE_KIND, 32f)
         click(CurveStroke.PLAIN.label, exact = true)
         tap(200f, 180f); tap(250f, 110f); tap(300f, 230f); tap(370f, 160f)
@@ -197,9 +201,11 @@ class Qa17PointsPaintUiTest {
         SmokeUi.typeAndDone("Thickness", "200")
         tap(300f, 230f)
         press("Sharp corner")
+        // v1.8: the corner is a More-row item; the row closes before the next canvas touch.
+        StripTestKit.closeMoreRow()
         apply("Apply path")
         // A brush line with a fill.
-        press(CurveLabels17.BOTH, 40f)
+        mode(CurveLabels17.BOTH)
         press(CurveLabels17.STROKE_KIND, 32f)
         click(CurveStroke.BRUSH.label, exact = true)
         tap(30f, 80f); tap(110f, 20f); tap(190f, 80f)
@@ -249,7 +255,7 @@ class Qa17PointsPaintUiTest {
         tap(100f, 250f)
         assertTrue("the fill reopened", tool.isReopened)
         assertTrue(selected(CurveLabels17.FILL_ONLY))
-        assertFalse(has(CurveLabels17.STROKE_KIND, exact = true))
+        assertFalse("a fill has no stroke kind", inMenu { SmokeUi.isEnabled(CurveStroke.PLAIN.label) })
         click("Discard path edit", exact = true)
         settle()
         tap(300f, 230f)

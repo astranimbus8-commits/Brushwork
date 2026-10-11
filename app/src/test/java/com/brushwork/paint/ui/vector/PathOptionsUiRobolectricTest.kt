@@ -11,6 +11,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.HandleSide
@@ -30,12 +31,22 @@ import org.robolectric.annotation.Config
  * v1.6 §3.2a / §3.3 at the user's phone size: the Path tool's strip (Order stepper, Endpoint,
  * Cyclic, Shapes ▾ while empty, the selected point's Weight, To Bézier) and the Curve tool's
  * Handles group (‹ › 110 %, typed value, the log slider, In and out / In / Out, All points), each
- * control an in-tool step.
+ * control an in-tool step. v1.8 (§3.9): the order arrows, the weight and the Handles group are
+ * popups of their More row items.
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.vector.pathoptionssandbox"])
 class PathOptionsUiRobolectricTest {
+
+    /** Back on the top window (a popup closes). */
+    private fun back() {
+        SmokeUi.windows().last().let { w ->
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+        }
+        settle()
+    }
 
     private fun slider(name: String): RobolectricUi.Element = RobolectricUi.elements().last { e ->
         e.node.config.contains(SemanticsActions.SetProgress) &&
@@ -53,7 +64,8 @@ class PathOptionsUiRobolectricTest {
         val tool = c.tools.getValue(ToolId.PATH) as CurveTool
         activity.setContent { BrushworkTheme { ToolOptionsBar(c, Modifier.fillMaxWidth()) } }
         settle()
-        // Empty: the order, Endpoint, Cyclic and the quick starts; nothing to convert.
+        // Empty: the order, Endpoint, Cyclic (v1.8: on the More row) and the quick starts; nothing to convert.
+        assertTrue("the More row opens", StripTestKit.openMoreRow())
         assertTrue("strip: ${SmokeUi.shown()}", SmokeUi.has("Order 4", exact = true))
         assertTrue(SmokeUi.has("Endpoint", exact = true))
         assertTrue(SmokeUi.has("Cyclic", exact = true))
@@ -62,11 +74,15 @@ class PathOptionsUiRobolectricTest {
         assertFalse(SmokeUi.has("Point weight slider"))
         assertFalse("no Handles group in Path", SmokeUi.has("Handle scale"))
 
+        // v1.8: the order arrows are in the popup of "Order 4".
+        SmokeUi.click("Order 4", exact = true)
         SmokeUi.click("Higher order")
         assertEquals(5, tool.pathOrder)
         assertTrue(SmokeUi.has("Order 5", exact = true))
         SmokeUi.click("Lower order")
         assertEquals(4, tool.pathOrder)
+        back()
+        assertFalse("the popup closed", SmokeUi.has("Lower order"))
 
         // Shapes ▾ › Capsule: 12 points, cyclic; the menu goes, To Bézier comes.
         SmokeUi.click("Path shapes")
@@ -74,12 +90,16 @@ class PathOptionsUiRobolectricTest {
         assertEquals(12, tool.spline!!.points.size)
         assertTrue(tool.pathCyclic)
         assertFalse(SmokeUi.has("Path shapes"))
+        StripTestKit.openMoreRow()
         assertTrue(SmokeUi.has("To Bézier"))
         assertFalse("Endpoint is greyed while Cyclic is on", SmokeUi.isEnabled("Endpoint"))
 
-        // A selected point: its weight (log slider, one step per drag) and thickness.
+        // A selected point: its weight (log slider, one step per drag; v1.8: in the popup of the More
+        // row's "Point weight") and thickness.
         tool.select(3)
         settle()
+        StripTestKit.openMoreRow()
+        SmokeUi.click(POINT_WEIGHT_LABEL, exact = true)
         assertTrue(SmokeUi.has("Point weight 1", exact = true))
         assertTrue(SmokeUi.has("Point thickness 100 %"))
         val before = tool.spline
@@ -118,6 +138,9 @@ class PathOptionsUiRobolectricTest {
         for (p in listOf(Vec2(60f, 200f), Vec2(150f, 80f), Vec2(260f, 210f), Vec2(350f, 90f))) tool.addAnchor(p)
         tool.select(1)
         settle()
+        // v1.8: the Handles group is the popup of the More row's "Handles".
+        assertTrue("the More row opens", StripTestKit.openMoreRow())
+        SmokeUi.click("Handles", exact = true)
         for (label in listOf("Handles", "Shorter handles", "Longer handles", "Type handle scale", "Handles: In and out", "Handles: In", "Handles: Out", "Handles: All points")) {
             assertTrue("$label: ${SmokeUi.shown()}", SmokeUi.has(label, exact = true))
         }
@@ -139,7 +162,8 @@ class PathOptionsUiRobolectricTest {
         SmokeUi.typeAndDone("Handles", "150")
         assertEquals(out0 * 1.5f, tool.handlesOf(1).second.length, 1e-3f)
 
-        // The chips.
+        // The chips (the typing dialog closed the popup and the More row).
+        SmokeUi.click("Handles", exact = true)
         SmokeUi.click("Handles: Out", exact = true)
         assertEquals(HandleSide.OUT, tool.handleSide)
         SmokeUi.click("Handles: All points", exact = true)

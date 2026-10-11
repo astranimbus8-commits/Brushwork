@@ -11,6 +11,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.CurveTool
@@ -30,7 +31,8 @@ import org.robolectric.annotation.Config
  * v1.5 §4.5 (A4 review): in vector mode the options strip starts with the VECTOR chip, so on the
  * user's 392 dp phone (and on 360 dp ones) the selected point's thickness slider used to begin
  * off the screen. Selecting a point now scrolls the strip so the whole thickness control shows,
- * and it still works there (one in-tool step).
+ * and it still works there (one in-tool step). v1.8 (§3.9): the control is whole on the More row,
+ * at 360 dp too.
  */
 // One test per class, each in its own sandbox (the test recomposer policy and paused
 // Choreographer are global: a second Compose test in the same sandbox stops recomposing).
@@ -94,6 +96,9 @@ private object CurveThicknessVisibleCheck {
         for (p in listOf(Vec2(60f, 200f), Vec2(200f, 80f), Vec2(340f, 200f))) tool.addAnchor(p)
         tool.select(1)
         frames(12)
+        // v1.8 (§3.9): the thickness control is on the More row, which never scrolls.
+        assertTrue("the More row opens", StripTestKit.openMoreRow())
+        frames(4)
         val screenW = activity.window.decorView.width
         val s = slider()
         assertOnScreen("the slider", s, screenW)

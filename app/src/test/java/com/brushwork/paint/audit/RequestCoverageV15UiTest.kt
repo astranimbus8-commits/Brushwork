@@ -492,6 +492,8 @@ class RequestCoverageV15UiTest {
         // Point thickness: select a point, its slider.
         curve.select(1)
         settle()
+        // v1.8: the slider is in the More row.
+        StripTestKit.openMoreRow()
         assertTrue("the thickness slider in the strip", RobolectricUi.elements().any { it.node.config.getOrNull(SemanticsProperties.ContentDescription)?.any { d -> d.contains("Point thickness slider") } == true })
         setSlider("Point thickness slider", 250f)
         assertEquals(2.5f, curve.anchors[1].width, 0.01f)
@@ -737,8 +739,11 @@ class RequestCoverageV15UiTest {
             tap(320f, 150f)
             curve.select(1)
             settle()
+            // v1.8: the slider is in the More row.
+            StripTestKit.openMoreRow()
             val thick = slider("Point thickness slider").bounds
             assertTrue("the point thickness slider fits: $thick", thick.left >= 0f && thick.right <= 720.5f && thick.bottom <= 1280.5f)
+            StripTestKit.closeMoreRow()
             curve.discard()
             settle()
         } finally {

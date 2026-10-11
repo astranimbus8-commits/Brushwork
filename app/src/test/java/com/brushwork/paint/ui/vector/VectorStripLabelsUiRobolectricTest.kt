@@ -33,7 +33,7 @@ import org.robolectric.shadows.ShadowLog
  * I10 for the vector tools' options strips (v1.6 §3.7.11): with the tool menu open beside the
  * Curve, Polyline, Path or Shape strip, every visible clickable label is unique at the user's
  * phone size — at every screen of the strip, swept from its start to its end. The strips'
- * "Settings" chips still show "Settings" but are known as "Curve settings", "Polyline settings",
+ * "Settings" chips (v1.8, Curve, Polyline and Path: icons on the More row) are known as "Curve settings", "Polyline settings",
  * "Path settings" and "Shape settings", apart from the menu's "Settings" cell. The strips are
  * audited empty, with a point selected (the Curve tool's Handles group, the Path tool's Weight),
  * on a vector layer, with a pending shape and in the Shape tool's Points mode (its Handles
@@ -46,6 +46,15 @@ import org.robolectric.shadows.ShadowLog
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.vector.striplabelssandbox"])
 class VectorStripLabelsUiRobolectricTest {
+
+    /** Back on the top window (a popup closes). */
+    private fun back() {
+        SmokeUi.windows().last().let { w ->
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN, android.view.KeyEvent.KEYCODE_BACK))
+            w.dispatchKeyEvent(android.view.KeyEvent(android.view.KeyEvent.ACTION_UP, android.view.KeyEvent.KEYCODE_BACK))
+        }
+        settle()
+    }
 
     /**
      * No clickable is known as "px"; the cells marked [PIXEL_ONLY_STATE] are pixel-only tools,
@@ -198,9 +207,18 @@ class VectorStripLabelsUiRobolectricTest {
                 settle()
                 val tool = curveWithSelectedPoint(s, id)
                 when (id) {
-                    // The Handles group: "In and out" / "In" / "Out", named "Handles: …".
-                    ToolId.CURVE -> assertTrue("handles: ${SmokeUi.shown()}", SmokeUi.has("Handles: In and out", exact = true))
-                    ToolId.PATH -> assertTrue("the point's weight: ${SmokeUi.shown()}", SmokeUi.has("Type the point weight"))
+                    // The Handles group: "In and out" / "In" / "Out", named "Handles: …" (v1.8: the popup of
+                    // the More row's "Handles"; the weight, of "Point weight").
+                    ToolId.CURVE -> {
+                        click("Handles", exact = true)
+                        assertTrue("handles: ${SmokeUi.shown()}", SmokeUi.has("Handles: In and out", exact = true))
+                        back()
+                    }
+                    ToolId.PATH -> {
+                        click(POINT_WEIGHT_LABEL, exact = true)
+                        assertTrue("the point's weight: ${SmokeUi.shown()}", SmokeUi.has("Type the point weight"))
+                        back()
+                    }
                     else -> assertTrue("the point's actions: ${SmokeUi.shown()}", SmokeUi.has("Delete point"))
                 }
                 audit(s, id, "${id.label} (point 2 selected)")
@@ -215,7 +233,9 @@ class VectorStripLabelsUiRobolectricTest {
             settle()
             assertTrue("vector mode", s.c.isVectorMode)
             val tool = curveWithSelectedPoint(s, ToolId.CURVE)
+            click("Handles", exact = true)
             assertTrue("handles: ${SmokeUi.shown()}", SmokeUi.has("Handles: In and out", exact = true))
+            back()
             audit(s, ToolId.CURVE, "Curve (vector layer, point 2 selected)")
             tool.discard()
             settle()

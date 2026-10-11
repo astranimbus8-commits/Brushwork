@@ -94,7 +94,7 @@ import com.brushwork.paint.vector.CurveGenKind
 /*
  * The Curve, Polyline and Path strips (v1.8, design §3.9 and §3.7, area E): [curveStrip] builds
  * one [StripSpec] by `CurveTool.kind` and by what is open. Row 1 holds the most-used controls
- * (the "Curves" dropdown or the point actions, the stroke kind); the More row the rest, mostly
+ * (the [CurveGenLabels18.CURVES] dropdown or the point actions, the stroke kind); the More row the rest, mostly
  * 40 dp icons known by their v1.7 descriptions (each with its long-press label). The controls
  * themselves (the thickness and weight controls, the Handles group, the sheets and dialogs) live
  * in CurveToolOptions.kt and CurveGeneratorSheet.kt.
@@ -238,7 +238,7 @@ internal const val CURVE_LINE_WIDTH_DP = 64
 internal const val CURVE_ORDER_DP = 64
 internal const val CURVE_GENERATOR_DP = 92
 internal const val CURVE_THICKNESS_DP = 260
-internal const val CURVE_GROUP_THICKNESS_DP = 216
+internal const val CURVE_GROUP_THICKNESS_DP = 224
 internal const val CURVE_WEIGHT_DP = 64
 
 /** The keys of the curve strips' items. */
@@ -260,7 +260,7 @@ internal const val DELETE_POINT_LABEL = "Delete point"
 internal const val DESELECT_POINT_LABEL = "Deselect point"
 internal const val SNAP_LABEL = "Snap to objects"
 
-/** The generator kinds in the "Curves" dropdown's order (§3.7). */
+/** The generator kinds in the [CurveGenLabels18.CURVES] dropdown's order (§3.7). */
 internal val CURVES_MENU = listOf(
     CurveGenKind.ARCHIMEDEAN, CurveGenKind.GOLDEN, CurveGenKind.LOGARITHMIC, CurveGenKind.FERMAT, CurveGenKind.SINE, CurveGenKind.ROSE,
 )
@@ -289,9 +289,13 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += strokeKindItem(tool, f, StripRow.ROW1, 0)
             if (f.generated != null) items += generatorItem(tool, f.generated, ui, StripRow.ROW1, 1)
             if (f.sharp != SharpState.NONE) items += sharpItem(tool, f)
+            // The host composes items by position: an item that a control's use brings in comes
+            // after that control, so the control (an open Handles popup, a slider being dragged)
+            // keeps its place: Auto tangent follows Handles; All points 100 % joins the More line
+            // above the thickness slider (a line of its own at both widths).
+            if (f.handles) items += handlesItem(tool, ui)
             if (f.customTangent) items += autoTangentItem(tool, f.single)
             if (f.anyThickness) items += all100Item(tool)
-            if (f.handles) items += handlesItem(tool, ui)
             items += selectAllItem(tool, f)
             thicknessItem(tool, f, ui)?.let { items += it }
             if (f.selected > 0) items += deselectItem(tool)
@@ -396,7 +400,7 @@ private fun CurveOverlays(tool: CurveTool, ui: CurveStripUi) {
 private fun item(key: String, label: String, width: Int, row: StripRow, rank: Int = 0, content: @Composable () -> Unit) =
     StripItem(key = key, label = label, width = width.dp, row = row, overflowRank = rank, content = content)
 
-/** "Curves" (known as [CurveGenLabels18.CURVES_DESC]): the generators, while nothing is open (Curve, Path). */
+/** [CurveGenLabels18.CURVES] (known as [CurveGenLabels18.CURVES_DESC]): the generators, while nothing is open (Curve, Path). */
 private fun curvesItem(tool: CurveTool) = item(CurveKeys.CURVES, CurveGenLabels18.CURVES_DESC, CURVE_CURVES_DP, StripRow.ROW1) {
     val view = LocalView.current
     DropCell(CurveGenLabels18.CURVES_DESC, CURVE_CURVES_DP, longPress = false, face = { CellText(CurveGenLabels18.CURVES) }) { close ->
@@ -876,7 +880,7 @@ private fun DropCell(
     }
 }
 
-/** The generator kind's name ([CurveGenLabels18]): the "Curves" entries, the chip and the sheet's title. */
+/** The generator kind's name ([CurveGenLabels18]): the [CurveGenLabels18.CURVES] entries, the chip and the sheet's title. */
 internal val CurveGenKind.label: String
     get() = when (this) {
         CurveGenKind.ARCHIMEDEAN -> CurveGenLabels18.ARCHIMEDEAN
