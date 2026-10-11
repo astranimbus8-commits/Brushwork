@@ -39,6 +39,7 @@ class QaRemoveSizeIncrementsUiTest {
             QaCurves.tool(s, "Remove")
             assertEquals(ToolId.REMOVE, s.c.activeToolId)
             val tool = s.c.currentTool as RemoveTool
+            openSizePopup()
             QaCurves.setSlider("Remove brush size", RemoveSizeScale.toPosition(50f))
             assertEquals(50f, tool.size, 0f)
             Smoke.assertQuiet(s.c, "off")
@@ -48,6 +49,7 @@ class QaRemoveSizeIncrementsUiTest {
             QaCurves.incrementsOn(size = "3")
             QaCurves.tool(s, "Remove")
             val tool = s.c.currentTool as RemoveTool
+            openSizePopup()
             QaCurves.setSlider("Remove brush size", RemoveSizeScale.toPosition(50f))
             assertEquals("the nearest multiple of 3", 51f, tool.size, 0f)
             QaCurves.setSlider("Remove brush size", RemoveSizeScale.toPosition(122f))
@@ -61,4 +63,14 @@ class QaRemoveSizeIncrementsUiTest {
         dog.interrupt()
         h.finish()
     }
+}
+
+/**
+ * v1.8 (design §3.9 "Remove"): the slider lives in the popup of the strip's "Remove brush size"
+ * readout; a tap on the readout opens it (once: the popup stays while the slider moves).
+ */
+private fun openSizePopup() {
+    if (runCatching { QaCurves.slider("Remove brush size") }.isSuccess) return
+    SmokeUi.click("Remove brush size", exact = true)
+    SmokeUi.settle(4)
 }
