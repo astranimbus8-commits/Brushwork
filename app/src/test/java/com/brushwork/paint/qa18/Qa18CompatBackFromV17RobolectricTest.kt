@@ -38,7 +38,9 @@ import java.io.File
  * - untouched: v1.7 shows v1.8's pixels (the same composite) and its save keeps every file but
  *   `project.json`, where only the arrays' looks are gone. Back in v1.8: mirror copies,
  *   generators, cogs (holes included), saved selections and the symmetry ruler as saved; each
- *   array without its look, its cache still showing the look (I1 until it is re-rendered).
+ *   array without its look, its cache still showing the look (I1 until it is re-rendered, and
+ *   then only within the copies' bounds: pixels of the old look's larger copies outside them
+ *   stay, [Qa18CompatLookBackUiTest]).
  * - edited: what v1.7 re-encoded lost its v1.8 keys (copies, generators; a cog became a
  *   Rectangle with the cog's outline as custom points, without its hole; arrays drawn plain).
  *   v1.8 opens it as v1.7 left it, pixels and data, and draws that data as v1.7 drew it.
