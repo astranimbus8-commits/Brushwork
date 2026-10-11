@@ -53,6 +53,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  *
  * It also hosts the story editor (the text editor dialog on the tool's [TextFrameTool.story]).
  * Buttons come first and hints last, so on a narrow phone only a hint is ever cut.
+ *
+ * v1.8: the editor draws the converted strip ([textFrameStrip]); this v1.7 strip stays for the tests
+ * that render it alone.
  */
 @Composable
 fun TextFrameToolOptions(tool: TextFrameTool) {
