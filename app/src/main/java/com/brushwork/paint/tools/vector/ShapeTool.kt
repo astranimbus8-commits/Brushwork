@@ -63,6 +63,7 @@ import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.CopyMaps
@@ -358,8 +359,22 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private var loadedInk: Rect? = null
     /** The painting tool and brush a re-opened brush-stroked shape was drawn with. */
     private var editBrush: Pair<ToolId, BrushPreset>? = null
-    /** v1.8 (I15): the live copies of a re-opened shape; they stay its copies when it is committed. */
+    /**
+     * v1.8 (I15, §3.1): the live copies of the pending shape: a re-opened shape's stored ones
+     * (whatever the symmetry ruler is now), or a NEW shape's, taken from the ruler at its start
+     * point ([useNewMaps]); they become its copies when it is committed.
+     */
     private var openCopies: CopyMaps = CopyMaps.NONE
+    /**
+     * v1.8 (§3.1): a NEW shape's Perspective array maps (not affine, so not [openCopies]): its
+     * copies are drawn through them and committed as pixels or as plain paths; empty otherwise.
+     */
+    private var openPerspective: List<FloatArray> = emptyList()
+    /** v1.8 (§3.1): the symmetry maps of the shape being dragged out ([creatingBox]), taken at its start point. */
+    private var creatingMaps: List<FloatArray> = emptyList()
+    /** v1.8: [MirrorLabels18.PERSPECTIVE_BAKED] / [MirrorLabels18.PERSPECTIVE_PIXELS] were shown (once per session each). */
+    private var bakedHintShown = false
+    private var pixelsHintShown = false
     private var editOverride: EditOverride? = null
     /** The outline a brush follows, drawn as a guide when the brush can't be shown live. */
     private var editGuide: Path? = null
@@ -578,11 +593,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * True when a NEW shape goes into a layer of its own ("Editable"). Smudge and blur outlines
      * only move pixels that are already there, so they are painted into the active layer. On a
-     * vector layer shapes are objects of that layer.
+     * vector layer shapes are objects of that layer. v1.8 (§3.1): a shape with Perspective array
+     * copies ([perspective]) can't stay editable (its copies are not affine): it is painted into
+     * the active layer too.
      */
-    private fun placesInNewLayer(s: ShapeSettings = newShapeSettings()): Boolean {
+    private fun placesInNewLayer(s: ShapeSettings = newShapeSettings(), perspective: Boolean = newPerspective): Boolean {
         if (isVectorTarget(targetLayer ?: controller.doc.activeLayer)) return false
-        if (!s.editable) return false
+        if (!s.editable || perspective) return false
         if (s.strokeWith != ShapeStroke.BRUSH || !s.strokes) return true
         val tool = controller.lastPaintTool
         val preset = controller.presetFor(tool) ?: return true
@@ -595,17 +612,17 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * editable. v1.7 (§3.8): the Shape tool works with a folder active (a new shape layer goes in
      * at `structure.insertionPoint()`), but with "Editable (own layer)" off it would paint into
      * the folder itself, which has no pixels: refused with "Choose a layer inside the folder to
-     * paint".
+     * paint". v1.8: [perspective], the new shape has Perspective array copies.
      */
-    private fun checkCanPlaceNew(): Boolean {
-        if (placesInNewLayer()) return true
-        if (paintsIntoFolder()) { controller.toast(FolderLabels.PAINT_REFUSAL); return false }
+    private fun checkCanPlaceNew(perspective: Boolean = newPerspective): Boolean {
+        if (placesInNewLayer(perspective = perspective)) return true
+        if (paintsIntoFolder(perspective = perspective)) { controller.toast(FolderLabels.PAINT_REFUSAL); return false }
         return controller.checkEditable()
     }
 
     /** A new shape painted into the active layer ([placesInNewLayer] false for [s]) would paint a folder. */
-    private fun paintsIntoFolder(s: ShapeSettings = newShapeSettings()): Boolean =
-        (targetLayer ?: controller.doc.activeLayer).isFolder && !placesInNewLayer(s)
+    private fun paintsIntoFolder(s: ShapeSettings = newShapeSettings(), perspective: Boolean = newPerspective): Boolean =
+        (targetLayer ?: controller.doc.activeLayer).isFolder && !placesInNewLayer(s, perspective)
 
     /** New shapes go into a shape layer of their own (Compose state; see [placesInNewLayer]). */
     val newShapesEditable: Boolean get() = placesInNewLayer()
@@ -714,8 +731,47 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /** The pending shape as it would be placed now (null when there is none). */
     fun pendingObject(): ShapeObject? = box?.let { objectFor(it, points) }
 
-    /** A NEW shape being dragged out in [b] (the user's own options and color, also while a shape layer is open). */
-    private fun newObject(b: ShapeBox): ShapeObject = objectFor(b, null, newShapeSettings(), newShapeColor(), own = null, copies = CopyMaps.NONE)
+    /**
+     * A NEW shape being dragged out in [b] (the user's own options and color, also while a shape
+     * layer is open); v1.8: with the copies the ruler gave at its start point ([creatingMaps]).
+     */
+    private fun newObject(b: ShapeBox): ShapeObject =
+        objectFor(b, null, newShapeSettings(), newShapeColor(), own = null, copies = ObjectCopies.fromSymmetry(creatingMaps) ?: CopyMaps.NONE)
+
+    // ------------------------------------------------------------------ symmetry copies (v1.8, §3.1)
+
+    /**
+     * The pending shape is a NEW one: its copies come from the symmetry maps [raw] taken at its
+     * start point (affine: [openCopies]; Perspective array: [openPerspective]; none: neither).
+     */
+    private fun useNewMaps(raw: List<FloatArray>) {
+        val kept = ObjectCopies.fromSymmetry(raw)
+        openCopies = kept ?: CopyMaps.NONE
+        openPerspective = if (kept == null) raw else emptyList()
+    }
+
+    /** The maps the pending shape's copies are drawn with (the identity first); empty without copies. */
+    private fun pendingMaps(): List<FloatArray> = openPerspective.ifEmpty { openCopies.maps }
+
+    /** The maps the shape being dragged out is drawn with (see [pendingMaps]). */
+    private fun creatingDrawMaps(): List<FloatArray> = ObjectCopies.fromSymmetry(creatingMaps)?.maps ?: creatingMaps
+
+    /** The pending NEW shape has Perspective array copies (or, with none pending, the one being dragged out). */
+    private val newPerspective: Boolean
+        get() = if (box != null) openPerspective.isNotEmpty() else ObjectCopies.isPerspective(creatingMaps)
+
+    /**
+     * The plain items of [o] with its copies [maps]: their union into a raster layer ([union],
+     * [ShapeCopies.unionSpec]), else one item per copy, as a shape layer or a vector object draws them.
+     */
+    private fun specsOf(o: ShapeObject, maps: List<FloatArray>, brush: Boolean, union: Boolean): List<VectorPaintSpec> =
+        if (union) listOfNotNull(ShapeCopies.unionSpec(o, maps, brush)) else ShapeCopies.eachSpecs(o, maps, brush)
+
+    /** Shows the hint [text] unless it was [shown] already this session; returns true (shown now). */
+    private fun hintOnce(text: String, shown: Boolean): Boolean {
+        if (!shown) controller.toast(text)
+        return true
+    }
 
     // ------------------------------------------------------------------ numeric editing
 
@@ -726,11 +782,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     fun ensurePending(): Boolean {
         if (box != null) return true
-        if (!checkCanPlaceNew()) return false
         val d = controller.doc
-        val size = max(1f, min(d.width, d.height) / 3f)
         val cx = d.width / 2f; val cy = d.height / 2f
+        // v1.8 (§3.1): its copies are taken at its start point, the centre.
+        val maps = ObjectCopies.mapsAt(controller, cx, cy)
+        if (!checkCanPlaceNew(ObjectCopies.isPerspective(maps))) return false
+        val size = max(1f, min(d.width, d.height) / 3f)
         targetLayer = d.activeLayer
+        useNewMaps(maps)
         box = if (settings.type.isLineLike) {
             ShapeBox(cx, cy, size, 0f, 0f)
         } else {
@@ -1240,6 +1299,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val editLayer = editingLayer
         val vectorLayer = session?.layer ?: (targetLayer ?: doc.activeLayer).takeIf { editLayer == null && isVectorTarget(it) }
         val layersBefore = doc.layers.mapTo(HashSet()) { it.id }
+        // v1.8 (§3.1): a new shape's Perspective array copies become plain paths beside its path.
+        val bake = if (session == null && editLayer == null && vectorLayer == null) openPerspective else emptyList()
         // 1. The pending edit, as its own step (nothing is recorded for an untouched reopened shape).
         if (vectorLayer != null) lastVectorId = null
         if (session != null || editLayer != null || vectorLayer != null) commit() else commitNewLayer(b)
@@ -1252,11 +1313,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return objectToPath(vectorLayer, id, selected)
         }
         val layer = editLayer ?: doc.layers.firstOrNull { it.id !in layersBefore && it.isShapeLayer } ?: return false
-        return layerToPath(layer, selected)
+        return layerToPath(layer, selected, bake)
     }
 
-    /** Shape layer [layer] becomes a vector layer with its shape as one path (see [turnIntoPath]). */
-    private fun layerToPath(layer: Layer, selected: IntArray): Boolean {
+    /**
+     * Shape layer [layer] becomes a vector layer with its shape as one path (see [turnIntoPath]).
+     * v1.8: [bake], a new shape's Perspective array maps: each copy is added as a plain path too.
+     */
+    private fun layerToPath(layer: Layer, selected: IntArray, bake: List<FloatArray> = emptyList()): Boolean {
         val doc = controller.doc
         if (doc.indexOf(layer) < 0) return false
         val o = decoded(layer) ?: return false
@@ -1265,7 +1329,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return false
         }
         val before = layer.dataSnapshot()
-        val (content, ids) = VectorContent.EMPTY.plus(listOf(result.path))
+        val baked = if (bake.isEmpty()) listOf(result.path) else ObjectCopies.baked(result.path, bake)
+        val (content, ids) = VectorContent.EMPTY.plus(baked)
         val after = before.copy(text = null, shape = null, vector = content)
         // A live array keeps repeating the source: the cache shows the expanded content.
         val view = ArrayDraw.effectiveVector(after) ?: content
@@ -1273,7 +1338,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val dirty = Rect()
         inkOf(layer, o)?.let { dirty.union(it) }
         paintRect(o)?.let { dirty.union(it) }
-        ObjectCopies.mappedBounds(VectorOps.bounds(result.path), result.path.copies).let { r ->
+        for (p in baked) VectorOps.bounds(p).let { r ->
             if (!r.isEmpty) dirty.union(Rect(floor(r.left).toInt(), floor(r.top).toInt(), ceil(r.right).toInt(), ceil(r.bottom).toInt()))
         }
         dirty.inset(-2, -2)
@@ -1284,6 +1349,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!ok || layer.vector !== content) return false
         openInPathTool(layer, ids.first(), result.selectedSplineIndices)
         compoundHint(o)
+        if (bake.isNotEmpty()) bakedHintShown = hintOnce(MirrorLabels18.PERSPECTIVE_BAKED, bakedHintShown)
         return true
     }
 
@@ -1749,10 +1815,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!started) {
             if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
             if (mode == Mode.CREATE) {
-                if (!checkCanPlaceNew()) { mode = Mode.NONE; snap.end(); return }
+                // v1.8 (§3.1): the ruler's maps are taken once, at the new shape's start point.
+                creatingMaps = ObjectCopies.mapsAt(controller, downPoint.x, downPoint.y)
+                if (!checkCanPlaceNew(ObjectCopies.isPerspective(creatingMaps))) { creatingMaps = emptyList(); mode = Mode.NONE; snap.end(); return }
                 if (box == null) targetLayer = controller.doc.activeLayer
                 // The first corner is a new point: it may snap (from where the finger landed).
                 anchor = snap.snapPoint(downPoint)
+                if (anchor != downPoint) creatingMaps = ObjectCopies.mapsAt(controller, anchor.x, anchor.y)
             }
             started = true
             if (mode == Mode.MARQUEE) {
@@ -2101,6 +2170,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (started) creatingBox = creationBox(pt)
         val created = creatingBox?.takeIf { started && isBigEnough(it) }
         creatingBox = null
+        val maps = creatingMaps
+        creatingMaps = emptyList()
         if (created == null) {
             val tap = !started
             var closed: Layer? = null
@@ -2131,6 +2202,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 selectedPoint = -1
                 selectSeveral = false
                 clearHistory()
+                // v1.8 (§3.1): its copies, from the maps taken at its start point.
+                useNewMaps(maps)
             }
         }
         refreshPreview()
@@ -2142,7 +2215,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         showReadout(null)
         resizeGuides = emptyList()
         when (mode) {
-            Mode.CREATE -> creatingBox = null
+            Mode.CREATE -> { creatingBox = null; creatingMaps = emptyList() }
             Mode.NONE, Mode.MARQUEE -> {}
             else -> restoreGesture()
         }
@@ -2563,6 +2636,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val asNew = placesInNewLayer()
         val pending = box?.let { objectFor(it, points) }
         val creating = creatingBox?.let { newObject(it) }
+        // v1.8 (§3.1): each shape is drawn with its copies (the maps taken at its start point):
+        // into a raster layer as one union, into a new shape layer one copy after the other.
+        val pMaps = pendingMaps()
+        val cMaps = creatingDrawMaps()
         // v1.7 (§3.8): nothing is ever painted into a folder (such a shape is refused when it is
         // placed): it shows as plain outlines over the canvas.
         val intoFolder = !asNew && layer.isFolder
@@ -2571,10 +2648,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (brushObj != null) {
             ensureObserving()
             preview.release()
+            val brushMaps = if (brushObj === creating) cMaps else pMaps
             // Only one shape can be the live brush stroke: while a new one is dragged out, the
             // pending one is shown as a plain outline until it is committed.
             val older = if (creating != null) pending else null
-            overlaySpecs = listOfNotNull(older?.let { ShapeOutlines.paintSpec(it, brush = false) }, ShapeOutlines.paintSpec(brushObj, brush = true))
+            overlaySpecs = (older?.let { specsOf(it, pMaps, brush = false, union = !asNew) } ?: emptyList()) +
+                specsOf(brushObj, brushMaps, brush = true, union = !asNew)
             val whole = ShapeOutlines.brushOutline(brushObj)
             // v1.8 (D21): a cog with a hole is two strokes: the teeth are the live one, the hole
             // is a guide until the shape is placed (then both are painted).
@@ -2586,16 +2665,18 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 // guide and painted exactly when the shape is placed.
                 brushPreview.cancel()
                 specOverlay.setBand(null, 0f)
-                brushGuide = whole.toAndroidPath(brushGuidePath)
+                brushGuide = ShapeCopies.mappedAll(whole, brushMaps).toAndroidPath(brushGuidePath)
             } else {
-                if (overlaySpecs.isNotEmpty()) specOverlay.setBand(whole.toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
-                brushGuide = restOf(contours)?.toAndroidPath(brushGuidePath)
-                brushPreview.request(path.ops) { brushStrokeInput(path, out = it) }
+                if (overlaySpecs.isNotEmpty()) specOverlay.setBand(ShapeCopies.mappedAll(whole, brushMaps).toAndroidPath(bandPath), brushPresetInUse()?.size ?: 0f)
+                brushGuide = restOf(contours)?.let { ShapeCopies.mappedAll(it, brushMaps) }?.toAndroidPath(brushGuidePath)
+                // v1.8: the painting tool's stroke repeats on every copy (one symmetric stroke).
+                brushPreview.request(path.ops, maps = brushMaps) { brushStrokeInput(path, out = it) }
             }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
-            val specs = listOfNotNull(pending?.let { ShapeOutlines.paintSpec(it, brush = false) }, creating?.let { ShapeOutlines.paintSpec(it, brush = false) })
+            val specs = (pending?.let { specsOf(it, pMaps, brush = false, union = !asNew) } ?: emptyList()) +
+                (creating?.let { specsOf(it, cMaps, brush = false, union = !asNew) } ?: emptyList())
             if (specs.isNotEmpty()) ensureObserving()
             preview.show(layer, specs, asNewLayer = asNew || intoFolder, overlayOnly = intoFolder || (asNew && newLayerPreviewInOverlay(layer)))
         }
@@ -2663,7 +2744,9 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         // The overlay only holds plain shapes here (the brush stroke is inside the override).
         specOverlay.setBand(null, 0f)
         val ov = installEditOverride(layer)
-        val specs = listOfNotNull(ShapeOutlines.paintSpec(o, brush))
+        // v1.8 (I15): the shape's live copies (its stored maps) follow every edit.
+        val maps = o.copies.maps
+        val specs = ShapeCopies.eachSpecs(o, maps, brush)
         // While a finger drags a plain shape that looks the same over the finished image, it is
         // drawn in the overlay: the canvas tiles (the layer's hidden pixels) stay as they are.
         val inOverlay = dragging && !brush && editDrawsInOverlay(layer)
@@ -2671,17 +2754,19 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val arraySource = if (layer.array != null) VectorOps.bounds(VShape(0L, shape = o)) else null
         setEditSpecs(ov, if (inOverlay) emptyList() else specs, arraySource)
         // A new shape dragged out meanwhile looks as it will once the opened one is closed.
-        overlaySpecs = (if (inOverlay) specs else emptyList()) + listOfNotNull(creatingBox?.let { ShapeOutlines.paintSpec(newObject(it), brush = false) })
+        val creating = creatingBox?.let { newObject(it) }
+        overlaySpecs = (if (inOverlay) specs else emptyList()) +
+            (creating?.let { specsOf(it, creatingDrawMaps(), brush = false, union = !placesInNewLayer()) } ?: emptyList())
         val whole = if (brush) ShapeOutlines.brushOutline(o) else null
         // v1.8 (D21): a cog's hole is a guide while the teeth are the live stroke.
         val contours = whole?.let { ShapeOutlines.contoursOf(it) }
         val path = contours?.first()
         editGuide = when {
             whole == null -> null
-            !live -> whole.toAndroidPath(guidePath)
-            else -> restOf(contours)?.toAndroidPath(guidePath)
+            !live -> ShapeCopies.mappedAll(whole, maps).toAndroidPath(guidePath)
+            else -> restOf(contours)?.let { ShapeCopies.mappedAll(it, maps) }?.toAndroidPath(guidePath)
         }
-        if (path != null && live) brushPreview.request(path.ops) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
+        if (path != null && live) brushPreview.request(path.ops, maps = maps) { brushStrokeInput(path, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
     }
 
@@ -2693,13 +2778,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * v1.8 (D21): paints [contours] for real, a stroke each (a cog with a hole: the teeth, then the
      * hole), the first with the session's random values and contour i with those + i, as the
      * vector renderer seeds a path's sub-paths and [outlineReplay] seeds them; the session's own
-     * come back afterwards. One contour: exactly the v1.7 commit.
+     * come back afterwards. One contour: exactly the v1.7 commit. v1.8 (§3.1): each stroke
+     * repeats on every map of [maps] (one symmetric stroke, `BrushTool.beginPath`'s maps).
      */
-    private fun commitContours(contours: List<VectorPath>) {
+    private fun commitContours(contours: List<VectorPath>, maps: List<FloatArray> = emptyList()) {
         val seed = brushPreview.sessionSeed
         contours.forEachIndexed { i, path ->
             if (i > 0) brushPreview.useSeed(seed + i)
-            brushPreview.commit(path.ops) { brushStrokeInput(path, out = it) }
+            brushPreview.commit(path.ops, maps) { brushStrokeInput(path, out = it) }
         }
         if (contours.size > 1) brushPreview.useSeed(seed)
     }
@@ -2782,16 +2868,20 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val specs = ArrayList<VectorPaintSpec>(2)
         val guides = ArrayList<Path>(2)
         var path: VectorPath? = null
+        var liveMaps: List<FloatArray> = emptyList()
         for (o in listOfNotNull(pending, creating)) {
-            ShapeOutlines.paintSpec(o, o.paintsWithBrush)?.let { specs += it }
+            // v1.8 (I15): with its copies (a perspective one's as the plain paths it becomes).
+            val maps = if (o === creating) creatingDrawMaps() else pendingMaps()
+            specs += ShapeCopies.eachSpecs(o, maps, o.paintsWithBrush)
             if (!o.paintsWithBrush) continue
             if (live && o === brushObj) {
                 // v1.8 (D21): the teeth are the live stroke. A cog's hole gets no guide here: an
                 // object's brush replay paints its first contour only (VectorLayerRenderer's
                 // shapeBrushReplays, frozen), so the preview shows what the commit renders.
                 path = ShapeOutlines.brushContours(o).first()
+                liveMaps = maps
             } else {
-                guides += ShapeOutlines.brushOutline(o).toAndroidPath()
+                guides += ShapeCopies.mappedAll(ShapeOutlines.brushOutline(o), maps).toAndroidPath()
             }
         }
         val inOverlay = dragging && !live && opaque && specs.isNotEmpty() && editDrawsInOverlay(layer)
@@ -2800,7 +2890,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         vectorGuides = guides
         // (path is set only when live.)
         val livePath = path
-        if (livePath != null) brushPreview.request(livePath.ops) { brushStrokeInput(livePath, out = it) } else brushPreview.cancel()
+        if (livePath != null) brushPreview.request(livePath.ops, maps = liveMaps) { brushStrokeInput(livePath, out = it) } else brushPreview.cancel()
         controller.invalidateOverlay()
     }
 
@@ -2996,6 +3086,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         openedColor = shape.strokeColor
         controller.color = shape.strokeColor
         openCopies = shape.copies
+        openPerspective = emptyList()
         loadedObject = objectFor(shape.box, shape.points)
         // The outline is shown with its own texture (its replay's random values).
         brushPreview.useSeed(current.seed)
@@ -3054,11 +3145,18 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return
         }
         val contours = if (o.paintsWithBrush) ShapeOutlines.brushContours(o) else emptyList()
+        // v1.8 (§3.1): affine copies stay the object's (o.copies); Perspective array copies are
+        // baked into plain paths, added with it in the same step.
+        val copies = openCopies
+        val perspective = openPerspective
         // Kept live only when nothing plain goes under the stroke (a fill must be drawn first).
         // v1.8 (D21): and only with one contour (a cog with a hole is rendered from the object:
-        // the live stroke is its teeth alone).
-        val livePath = contours.singleOrNull()?.takeIf { ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer) }
+        // the live stroke is its teeth alone); v1.8: and without copies (rendered from the object).
+        val livePath = contours.singleOrNull()?.takeIf {
+            copies.isEmpty && perspective.isEmpty() && ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer)
+        }
         val shape = VShape(0, shape = o, seed = brushPreview.sessionSeed)
+        val objects = if (perspective.isEmpty()) listOf(shape) else ObjectCopies.baked(shape, perspective)
         val pendingPoints = points
         val pendingTarget = targetLayer
         var ids: List<Long> = emptyList()
@@ -3087,7 +3185,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 brushPreview.cancel()
                 releaseVectorPreview()
                 resetPending()
-                ids = controller.vectors.addObjects(layer, listOf(shape), SHAPE_LABEL)
+                // (Perspective: the shape and its baked copies, ONE step.)
+                ids = controller.vectors.addObjects(layer, objects, SHAPE_LABEL)
             }
         } catch (e: OutOfMemoryError) {
             controller.toast("Not enough memory for the shape")
@@ -3100,9 +3199,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             box = b
             points = pendingPoints
             targetLayer = pendingTarget
+            openCopies = copies
+            openPerspective = perspective
             refreshPreview()
         } else {
             lastVectorId = ids.first()
+            if (perspective.isNotEmpty()) bakedHintShown = hintOnce(MirrorLabels18.PERSPECTIVE_BAKED, bakedHintShown)
         }
         controller.invalidateOverlay()
     }
@@ -3326,6 +3428,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         openedColor = obj.strokeColor
         controller.color = obj.strokeColor
         openCopies = obj.copies
+        openPerspective = emptyList()
         loadedObject = objectFor(obj.box, obj.points)
         loadedInk = inkOf(layer, obj)
         // v1.7 (I14): the hidden pixels include every copy of a live array.
@@ -3468,6 +3571,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         groupBase = null
         groupPinchPivot = null
         creatingBox = null
+        creatingMaps = emptyList()
+        // v1.8: the copies go with the shape (a commit that is refused puts them back).
+        openCopies = CopyMaps.NONE
+        openPerspective = emptyList()
         targetLayer = null
         pinchStart = null
         overlaySpecs = emptyList()
@@ -3503,9 +3610,14 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (!controller.checkEditable(layer)) return
         val o = objectFor(b, points)
         val brush = paintsWithBrush(layer)
-        val spec = ShapeOutlines.paintSpec(o, brush)
+        // v1.8 (§3.1): the copies are painted in the same step: the plain items as one union
+        // (translucent copies never darken each other), the brush as one symmetric stroke.
+        val maps = pendingMaps()
+        val spec = ShapeCopies.unionSpec(o, maps, brush)
         // v1.8 (D21): one stroke per contour (a cog with a hole: the teeth, then the hole).
         val contours = if (brush) ShapeOutlines.brushContours(o) else emptyList()
+        // Perspective copies with "Editable (own layer)" on: the shape can't stay editable.
+        val asPixels = openPerspective.isNotEmpty() && placesInNewLayer(settings, perspective = false)
         resetPending()
         // Fill (plain) and outline (brush) are ONE undo step, named "Shape".
         controller.undoStepNamed("Shape") {
@@ -3514,9 +3626,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 brushPreview.cancel()
                 VectorCommit.commit(controller, layer, listOf(spec), "Shape")
             }
-            commitContours(contours)
+            commitContours(contours, maps)
         }
         brushPreview.end()
+        if (asPixels) pixelsHintShown = hintOnce(MirrorLabels18.PERSPECTIVE_PIXELS, pixelsHintShown)
         controller.invalidateOverlay()
     }
 
@@ -3529,7 +3642,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private fun commitNewLayer(b: ShapeBox) {
         val o = objectFor(b, points)
         val brush = o.paintsWithBrush
-        val spec = ShapeOutlines.paintSpec(o, brush)
+        // v1.8 (I15): the layer keeps the shape's copies (o.copies) and shows them: one item per
+        // copy, as the layer is drawn again later; the brush as one symmetric stroke.
+        val copies = openCopies
+        val perspective = openPerspective
+        val maps = o.copies.maps
+        val specs = ShapeCopies.eachSpecs(o, maps, brush)
         val contours = if (brush) ShapeOutlines.brushContours(o) else emptyList()
         val doc = controller.doc
         val area = paintRect(o)
@@ -3553,12 +3671,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             controller.undoStepNamed("Shape") {
                 brushPreview.cancel()
                 val layer = controller.addLayerWithContent(o.type.label, "Shape", shapeData = data) { c ->
-                    spec?.let { drawSpec(c, it, sel) }
+                    for (s in specs) drawSpec(c, s, sel)
                 }
                 added = layer
                 // The brush paints the active layer: the new one.
                 if (layer != null && contours.isNotEmpty()) controller.keepLayerData(layer) {
-                    commitContours(contours)
+                    commitContours(contours, maps)
                 }
             }
         } catch (e: OutOfMemoryError) {
@@ -3572,6 +3690,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             box = b
             points = pendingPoints
             targetLayer = pendingTarget
+            openCopies = copies
+            openPerspective = perspective
             refreshPreview()
         }
         controller.invalidateOverlay()
@@ -3670,8 +3790,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                     val sel = controller.selection
                     if (sel != null) controller.setSelection(null, recordUndo = false)
                     try {
+                        // v1.8 (I17): with live copies, one symmetric stroke (a smudge or blur moves
+                        // the pixels under every copy; BrushTool.beginPath's maps).
                         controller.keepLayerData(layer) {
-                            commitContours(contours)
+                            commitContours(contours, copies.maps)
                         }
                     } finally {
                         layer.editingMask = maskEditing
@@ -3783,7 +3905,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (inCommit) return
         observeJob?.cancel()
         observeJob = null
-        if (mode == Mode.CREATE) creatingBox = null
+        if (mode == Mode.CREATE) { creatingBox = null; creatingMaps = emptyList() }
         mode = Mode.NONE
         pinchStart = null
         groupPinchPivot = null

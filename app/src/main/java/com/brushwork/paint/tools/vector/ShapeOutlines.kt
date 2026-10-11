@@ -74,25 +74,49 @@ object ShapeOutlines {
      * stays plain (the fill, filled arrowheads), since the brush paints the outline. (Moved out
      * of ShapeTool in v1.5 so vector layers draw shapes exactly like the Shape tool.)
      */
-    fun paintSpec(o: ShapeObject, brush: Boolean): VectorPaintSpec? {
+    fun paintSpec(o: ShapeObject, brush: Boolean): VectorPaintSpec? = paintParts(o, brush)?.spec()
+
+    /**
+     * v1.8: the paths [paintSpec] draws, before they become a spec, so that a shape's symmetry
+     * copies can be built from the same paths ([ShapeCopies]); null when nothing is plain (a
+     * line stroked with the brush). [o]'s copies are not read here.
+     */
+    internal fun paintParts(o: ShapeObject, brush: Boolean): PaintParts? {
         val color = o.strokeColor
         val w = o.strokeWidth
         return when (o.type) {
-            ShapeType.LINE -> if (brush) null else VectorPaintSpec.build(
-                null, 0, outline(o), color, w, o.lineCap, join(o),
-            )
+            ShapeType.LINE -> if (brush) null else PaintParts(null, 0, outline(o), color, w, o.lineCap, join(o), null)
             ShapeType.ARROW -> {
                 val g = arrow(o)
-                VectorPaintSpec.build(null, 0, if (brush) null else g.stroke, color, w, o.lineCap, JoinStyle.ROUND, g.fill)
+                PaintParts(null, 0, if (brush) null else g.stroke, color, w, o.lineCap, JoinStyle.ROUND, g.fill)
             }
             else -> {
                 val outline = outline(o)
-                VectorPaintSpec.build(
+                PaintParts(
                     if (o.style.fill) outline else null, o.fillColor,
-                    if (o.style.stroke && !brush) outline else null, color, w, LineCapStyle.ROUND, join(o),
+                    if (o.style.stroke && !brush) outline else null, color, w, LineCapStyle.ROUND, join(o), null,
                 )
             }
         }
+    }
+
+    /**
+     * v1.8: the plain items of a shape as paths (document px): [fill] filled with [fillColor],
+     * [stroke] stroked with [strokeColor] ([width], [cap], [join]), [strokeFill] (arrowheads)
+     * filled with [strokeColor]. [spec] builds the [VectorPaintSpec], each path through [map].
+     */
+    internal class PaintParts(
+        val fill: VectorPath?,
+        val fillColor: Int,
+        val stroke: VectorPath?,
+        val strokeColor: Int,
+        val width: Float,
+        val cap: LineCapStyle,
+        val join: JoinStyle,
+        val strokeFill: VectorPath?,
+    ) {
+        fun spec(map: (VectorPath) -> VectorPath = { it }): VectorPaintSpec? =
+            VectorPaintSpec.build(fill?.let(map), fillColor, stroke?.let(map), strokeColor, width, cap, join, strokeFill?.let(map))
     }
 
     /** Stroke join of the outline: round for ellipses and lines, the corner style's join otherwise. */
