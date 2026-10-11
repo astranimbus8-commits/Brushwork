@@ -2489,7 +2489,7 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
   - Free deform: row 1 has the mode, `TransformLabels18.MESH_SIZE` ("3 × 3", 72 dp; its popup holds v1.7's "Mesh columns" / "Mesh rows" steppers, `movedInto`) and "Reset mesh". The More row has "Smooth mesh", "Select all points" / "Deselect all points", "Delete" and "Choose interpolation". The hint is `PointLabels.SEVERAL_HINT` while the pill's "Select several" is on (`selectSeveralAvailable = isMeshShown`).
 - **Text (`TextStripItems.kt`).**
   - Row 1: "Edit text" (92 dp, dimmed with nothing to edit), the direction, "Letters" and "Wrap" (AUTO 1).
-  - More row: "Numbers" while a text is open, and "Snap to objects".
+  - More row: "Snap to objects", then "Numbers" (80 dp, its word on one line) while a text is open. Without an open text the item is left out, not kept as an empty slot; Snap stays first in both states (v1.8 polish; `Qa18PolishChromeTextTest`).
   - The editor dialog and the Numbers, Wrap and Letter scaling sheets are overlays.
 - **Frame divider.**
   - Without a frame layer: "New frame layer" and the status (no toggle).

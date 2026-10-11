@@ -33,9 +33,9 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
 /**
  * The Text tool's strip (v1.8, design §3.9 "Text"; area G): row 1 "Edit text" (dimmed with no
  * text to edit), the horizontal / vertical switch, "Letter scaling" (showing "Letters") and the
- * wrap button (AUTO: the first to go to the More row); the More row "Numbers" (an open text) and
- * "Snap to objects", under v1.7's hint. The editor dialog and the Numbers, Wrap and Letter
- * scaling sheets are its overlays, as v1.7 hosted them.
+ * wrap button (AUTO: the first to go to the More row); the More row "Snap to objects", then
+ * "Numbers" while a text is open (no slot kept without one), under v1.7's hint. The editor
+ * dialog and the Numbers, Wrap and Letter scaling sheets are its overlays, as v1.7 hosted them.
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
@@ -82,7 +82,11 @@ internal fun textSpec(tool: TextTool): StripSpec {
         },
         StripItem(T.LETTERS, T.LETTERS_LABEL, T.LETTERS_DP.dp) { LettersButton(tool) },
         StripItem(T.WRAP, T.wrapLabel(tool), T.WRAP_DP.dp, overflowRank = 1) { WrapButton(tool) },
-        StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE, shown = item != null) {
+        // Snap first, then the Numbers button only while a text is open: no empty slot without
+        // one, and Snap keeps its place whether a text is open or not (v1.8 polish).
+        snapItem(T.SNAP, on = { c.snapping.enabled }) { c.snapping.enabled = it },
+    ) + listOfNotNull(
+        if (item == null) null else StripItem(T.NUMBERS, T.NUMBERS_LABEL, T.NUMBERS_DP.dp, row = StripRow.MORE) {
             val strip = LocalStripContext.current
             StripTextButton(T.NUMBERS_LABEL, T.NUMBERS_DP.dp, icon = Icons.Filled.Tune, onClick = {
                 strip.closeMore()
@@ -91,7 +95,6 @@ internal fun textSpec(tool: TextTool): StripSpec {
                 tool.numbersOpen = true
             })
         },
-        snapItem(T.SNAP, on = { c.snapping.enabled }) { c.snapping.enabled = it },
     )
     return StripSpec(items, hint = hint, overlays = { TextOverlays(tool) })
 }
@@ -178,8 +181,8 @@ internal object TextStripItems {
     /** "Wrap" after its icon. */
     const val WRAP_DP = 72f
 
-    /** "Numbers" after its icon. */
-    const val NUMBERS_DP = 72f
+    /** "Numbers" after its icon, on one line (72 dp broke the word in two; v1.8 polish). */
+    const val NUMBERS_DP = 80f
 
     const val EDIT_LABEL = "Edit text"
     const val LETTERS_LABEL = "Letter scaling"
