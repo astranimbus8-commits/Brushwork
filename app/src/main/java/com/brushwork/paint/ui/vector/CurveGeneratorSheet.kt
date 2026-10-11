@@ -42,10 +42,10 @@ internal val GEN_HEIGHT_RANGE = 0f..1f
 internal const val GEN_MAX_PETALS = 24
 internal const val GEN_MAX_DIVISOR = 12
 
-/** "Points per turn": 1 to [CurveGenerator.MAX_DENSITY] (0, the default, shows the default's number). */
+/** [CurveGenLabels18.POINTS_PER_TURN]: 1 to [CurveGenerator.MAX_DENSITY] (0, the default, shows the default's number). */
 internal const val GEN_MIN_DENSITY = 1
 
-/** The generator kinds that are spirals ("Turns", "Clockwise"). */
+/** The generator kinds that are spirals ([CurveGenLabels18.TURNS], [CurveGenLabels18.CLOCKWISE]). */
 internal val CurveGenKind.isSpiral: Boolean
     get() = this == CurveGenKind.ARCHIMEDEAN || this == CurveGenKind.LOGARITHMIC || this == CurveGenKind.GOLDEN || this == CurveGenKind.FERMAT
 
@@ -84,7 +84,8 @@ internal fun withWaveHeight(g: CurveGenerator, fraction: Float): CurveGenerator 
 internal fun waveHeightOf(g: CurveGenerator): Float = if (g.size > 0f) (abs(g.amplitude) / g.size).coerceIn(0f, 1f) else 0f
 
 /**
- * The generator sheet of [tool]'s open curve, titled by its kind ([CurveGenLabels18]); it closes
+ * The generator sheet of [tool]'s open curve, titled [CurveGenLabels18.CURVES] (the menu it came from:
+ * its kind's name is the chip's text, and one text twice on a screen would clash, I10); it closes
  * itself ([onDismiss]) once the curve has no generator (a hand edit, an undo before it, a commit).
  */
 @Composable
@@ -108,7 +109,7 @@ internal fun CurveGeneratorSheet(tool: CurveTool, onDismiss: () -> Unit) {
         }
     }
     DisposableEffect(tool) { onDispose { finished() } }
-    BwSheet(title = g.kind.label, onDismiss = {
+    BwSheet(title = CurveGenLabels18.CURVES, onDismiss = {
         finished()
         onDismiss()
     }) {
