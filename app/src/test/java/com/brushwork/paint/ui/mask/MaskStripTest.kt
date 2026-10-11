@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.mask
 
 import android.graphics.Matrix
+import com.brushwork.paint.EditorController
 import com.brushwork.paint.masks.BrushMask
 import com.brushwork.paint.masks.MaskMode
 import com.brushwork.paint.smoke.Smoke
@@ -175,7 +176,7 @@ class MaskStripTest {
     }
 
     /** A finger drag in document px (the view is the identity). */
-    private fun drag(c: com.brushwork.paint.EditorController, x0: Float, y0: Float, x1: Float, y1: Float) {
+    private fun drag(c: EditorController, x0: Float, y0: Float, x1: Float, y1: Float) {
         c.pointerDown(ToolPoint(x0, y0))
         for (i in 1..4) c.pointerMove(ToolPoint(x0 + (x1 - x0) * i / 4f, y0 + (y1 - y0) * i / 4f))
         c.pointerUp(ToolPoint(x1, y1))

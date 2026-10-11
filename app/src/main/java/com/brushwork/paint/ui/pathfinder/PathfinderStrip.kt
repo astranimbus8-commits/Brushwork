@@ -27,10 +27,12 @@ import com.brushwork.paint.vector.pathfinder.PathfinderOp
 /**
  * The Pathfinder tool's strip (v1.8, design §3.9 and §4.6; area G).
  *
- * Row 1 only, no More row (no toggle): the operation dropdown (v1.7's ten operation buttons in one
- * dropdown, each still announced by its description; the button shows the last one used),
- * "Select all objects" and the status text: what to do next ("Tap shapes or paths to combine
- * them", also after a tap on nothing), how many objects are picked, or "Working…" with a spinner.
+ * Row 1 only at 360 and 392 dp, no More row (no toggle): the operation dropdown (v1.7's ten
+ * operation buttons in one dropdown, each still announced by its description; the button shows
+ * the last one used), "Select all objects" and the status text: what to do next ("Tap shapes or
+ * paths to combine them", also after a tap on nothing), how many objects are picked, or
+ * "Working…" with a spinner. The status is AUTO 1: on a screen narrower than 360 dp it moves to
+ * the More row.
  */
 @Suppress("UNUSED_PARAMETER")
 @Composable
@@ -55,7 +57,9 @@ internal fun pathfinderStrip(tool: PathfinderTool, c: EditorController): StripSp
                 size = PathfinderStripItems.SELECT_ALL_DP.dp,
             )
         },
-        StripItem(PathfinderStripItems.STATUS, PathfinderStripItems.status(tool), PathfinderStripItems.STATUS_DP.dp) {
+        // AUTO 1: row 1 holds all three at 360 and 392 dp (280 dp); a narrower screen moves the
+        // status to the More row instead of overflowing row 1 (I18).
+        StripItem(PathfinderStripItems.STATUS, PathfinderStripItems.status(tool), PathfinderStripItems.STATUS_DP.dp, overflowRank = 1) {
             StripStatusText(
                 PathfinderStripItems.status(tool),
                 PathfinderStripItems.STATUS_DP.dp,
