@@ -44,12 +44,12 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * v1.8 (item 5, design §3.6 (a), D16): the control of a [FilterParam.Fringes].
  *
  * - The preset chips, each tagged [V18Tags.FRINGE_PREFIX] + the preset's name and showing its
- *   three colors as dots (a ring for "No color"); the chip whose colors are the current ones is
+ *   three colors as dots (a ring for no color); the chip whose colors are the current ones is
  *   selected. A preset fills the three swatches, which stay editable.
  * - The three fringe swatches, 40 dp: first (moves forward), middle (stays), last (moves back).
  *   A tap opens the color picker, unchanged ([ColorPickerDialog], opaque colors); its pick
  *   replaces that swatch's color. The swatch being picked is outlined.
- * - A [FringeLabels18.NO_COLOR] chip beside the middle swatch sets it to 0 ("No color": the
+ * - A [FringeLabels18.NO_COLOR] chip beside the middle swatch sets it to 0 (no color: the
  *   swatch shows the checkerboard); a later pick replaces it.
  *
  * The colors shown are the ones the filter draws ([FringeColors.resolve]: a v1.7 Chromatic
@@ -120,7 +120,7 @@ internal fun FringeControl(host: ParamHost, p: FilterParam.Fringes, enabled: Boo
     val i = picking
     if (i in 0..2) {
         ColorPickerDialog(
-            // "No color" has no color to start from: the default's (the middle: green).
+            // No color has nothing to start from: the default's (the middle: green).
             initial = colors[i].takeIf { it != FringeColors.NONE } ?: p.default.getOrNull(i)?.takeIf { it != FringeColors.NONE } ?: 0xFF000000.toInt(),
             onPick = { c -> set(i, c) },
             onDismiss = { picking = -1 },
@@ -129,7 +129,7 @@ internal fun FringeControl(host: ParamHost, p: FilterParam.Fringes, enabled: Boo
     }
 }
 
-/** A preset's three colors as small dots, first to last; "No color" as an empty ring. */
+/** A preset's three colors as small dots, first to last; no color as an empty ring. */
 @Composable
 private fun PresetDots(colors: IntArray) {
     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
