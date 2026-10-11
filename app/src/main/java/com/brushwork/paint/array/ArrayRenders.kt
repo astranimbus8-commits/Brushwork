@@ -17,7 +17,7 @@ import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerDataAction
-import com.brushwork.paint.model.ArrayLayout
+import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerArray
 import com.brushwork.paint.model.LayerData
@@ -503,7 +503,9 @@ internal class ArrayRenders(private val c: EditorController) {
 
     /**
      * The cost of a cache (units of [kindOf]): the area cleared and the pixels the copies cover
-     * (each copy's source area times its matrix's scale, from the after data).
+     * (each copy's source area times its matrix's scale, from the after data; v1.8: the
+     * `ArrayInstances` matrices, a look's size included, twice for a copy whose look changes its
+     * pixels, none for a copy with opacity 0).
      */
     private fun unitsOf(after: LayerData, cache: Cache, area: Rect): Double {
         val cleared = area.width().toDouble() * area.height()
@@ -515,9 +517,13 @@ internal class ArrayRenders(private val c: EditorController) {
         val one = src.width().toDouble() * src.height()
         if (a == null || a.spec.editingSource || (cache is Cache.Draw && cache.pixels)) return cleared + one
         var covered = 0.0
-        for (m in ArrayLayout.matrices(a.spec, src)) {
+        for (inst in ArrayInstances.of(a.spec, src)) {
+            val look = inst.look
+            if (look != null && look.opacity <= 0f) continue
+            val m = inst.matrix
             val det = abs(m[0].toDouble() * m[4] - m[1].toDouble() * m[3])
-            if (det.isFinite()) covered += one * det
+            // v1.8: a copy drawn through a layer or a color filter (its look) costs about twice.
+            if (det.isFinite()) covered += one * det * (if (look != null && ArrayDraw.changesPixels(look)) 2.0 else 1.0)
         }
         return cleared + covered
     }

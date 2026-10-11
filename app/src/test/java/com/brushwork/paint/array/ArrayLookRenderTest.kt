@@ -270,6 +270,12 @@ class ArrayLookRenderTest {
         assertEquals("the source and copy 1", 2, calls)
         assertColor("copy 1 at half", withAlpha(GRAY, 128), out.getPixel(40, 20))
         assertEquals("copy 2 left out", 0, out.getPixel(60, 20))
+        // A vector copy with opacity 0 is no object at all.
+        val v = com.brushwork.paint.vector.VectorContent.EMPTY.plus(listOf(ArrayLookKit.box(10f, 10f, 30f, 30f))).first
+        val objects = ArrayDraw.effectiveVector(com.brushwork.paint.model.LayerData(vector = v, array = LayerArray(spec)))!!.objects
+        val id = v.objects[0].id
+        assertEquals(listOf(id + (1L shl ArrayDraw.COPY_ID_SHIFT), id), objects.map { it.id })
+        assertEquals(0.5f, objects[0].opacity)
         assertTrue(ArrayDraw.changesPixels(CopyLook(0.99f, 0, 0f)))
         assertTrue(ArrayDraw.changesPixels(CopyLook(1f, 0, 0.01f)))
         assertTrue(!ArrayDraw.changesPixels(CopyLook(1f, RED, 0f)))

@@ -143,7 +143,8 @@ object ArrayDraw {
      * `id` is `VectorOps.transformed(o, matrix k)`, [restyled] by copy k's look, with the id
      * `id + (k shl 53)` ([COPY_ID_SHIFT]): disjoint from real ids and from every other copy's;
      * copy ids are never encoded or sanitized (the layer's DATA stays the source objects). At
-     * most [ArraySpec.MAX_INSTANCES] objects: the last copies are left out beyond that.
+     * most [ArraySpec.MAX_INSTANCES] objects: the last copies are left out beyond that. A copy
+     * whose look has opacity 0 is left out too (it draws nothing, as in [drawWithArray]).
      *
      * Without an array (or with one instance, or no objects): [LayerData.vector] itself, the same
      * instance. Results are memoized by the content's identity and the spec, and copies of
@@ -176,8 +177,9 @@ object ArrayDraw {
         for (k in copies - 1 downTo 1) {
             val mk = matrices[k]
             if (mk.any { !it.isFinite() }) continue
-            val shift = k.toLong() shl COPY_ID_SHIFT
             val look = looks[k]
+            if (look != null && look.opacity <= 0f) continue
+            val shift = k.toLong() shl COPY_ID_SHIFT
             for (o in v.objects) {
                 val slots = made.getOrPut(o) { reuse?.get(o)?.copyOf(total) ?: arrayOfNulls(total) }
                 val c = slots[k]?.takeIf { it.id == o.id + shift }

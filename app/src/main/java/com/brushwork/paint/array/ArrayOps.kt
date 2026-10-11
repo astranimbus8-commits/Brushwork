@@ -16,7 +16,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.UndoAction
-import com.brushwork.paint.model.ArrayLayout
+import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ArrayPixels
 import com.brushwork.paint.model.ArraySpec
 import com.brushwork.paint.model.ColorMode
@@ -511,11 +511,14 @@ object ArrayOps {
         }
     }
 
-    /** A vector array's copies as real objects: the expanded content with new ids for the copies. */
+    /**
+     * A vector array's copies as real objects: the expanded content with new ids for the copies
+     * (v1.8: already restyled by their look, `ArrayDraw.restyled`, so they look as drawn).
+     */
     private fun applyVector(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val v = before.vector ?: return false
         if (!c.checkUsable(layer)) return false
-        val n = if (v.objects.isEmpty()) 1 else ArrayLayout.matrices(a.spec, ObjectIndex.of(v).unionBounds()).size
+        val n = if (v.objects.isEmpty()) 1 else ArrayInstances.of(a.spec, ObjectIndex.of(v).unionBounds()).size
         if (n.toLong() * v.objects.size > ArraySpec.MAX_INSTANCES) { c.toast(ArrayLabels.TOO_MANY); return false }
         val eff = ArrayDraw.effectiveVector(before) ?: v
         val sourceIds = v.objects.mapTo(HashSet()) { it.id }
@@ -525,15 +528,22 @@ object ArrayOps {
         return true
     }
 
-    /** A shape array becomes a vector layer: one shape per copy (copy N − 1 first, the source on top). */
+    /**
+     * A shape array becomes a vector layer: one shape per copy (copy N − 1 first, the source on
+     * top). v1.8: each copy restyled by its look (`ArrayDraw.restyled`: colors tinted, opacity
+     * multiplied); a copy with opacity 0 draws nothing and is left out.
+     */
     private fun applyShape(c: EditorController, layer: Layer, before: LayerData, a: LayerArray): Boolean {
         val o = before.shape?.let { ShapeCodec.decode(it) } ?: return false
         val source = VShape(0L, shape = o)
-        val ms = ArrayLayout.matrices(a.spec, VectorOps.bounds(source))
-        val objects = ArrayList<VObject>(ms.size)
-        for (k in ms.size - 1 downTo 1) {
-            if (ms[k].any { !it.isFinite() }) continue
-            objects += VectorOps.transformed(source, ms[k])
+        val instances = ArrayInstances.of(a.spec, VectorOps.bounds(source))
+        val objects = ArrayList<VObject>(instances.size)
+        for (inst in instances) {
+            if (inst.k == 0) continue
+            if (inst.matrix.any { !it.isFinite() }) continue
+            val look = inst.look
+            if (look != null && look.opacity <= 0f) continue
+            objects += ArrayDraw.restyled(VectorOps.transformed(source, inst.matrix), look)
         }
         objects += source
         val content = VectorContent.EMPTY.plus(objects).first
