@@ -5,18 +5,21 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripContext
 import com.brushwork.paint.ui.tools.strip.StripHost
+import com.brushwork.paint.ui.tools.strip.StripSpec
 import com.brushwork.paint.ui.tools.strip.StripState
 
 /**
  * The per-tool options strip (v1.6: inside the floating options panel under the top row; v1.8:
  * the call `StripHost(ToolStrips.of(controller), ...)`, design §4.6). Each tool's builder
  * ([ToolStrips]) describes its strip; a tool not converted yet draws its v1.7 composable exactly
- * as v1.7 did, in one row that scrolls sideways ([modifier] is that row's).
+ * as v1.7 did, in one row that scrolls sideways ([modifier] is that row's). A test's fake strip
+ * ([LocalStripOverride]) replaces the tool's.
  *
  * [onContentWidth] receives the width (px) of what the tool shows on row 1, at layout time (0 = a
  * tool without options): the panel hides itself then. [panelModifier] styles row 1's container
@@ -53,7 +56,7 @@ fun ToolOptionsBar(
     }
     CompositionLocalProvider(LocalStripContext provides context) {
         StripHost(
-            spec = ToolStrips.of(controller),
+            spec = LocalStripOverride.current ?: ToolStrips.of(controller),
             toolId = toolId,
             vectorMode = vectorMode,
             state = strip,
@@ -63,3 +66,10 @@ fun ToolOptionsBar(
         )
     }
 }
+
+/**
+ * v1.8 (area H): a spec the options strip shows instead of the active tool's, whatever the tool.
+ * Always null in the app; the chrome tests provide a fake strip with them (one, two or three More
+ * lines on any tool, design §3.9) around `EditorScreen`.
+ */
+val LocalStripOverride = staticCompositionLocalOf<StripSpec?> { null }

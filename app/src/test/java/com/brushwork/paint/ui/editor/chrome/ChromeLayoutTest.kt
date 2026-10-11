@@ -3,6 +3,7 @@ package com.brushwork.paint.ui.editor.chrome
 import com.brushwork.paint.ui.editor.SliderMath
 import com.brushwork.paint.ui.editor.SliderRowGeometry
 import com.brushwork.paint.ui.editor.chrome.ChromeLayout.TopSlot
+import com.brushwork.paint.ui.tools.strip.StripLayout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -154,5 +155,23 @@ class ChromeLayoutTest {
         assertEquals("72.0", SliderMath.formatSizeFixed(72f))
         assertEquals("2.5", SliderMath.formatSizeFixed(2.5f))
         assertEquals("1000.0", SliderMath.formatSizeFixed(1000f))
+    }
+
+    @Test
+    fun theOpenMoreRowMovesThePillAndTheBarsDown() {
+        // v1.8 (design §3.9): the More row hangs 4 dp under row 1 (85 + 44 + 4 = 133); the pill and
+        // the bars keep their 6 dp under it, so they move by its height plus 4 dp. The canvas does not.
+        assertEquals("closed: no move", 0f, ChromeLayout.moreRowShift(0f), 0f)
+        for (lines in 1..StripLayout.MAX_MORE_LINES) {
+            val more = StripLayout.moreRowDp(lines)
+            val shift = more + ChromeLayout.MORE_ROW_GAP
+            assertEquals(shift, ChromeLayout.moreRowShift(more), 0.01f)
+            val moreBottom = ChromeLayout.optionsStripTop(s) + 44f + ChromeLayout.MORE_ROW_GAP + more
+            assertEquals("$lines lines: the pill 6 dp under the More row", moreBottom + 6f, ChromeLayout.pillTop(s, more), 0.01f)
+            assertEquals("$lines lines: the bar in the pill's place", 135f + shift, ChromeLayout.selectionBarTop(s, 0f, more), 0.01f)
+            assertEquals("$lines lines: the bar under a 32 dp pill", 173f + shift, ChromeLayout.selectionBarTop(s, 32f, more), 0.01f)
+            assertEquals("$lines lines: the canvas fit inset stays", 137f, ChromeLayout.fitInsetTop(s), 0.01f)
+        }
+        assertEquals("the pill at 183, 231 and 279 dp", listOf(183f, 231f, 279f), (1..3).map { ChromeLayout.pillTop(s, StripLayout.moreRowDp(it)) })
     }
 }
