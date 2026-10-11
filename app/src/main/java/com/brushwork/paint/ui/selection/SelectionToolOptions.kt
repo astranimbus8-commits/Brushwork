@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Check
@@ -94,9 +92,9 @@ fun MagicWandOptions(tool: MagicWandTool) {
 }
 
 /**
- * Lasso: Freehand / Polygon / Curve, mode, anti-alias. Polygon and curve: undo / redo of the
- * last corner or point and ✓ / ✕ for an unfinished outline; curve: sharp / smooth / delete for
- * the long-pressed point.
+ * Lasso: Freehand / Polygon / Curve, mode, anti-alias. Polygon and curve: ✓ / ✕ for an
+ * unfinished outline; curve: sharp / smooth / delete for the long-pressed point. (v1.8, F4: the
+ * top row's Undo / Redo take back and bring back the last corner or point; the strip's own left.)
  */
 @Composable
 fun LassoOptions(tool: LassoTool) {
@@ -117,8 +115,6 @@ fun LassoOptions(tool: LassoTool) {
         StripDivider()
         when (kind) {
             LassoKind.POLYGON -> {
-                ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last corner", onClick = { tool.undoLastCorner() }, enabled = tool.canUndoStep, size = 40.dp)
-                ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo corner", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 40.dp)
                 if (pending) {
                     Text("${tool.vertexCount} pt", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
                     ToolIconButton(Icons.Filled.Close, "Discard polygon", onClick = { tool.discard() }, size = 40.dp)
@@ -180,8 +176,9 @@ internal fun lassoKindHint(kind: LassoKind): String? = when (kind) {
 private data class LassoPoint(val index: Int, val sharp: Boolean)
 
 /**
- * Curve lasso: sharp / smooth / delete for the selected point, undo / redo of the last point
- * edit, the point count with ✕ / ✓ (or a hint while there are no points).
+ * Curve lasso: sharp / smooth / delete for the selected point, the point count with ✕ / ✓ (or a
+ * hint while there are no points). (v1.8, F4: undo / redo of the last point edit are the top
+ * row's.)
  */
 @Composable
 private fun CurveLassoControls(tool: LassoTool) {
@@ -197,8 +194,6 @@ private fun CurveLassoControls(tool: LassoTool) {
         ActionChip("Delete", Icons.Outlined.Delete, tint = BrushworkColors.Danger) { curve.deleteAnchor(a.index) }
         StripDivider()
     }
-    ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoLastCorner() }, enabled = count > 0, size = 40.dp)
-    ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = curve.redoCount > 0, size = 40.dp)
     if (count > 0) {
         Text("$count pt", style = MaterialTheme.typography.labelMedium, color = BrushworkColors.OnChromeDim)
         ToolIconButton(Icons.Filled.Close, "Discard curve", onClick = { tool.discard() }, size = 40.dp)

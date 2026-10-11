@@ -26,6 +26,13 @@ interface PointEditor {
     /** "Select several" (a tool-session toggle; off when the tool closes or the object changes). */
     var selectSeveral: Boolean
 
+    /**
+     * v1.8 (F4, design §3.2): "Select several" can be used now, so the X / Y pill shows its cell
+     * (tag `V18Tags.PILL_SEVERAL`). Compose state. By default while the edited object has points
+     * (Curve, Polyline, Path); Shape only in Points mode, Free deform while its mesh shows.
+     */
+    val selectSeveralAvailable: Boolean get() = pointCount > 0
+
     /** Document px of point i (Path: the control point; Free deform: the mesh vertex). */
     fun pointAt(i: Int): Vec2
 

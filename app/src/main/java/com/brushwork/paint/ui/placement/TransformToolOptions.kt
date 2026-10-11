@@ -175,10 +175,11 @@ object MeshStepperLabels {
 }
 
 /**
- * The Free deform controls (v1.7, design §3.1 and §3.16), tagged [V17Tags.MESH]: "Select several"
- * (with its hint while on), "Select all points" / "Deselect all points", the "Mesh columns" and
- * "Mesh rows" steppers (1..12), "Smooth mesh" and "Reset mesh". Each value is read through
- * derivedStateOf: the mesh changes on every drag frame, the strip only when a shown value does.
+ * The Free deform controls (v1.7, design §3.1 and §3.16), tagged [V17Tags.MESH]: "Select all
+ * points" / "Deselect all points" (with the "Select several" hint while that is on), the "Mesh
+ * columns" and "Mesh rows" steppers (1..12), "Smooth mesh" and "Reset mesh". Each value is read
+ * through derivedStateOf: the mesh changes on every drag frame, the strip only when a shown value
+ * does. (v1.8, F4: "Select several" itself is the X / Y pill's cell.)
  */
 @Composable
 private fun MeshOptions(tool: TransformTool) {
@@ -187,15 +188,6 @@ private fun MeshOptions(tool: TransformTool) {
     val all by remember(tool) { derivedStateOf { tool.allPointsSelected } }
     val changed by remember(tool) { derivedStateOf { tool.isMeshChanged } }
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag(V17Tags.MESH)) {
-        FilterChip(
-            selected = tool.selectSeveral,
-            onClick = { tool.selectSeveral = !tool.selectSeveral },
-            label = { Text(PointLabels.SELECT_SEVERAL) },
-            colors = chipColors(),
-            modifier = Modifier
-                .padding(horizontal = 4.dp)
-                .semantics { stateDescription = if (tool.selectSeveral) "On" else "Off" },
-        )
         TextButton(onClick = { tool.selectAllPoints() }, modifier = Modifier.heightIn(min = 44.dp)) {
             Text(if (all) PointLabels.DESELECT_ALL else PointLabels.SELECT_ALL)
         }

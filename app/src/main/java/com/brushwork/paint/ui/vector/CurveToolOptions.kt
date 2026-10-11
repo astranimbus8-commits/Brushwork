@@ -21,8 +21,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Redo
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AspectRatio
@@ -32,7 +30,6 @@ import androidx.compose.material.icons.filled.CenterFocusStrong
 import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.Gesture
-import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Pin
@@ -191,9 +188,10 @@ internal const val PATH_WIDTH_CAPTION = "The line reaches a point's full thickne
 private val HINT_MAX_WIDTH = 360.dp
 
 /**
- * Options strip of the curve and polyline tools: undo last point, closed path, actions for the
- * selected anchor (sharp / smooth / automatic tangent / delete), the Handles group (Curve),
- * stroke mode, fill, and the "Numbers" / settings sheets.
+ * Options strip of the curve and polyline tools: closed path, actions for the selected anchor
+ * (sharp / smooth / automatic tangent / delete), the Handles group (Curve), stroke mode, fill,
+ * and the "Numbers" / settings sheets. (v1.8, F4: the point Undo / Redo left for the top row's,
+ * "Select several" for the X / Y pill.)
  */
 @Composable
 private fun BezierToolOptions(tool: CurveTool) {
@@ -213,13 +211,11 @@ private fun BezierToolOptions(tool: CurveTool) {
     var showNumbers by rememberSaveable { mutableStateOf(false) }
     fun set(f: (CurveSettings) -> CurveSettings) = tool.update(f)
 
-    // The same steps as the app's undo / redo (which take back one point edit at a time too).
-    ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
-    ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
+    // (v1.8, F4: no point Undo / Redo here; the top row's take back one point edit at a time.)
     val a = selInfo
-    // v1.7 (item 1): "Select several" and "Select all points" start the points bar, then the
-    // group's controls. With exactly one point selected they follow that point's controls, which
-    // keep their v1.6 places (I12).
+    // v1.7 (item 1): "Select all points" starts the points bar, then the group's controls. With
+    // exactly one point selected it follows that point's controls, which keep their v1.6 places
+    // (I12). (v1.8, F4: "Select several" is the X / Y pill's cell.)
     if (a == null) {
         PointSelectionControls(tool)
         GroupPointControls(tool, anyThickness)
@@ -344,28 +340,19 @@ private fun PaintSegment(text: String, description: String, selected: Boolean, a
 // ====================================================================== several points (v1.7, item 1)
 
 /** What the selection controls show (derived: dragging points doesn't recompose them). */
-private data class SelectionInfo(val points: Int, val selected: Int, val several: Boolean)
+private data class SelectionInfo(val points: Int, val selected: Int)
 
 /**
- * The start of the points bar (§3.1a), 44 dp each: "Select several" (accent while on) and
- * "Select all points" ("Deselect all points" when every point is selected). Nothing while no
- * point exists. With exactly one point selected the strips show them after that point's
- * controls instead, so those keep their v1.6 places (I12).
+ * The start of the points bar (§3.1a), 44 dp: "Select all points" ("Deselect all points" when
+ * every point is selected). Nothing while no point exists. With exactly one point selected the
+ * strips show it after that point's controls instead, so those keep their v1.6 places (I12).
+ * (v1.8, F4: "Select several" left for the X / Y pill's cell.)
  */
 @Composable
 private fun PointSelectionControls(tool: CurveTool) {
-    val info by remember(tool) { derivedStateOf { SelectionInfo(tool.pointCount, tool.pointSelection.count, tool.selectSeveral) } }
+    val info by remember(tool) { derivedStateOf { SelectionInfo(tool.pointCount, tool.pointSelection.count) } }
     val i = info
     if (i.points == 0) return
-    // (As [OptionChip], 44 dp tall: a finger's size, as the button beside it.)
-    FilterChip(
-        selected = i.several,
-        onClick = { tool.selectSeveral = !i.several },
-        label = { Text(PointLabels.SELECT_SEVERAL, maxLines = 1) },
-        leadingIcon = { Icon(Icons.Filled.HighlightAlt, contentDescription = null, modifier = Modifier.size(18.dp)) },
-        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White, selectedLeadingIconColor = Color.White),
-        modifier = Modifier.padding(horizontal = 3.dp).heightIn(min = SELECTION_CONTROL_SIZE),
-    )
     val all = i.selected == i.points
     ToolIconButton(
         if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll,
@@ -375,7 +362,7 @@ private fun PointSelectionControls(tool: CurveTool) {
     )
 }
 
-/** "Select several" and "Select all points" are 44 dp each (§3.1a). */
+/** "Select all points" is 44 dp (§3.1a). */
 private val SELECTION_CONTROL_SIZE = 44.dp
 
 /**
@@ -511,9 +498,10 @@ internal const val SHARP_MIXED = "Sharp corner: ${PointLabels.MIXED}"
 private data class SelectedPathPoint(val index: Int, val weight: Float, val width: Float, val sharp: Boolean, val canSharp: Boolean)
 
 /**
- * Options strip of the Path tool (§3.2a, in order): Undo / Redo point, the Order stepper,
- * Endpoint, Cyclic, the selected point's Weight and Thickness, Delete point / Deselect, stroke,
- * Fill, Snap, Numbers, Settings, "To Bézier", and while no point exists the "Shapes" quick starts.
+ * Options strip of the Path tool (§3.2a, in order): the Order stepper, Endpoint, Cyclic, the
+ * selected point's Weight and Thickness, Delete point / Deselect, stroke, Fill, Snap, Numbers,
+ * Settings, "To Bézier", and while no point exists the "Shapes" quick starts. (v1.8, F4: the
+ * point Undo / Redo left for the top row's, "Select several" for the X / Y pill.)
  */
 @Composable
 private fun PathToolOptions(tool: CurveTool) {
@@ -531,12 +519,10 @@ private fun PathToolOptions(tool: CurveTool) {
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showNumbers by rememberSaveable { mutableStateOf(false) }
 
-    ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo last point", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
-    ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
     val f = flags
     val a = selInfo
-    // v1.7 (item 1): "Select several" and "Select all points" start the points bar (with exactly one
-    // point selected they follow that point's controls, as in the Curve strip).
+    // v1.7 (item 1): "Select all points" starts the points bar (with exactly one point selected it
+    // follows that point's controls, as in the Curve strip).
     if (a == null) PointSelectionControls(tool)
     OrderStepper(tool, f.order)
     // (Endpoint only matters for an open curve: greyed while Cyclic is on.)

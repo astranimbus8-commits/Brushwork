@@ -19,6 +19,7 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.HighlightAlt
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LinkOff
 import androidx.compose.material.icons.filled.OpenWith
@@ -76,11 +77,15 @@ import com.brushwork.paint.tools.ObjectPosition
 import com.brushwork.paint.tools.ObjectScale
 import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
+import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.ui.common.IncrementStepping
 import com.brushwork.paint.ui.common.PillLabels
+import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.StepTarget
 import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.longPressInitialPass
+import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.common.rememberStepPopupHost
 import com.brushwork.paint.ui.common.summary
 import com.brushwork.paint.ui.editor.ValueInputDialog
@@ -123,6 +128,11 @@ import kotlinx.serialization.builtins.serializer
  *   increments" (the Scale step; the tap switches increments like row 1's "#").
  * The pill reads both interfaces off the tool generically (never a concrete tool class), so a
  * tool that implements them gets the row and the cell without touching this file.
+ *
+ * v1.8 (F4, design §3.2; D5): row 1 ends with "Select several" ([PointLabels.SELECT_SEVERAL],
+ * tag [V18Tags.PILL_SEVERAL]) while the tool's [PointEditor.selectSeveralAvailable]:
+ * `[✥][X][Y][# 10][🗑][sel]`, folded `[✥][🗑][sel]`; with points but no position yet the pill
+ * shows reduced to `[sel]` ([pillRow1]). The strips' "Select several" chips are gone.
  */
 @Composable
 fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) {
@@ -134,20 +144,25 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
     val pos by remember(target) {
         derivedStateOf { target.position?.takeIf { it.x.isFinite() && it.y.isFinite() }?.let { Vec2(round1(it.x), round1(it.y)) } }
     }
-    val p = pos ?: return
-    controller.docVersion // (the canvas size can change)
-    val doc = controller.doc
-    val dpi = doc.dpi.toDouble()
-    val unit = source.unit()
-    val snap = controller.snapping.enabled
+    // v1.8 (F4): whether the "Select several" cell shows (derived: dragging points doesn't recompose the pill).
+    val editor = tool as? PointEditor
+    val severalShown by remember(tool) { derivedStateOf { editor?.selectSeveralAvailable == true } }
+    val p = pos
     var folded by remember { mutableStateOf(controller.settings.coordinateStripFolded) }
     fun setFolded(v: Boolean) {
         folded = v
         controller.settings.coordinateStripFolded = v
     }
-    val label = target.label
     // v1.7: the trash cell's label (null hides it) and the scale (null hides row 2), observed state.
-    val deleteLabel = (tool as? DeletingTool)?.objectDeletion?.deleteLabel
+    val deleteLabel = if (p != null) (tool as? DeletingTool)?.objectDeletion?.deleteLabel else null
+    val cells = pillRow1(hasPosition = p != null, folded = folded, trash = deleteLabel != null, several = editor != null && severalShown)
+    if (cells.isEmpty()) return
+    controller.docVersion // (the canvas size can change)
+    val doc = controller.doc
+    val dpi = doc.dpi.toDouble()
+    val unit = source.unit()
+    val snap = controller.snapping.enabled
+    val label = if (p != null) target.label else ""
     val percent by remember(tool) {
         derivedStateOf {
             (tool as? ScaledTool)?.objectScale?.scalePercent
@@ -168,21 +183,84 @@ fun CoordinatePill(controller: EditorController, modifier: Modifier = Modifier) 
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(IbisDims.PillGap),
         ) {
-            if (folded) {
-                FoldCell("Unfold the X / Y strip") { setFolded(false) }
-            } else {
-                FoldCell("Fold the X / Y strip") { setFolded(true) }
-                // At most 110 dp each; on a phone narrower than 392 dp they give way first, so the
-                // "#" and trash cells stay whole (no effect at 392 dp: their share is 112 dp there).
-                AxisCell(controller, target, "X", p.x, doc.width.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(v, null) }
-                AxisCell(controller, target, "Y", p.y, doc.height.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(null, v) }
-                StepCell(controller, IncrementKind.LENGTH, INCREMENTS_LABEL)
+            for (cell in cells) {
+                when (cell) {
+                    PillCell.FOLD ->
+                        if (folded) FoldCell("Unfold the X / Y strip") { setFolded(false) } else FoldCell("Fold the X / Y strip") { setFolded(true) }
+                    // At most 110 dp each; on a phone narrower than 392 dp they give way first, so the
+                    // "#", trash and "Select several" cells stay whole (no effect at 392 dp).
+                    PillCell.X -> if (p != null) {
+                        AxisCell(controller, target, "X", p.x, doc.width.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(v, null) }
+                    }
+                    PillCell.Y -> if (p != null) {
+                        AxisCell(controller, target, "Y", p.y, doc.height.toFloat(), unit, dpi, snap, Modifier.weight(1f, fill = false)) { v -> target.setPosition(null, v) }
+                    }
+                    PillCell.STEP -> StepCell(controller, IncrementKind.LENGTH, INCREMENTS_LABEL)
+                    // Item 13: delete stays one tap away, folded too.
+                    PillCell.TRASH -> if (deleteLabel != null) TrashCell(controller, tool, deleteLabel)
+                    // v1.8 (F4): so does "Select several".
+                    PillCell.SEVERAL -> if (editor != null) SeveralCell(controller, editor)
+                }
             }
-            // Item 13: delete stays one tap away, folded too.
-            if (deleteLabel != null) TrashCell(controller, tool, deleteLabel)
         }
         val pct = percent
-        if (!folded && pct != null) ScaleRow(controller, tool, pct, uniformOnly, snap)
+        if (p != null && !folded && pct != null) ScaleRow(controller, tool, pct, uniformOnly, snap)
+    }
+}
+
+/** v1.8 (F4, design §3.2): a cell of the pill's first row, in [pillRow1]'s order. */
+internal enum class PillCell { FOLD, X, Y, STEP, TRASH, SEVERAL }
+
+/**
+ * v1.8 (F4, design §3.2 and D5): the cells of the pill's first row. With a position:
+ * `[✥][X][Y][#][🗑][sel]`, folded `[✥][🗑][sel]` (the trash cell while the tool deletes
+ * something, [trash]; "Select several" while it is available, [several]). Without one: only
+ * `[sel]` (the tool has points but no position yet), else nothing (no pill, as in v1.7).
+ */
+internal fun pillRow1(hasPosition: Boolean, folded: Boolean, trash: Boolean, several: Boolean): List<PillCell> {
+    if (!hasPosition) return if (several) listOf(PillCell.SEVERAL) else emptyList()
+    val cells = mutableListOf(PillCell.FOLD)
+    if (!folded) cells += listOf(PillCell.X, PillCell.Y, PillCell.STEP)
+    if (trash) cells += PillCell.TRASH
+    if (several) cells += PillCell.SEVERAL
+    return cells
+}
+
+// ------------------------------------------------------------------ v1.8 (F4, §3.2): "Select several"
+
+/**
+ * "Select several" ([PointLabels.SELECT_SEVERAL]): a 40 dp icon cell, tag [V18Tags.PILL_SEVERAL],
+ * that switches the tool's [PointEditor.selectSeveral] (as v1.7's strip chip did; its state is
+ * "On" / "Off", the square filled with the accent while on). A long press shows its name.
+ */
+@Composable
+private fun SeveralCell(controller: EditorController, editor: PointEditor) {
+    val on = editor.selectSeveral
+    Box(
+        Modifier
+            .width(IbisDims.PillIconTouch)
+            .requiredHeight(IbisDims.PillCellTouch)
+            .testTag(V18Tags.PILL_SEVERAL)
+            // (Outside the toggle: after a long press the touch is the bubble's, never a switch.)
+            .longPressLabel(PointLabels.SELECT_SEVERAL)
+            .toggleable(value = on, role = Role.Switch) { v ->
+                controller.endCanvasGesture()
+                editor.selectSeveral = v
+            }
+            .semantics {
+                contentDescription = PointLabels.SELECT_SEVERAL
+                stateDescription = if (on) "On" else "Off"
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier
+                .size(IbisDims.PillCellHeight)
+                .bevel(if (on) IbisColors.Accent else IbisColors.PillCell),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.HighlightAlt, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+        }
     }
 }
 

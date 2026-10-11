@@ -16,11 +16,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.ShowChart
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.ChangeHistory
-import androidx.compose.material.icons.filled.Checklist
 import androidx.compose.material.icons.filled.Deselect
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Layers
@@ -34,8 +31,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
@@ -51,7 +46,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -143,9 +137,10 @@ private fun rememberPointsInfo(tool: ShapeTool): PointsInfo {
 }
 
 /**
- * Strip chips for the pending shape's points: "Points" (edit them), the in-tool undo / redo of
- * point edits, "Select several" (its hint shows as a message when it is turned on) and "Select
- * all points" / "Deselect all points", the selected points' actions (sharp / smooth as a
+ * Strip chips for the pending shape's points: "Points" (edit them), "Select all points" /
+ * "Deselect all points" (v1.8, F4: the point-edit undo / redo are the top row's Undo / Redo, and
+ * "Select several" is the X / Y pill's cell; its hint shows as a message when it is turned on),
+ * the selected points' actions (sharp / smooth as a
  * three-state chip, automatic tangents, delete, "Deselect point", which clears the whole
  * selection) and "Point roundness" with its reset on a closed shape, the Handles group while some
  * point has tangent handles (v1.6), "Reset shape" (back to the regular outline) and, in Points
@@ -158,24 +153,7 @@ internal fun ShapePointsStrip(tool: ShapeTool) {
     if (!info.pending) return
     OptionChip("Points", info.pointsMode, { tool.setPointEditing(!info.pointsMode) }, icon = Icons.Filled.Timeline)
     if (info.pointsMode) {
-        // The same steps as the app's undo / redo (one point edit at a time).
-        ToolIconButton(Icons.AutoMirrored.Filled.Undo, "Undo point edit", onClick = { tool.undoStep() }, enabled = tool.canUndoStep, size = 44.dp)
-        ToolIconButton(Icons.AutoMirrored.Filled.Redo, "Redo point edit", onClick = { tool.redoStep() }, enabled = tool.redoCount > 0, size = 44.dp)
-        val several = tool.selectSeveral
-        // "Select several" and "Select all points" are 44 dp each (§3.1a), as on the Curve and
-        // Path strips (a 32 dp chip is under a finger's size).
-        FilterChip(
-            selected = several,
-            onClick = {
-                tool.selectSeveral = !several
-                // The one-line hint (the strip is a single scrolling row: it shows as the editor's message).
-                if (!several) tool.controller.toast(PointLabels.SEVERAL_HINT)
-            },
-            label = { Text(PointLabels.SELECT_SEVERAL, maxLines = 1) },
-            leadingIcon = { Icon(Icons.Filled.Checklist, contentDescription = null, modifier = Modifier.size(18.dp)) },
-            colors = FilterChipDefaults.filterChipColors(selectedContainerColor = BrushworkColors.AccentDim, selectedLabelColor = Color.White, selectedLeadingIconColor = Color.White),
-            modifier = Modifier.padding(horizontal = 3.dp).heightIn(min = 44.dp),
-        )
+        // (v1.8, F4: the point-edit Undo / Redo are the top row's, "Select several" the X / Y pill's cell.)
         val all = info.count > 0 && info.selectedCount == info.count
         ToolIconButton(
             if (all) Icons.Filled.Deselect else Icons.Filled.SelectAll,
@@ -430,7 +408,7 @@ internal fun ShapeEditingSettings(tool: ShapeTool) {
         Modifier.padding(top = 4.dp),
     )
     Hint(
-        "Several points: turn on ${PointLabels.SELECT_SEVERAL}, then tap points to add or remove them or drag on the canvas to box-select. " +
+        "Several points: turn on ${PointLabels.SELECT_SEVERAL} in the X / Y pill, then tap points to add or remove them or drag on the canvas to box-select. " +
             "Drag a selected point or the inside of their box to move them, a box handle to scale them and the knob above it to turn them; " +
             "a pinch that starts on the box scales and turns them. ${PointLabels.ROUNDNESS} rounds the selected corners; " +
             "${PointLabels.TO_PATH} makes the shape a Path to edit in the Path tool.",

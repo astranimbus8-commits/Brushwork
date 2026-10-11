@@ -2052,6 +2052,9 @@ class TransformTool(controller: EditorController) : Tool(controller), PointEdito
         get() = selectSeveralState
         set(v) { selectSeveralState = v }
 
+    /** v1.8 (F4): the X / Y pill's "Select several" cell shows while the Free deform mesh does (where the v1.7 strip chip was). */
+    override val selectSeveralAvailable: Boolean get() = isMeshShown
+
     override fun pointAt(i: Int): Vec2 {
         val m = meshEdit?.mesh ?: return Vec2(Float.NaN, Float.NaN)
         return if (i in 0 until m.vertexCount) m.vertex(i) else Vec2(Float.NaN, Float.NaN)

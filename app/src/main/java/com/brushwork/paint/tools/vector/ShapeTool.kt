@@ -852,9 +852,21 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     /**
      * "Select several" (Compose state): a tap on a point adds or removes it, a drag on the canvas
      * box-selects, a tap elsewhere clears the selection and no point is ever inserted. It turns
-     * itself off when the shape closes, another shape opens or points mode ends.
+     * itself off when the shape closes, another shape opens or points mode ends. Turning it on
+     * shows its hint as the editor's message (v1.7's strip chip did; v1.8, F4: the X / Y pill's
+     * cell turns it on now, and Shape has no hint line of its own).
      */
-    override var selectSeveral by mutableStateOf(false)
+    override var selectSeveral: Boolean
+        get() = severalState
+        set(v) {
+            if (v && !severalState) controller.toast(PointLabels.SEVERAL_HINT)
+            severalState = v
+        }
+
+    private var severalState by mutableStateOf(false)
+
+    /** v1.8 (F4): the X / Y pill's "Select several" cell shows in Points mode only (where the v1.7 strip chip was). */
+    override val selectSeveralAvailable: Boolean get() = pointsMode && pointCount > 0
 
     /** The pending shape's number of points (0 without a pending shape with its own points). */
     override val pointCount: Int get() = if (box != null) points?.size ?: 0 else 0
