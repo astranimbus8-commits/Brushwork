@@ -129,7 +129,7 @@ internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): Strip
             }, size = IconItemWidth)
         },
         StripItem(ColorSelectStrip.SELECT, ColorSelectLabels18.SELECT_COLORS, IconItemWidth) {
-            // Off while no color counts (no sample on "Sampled colors"): it would only empty the selection.
+            // Off while no color counts (no sample on ColorSelectLabels18.SAMPLED): it would only empty the selection.
             ToolIconButton(
                 Icons.Filled.Check, ColorSelectLabels18.SELECT_COLORS, onClick = { tool.selectColors() },
                 enabled = !tool.busy && tool.canSelect, size = IconItemWidth,

@@ -164,8 +164,8 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     override fun commit() = selectColors()
 
     /**
-     * False while no color counts ("Sampled colors" with no sample, not inverted): "Select colors"
-     * is off then, as there is nothing to select (Compose state).
+     * False while no color counts ([ColorPreset.SAMPLED] with no sample, not inverted): the strip's
+     * check (ColorSelectLabels18.SELECT_COLORS) is off then, as there is nothing to select (Compose state).
      */
     val canSelect: Boolean
         get() {
@@ -176,7 +176,7 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
     /**
      * The strip's check: ONE selection step "Color select" at full resolution, combined by [mode].
      * The samples stay; their steps end. With nothing to select ([canSelect] false: the ✓ of the
-     * pending bar after "Clear samples", a layer operation landing the steps) only the steps end:
+     * pending bar after ColorSelectLabels18.CLEAR_SAMPLES, a layer operation landing the steps) only the steps end:
      * the selection there is kept, never replaced by an empty one.
      */
     fun selectColors() {
