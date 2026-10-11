@@ -45,7 +45,8 @@ import com.brushwork.paint.vector.VStop
  */
 @Composable
 internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
-    val look = spec.look ?: ArrayLook.IDENTITY
+    // No look: the tint colors chosen before (a strength set to 0 keeps them), else the defaults.
+    val look = spec.look ?: ArrayLook.IDENTITY.copy(tint = tool.plainTint)
     Column(Modifier.fillMaxWidth().testTag(V18Tags.ARRAY_LOOK)) {
         Hint(ArrayLabels18.LOOK_CAPTION)
         LookPair(

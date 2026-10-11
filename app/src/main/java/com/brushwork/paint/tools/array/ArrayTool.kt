@@ -32,6 +32,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.common.ArrayLabels18
 import com.brushwork.paint.vector.VPath
+import com.brushwork.paint.vector.VStop
 import com.brushwork.paint.vector.VectorContent
 import kotlin.math.max
 import kotlin.math.min
@@ -104,8 +105,19 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     /** The Pace the Look tab shows: the look's own, else [plainPace]. */
     val shownPace: ArrayEasing get() = shownSpec()?.look?.easing ?: plainPace
 
-    /** The look the Look tab's next edit starts from: the shown one, else no look at [plainPace]. */
-    fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace)
+    /**
+     * v1.8 QA: the [ArrayLabels18.TINT_COLORS] the Look tab keeps while the look shows no tint
+     * (Compose state). A tint at strength 0 changes no copy, so a look that is only a tint becomes
+     * no look at 0 % (`ArraySpec.sanitized`) and its stops would go with it: a finger on "Tint
+     * strength" through 0 and back gave the default colors instead of the chosen ones. Kept here
+     * by every edit through [previewLook] / [commitLook], like [plainPace]; empty on another layer
+     * and on [ArrayLabels18.RESET_LOOK].
+     */
+    var plainTint by mutableStateOf<List<VStop>>(emptyList())
+        private set
+
+    /** The look the Look tab's next edit starts from: the shown one, else no look at [plainPace] with [plainTint]. */
+    fun lookBase(): ArrayLook = shownSpec()?.look ?: ArrayLook.IDENTITY.copy(easing = plainPace, tint = plainTint)
 
     /**
      * The Look tab: previews [change] of [lookBase] (a field moving; nothing recorded until
@@ -114,7 +126,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     fun previewLook(change: (ArrayLook) -> ArrayLook) {
         val cur = shownSpec() ?: return
         val next = change(lookBase())
-        plainPace = next.easing
+        keepPlain(next)
         preview(cur.copy(look = next))
     }
 
@@ -126,13 +138,20 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
     fun commitLook(change: (ArrayLook) -> ArrayLook) {
         val cur = shownSpec() ?: return
         val next = change(lookBase())
-        plainPace = next.easing
+        keepPlain(next)
         commit(cur.copy(look = next))
+    }
+
+    /** [plainPace] and [plainTint] in step with the look the tab just made. */
+    private fun keepPlain(next: ArrayLook) {
+        plainPace = next.easing
+        if (next.tint.isNotEmpty()) plainTint = next.tint
     }
 
     /** [ArrayLabels18.RESET_LOOK]: no look (ONE step when there was one) and the Pace back to Even. */
     fun resetLook() {
         plainPace = ArrayEasing.LINEAR
+        plainTint = emptyList()
         val cur = shownSpec() ?: return
         if (cur.look != null) commit(cur.copy(look = null))
     }
@@ -305,6 +324,7 @@ class ArrayTool(controller: EditorController) : Tool(controller) {
             guideInput = GuideInput.NONE
             sheetTab = SheetTab.PLACEMENT
             plainPace = ArrayEasing.LINEAR
+            plainTint = emptyList()
             finishSourceOf(layer)
             if (layer.array != null && !layer.isFolder) sheetOpen = true
         }
