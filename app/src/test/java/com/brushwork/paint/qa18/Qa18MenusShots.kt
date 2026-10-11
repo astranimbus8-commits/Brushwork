@@ -172,7 +172,8 @@ internal object Qa18MenusShots {
     /**
      * Opens the strip's More row by a finger on its toggle and checks what the user sees: the toggle
      * says the row is open, the row sits 4 dp under row 1 in 1 to [StripLayout.MAX_MORE_LINES]
-     * lines, every control on it is whole and on screen. Returns its controls and its lines.
+     * lines, every control on it is whole and on screen, and none of its lines scrolls (nothing
+     * hidden past its edge). Returns its controls and its lines.
      */
     fun openMore(s: ChromeScreen, what: String): Pair<List<Clickables.Item>, Int> {
         val row1 = s.tagged(ChromeTags.OPTIONS_STRIP) ?: throw AssertionError("$what: no strip")
@@ -190,6 +191,17 @@ internal object Qa18MenusShots {
             onScreen(s, "$what: \"${it.own.firstOrNull()}\" on the More row", it.bounds)
             assertEquals("$what: \"${it.own.firstOrNull()}\" whole", it.width, it.bounds.width, 0.5f)
         }
+        // A control scrolled wholly past the row's edge is not among [items] (nothing of it shows):
+        // no line of the row may scroll at all, or something on it is out of the user's sight.
+        val scrolls = s.placed().filter { e ->
+            more.contains(s.dp(e.bounds).center) &&
+                (e.node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.maxValue?.invoke() ?: 0f) > 0.5f
+        }
+        assertTrue(
+            "$what: a line of the More row scrolls (controls past its edge): " +
+                scrolls.joinToString { "${s.dp(it.bounds)} by ${it.node.config[SemanticsProperties.HorizontalScrollAxisRange].maxValue()} px" },
+            scrolls.isEmpty(),
+        )
         return items to lines
     }
 
