@@ -171,6 +171,12 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
      * drawn through `DabMapping`). Empty (the default) is the v1.7 path stroke exactly. A stroke
      * with copies is always exact (no draft) and is never updated in place: [updatePath]
      * returns false for it, so the caller starts it again.
+     *
+     * v1.8 D (the body): every copy's dabs go into the ONE coverage buffer right after the dab
+     * they copy (n maps: n times the original's dabs). [draftBudget] has no effect on a stroke
+     * with copies (the frozen contract keeps it exact: design §3.1's `draftBudget / n` is the
+     * caller's to pass, and is ignored here), and a cancelled or committed one clears the coverage
+     * under its copies too.
      */
     fun beginPath(input: PathStrokeInput, seed: Long, draftBudget: Float = 0f, maps: List<FloatArray> = emptyList()): Boolean {
         if (input.size < 2) return false
@@ -1083,7 +1089,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 source?.endStroke()
             }
             val grid = cleared
-            if (isPath && grid != null) {
+            // v1.8 D: a path stroke with copies holds coverage under its copies too (they are not
+            // listed in [dabs]); it is never rewound, so it clears its whole [bounds] (which
+            // takes in the copies) like a symmetric brush stroke, and leaves nothing behind for
+            // the next stroke to commit.
+            if (isPath && grid != null && mapping == null) {
                 // Only the cells under the current dabs hold coverage (rewinds cleared the rest):
                 // a long path doesn't clear and redraw its whole bounding box.
                 grid.clear()

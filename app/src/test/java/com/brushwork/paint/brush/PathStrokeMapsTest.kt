@@ -2,6 +2,10 @@ package com.brushwork.paint.brush
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import androidx.test.core.app.ApplicationProvider
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
@@ -123,5 +127,96 @@ class PathStrokeMapsTest {
         var right = 0
         for (y in 0 until h) for (x in w / 2 + 4 until w) if (plain[y * w + x] ushr 24 > 0) right++
         assertEquals("no copy without maps", 0, right)
+    }
+
+    // ------------------------------------------------------------------ v1.8 D: the body polish
+
+    private fun kaleidoscope2(input: PathStrokeInput): List<FloatArray> =
+        SymmetryMaps.transforms(SymmetrySettings(type = SymmetryType.KALEIDOSCOPE, divisions = 2, angleDeg = 90f), w, h, input.x[0], input.y[0])
+
+    /** Every pixel of the shared coverage buffer of [c] that holds coverage. */
+    private fun coverageLeft(c: EditorController): Int {
+        val b = StrokeResources.of(c).coverage(w, h)
+        val px = IntArray(w * h)
+        b.getPixels(px, 0, w, 0, 0, w, h)
+        return px.count { it ushr 24 != 0 }
+    }
+
+    @Test
+    fun copiesAreDrawnIntoOneBufferWithNTimesTheOriginalsDabs() {
+        val input = leftWave()
+        val preset = BrushLibrary.defaultBrush.copy(size = 10f)
+        val counts = mutableMapOf<Int, Long>()
+        for (maps in listOf(emptyList(), SymmetryMaps.transforms(SymmetrySettings(type = SymmetryType.MIRROR), w, h, input.x[0], input.y[0]), kaleidoscope2(input))) {
+            val c = controller()
+            val t = c.tool(ToolId.BRUSH, preset)
+            val res = StrokeResources.of(c)
+            val before = res.stamper.stampCount
+            assertTrue(t.beginPath(input, 0x5eedL, maps = maps))
+            counts[maps.size] = res.stamper.stampCount - before
+            // One coverage buffer for the stroke and all its copies: the controller's own.
+            assertTrue(res.hasCoverage)
+            assertEquals(w, res.coverage(w, h).width)
+            t.onCancel()
+        }
+        val own = counts.getValue(0)
+        assertTrue("the stroke has dabs ($own)", own > 50)
+        assertEquals("Mirror: the identity and one copy, 2 x the dabs", 2 * own, counts.getValue(2))
+        assertEquals("Kaleidoscope 2: four maps, 4 x the dabs", 4 * own, counts.getValue(4))
+    }
+
+    @Test
+    fun aDraftBudgetLeavesAStrokeWithCopiesExact() {
+        val input = leftWave()
+        val preset = BrushLibrary.defaultBrush.copy(size = 10f)
+        val maps = kaleidoscope2(input)
+        fun paintWith(budget: Float): IntArray {
+            val c = controller()
+            val t = c.tool(ToolId.BRUSH, preset)
+            assertTrue(t.beginPath(input, 0x5eedL, draftBudget = budget, maps = maps))
+            assertFalse("$budget: exact", t.isDraft)
+            assertFalse("$budget: nothing to refine", t.refinePath(1_000_000f))
+            t.lift(input)
+            return c.doc.activeLayer.bitmap.pixels()
+        }
+        val exact = paintWith(0f)
+        assertArrayEquals("a 50 000 budget", exact, paintWith(50_000f))
+        assertArrayEquals("a tiny budget", exact, paintWith(1f))
+        // Without copies the same budget does draw a draft (the budget is real).
+        val c = controller()
+        val t = c.tool(ToolId.BRUSH, preset)
+        assertTrue(t.beginPath(input, 0x5eedL, draftBudget = 50_000f))
+        assertTrue("no copies: a draft", t.isDraft)
+        t.onCancel()
+    }
+
+    @Test
+    fun aStrokeWithCopiesLeavesNoCoverageBehind() {
+        val input = leftWave()
+        val preset = BrushLibrary.defaultBrush.copy(size = 10f)
+        val maps = kaleidoscope2(input)
+        val c = controller()
+        val t = c.tool(ToolId.BRUSH, preset)
+        // Cancelled (the preview is started again on every change of the path).
+        assertTrue(t.beginPath(input, 0x5eedL, maps = maps))
+        assertTrue(coverageLeft(c) > 1000)
+        t.onCancel()
+        assertEquals("a cancelled stroke clears its copies' coverage too", 0, coverageLeft(c))
+        // Started again over a running one, then committed.
+        assertTrue(t.beginPath(input, 0x5eedL, maps = maps))
+        assertTrue(t.beginPath(input, 0x5eedL, maps = maps))
+        t.lift(input)
+        assertEquals("a committed stroke clears its copies' coverage too", 0, coverageLeft(c))
+        // So a plain stroke across a copy commits only itself: the same as on a fresh editor
+        // holding the same pixels.
+        val line = PathStrokeInput().also { for (i in 0 until 90) it.add(200f + i, 118f + (i % 7), 1f) }
+        val fresh = controller()
+        Canvas(fresh.doc.activeLayer.bitmap).drawBitmap(c.doc.activeLayer.bitmap, 0f, 0f, Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC) })
+        for (e in listOf(c, fresh)) {
+            val b = e.tool(ToolId.BRUSH, preset)
+            assertTrue(b.beginPath(line, 1L))
+            b.lift(line)
+        }
+        assertArrayEquals("nothing of the copies is committed again", fresh.doc.activeLayer.bitmap.pixels(), c.doc.activeLayer.bitmap.pixels())
     }
 }
