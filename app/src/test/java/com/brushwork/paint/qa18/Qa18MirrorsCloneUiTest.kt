@@ -51,6 +51,8 @@ import kotlin.math.floor
  *   so each copy shows its own, mirrored R; nothing is painted outside the copies;
  * - more than 32 copies (Kaleidoscope, Divisions 17: 34) refuses the stroke with its message, no
  *   pixel and no step; Rotation 32 still paints.
+ * The Perspective array is checked with its cell enlarged by dragging its four corners: with the
+ * default cell every stroke is refused (more than 32 copies counted on any canvas size).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -251,8 +253,11 @@ class Qa18MirrorsCloneUiTest {
         }
         h.section("Perspective array") {
             editor(h)
-            // The default cell (a fifth of the shorter side) gives this canvas more than 32 copies
-            // (refused, as §3.1 D4 says): the user first drags its four corners out on the canvas.
+            // The default cell (a fifth of the shorter side) gives every canvas more than 32 copies
+            // counted (printed below: 75 on 400 x 300, 235 on 1080 x 2340), so a clone stroke under a
+            // fresh Perspective array is always refused with "Clone stamp mirrors up to 32 copies",
+            // which does not say to enlarge the cell. The corner drags below are the workaround the
+            // user must find first (a QA finding for the lead, not a design rule).
             for ((w, ht) in listOf(W to H, 1080 to 2340, 2048 to 2048, 1920 to 1080)) {
                 val st = com.brushwork.paint.model.SymmetrySettings(type = SymmetryType.PERSPECTIVE_ARRAY)
                 val m = com.brushwork.paint.assist.SymmetryMaps.transforms(st, w, ht, w / 2f, ht / 2f)
