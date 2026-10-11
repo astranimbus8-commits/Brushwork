@@ -96,6 +96,19 @@ I1–I10 from `docs/ARCHITECTURE.md` stay as they are (I1 data and cache change 
   - `ProjectFormat.writtenVersion(layers) = when { any folder -> 3; any adjustment layer -> 2; else -> 1 }`. Arrays, saved selections, symmetry, sharp points, per-point radii and kerning never raise it.
   - Budget: folders, arrays and saved selections never allocate a document-size ARGB bitmap except where §3 says so, and each such allocation is counted by `doc.effectiveLayerCount` against `maxLayers`.
 
+## Invariants (v1.8)
+I1–I14 stay as they are. Three of them carry most of v1.8's weight:
+- **I10 (labels are an API):** every new visible text and description is a constant in `ui/common/LabelsV18.kt` (tags in `V18Tags`). `LabelsV18Test` checks the substring rule and that no main source retypes a value; `ownership-check-v18.ps1` rule L fails an area branch that adds one as a literal outside `ui/common/`.
+- **I13 / I13b (byte-exact compatibility):** every new field is `@EncodeDefault(NEVER)` with a default that reproduces v1.7, and no codec `version` changes (`ShapeCodec` stays 2, `ArrayCodec` 1). The v1.6 goldens and the v1.7 fixtures re-encode byte for byte (`CodecV18GoldenTest`); frozen v1.7 decoders in test sources (`compat17`, copied from `885793b4`) read v1.8 files as the compatibility table says (`CompatV17DecodeTest`).
+- **I14 (ArrayDraw is the one draw seam):** it stays so; per-copy data comes from `ArrayInstances.of` (area B wires it).
+
+v1.8 adds five:
+- **I15 Copies are data.** An object's symmetry copies are a `CopyMaps` (`vector/CopyMaps.kt`): affine 3 × 3 maps, identity first, 2..256 maps (`StrokeCopies.MAX`), never baked into the object's geometry. A homography never becomes a copy: it bakes plain objects, in one step. Committing a symmetric curve or shape is ONE undo step, whatever the number of copies. Checked by `CopyMapsTest`, `CopyMapsCodecTest`, `SymmetricCommitUndoTest`.
+- **I16 Generators match their geometry.** A `VPath` with a `generator` has geometry equal to `CurveGenerators.build(generator, kind)` within 0.01 px. A hand edit of a point clears the generator in the same in-tool step (`CurveTool.editGeometry`); a reopened path that fails the check loses its generator silently; thickness edits are not geometry. On the foundation `CurveGenerators.matches` is false, so no generator survives a reopen until area E lands. Checked by E's `GeneratorMatchTest`, `GeneratorClearTest`.
+- **I17 Copies have readers.** Every reader of a `VPath`, a `VShape` or a shape layer's `ShapeObject` goes through `vector/ObjectCopies.kt` and keeps, bakes or (documented) ignores the copies as the readers table below says. A new reader without copies fails `CopiesReadersAuditTest`.
+- **I18 Strip placement is a pure function.** Which items sit in row 1 and which in the More row is `StripLayout.split(spec, availableDp)`: a function of the items' declared widths, rows and ranks, never of measured text. Row 1 of a converted strip never scrolls. Checked by `StripLayoutTest`, `StripInventoryTest`.
+- **I19 Array looks never touch the source.** Instance 0 is drawn exactly as in v1.7, and with `look == null` every instance is bit-identical to v1.7: `ArrayInstances.of` returns `ArrayLayout.matrices` unchanged. Checked by `ArrayInstancesTest`, B's `ArrayLookSourceTest` and the v1.7 array goldens.
+
 ## v1.6 foundation contracts (frozen APIs the areas build on)
 - **Tools:** `ToolId.PATH` (a third `CurveKind` of `CurveTool`) and `ToolId.TEXT_FRAMES`
   (`tools/text/frames/TextFrameTool`), appended after `MASK`. `ui/editor/ToolMenu` lists the
@@ -120,6 +133,173 @@ I1–I10 from `docs/ARCHITECTURE.md` stay as they are (I1 data and cache change 
   dialog edits a `TextEditorHost` (the Text tool, or a story).
 - **Theme:** `ui/theme/IbisColors` and `IbisDims` (the ibisPaint look, measured); the layer
   window fills the size its host gives it.
+
+## v1.8 foundation (gate 1)
+
+The lead's part of v1.8, written at gate 1. The item sections (clone with symmetry, curve
+generators, the cog, Magnetic lasso, Color select, fringe colors, top menus) are written at
+integration (`v18I`), when the areas have built them.
+
+### v1.8 overview: items, areas and merge order
+
+The items:
+- 1a mirrors for curves, polylines, paths, shapes and the clone stamp; 1b "Select several" in the X / Y pill;
+- 2 Array looks (opacity, size, turn and tint from the first copy to the last);
+- 3 Magnetic lasso (tap to tap); 4 Color select (color range plus preset chips);
+- 5 choosable colors for Chromatic aberration and Glitch;
+- 6 editable curve generators (spirals, wave, rose); 7 the Cog shape;
+- 8 the options strip with its More row; 9 the top menus (long-press labels, sections, opaque menus).
+
+The foundation (the lead, branch `v18/foundation`, then `main`), each step its own commits
+`v18F<n>: <what>`:
+- **F0** test infrastructure only: `PerfBudget.within` / `ratioWithin` (retrying timing guards), the
+  `Timing` JUnit category on every timed test (`TimingTaggedTest` keeps it true), the canvas
+  capability probes, frozen v1.7 decoders and filters in test sources (`compat17`, `filters/art/v17`).
+- **F1** model, codecs and labels: `CopyMaps`, `CurveGenerator`, `VPath.copies` / `generator`,
+  `ArrayLook`, `ArrayInstances`, `ArrayTint`, the cog fields of `ShapeObject` and the interim
+  `ShapeType.COG`, `FilterParam.Fringes`, `LabelsV18.kt` and `V18Tags`, `IbisColors.Menu`, the v1.8
+  history labels.
+- **F2** the copies readers (I17), `ObjectActions.detachCopies`, `ShapeOutlines` moved to its own
+  file, the `CogGeometry` stub.
+- **F3** the strip model and host, `ToolStrips` and the 13 builder stubs, the two new tools
+  (stubs) and the 30-cell tool menu, the seams (`beginPath` maps, `SymmetryGuides.drawFor`,
+  `CurveGenerators`), `Modifier.longPressLabel`, the More-row aware test helpers.
+- **Gate 1:** A, B and D branch. **F4** ("Select several" in the pill, the strips' point undo
+  removed), then **Gate 2:** C, E, F, G and H branch.
+
+| Area | Name | Gate | Items | Owns (main sources) |
+|---|---|---|---|---|
+| A | FILTERS | 1 | 5 | `filters/art/ChromaticAberration.kt`, `GlitchFilter.kt`, `ArtMath.kt`, `FringeColors.kt`; `ui/filters/FringeControl.kt` |
+| B | ARRAY | 1 | 2 | `array/**`, `tools/array/**`, `ui/array/**`, `engine/ArrayDraw.kt`, `exchange/export/ExportSceneBuilder.kt` |
+| C | SELECTION | 2 | 3, 4; the selection strips | `tools/select/**`, `ui/selection/**` |
+| D | MIRRORS | 1 | 1a (raster, clone, guides); brush, clone, ruler, symmetry strips | `brush/**`, `assist/**`, `tools/symmetry/**`, `ui/symmetry/**`, `ui/assist/**`, `tools/clone/**`, `ui/clone/**`, `ui/brush/**`, `ui/vector/VectorEraserOptions.kt` |
+| E | CURVES | 2 | 1a (curves), 6; Curve, Polyline, Path strips | `tools/vector/Curve*.kt`, `BrushStroking.kt`, `VectorPath.kt`, `VariableWidthOutline.kt`, `spline/**`, `gen/**`; `tools/points/**` except `PointEditor.kt`; `ui/vector/Curve*.kt`, `ui/points/**` |
+| F | SHAPES | 2 | 1a (shapes), 7; Shape strip | `tools/vector/Shape*.kt` except `ShapeObject.kt`, `tools/vector/CogGeometry.kt`, `ui/vector/Shape*.kt` |
+| G | STRIPS | 2 | 8 for Transform, Text, Frame divider, Text frames, Masks, Remove, Pathfinder | `ui/placement/**`, `ui/textframes/**`, `ui/mask/**`, `ui/remove/**`, `ui/pathfinder/**`, `tools/transform/**` |
+| H | CHROME | 2 | 8 (host, More row), 9 | `ui/editor/**`, `ui/theme/**`, `ui/common/**`, `ui/tools/**`, `ui/vector/VectorObjectBar.kt`, except the frozen files below |
+
+The letters are the merge order (A first, H last: H sees every converted strip). Then the lead's
+integration (`v18I`) and device QA. Everything else is frozen (the lead's), among it
+`EditorController.kt`, `model/**`, `vector/**`, `engine/**` (except B's `ArrayDraw.kt`),
+`exchange/**`, `filters/**` (except A's files), `ui/common/LabelsV17.kt`, `LabelsV18.kt`,
+`LongPressLabel.kt`, `IncrementsLocal.kt`, `ui/editor/HistoryLabels.kt`,
+`ui/tools/strip/StripModel.kt`, `StripLayout.kt` and `ui/tools/ToolStrips.kt`. Seven test helpers
+are frozen too (`$FrozenTests`): `smoke/SmokeUi.kt`, `testing/StripTestKit.kt`,
+`testing/PerfBudget.kt`, `qa16/QaCurves.kt`, `qa16/Qa16Ui.kt`, `ui/editor/HistoryTapFingers.kt`,
+`ui/editor/chrome/UniqueLabelsV17.kt`. `.wt/_tools/ownership-check-v18.ps1 -Area <X> -Worktree <wt>`
+enforces the tables (design §5.3), the frozen test helpers, rule S (no layer inserted or removed
+by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outside `ui/common/`).
+
+### Object copies (`vector/CopyMaps.kt`, `vector/ObjectCopies.kt`; F1, F2)
+
+- **Data (I15).** `VPath.copies` and `ShapeObject.copies` (a `VShape`'s copies are its shape's) are
+  a `CopyMaps`: `CopyMaps.of(maps)` sanitizes (drops non-finite, singular and non-affine maps,
+  puts the exact identity first, keeps at most 256, `NONE` below 2), and `CopyMaps.NONE` means no
+  copies. Copy k is the source drawn under C_k (`canvas.concat`). The JSON is exactly
+  `VStroke.copies`' (a list of 9-float lists), `@EncodeDefault(NEVER)`: an object without copies
+  encodes as v1.7, and v1.7 drops the field (it shows the source only).
+- **The seams (§4.4).** `ObjectCopies.mapsAt(c, x, y)` is `SymmetryMaps.transforms` at the first
+  anchor (empty when symmetry is off); `isPerspective(maps)` and `fromSymmetry(maps)` (null = a
+  homography: bake plain objects instead, in the same step).
+- **Readers (I17).** Every reader of a `VPath`, a `VShape` or a shape layer's `ShapeObject` goes
+  through `ObjectCopies`, and an object without copies is read exactly as in v1.7 (every helper
+  returns its input or calls the v1.7 code once):
+
+  | Reader | Copies |
+  |---|---|
+  | Vector render, bounds, hit test, lasso and object pick (`vector/render/**`, `vector/select/**`, `ObjectMapping`, `VectorLayers`, `VectorLayerOps`, `VectorRender`, `VectorTools`) | drawn and hit per copy (`drawEach`, `mappedBounds` / `eachBounds`, `hits`) |
+  | Object eraser / partial eraser (`EraseSession`, `EraseTargets`, `VectorFill`) | all copies go / expanded first (`expanded`) |
+  | Transform of an object (`VectorOps.transformed`, `ShapeAffine`, `LayerDataTransforms`; shape layers: `ShapeTransforms`) | kept and conjugated (m·C_k·m⁻¹, `CopyMaps.conjugated`) under an affine map; expanded under a homography (`transformedAll`, `mapped`) |
+  | Shape-layer render and reopen (`ShapeTool`), shape layer to vector layer (`convertToVectorLayer`), payload import, lift (`vector/lift/**`, `DataLift`) | kept |
+  | Pathfinder, export (`ExportSceneBuilder`: one part per copy), Array sources and `ArrayDraw.effectiveVector` | baked |
+  | Array guide pick (`ArrayTool.pickPath`, `GuideEditor`) | source only (documented) |
+
+  `CopiesReadersAuditTest` runs a vector-layer and a shape-layer fixture with Mirror copies
+  through every row.
+- **Detach.** `ObjectActions.detachCopies(c)` (the object bar's entry, while
+  `ObjectActions.hasCopiesSelected(c)`) replaces each selected object with copies by its plain
+  objects (`ObjectCopies.detached`), one step.
+
+### Array instances and looks (`model/ArrayInstances.kt`, `model/ArrayModel.kt`; F1)
+
+- `ArraySpec.look: ArrayLook?` (last field, `@EncodeDefault(NEVER)`, `ArrayCodec` stays version 1):
+  opacity, size and turn from the first copy to the last, an easing (`ArrayEasing`), and tint stops
+  with a strength. `ArrayLook.sanitized()` clamps; an identity look is never written.
+- `ArrayInstances.of(spec, source)` is the one source of per-copy data, in draw order: v1.7's
+  `ArrayLayout.matrices` (frozen) plus, with a look, M_k·T(c)·R(turn_k)·S(size_k)·T(−c) about the
+  source's center and a `CopyLook` (opacity, tint) per copy, with t_k = ease((k − 1)/(n − 2)).
+  Instance 0 is always the identity without a look, and with `look == null` every matrix is v1.7's
+  bit for bit (I19); `ArrayInstances.bounds` is `ArrayLayout.bounds` then.
+- `ArrayTint.matrix(tint, strength)` (a `ColorMatrix` for a copy's paint), `apply` (one ARGB value)
+  and `sample(stops, t)` (the tint along the copies).
+- Area B moves every draw, bounds and export caller of `ArrayLayout` to `ArrayInstances`, adds the
+  draft rule above 64 copies and the Look tab; until then nothing reads `look`.
+
+### The options strip and its More row (`ui/tools/strip/`, `ui/tools/ToolStrips.kt`; F3)
+
+- **Model (`StripModel.kt`, frozen).** A tool's strip is a `StripSpec`: `items` (`StripItem`: a
+  stable `key`, the `label` the inventory and tests use as the control's handle, a declared
+  `width`, `row` ROW1 or MORE, an `overflowRank` (0 = never leaves row 1; above 0 = AUTO, leaves
+  row 1 highest rank first), `shown` (false reserves the width and draws nothing), `content`), an
+  optional `hint` (the More row's first line), `overlays` (every sheet and dialog the strip
+  opens) and `movedInto` (v1.7 handles now inside an item's popup). `StripSpec.legacy { v1.7
+  composable }` is the migration form; `StripSpec.EMPTY` shows nothing. `StripContext`
+  (`selectionBarShown`, `vectorMode`, `closeMore`) reaches the builders through
+  `LocalStripContext`.
+- **Layout (`StripLayout.kt`, frozen, I18).** `split(spec, availableDp)` is pure: available = row 1's
+  content width (the screen less 28 dp: 332 dp at 360, 364 dp at 392) less 44 dp while the VECTOR
+  cell shows; the 44 dp toggle (plus its 4 dp gap) is reserved as soon as an item or the hint goes
+  to the More row; AUTO items leave by rank, the highest first (equal ranks from the end) and go
+  to the More row's front in row-1 order. The item budgets this gives at 360 dp are 332 dp (no
+  VECTOR cell, no More row), 288 (VECTOR cell), 284 (More row) and 240 (both). `moreLines` wraps
+  the More row (hint first) into at most `MAX_MORE_LINES` = 3 lines, the overflow joining the last
+  line; `moreRowDp(n)` = 44n + 4(n − 1).
+- **Dispatcher (`ToolStrips.of(c)`, frozen).** One builder per tool, in its owner's folder
+  (`@Composable internal fun xxxStrip(tool, c): StripSpec`, 13 files). On the foundation every
+  v1.7 tool's builder returns `StripSpec.legacy { its v1.7 options composable }`, and the two new
+  tools' return `StripSpec.EMPTY`.
+- **Host (`StripHost.kt`, H's after F3).** `ToolOptionsBar` is
+  `StripHost(ToolStrips.of(controller), ...)`. A legacy spec draws exactly as v1.7: the "VECTOR"
+  chip and the composable in one sideways-scrolling row, no toggle, no More row. A converted spec
+  draws a fixed row 1 (the 40 dp VECTOR cell on a vector layer, the items, the 44 dp toggle at
+  the end, described `StripLabels18.MORE_TOGGLE`, Expanded / Collapsed, tag
+  `V18Tags.STRIP_TOGGLE`) and, while open, the opaque More row (`IbisColors.Menu`, tag
+  `V18Tags.STRIP_MORE_ROW`) 4 dp under it, floating over the canvas. `spec.overlays` are composed
+  whenever the strip shows, so a sheet opened from the More row outlives it.
+- **State and close rules (D25).** `StripState` (hoisted in `EditorScreen`, per tool, for the
+  session) holds the open rows and `moreRowDp`. The host closes the row on a tool or vector-mode
+  change and when the strip leaves the screen; `EditorScreen` closes it when a chrome surface
+  opens or the interface hides, and wires `StripContext.closeMore` to it (an item calls it before
+  it opens a sheet or a dialog; an anchored dropdown never does). A canvas touch while the row is
+  open only closes it (`CanvasView.onConsumeTouch`, `Mode.CONSUMED`). The X / Y pill and the
+  selection and object bars move down by `moreRowDp` + 4 dp (`ChromeLayout.pillTop(statusDp,
+  moreRowDp)`, `selectionBarTop(..., moreRowDp)`), animated over 150 ms.
+- **Long-press labels (`ui/common/LongPressLabel.kt`, frozen).** `Modifier.longPressLabel(label)`
+  shows the label in a bubble (tag `V18Tags.LONG_PRESS_BUBBLE`) under the element for
+  `LONG_PRESS_BUBBLE_MS` (1.5 s) on a long press, inside a `LongPressLabelHost` (`EditorScreen`
+  wraps the editor in one). It never consumes a tap and never fires the click; a drag shows
+  nothing; outside a host it does nothing.
+- **Tests and helpers.** `StripLayoutTest` (pure budgets), `StripRegistryTest`,
+  `StripHostLegacyTest`, `MoreRowOverlayTest`, `StripInventoryTest` (the §3.9 inventory rules on
+  every converted spec at 360 dp; `StripHandlesV17` records, per tool on a raster and a vector
+  layer, the handles the v1.7 strip offers, and a converted strip must still offer each one on
+  row 1, in the More row or inside an item), `StripNoLegacyTest` (ignored until integration),
+  `UniqueLabelsV18`. `SmokeUi.find` / `click` and `testing/StripTestKit.openMoreRow` open the
+  More row when a control is not on row 1, so v1.7 tests keep finding controls an area moves.
+
+### Seams and new tools (F3)
+
+- `ToolId.MAGNETIC_LASSO` and `ToolId.COLOR_SELECT` are appended after `PATHFINDER` (older
+  ordinals unchanged); their tools are stubs (`tools/select/magnetic/MagneticLassoTool.kt`,
+  `tools/select/colorrange/ColorSelectTool.kt`: they open, draw nothing and commit nothing), act
+  where Magic wand acts, and fill cells [26] and [27] of the 30-cell tool menu.
+- `BrushTool.beginPath(input, seed, draftBudget = 0f, maps = emptyList())`: a path stroke
+  replicated through `DabMapping` like a symmetric brush stroke; empty maps are the v1.7 path.
+- `SymmetryGuides.showsFor(id)` (the nine tools the rulers repeat) and `drawFor(canvas, t, doc,
+  id)`, called by `EditorController.drawOverlays` for the active tool; on the foundation it draws
+  the v1.7 guides of Brush, Eraser, Smudge and Blur.
+- Stubs the areas fill: `CurveGenerators.build` (a valid Archimedean polyline) / `matches` (false),
+  `CogGeometry.contours` (the interim zigzag, no hole), `FringeControl`.
 
 ## Core model (`model/`)
 - `Document` — size, dpi, color mode, `layers` (index 0 = bottom), `activeLayerIndex`, grid + ruler settings.
