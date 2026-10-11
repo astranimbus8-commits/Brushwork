@@ -2,6 +2,7 @@ package com.brushwork.paint.ui.tools.strip
 
 import android.content.pm.ApplicationInfo
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -210,7 +211,7 @@ private fun ConvertedStrip(
     }
 }
 
-/** The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first. */
+/** The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first; opaque, with a 1 dp edge. */
 @Composable
 private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float) {
     val shape = RoundedCornerShape(IbisDims.OptionsStripRadius)
@@ -219,6 +220,8 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, innerDp: Float)
             .fillMaxWidth()
             .clip(shape)
             .background(IbisColors.Menu, shape)
+            // A 1 dp edge sets the row apart from row 1 and from the canvas under it.
+            .border(1.dp, BrushworkColors.ChromeBorder, shape)
             .blockCanvasTouches()
             .testTag(V18Tags.STRIP_MORE_ROW)
             .padding(horizontal = ROW_PADDING.dp),
@@ -264,13 +267,20 @@ private fun ItemCell(item: StripItem) {
     }
 }
 
-/** The toggle ([StripLabels18.MORE_TOGGLE]): 44 dp, the one control every strip with a More row shares. */
+/**
+ * The toggle ([StripLabels18.MORE_TOGGLE]): 44 dp, the one control every strip with a More row shares.
+ * While the row is open the toggle is filled with the accent (the chevron points up); a long press
+ * shows its label in a bubble and never toggles (v1.8, design §3.9).
+ */
 @Composable
 private fun MoreToggle(open: Boolean, onToggle: () -> Unit) {
+    val shape = RoundedCornerShape(8.dp)
     Box(
         Modifier
             .size(StripLayout.TOGGLE_DP.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(shape)
+            .background(if (open) IbisColors.Accent else Color.Transparent, shape)
+            .longPressLabel(StripLabels18.MORE_TOGGLE)
             .clickable(onClick = onToggle)
             .semantics {
                 contentDescription = StripLabels18.MORE_TOGGLE

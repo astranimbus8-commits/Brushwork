@@ -266,7 +266,7 @@ private fun SeveralCell(controller: EditorController, editor: PointEditor) {
 
 // ------------------------------------------------------------------ v1.7 (§3.13): the trash cell
 
-/** The trash cell: 40 dp touch, the icon; says what it deletes ([label]) and deletes it at once. */
+/** The trash cell: 40 dp touch, the icon; says what it deletes ([label], also its long-press bubble, v1.8) and deletes it at once. */
 @Composable
 private fun TrashCell(controller: EditorController, tool: Tool, label: String) {
     Box(
@@ -274,6 +274,7 @@ private fun TrashCell(controller: EditorController, tool: Tool, label: String) {
             .width(IbisDims.PillIconTouch)
             .requiredHeight(IbisDims.PillCellTouch)
             .testTag(V17Tags.PILL_TRASH)
+            .longPressLabel(label)
             .clickable(onClickLabel = label, role = Role.Button) {
                 // Read at the tap: what the tool deletes right now (one controller or in-tool step).
                 val deletion = (tool as? DeletingTool)?.objectDeletion ?: return@clickable
@@ -321,13 +322,14 @@ private fun ScaleRow(controller: EditorController, tool: Tool, percent: Vec2, un
     }
 }
 
-/** "Keep scale proportions": a chain toggle, 40 dp touch; [enabled] false shows it forced on. */
+/** "Keep scale proportions": a chain toggle, 40 dp touch; [enabled] false shows it forced on. A long press shows its name (v1.8). */
 @Composable
 private fun KeepCell(on: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
     Box(
         Modifier
             .width(IbisDims.PillIconTouch)
             .requiredHeight(IbisDims.PillCellTouch)
+            .longPressLabel(PillLabels.KEEP_PROPORTIONS)
             .toggleable(value = on, enabled = enabled, role = Role.Switch, onValueChange = onChange)
             .semantics { contentDescription = PillLabels.KEEP_PROPORTIONS },
         contentAlignment = Alignment.Center,
@@ -499,13 +501,14 @@ internal fun stepCellText(step: Float): AnnotatedString = buildAnnotatedString {
     withStyle(SpanStyle(fontSize = IbisDims.PillStepText, fontFeatureSettings = "tnum")) { append(IncrementStepping.format(step)) }
 }
 
-/** The ✥ cell: 40 × 40 touch, the glyph on the pill. */
+/** The ✥ cell: 40 × 40 touch, the glyph on the pill; a long press shows its [label] (v1.8). */
 @Composable
 private fun FoldCell(label: String, onClick: () -> Unit) {
     Box(
         Modifier
             .width(FOLD_TOUCH)
             .requiredHeight(IbisDims.PillCellTouch)
+            .longPressLabel(label)
             .clickable(onClickLabel = label, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,

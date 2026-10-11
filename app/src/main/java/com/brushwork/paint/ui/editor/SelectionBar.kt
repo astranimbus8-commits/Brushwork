@@ -47,6 +47,7 @@ import com.brushwork.paint.tools.remove.ContentAwareFillJob
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SheetBackground
+import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
 import com.brushwork.paint.ui.theme.BrushworkColors
 
@@ -120,7 +121,7 @@ internal fun SelectionActionBar(
     }
 }
 
-/** Icon over a short label; [clickLabel] tells a screen reader what it does. */
+/** Icon over a short label; [clickLabel] tells a screen reader what it does, and a long press shows it (v1.8). */
 @Composable
 private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enabled: Boolean = true, lines: Int = 1, onClick: () -> Unit) {
     val tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.45f)
@@ -130,6 +131,8 @@ private fun BarItem(icon: ImageVector, label: String, clickLabel: String, enable
             // Grows (rather than clipping) the two-line label under a large system font.
             .heightIn(min = 46.dp)
             .clip(RoundedCornerShape(10.dp))
+            // v1.8 (design §3.9): a long press shows what the item does ([clickLabel]) and never acts.
+            .longPressLabel(clickLabel)
             .clickable(enabled = enabled, onClickLabel = clickLabel, role = Role.Button, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,

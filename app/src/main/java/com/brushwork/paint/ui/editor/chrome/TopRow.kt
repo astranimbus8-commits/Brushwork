@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.editor.MenuEntry
 import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -117,6 +118,8 @@ private fun TopCircle(b: TopButton, spec: ChromeLayout.TopRow) {
         Modifier
             .width(spec.pitch.dp)
             .height(IbisDims.TopRowHeight)
+            // v1.8 (design §3.9): a long press shows the circle's label in a bubble, and never acts.
+            .longPressLabel(b.label)
             .semantics {
                 contentDescription = b.label
                 // Only the circles that show a state say it (Selection, like Undo, Redo and More,
