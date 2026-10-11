@@ -139,7 +139,10 @@ internal enum class SharpState {
  */
 internal data class CurveStripFacts(
     val kind: CurveKind,
-    /** Points of the open path (0: nothing open). */
+    /**
+     * Points of the open path (0: nothing open). [curveFacts] holds it at 2: the strip only asks
+     * "open" and "two or more", so a generator slider that changes the count rebuilds no spec.
+     */
     val points: Int = 0,
     /** Selected points. */
     val selected: Int = 0,
@@ -189,7 +192,7 @@ internal fun curveFacts(tool: CurveTool): CurveStripFacts {
     }
     return CurveStripFacts(
         kind = tool.kind,
-        points = n,
+        points = n.coerceAtMost(2),
         selected = count,
         single = single,
         allSelected = n > 0 && count == n,
