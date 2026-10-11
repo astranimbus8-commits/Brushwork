@@ -19,10 +19,10 @@ import com.brushwork.paint.ui.vector.VectorEraserStrip
  * The strip of the Brush, Eraser, Smudge and Blur (v1.8, design §3.9 and §4.6; area D).
  *
  * - Brush, raster Eraser, Smudge, Blur: row 1 only, no More row and no toggle: "Choose brush" 96,
- *   "Brush size" 76, "Opacity" 60 ("Strength" for smudge and blur), "Pressure changes size" 40
- *   (276 dp: it fits 360 dp with the VECTOR cell, 288).
+ *   "Brush size" 76, "Opacity" 64 ("Strength" for smudge and blur), "Pressure changes size" 40
+ *   (288 dp: it fits 360 dp with the VECTOR cell, 288).
  * - The Eraser erasing a vector layer's objects: row 1 is the three modes 120, "Brush size" 76
- *   and "Opacity" 60 (AUTO 1); the More row "Choose brush" and "Pressure changes size". While the
+ *   and "Opacity" 64 (AUTO 1); the More row "Choose brush" and "Pressure changes size". While the
  *   layer's mask is painted the eraser erases pixels: the raster row.
  *
  * "All brush settings" stays inside the size and opacity popups (as in v1.7). The brush panel it

@@ -63,9 +63,11 @@ class CloneStripTest {
                 val lines = StripLayout.moreLines(split, spec.hint, StripInventoryWidths.content(dp))
                 assertEquals("$k at $dp dp: More lines", if (dp == 360) 3 else 2, lines.size)
                 assertEquals("$k at $dp dp: row 1", listOf("Set source", "Aligned", "Sample from: This layer"), row1Handles())
+                assertEquals("$k at $dp dp: row 1 texts fit", emptyList<String>(), MirrorsStripKit.clippedTexts())
                 assertTrue("$k: the toggle", StripTestKit.toggle() != null)
                 assertTrue(StripTestKit.openMoreRow())
                 assertEquals("$k at $dp dp: the More row", listOf(CloneTool.HINT, "Show source") + brushMore, moreHandles())
+                assertEquals("$k at $dp dp: More row texts fit", emptyList<String>(), MirrorsStripKit.clippedTexts())
                 StripTestKit.closeMoreRow()
             }
 
@@ -78,6 +80,7 @@ class CloneStripTest {
             assertTrue("$dp dp: the hint arms Set source", tool.armed)
             assertFalse("$dp dp: the hint closes the More row", StripTestKit.moreRowShown())
             assertEquals(listOf("Tap the source", "Aligned", "Sample from: This layer"), row1Handles())
+            assertEquals("armed: row 1 texts fit", emptyList<String>(), MirrorsStripKit.clippedTexts())
             assertFalse("armed: no hint", rig.spec.items.any { it.key == CloneStripItems.HINT })
             assertEquals(row1, rig.spec.items.filter { it.row == StripRow.ROW1 }.map { it.key })
             SmokeUi.click("Tap the source", exact = true)

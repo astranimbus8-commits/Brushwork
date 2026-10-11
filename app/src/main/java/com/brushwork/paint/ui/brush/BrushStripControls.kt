@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
-import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Opacity
@@ -66,8 +65,8 @@ internal object BrushStripItems {
     /** "Brush size": up to "1000 px" after its icon. */
     const val SIZE_DP = 76f
 
-    /** "Opacity" / "Strength": up to "100%" after its icon. */
-    const val OPACITY_DP = 60f
+    /** "Opacity" / "Strength": up to "100%" (13 sp) after its icon. */
+    const val OPACITY_DP = 64f
 
     /** "Pressure changes size: on / off": a 40 dp icon toggle, as in v1.7. */
     const val PRESSURE_DP = 40f
@@ -132,7 +131,10 @@ internal class BrushItems(val choose: StripItem, val size: StripItem, val opacit
 internal fun StripItem.placed(row: StripRow, overflowRank: Int = 0): StripItem =
     StripItem(key = key, label = label, width = width, row = row, overflowRank = overflowRank, shown = shown, content = content)
 
-/** v1.7's "Choose brush" chip, [width] wide: the brush icon, the preset's name and ▾ (described "Choose brush"). */
+/**
+ * v1.7's "Choose brush" chip, [width] wide: the preset's name (11 sp, up to two lines, so every
+ * library name fits whole, "Mechanical pencil" the longest) and ▾ (described "Choose brush").
+ */
 @Composable
 internal fun ChooseBrushChip(name: String, width: Dp, onClick: () -> Unit) {
     val shape = RoundedCornerShape(8.dp)
@@ -146,13 +148,12 @@ internal fun ChooseBrushChip(name: String, width: Dp, onClick: () -> Unit) {
             .padding(start = 6.dp, end = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Filled.Brush, contentDescription = null, tint = BrushworkColors.Accent, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(4.dp))
         Text(
             name,
-            fontSize = 13.sp,
+            fontSize = 11.sp,
+            lineHeight = 12.sp,
             color = BrushworkColors.OnChrome,
-            maxLines = 1,
+            maxLines = 2,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
@@ -184,7 +185,7 @@ internal fun StripReadout(
                 .heightIn(min = 40.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .clickable(onClickLabel = "Edit $description") { editing = true }
-                .padding(horizontal = 4.dp),
+                .padding(horizontal = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {

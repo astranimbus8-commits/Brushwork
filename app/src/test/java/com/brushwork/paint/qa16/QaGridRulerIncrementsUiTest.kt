@@ -5,6 +5,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import org.junit.Assert.assertEquals
@@ -62,7 +63,13 @@ class QaGridRulerIncrementsUiTest {
             assertTrue("the Ruler panel: ${SmokeUi.shown()}", has("Use ruler", exact = true))
             click("Edit on canvas", exact = true)
             assertEquals(ToolId.RULER, c.activeToolId)
-            QaCurves.snapOff(c)
+            // v1.8: "Snap to objects" is on the ruler strip's More row (v1.7's "Snap": design §3.9 keeps the longer
+            // name); the row closes again so the drag below reaches the canvas.
+            if (c.snapping.enabled) {
+                click("Snap to objects", exact = true)
+                StripTestKit.closeMoreRow()
+            }
+            assertTrue("snapping is off", !c.snapping.enabled)
             val r0 = c.ruler
             assertTrue("placed: ${r0.centerX}, ${r0.centerY}", r0.enabled && r0.centerX >= 0f)
             var held: String? = "unset"

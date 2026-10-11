@@ -54,7 +54,7 @@ import com.brushwork.paint.ui.tools.strip.StripRow
  * width. Row 1: "Set source" 92 ("Tap the source" while armed), "Aligned" 40 (an icon toggle),
  * "Sample from" 96 (a dropdown: "This layer" / "All layers"). The More row: the hint "Long-press
  * where to copy from" (while there is no source and Set source is not armed; it arms Set source
- * and closes the More row, so the next canvas tap sets the source) and "Show source" 112. The
+ * and closes the More row, so the next canvas tap sets the source) and "Show source" 124. The
  * v1.7 handles are unchanged.
  */
 internal object CloneStripItems {
@@ -68,7 +68,7 @@ internal object CloneStripItems {
     const val ALIGNED_DP = 40f
     const val SAMPLE_DP = 96f
     const val HINT_DP = 232f
-    const val SHOW_SOURCE_DP = 112f
+    const val SHOW_SOURCE_DP = 124f
 
     const val SET_SOURCE_LABEL = "Set source"
     const val ARMED_LABEL = "Tap the source"

@@ -31,8 +31,8 @@ import org.robolectric.shadows.ShadowLog
  *   at 360 dp with the VECTOR cell); the More row "Choose brush", "Pressure changes size"; the
  *   brush panel opened from the More row outlives it.
  * Measured widths (rule 4, rounded up to 4 dp) differ from the planning table: "Brush size" 76
- * (for "1000 px"), "Opacity" 60 (for "100%"); the sums stay within rule 1 (276 of 288, and 196 of
- * 240 for the vector eraser), so no item became AUTO.
+ * (for "1000 px"), "Opacity" 64 (for "100%"); the sums stay within rule 1 (288 of 288, and 200 of
+ * 240 for the vector eraser), so no item became AUTO. The longest texts ("1000 px", "100%") fit.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h780dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.brush.brushstripsandbox"])
@@ -69,8 +69,20 @@ class BrushStripTest {
                     val pressure = if (id == ToolId.BRUSH) "Pressure changes size: on" else "Pressure changes size: off"
                     assertEquals("$k at $dp dp: row 1", listOf("Choose brush", "Brush size", if (strength) "Strength" else "Opacity", pressure), row1Handles())
                     assertNull("$k: no More row, no toggle", StripTestKit.toggle())
+                    assertEquals("$k at $dp dp: row 1 texts fit", emptyList<String>(), MirrorsStripKit.clippedTexts())
                 }
             }
+
+            // The longest texts fit their items: "1000 px", "100%" and the longest library name.
+            rig.select(ToolId.BRUSH)
+            val name = rig.c.presetFor(ToolId.BRUSH)!!.name
+            com.brushwork.paint.brush.BrushPresetStore.get(rig.c.appContext).edit(rig.c, ToolId.BRUSH, persist = false) { it.copy(size = 1000f, opacity = 1f, name = "Mechanical pencil") }
+            rig.settle()
+            assertEquals("$dp dp: the widest readouts", listOf("Choose brush", "Brush size", "Opacity", "Pressure changes size: on"), row1Handles())
+            assertTrue(SmokeUi.has("1000 px", exact = true) && SmokeUi.has("100%", exact = true))
+            assertEquals("$dp dp: the widest readouts fit", emptyList<String>(), MirrorsStripKit.clippedTexts())
+            com.brushwork.paint.brush.BrushPresetStore.get(rig.c.appContext).edit(rig.c, ToolId.BRUSH, persist = false) { it.copy(size = 8f, name = name) }
+            rig.settle()
 
             // "All brush settings" stays inside the size popup and opens the brush panel.
             rig.select(ToolId.BRUSH)
