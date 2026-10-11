@@ -33,6 +33,22 @@ class GeneratorMatchTest {
         for (g in generators) for (k in listOf(CurveKind.CURVE, CurveKind.PATH)) assertTrue("$g / $k", CurveGenerators.matches(path(g, k)))
     }
 
+    /**
+     * The most turns: a logarithmic spiral's innermost turns are far below a pixel (2^-50 of its
+     * size), where the anchors' float rounding is larger than the curve's movement; the match
+     * must not lose its place there (it did: a full Newton step threw it to the curve's end).
+     */
+    @Test
+    fun theMostTurnsAndPointsStillMatch() {
+        for (kind in CurveGenKind.entries) for (density in listOf(0, CurveGenerator.MAX_DENSITY)) {
+            val g = CurveGenerator(
+                kind = kind, cx = 200f, cy = 150f, size = 140f, angleDeg = 10f, turns = CurveGenerator.MAX_TURNS, inner = 0.1f,
+                waves = 50f, amplitude = 28f, petalsN = 23, petalsD = 12, density = density,
+            )
+            for (k in listOf(CurveKind.CURVE, CurveKind.PATH)) assertTrue("$kind / $k, density $density", CurveGenerators.matches(path(g, k)))
+        }
+    }
+
     @Test
     fun withoutAGeneratorOrAsAPolylineNothingMatches() {
         for (g in generators) {

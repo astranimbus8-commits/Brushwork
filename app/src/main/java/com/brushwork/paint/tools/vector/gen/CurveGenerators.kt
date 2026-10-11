@@ -529,12 +529,18 @@ object CurveGenerators {
                 // The last span ends at the curve's end (the closed curve's end is its start again).
                 next = a.end
             } else {
-                // Refine: project the next anchor onto the curve near the predicted parameter.
+                // Refine: project the next anchor onto the curve near the predicted parameter, only
+                // while it misses, and by at most half a span per step: where the curve barely
+                // moves (a logarithmic spiral's innermost turns) the anchors' float rounding alone
+                // would throw a full Newton step far along the curve.
                 next = next.coerceIn(t, a.end)
-                repeat(3) {
+                for (round in 0 until 3) {
                     a.eval(next, w)
+                    if (hypot(to.x - w[0], to.y - w[1]) <= tol * 0.25) break
                     val e2 = w[2] * w[2] + w[3] * w[3]
-                    if (e2 > 0.0) next = (next + ((to.x - w[0]) * w[2] + (to.y - w[1]) * w[3]) / e2).coerceIn(t, a.end)
+                    if (!(e2 > 0.0)) break
+                    val d = ((to.x - w[0]) * w[2] + (to.y - w[1]) * w[3]) / e2
+                    next = (next + d.coerceIn(-0.5 * dt, 0.5 * dt)).coerceIn(t, a.end)
                 }
             }
             a.eval(next, w)
