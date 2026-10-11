@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -109,6 +110,7 @@ import com.brushwork.paint.ui.common.LocalHistoryTaps
 import com.brushwork.paint.ui.common.LocalIncrements
 import com.brushwork.paint.ui.common.LocalSheetGroup
 import com.brushwork.paint.ui.common.LocalSheetHost
+import com.brushwork.paint.ui.common.LongPressLabelHost
 import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
 import com.brushwork.paint.ui.common.SheetPill
@@ -136,6 +138,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.ui.tools.CoordinatePill
+import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
+import com.brushwork.paint.ui.tools.strip.StripState
 import com.brushwork.paint.ui.vector.VectorObjectBar
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -185,7 +190,8 @@ fun EditorScreen(controller: EditorController, onExit: () -> Unit, onSaveNow: ()
     val historyTaps = remember(controller, density) { EditorHistoryTaps(controller, TouchGestureClassifier.TAP_SLOP_DP * density) }
     // v1.6: the shared number controls reach the increments service through LocalIncrements.
     CompositionLocalProvider(LocalSheetHost provides sheetHost, LocalIncrements provides controller.increments, LocalHistoryTaps provides historyTaps) {
-        EditorScreenContent(controller, sheetHost, historyTaps, onExit, onSaveNow)
+        // v1.8 (item 9): the bubbles of the long-press labels (top-row circles, the strip's VECTOR cell).
+        LongPressLabelHost { EditorScreenContent(controller, sheetHost, historyTaps, onExit, onSaveNow) }
     }
 }
 
@@ -204,6 +210,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // "Hide interface" (bottom bar slot 5): a session state, like ibisPaint's.
     var interfaceHidden by rememberSaveable { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
+    // v1.8 (design §3.9): the options strip's More row, open per tool for the session (never persisted).
+    val stripState = remember(controller) { StripState() }
     // Typed brush size / opacity (tapping a value of the slider rows).
     var editingValue by rememberSaveable { mutableStateOf<SliderKind?>(null) }
     // The clipboard content whose paste bar the user hid (shown again for a new copy).
@@ -379,6 +387,21 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // close it instead of the panel on top. (The menu's own cells close it before they open one.)
     val toolMenuVisible = toolMenuOpen && session == null && !sheetHost.hasExpanded
     LaunchedEffect(sheetHost.hasExpanded) { if (sheetHost.hasExpanded) toolMenuOpen = false }
+    // v1.8 (D25): a chrome surface opening (the More menu, a top-row panel, the tool menu, the
+    // layer window) and hiding the interface close the strip's More row. (The host closes it on a
+    // tool or vector-mode change; a canvas touch closes it below, consumed.)
+    LaunchedEffect(stripState, moreOpen) { if (moreOpen) stripState.closeAll() }
+    LaunchedEffect(stripState, panel) { if (panel != null) stripState.closeAll() }
+    LaunchedEffect(stripState, toolMenuOpen) { if (toolMenuOpen) stripState.closeAll() }
+    LaunchedEffect(stripState, layersOpen) { if (layersOpen) stripState.closeAll() }
+    LaunchedEffect(stripState, interfaceHidden) { if (interfaceHidden) stripState.closeAll() }
+    val consumeCanvasTouch: () -> Boolean = remember(stripState) {
+        {
+            val open = stripState.anyOpen
+            if (open) stripState.closeAll()
+            open
+        }
+    }
     // Back stops a cancellable operation; otherwise it waits for the operation to finish.
     BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
@@ -470,9 +493,12 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         val screenH = maxHeight.value
         val contentW = (screenW - insetLeftDp - insetRightDp).coerceAtLeast(1f)
         val topSpec = ChromeLayout.topRow(contentW)
-        val pillTop = ChromeLayout.pillTop(statusDp)
+        // v1.8 (design §3.9): the open More row moves the pill and the bars down by its height
+        // plus 4 dp, over 150 ms. It floats over the canvas: the fit insets never see it.
+        val moreRowDp by animateFloatAsState(stripState.moreRowDp, tween(MORE_ROW_ANIM_MS), label = "moreRow")
+        val pillTop = ChromeLayout.pillTop(statusDp, moreRowDp)
         val pillDp = with(density) { pillPx.toDp() }.value
-        val selectionBarTop = ChromeLayout.selectionBarTop(statusDp, pillDp)
+        val selectionBarTop = ChromeLayout.selectionBarTop(statusDp, pillDp, moreRowDp)
         val selectionBarDp = with(density) { selectionBarPx.toDp() }.value
         val sessionPanelDp = with(density) { sessionPanelPx.toDp() }.value
         val layerWindow = ChromeLayout.layerWindow(contentW, screenH, statusDp, navDp)
@@ -499,6 +525,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     v.onTouchDown = onCanvasTouch
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap
+                    // v1.8 (D25): with the strip's More row open, a canvas touch only closes it.
+                    v.onConsumeTouch = consumeCanvasTouch
                     v.setMirrored(controller.viewMirrored)
                     // Constant bands (V11): the pill, the selection bar and "hide interface" never move the canvas.
                     v.setFitInsets(0f, fitTopPx, 0f, fitBottomPx)
@@ -570,7 +598,14 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 // Tool options act on the document; the tool is not usable while a filter is previewed.
                 if (session == null) {
                     Spacer(Modifier.height(ChromeLayout.optionsStripGap.dp))
-                    OptionsStripPanel(controller, Modifier.fillMaxWidth().padding(horizontal = IbisDims.OptionsStripSide))
+                    // v1.8 (design §4.6): what the strip's builders need from the chrome.
+                    val barShown = selectionBarVisible || objectBarVisible
+                    val stripContext = remember(barShown, vectorMode, stripState) {
+                        StripContext(selectionBarShown = barShown, vectorMode = vectorMode, closeMore = stripState::closeAll)
+                    }
+                    CompositionLocalProvider(LocalStripContext provides stripContext) {
+                        OptionsStripPanel(controller, Modifier.fillMaxWidth().padding(horizontal = IbisDims.OptionsStripSide), stripState)
+                    }
                 }
             }
         }
@@ -878,6 +913,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
 /** Room a minimized panel's pill takes above the bottom items (its 44 dp row and a gap). */
 private const val PILL_ROOM = 52f
+
+/** v1.8 (design §3.9): the pill and the bars follow the More row over this long (ms). */
+private const val MORE_ROW_ANIM_MS = 150
 
 /**
  * The InfoChip slot (v1.6 §3.7.9): the increments readout of a stepped gesture ("+30 px", "120 %",

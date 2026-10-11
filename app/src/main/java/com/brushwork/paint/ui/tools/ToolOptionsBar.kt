@@ -1,147 +1,65 @@
 package com.brushwork.paint.ui.tools
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.layout
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
-import com.brushwork.paint.assist.RulerTool
-import com.brushwork.paint.brush.BrushTool
-import com.brushwork.paint.tools.ToolId
-import com.brushwork.paint.tools.array.ArrayTool
-import com.brushwork.paint.tools.clone.CloneTool
-import com.brushwork.paint.tools.frame.FrameDividerTool
-import com.brushwork.paint.tools.mask.MaskTool
-import com.brushwork.paint.tools.pathfinder.PathfinderTool
-import com.brushwork.paint.tools.select.EyedropperTool
-import com.brushwork.paint.tools.select.FillTool
-import com.brushwork.paint.tools.select.LassoTool
-import com.brushwork.paint.tools.select.MagicWandTool
-import com.brushwork.paint.tools.select.MarqueeTool
-import com.brushwork.paint.tools.symmetry.SymmetryTool
-import com.brushwork.paint.tools.text.TextTool
-import com.brushwork.paint.tools.text.frames.TextFrameTool
-import com.brushwork.paint.tools.transform.TransformTool
-import com.brushwork.paint.tools.vector.CurveTool
-import com.brushwork.paint.tools.vector.ShapeTool
-import com.brushwork.paint.ui.array.ArrayToolOptions
-import com.brushwork.paint.ui.assist.RulerToolOptions
-import com.brushwork.paint.ui.brush.BrushToolOptions
-import com.brushwork.paint.ui.clone.CloneToolOptions
-import com.brushwork.paint.ui.mask.MaskToolOptions
-import com.brushwork.paint.ui.pathfinder.PathfinderOptions
-import com.brushwork.paint.ui.placement.FrameDividerOptions
-import com.brushwork.paint.ui.placement.TextToolOptions
-import com.brushwork.paint.ui.placement.TransformToolOptions
-import com.brushwork.paint.ui.selection.EyedropperOptions
-import com.brushwork.paint.ui.selection.FillOptions
-import com.brushwork.paint.ui.selection.LassoOptions
-import com.brushwork.paint.ui.selection.MagicWandOptions
-import com.brushwork.paint.ui.selection.MarqueeOptions
-import com.brushwork.paint.ui.symmetry.SymmetryOptions
-import com.brushwork.paint.ui.textframes.TextFrameToolOptions
-import com.brushwork.paint.ui.theme.BrushworkColors
-import com.brushwork.paint.ui.vector.CurveToolOptions
-import com.brushwork.paint.ui.vector.ShapeToolOptions
-import com.brushwork.paint.ui.vector.VectorEraserOptions
+import com.brushwork.paint.ui.tools.strip.LocalStripContext
+import com.brushwork.paint.ui.tools.strip.StripContext
+import com.brushwork.paint.ui.tools.strip.StripHost
+import com.brushwork.paint.ui.tools.strip.StripState
 
 /**
- * The per-tool options strip (v1.6: inside the floating options panel under the top row). Each
- * module provides `XxxOptions(tool)`; those composables emit one Row (they may also show their
- * own dialogs/popups). [onContentWidth] receives the width (px) of what the tool shows, at
- * layout time (0 = a tool without options): the panel hides itself then.
+ * The per-tool options strip (v1.6: inside the floating options panel under the top row; v1.8:
+ * the call `StripHost(ToolStrips.of(controller), ...)`, design §4.6). Each tool's builder
+ * ([ToolStrips]) describes its strip; a tool not converted yet draws its v1.7 composable exactly
+ * as v1.7 did, in one row that scrolls sideways ([modifier] is that row's).
+ *
+ * [onContentWidth] receives the width (px) of what the tool shows on row 1, at layout time (0 = a
+ * tool without options): the panel hides itself then. [panelModifier] styles row 1's container
+ * (the More row hangs under it, outside it). [state] is the More row's open state, hoisted in
+ * `EditorScreen`; without one the bar keeps its own.
+ *
+ * The [LocalStripContext] the builders read is the caller's with this bar's vector mode, and with
+ * `closeMore` closing this bar's More row too.
  */
 @Composable
-fun ToolOptionsBar(controller: EditorController, modifier: Modifier = Modifier, onContentWidth: ((Int) -> Unit)? = null) {
-    val tool = controller.tools[controller.activeToolId] ?: return
+fun ToolOptionsBar(
+    controller: EditorController,
+    modifier: Modifier = Modifier,
+    onContentWidth: ((Int) -> Unit)? = null,
+    panelModifier: Modifier = Modifier,
+    state: StripState? = null,
+) {
+    val toolId = controller.activeToolId
+    if (controller.tools[toolId] == null) return
     // Derived: isVectorMode reads layersVersion, which changes with every committed edit.
     val vectorMode by remember(controller) { derivedStateOf { controller.isVectorMode } }
-    Row(
-        modifier = modifier
-            .heightIn(min = 44.dp)
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 8.dp)
-            .then(
-                if (onContentWidth == null) {
-                    Modifier
-                } else {
-                    Modifier.layout { measurable, constraints ->
-                        // The content's own width (no minimum), reported before it is padded out.
-                        val p = measurable.measure(constraints.copy(minWidth = 0))
-                        onContentWidth(p.width)
-                        layout(maxOf(p.width, constraints.minWidth), p.height) { p.place(0, 0) }
-                    }
-                },
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // Vector mode (v1.5): what is drawn stays editable.
-        if (vectorMode) VectorModeChip()
-        when (tool) {
-            is BrushTool -> {
-                // The vector eraser's modes come first: they decide what a stroke removes, and
-                // the start of the strip is what a phone shows without scrolling.
-                if (tool.id == ToolId.ERASER && vectorMode) VectorEraserOptions(controller)
-                BrushToolOptions(tool)
-            }
-            is CloneTool -> CloneToolOptions(tool)
-            is MaskTool -> MaskToolOptions(tool)
-            is FillTool -> FillOptions(tool)
-            is EyedropperTool -> EyedropperOptions(tool)
-            is MagicWandTool -> MagicWandOptions(tool)
-            is LassoTool -> LassoOptions(tool)
-            is MarqueeTool -> MarqueeOptions(tool)
-            is TransformTool -> TransformToolOptions(tool)
-            is TextTool -> TextToolOptions(tool)
-            is ShapeTool -> ShapeToolOptions(tool)
-            is CurveTool -> CurveToolOptions(tool)
-            is FrameDividerTool -> FrameDividerOptions(tool)
-            is RulerTool -> RulerToolOptions(tool)
-            is com.brushwork.paint.tools.select.ObjectSelectTool -> com.brushwork.paint.ui.selection.ObjectSelectOptions(tool)
-            is com.brushwork.paint.tools.remove.RemoveTool -> com.brushwork.paint.ui.remove.RemoveToolOptions(tool)
-            // v1.6 (pre-registered by the foundation; area D fills it). The Path tool is a
-            // CurveTool: its options branch on CurveTool.kind inside CurveToolOptions (area B).
-            is TextFrameTool -> TextFrameToolOptions(tool)
-            // v1.7 (pre-registered by the foundation; areas E, H and G fill them).
-            is ArrayTool -> ArrayToolOptions(tool)
-            is SymmetryTool -> SymmetryOptions(tool)
-            is PathfinderTool -> PathfinderOptions(tool)
-        }
+    val own = remember { StripState() }
+    val strip = state ?: own
+    val outer = LocalStripContext.current
+    val context = remember(outer, vectorMode, strip) {
+        StripContext(
+            selectionBarShown = outer.selectionBarShown,
+            vectorMode = vectorMode,
+            closeMore = {
+                outer.closeMore()
+                strip.closeAll()
+            },
+        )
     }
-}
-
-/** Accent "VECTOR" chip at the start of the options strip while the active layer is a vector layer. */
-@Composable
-private fun VectorModeChip() {
-    Text(
-        "VECTOR",
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        color = Color.White,
-        maxLines = 1,
-        modifier = Modifier
-            .padding(end = 6.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(BrushworkColors.AccentDim)
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-            .semantics { contentDescription = "Vector mode is on" },
-    )
+    CompositionLocalProvider(LocalStripContext provides context) {
+        StripHost(
+            spec = ToolStrips.of(controller),
+            toolId = toolId,
+            vectorMode = vectorMode,
+            state = strip,
+            modifier = modifier,
+            panelModifier = panelModifier,
+            onContentWidth = onContentWidth,
+        )
+    }
 }

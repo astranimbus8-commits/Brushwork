@@ -71,6 +71,13 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      */
     var onOutsideTap: (() -> Unit)? = null
 
+    /**
+     * v1.8 (D25): asked when a touch gesture starts on the canvas, after [onTouchDown]. True (the
+     * editor closed the strip's More row) consumes the whole gesture: until every finger and pen
+     * lifts it draws nothing, pans and zooms nothing, and taps nothing.
+     */
+    var onConsumeTouch: (() -> Boolean)? = null
+
     private val viewport = ViewportStore.of(controller)
     // The activity handles density changes itself (manifest configChanges): see onConfigurationChanged.
     private var density = resources.displayMetrics.density
@@ -355,8 +362,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * PENDING_TAP: one pointer is down while [onOutsideTap] is set; it is held back from the tool
      * until it turns out to be more than a tap (see [startPendingTap]).
      * IGNORE: the rest of the gesture does nothing.
+     * CONSUMED (v1.8, D25): the gesture closed the strip's More row; like IGNORE, and a pen joining
+     * it does not draw either (see [onConsumeTouch]).
      */
-    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE }
+    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE, CONSUMED }
 
     private var mode = Mode.NONE
     private var drawPointerId = -1
@@ -440,6 +449,12 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             (e.buttonState and (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_TERTIARY)) != 0
         val fingerPans = type == MotionEvent.TOOL_TYPE_FINGER && controller.settings.stylusOnlyDrawing
         onTouchDown?.invoke()
+        if (onConsumeTouch?.invoke() == true) {
+            classifier.cancel()
+            ignore(id)
+            mode = Mode.CONSUMED
+            return
+        }
         when {
             mousePan || fingerPans -> restartTransform(e, -1)
             onOutsideTap != null -> startPendingTap(e)
@@ -449,6 +464,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private fun onPointerDown(e: MotionEvent, idx: Int) {
         val id = e.getPointerId(idx)
+        // v1.8 (D25): the gesture that closed the More row stays consumed, whatever joins it.
+        if (mode == Mode.CONSUMED) { ignore(id); return }
         val stylus = isStylusType(e.getToolType(idx))
         if (mode == Mode.PENDING_TAP) {
             // A held pen keeps the gesture: another contact is a resting palm or a second pen.
@@ -808,7 +825,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * and the rest of the gesture does nothing here, so it is never a canvas tap as well.
      */
     fun yieldToHistoryTap() {
-        if (mode == Mode.NONE) return
+        if (mode == Mode.NONE || mode == Mode.CONSUMED) return
         revertView()
         abortGesture()
         mode = Mode.IGNORE

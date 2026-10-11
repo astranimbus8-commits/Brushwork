@@ -75,11 +75,22 @@ object ChromeLayout {
 
     fun optionsStripTop(statusDp: Float): Float = topRowBottom(statusDp) + optionsStripGap
 
-    fun pillTop(statusDp: Float): Float = optionsStripTop(statusDp) + IbisDims.OptionsStripHeight.value + pillGap
+    /** v1.8: between the options strip's row 1 and its More row (4 dp, design §3.9: the More row at y 133). */
+    const val MORE_ROW_GAP = 4f
+
+    /**
+     * How far the open More row ([moreRowDp] tall, `StripLayout.moreRowDp`) moves the X / Y pill
+     * and the selection / object bar down (v1.8, design §3.9): its height plus [MORE_ROW_GAP]; 0
+     * while it is closed. One line moves the pill from 135 to 183.
+     */
+    fun moreRowShift(moreRowDp: Float): Float = if (moreRowDp > 0f) moreRowDp + MORE_ROW_GAP else 0f
+
+    fun pillTop(statusDp: Float, moreRowDp: Float = 0f): Float =
+        optionsStripTop(statusDp) + IbisDims.OptionsStripHeight.value + pillGap + moreRowShift(moreRowDp)
 
     /** Where the selection / object bar goes: at the pill's place, or under the pill when it shows ([pillHeightDp] > 0). */
-    fun selectionBarTop(statusDp: Float, pillHeightDp: Float): Float =
-        if (pillHeightDp > 0f) pillTop(statusDp) + pillHeightDp + selectionBarGap else pillTop(statusDp)
+    fun selectionBarTop(statusDp: Float, pillHeightDp: Float, moreRowDp: Float = 0f): Float =
+        if (pillHeightDp > 0f) pillTop(statusDp, moreRowDp) + pillHeightDp + selectionBarGap else pillTop(statusDp, moreRowDp)
 
     /**
      * Canvas fit inset at the top: the top row and the options strip. The pill and the selection
