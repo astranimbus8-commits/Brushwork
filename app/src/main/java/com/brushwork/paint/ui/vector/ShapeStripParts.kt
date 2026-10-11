@@ -158,8 +158,8 @@ private fun cellTint(on: Boolean, enabled: Boolean): Color = when {
 
 /**
  * A dropdown cell [width] wide: [glyph] and ▾, known by [label] (its description, the v1.7
- * DropdownChip's), opening its [entries] in an opaque menu anchored here (a pick closes the menu,
- * never the More row). The [selected] entry is checked.
+ * DropdownChip's, and its long-press label), opening its [entries] in an opaque menu anchored
+ * here (a pick closes the menu, never the More row). The [selected] entry is checked.
  */
 @Composable
 internal fun <T> ShapeMenuCell(
@@ -180,6 +180,7 @@ internal fun <T> ShapeMenuCell(
                 .heightIn(min = SHAPE_CELL_DP)
                 .clip(cellShape)
                 .border(1.dp, MaterialTheme.colorScheme.outline, cellShape)
+                .longPressLabel(label)
                 .clickable(role = Role.Button) { open = true }
                 .semantics { contentDescription = label }
                 .padding(start = if (width < MENU_ROW_MIN) 0.dp else 6.dp, end = if (width < MENU_ROW_MIN) 0.dp else 1.dp),
@@ -272,19 +273,6 @@ internal fun ShapePopupCell(
             Column(Modifier.width(popupWidth).padding(horizontal = 8.dp, vertical = 4.dp)) { content() }
         }
     }
-}
-
-/** A short hint [width] wide on up to two small lines (a refusal beside its control). */
-@Composable
-internal fun ShapeHintCell(text: String, width: Dp) {
-    Text(
-        text,
-        fontSize = 11.sp,
-        lineHeight = 13.sp,
-        color = BrushworkColors.OnChromeDim,
-        maxLines = 2,
-        modifier = Modifier.width(width),
-    )
 }
 
 /** The line ends glyph: a thick stroke with [cap] at both ends. */
