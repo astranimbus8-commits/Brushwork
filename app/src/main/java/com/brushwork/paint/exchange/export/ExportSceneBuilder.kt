@@ -18,6 +18,7 @@ import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.image.ArgbImage
 import com.brushwork.paint.model.ArrayCodec
+import com.brushwork.paint.model.ArrayInstances
 import com.brushwork.paint.model.ArrayLayout
 import com.brushwork.paint.model.ArraySourceBlob
 import com.brushwork.paint.model.ArraySpec
@@ -111,6 +112,12 @@ interface TextSource {
  *   cache); a shape or raster array exports its cache. The payload writes an arrayed layer as its
  *   cache plus its array (spec and source container), as a project file does.
  * - v1.7 (item 18): a stroke with symmetry copies is one outline of one envelope per copy.
+ * - v1.8 (area B, design §3.3): an array with a look places its copies by the
+ *   [ArrayInstances] matrices (End size and End turn in them) and styles each as the cache
+ *   draws it: a vector copy's objects restyled ([ArrayDraw.restyled]: paints tinted, opacity
+ *   multiplied), a text copy's outlines tinted with their opacity multiplied; a copy with
+ *   opacity 0 is left out. A shape or raster array's cache has the looks in its pixels. Without
+ *   a look the matrices and items are v1.7's (I19).
  *
  * Runs on the main thread (one layer at a time, yielding between layers: it only takes
  * references to immutable data and decides what goes where); converting vector objects runs on
@@ -477,6 +484,10 @@ class ExportSceneBuilder(
      * as [ArrayDraw.drawWithArray] draws them. Never real `<text>` (a copy is the letters moved,
      * turned and scaled; manual kerns are in the outlines). Null = the cache: the parts are not
      * known, or some letters have no outlines (color emoji).
+     *
+     * v1.8 (area B): placed by the [ArrayInstances] matrices; a copy with a look has every part's
+     * paint tinted ([ArrayDraw.tinted]) and its opacity multiplied by the copy's, and a copy with
+     * opacity 0 is left out. Without a look the items are v1.7's.
      */
     private fun textCopies(layer: Layer, item: TextItem, array: LayerArray): List<SceneItem>? {
         val parts = text.parts(item) ?: return null
@@ -488,16 +499,28 @@ class ExportSceneBuilder(
         // As the cache: the source alone while editing it or without a usable source rectangle.
         val usable = source.left.isFinite() && source.top.isFinite() && source.right.isFinite() && source.bottom.isFinite() && !source.isEmpty
         if (array.spec.editingSource || !usable) return own
-        val ms = ArrayLayout.matrices(array.spec, source)
-        val out = ArrayList<SceneItem>(ms.size * own.size)
-        for (k in ms.indices.reversed()) {
-            if (k == 0) { out += own; continue }
-            val v = ms[k]
+        val instances = ArrayInstances.of(array.spec, source)
+        val out = ArrayList<SceneItem>(instances.size * own.size)
+        for (inst in instances) {
+            if (inst.k == 0) { out += own; continue }
+            val v = inst.matrix
             if (v.any { !it.isFinite() }) continue
+            val look = inst.look
+            if (look != null && look.opacity <= 0f) continue
             for (it in own) {
                 val s = it as SceneItem.Shape
                 val path = s.path.transformed { p -> Vec2(v[0] * p.x + v[1] * p.y + v[2], v[3] * p.x + v[4] * p.y + v[5]) }
-                out += SceneItem.Shape(path, s.evenOdd, s.fill, s.stroke, s.opacity)
+                out += if (look == null) {
+                    SceneItem.Shape(path, s.evenOdd, s.fill, s.stroke, s.opacity)
+                } else {
+                    SceneItem.Shape(
+                        path,
+                        s.evenOdd,
+                        s.fill?.let { f -> ArrayDraw.tinted(f, look) },
+                        s.stroke?.let { st -> st.copy(color = ArrayDraw.tinted(st.color, look)) },
+                        s.opacity * look.opacity,
+                    )
+                }
             }
         }
         return out
@@ -717,12 +740,20 @@ class ExportSceneBuilder(
      * mapped by each [ArrayLayout] matrix (measured from the objects' paint bounds, as
      * `LayerDataTransforms` measures the array), copy N − 1 at the bottom and the source on top;
      * copy k ≥ 1 of object `id` has the id `id + (k shl 53)` (never written). Off the main thread.
+     *
+     * v1.8 (area B): placed by the [ArrayInstances] matrices, each copy's objects restyled by its
+     * look ([ArrayDraw.restyled]), as [ArrayDraw.effectiveVector] shows them; a copy with opacity
+     * 0 is left out. Without a look the objects are v1.7's.
      */
     private fun arrayObjects(content: VectorContent, spec: ArraySpec): List<VObject> {
-        val ms = ArrayLayout.matrices(spec, ObjectIndex.of(content).unionBounds())
-        val out = ArrayList<VObject>(ms.size * content.objects.size)
-        for (k in ms.indices.reversed()) {
-            for (o in content.objects) out += if (k == 0) o else VectorOps.transformed(o, ms[k]).withId(o.id + (k.toLong() shl 53))
+        val instances = ArrayInstances.of(spec, ObjectIndex.of(content).unionBounds())
+        val out = ArrayList<VObject>(instances.size * content.objects.size)
+        for (inst in instances) {
+            val look = inst.look
+            if (look != null && look.opacity <= 0f) continue
+            for (o in content.objects) {
+                out += if (inst.k == 0) o else ArrayDraw.restyled(VectorOps.transformed(o, inst.matrix), look).withId(o.id + (inst.k.toLong() shl 53))
+            }
         }
         return out
     }
