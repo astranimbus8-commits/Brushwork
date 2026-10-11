@@ -198,7 +198,7 @@ foundation" uses those names.
 | F | "Shapes in v1.8: the cog, object copies and the Shape strip" |
 | G | "The converted strips of area G", under "Converted strips and top menus" |
 | H | "Top menus", under the same heading; the strip host and the object bar's More row are in "The options strip and its More row" (foundation) |
-| Integration (`v18I`) | "Invariants (v1.8)", "Formats and compatibility (v1.8)" and "Testing and CI (v1.8)" |
+| Integration (`v18I`) | "Invariants (v1.8)", "Formats and compatibility (v1.8)" and "Testing and CI (v1.8)"; its strip changes (row 1 below 360 dp, the hint's lines, history taps through an open More row) are in "The options strip and its More row" |
 
 ## v1.8 foundation (gate 1)
 
@@ -429,10 +429,6 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
     stops dispatching to the interop view after a consumed change, so the yield's invalidate is a
     second guard. The hub runs the one undo or redo, so the history never moves twice, and the
     control under the UI finger does not fire.
-  - UI finger first: a two- or three-finger tap whose first finger lands on the UI (a control,
-    the More row itself) goes through `HistoryTapHub` alone ("History taps over the UI"). It
-    undoes or redoes once, and the row stays open: only a gesture whose first finger lands on the
-    canvas closes it.
   - Tests: `MoreRowHistoryTapsTest` (`qa18`, 392 × 873 dp) sends real multi-finger events
     through the editor's window, on the strip's row and on the object bar's. The canvas has three
     states, so a doubled undo or redo shows. It covers a one-finger tap and a drag, a pinch and a
@@ -2432,7 +2428,7 @@ Each window feeds it exactly once:
 
 A gesture counts as a history tap under the canvas' rules: every finger goes down and up within 300 ms of the first down, none moves the 12 dp tap slop, there are at most 3 fingers, and all are fingers (a stylus or mouse ends it).
 - **Canvas alone:** the gesture stays the canvas', including a gesture that closed a More row (`Mode.CONSUMED`): its two- and three-finger taps undo or redo there ("State and close rules (D25)").
-- **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`). A gesture that closed a More row (`Mode.CONSUMED`) started nothing. The yield invalidates its tap classifier, and the gesture stays consumed. When the first finger is on the UI, the hub claims before a later finger reaches the canvas, so an open More row stays open while the hub undoes or redoes.
+- **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`). A gesture that closed a More row (`Mode.CONSUMED`) started nothing. The yield invalidates its tap classifier, and the gesture stays consumed.
 - **After the last up**, in the Final pass so a control's own up has run: the hub puts back what the fingers did and runs ONE `HistoryLabels.performUndo` / `performRedo` with the hotbar's feedback. With a filter open, undo cancels it and redo says "Finish the filter first".
 
 **The mark has two parts.** This differs from design §3.10, which takes `uiMark()` at the first down. `uiMark()` → `undoMarker()` records a pending live edit first. Taken at every first down, it split the Adjust sheet's live edit into one step per tap, and it `runBlocking`-waited for a running vector render on every touch, the canvas' included.
@@ -2556,7 +2552,7 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
     - `ChromeV18NarrowUiTest` (360 dp: every strip, the row-1 budgets, the object bar, the top row);
     - from the integration, `MoreRowHistoryTapsTest` (history taps through an open More row) and `StripRow1NarrowFingerTest` (320 dp, real fingers on row 1), both under "The options strip and its More row".
   - Helpers:
-    - `Fingers18`: real touch, with taps, `quickTap` (no settle, for touches inside a fade), strokes, pinches, `longPress` / `longPressAt` and the canvas state;
+    - `Fingers18`: real touch, with taps (`tap`, `twoFingerTap`, `threeFingerTap`), `quickTap` (no settle, for touches inside a fade), strokes, pinches, pans, `longPress` / `longPressAt` and the canvas state;
     - `FakeStrip18`: `FakeStrips.spec(more, moreWidth, closer, row1Width)`; `FakeStrips.items(row1, more)`, which takes row-1 and More items of any width and counts their taps; and `FakeStripEditor` through `LocalStripOverride`.
   - `ui/vector/ObjectBarLayoutTest` covers the pure object-bar split.
 
