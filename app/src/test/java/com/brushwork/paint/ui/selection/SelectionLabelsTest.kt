@@ -41,6 +41,7 @@ class SelectionLabelsTest {
         "FILL" to listOf("Tolerance", "Refer:", "Close gaps", "Expand"),
         "EYEDROPPER" to listOf("Sample:", "Size:"),
         "MAGIC_WAND" to listOf(MagneticLabels18.SELECTION_MODE, "Tolerance", "Refer:"),
+        "LASSO" to listOf(MagneticLabels18.SELECTION_MODE, "Freehand lasso"),
         "MARQUEE" to listOf(MagneticLabels18.SELECTION_MODE),
         "OBJECT_SELECT" to listOf(MagneticLabels18.SELECTION_MODE, "Refer:"),
     )

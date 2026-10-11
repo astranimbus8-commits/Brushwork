@@ -4,11 +4,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChangeHistory
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Rectangle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,6 +24,8 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.tools.select.FillSettings
 import com.brushwork.paint.tools.select.FillTool
+import com.brushwork.paint.tools.select.LassoCommit
+import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.select.MagicWandTool
 import com.brushwork.paint.tools.select.MarqueeShape
@@ -113,9 +119,95 @@ internal fun magicWandStrip(tool: MagicWandTool, c: EditorController): StripSpec
     )
 }
 
-/** Lasso: the v1.7 strip until sub-step 3 converts it. */
+/**
+ * Lasso: mode and kind (one dropdown, v1.7's "<kind> lasso" buttons inside); for a polygon or
+ * curve, ✓ (with v1.7's point count under it) and ✕, their room kept while nothing is placed; a
+ * long-pressed curve point's sharp / smooth and delete (AUTO: at 360 dp they front the More row).
+ * Snapping (polygon and curve), anti-alias and the shortcuts on the More row, v1.7's "how to"
+ * text as its hint.
+ */
 @Composable
-internal fun lassoStrip(tool: LassoTool, c: EditorController): StripSpec = StripSpec.legacy { LassoOptions(tool) }
+internal fun lassoStrip(tool: LassoTool, c: EditorController): StripSpec {
+    val s = tool.settings
+    val kind = tool.kind
+    val curve = tool.curve
+    // Derived: dragging a curve point makes a new list on every move, the strip needs only these.
+    val pending by remember(tool) { derivedStateOf { tool.hasPendingWork } }
+    val count by remember(tool) { derivedStateOf { if (tool.kind == LassoKind.CURVE) tool.curve.count else tool.vertexCount } }
+    val point by remember(curve) {
+        derivedStateOf { curve.anchors.getOrNull(curve.selected)?.let { LassoPoint(curve.selected, it.sharp) } }
+    }
+    var menu by remember(tool) { mutableStateOf(false) }
+    val noun = if (kind == LassoKind.CURVE) "curve" else "polygon"
+    val items = buildList {
+        add(selectionModeItem(tool.mode) { tool.mode = it })
+        add(
+            StripItem(LASSO_KIND_KEY, "${kind.label} lasso", LassoKindWidth) {
+                IconDropdown(lassoKindIcon(kind), "${kind.label} lasso", LassoKindWidth) { close ->
+                    LassoKind.entries.forEach { k ->
+                        StripMenuItem(k.label, checked = k == kind, icon = lassoKindIcon(k), description = "${k.label} lasso") {
+                            close()
+                            if (k != tool.kind) {
+                                tool.setKind(k)
+                                lassoKindHint(k)?.let { c.toast(it) }
+                            }
+                        }
+                    }
+                }
+            },
+        )
+        if (kind != LassoKind.FREEHAND) {
+            add(
+                StripItem("lasso.close", "Close $noun", IconItemWidth, shown = pending) {
+                    CountedCloseButton("Close $noun", count) { tool.commit() }
+                },
+            )
+            add(
+                StripItem("lasso.discard", "Discard $noun", IconItemWidth, shown = pending) {
+                    ToolIconButton(Icons.Filled.Close, "Discard $noun", onClick = { tool.discard() }, size = IconItemWidth)
+                },
+            )
+        }
+        val a = point
+        if (kind == LassoKind.CURVE && a != null) {
+            val label = if (a.sharp) "Smooth" else "Sharp"
+            add(
+                StripItem("lasso.sharp", label, IconItemWidth, overflowRank = 2) {
+                    StripIconAction(if (a.sharp) Icons.Filled.Gesture else Icons.Filled.ChangeHistory, label) { curve.setSharp(a.index, !a.sharp) }
+                },
+            )
+            add(
+                StripItem("lasso.delete", "Delete", IconItemWidth, overflowRank = 1) {
+                    StripIconAction(Icons.Outlined.Delete, "Delete", tint = BrushworkColors.Danger) { curve.deleteAnchor(a.index) }
+                },
+            )
+        }
+        if (kind != LassoKind.FREEHAND) add(snapItem("lasso.snap", c))
+        add(
+            StripItem("lasso.aa", "Anti-alias", ANTI_ALIAS_DP.dp, row = StripRow.MORE) {
+                StripToggle("Anti-alias", s.antiAlias, ANTI_ALIAS_DP.dp) { tool.settings = tool.settings.copy(antiAlias = it) }
+            },
+        )
+        addAll(selectionShortcutItems(c) { menu = true })
+    }
+    val hint = when {
+        tool.busy -> LassoCommit.BUSY_LABEL
+        pending -> null
+        kind == LassoKind.POLYGON -> "Tap corners"
+        kind == LassoKind.CURVE -> "Tap points · long-press one to edit"
+        else -> null
+    }
+    return StripSpec(
+        items = items,
+        hint = hint,
+        overlays = { SelectionMenuOverlay(c, menu) { menu = false } },
+        movedInto = modesMovedInto + LassoKind.entries.associate { it.label to LASSO_KIND_KEY },
+    )
+}
+
+/** The lasso's kind dropdown: its key and declared width. */
+internal const val LASSO_KIND_KEY = "lasso.kind"
+internal val LassoKindWidth = 56.dp
 
 /** Select shape: mode, rectangle / ellipse, 1:1; from center, snapping and the shortcuts on the More row. */
 @Composable

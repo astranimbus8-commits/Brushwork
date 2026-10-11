@@ -40,6 +40,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -98,12 +99,16 @@ internal fun StripDropdown(expanded: Boolean, onDismiss: () -> Unit, content: @C
     )
 }
 
-/** A dropdown entry: [text] (its handle), an optional [icon], a check mark when [checked]. */
+/**
+ * A dropdown entry: [text] (its handle), an optional [icon], a check mark when [checked]; a
+ * [description], when given, is heard (and found) besides the text.
+ */
 @Composable
-internal fun StripMenuItem(text: String, checked: Boolean, icon: ImageVector? = null, onClick: () -> Unit) {
+internal fun StripMenuItem(text: String, checked: Boolean, icon: ImageVector? = null, description: String? = null, onClick: () -> Unit) {
     DropdownMenuItem(
         text = { Text(text, color = BrushworkColors.OnChrome) },
         onClick = onClick,
+        modifier = if (description != null) Modifier.semantics { contentDescription = description } else Modifier,
         leadingIcon = icon?.let { { Icon(it, contentDescription = null, tint = if (checked) BrushworkColors.Accent else BrushworkColors.OnChrome) } },
         trailingIcon = { if (checked) Icon(Icons.Filled.Check, contentDescription = null, tint = BrushworkColors.Accent) },
     )
@@ -229,33 +234,89 @@ internal fun StripToggle(label: String, checked: Boolean, width: Dp, onChange: (
  */
 @Composable
 internal fun SelectionModeDropdown(mode: SelectionMode, onChange: (SelectionMode) -> Unit) {
+    IconDropdown(modeIcon(mode), MagneticLabels18.SELECTION_MODE, SelectionModeWidth, state = modeDescription(mode)) { close ->
+        SelectionMode.entries.forEach { m ->
+            StripMenuItem(modeDescription(m), checked = m == mode, icon = modeIcon(m)) {
+                onChange(m)
+                close()
+            }
+        }
+    }
+}
+
+/**
+ * A [width] button showing [icon] and ▾, known by [description] (and [state] when given), that
+ * opens [entries] in an opaque dropdown anchored in it; `close` closes the dropdown.
+ */
+@Composable
+internal fun IconDropdown(
+    icon: ImageVector,
+    description: String,
+    width: Dp,
+    state: String? = null,
+    entries: @Composable ColumnScope.(close: () -> Unit) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
         Row(
             Modifier
-                .width(SelectionModeWidth)
+                .width(width)
                 .stripButton()
                 .clickable(role = Role.Button) { open = true }
                 .clearAndSetSemantics {
-                    contentDescription = MagneticLabels18.SELECTION_MODE
-                    stateDescription = modeDescription(mode)
+                    contentDescription = description
+                    if (state != null) stateDescription = state
                     role = Role.Button
                     onClick { open = true; true }
                 },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
-            Icon(modeIcon(mode), contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp))
+            Icon(icon, contentDescription = null, tint = BrushworkColors.OnChrome, modifier = Modifier.size(22.dp))
             Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(16.dp))
         }
-        StripDropdown(open, onDismiss = { open = false }) {
-            SelectionMode.entries.forEach { m ->
-                StripMenuItem(modeDescription(m), checked = m == mode, icon = modeIcon(m)) {
-                    onChange(m)
-                    open = false
-                }
-            }
-        }
+        StripDropdown(open, onDismiss = { open = false }) { entries { open = false } }
+    }
+}
+
+/**
+ * A 40 dp ✓ known by [description] ("Close polygon"), with the outline's point count under it
+ * ("3 pt", v1.7's readout); it needs three points.
+ */
+@Composable
+internal fun CountedCloseButton(description: String, count: Int, onClick: () -> Unit) {
+    val enabled = count >= 3
+    Column(
+        Modifier
+            .size(IconItemWidth)
+            .clip(ButtonShape)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Icon(
+            Icons.Filled.Check,
+            contentDescription = null,
+            tint = if (enabled) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim,
+            modifier = Modifier.size(20.dp),
+        )
+        Text("$count pt", fontSize = 9.sp, lineHeight = 10.sp, color = BrushworkColors.OnChromeDim, maxLines = 1, softWrap = false)
+    }
+}
+
+/** A 40 dp icon action known by [description], tinted [tint] (the curve point's actions). */
+@Composable
+internal fun StripIconAction(icon: ImageVector, description: String, tint: Color = BrushworkColors.OnChrome, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(IconItemWidth)
+            .clip(ButtonShape)
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics { contentDescription = description },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(22.dp))
     }
 }
 
