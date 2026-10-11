@@ -104,7 +104,7 @@ I1–I14 stay as they are. Three of them carry most of v1.8's weight:
 
 v1.8 adds five:
 - **I15 Copies are data.** An object's symmetry copies are a `CopyMaps` (`vector/CopyMaps.kt`): affine 3 × 3 maps, identity first, 2..256 maps (`StrokeCopies.MAX`), never baked into the object's geometry. A homography never becomes a copy: it bakes plain objects, in one step. Committing a symmetric curve or shape is ONE undo step, whatever the number of copies. Checked by `CopyMapsTest`, `CopyMapsCodecTest`, `SymmetricCommitUndoTest`.
-- **I16 Generators match their geometry.** A `VPath` with a `generator` has geometry equal to `CurveGenerators.build(generator, kind)` within 0.01 px. A hand edit of a point clears the generator in the same in-tool step (`CurveTool.editGeometry`); a reopened path that fails the check loses its generator silently; thickness edits are not geometry. `VectorOps.transformed` maps the generator with the path under a similarity (`CurveGenerator.mapped`) and drops it under any other map (`VectorOpsGeneratorTest`). On the foundation `CurveGenerators.matches` is a stub (false) that nothing calls yet: area E's `CurveTool` wires the reopen check, and until then a stored generator is kept but unused. Checked by E's `GeneratorMatchTest`, `GeneratorClearTest`, `GeneratorTransformTest`.
+- **I16 Generators match their geometry.** A `VPath` with a `generator` has geometry equal to `CurveGenerators.build(generator, kind)` within 0.01 px. A hand edit of a point clears the generator in the same in-tool step (`CurveTool.editGeometry`); a reopened path that fails the check loses its generator silently; thickness edits are not geometry. `VectorOps.transformed` maps the generator with the path under a similarity (`CurveGenerator.mapped`) and drops it under any other map (`VectorOpsGeneratorTest`). On the foundation `CurveGenerators.matches` was a stub (false) that nothing called; area E made it real, and `CurveTool` runs it when it reopens a path and again when it stores one (`open`, `checkedGenerator`): a path that fails it loses its generator. Checked by E's `GeneratorMatchTest`, `GeneratorClearTest`, `GeneratorTransformTest`.
 - **I17 Copies have readers.** Every reader of a `VPath`, a `VShape` or a shape layer's `ShapeObject` goes through `vector/ObjectCopies.kt` and keeps, bakes or (documented) ignores the copies as the readers table below says. A new reader without copies fails `CopiesReadersAuditTest`.
 - **I18 Strip placement is a pure function.** Which items sit in row 1 and which in the More row is `StripLayout.split(spec, availableDp)`: a function of the items' declared widths, rows and ranks, never of measured text. Row 1 of a converted strip never scrolls. Checked by `StripLayoutTest`, `StripInventoryTest`.
 - **I19 Array looks never touch the source.** Instance 0 is drawn exactly as in v1.7, and with `look == null` every instance is bit-identical to v1.7: `ArrayInstances.of` returns `ArrayLayout.matrices` unchanged. Checked by `ArrayInstancesTest`, B's `ArrayLookSourceTest` and the v1.7 array goldens.
@@ -134,13 +134,79 @@ v1.8 adds five:
 - **Theme:** `ui/theme/IbisColors` and `IbisDims` (the ibisPaint look, measured); the layer
   window fills the size its host gives it.
 
+## v1.8 overview
+
+v1.8 answers nine requests from the user. The lead built a foundation on `main`, eight areas
+built the items in parallel on top of it, and the lead integrated them (`v18I`).
+
+**The request, in the user's words:**
+
+> "1. make other tools compatible with mirrors like curves, paths, clone stamp, etc. Put the select several as a small icon right below or besides the X Y scale and transform,
+> 2. Make it so that array allows you to change progressively the transparency, colors, size, etc of each copy with a gradient
+> 3. Add a magnet selection tool
+> 4. Also add a color selection tool
+> 5. Make it so you can choose the colors of chromatic aberration and glitch filters
+> 6. Add curve options like archemedian that you can edit
+> 7. also add a cog shape in shapes
+> 8. Organize the menus that appear on top better, and also add 2 rows of the menu when needed
+> 9. Also improve the ui so it is more intuitive for top menus"
+
+**The user's answers (binding):**
+- Color selection: both. Color Range (tap colors on the canvas or pick one, a Fuzziness slider
+  for soft edges, a red preview before confirming) and preset chips by hue, saturation or
+  brightness.
+- Magnet: tap to tap. Each segment between two taps follows the strongest edge; every point can
+  be dragged and undone, as in the polygon lasso.
+- Array colors: a gradient tint of 2 or more stops. Each copy is tinted toward its color by a
+  Strength %, keeping its shading and transparency, on pixels, text, shapes and vectors.
+- Second row: one row, plus a More button that drops down the second row only when tapped.
+
+Item 1 is split in two: 1a (mirrors for Curve, Polyline, Path, Shape and Clone stamp) and 1b
+("Select several" as a cell of the X / Y pill). The item list under "v1.8 foundation" below gives
+each item's short name.
+
+**Areas, gates and merge order.**
+
+| Area | Name | Gate | Items |
+|---|---|---|---|
+| A | FILTERS | 1 | 5 |
+| B | ARRAY | 1 | 2 |
+| C | SELECT | 2 | 3, 4; the selection strips |
+| D | MIRRORS | 1 | 1a for the raster tools, the clone stamp and the guides; the Brush, Clone stamp, Ruler and Symmetry strips |
+| E | CURVES | 2 | 1a for Curve, Polyline and Path, 6; their strips |
+| F | COG/SHAPES | 2 | 1a for Shape, 7; the Shape strip |
+| G | STRIPS-1 | 2 | 8 for Transform, Text, Frame divider, Text frames, Masks, Remove and Pathfinder |
+| H | CHROME | 2 | 8 (the strip host, the More rows), 9 |
+
+The design calls C, F and G SELECTION, SHAPES and STRIPS; the ownership table under "v1.8
+foundation" uses those names.
+- **Gate 1** follows the foundation steps F0 to F3: A, B and D branch from `main`.
+- **Gate 2** follows F4 ("Select several" in the pill): C, E, F, G and H branch.
+- **Merge order:** A, B, C, D, E, F, G, H, by letter. H merges last, so it sees every converted
+  strip. Then the lead's integration (`v18I`), then device QA on the phone.
+
+**Where each area's section is** (by heading):
+
+| Area | Section |
+|---|---|
+| Foundation (F0 to F4) | "v1.8 foundation (gate 1)" below: object copies, array instances, the options strip and its More row, seams and new tools, "Select several" in the pill |
+| A | "Fringe colors (v1.8 item 5, area A)", under "Filters" |
+| B | "Array instances and looks", after "Live arrays" |
+| C | "Selection tools: Magnetic lasso, Color select and their strips" |
+| D | "Mirrors for raster tools, the clone and the guides (v1.8 item 1a, area D)", under "Symmetry". D's four strips have no section of their own: `ui/brush/BrushStrip.kt`, `ui/clone/CloneStrip.kt`, `ui/assist/RulerStrip.kt` and `ui/symmetry/SymmetryStrip.kt`, checked by `BrushStripTest`, `CloneStripTest`, `RulerStripTest` and `SymmetryStripTest` |
+| E | "Curve generators (v1.8 item 6, area E)", "Mirrors for Curve, Polyline and Path" and "The curve strips" |
+| F | "Shapes in v1.8: the cog, object copies and the Shape strip" |
+| G | "The converted strips of area G", under "Converted strips and top menus" |
+| H | "Top menus", under the same heading; the strip host and the object bar's More row are in "The options strip and its More row" (foundation) |
+| Integration (`v18I`) | "Invariants (v1.8)", "Formats and compatibility (v1.8)" and "Testing and CI (v1.8)" |
+
 ## v1.8 foundation (gate 1)
 
 The lead's part of v1.8, written at gate 1. The item sections (clone with symmetry, curve
-generators, the cog, Magnetic lasso, Color select, fringe colors, top menus) are written at
-integration (`v18I`), when the areas have built them.
+generators, the cog, Magnetic lasso, Color select, fringe colors, top menus) were written as the
+areas merged and completed at integration (`v18I`); "v1.8 overview" above says where each one is.
 
-### v1.8 overview: items, areas and merge order
+### Items, foundation steps and area ownership
 
 The items:
 - 1a mirrors for curves, polylines, paths, shapes and the clone stamp; 1b "Select several" in the X / Y pill;
@@ -197,7 +263,8 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   puts the exact identity first, keeps at most 256, `NONE` below 2), and `CopyMaps.NONE` means no
   copies. Copy k is the source drawn under C_k (`canvas.concat`). The JSON is exactly
   `VStroke.copies`' (a list of 9-float lists), `@EncodeDefault(NEVER)`: an object without copies
-  encodes as v1.7, and v1.7 drops the field (it shows the source only).
+  encodes as v1.7, and v1.7 drops the field (a v1.7 re-render shows the source only; see
+  "Formats and compatibility (v1.8)").
 - **The seams (§4.4).** `ObjectCopies.mapsAt(c, x, y)` is `SymmetryMaps.transforms` at the first
   anchor (empty when symmetry is off); `isPerspective(maps)` and `fromSymmetry(maps)` (null = a
   homography: bake plain objects instead, in the same step).
@@ -243,7 +310,7 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   row 1 highest rank first), `shown` (false reserves the width and draws nothing), `content`), an
   optional `hint` (the More row's first line), `overlays` (every sheet and dialog the strip
   opens) and `movedInto` (v1.7 handles now inside an item's popup). `StripSpec.legacy { v1.7
-  composable }` is the migration form; `StripSpec.EMPTY` shows nothing. `StripContext`
+  composable }` is the migration form (removed at integration, v18I); `StripSpec.EMPTY` shows nothing. `StripContext`
   (`selectionBarShown`, `vectorMode`, `closeMore`) reaches the builders through
   `LocalStripContext`.
 - **Layout (`StripLayout.kt`, frozen, I18).** `split(spec, availableDp)` is pure: available = row 1's
@@ -260,7 +327,8 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   tools' return `StripSpec.EMPTY`.
 - **Host (`StripHost.kt`, H's after F3).** `ToolOptionsBar` is
   `StripHost(ToolStrips.of(controller), ...)`. A legacy spec draws exactly as v1.7: the "VECTOR"
-  chip and the composable in one sideways-scrolling row, no toggle, no More row. A converted spec
+  chip and the composable in one sideways-scrolling row, no toggle, no More row (removed at
+  integration, v18I). A converted spec
   draws a fixed row 1 (the 40 dp VECTOR cell on a vector layer, the items, the 44 dp toggle at
   the end, described `StripLabels18.MORE_TOGGLE`, Expanded / Collapsed, tag
   `V18Tags.STRIP_TOGGLE`) and, while open, the opaque More row (`IbisColors.Menu`, tag
@@ -269,7 +337,8 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   While the row is open, the toggle is filled with `IbisColors.Accent` and the chevron points up.
   A long press shows its label without toggling. A `SideEffect` drops the open entry of a spec
   that can no longer open its row (`StripState.drop`): one that became wide enough for every
-  item, one with nothing left for the More row, or a legacy spec. So a row never stays open
+  item, one with nothing left for the More row, or a legacy spec (removed at integration, v18I).
+  So a row never stays open
   unseen and swallows a canvas touch, and it comes back closed. Each cell is composed under
   `key(item.key)`, so an item that comes or goes before an open popup, on row 1 or on the More
   row, never resets it (`StripHostStateTest`). `LocalStripOverride` (`ui/tools/ToolOptionsBar.kt`,
@@ -311,10 +380,10 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   wraps the editor in one). It never consumes a tap and never fires the click; a drag shows
   nothing; outside a host it does nothing.
 - **Tests and helpers.** `StripLayoutTest` (pure budgets), `StripRegistryTest`,
-  `StripHostLegacyTest`, `MoreRowOverlayTest`, `StripInventoryTest` (the §3.9 inventory rules on
+  `StripHostLegacyTest` (removed at integration, v18I), `MoreRowOverlayTest`, `StripInventoryTest` (the §3.9 inventory rules on
   every converted spec at 360 dp; `StripHandlesV17` records, per tool on a raster and a vector
   layer, the handles the v1.7 strip offers, and a converted strip must still offer each one on
-  row 1, in the More row or inside an item), `StripNoLegacyTest` (ignored until integration),
+  row 1, in the More row or inside an item), `StripNoLegacyTest` (ignored until integration; its `@Ignore` is removed at integration, v18I),
   `UniqueLabelsV18`. `SmokeUi.find` / `click` and `testing/StripTestKit.openMoreRow` open the
   More row when a control is not on row 1, so v1.7 tests keep finding controls an area moves.
 
@@ -885,7 +954,7 @@ Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape
 
 **The v1.7 fallback (D23).**
 - `ShapeObject.forWriting()` is called by `ShapeCodec.encode` and by `VectorCodec.encode` for each `VShape`. For a COG without its own points, it writes normalized `points` (the outer contour with corners, no hole) and sets `cogFallback = true`.
-- v1.7 coerces COG to RECTANGLE and draws those points: the teeth, without the hole. A v1.7 save keeps a custom-points rectangle.
+- v1.7 coerces COG to RECTANGLE and draws those points: the teeth, without the hole. A v1.7 save keeps a custom-points rectangle. Both hold once v1.7 re-renders or edits the layer: until then it shows v1.8's saved pixels (hole included), and a layer it never edited keeps the cog when it saves ("Formats and compatibility (v1.8)").
 - On read, `sanitized()` drops the flagged points and the flag. It runs in `ShapeCodec.decode`, in `VectorCodec.sanitizedShapes` (inside `VectorCodec.decode`) and in `PayloadImport`. v1.8 therefore reopens the cog itself, hole included.
 - A plain v1.7 shape round-trips through v1.8 byte for byte (`CogFallbackCodecTest`, `CogFallbackWriteTest`).
 - A mirrored cog with a hole survives `ProjectRepository` save → load with the same data and pixels, on a shape layer and as a vector object (`ShapeCopiesSaveReopenTest`).
@@ -1157,7 +1226,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - petalsN / petalsD;
 - density ("Points per turn"; 0 = the kind's default).
 
-`sanitized()` clamps the values (turns ≤ 50, density ≤ 64, petals 1..24). v1.7 drops the field and keeps an ordinary path.
+`sanitized()` clamps the values (turns ≤ 50, density ≤ 64, petals 1..24). v1.7 drops the field and keeps an ordinary path (once it edits the layer: an untouched layer keeps v1.8's file, generator included).
 
 **The kinds** (`tools/vector/gen/CurveGenerators.Analytic`, document px, y down; c centre, R size, α angle, dir = +1 clockwise):
 - Archimedean: φ in 0..Φ (Φ = 2π·turns), r = R·(inner + (1 − inner)·φ/Φ), angle α + dir·(φ − Φ). The outer end is at c + R·(cos α, sin α).
@@ -1210,7 +1279,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - **Removing copies.** `MirrorLabels18.REMOVE` (More row) drops the open path's copies as one in-tool step; the generator stays (copies are no geometry).
 
 ## The curve strips (§3.9, area E)
-- `curveSpec(tool, CurveStripFacts, CurveStripUi)` is pure and fully converted (`legacyContent == null`). The keys are `CurveKeys.*`.
+- `curveSpec(tool, CurveStripFacts, CurveStripUi)` is pure and fully converted (`legacyContent == null` (removed at integration, v18I)). The keys are `CurveKeys.*`.
 - `curveFacts` clamps `points` to 2. The spec asks only "open" and "two or more", so a generator slider frame that changes the point count rebuilds no spec (`GeneratorRoundTripTest.aTurnsChangeKeepsTheStripFacts`). Keep every `points` test as `> 0` or `>= 2`.
 - The paint modes are in the Stroke kind dropdown (`movedInto`); Order, Handles and Point weight are popups. Sheets and typing dialogs close the More row; popups and toggles keep it open.
 - Items that come and go sit after the popups in their line. (They were placed so while StripHost composed its cells by position. Since the merge it keys each cell by `StripItem.key`, so an item coming or going before an open popup no longer resets it: `StripHostStateTest`.)
@@ -1229,6 +1298,8 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 | Perspective-array curves (baked) | identical | identical |
 | Raster curve commits with mirrors | identical | identical |
 | Generated curve | an ordinary path, identical geometry | the path, without its settings |
+
+These rows are the design's, and the first and last hold only once v1.7 edits the layer. v1.7 first shows v1.8's saved pixels (copies included), and a layer it never edited keeps its copies and generator when it saves. "Formats and compatibility (v1.8)" has the corrected rows.
 
 ## Live arrays (`array/`, `tools/array/`, `ui/array/`, v1.7)
 
@@ -1390,7 +1461,7 @@ v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode r
 **On disk.**
 - The look is saved in the array spec JSON (`ArrayCodec`). An identity look is not written.
 - `ArrayLookPersistenceTest` saves and reopens all four source kinds with a look: same spec, same caches, and still live after reopening.
-- A v1.8 file opened in v1.7 shows plain copies, and a v1.7 save loses the look (Formats row "Array with a look").
+- A v1.8 file opened in v1.7 shows plain copies, and a v1.7 save loses the look (Formats row "Array with a look"). More exactly: v1.7 first shows the cached copies with their look and draws plain copies only when it re-renders the array; its first save drops the look from the spec even if the array was never touched, while the container keeps the looked pixels until a re-render ("Formats and compatibility (v1.8)").
 
 ## Transforming data layers (v1.7, items 11 and 9)
 
@@ -2043,6 +2114,86 @@ What v1.6 does with a v1.7 project (the final compat QA checked these rows again
 | Fill/Stroke/Both, Pathfinder, transforms, Free deform, Shape to path | 1 or 2 | yes | identical (plain `VPath`/`VShape`/pixels) | identical | identical |
 
 Folders alone bump the format: v1.6 would draw a folder's children flat, treat the folder entry as a raster layer without a pixel file, and its save would destroy the tree. Every other construct has a correct pixel cache that v1.6 already shows.
+
+## Formats and compatibility (v1.8)
+
+v1.8 changes no codec version and adds no file family. `ProjectFormat.VERSION` stays 3 and `writtenVersion` stays 1, 2 or 3 (I14); `TextCodec` stays 5, `ShapeCodec` 2, `VectorCodec` 1, `Payload` 2 and `ArrayCodec` 1. v1.7 therefore opens every v1.8 project. Every new field is `@EncodeDefault(NEVER)` (I13), and v1.7's decoders ignore it (`ignoreUnknownKeys`, `coerceInputValues`):
+
+| Codec | New in v1.8 | v1.7 reads |
+|---|---|---|
+| `VectorCodec` (`VPath`) | `copies` (a `CopyMaps`, as 9-float lists), `generator` | ignores both |
+| `ShapeCodec`, and a `VShape`'s `ShapeObject` | `copies`; `type` COG with `cogTeeth`, `cogDepth`, `cogToothWidth`, `cogTaper`, `cogHole`; the fallback `points` with `cogFallback` | ignores the new keys; COG coerces to RECTANGLE, which draws the fallback points |
+| `ArrayCodec` spec | `look` (an `ArrayLook`; an identity look is not written) | ignores it |
+
+The fringe colors of Chromatic aberration and Glitch are not persisted: neither filter can be an adjustment layer (no `pixelMapper`), and the filter recents keep only filter ids.
+
+Two facts of v1.7's storage decide what v1.7 shows and keeps (`ProjectRepository`, `LayerEntries`, unchanged since `885793b4`, which is the v1.7.0 code):
+- **Open re-renders nothing.** Each layer shows its saved pixel cache, as v1.8 drew it. v1.7 redraws a layer from its own model only when an edit of that layer re-renders it. On a vector layer that redraws only the changed tiles (`ContentDiff.changedTiles`), so v1.8's pixels can stay in the tiles v1.7 never redrew.
+- **Saves are incremental.** A layer v1.7 never edited keeps its `.vec` file, its `shapeData` string and its array container as v1.8 wrote them, so its v1.8 keys survive. A layer v1.7 edited is re-encoded by v1.7's codecs, which drop them. The one exception is the array spec: `project.json` re-encodes it from memory on every save, so its `look` is lost at v1.7's first save even when the array was never touched.
+
+What v1.7 does with a v1.8 project (the rows of design §8.1, checked against the code; the frozen v1.7 decoders in `compat17` check the decoding, `CompatV17DecodeTest`):
+
+| What v1.8 wrote | What v1.7 shows | What a v1.7 save keeps | Back in v1.8 |
+|---|---|---|---|
+| Curve, Polyline or Path with mirror copies (vector layer) | the committed pixels, copies included; an edit of the layer redraws its changed tiles with the source only | the copies, while v1.7 never edited the layer; after an edit, the source only | as saved |
+| Shape with mirror copies (vector or shape layer) | the same: the committed pixels, copies included; a re-render draws the source only | the same: the copies until v1.7 edits the layer, then the source only | as saved |
+| Perspective-array curves and shapes (baked) | identical | identical | identical |
+| Detached copies (`ObjectActions.detachCopies`) | identical (plain objects) | identical | identical |
+| Raster commits with mirrors, clone results | identical | identical | identical |
+| Selections from Magnetic lasso and Color select | identical (a selection or saved selection is pixels) | identical | identical |
+| Array with a look (any source kind) | the cached copies, look included; a re-render of the array draws plain copies | the container as v1.8 wrote it (looked pixels) until v1.7 re-renders the array; the spec loses its look at the first save | an array without a look; its cache shows the look until the array is re-rendered |
+| Generated curve | an ordinary path, identical geometry | the generator, while v1.7 never edited the layer; after an edit, the path without its settings | as saved (the reopen check of I16 drops a generator whose geometry changed) |
+| Cog without a hole | the committed pixels; a re-render draws a Rectangle with the cog's outline (teeth) as custom points | the cog, while v1.7 never edited the layer; after an edit, a custom-points rectangle | as saved |
+| Cog with a hole | the committed pixels, hole included; a re-render draws the same rectangle, without the hole | the same as without a hole: the cog until an edit, then a custom-points rectangle without the hole | as saved |
+| A holed cog turned into a path | identical (one plain compound `VPath`) | identical | identical |
+| Chromatic aberration and Glitch colors | not stored anywhere | - | - |
+
+Corrections to design §8.1, found at integration: its "What v1.7 shows" column describes v1.7's re-render, not what it shows on open (the saved pixels), and its "What a v1.7 save keeps" column describes a layer v1.7 edited. The array row is the one where an untouched project changes: the spec loses its look at the first v1.7 save while the cache keeps the looked pixels, so back in v1.8 the array's cache and its spec differ (I1) until the array is re-rendered.
+
+## Testing and CI (v1.8)
+
+**The `Timing` category (F0).**
+- `testing/Timing.kt` is a JUnit 4 category: an empty interface, `com.brushwork.paint.testing.Timing`. Every test class that times anything carries `@Category(Timing::class)` (`org.junit.experimental.categories.Category`). At integration 55 test classes carry it.
+- `testing/TimingTaggedTest` keeps that true by scanning the test sources. A file "times" when its text has one of `CLOCK` (`PerfBudget.`, `System.nanoTime`, `measureNanoTime`, `measureTimeMillis`) or names a helper listed in `TIMING_HELPERS` (`qa16/LiveQa.kt`, `qa16/MasksLiveFlow.kt` and `tools/vector/VectorPerfHarness.kt`, each with the names its users call). Every top-level test class of such a file must be tagged.
+- `NOT_TIMING` is its allowlist: about 20 files that read the clock for another reason, each with that reason. Examples are a UI wait's timeout scaled with `PerfBudget.ms`, a clock that names a fresh directory or document, times that are printed or noted but never asserted, and `PerfBudgetTest`'s scripted clock.
+- An entry of `TIMING_HELPERS` or `NOT_TIMING` that no longer applies fails the test too, so both lists stay true. The test also pins the category's class name, which Gradle filters on.
+
+**Timing guards (`testing/PerfBudget.kt`, frozen).**
+- Budgets are tuned on a desktop. On CI (`CI` set) `PerfBudget.ms(desktopMs)` multiplies them by `CI_FACTOR` = 4. Callers scale with `ms` where they always did; a guard uses the budget it is given.
+- `within(budgetMs, tries = TRIES, what) { block }` runs the block once untimed (a warm-up), then up to `TRIES` = 5 timed runs. It stops at the first run within the budget and returns its time. It fails only when every try is over, and its message lists every time and the best one.
+- `ratioWithin(limit, tries, a, b, slackMs, what)` warms up both blocks, then times `a` (the thing under test) and right after it `b` (the reference) in each try. A try passes when a ≤ limit · b + slackMs.
+- `timedWithin` is `within` without the warm-up, returning the block's result (for a cold first run). `measuredWithin`, `measuredRatioWithin` and `until` take the caller's own measurement: a median, an average, or a step set up again each try.
+- A healthy guard pays one run. Retries absorb a noisy machine; a budget is never loosened to make a guard pass.
+
+**Frozen test helpers (`$FrozenTests`).** `.wt/_tools/ownership-check-v18.ps1` fails an area branch that changes any of eight helpers, with "frozen test helper (lead)": `smoke/SmokeUi.kt`, `testing/StripTestKit.kt`, `testing/PerfBudget.kt`, `qa16/QaCurves.kt`, `qa16/Qa16Ui.kt`, `ui/editor/HistoryTapFingers.kt`, `ui/editor/chrome/UniqueLabelsV17.kt` and (from F4) `testing/PillTestKit.kt`. Only the lead changes them.
+
+**The kits for converted strips and the pill.**
+- `SmokeUi` (the More-row fallbacks): `find` and `click` look for a label; when it is not on screen and the strip shows its More-row toggle closed, they open the row (`openMoreRow`, through the tag `V18Tags.STRIP_TOGGLE`) and try once more. `has` never opens the row, so a check for absence leaves no row open to swallow the next canvas touch (D25). v1.7 tests therefore still find a control an area moved to the More row.
+- `testing/StripTestKit` does the same for tests that drive `RobolectricUi` directly: `tagged`, `toggle`, `moreRowShown`, `openMoreRow`, `closeMoreRow`, `reach { find }` (find, else open the row and find again), `inConvertedStrip(node)` (on row 1 or the More row) and `horizontalScroller(node)` (null on row 1, which never scrolls, I18).
+- `testing/PillTestKit` reaches the X / Y pill's "Select several" cell (tag `V18Tags.PILL_SEVERAL`): `severalCell`, `severalState` ("On" / "Off") and `toggleSeveral` (its click action, then a settle).
+- UI tests keep the v1.7 rules: one `@Test` per class after `SmokeUi.installTestRecomposer()`, its own `instrumentedPackages` sandbox, and `@Config(qualifiers = "w392dp-h873dp-xxhdpi")` (the phone) or `"w360dp-h640dp-xxhdpi"` (the narrow check).
+
+**The CI decision (CI2, design §8.5).** v1.7.0 ran two test JVMs on CI. After it, CI went back to one JVM (`885793b4`), because the timing-ratio QA tests (`VectorBudgetQaTest`'s local erase against a full render) spiked past their budgets while two JVMs shared the cores; the suite then took about 41 minutes. CI2 runs two JVMs again, but only for the tests that time nothing. `app/build.gradle.kts` sets the test JVMs:
+- `forkEvery = 40` and a 1536 MB heap, as in v1.7.
+- On CI (`CI` set) without `-PtimingOnly`: `maxParallelForks = 2`, and `excludeCategories` drops the `Timing` classes.
+- With `-PtimingOnly`: one JVM, and `includeCategories` runs only the `Timing` classes.
+- Locally (no `CI`): one JVM runs every test, timing tests included, as before v1.8.
+- `bw.testForks` and `bw.testSet` (`timing`, `main` or `all`) are passed as system properties, so they are task inputs and the build cache never hands back a run made with other settings.
+
+`.github/workflows/android.yml` runs "Unit tests" (`./gradlew --no-daemon testDebugUnitTest`: two JVMs, no timing tests), then "Timing tests" (`... testDebugUnitTest -PtimingOnly`: serial, so no second JVM competes with a budget for the cores), then the release APK. The job's timeout is 75 minutes. The merged suite has 4205 tests: 3883 in the first step and 322 in the second.
+
+Measured on GitHub Actions (pushes to `main`, all green):
+
+| Run | Commit | Unit tests | Timing tests | Whole job |
+|---|---|---|---|---|
+| 38049787695 | `33e1184f` (before CI2) | 41.8 min (one JVM, all tests) | - | about 49 min |
+| 38111944913 | `4f923db2` (before CI2) | 40.2 min (one JVM, all tests) | - | about 46.6 min |
+| 38114453644 | `089b946e` (CI2) | 22.0 min | 4.7 min | about 31 min |
+| 38126171015 | `762b3cb7` | 25.7 min | 4.7 min | about 37 min |
+| 38133168556 | `f4478bc8` | 18.2 min | 3.0 min | about 25.5 min |
+
+The split cut the test time from about 41 minutes to 21 to 30 minutes, and the job from about 47 minutes to 25 to 37, well inside the 75-minute timeout.
+
 ## UI (`ui/`)
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
 nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
@@ -2162,7 +2313,7 @@ The panel lays out 0 × 0 and does not place the bar for a tool that shows no op
 
 ### The converted strips of area G (v1.8 item 8, §3.9; `ui/placement/`, `ui/textframes/`, `ui/mask/`, `ui/remove/`, `ui/pathfinder/`)
 
-Seven builders return real `StripSpec`s (`legacyContent == null`): `transformStrip`, `textStrip` and `frameDividerStrip` (`ui/placement/PlacementStrips.kt`), `textFrameStrip`, `maskStrip`, `removeStrip` and `pathfinderStrip`.
+Seven builders return real `StripSpec`s (`legacyContent == null` (removed at integration, v18I)): `transformStrip`, `textStrip` and `frameDividerStrip` (`ui/placement/PlacementStrips.kt`), `textFrameStrip`, `maskStrip`, `removeStrip` and `pathfinderStrip`.
 - Each strip's `…StripItems` object holds its keys, its declared widths (measured, rounded up to 4 dp) and its handles (the v1.7 labels).
 - Row 1 / More row placement is the host's `StripLayout.split` (I18).
 
@@ -2172,7 +2323,7 @@ Seven builders return real `StripSpec`s (`legacyContent == null`): `transformStr
   - `StripTextButton`: icon and text at 10 to 11 sp, `stacked` for icon over text, with `checked`/`on`/`dimmed` states.
   - `StripStatusText`: 11 sp, 2 lines.
   - `snapItem`: "Snap to objects", 96 dp.
-  - `ClosesMoreRow()`: used in toggle-less states, so a stale open More-row entry cannot swallow the next canvas touch. Since the merge the host also drops a toggle-less spec's open entry itself (`StripState.drop`, legacy specs included); `ClosesMoreRow()` stays as the strips' own guard.
+  - `ClosesMoreRow()`: used in toggle-less states, so a stale open More-row entry cannot swallow the next canvas touch. Since the merge the host also drops a toggle-less spec's open entry itself (`StripState.drop`, legacy specs included (removed at integration, v18I)); `ClosesMoreRow()` stays as the strips' own guard.
 - **Close rules (D25).**
   - Anchored dropdowns and popups keep the More row open: the Transform mode, Mesh size, interpolation, the Text frames wrap, the Masks target, the Remove sample and size, the Pathfinder ops.
   - An item that opens a sheet or dialog, or that waits for the next canvas touch, calls `LocalStripContext.current.closeMore()` first. Examples: "Edit text", "Letters", "Wrap", "Numbers", "Edit story", "Link…", the Masks add buttons, the Frame divider sheets.
@@ -2234,6 +2385,7 @@ Seven builders return real `StripSpec`s (`legacyContent == null`): `transformStr
 - **Opacity (D27).**
   - Menus are opaque `IbisColors.Menu` (#1E1E1E). The More menu passes it as `containerColor`.
   - `BrushworkTheme` sets `surfaceContainer = IbisColors.Menu`, so Material dropdowns that keep the default container color are opaque too. A dropdown that sets its own color keeps it.
+  - At integration (`v18I`) the five dropdowns that still set `BrushworkColors.ChromeHigh` (#2A2C30) moved to `IbisColors.Menu`: the brush readouts' editor (`ui/brush/BrushPanel.kt`), the clone stamp's Sample menu (`ui/clone/CloneToolOptions.kt`), the layer window's special-layer, ⋮ and blend menus (`ui/layers/LayerControls.kt`) and a saved selection's menu (`ui/layers/SavedSelectionRows.kt`). `ChromeHigh` stays on what is not a menu: dialogs, the filter chip and the snackbar.
   - The options strip's More row and the object bar's More row are `IbisColors.Menu` with a 1 dp `BrushworkColors.ChromeBorder` edge.
   - Sheets, the selection bar and the object bar's own row stay `SheetBackground` (translucent).
 - **Long-press labels.** `Modifier.longPressLabel(label)` shows the label in a bubble and never acts. It sits on:
