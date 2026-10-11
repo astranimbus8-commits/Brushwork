@@ -22,7 +22,6 @@ import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.TransformLabels17
-import com.brushwork.paint.ui.common.V17Tags
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
@@ -32,7 +31,6 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VectorContent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -87,31 +85,7 @@ class Qa18MirrorsSeveralUiTest {
      * every other row-1 cell (fold; X, Y and "Increments" unless [folded]; the trash cell), next to
      * the last of them; the scale row (when there is one) under the row, none while [folded].
      */
-    private fun assertAtRowEnd(what: String, folded: Boolean) {
-        val r = cell(what)
-        assertTrue("$what: on screen: $r", r.left >= 0f && r.right <= s.widthDp + 0.5f && r.top >= 0f && r.bottom <= s.heightDp + 0.5f)
-        assertTrue("$what: a finger's size: $r", r.width >= 40f - 0.5f && r.height >= 40f - 0.5f)
-        val fold = requireNotNull(Finger.control(s, if (folded) "Unfold the X / Y strip" else "Fold the X / Y strip")) { "$what: no fold cell" }
-        assertEquals("$what: on the fold cell's row ($fold vs $r)", fold.center.y, r.center.y, 2f)
-        val left = mutableListOf("fold" to fold)
-        s.tagged(V17Tags.PILL_TRASH)?.let { left += "trash" to it }
-        for (label in listOf("Type X", "Type Y", "Increments")) {
-            val b = Finger.control(s, label)
-            if (folded) {
-                assertTrue("$what: folded, no \"$label\" on the row: $b", b == null || abs(b.center.y - r.center.y) > 2f)
-            } else {
-                requireNotNull(b) { "$what: no \"$label\"" }
-                left += label to b
-            }
-        }
-        for ((name, b) in left) assertTrue("$what: $name ($b) left of the cell ($r)", b.right <= r.left + 0.5f)
-        val gap = r.left - left.maxOf { it.second.right }
-        assertTrue("$what: right next to the last cell (gap $gap dp)", gap in -0.5f..12f)
-        val scale = s.tagged(V17Tags.PILL_SCALE_ROW)
-        if (folded) assertNull("$what: folded, no scale row", scale)
-        else if (scale != null) assertTrue("$what: the scale row ($scale) under the row ($fold)", scale.top >= fold.bottom - 0.5f)
-        println("Qa18MirrorsSeveral $what: cell $r, row-1 cells ${left.map { it.first }}, scale row ${scale != null}")
-    }
+    private fun assertAtRowEnd(what: String, folded: Boolean) = Qa18MirrorsKit.severalAtRowEnd(s, what, folded)
 
     private fun tapCell(t: PointEditor, on: Boolean, what: String) {
         val r = cell(what)

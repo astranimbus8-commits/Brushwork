@@ -19,10 +19,13 @@ import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.SymmetryLabels
+import com.brushwork.paint.ui.common.V17Tags
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.symmetry.SymmetryStripItems
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import java.io.File
 import java.io.FileOutputStream
@@ -89,6 +92,68 @@ internal object Qa18MirrorsKit {
         settle()
         assertNotEquals("Done leaves the Symmetry tool", ToolId.SYMMETRY, c.activeToolId)
         assertEquals("still the ruler", type, c.symmetry.type)
+    }
+
+    /** The ruler off, by finger: the Symmetry tool, its ruler dropdown, "Off", Done. */
+    fun rulerOff(ui: Qa16Ui) {
+        val s = ui.s
+        val c = s.c
+        ui.tool("Symmetry")
+        settle()
+        val current = c.symmetry.type.label
+        ui.reach(current, 32f)
+        Finger.tap(s, current)
+        settle()
+        SmokeUi.click(SymmetryType.OFF.label, exact = true)
+        settle()
+        assertEquals("the ruler is off", SymmetryType.OFF, c.symmetry.type)
+        if (StripTestKit.moreRowShown()) StripTestKit.closeMoreRow()
+        click("Done", exact = true)
+        settle()
+        assertNotEquals("Done leaves the Symmetry tool", ToolId.SYMMETRY, c.activeToolId)
+        assertEquals("still off", SymmetryType.OFF, c.symmetry.type)
+    }
+
+    /** The most opaque pixel of [b] within [r] px of [p] (0 off the bitmap). */
+    fun inkNear(b: Bitmap, p: Vec2, r: Int): Int {
+        var best = 0
+        for (y in p.y.toInt() - r..p.y.toInt() + r) for (x in p.x.toInt() - r..p.x.toInt() + r) {
+            if (x in 0 until b.width && y in 0 until b.height) best = maxOf(best, b.getPixel(x, y) ushr 24)
+        }
+        return best
+    }
+
+    /**
+     * "Select several" (tag [V18Tags.PILL_SEVERAL]) ends the X / Y pill's first row: on screen,
+     * finger-sized, on the fold cell's row, right of every other row-1 cell (fold; X, Y and
+     * "Increments" unless [folded]; the trash cell), next to the last of them, nothing clipped;
+     * the scale row (when there is one) under the row, none while [folded].
+     */
+    fun severalAtRowEnd(s: ChromeScreen, what: String, folded: Boolean) {
+        val r = requireNotNull(s.tagged(V18Tags.PILL_SEVERAL)) { "$what: no \"Select several\" cell; shown: ${SmokeUi.shown().take(80)}" }
+        assertTrue("$what: on screen: $r", r.left >= 0f && r.right <= s.widthDp + 0.5f && r.top >= 0f && r.bottom <= s.heightDp + 0.5f)
+        assertTrue("$what: a finger's size: $r", r.width >= 40f - 0.5f && r.height >= 40f - 0.5f)
+        val fold = requireNotNull(Finger.control(s, if (folded) "Unfold the X / Y strip" else "Fold the X / Y strip")) { "$what: no fold cell" }
+        assertEquals("$what: on the fold cell's row ($fold vs $r)", fold.center.y, r.center.y, 2f)
+        val left = mutableListOf("fold" to fold)
+        s.tagged(V17Tags.PILL_TRASH)?.let { left += "trash" to it }
+        for (label in listOf("Type X", "Type Y", "Increments")) {
+            val b = Finger.control(s, label)
+            if (folded) {
+                assertTrue("$what: folded, no \"$label\" on the row: $b", b == null || abs(b.center.y - r.center.y) > 2f)
+            } else {
+                requireNotNull(b) { "$what: no \"$label\"" }
+                assertTrue("$what: \"$label\" shows whole ($b)", b.width >= 24f && b.left >= 0f && b.right <= s.widthDp + 0.5f)
+                left += label to b
+            }
+        }
+        for ((name, b) in left) assertTrue("$what: $name ($b) left of the cell ($r)", b.right <= r.left + 0.5f)
+        val gap = r.left - left.maxOf { it.second.right }
+        assertTrue("$what: right next to the last cell (gap $gap dp)", gap in -0.5f..12f)
+        val scale = s.tagged(V17Tags.PILL_SCALE_ROW)
+        if (folded) assertNull("$what: folded, no scale row", scale)
+        else if (scale != null) assertTrue("$what: the scale row ($scale) under the row ($fold)", scale.top >= fold.bottom - 0.5f)
+        println("Qa18Mirrors $what: cell $r, row-1 cells ${left.map { it.first }}, scale row ${scale != null}")
     }
 
     // ------------------------------------------------------------------ pictures
