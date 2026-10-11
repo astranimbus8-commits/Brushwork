@@ -37,7 +37,8 @@ import org.robolectric.shadows.ShadowLog
  * With objects selected on a vector layer and Lasso, then Object select, on the user's phone (392 dp):
  * - [StripTestKit.openMoreRow] and [SmokeUi.openMoreRow] open the strip's More row (4 dp under the
  *   strip's panel), not the bar's; [StripTestKit.moreRowShown] and [StripTestKit.inConvertedStrip]
- *   count the strip's row only; [SmokeUi.find]'s fallback opens only the strip's row;
+ *   count the strip's row only; [StripTestKit.reach]'s and [SmokeUi.find]'s fallbacks open only the
+ *   strip's row; [StripTestKit.closeMoreRow] leaves the bar's open row alone;
  * - [StripTestKit.openObjectRow] opens the bar's row (under the bar, with Bring forward);
  * - one row shows at a time (area H's rule): each opener closes the other's row, and there is never
  *   more than one More row in the tree.
@@ -140,6 +141,9 @@ class StripTestKitObjectRowTest {
             assertTrue("openObjectRow clicks the bar's toggle", StripTestKit.openObjectRow())
             assertOneRow("openObjectRow", strip = false)
             assertFalse("already open", StripTestKit.openObjectRow())
+            // The strip's closer leaves the bar's row alone (the strip's row is the closed one).
+            assertFalse("closeMoreRow: the strip's row is closed", StripTestKit.closeMoreRow())
+            assertOneRow("closeMoreRow with the bar's row open", strip = false)
             val forward = clickable("Bring forward") ?: throw AssertionError("no Bring forward on the bar's More row")
             assertTrue("Bring forward sits on the bar's More row", StripTestKit.inObjectRow(forward))
             assertFalse("…which is not the strip's", StripTestKit.inConvertedStrip(forward))
@@ -152,6 +156,12 @@ class StripTestKitObjectRowTest {
             assertFalse("closeObjectRow: the bar's row is closed", StripTestKit.closeObjectRow())
             assertTrue(StripTestKit.closeMoreRow())
             assertNoRow("closeMoreRow")
+
+            // StripTestKit.reach's fallback opens the strip's row only.
+            assertNull("reach never opens the bar's row", StripTestKit.reach { clickable("Bring forward") })
+            assertOneRow("StripTestKit.reach's fallback", strip = true)
+            assertTrue(StripTestKit.closeMoreRow())
+            assertNoRow("closeMoreRow after reach")
 
             // SmokeUi: its opener and find's fallback reach the strip's row only.
             assertTrue("SmokeUi.openMoreRow clicks the strip's toggle", SmokeUi.openMoreRow())
