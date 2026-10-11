@@ -32,6 +32,7 @@ import kotlin.random.Random
 class FringeGeneralTest {
     private val moving = ChromaticAberrationMovingFilter()
     private val zooming = ChromaticAberrationZoomingFilter()
+    private val glitch = GlitchFilter()
     private val orange = 0xFFFF8000.toInt()
     private val teal = 0xFF008080.toInt()
     private val cyan = FringeColors.CYAN
@@ -167,5 +168,39 @@ class FringeGeneralTest {
         val z = run(zooming, whiteLine(), "distance" to 4f, "center" to floatArrayOf(0f, 0.5f), FringeColors.KEY to intArrayOf(orange, NONE, teal))
         assertTrue((11 until 21).any { r(z[it, 2]) > 0 && b(z[it, 2]) == 0 })
         assertTrue((0 until 10).any { b(z[it, 2]) > 0 && r(z[it, 2]) == 0 })
+    }
+
+    /** Glitch with every band split (no blocks, no static) and the given fringe colors. */
+    private fun glitched(src: PixelBuffer, colors: IntArray, shift: Float = 20f): PixelBuffer {
+        val v = glitch.defaultValues().apply { set("strength", 100f); set("noise", 0f); set("blocks", 0f); set("colorShift", shift); set("seed", 31) }
+        return glitch.apply(src, v.set(FringeColors.KEY, colors), com.brushwork.paint.filters.FilterContext())
+    }
+
+    @Test
+    fun glitchMixesTheThreeSamplesTheSameWay() {
+        // Opaque, so v1.7's orders give each sample's exact channels: (R, none, R) is the mean of the
+        // first and last samples' red, with green and blue from the middle sample.
+        val src = random(50, 60, 5).also { p -> for (i in p.pixels.indices) p.pixels[i] = p.pixels[i] or 0xFF000000.toInt() }
+        val first = glitched(src, intArrayOf(R, G, B)) // red: first
+        val last = glitched(src, intArrayOf(B, G, R)) // red: last; green: middle
+        val mid = glitched(src, intArrayOf(R, B, G)) // blue: middle
+        val out = glitched(src, intArrayOf(R, NONE, R))
+        var split = 0
+        for (i in src.pixels.indices) {
+            val c = out.pixels[i]
+            assertEquals(255, a(c))
+            assertTrue(abs(r(c) * 2 - (r(first.pixels[i]) + r(last.pixels[i]))) <= 2)
+            assertEquals(g(last.pixels[i]), g(c))
+            assertEquals(b(mid.pixels[i]), b(c))
+            if (r(first.pixels[i]) != r(last.pixels[i])) split++
+        }
+        assertTrue("the samples differ ()", split > src.pixels.size / 2)
+        // No color at all: the bands only slide, as with no color shift.
+        assertArrayEquals(glitched(src, intArrayOf(R, G, B), shift = 0f).pixels, glitched(src, intArrayOf(NONE, NONE, NONE)).pixels)
+        // Any colors keep a uniform picture.
+        val flat = PixelBuffer.filled(40, 50, 0xFF5A7896.toInt())
+        for (c in glitched(flat, intArrayOf(orange, NONE, teal)).pixels) {
+            assertTrue(Integer.toHexString(c), abs(r(c) - 0x5A) <= 1 && abs(g(c) - 0x78) <= 1 && abs(b(c) - 0x96) <= 1 && a(c) == 255)
+        }
     }
 }

@@ -8,6 +8,7 @@ import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterMath
 import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterValues
+import com.brushwork.paint.ui.common.FringeLabels18
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
@@ -22,14 +23,24 @@ import kotlin.random.Random
  *
  * The band layout is generated in full-resolution coordinates from the seed, so a downscaled
  * preview matches the final result.
+ *
+ * v1.8 (item 5): the channel split takes its colors from the fringe colors ([FringeColors]: the
+ * first sampled at `sx - cs`, the middle at `sx`, the last at `sx + cs`), and the static from
+ * [STATIC_COLOR_KEY] (the static of a band mixes toward `n · S` instead of `n · 255`; the swatch's
+ * alpha scales the mix). The defaults (RGB, white) give v1.7's bytes; no random draw is added,
+ * so a seed keeps its bands and blocks.
  */
 class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
+    private val fringes = FringeColors.param(null)
+
     override val params: List<FilterParam> = listOf(
         FilterParam.Slider("height", "Height", 1f, 200f, 20f, step = 1f, suffix = "px", pixels = true),
         FilterParam.Slider("strength", "Strength", 0f, 100f, 50f, step = 1f, suffix = "%"),
         FilterParam.Slider("colorShift", "Color shift", 0f, 100f, 10f, step = 1f, suffix = "px", pixels = true),
+        fringes,
         FilterParam.Slider("blocks", "Block noise", 0f, 100f, 30f, step = 1f, suffix = "%"),
         FilterParam.Slider("noise", "Static", 0f, 100f, 20f, step = 1f, suffix = "%"),
+        FilterParam.Color(STATIC_COLOR_KEY, FringeLabels18.STATIC_COLOR, FringeColors.WHITE),
         FilterParam.Seed(),
     )
 
@@ -84,7 +95,17 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         val rowBand = arrayOfNulls<Band>(h)
         for (b in bands) for (row in b.y0 until b.y1) rowBand[row] = b
 
-        // (2) Render rows.
+        // (2) The colors: the fringes' path (v1.7's combine on one-hot colors, else the mix; with
+        // no fringe color the band only slides) and the static's color.
+        val colors = FringeColors.resolve(values, fringes)
+        val none = FringeColors.allNone(colors)
+        val k = if (none) null else FringeColors.oneHotFactors(colors)
+        val mix = if (none || k != null) null else FringeColors.Mix(colors)
+        val static = (values.raw(STATIC_COLOR_KEY) as? Number)?.toInt() ?: FringeColors.WHITE
+        val sr = ((static shr 16) and 0xFF).toFloat(); val sg = ((static shr 8) and 0xFF).toFloat(); val sb = (static and 0xFF).toFloat()
+        val sa = (static ushr 24) / 255f
+
+        // (3) Render rows.
         val out = src.copy()
         val sp = src.pixels; val dp = out.pixels
         Parallel.forRows(h) { r0, r1 ->
@@ -100,20 +121,36 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                 if (band.glitched) {
                     fillOffsets(band, w, dxRow)
                     val cs = (band.colorShift * scale).roundToInt()
-                    for (x in 0 until w) {
-                        val sx = x - dxRow[x]
-                        val cr = sp[so + Math.floorMod(sx - cs, w)]
-                        val cg = sp[so + Math.floorMod(sx, w)]
-                        val cb = sp[so + Math.floorMod(sx + cs, w)]
-                        dp[o + x] = combine(cr, cg, cb)
+                    when {
+                        k != null -> {
+                            // A channel of the first fringe is sampled at sx - cs, of the last at sx + cs.
+                            val offR = -k[0] * cs; val offG = -k[1] * cs; val offB = -k[2] * cs
+                            for (x in 0 until w) {
+                                val sx = x - dxRow[x]
+                                val cr = sp[so + Math.floorMod(sx + offR, w)]
+                                val cg = sp[so + Math.floorMod(sx + offG, w)]
+                                val cb = sp[so + Math.floorMod(sx + offB, w)]
+                                dp[o + x] = combine(cr, cg, cb)
+                            }
+                        }
+                        mix != null -> for (x in 0 until w) {
+                            val sx = x - dxRow[x]
+                            dp[o + x] = mixed(sp[so + Math.floorMod(sx - cs, w)], sp[so + Math.floorMod(sx, w)], sp[so + Math.floorMod(sx + cs, w)], mix)
+                        }
+                        else -> for (x in 0 until w) dp[o + x] = sp[so + Math.floorMod(x - dxRow[x], w)]
                     }
                 } else if (srcRow != row) {
                     System.arraycopy(sp, so, dp, o, w)
                 }
-                if (band.noise > 0f) addStatic(dp, o, w, row, scale, band.noise, seed)
+                if (band.noise > 0f) addStatic(dp, o, w, row, scale, band.noise * sa, seed, sr, sg, sb)
             }
         }
         return out
+    }
+
+    companion object {
+        /** v1.8 (item 5): the param key of the static's color (default white). */
+        const val STATIC_COLOR_KEY = "static_color"
     }
 
     /** Splits a band into blocks 5–30 % of the width wide, each with its own offset. */
@@ -156,8 +193,32 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
-    /** Digital static: short horizontal dashes of random gray mixed in by [amount]. */
-    private fun addStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int) {
+    /**
+     * v1.8 general path: channel c is the swatch-weighted mean `Σ_i w[3i + c] · P_i,c` of the
+     * three samples' coverage-weighted channels (first, middle, last) over the output alpha, the
+     * largest alpha among the colored samples (design §3.6 (c), as Chromatic aberration's).
+     */
+    private fun mixed(c0: Int, c1: Int, c2: Int, mix: FringeColors.Mix): Int {
+        val a0 = c0 ushr 24; val a1 = c1 ushr 24; val a2 = c2 ushr 24
+        var a = 0
+        if (mix.colored[0]) a = a0
+        if (mix.colored[1] && a1 > a) a = a1
+        if (mix.colored[2] && a2 > a) a = a2
+        if (a == 0) return 0
+        val m = mix.w
+        val p0 = a0.toFloat(); val p1 = a1.toFloat(); val p2 = a2.toFloat()
+        val r = m[0] * p0 * ((c0 shr 16) and 0xFF) + m[3] * p1 * ((c1 shr 16) and 0xFF) + m[6] * p2 * ((c2 shr 16) and 0xFF)
+        val g = m[1] * p0 * ((c0 shr 8) and 0xFF) + m[4] * p1 * ((c1 shr 8) and 0xFF) + m[7] * p2 * ((c2 shr 8) and 0xFF)
+        val b = m[2] * p0 * (c0 and 0xFF) + m[5] * p1 * (c1 and 0xFF) + m[8] * p2 * (c2 and 0xFF)
+        val inv = 1f / a
+        return (a shl 24) or (ChannelShift.clamp(r * inv) shl 16) or (ChannelShift.clamp(g * inv) shl 8) or ChannelShift.clamp(b * inv)
+    }
+
+    /**
+     * Digital static: short horizontal dashes of random brightness of the static's color
+     * ([sr], [sg], [sb]; white in v1.7) mixed in by [amount].
+     */
+    private fun addStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int, sr: Float, sg: Float, sb: Float) {
         val fy = floor(row / scale).toInt()
         val inv = 1f / scale
         for (x in 0 until w) {
@@ -166,12 +227,12 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
             val fx = floor(x * inv).toInt()
             val n = FilterMath.hash01(fx / 3, fy, seed * 13 + 5)
             val k = amount * FilterMath.hash01(fx / 11, fy, seed * 13 + 9)
-            val v = n * 255f
+            val vr = n * sr; val vg = n * sg; val vb = n * sb
             val r = ((c shr 16) and 0xFF); val g = ((c shr 8) and 0xFF); val b = c and 0xFF
             dp[o + x] = (c and 0xFF000000.toInt()) or
-                (ChannelShift.clamp(r + (v - r) * k) shl 16) or
-                (ChannelShift.clamp(g + (v - g) * k) shl 8) or
-                ChannelShift.clamp(b + (v - b) * k)
+                (ChannelShift.clamp(r + (vr - r) * k) shl 16) or
+                (ChannelShift.clamp(g + (vg - g) * k) shl 8) or
+                ChannelShift.clamp(b + (vb - b) * k)
         }
     }
 }

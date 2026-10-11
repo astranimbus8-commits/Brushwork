@@ -96,4 +96,16 @@ class FringeLegacyOrderTest {
         }
     }
 
+
+    @Test
+    fun glitchHasNoLegacyOrder() {
+        val glitch = GlitchFilter()
+        val p = fringesOf(glitch)
+        assertNull(p.legacyOrderKey)
+        assertArrayEquals(intArrayOf(R, G, B), p.default)
+        assertArrayEquals(intArrayOf(R, G, B), FringeColors.resolve(FilterValues(mapOf(FringeColors.LEGACY_ORDER_KEY to 5)), p))
+        val src = random(30, 40, 2)
+        val v = glitch.defaultValues().apply { set("strength", 100f); set("seed", 4) }
+        assertArrayEquals(glitch.apply(src, v.copy(), ctx).pixels, glitch.apply(src, v.copy().set(FringeColors.LEGACY_ORDER_KEY, 5), ctx).pixels)
+    }
 }

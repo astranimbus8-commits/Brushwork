@@ -4,9 +4,13 @@ import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.filters.FilterContext
 import com.brushwork.paint.filters.FilterValues
 import com.brushwork.paint.filters.art.FringeFixtures.contexts
+import com.brushwork.paint.filters.art.FringeFixtures.channelOf
 import com.brushwork.paint.filters.art.FringeFixtures.gradient
+import com.brushwork.paint.filters.art.FringeFixtures.inverse
+import com.brushwork.paint.filters.art.FringeFixtures.permute
 import com.brushwork.paint.filters.art.FringeFixtures.random
 import com.brushwork.paint.filters.art.v17.ChromaticAberrationV17
+import com.brushwork.paint.filters.art.v17.GlitchV17
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -23,6 +27,7 @@ import org.junit.Test
 class FringeGoldenTest {
     private val moving = ChromaticAberrationMovingFilter()
     private val zooming = ChromaticAberrationZoomingFilter()
+    private val glitch = GlitchFilter()
     private val pictures: List<Pair<String, PixelBuffer>> = listOf("random" to random(61, 47, 3), "gradient" to gradient(53, 64))
 
     private fun orderColors(order: Int): IntArray = FringeColors.legacyOrder(order) ?: error("order $order")
@@ -68,6 +73,34 @@ class FringeGoldenTest {
                 assertArrayEquals("order $order, $what", ChromaticAberrationV17.zooming(src, old(order), ctx).pixels, zooming.apply(src, v, ctx).pixels)
             }
         }
+    }
+
+    @Test
+    fun glitchDefaultAndOrders() {
+        val settings = listOf(
+            mapOf<String, Any>(),
+            mapOf("strength" to 100f, "noise" to 100f, "blocks" to 100f, "colorShift" to 40f, "height" to 6f),
+            mapOf("strength" to 80f, "noise" to 0f, "blocks" to 0f, "colorShift" to 25f, "height" to 3f),
+        )
+        var changed = 0
+        for ((name, src) in pictures) for (ctx in contexts) for (s in settings) for (seed in listOf(1, 12345)) {
+            val v = glitch.defaultValues().apply { for ((k, x) in s) set(k, x); set("seed", seed) }
+            val what = "$name, settings $s, seed $seed, scale ${ctx.scale}"
+            val want = GlitchV17.apply(src, v.copy(), ctx)
+            assertArrayEquals("default, $what", want.pixels, glitch.apply(src, v.copy(), ctx).pixels)
+            if (!want.pixels.contentEquals(src.pixels)) changed++
+            // v1.7 had RGB only: order P equals v1.7 on the picture whose R, G, B hold P's first, middle
+            // and last channel, with the channels put back after (the split and the static treat the
+            // channels alike).
+            for (order in 0..5) {
+                val colors = orderColors(order)
+                val from = IntArray(3) { channelOf(colors[it]) }
+                val old = permute(GlitchV17.apply(permute(src, from), v.copy(), ctx), inverse(from))
+                val got = glitch.apply(src, v.copy().set(FringeColors.KEY, colors), ctx)
+                assertArrayEquals("order $order, $what", old.pixels, got.pixels)
+            }
+        }
+        assertTrue("the settings glitch the pictures ($changed)", changed >= 30)
     }
 
     @Test
