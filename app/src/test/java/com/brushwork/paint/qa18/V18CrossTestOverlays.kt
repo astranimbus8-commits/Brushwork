@@ -13,10 +13,12 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.8 integration (design §6.2 item 2, scenario f) on a 360 × 640 dp phone: MoreRowOverlayTest's
- * rule (D25) on the real strips. Every control of every More row of [V18CrossTestKit.states] (each
- * tool on the raster and on the vector layer, and the v1.8 states) is clicked in turn: a sheet
- * or dialog it opens outlives the row it closed, an anchored popup keeps the row open and leaves
- * it open when Back closes it.
+ * rule (D25) on the real strips. Every enabled control of every More row of
+ * [V18CrossTestKit.states] (each tool on the raster and on the vector layer, and the v1.8 states)
+ * is clicked in turn: a sheet or dialog it opens outlives the row it closed, an anchored popup
+ * keeps the row open and leaves it open when Back closes it, and a click that opens nothing
+ * leaves the row open unless it changed the tool or is known to close it (an overlay composed in
+ * its item, which dies with the row, shows nothing at all).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w360dp-h640dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.crossoverlayssandbox"])
@@ -78,6 +80,7 @@ class V18CrossTestOverlays {
             "SHAPE, a cog with mirror copies in Points mode: \"Point roundness\" $SHEET",
             "SHAPE@vector, a holed cog open: \"Shape settings\" $SHEET",
             "TEXT, an open text: \"Numbers\" $SHEET",
+            "TEXT@vector, an open text: \"Wrap around picture\" $SHEET",
             "TEXT_FRAMES, a frame selected: \"Wrap around picture\" $POPUP",
             "MASK, a brush part on an adjustment layer: \"Adjust…\" $SHEET",
             "TRANSFORM, box modes: \"Choose interpolation\" $POPUP",

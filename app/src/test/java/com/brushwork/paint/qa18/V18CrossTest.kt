@@ -95,7 +95,8 @@ import kotlin.math.roundToInt
  *   tool, becomes through the strip's "Turn into path" ONE compound plain path with its hole (D21);
  * - c. a Magnetic lasso around a blue disc, intersected by Color select "Reds" (the strip's mode
  *   dropdown and presets popup): the reds inside the disc; a Clone stamp stroke under a Rotation 4
- *   ruler then changes pixels only there, in the four rotated places;
+ *   ruler, cloning a green centre and running past a red square onto the unselected blue, then
+ *   changes pixels only in the reds, in the four rotated places, each green;
  * - d. Chromatic aberration with the "Red/Cyan" fringe chip applied (one step, the filter's own
  *   result), then "Array from selection" with a "Sunset" look: each tinted copy is the fringed
  *   pixels tinted.
@@ -319,6 +320,8 @@ class V18CrossTest {
         val art = doc.layers[1]
         Canvas(art.bitmap).apply {
             drawCircle(CX, CY, R, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = BLUE })
+            // The clone's source: a green disc at the centre, the same under every Rotation 4 copy.
+            drawCircle(CX, CY, GREEN_R, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = GREEN })
             val red = Paint().apply { color = RED }
             for ((x, y) in INNER + OUTER) drawRect(x - HALF, y - HALF, x + HALF, y + HALF, red)
         }
@@ -362,21 +365,32 @@ class V18CrossTest {
         for ((x, y) in INNER) assertEquals("the reds inside the disc at ($x, $y)", 255, sel.alphaAt(x.toInt(), y.toInt()))
         for ((x, y) in OUTER) assertEquals("the reds outside the disc at ($x, $y)", 0, sel.alphaAt(x.toInt(), y.toInt()))
         assertEquals("the blue disc", 0, sel.alphaAt(250, 110))
+        assertEquals("the green centre", 0, sel.alphaAt(CX.toInt(), CY.toInt()))
         assertEquals("the white", 0, sel.alphaAt(380, 150))
 
-        // The Clone stamp under a Rotation 4 ruler: one stroke over the right red square.
+        // The Clone stamp under a Rotation 4 ruler: one stroke across the right red square and past
+        // it on both sides, onto the blue of the disc, which the selection leaves out.
         c.updateSymmetry(SymmetrySettings(type = SymmetryType.ROTATION, divisions = 4))
         u.tool(ToolId.CLONE.label)
         val pen = BrushLibrary.clones.first { it.id == "clone_pen" }
         c.updatePreset(ToolId.CLONE, pen.copy(size = 16f, hardness = 1f, pressureSize = false, minSizeRatio = 1f, opacity = 1f, flow = 1f, taperStart = 0f, taperEnd = 0f))
         val clone = c.tools.getValue(ToolId.CLONE) as CloneTool
-        // The source 50 px above the stroke: blue inside the disc for every rotated copy, on the canvas.
-        clone.setSource(Vec2(244f, 100f))
-        assertEquals("four rotated copies", 4, ObjectCopies.mapsAt(c, 244f, 150f).size)
+        // The source 50 px left of the stroke's start: the green centre, for every rotated copy
+        // (copy k reads its own rotated source spot, D1, and the green disc is the same under each).
+        clone.setSource(Vec2(STROKE_X0 - CLONE_DX, CY))
+        assertEquals("four rotated copies", 4, ObjectCopies.mapsAt(c, STROKE_X0, CY).size)
         settle()
         val before = pixels(art.bitmap)
+        // Not vacuous: the stroke's end reaches unselected blue in every rotated place, whose source
+        // is green, so a clone that ignored the selection would paint it green.
+        val probes = rotated4(STROKE_X1, CY)
+        for ((x, y) in probes) {
+            assertEquals("unselected at ($x, $y)", 0, sel.alphaAt(x, y))
+            assertEquals("blue at ($x, $y) before", BLUE, art.bitmap.getPixel(x, y))
+        }
+        for ((x, y) in rotated4(STROKE_X1 - CLONE_DX, CY)) assertEquals("the green source at ($x, $y)", GREEN, art.bitmap.getPixel(x, y))
         val steps = c.undoManager.undoCount
-        Fingers18.stroke(u.s, 244f, CY, 256f, CY)
+        Fingers18.stroke(u.s, STROKE_X0, CY, STROKE_X1, CY)
         assertTrue(Smoke.pumpUntil(Qa17ArrayUi.WAIT_MS) { !c.currentTool.hasPendingWork && c.busyMessage == null })
         settle()
         assertEquals("the stroke: one step", steps + 1, c.undoManager.undoCount)
@@ -391,7 +405,10 @@ class V18CrossTest {
         for ((x, y) in INNER) {
             val n = changed.count { i -> abs(i % 400 - x) <= HALF && abs(i / 400 - y) <= HALF }
             assertTrue("the rotated copy at ($x, $y) changed $n px", n >= 40)
+            val got = art.bitmap.getPixel(x.toInt(), y.toInt())
+            assertTrue("the rotated copy at ($x, $y) cloned the green centre: ${hex(got)}", near(GREEN, got))
         }
+        for ((x, y) in probes) assertEquals("the unselected blue at ($x, $y) under the stroke", BLUE, art.bitmap.getPixel(x, y))
         for ((x, y) in OUTER) assertEquals("the red outside the disc", RED, art.bitmap.getPixel(x.toInt(), y.toInt()))
         assertEquals("the blue disc", BLUE, art.bitmap.getPixel(250, 110))
         Smoke.assertQuiet(c, "c")
@@ -492,6 +509,23 @@ class V18CrossTest {
 
         /** Half the side of a red square. */
         const val HALF = 12f
+
+        const val GREEN = 0xFF20A040.toInt()
+
+        /** The green disc at the centre of scenario c (clear of the red squares, 38 px out). */
+        const val GREEN_R = 34f
+
+        /** Scenario c's clone stroke along y = CY, its source [CLONE_DX] px to the left. */
+        const val STROKE_X0 = 230f
+        const val STROKE_X1 = 270f
+        const val CLONE_DX = 50f
+
+        /** ([x], [y]) and its three quarter turns about the canvas centre (the Rotation 4 copies), as pixels. */
+        fun rotated4(x: Float, y: Float): List<Pair<Int, Int>> {
+            val dx = x - CX
+            val dy = y - CY
+            return listOf(dx to dy, -dy to dx, -dx to -dy, dy to -dx).map { (u, v) -> (CX + u).roundToInt() to (CY + v).roundToInt() }
+        }
 
         /** The red squares inside the disc: the four places a Rotation 4 copy of one stroke reaches. */
         val INNER = listOf(250f to 150f, 200f to 200f, 150f to 150f, 200f to 100f)

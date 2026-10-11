@@ -33,6 +33,7 @@ import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.array.ArrayTool
+import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.mask.MaskTool
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.text.TextTool
@@ -78,7 +79,7 @@ import kotlin.math.roundToInt
  * calls it) walks [states]: every tool on the raster and on the vector layer, then the states
  * whose More rows carry the most controls, v1.8's first (a generated rose on Curve and Path, the
  * curve tools open with mirror copies, a holed cog, a cog with copies in Points mode, an open
- * text, a selected text frame, a brush part of a mask, the Transform box and Free deform, an Array
+ * text (on the vector layer too, where the wrap button is on the More row), a selected text frame, a brush part of a mask, the Transform box and Free deform, an Array
  * layer). Each state is set up from the one before by [restore]: what is open is put away and
  * the document's steps are undone.
  */
@@ -213,15 +214,18 @@ internal object V18CrossTestKit {
                 rig.settle()
             })
         }
-        add(State("TEXT, an open text") { rig ->
-            rig.select(ToolId.TEXT)
-            val t = rig.c.currentTool as TextTool
-            t.startTextAt(200f, 150f)
-            t.setText("Strip")
-            t.confirmEditor()
-            rig.settle()
-            check(t.item != null) { "no open text" }
-        })
+        // On the vector layer at 360 dp the wrap button (AUTO 1) leaves row 1: its sheet opens from the More row.
+        for (vector in listOf(false, true)) {
+            add(State("TEXT${at(vector)}, an open text") { rig ->
+                rig.select(ToolId.TEXT, vector)
+                val t = rig.c.currentTool as TextTool
+                t.startTextAt(200f, 150f)
+                t.setText("Strip")
+                t.confirmEditor()
+                rig.settle()
+                check(t.item != null) { "no open text" }
+            })
+        }
         add(State("TEXT_FRAMES, a frame selected") { rig ->
             rig.select(ToolId.TEXT_FRAMES)
             val c = rig.c
@@ -287,16 +291,18 @@ internal object V18CrossTestKit {
 
     /**
      * The substring rule (LabelsV18Test 4, SmokeUi matches by case-sensitive `contains`): pairs
-     * (a, b) on two different controls, a inside b, one of them a v1.8 text. Equal texts count when
-     * two different controls carry them (CurvesLabelsTest); a control's own texts, a label repeated
-     * beside its control (ShapesLabelsTest), the derived handles and R15's pair do not.
+     * (a, b) of two texts on the strip, a inside b, one of them a v1.8 text. Equal texts count when
+     * two different controls carry them (CurvesLabelsTest); the same text twice on one control (a
+     * StripValueButton's label and its description) or a label repeated beside its control
+     * (ShapesLabelsTest: one text), the derived handles and R15's pair do not. A text strictly
+     * inside another counts even on one control.
      */
     fun clashes(): List<String> {
         val s = shown()
         val out = linkedSetOf<String>()
         for (a in s) for (b in s) {
-            if (a === b || a.unit == b.unit || !b.text.contains(a.text)) continue
-            if (a.text == b.text && !(a.control && b.control)) continue
+            if (a === b || !b.text.contains(a.text)) continue
+            if (a.text == b.text && (a.unit == b.unit || !(a.control && b.control))) continue
             if (a.text !in V18 && b.text !in V18) continue
             if (a.text to b.text in ALLOWED) continue
             if (DERIVED.any { b.text == it + a.text }) continue
@@ -467,6 +473,26 @@ internal object V18CrossTestKit {
         .filter { n -> n.layoutInfo.isPlaced && n.config.getOrNull(SemanticsActions.OnClick) != null && underMoreRow(n) }
         .sortedWith(compareBy({ it.positionInWindow.y.toInt() / 8 }, { it.positionInWindow.x }))
 
+    /**
+     * A disabled control keeps its click action in the semantics, which a tap never reaches. It is
+     * skipped where it is clicked, not left out of [moreClickables]: whether a control is enabled
+     * can follow a tool setting an earlier click changed, and the walk counts the row's controls by
+     * index across its runs.
+     */
+    private fun disabled(n: SemanticsNode) = n.config.getOrNull(SemanticsProperties.Disabled) != null
+
+    /**
+     * The More-row controls ("state: \"handle\"") that close the row and open nothing, by design:
+     * the Clone stamp's hint arms Set source, and the next canvas touch must reach the canvas (an
+     * open row takes it, D25); the Text tool's wrap button with no text yet only toasts "Tap the
+     * canvas to add a text, then wrap it around a picture".
+     */
+    private val CLOSES_WITH_NOTHING_OPEN = setOf(
+        "CLONE: \"${CloneTool.HINT}\"",
+        "CLONE@vector: \"${CloneTool.HINT}\"",
+        "TEXT@vector: \"Wrap around picture\"",
+    )
+
     /** Puts the rig back: [reset], then the document's steps undone down to [steps]. */
     private fun restore(rig: StripRig, steps: Int) {
         reset(rig)
@@ -494,6 +520,9 @@ internal object V18CrossTestKit {
      *   the item the closed row took away);
      * - an anchored popup (a dropdown): the More row stays open while it shows; Back closes it and
      *   the row is still open.
+     * A click that opens no window must leave the row open, unless it changed the tool, left the
+     * strip without a More row, or is one of [CLOSES_WITH_NOTHING_OPEN]: an item that closes the
+     * row for a sheet composed inside it shows nothing at all.
      * [opened] collects "state: \"handle\" (kind)" for each opener found. Returns the problems.
      */
     fun overlaysOutliveTheRow(rig: StripRig, opened: MutableList<String>, walk: List<State> = states()): List<String> {
@@ -514,12 +543,22 @@ internal object V18CrossTestKit {
                     break
                 }
                 val node = controls[i]
+                if (disabled(node)) continue
                 val handle = StripInventory.handle(node) ?: "control ${i + 1}"
                 val what = "${state.name}: \"$handle\""
                 val before = RobolectricUi.windowRoots()
+                val tool = rig.c.activeToolId
                 node.config.getOrNull(SemanticsActions.OnClick)?.action?.invoke()
                 rig.settle()
-                val top = RobolectricUi.windowRoots().lastOrNull { it !in before } ?: continue
+                val top = RobolectricUi.windowRoots().lastOrNull { it !in before }
+                if (top == null) {
+                    // Nothing stays open. A sheet or dialog composed inside its item, which closed the
+                    // row first, died with the row and never showed: the row closes with nothing open
+                    // only for a tool change, a strip left without a More row, or a known reason.
+                    val explained = rig.c.activeToolId != tool || StripTestKit.toggle() == null || what in CLOSES_WITH_NOTHING_OPEN
+                    if (!StripTestKit.moreRowShown() && !explained) problems += "$what: the More row closed and nothing stayed open (an overlay that died with the row?)"
+                    continue
+                }
                 if (top.javaClass.name.contains("Popup")) {
                     opened += "$what (popup)"
                     if (!StripTestKit.moreRowShown()) problems += "$what: its popup closed the More row (an anchored popup keeps it open)"
@@ -544,8 +583,9 @@ internal object V18CrossTestKit {
     /**
      * The overlay walk on fake specs: a sheet and a dialog from the overlays (their items close
      * the row first) and an anchored dropdown pass and are found as their kinds; a dialog whose
-     * item leaves the row open and a dropdown composed in the overlays behind a closed row are
-     * caught. Returns what went wrong.
+     * item leaves the row open, a dropdown composed in the overlays behind a closed row, and a
+     * dialog composed inside its item (which dies with the row it closed) are caught. Returns what
+     * went wrong.
      */
     fun overlayMachineryCatches(rig: StripRig): List<String> {
         val out = mutableListOf<String>()
@@ -554,6 +594,7 @@ internal object V18CrossTestKit {
         var menu by mutableStateOf(false)
         var late by mutableStateOf(false)
         var loose by mutableStateOf(false)
+        var inner by mutableStateOf(false)
         val row = StripItem("row", "Probe row", 100.dp) { Probe("Probe row", 100) }
         val good = StripSpec(
             items = listOf(
@@ -590,6 +631,12 @@ internal object V18CrossTestKit {
                     val ctx = LocalStripContext.current
                     Box(Modifier.size(100.dp, 40.dp).clickable { ctx.closeMore(); loose = true }.semantics { contentDescription = "Probe loose" })
                 },
+                // A dialog composed inside its item (not in the overlays): the row it closes takes it along.
+                StripItem("inner", "Probe inner", 100.dp, row = StripRow.MORE) {
+                    val ctx = LocalStripContext.current
+                    Box(Modifier.size(100.dp, 40.dp).clickable { ctx.closeMore(); inner = true }.semantics { contentDescription = "Probe inner" })
+                    if (inner) BwDialog(title = "Probe inner", onDismiss = { inner = false }) { Text("Probe inner body") }
+                },
             ),
             overlays = {
                 if (late) BwDialog(title = "Probe late", onDismiss = { late = false }) { Text("Probe late body") }
@@ -607,6 +654,7 @@ internal object V18CrossTestKit {
             val badProblems = overlaysOutliveTheRow(rig, mutableListOf(), listOf(State("bad") { it.override = bad; it.settle() }))
             if (badProblems.none { it.startsWith("bad: \"Probe late\": the More row stayed open") }) out += "a dialog over an open row went unseen: $badProblems"
             if (badProblems.none { it.startsWith("bad: \"Probe loose\": its popup closed the More row") }) out += "a popup behind a closed row went unseen: $badProblems"
+            if (badProblems.none { it.startsWith("bad: \"Probe inner\": the More row closed and nothing stayed open") }) out += "a dialog that died with the row went unseen: $badProblems"
         } finally {
             reset(rig)
             rig.override = null
