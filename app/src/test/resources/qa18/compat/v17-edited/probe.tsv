@@ -1,0 +1,18 @@
+warnings	[]
+files	array_5_r2.bin,array_6_r2.bin,array_7_r2.bin,array_8_r2.bin,layer_10_r2.bin,layer_11_r1.bin,layer_12_r2.bin,layer_13_r2.bin,layer_14_r2.bin,layer_15_r2.bin,layer_1_r1.bin,layer_2_r1.bin,layer_3_r1.bin,layer_4_r1.bin,layer_5_r2.bin,layer_6_r2.bin,layer_7_r2.bin,layer_8_r2.bin,layer_9_r2.bin,project.json,sel_1_r1.bin,sel_2_r1.bin,vector_11_r1.vec,vector_12_r2.vec,vector_13_r2.vec,vector_9_r2.vec
+composite	653707453
+layer	1	Background	82998804	-	raster
+layer	2	Fringes	2405037627	-	raster
+layer	3	Static	4172974065	-	raster
+layer	4	Source	1629467680	-	raster
+layer	5	Array 1	862993177	1597284128	array={"mode":"CIRCLE","count":6,"relativeX":1.0,"relativeY":0.0,"constantX":0.0,"constantY":0.0,"centerX":null,"centerY":null,"sweepDeg":180.0,"rotateCopies":true,"guide":null,"spacing":0.0,"alignToCurve":true,"moveX":100.0,"moveY":0.0,"turnDeg":30.0,"scale":1.0,"pivotX":null,"pivotY":null,"editingSource":false}
+layer	6	Text array	13245275	13245275	array={"mode":"LINE","count":5,"relativeX":0.2,"relativeY":1.0,"constantX":0.0,"constantY":0.0,"centerX":null,"centerY":null,"sweepDeg":360.0,"rotateCopies":true,"guide":null,"spacing":0.0,"alignToCurve":true,"moveX":100.0,"moveY":0.0,"turnDeg":30.0,"scale":1.0,"pivotX":null,"pivotY":null,"editingSource":false};text
+layer	7	Shape array	607987321	607987321	array={"mode":"TRANSFORM","count":5,"relativeX":1.0,"relativeY":0.0,"constantX":0.0,"constantY":0.0,"centerX":null,"centerY":null,"sweepDeg":360.0,"rotateCopies":true,"guide":null,"spacing":0.0,"alignToCurve":true,"moveX":20.0,"moveY":0.0,"turnDeg":20.0,"scale":0.9,"pivotX":null,"pivotY":null,"editingSource":false};shape=RECTANGLE:points=0
+layer	8	Vector array	1863215167	1863215167	array={"mode":"CURVE","count":5,"relativeX":1.0,"relativeY":0.0,"constantX":0.0,"constantY":0.0,"centerX":null,"centerY":null,"sweepDeg":360.0,"rotateCopies":true,"guide":{"anchors":[{"x":310.0,"y":130.0,"sharp":false,"inX":null,"inY":null,"outX":null,"outY":null,"width":1.0},{"x":350.0,"y":170.0,"sharp":false,"inX":null,"inY":null,"outX":null,"outY":null,"width":1.0},{"x":390.0,"y":130.0,"sharp":false,"inX":null,"inY":null,"outX":null,"outY":null,"width":1.0}],"closed":false},"spacing":0.0,"alignToCurve":true,"moveX":100.0,"moveY":0.0,"turnDeg":30.0,"scale":1.0,"pivotX":null,"pivotY":null,"editingSource":false};objects=VPath:subpaths=1:spline=false
+layer	9	Mirrored	1174035424	596226803	objects=VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=true,VShape:STAR:points=0,VPath:subpaths=1:spline=false
+layer	10	Mirrored shape	868677872	2673424877	shape=ELLIPSE:points=0
+layer	11	Detached	1141738080	1141738080	objects=VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=false
+layer	12	Generated	4227082596	3401641734	objects=VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=true,VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=true,VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=true,VPath:subpaths=1:spline=false,VPath:subpaths=1:spline=false
+layer	13	Cogs	632799369	1122255865	objects=VShape:RECTANGLE:points=56,VShape:RECTANGLE:points=56,VShape:RECTANGLE:points=56,VPath:subpaths=1:spline=false
+layer	14	Cog	1864673880	584507941	shape=RECTANGLE:points=56
+layer	15	Holed cog	542455593	2140406611	shape=RECTANGLE:points=56

@@ -1,0 +1,46 @@
+// v1.8 QA (compat), kept as text so it never runs again. It made qa18/compat/v18-written: the
+// Qa18CompatArtwork saved by v1.8 (id qa18-compat-v18), for the v1.7.0 build to open and save
+// (qa18/compat/V18OpenedByV17Test.kt.txt). v18probe.tsv: every layer's stored pixels (CRC32 of
+// the ARGB ints, big-endian) and the composite, as v1.8 loads them.
+
+package com.brushwork.paint.qa18
+
+import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.qa18.Qa18CompatArtwork
+import com.brushwork.paint.qa18.Qa18CompatV17Golden.crc
+import com.brushwork.paint.storage.ProjectFormat
+import com.brushwork.paint.storage.ProjectRepository
+import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import java.io.File
+
+@RunWith(RobolectricTestRunner::class)
+class V18WriterForV17Test {
+    private val app get() = RuntimeEnvironment.getApplication()
+    private val ex = File(System.getenv("TEMP"), "v18qa_compat_exchange/v18-written")
+
+    @Test
+    fun writeV18Project() {
+        val (c, _) = Qa18CompatArtwork.build(app, id = "qa18-compat-v18")
+        val doc = c.doc
+        runBlocking { ProjectRepository(app).save(doc, null) }
+        c.dispose()
+        val dir = File(app.filesDir, "projects/${doc.id}")
+        ex.deleteRecursively()
+        ex.mkdirs()
+        val names = dir.list()!!.filter { it != ProjectFormat.THUMB_FILE }.sorted()
+        for (n in names) File(dir, n).copyTo(File(ex, n), overwrite = true)
+        val loaded = runBlocking { ProjectRepository(app).load(doc.id) }
+        assertEquals(emptyList<String>(), loaded.loadWarnings)
+        val sb = StringBuilder()
+        sb.append("files\t").append(names.joinToString(",")).append('\n')
+        sb.append("composite\t").append(crc(Compositor(loaded) { null }.renderFlattened())).append('\n')
+        for (l in loaded.layers) sb.append("layer\t${l.id}\t${l.name}\t${crc(l.bitmap)}\n")
+        File(ex, "v18probe.tsv").writeText(sb.toString())
+        println(sb)
+    }
+}
