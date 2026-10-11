@@ -17,7 +17,9 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStroke
@@ -37,8 +39,9 @@ import org.robolectric.annotation.Config
 
 /**
  * The Object bar (v1.5 A2) in a real activity at the user's phone width: all nine actions are
- * there with finger-sized buttons, each edit is one undo step, Recolor's long press paints the
- * lines only, and the bar goes away with the selection (also when another layer is selected).
+ * there with finger-sized buttons (v1.8: seven on row 1, Forward and Backward on the More row its
+ * toggle opens), each edit is one undo step, Recolor's long press paints the lines only, and the bar
+ * goes away with the selection (also when another layer is selected).
  */
 // Own sandbox (the test recomposer policy and paused Choreographer are global); the user's phone size.
 @RunWith(RobolectricTestRunner::class)
@@ -68,22 +71,32 @@ class VectorObjectBarUiRobolectricTest {
             }
         }
         SmokeUi.settle()
-        for (label in listOf("Delete", "Duplicate", "Forward", "Backward", "Front", "Back", "Recolor", "Transform", "Deselect")) {
-            assertTrue("\"$label\" shown", SmokeUi.has(label, exact = true))
-        }
+        // v1.8 (design §3.9): row 1 holds the most used seven and the toggle "Show more object
+        // actions"; Forward, Backward and Array wait on the More row.
+        val row1 = listOf("Delete", "Duplicate", "Front", "Back", "Recolor", "Transform", "Deselect")
+        for (label in row1) assertTrue("\"$label\" shown", SmokeUi.has(label, exact = true))
+        for (label in listOf("Forward", "Backward")) assertFalse("$label waits on the More row", SmokeUi.has(label, exact = true))
         assertTrue(SmokeUi.has("2 objects selected", exact = true))
-        // Finger-sized buttons, all nine on the 392 dp screen (no scrolling to reach Deselect),
+        // Finger-sized buttons, all seven and the toggle on the 392 dp screen (row 1 never scrolls),
         // every label whole (long words are set smaller, never clipped).
         val density = activity.resources.displayMetrics.density
         val screen = activity.resources.displayMetrics.widthPixels
         val buttons = listOf(
-            "Delete the selected objects", "Duplicate the selected objects", "Bring forward", "Send backward", "Bring to front",
-            "Send to back", "Recolor with the main color", "Transform the selected objects", "Deselect the objects",
+            "Delete the selected objects", "Duplicate the selected objects", "Bring to front", "Send to back",
+            "Recolor with the main color", "Transform the selected objects", "Deselect the objects",
         ).map { clickableOf(it) }
         for (b in buttons) assertTrue(b.bounds.width >= 40 * density - 1 && b.bounds.height >= 46 * density - 1)
-        assertTrue("Deselect is on screen (${buttons.last().bounds.right} of $screen)", buttons.last().bounds.right <= screen - 8 * density + 1)
         for (i in 1 until buttons.size) assertTrue(buttons[i - 1].bounds.right <= buttons[i].bounds.left + 1)
-        for (label in listOf("Delete", "Duplicate", "Forward", "Backward", "Front", "Back", "Recolor", "Transform", "Deselect")) {
+        val toggle = RobolectricUi.byDescription(StripLabels18.MORE_OBJECT)
+        assertTrue("the toggle follows Deselect", toggle.bounds.left >= buttons.last().bounds.right - 1)
+        assertTrue("the toggle is on screen (${toggle.bounds.right} of $screen)", toggle.bounds.right <= screen - 8 * density + 1)
+        assertTrue("row 1 never scrolls", buttons.all { StripTestKit.horizontalScroller(it.node) == null })
+        assertTrue("the toggle opens the More row", StripTestKit.openMoreRow())
+        for (label in listOf("Bring forward", "Send backward")) {
+            val b = clickableOf(label)
+            assertTrue("\"$label\" finger-sized, under row 1", b.bounds.width >= 40 * density - 1 && b.bounds.top >= buttons[0].bounds.bottom)
+        }
+        for (label in row1 + "Forward" + "Backward") {
             val node = RobolectricUi.byText(label).node
             val layouts = ArrayList<TextLayoutResult>()
             node.config.getOrNull(SemanticsActions.GetTextLayoutResult)?.action?.invoke(layouts)

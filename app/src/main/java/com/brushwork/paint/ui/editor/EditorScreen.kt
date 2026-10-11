@@ -639,8 +639,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
             modifier = selectionModifier,
         ) {
             if (objectBarVisible) {
-                // Selected vector objects get their own bar in the selection bar's place (v1.5).
-                VectorObjectBar(controller, Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height })
+                // Selected vector objects get their own bar in the selection bar's place (v1.5); its More
+                // row (v1.8) closes by the strip's rules (D25), so it shares the strip's state.
+                VectorObjectBar(controller, Modifier.testTag(ChromeTags.SELECTION_BAR).onSizeChanged { selectionBarPx = it.height }, stripState)
             } else {
                 SelectionActionBar(
                     controller = controller,
@@ -956,9 +957,10 @@ private fun FeedbackChips(
  * While the layer window is shown ([layerWindowShown]) "Import picture" is left out: the window has
  * the same button, and two controls never share a label (I10).
  *
- * v1.8 (D28): five sections, each headed by its name ([MenuLabels18]): "Clipboard", "Bring in",
- * "Send out", "View" and "This artwork". The entries keep their labels and, within a section,
- * their order; "Canvas…" moves from before "Flip view" to the head of "This artwork".
+ * v1.8 (D28): five sections, each headed by its name ([MenuLabels18]): [MenuLabels18.CLIPBOARD],
+ * [MenuLabels18.BRING_IN], [MenuLabels18.SEND_OUT], [MenuLabels18.VIEW] and
+ * [MenuLabels18.THIS_ARTWORK]. The entries keep their labels and, within a section, their order;
+ * "Canvas…" moves from before "Flip view" to the head of the last section.
  */
 private fun moreMenuEntries(
     controller: EditorController,

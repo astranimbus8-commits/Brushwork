@@ -32,6 +32,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,10 +65,16 @@ import com.brushwork.paint.ui.theme.IbisDims
  * `EditorScreen` hoists one and closes it on the chrome's events (D25); the host closes it on a
  * tool or vector-mode change and reports the row's height in [moreRowDp], which moves the X / Y
  * pill and the selection and object bars down.
+ *
+ * The vector object bar's own More row ([StripLabels18.MORE_OBJECT], [objectRowOpen]) follows the
+ * same rules: [anyOpen] counts it, [closeAll] closes it.
  */
 @Stable
 class StripState {
     private val open = mutableStateMapOf<ToolId, Boolean>()
+
+    /** The vector object bar's More row is open (`VectorObjectBar`; closed whenever the bar leaves). */
+    var objectRowOpen by mutableStateOf(false)
 
     /** The More row's height (dp) as the host draws it now: 0 while it is closed or the strip is not shown. */
     var moreRowDp by mutableFloatStateOf(0f)
@@ -75,8 +82,8 @@ class StripState {
 
     fun isOpen(id: ToolId): Boolean = open[id] == true
 
-    /** The More row shows for some tool (a canvas touch then only closes it, D25). */
-    val anyOpen: Boolean get() = open.values.any { it }
+    /** A More row shows: some tool's, or the object bar's (a canvas touch then only closes it, D25). */
+    val anyOpen: Boolean get() = objectRowOpen || open.values.any { it }
 
     fun toggle(id: ToolId) {
         if (isOpen(id)) open.remove(id) else open[id] = true
@@ -84,6 +91,7 @@ class StripState {
 
     fun closeAll() {
         if (open.isNotEmpty()) open.clear()
+        if (objectRowOpen) objectRowOpen = false
     }
 }
 
@@ -166,9 +174,15 @@ private fun ConvertedStrip(
         val chip = if (vectorMode) StripLayout.VECTOR_CHIP_DP + StripLayout.GAP_DP else 0f
         val split = StripLayout.split(spec, inner - chip)
         val lines = StripLayout.moreLines(split, spec.hint, inner)
-        val open = state.isOpen(toolId) && split.toggle && lines.isNotEmpty()
+        val canOpen = split.toggle && lines.isNotEmpty()
+        val open = state.isOpen(toolId) && canOpen
         val moreDp = if (open) StripLayout.moreRowDp(lines.size) else 0f
-        SideEffect { if (state.moreRowDp != moreDp) state.moreRowDp = moreDp }
+        SideEffect {
+            if (state.moreRowDp != moreDp) state.moreRowDp = moreDp
+            // A row that can no longer show (the strip got wide enough) must not stay open unseen:
+            // it would swallow the next canvas touch (D25).
+            if (!canOpen && state.isOpen(toolId)) state.toggle(toolId)
+        }
         if (debuggable) {
             val budget = inner - chip - if (split.toggle) StripLayout.TOGGLE_DP + StripLayout.GAP_DP else 0f
             check(StripLayout.rowWidth(split.row1) <= budget + 0.5f) {
