@@ -266,6 +266,14 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   `V18Tags.STRIP_TOGGLE`) and, while open, the opaque More row (`IbisColors.Menu`, tag
   `V18Tags.STRIP_MORE_ROW`) 4 dp under it, floating over the canvas. `spec.overlays` are composed
   whenever the strip shows, so a sheet opened from the More row outlives it.
+  While the row is open, the toggle is filled with `IbisColors.Accent` and the chevron points up.
+  A long press shows its label without toggling. A `SideEffect` drops the open entry of a spec
+  that can no longer open its row (`StripState.drop`): one that became wide enough for every
+  item, one with nothing left for the More row, or a legacy spec. So a row never stays open
+  unseen and swallows a canvas touch, and it comes back closed. Each cell is composed under
+  `key(item.key)`, so an item that comes or goes before an open popup, on row 1 or on the More
+  row, never resets it (`StripHostStateTest`). `LocalStripOverride` (`ui/tools/ToolOptionsBar.kt`,
+  null in the app) lets a test show a fake `StripSpec` on any tool.
 - **State and close rules (D25).** `StripState` (hoisted in `EditorScreen`, per tool, for the
   session) holds the open rows and `moreRowDp`. The host closes the row on a tool or vector-mode
   change and when the strip leaves the screen; `EditorScreen` closes it when a chrome surface
@@ -274,6 +282,29 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   open only closes it (`CanvasView.onConsumeTouch`, `Mode.CONSUMED`). The X / Y pill and the
   selection and object bars move down by `moreRowDp` + 4 dp (`ChromeLayout.pillTop(statusDp,
   moreRowDp)`, `selectionBarTop(..., moreRowDp)`), animated over 150 ms.
+- **The vector object bar (`ui/vector/VectorObjectBar.kt`, H).**
+  - `VectorObjectBar(controller, modifier, state: StripState?)` is one row that never scrolls. `EditorScreen` passes its `stripState`.
+  - `ObjectBarLayout.split(units, ranks, innerDp)` is pure. When all the buttons fit at 40 dp (`MIN_ITEM_DP`), they share the row at up to `MAX_ITEM_DP` (46 dp) each, with no toggle.
+  - Otherwise the lowest rank leaves row 1 first, a whole rank at a time:
+
+    | Rank | Button(s) |
+    |---|---|
+    | 1 | Array |
+    | 2 | Detach mirror copies (two units wide) |
+    | 3 | Forward / Backward |
+    | 4 | Front / Back |
+    | 5 | Duplicate |
+    | 6 | Recolor |
+    | 7 | Transform |
+    | 8 | Deselect |
+    | 9 | Delete |
+
+    This continues until the rest fit beside the 44 dp toggle `StripLabels18.MORE_OBJECT`. The kept buttons are widened to fill the row. Widths are floored to whole px so the toggle measures exactly 44 dp.
+  - At 360 and 392 dp, row 1 holds Delete, Duplicate, Front, Back, Recolor, Transform and Deselect. Bring forward, Send backward, Array and Detach mirror copies wait, in that order, in the More row under the bar. Detach mirror copies shows only while a selected object has copies.
+  - The open state is `StripState.objectRowOpen`. `anyOpen` counts it and `closeAll` clears it, so the D25 rules close it like the strip's row.
+  - A `DisposableEffect` closes it when the bar leaves. Deselecting swaps the bar out at once, so nothing stays open during its fade-out.
+  - **One More row at a time.** `StripState.toggle(id)` clears `objectRowOpen` when it opens the strip's row. `StripState.toggleObjectRow()` (the object bar's toggle) clears the strip's open map when it opens. The two rows never stack, and neither do their offsets.
+  - The toggle and the row reuse `V18Tags.STRIP_TOGGLE` / `V18Tags.STRIP_MORE_ROW` and the Expanded / Collapsed state, so whatever reaches a strip's More row reaches this one. Test helpers that pick the last toggle reach the object bar's when both show.
 - **Long-press labels (`ui/common/LongPressLabel.kt`, frozen).** `Modifier.longPressLabel(label)`
   shows the label in a bubble (tag `V18Tags.LONG_PRESS_BUBBLE`) under the element for
   `LONG_PRESS_BUBBLE_MS` (1.5 s) on a long press, inside a `LongPressLabelHost` (`EditorScreen`
@@ -290,9 +321,10 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
 ### Seams and new tools (F3)
 
 - `ToolId.MAGNETIC_LASSO` and `ToolId.COLOR_SELECT` are appended after `PATHFINDER` (older
-  ordinals unchanged); their tools are stubs (`tools/select/magnetic/MagneticLassoTool.kt`,
-  `tools/select/colorrange/ColorSelectTool.kt`: they open, draw nothing and commit nothing), act
-  where Magic wand acts, and fill cells [26] and [27] of the 30-cell tool menu.
+  ordinals unchanged); on the foundation their tools were stubs
+  (`tools/select/magnetic/MagneticLassoTool.kt`, `tools/select/colorrange/ColorSelectTool.kt`:
+  they open, draw nothing and commit nothing; area C built them, see "Selection tools" below),
+  act where Magic wand acts, and fill cells [26] and [27] of the 30-cell tool menu.
 - `BrushTool.beginPath(input, seed, draftBudget = 0f, maps = emptyList())`: a path stroke
   replicated through `DabMapping` like a symmetric brush stroke; empty maps are the v1.7 path.
 - `SymmetryGuides.showsFor(id)` (the nine tools the rulers repeat) and `drawFor(canvas, t, doc,
@@ -828,6 +860,78 @@ Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape
 - While the layer is open for editing, `EditOverride` draws the edited shape once per copy, placed from `VectorOps.bounds(VShape(shape))` as `ArrayDraw.sourceBounds` places it. Its tile regions include `ArrayLayout.bounds`, and the overlay shortcut is off for arrayed layers.
 - On an arrayed VECTOR layer, a brush-outlined shape previews as a guide rather than a live stroke. The commit re-renders the copies.
 
+## Shapes in v1.8: the cog, object copies and the Shape strip (items 7 and 1a, area F: `tools/vector/Shape*.kt`, `tools/vector/CogGeometry.kt`, `ui/vector/Shape*.kt`)
+
+### The cog and its v1.7 fallback
+
+**Geometry (`tools/vector/CogGeometry.kt`, pure, thread-safe).**
+- The cog is built on the unit circle and scaled into the box: x by w/2, y by h/2, so the tips touch the box edges.
+- Values are clamped to the `CogParams` ranges (`clamped`): teeth 3..64, depth 0.05..0.5, tooth width 0.2..0.8, taper 0..0.9, hole 0..0.8. A non-finite value takes its default.
+- Pitch p = 2π/N; base b = toothWidth·p; tip = b·(1 − taper); root radius r = 1 − depth.
+- Tooth k is centred at −90° + k·p. The first tooth points up; the rest follow clockwise on screen.
+- Each tooth has 4 vertices: root start, tip start, tip end, root end. The root arc between two teeth adds m − 1 vertices, with m = ceil(gap / 20°). The outer contour therefore has N·(3 + m) ≤ 320 vertices.
+- The hole (hole > 0) is a circle of radius hole·r with 48 vertices. It runs counter-clockwise, so it stays a hole under both the non-zero and the even-odd rule.
+- `ShapeGeometry.vertices(COG)` = `CogGeometry.outer`, the outer contour only.
+- `CogGeometry.local` / `contours` = the outer contour with the shape's Corners (`ShapeGeometry.cornerPath`), then the hole, which has no corners.
+- Budgets (`CogPerfTest`, Timing): a 64-tooth build ≤ 1 ms; a "Number of teeth" drag ≤ 8 ms per frame.
+
+**In the tool.**
+- `pickerTypes` = every type, so "Cog" is last in the dropdown. `hasCorners` includes COG.
+- Points mode starts from `vertices(COG)`: the points are the teeth, sharp, and the outline is unchanged within 0.01 px.
+- With a hole, Points is refused (D21). `ShapePoints` returns `CogLabels18.HOLE_REFUSAL`, shown as a toast and kept as state.
+- Turn into path on a field-drawn cog with a hole (`ShapeToSpline.isCompound`) gives ONE plain compound `VPath`: non-zero fill, no spline, so the Path tool cannot open it as points. A `CogLabels18.COMPOUND_HINT` toast says so.
+- With a brush, `ShapeOutlines.brushContours` splits the outline into its contours: the teeth, then the hole. The commit strokes each contour, seeded with the shape's seed plus the contour's index (`commitContours`, D21). The live preview strokes the teeth and draws the hole as a guide, on a raster layer and on a vector layer. On a vector layer, `VectorLayerRenderer.shapeBrushReplays` replays every contour the same way (seed + index), so the hole's line shows there too (`CogBrushOutlineTest`).
+
+**The v1.7 fallback (D23).**
+- `ShapeObject.forWriting()` is called by `ShapeCodec.encode` and by `VectorCodec.encode` for each `VShape`. For a COG without its own points, it writes normalized `points` (the outer contour with corners, no hole) and sets `cogFallback = true`.
+- v1.7 coerces COG to RECTANGLE and draws those points: the teeth, without the hole. A v1.7 save keeps a custom-points rectangle.
+- On read, `sanitized()` drops the flagged points and the flag. It runs in `ShapeCodec.decode`, in `VectorCodec.sanitizedShapes` (inside `VectorCodec.decode`) and in `PayloadImport`. v1.8 therefore reopens the cog itself, hole included.
+- A plain v1.7 shape round-trips through v1.8 byte for byte (`CogFallbackCodecTest`, `CogFallbackWriteTest`).
+- A mirrored cog with a hole survives `ProjectRepository` save → load with the same data and pixels, on a shape layer and as a vector object (`ShapeCopiesSaveReopenTest`).
+
+### Object copies: shapes
+
+**Live copies (`ShapeTool`, I15).**
+- A new shape takes the ruler's maps once, at its start point (`ObjectCopies.mapsAt`).
+- Affine maps become the shape's `CopyMaps` (`openCopies`). They are stored with the shape on a shape layer or a vector layer and drawn per copy.
+- A Perspective array is not affine, so its maps (`openPerspective`) are not kept; they bake on commit:
+  - on a raster layer or an Editable shape, pixels on the current layer (the new shape is then not kept as a shape layer);
+  - on a vector layer, one extra plain path per copy beside the shape (`ObjectCopies.baked`).
+  - A one-time hint (`MirrorLabels18.PERSPECTIVE_PIXELS` / `PERSPECTIVE_BAKED`) says which.
+- A reopened shape keeps its stored maps even with the ruler off, and tapping a copy opens the shape. Every edit moves the copies along.
+- `PendingState` carries the copies, so in-tool undo restores them.
+- "Remove mirror copies" (`MirrorLabels18.REMOVE`, on the More row while `hasCopies`) is ONE in-tool step.
+- Every commit with copies is ONE editor step that undo takes back whole and redo brings back exactly (`ShapeCopiesRedoTest`).
+
+**Drawing (`tools/vector/ShapeCopies.kt`).**
+- An affine map moves the path's points and control points exactly. A perspective map moves the flattened path (0.25 px tolerance).
+- `eachSpecs`: one spec per copy, source first. This is how the vector renderer and `ObjectCopies.drawEach` draw a shape layer's copies.
+- `unionSpec`: every copy's paths in ONE spec per item (fill, line, arrowheads), painted into a raster layer in one call, so translucent copies do not darken where they overlap.
+- `mappedAll`: the brush guide with every copy.
+- A shape layer's brush outline follows its copies:
+  - on a move, `outlineReplay` replays it on every copy;
+  - for a tool that moves pixels (smudge, blur), it is one stroke through `BrushTool.beginPath(..., maps)` (`ShapeLayerCopiesBrushTest`).
+- The rulers' affine maps are isometries, so a mapped path stroked at the shape's width matches drawing the source under `canvas.concat(map)`.
+- Budget (`ShapeCopiesPerfTest`, Timing): a box drag on a vector layer with 32 rotation copies, frame = move + document + overlays at 512 × 512, ≤ 33 ms per frame. The vector-layer preview draws its specs synchronously through the render override.
+
+**Readers (I17).**
+- `ShapeToSpline` reads only the source (`ObjectCopies.source`). It contains no `ObjectCopies.` and no `.copies`.
+- `ShapeTool.converted` puts the live copies back on the resulting path, so Turn into path keeps them:
+  - a new shape on a raster layer: two steps, the shape layer, then the vector layer;
+  - a vector object: replaced in place, same id, ONE step.
+- With a Perspective array, Turn into path places the source in a shape layer, then bakes the source path plus one plain path per copy into the vector layer (`ShapeCopiesTurnIntoPathTest`).
+
+### The Shape strip (§3.9)
+- `ui/vector/ShapeStrip.kt` builds the converted two-row `StripSpec`.
+- Row 1: Shape type 56, Shape style or Line ends 56, width 64 (AUTO 1: at 360 dp with the VECTOR cell it alone moves to the More row), Points 72.
+- The More row holds the v1.7 handles plus the Points-mode actions.
+  - "Stroke with" is a 40 dp icon menu; "Handles" is a 40 dp icon popup.
+  - "Point roundness" (`ShapeRoundnessCell`) is a 96 dp scrub cell whose typed dialog is an overlay.
+  - "Remove mirror copies" shows while the shape has copies.
+- The cells are in `ShapeStripParts.kt`. Every icon cell, dropdown cells included (`ShapeMenuCell`), shows its label on a long press (`Modifier.longPressLabel`).
+- The Shape settings and Numbers sheets are `overlays`, so they outlive the More row. Each item closes the row (`StripContext.closeMore`) before it opens a sheet.
+- `movedInto` maps the v1.7 handles that now live in a dropdown or popup.
+
 ## Vector layers (`vector/`, v1.5)
 A vector layer is a normal `Layer` whose `bitmap` is a render cache of `Layer.vector`, an immutable
 `VectorContent` (`vector/VectorModel.kt`): objects in z-order — `VStroke` (a recorded brush stroke:
@@ -1043,6 +1147,87 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - `setPaintMode` keeps the last stroke kind in `CurveSettings.lastStroke`, a tool preference (not I13).
 - The segments are "Stroke only" / "Fill only" / "Stroke and fill". Fill needs a closed object or a Path.
 - The stroke kind is a 2-item dropdown (Brush / Plain).
+
+## Curve generators (v1.8 item 6, area E)
+
+**Data.** `VPath.generator: CurveGenerator?` (`vector/CurveGenerator.kt`, `@EncodeDefault(NEVER)`) holds:
+- kind, centre, size, angle, clockwise;
+- turns, inner, growth, waves, amplitude;
+- petalsN / petalsD;
+- density ("Points per turn"; 0 = the kind's default).
+
+`sanitized()` clamps the values (turns ≤ 50, density ≤ 64, petals 1..24). v1.7 drops the field and keeps an ordinary path.
+
+**The kinds** (`tools/vector/gen/CurveGenerators.Analytic`, document px, y down; c centre, R size, α angle, dir = +1 clockwise):
+- Archimedean: φ in 0..Φ (Φ = 2π·turns), r = R·(inner + (1 − inner)·φ/Φ), angle α + dir·(φ − Φ). The outer end is at c + R·(cos α, sin α).
+- Logarithmic: r = R·growth^((φ − Φ)/2π). Golden: growth = φ⁴ per turn (the golden ratio per quarter turn).
+- Fermat: both arms through the centre as ONE curve, u in −1..1, r = R·u, angle α + dir·Φ·(u² − 1). It has no inner size.
+- Sine wave: c is the middle, R the length along α, height·sin(2π·waves·t) across.
+- Rose: r = R·cos(k·t) with k = n/d reduced, over one period (π·d when n·d is odd, else 2π·d), so it is always closed.
+
+**The fits** (`CurveGenerators.build(g, kind): CurveBuild(subpath, spline)`):
+- Curve (Bézier): an adaptive Hermite fit. Anchors start at parameter steps (Points per turn, default 4 per turn, wave or petal). Each anchor is smooth, with both handles h = P'(t)·Δt/3. The span that misses most (8 samples per span) is halved until every span is within 0.25 px, at most 400 anchors.
+- Path (NURBS): Points per turn samples (default 8, at most 400) are interpolated exactly by the Path tool's cubic B-spline. It is clamped (order 4, endpoint on), with the end tangents from the derivative and a Thomas tridiagonal solve; the rose is cyclic (a cyclic tridiagonal solve). The subpath is the spline's Bézier form.
+- Polyline offers no generators. `build` stays total (the Curve fit's anchors, made sharp).
+
+**I16: the generator holds only while the geometry is its build.**
+- `CurveTool.editGeometry` is THE one place where a hand edit clears the generator, in the same in-tool step (undo brings it back). The hint `CurveGenLabels18.EDITED_HINT` shows once per editor session, when the touch ends (a cancelled touch shows none). The Curve, Polyline and Path tools share it: `CurveTool.toastOncePerSession` asks all three.
+  - These go through it: move, add or delete points, tangent handles, Sharp / Smooth, auto tangent, handle lengths, weights, order, Endpoint, Cyclic, Closed.
+  - These do not: thickness, color, stroke.
+  - Moving, turning or uniformly scaling EVERY point maps the generator instead (`mapGenerator`).
+- On reopen, `CurveGenerators.matches` (0.01 px, on `ObjectCopies.source`) keeps the generator only when the geometry is its build:
+  - A Bézier path must be a Hermite fit of the curve. Each anchor's parameter is read from its out-handle length (|h| = |P'|·Δt/3). The projection then refines it only while the anchor misses by more than tol/4, and moves at most half a span per step. Without that clamp, float rounding in a logarithmic spiral's sub-pixel inner turns threw a full Newton step to the curve's end (found by GeneratorPerfTest; covered by `GeneratorMatchTest.theMostTurnsAndPointsStillMatch`).
+  - A Path must hold exactly the built spline.
+  - Per-point thickness never counts.
+- `VectorOps.transformed` (lead) maps the generator under a similarity and drops it otherwise.
+
+**The session.**
+- `CurveTool.startGenerator(kind, viewArea)` works only with nothing open, in Curve or Path. It places the curve at the centre of the canvas seen. The size is `GENERATOR_VIEW_FRACTION` (0.3) × the short side; a wave is twice that. It uses the last settings (pref `curve.generator.last`) and is one in-tool step.
+- `changeGenerator(g)` rebuilds the open curve. Between `beginNumericEdit` and `endNumericEdit` a slider drag is ONE in-tool step, and the settings are saved at its end.
+- `generatorHandles`: the centre (move) and the size handle (out scales, around turns), drawn in `drawOverlay`.
+- The commit is one LayerDataAction or PixelEditAction, as for any curve.
+
+**UI** (`ui/vector/CurveStrips.kt`, `CurveGeneratorSheet.kt`):
+- While nothing is open, the "Curves" dropdown leads row 1. Visible text `CurveGenLabels18.CURVES`; tests reach it by its description `CURVES_DESC` (R15: "Curves" contains "Curve"). The entries come in `CURVES_MENU` order.
+- While a curve is generated, the chip shows the kind's name, with description `CHANGE`. It is on row 1 for Curve (AUTO 1) and on the More row for Path.
+- The sheet is titled "Curves", because the kind's name is already the chip's text. It shows `generatorSettings(kind)` and Points per turn.
+
+**Budgets** (`GeneratorPerfTest`, Timing; the T606 itself is checked on the device):
+- A build of at most 400 anchors: ≤ 5 ms.
+- The I16 check on reopen: ≤ 2 ms.
+- A slider frame (the change and its outline, not the drawing): ≤ 8 ms.
+- Local only: T606-size probes (a 614 px spiral; Q10's Golden drag; Q1's Kaleidoscope 8 commit at Points per turn 25, about 300 anchors, ≤ 50 ms).
+
+## Mirrors for Curve, Polyline and Path (item 1a, area E)
+- **Maps.** Taken once, at the path's first point (`ObjectCopies.mapsAt`), whatever the ruler does later. A reopened path keeps its stored copies, whatever the ruler is now. `CurveCopies.others` drops the identity and singular maps.
+- **Live preview** (`CopiesPreview`). The path's plain items are drawn once per copy under `canvas.concat(M_k)` (homographies too). Brush strokes replicate through `BrushStrokePreview.request(maps)`.
+- **Translucent paint on a raster layer** (preview and commit, `CurveTool.groupAlpha`). When the line alpha equals the fill alpha, all copies go inside ONE `saveLayerAlpha`, so overlaps never darken. When they differ, `groupAlpha` is 255 and each copy is composited on its own (known gap; the per-copy order then matches the vector renderer).
+- **Commit.**
+  - Vector layer: the path stores affine `CopyMaps` (`ObjectCopies.fromSymmetry`). Perspective copies are baked into plain paths (`ObjectCopies.baked`). The hint `MirrorLabels18.PERSPECTIVE_BAKED` shows once per editor session, shared by the three curve tools (`toastOncePerSession`).
+  - Raster layer: every copy is painted in the commit's one step.
+- **Reopen.** A tap on any copy's line reopens the source (`ObjectCopies.hits`).
+- **Removing copies.** `MirrorLabels18.REMOVE` (More row) drops the open path's copies as one in-tool step; the generator stays (copies are no geometry).
+
+## The curve strips (§3.9, area E)
+- `curveSpec(tool, CurveStripFacts, CurveStripUi)` is pure and fully converted (`legacyContent == null`). The keys are `CurveKeys.*`.
+- `curveFacts` clamps `points` to 2. The spec asks only "open" and "two or more", so a generator slider frame that changes the point count rebuilds no spec (`GeneratorRoundTripTest.aTurnsChangeKeepsTheStripFacts`). Keep every `points` test as `> 0` or `>= 2`.
+- The paint modes are in the Stroke kind dropdown (`movedInto`); Order, Handles and Point weight are popups. Sheets and typing dialogs close the More row; popups and toggles keep it open.
+- Items that come and go sit after the popups in their line. (They were placed so while StripHost composed its cells by position. Since the merge it keys each cell by `StripItem.key`, so an item coming or going before an open popup no longer resets it: `StripHostStateTest`.)
+- Tests:
+  - `CurveStripRulesTest` (every state, pure).
+  - `CurveStripTest` (360 and 392 dp, raster and vector).
+  - `CurvesDropdownUiTest`, `CurvesLabelsTest`.
+  - `GeneratorRoundTripTest` (5): save and reopen with copies, handle-drag undo / redo, Remove copies, the raster step, the strip facts, the edit hint once per editor.
+  - `CurvePerspectiveBakeTest` covers the bake hint once per editor across the three tools.
+
+**Formats and compatibility rows (a v1.8 file opened in v1.7):**
+
+| What v1.8 wrote | What v1.7 shows | What a v1.7 save keeps |
+|---|---|---|
+| Curve, Polyline or Path with mirror copies (vector layer) | the source only | the source only |
+| Perspective-array curves (baked) | identical | identical |
+| Raster curve commits with mirrors | identical | identical |
+| Generated curve | an ordinary path, identical geometry | the path, without its settings |
 
 ## Live arrays (`array/`, `tools/array/`, `ui/array/`, v1.7)
 
@@ -1469,6 +1654,213 @@ behind the system picker still writes what was chosen.
   - **Pending saves** show at once, on top and newest first, tagged with the id they will have (`V17Tags.savedSelectionRow(id)`). Each row shows the name and a spinner in the thumbnail slot, and has no clickable and no menu until it lands.
   - **A pending update** replaces the entry's ⋮ with a spinner, and the row cannot be tapped until the update lands.
 
+## Selection tools: Magnetic lasso, Color select and their strips (v1.8 items 3 and 4, area C: `tools/select/`, `ui/selection/`)
+
+### Magnetic lasso (v1.8 item 3, area C)
+
+The tool is `tools/select/magnetic/MagneticLassoTool.kt`, with `EdgeMap.kt`, `LiveWire.kt`, `MagneticPoints.kt` and `Loupe.kt`. Its strip is `ui/selection/MagneticLassoOptions.kt`.
+
+Settings (`MagneticSettings` in `tools/select/ToolSettings.kt`) persist under `select.magnetic` in `AppSettings`:
+- Edge reach: 8..64 dp, default 24.
+- Edge contrast: 0..50 %, default 10.
+- Snap to edge: on.
+- Refer: Layer.
+- Anti-alias: on.
+
+Nothing new is stored in documents; the result is an ordinary `Selection`. The user taps points around an object, and each segment between two anchors follows the strongest edge between them.
+
+**Edge map** (`EdgeMap`). It is built on a worker (`Dispatchers.Default.limitedParallelism(1)`, newest wins) from `PixelSnapshot.take` of the pixels Refer names: the active layer, or the flattened canvas (a folder counts as the canvas).
+- The proxy's long side is at most `MAX_SIDE` = 2048 px, about 2 document px of error on a 4000 x 5000 canvas.
+- For each proxy pixel: the Rec. 709 luminance (transparent pixels count over white paper), then a 3 x 3 Gaussian blur, then the Sobel magnitude.
+- A 256-bin histogram normalizes the result so the 99th percentile maps to 255. When edges cover under 1 % of the picture (line art on white), the 99th percentile of the pixels above noise is used instead. The reference is never under `MIN_REFERENCE`, so noise never becomes a strong edge.
+- `grad` holds one byte per proxy pixel: 4 MB at 2048², and the build's peak is twice that. `half` is a half-resolution copy (each pixel is the strongest of its 2 x 2), built once on first need.
+
+**When the map is rebuilt.** Its key (`MapKey`) names the pixels:
+- for Refer: Layer, the active layer, its bitmap and its `contentVersion`;
+- for Refer: Canvas, the sum of every layer's `contentVersion`, plus `layersVersion` and the document size.
+
+`ensureEdgeMap` compares the key on activation, on a new Refer and on every finger-down. So the tool sees a stroke painted with another tool, a pixel undo or redo while the tool is active, a layer switch, and a vector render landing. (A pixel undo changes only `contentVersion`, not `layersVersion`.)
+
+A new key cancels the running build, forgets every traced segment (of the outline and of its history) and starts a new build. Until the build lands, segments are drawn straight and dashed, and taps do not snap.
+
+A build that runs out of memory shows the toast `Not enough memory for "Magnetic lasso"` once and keeps segments straight. It is not retried on every touch (`failedKey`); the next activation, or other pixels, try again.
+
+**Live wire** (`LiveWire`, design D10). It runs Dijkstra with Dial's bucket queue on the 8-connected proxy grid.
+- A step to pixel q costs (10 straight | 14 diagonal) x (1 + ((255 - g(q)) shr 3)). A g below the contrast floor (Edge contrast x 255 / 100) counts as 0, so a flat region costs the same everywhere (the path runs straight), and an edge is up to 32 times cheaper to follow.
+- The search window is the box of the two anchors plus `MARGIN` = 48 proxy px. A window over `MAX_NODES` = 1 M nodes searches the half-resolution map, and the path is scaled back up.
+- There is one instance per worker. Its arrays are sized to the largest window and reused, so a drag allocates nothing.
+
+Tracing runs one segment at a time on the worker, newest state first: the live segment (last anchor to the finger), then the active anchor's two segments, then the rest. A result is stored only if its anchors have not moved meanwhile.
+
+**Outline and steps** (`MagneticPoints`). It holds:
+- the anchors, in document px;
+- one traced segment per pair of anchors (x, y pairs, both ends exact; null means not traced yet);
+- the active anchor;
+- the in-tool history (copy on write, at most 200 states).
+
+Each of these is one step:
+- adding an anchor;
+- moving one (a drag, or an X / Y pill edit);
+- deleting one ("Delete point" or the pill's trash; the neighbours are joined by a new segment);
+- the strip's "Discard outline".
+
+The top row's Undo and Redo walk these steps and bring traced segments back without tracing again. `hasPendingWork` holds while there are anchors, or steps to undo. When an outline is taken back to nothing, its steps end once the tool is left.
+
+**Input.**
+- A tap places an anchor. With "Snap to edge" on, the anchor moves to the strongest edge within "Edge reach" (in screen dp, so the reach is the same at any zoom), unless no edge there passes the contrast floor. An anchor that snaps onto the last one (within 3 dp) is not added twice.
+- Press and drag shows the live segment to the finger.
+- A touch within 24 dp of an anchor drags it, with a 6 dp slop. Its two segments are traced again, and a cancelled touch puts the anchor back. A tap on an anchor makes it the active anchor.
+
+Closing traces any missing segment (and the closing one) on the worker, then commits through `LassoCommit.apply`. This makes ONE selection step "Magnetic lasso", combined by the selection mode. On a vector layer, the outline selects objects.
+
+There are three ways to close:
+- a tap on the first anchor;
+- the strip's "Close outline", or the pending bar's ✓;
+- a double tap (300 ms, 32 dp). With fewer than three anchors, the second tap does nothing.
+
+With fewer than three anchors, nothing closes and the outline is dropped quietly. Leaving the tool closes the outline, because `Tool.onDeactivate` commits pending work; with fewer than three anchors it is dropped.
+
+**Loupe** (`Loupe`, D12). It shows from finger-down to lift for every touch that places or drags an anchor, and for Color select's taps too.
+- It is a 104 dp circle showing the canvas at 3x the view's zoom, rendered through `Compositor.drawDocument` with white paper under it.
+- It shows the outline, the live segment, the faint reach ring and a crosshair.
+- It sits 96 dp above the finger, and flips below it when the finger is within 140 dp of the canvas's visible top.
+
+The canvas view is full-bleed under the editor's status bar, top row and options strip, so the visible top is the bars' lower edge. `Loupe.chromeTop(controller)` reads it from `EyedropperTool.chromeTop`, which `CanvasView.setFitInsets` already feeds (the eyedropper's color preview keeps clear of the bars the same way). It is 0 until the editor has measured its bars.
+
+For tests, the tool state is `MagneticLassoTool.loupe` / `ColorSelectTool.loupe` (`center`, `flipped`, `focus`).
+
+**`LassoCommit`** (`tools/select/LassoCommit.kt`, §4.7). This is the commit of a closed outline, shared by the Lasso (freehand, polygon, curve) and the Magnetic lasso.
+- It rasterizes at full resolution on a background thread (`SelectionJobs.applyAsync`), combined with the selection that is current when it finishes.
+- The busy overlay "Selecting…" shows after 400 ms.
+- It makes one selection step, named by the caller.
+
+It was moved out of `LassoTool` byte for byte. `LassoCommitParityTest` checks the masks against hashes recorded from the v1.7 code.
+
+**Budgets** (T606; `MagneticPerfTest`, `Timing`, desktop x 4 on CI):
+
+| Scenario | Budget |
+|---|---|
+| Edge map, 2048 px proxy | ≤ 400 ms, worker |
+| Segment, ≤ 300 proxy px | ≤ 30 ms |
+| Anchor drag retrace, two segments of ≤ 150 proxy px | ≤ 16 ms per frame |
+| Commit, 4000 x 5000 | ≤ 300 ms |
+| Memory, 2048² proxy (map, half map, search) | ≤ 12 MB |
+
+**Tests.**
+- `EdgeMapTest`.
+- `LiveWireTest`: a disc's rim is traced within 1.5 proxy px.
+- `LiveWireCapTest`, `MagneticAnchorUndoTest`, `MagneticModesTest`, `MagneticLoupeUiTest`.
+- `MagneticEdgeMapRefreshTest`: a stroke, its undo and its redo while the tool is active.
+- `LoupeChromeFlipTest`: the flip under the bars, for both tools.
+- `MagneticStripNarrowTest`, `LassoCommitParityTest`, `MagneticPerfTest`.
+
+### Color select (v1.8 item 4, area C)
+
+The tool is `tools/select/colorrange/ColorSelectTool.kt`, with `ColorRange.kt` (pure math), `ColorPreview.kt` (`ColorProxy`, `ColorPreview`, `ColorMasks`) and `ColorSamples.kt`. Its strip is `ui/selection/ColorSelectOptions.kt`.
+
+Settings (`ColorSelectSettings`) persist under `select.color` in `AppSettings`:
+- fuzziness: 0..200, default 40;
+- preset: default Sampled colors;
+- Refer;
+- anti-alias;
+- invert.
+
+Nothing new is stored in documents; the result is an ordinary `Selection`.
+
+**Lab** (D14). sRGB (D65) is converted to Lab through a 256-entry linearization table, the 3 x 3 matrix, and a 4096-bin f(t) table with linear interpolation. The result is within 0.01 ΔE of the closed form (`LabTableTest`, over a 32³ grid). `ColorRange.labQ` rounds it to hundredths, packed in a Long; the preview's cache and the commit both use it.
+
+**Membership** (`ColorRange.member`) is 0..1 per color. F is the fuzziness.
+- Sampled colors: d is the nearest sample's ΔE76. Membership is 1 up to F/2, 0 from F, with a smoothstep between. F = 0 selects only exact matches (d < 0.5).
+- Presets, with w = 0.05 + F/1000:
+  - The six hues (Reds 0°, Yellows 60°, Greens 120°, Cyans 180°, Blues 240°, Magentas 300°): 1 within 15 + 0.15·F degrees of the centre, 0 beyond 45 + 0.15·F, smoothstep between. This is multiplied by smoothstep(0.05, 0.2, S), so grays never count.
+  - Highlights: smoothstep(0.65 - w, 0.65 + w, L). Shadows: 1 - smoothstep(0.35 - w, 0.35 + w, L). Midtones: 1 minus both, clamped. L is Lab L / 100.
+  - Vivid colors: smoothstep(0.45 - w, 0.45 + w, S·V). Muted colors: 1 - Vivid.
+  - Skin tones: hue 5..50°, S 0.15..0.7, V > 0.25. The S and V edges are softened by w, the hue edges by w x 100°.
+- Then the value is inverted when "Invert range" is on, and multiplied by the pixel's alpha, so a transparent pixel is never selected. With anti-alias off, it is cut at half (0 or 255).
+
+Nothing counts when the preset is Sampled colors, there is no sample and invert is off (`ColorRange.Params.selectsNothing`). In that state:
+- the preview is empty;
+- `ColorSelectTool.canSelect` is false and "Select colors" is off;
+- a confirm (the pending bar's ✓ after "Clear samples", or a layer operation landing the steps) only ends the samples' steps. The selection is never replaced or intersected with nothing.
+
+**Samples** (`ColorSamples`). There are at most 8; a 9th replaces the oldest. Ways to change them:
+- A tap on the canvas adds the Refer color under the finger, as an opaque color. A transparent pixel or a point outside the document adds nothing. The loupe shows while the finger is down, and a swatch dot marks the tap point.
+- "Use the current color" adds the brush color.
+- "Add from the color picker" closes the More row (`StripContext.closeMore()`, §3.9) and opens `ColorPickerDialog`; its OK adds the color.
+- "Clear samples" removes them all.
+
+Each change is one in-tool step (Undo / Redo, at most 100). ✕ (discard) goes back to the samples of the last confirm.
+
+There are three ways to confirm: "Select colors", the pending bar's ✓, or a layer operation, export or share that lands pending work (as for every tool with steps). A confirm makes ONE selection step "Color select", combined by the selection mode. The samples stay for the next refinement; their steps end only once the selection has started. Leaving the tool selects nothing and ends the steps.
+
+**Preview pipeline.**
+1. The Refer pixels are reduced to a proxy whose long side is ≤ `PROXY_MAX` = 1280: a scaled copy of the layer, or `Compositor.renderThumbnail(1280)` of the canvas.
+2. The proxy's Lab is cached once per proxy (`ColorProxy`: three `ShortArray`s plus the pixels for alpha and HSV, ≤ 16 MB at 1280²). It is built on `Dispatchers.Default` in 64-row bands over every core.
+3. A change (settings, a sample, an undo) recomputes only the membership (`ColorMasks.previewMask`) on a worker, and the latest change wins: one job runs, and a "wanted" flag is picked up when it ends.
+4. The result is published as `ColorSelectTool.preview` (`version` + 1, the proxy `mask`, an ALPHA_8 bitmap).
+
+`drawOverlay` tints the preview red (0x80FF0000) over the canvas, with the samples' dots. It rebuilds the proxy when the Refer pixels changed under the tool. The proxy's key holds the source, the layer, its bitmap, the `contentVersion`s, `layersVersion` and the size.
+
+**Commit.**
+1. A `PixelSnapshot` of the Refer pixels is taken on the main thread.
+2. `ColorMasks.fullMask` runs at full resolution in 256-row bands over every core. Each worker has its own row buffer and a 4096-entry direct-mapped color cache, plus a last-color shortcut.
+3. `SelectionMasks.fromWindow` builds the selection.
+
+All of this runs through `SelectionJobs.applyAsync` under the busy overlay ("Selecting…"). On a vector layer, it selects pixels (as Magic wand does), not objects. The preview and the commit share `labQ` and `member`, so the preview shows what will be selected. `ColorPreviewMatchesCommitTest` checks that the full mask's 2 x 2 averages are within 2/255 of the preview.
+
+**Budgets** (T606; `ColorSelectPerfTest`, `Timing`, desktop x 4 on CI, photo-like pixels):
+
+| Scenario | Budget |
+|---|---|
+| Preview after a change (1024 x 1280 proxy, 8 samples at F 200, presets; and the tool's own preview end to end) | ≤ 120 ms |
+| First Lab cache, 1024 x 1280 | ≤ 250 ms |
+| Commit, 4000 x 5000 (mask + selection) | ≤ 1.5 s, under the busy overlay |
+| Proxy memory at 1280² | ≤ 16 MB (Lab ≤ 10 MB) |
+
+**Tests.** `LabTableTest`, `ColorRangeMembershipTest`, `ColorPreviewMatchesCommitTest`, `ColorSelectUndoTest`, `ColorSelectNothingToSelectTest`, `ColorSelectPresetChipsUiTest`, `ColorSelectStripNarrowTest`, `ColorSelectPerfTest`.
+
+### The selection strips (area C)
+
+Every selection tool's strip is a converted `StripSpec` in `ui/selection/`:
+- `SelectionStrips.kt`: Bucket, Eyedropper, Magic wand, Lasso, Select shape, Object select;
+- `MagneticLassoOptions.kt`;
+- `ColorSelectOptions.kt`.
+
+The compact controls are in `SelectionStripControls.kt`:
+- `SelectionModeDropdown` ("Selection mode", 56 dp, key `select.mode`): shows the mode's icon, carries the mode as its state, and holds the four v1.7 mode descriptions inside (`modesMovedInto`).
+- `StripValueButton`: a small label over the value and a ▾. A v1.7 control is found by its v1.7 handle ("Tolerance 32", "Refer: Layer"); a v1.8 control by its name, with the value as its state. `fixed` keeps the button exactly its width and ellipsizes the value.
+- `StripSliderChip`: a popup with the v1.7 slider and number field. A v1.8 chip has no − / + buttons.
+- `StripChoiceChip`, `StripToggle`, `StripIconAction`.
+- `CountedCloseButton`: the ✓ with "N pt" under it, enabled from 3 points.
+
+Rules for these controls:
+- Every dropdown and popup is opaque (`IbisColors.Menu`), anchored in its item, and closed by a second finger, so it never closes the More row.
+- An item that opens a sheet or a dialog (the Selection menu, the color picker) calls `StripContext.closeMore()` first.
+- The More row's "Deselect" and "Selection menu" (a sheet raised through the strip's overlays) show only while the selection bar is hidden.
+
+Rows, with widths in dp. AUTO items leave row 1 first when it is full.
+
+| Tool | Row 1 | More row |
+|---|---|---|
+| Bucket | Tolerance 72, Refer 80, Close gaps 72 | Expand 72, Anti-alias 88 |
+| Eyedropper | Sample 80, Size 64, Back to brush 104 | - |
+| Magic wand | mode 56, Tolerance 72, Contiguous 104 | Refer 80, Anti-alias 88, shortcuts |
+| Lasso | mode 56, kind 56; polygon / curve: Close, Discard (40, room kept while empty); curve point: sharp (AUTO 2), Delete (AUTO 1) | Snap to objects 160 (polygon, curve), Anti-alias 88, shortcuts; hint "Tap corners" |
+| Select shape | mode 56, shape 80, 1:1 56 | From center 96, Snap to objects 160, shortcuts |
+| Object select | mode 56, Refine edges 104, Cancel 40 (while busy) | Refer 80, shortcuts; hint |
+| Magnetic lasso | mode 56, Delete point 40, Discard 40, Close 40 (188; room kept while empty) | Edge reach 72, Edge contrast 88, Snap to edge 96, Refer 80, Anti-alias 88, shortcuts; hint while committing |
+| Color select | mode 56; Color range 92 (fixed, preset as state, a popup of 13 FilterChips); Fuzziness 64 (AUTO 1: a 44 dp opaque, full-width one-line slider panel right under the strip's row); Add from the color picker 40; Select colors 40 (off while nothing counts) | Use the current color 40, Clear samples 40, Invert range 96, Refer 80, Anti-alias 88, shortcuts; hint while selecting |
+
+Row 1 room (`StripInventory.content`) is 316 dp at 392 dp and 284 dp at 360 dp, and 44 dp less with the VECTOR chip.
+- Color select's row 1 is 308 dp with its gaps, so "Fuzziness" heads the More row at 360 dp (with or without the chip), and at 392 dp with the chip.
+- The curve lasso's point actions leave row 1 at 360 dp and with the chip.
+
+**Tests.**
+- `SelectionStripTest`: every state at 360 and 392 dp, with and without the chip. It covers the rows, the inventory rules, AUTO items leaving, handles on screen, the menu sheet outliving the row, and Refer's dropdown keeping the row.
+- `SelectionModeDropdownTest`.
+- `SelectionLabelsTest`: §4.8 rule 4 over the rows, the More rows and every opener.
+- The narrow tests listed above.
+
 ## Snapping (`snap/`)
 One app-wide "Snap to objects" setting (`controller.snapping`, `SnapService`) for every tool. Targets
 are the canvas edges and center, the selection, the content bounds of other visible layers, points
@@ -1764,6 +2156,103 @@ A document step that a control pushes on a finger's DOWN, before the claim, is n
 ## The options strip (v1.6 §3.7.2; `ui/editor/chrome/OptionsStrip`)
 
 The panel lays out 0 × 0 and does not place the bar for a tool that shows no options. The bar reports its content width while it is measured, and the "empty" flag is remembered per active tool and vector mode: Compose does not measure an unplaced node again on its own, so a flag kept across tools left the strip hidden for every later tool. On a tool or vector-mode change the flag starts as "not empty", the panel measures the new bar in the same pass, and the bar's report flips it before the panel lays out, so a tool without options never shows an empty panel.
+
+## Converted strips and top menus (v1.8 items 8 and 9, areas G and H)
+
+### The converted strips of area G (v1.8 item 8, §3.9; `ui/placement/`, `ui/textframes/`, `ui/mask/`, `ui/remove/`, `ui/pathfinder/`)
+
+Seven builders return real `StripSpec`s (`legacyContent == null`): `transformStrip`, `textStrip` and `frameDividerStrip` (`ui/placement/PlacementStrips.kt`), `textFrameStrip`, `maskStrip`, `removeStrip` and `pathfinderStrip`.
+- Each strip's `…StripItems` object holds its keys, its declared widths (measured, rounded up to 4 dp) and its handles (the v1.7 labels).
+- Row 1 / More row placement is the host's `StripLayout.split` (I18).
+
+- **Shared parts (`ui/placement/StripParts.kt`).**
+  - `StripMenu`: an anchored dropdown, opaque `IbisColors.Menu`.
+  - `StripMenuButton`: a label and ▾. It leaves the semantics while its menu is open, so the menu entry is the one control with its label.
+  - `StripTextButton`: icon and text at 10 to 11 sp, `stacked` for icon over text, with `checked`/`on`/`dimmed` states.
+  - `StripStatusText`: 11 sp, 2 lines.
+  - `snapItem`: "Snap to objects", 96 dp.
+  - `ClosesMoreRow()`: used in toggle-less states, so a stale open More-row entry cannot swallow the next canvas touch. Since the merge the host also drops a toggle-less spec's open entry itself (`StripState.drop`, legacy specs included); `ClosesMoreRow()` stays as the strips' own guard.
+- **Close rules (D25).**
+  - Anchored dropdowns and popups keep the More row open: the Transform mode, Mesh size, interpolation, the Text frames wrap, the Masks target, the Remove sample and size, the Pathfinder ops.
+  - An item that opens a sheet or dialog, or that waits for the next canvas touch, calls `LocalStripContext.current.closeMore()` first. Examples: "Edit text", "Letters", "Wrap", "Numbers", "Edit story", "Link…", the Masks add buttons, the Frame divider sheets.
+  - Every sheet and dialog is composed from `StripSpec.overlays`.
+- **Transform (`TransformStripItems.kt`).**
+  - Idle: v1.7's status text alone (284 dp, no toggle).
+  - Box modes: row 1 has the mode dropdown (56 dp, the current mode's label and icon), "Keep aspect ratio", "From center" and the flips. The flips keep their width while a text can't be mirrored. The More row has "Delete" (104 dp), the quarter turns, "Fit to canvas", "Reset transform", "Snap to objects", "Choose interpolation" (80 dp) and "Numbers" (64 dp, the Numbers sheet is an overlay), under v1.7's status text as the hint.
+  - The dropdown lists the three modes. A mode the lifted content refuses is dimmed, with its caption as stateDescription; a tap shows the caption, plus "Rasterize and deform" when available.
+  - `movedInto` maps the other two modes to the mode item (`modesInside`).
+  - Free deform: row 1 has the mode, `TransformLabels18.MESH_SIZE` ("3 × 3", 72 dp; its popup holds v1.7's "Mesh columns" / "Mesh rows" steppers, `movedInto`) and "Reset mesh". The More row has "Smooth mesh", "Select all points" / "Deselect all points", "Delete" and "Choose interpolation". The hint is `PointLabels.SEVERAL_HINT` while the pill's "Select several" is on (`selectSeveralAvailable = isMeshShown`).
+- **Text (`TextStripItems.kt`).**
+  - Row 1: "Edit text" (92 dp, dimmed with nothing to edit), the direction, "Letters" and "Wrap" (AUTO 1).
+  - More row: "Numbers" while a text is open, and "Snap to objects".
+  - The editor dialog and the Numbers, Wrap and Letter scaling sheets are overlays.
+- **Frame divider.**
+  - Without a frame layer: "New frame layer" and the status (no toggle).
+  - Ready: "Rows × columns", "Remove panels mode" and "Frame settings / new frame layer" on row 1; "Snap to objects" on the More row under the divide or remove hint.
+  - Edited by hand: "Redraw", "New frame" and the status (184 dp).
+  - The settings sheet and the grid dialog are overlays.
+- **Text frames (`ui/textframes/TextFrameStrip.kt`).**
+  - Nothing selected: the draw hint on row 1.
+  - A frame selected: "Edit story" (64), "Link…" (60), "Unlink here" (AUTO 1), "Delete frame" and the red "+ N characters" (64 dp, its width reserved while the story fits).
+  - Linking: "Cancel link" and the link hint.
+  - The More row always has "Threads" and "Snap to objects", plus "Wrap around picture" (a dropdown) with a frame selected. The story editor is the overlay.
+- **Masks (`ui/mask/MaskStrip.kt`).**
+  - Row 1: "+ Linear", "+ Radial", "+ Brush" (40 dp each), "Invert", "Adjust…" (72 dp, AUTO 1) and "Done" while a brush part is selected.
+  - More row: the target dropdown (152 dp), Brush / Erase, Add / Subtract / Intersect, the overlay toggle and "Components (N)" (100 dp).
+  - The Adjust and components sheets, the filter browser and the replace question are overlays (`MaskSheets`).
+- **Remove (`ui/remove/RemoveStrip.kt`).**
+  - Row 1 only, no toggle: "Remove brush size" (64 dp readout; its popup holds v1.7's slider, with a spinner while removing), the "Sample" dropdown (96 dp) and "Color adaptation" (104 dp).
+- **Pathfinder (`ui/pathfinder/PathfinderStrip.kt`, `PathfinderOptions.kt`).**
+  - Row 1 only, no toggle: the ops dropdown (92 dp, tag `v18g.pathfinder.ops`; the button shows the last op used, kept with `rememberSaveable`; the ten ops keep their descriptions; enabled with at least 2 picks while idle), "Select all objects" (40 dp) and the status (140 dp, AUTO 1: it moves only below 360 dp).
+  - `movedInto` maps every op description to the dropdown.
+- **Tests.**
+  - UI (one @Test per class, 360 and 392 dp × VECTOR cell, inventory rules 1 to 5, splits, clipped texts): `PlacementStripTest`, `TextFrameStripTest`, `MaskStripTest`, `RemoveStripTest`, `PathfinderStripTest`, `FreeDeformPillTest`.
+  - JVM: `StripsLabelsTest` (labels are LabelsV18 or v1.7 constants, rule L).
+  - Shared kit: `PlacementStripKit`.
+
+### Top menus (v1.8 item 9; area H: `ui/editor/chrome/TopRow.kt`, `ui/editor/EditorScreen.kt`, `ui/editor/chrome/ChromeGlyphs.kt`, `ui/theme/`)
+
+- **The More circle.** The top row's last circle draws `ChromeGlyphs.MoreDots`. These are three solid dots of radius 2.1 at y 12 on the 24-unit grid, centred at x 5.5, 12 and 18.5. Its label stays "More options".
+- **Sections (D28).** `MenuEntry.section` (a `MenuLabels18` name) replaces v1.7's `dividerBefore`. `MoreMenu` heads each run of entries of one section with a `SectionHeader`:
+  - 24 dp tall (`IbisDims.MoreMenuSection`), with the name at 12 sp (`IbisDims.MoreMenuSectionText`) in `OnChromeDim`;
+  - a heading for screen readers, not clickable, tagged `V18Tags.MENU_SECTION_PREFIX + name`.
+
+  The five sections (`moreMenuEntries`):
+
+  | Section | Entries |
+  |---|---|
+  | `CLIPBOARD` | Copy, Paste |
+  | `BRING_IN` | Import picture, Import SVG or PDF… |
+  | `SEND_OUT` | the four exports, Share |
+  | `VIEW` | Flip view, Fit to screen, 100% (actual pixels), Reset rotation |
+  | `THIS_ARTWORK` | Canvas…, Increments…, Save now, Settings |
+
+  "Canvas…" moved from before "Flip view" to the head of the last section. Every other entry keeps its label and relative order. The top-row circles folded into the menu on a narrow screen have no section. They come first, before the first header.
+
+  The headers make the menu about 116 dp longer than v1.7's: five 24 dp headers replace four 1 dp dividers. On the 392 × 873 dp phone the entries from "Canvas…" on sit below the fold, one short scroll away. v1.7's menu already scrolled there. A test that reads those entries' bounds must scroll the menu first; `SmokeUi.click` does not need to.
+- **Opacity (D27).**
+  - Menus are opaque `IbisColors.Menu` (#1E1E1E). The More menu passes it as `containerColor`.
+  - `BrushworkTheme` sets `surfaceContainer = IbisColors.Menu`, so Material dropdowns that keep the default container color are opaque too. A dropdown that sets its own color keeps it.
+  - The options strip's More row and the object bar's More row are `IbisColors.Menu` with a 1 dp `BrushworkColors.ChromeBorder` edge.
+  - Sheets, the selection bar and the object bar's own row stay `SheetBackground` (translucent).
+- **Long-press labels.** `Modifier.longPressLabel(label)` shows the label in a bubble and never acts. It sits on:
+  - every top-row circle (`TopCircle`);
+  - every selection-bar button (`BarItem`, its click label);
+  - every object-bar button (`ObjectBarItem`) except Recolor, whose own long press recolors the lines only;
+  - both More toggles, and the strip's VECTOR cell (F3);
+  - the pill's trash, Keep proportions and fold cells (`CoordinatePill`). The several-points cell already had one, and the step cell keeps its own long press.
+- **Tests.**
+  - In `qa18`:
+    - `MoreMenuSectionsTest`, `TopRowLongPressTest`, `MoreRowOffsetsTest`;
+    - `MoreRowCloseTest` (the D25 rules, plus the object bar's row beside the strip's);
+    - `ObjectBarMoreTest`;
+    - `OpaqueMenusTest` (Skia pixels of the menu card and both More rows);
+    - `ChromeLabelsTest`;
+    - `ChromeV18NarrowUiTest` (360 dp: every strip, the row-1 budgets, the object bar, the top row).
+  - Helpers:
+    - `Fingers18`: real touch, with taps, `quickTap` (no settle, for touches inside a fade), strokes, pinches, `longPress` / `longPressAt` and the canvas state;
+    - `FakeStrip18`: `FakeStrips.spec(more, moreWidth, closer, row1Width)`, and `FakeStripEditor` through `LocalStripOverride`.
+  - `ui/vector/ObjectBarLayoutTest` covers the pure object-bar split.
 
 ## Typed expressions: grammar and parse sites (v1.7, item 15; `core/Expressions.kt`)
 
