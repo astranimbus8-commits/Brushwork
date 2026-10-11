@@ -168,7 +168,6 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
      * (no samples and no preset: an empty selection). The samples stay; their steps end.
      */
     fun selectColors() {
-        samples.resetHistory()
         if (busy) return
         val c = controller
         val p = params()
@@ -178,6 +177,8 @@ class ColorSelectTool(controller: EditorController) : Tool(controller) {
             c.toast("Not enough memory for \"${ToolId.COLOR_SELECT.label}\"")
             return
         }
+        // Confirmed: the samples' steps end only now (a selection that never starts keeps them).
+        samples.resetHistory()
         val w = snapshot.width; val h = snapshot.height
         busy = true
         SelectionJobs.applyAsync(c, ToolId.COLOR_SELECT.label, mode, LassoCommit.BUSY_LABEL, onFinished = {
