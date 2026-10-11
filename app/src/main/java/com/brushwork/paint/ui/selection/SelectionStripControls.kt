@@ -153,13 +153,25 @@ internal fun StripValueButton(
 
 /**
  * An integer in [range] as "[label] [value][suffix] ▾": a popup with the v1.7 slider and its
- * number field. Its handle is v1.7's chip text, "Tolerance 32" / "Close gaps 0 px".
+ * number field. Its handle is v1.7's chip text, "Tolerance 32" / "Close gaps 0 px"; a v1.8 control
+ * ([stateful]) is known by its [label] alone and says its value as its state, so the popup's own
+ * label is never a part of another handle (design §4.8 rule 4).
  */
 @Composable
-internal fun StripSliderChip(label: String, value: Int, range: IntRange, width: Dp, suffix: String = "", onChange: (Int) -> Unit) {
+internal fun StripSliderChip(
+    label: String,
+    value: Int,
+    range: IntRange,
+    width: Dp,
+    suffix: String = "",
+    stateful: Boolean = false,
+    onChange: (Int) -> Unit,
+) {
     var open by remember { mutableStateOf(false) }
     Box {
-        StripValueButton(label, "$value$suffix", "$label $value$suffix", width, onClick = { open = true })
+        val text = "$value$suffix"
+        if (stateful) StripValueButton(label, text, label, width, onClick = { open = true }, state = text)
+        else StripValueButton(label, text, "$label $text", width, onClick = { open = true })
         StripDropdown(open, onDismiss = { open = false }) {
             Column(Modifier.width(280.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
                 val span = range.last - range.first
@@ -179,7 +191,8 @@ internal fun StripSliderChip(label: String, value: Int, range: IntRange, width: 
                     suffix = suffix.trim(),
                     min = range.first.toDouble(),
                     max = range.last.toDouble(),
-                    step = 1.0,
+                    // A v1.8 control has no − / + buttons: their "Decrease / Increase <label>" would hold its name (§4.8 rule 4).
+                    step = if (stateful) null else 1.0,
                     adjust = NumberAdjust.NONE, // the slider is right above
                 )
             }

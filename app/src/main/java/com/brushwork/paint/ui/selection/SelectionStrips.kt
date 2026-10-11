@@ -33,7 +33,6 @@ import com.brushwork.paint.tools.select.MarqueeTool
 import com.brushwork.paint.tools.select.ObjectSelectTool
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
-import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.ui.common.SnapToObjectsChip
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.theme.BrushworkColors
@@ -275,9 +274,6 @@ internal fun objectSelectStrip(tool: ObjectSelectTool, c: EditorController): Str
         movedInto = modesMovedInto,
     )
 }
-
-@Composable
-internal fun magneticLassoStrip(tool: MagneticLassoTool, c: EditorController): StripSpec = StripSpec.EMPTY
 
 @Composable
 internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): StripSpec = StripSpec.EMPTY

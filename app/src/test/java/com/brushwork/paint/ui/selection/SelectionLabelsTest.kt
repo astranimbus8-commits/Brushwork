@@ -44,6 +44,7 @@ class SelectionLabelsTest {
         "LASSO" to listOf(MagneticLabels18.SELECTION_MODE, "Freehand lasso"),
         "MARQUEE" to listOf(MagneticLabels18.SELECTION_MODE),
         "OBJECT_SELECT" to listOf(MagneticLabels18.SELECTION_MODE, "Refer:"),
+        "MAGNETIC_LASSO" to listOf(MagneticLabels18.SELECTION_MODE, MagneticLabels18.EDGE_REACH, MagneticLabels18.EDGE_CONTRAST, "Refer:"),
     )
 
     /** Everything a person reads or hears on the placed nodes. */

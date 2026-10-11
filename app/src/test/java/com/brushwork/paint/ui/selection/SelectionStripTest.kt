@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.LassoKind
 import com.brushwork.paint.tools.select.LassoTool
+import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.tools.strip.StripInventory
 import com.brushwork.paint.ui.tools.strip.StripLayout
@@ -49,6 +50,10 @@ class SelectionStripTest {
     )
 
     private val shortcuts = listOf("select.deselect", "select.menu")
+
+    private val magneticRow1 = listOf(MODE_KEY, MagneticStrip.DELETE, MagneticStrip.DISCARD, MagneticStrip.CLOSE)
+    private val magneticMore =
+        listOf(MagneticStrip.REACH, MagneticStrip.CONTRAST, MagneticStrip.SNAP, MagneticStrip.REFER, MagneticStrip.ANTI_ALIAS) + shortcuts
 
     private fun lasso(rig: StripRig): LassoTool = rig.c.tools.getValue(ToolId.LASSO) as LassoTool
 
@@ -99,6 +104,10 @@ class SelectionStripTest {
             "object select", ToolId.OBJECT_SELECT, listOf(MODE_KEY, "object.refine", "object.cancel"),
             listOf("object.refer") + shortcuts, hint = "Tap or scribble on an object",
         ),
+        State(
+            "magnetic lasso", ToolId.MAGNETIC_LASSO, magneticRow1, magneticMore,
+        ),
+        State("magnetic lasso, 3 anchors", ToolId.MAGNETIC_LASSO, magneticRow1, magneticMore) { tapAll(it) },
     )
 
     private fun available(screen: Float, chip: Boolean) =
@@ -189,6 +198,7 @@ class SelectionStripTest {
             if (full && "select.menu" in s.more) problems += menuStaysOpen(where, rig)
             if (full && s.more.any { it.endsWith(".refer") }) problems += dropdownKeepsRow(where, rig)
             (rig.c.currentTool as? LassoTool)?.let { if (it.hasPendingWork) it.discard() }
+            (rig.c.currentTool as? MagneticLassoTool)?.let { if (it.hasPendingWork) it.discard() }
             rig.settle()
         }
         return problems
