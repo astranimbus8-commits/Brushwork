@@ -17,6 +17,8 @@ import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.segmentation.LiteRtMagicTouch
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
+import com.brushwork.paint.ui.common.MagneticLabels18
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.theme.BrushworkTheme
@@ -85,12 +87,23 @@ class ObjectSelectOptionsRobolectricTest {
         RobolectricUi.settle(10, 50)
         val width = activity.resources.displayMetrics.widthPixels
 
+        // v1.8 (design §3.9): the hint is the More row's first line; the four modes are inside
+        // row 1's mode dropdown ([MagneticLabels18.SELECTION_MODE]).
+        assertTrue(StripTestKit.openMoreRow())
         val hint = RobolectricUi.byText(HINT)
         assertTrue("hint at ${hint.bounds} on a $width px screen", hint.bounds.right <= width)
+        assertTrue(StripTestKit.closeMoreRow())
+        val modeButton = RobolectricUi.byDescription(MagneticLabels18.SELECTION_MODE).bounds
+        assertTrue("the mode dropdown at $modeButton on a $width px screen", modeButton.right <= width)
+        SmokeUi.click(MagneticLabels18.SELECTION_MODE, exact = true)
         for (m in listOf("New selection", "Add to selection", "Subtract from selection", "Intersect with selection")) {
-            val b = RobolectricUi.byDescription(m).bounds
-            assertTrue("$m at $b on a $width px screen", b.right <= width)
+            val b = RobolectricUi.byText(m).bounds
+            assertTrue("$m at $b on a $width px screen", b.right <= width && b.left >= 0f)
         }
+        SmokeUi.click("Subtract from selection", exact = true)
+        assertTrue(tool.mode == com.brushwork.paint.model.SelectionMode.SUBTRACT)
+        tool.mode = com.brushwork.paint.model.SelectionMode.REPLACE
+        RobolectricUi.settle(4, 50)
 
         // Keep the selection busy for as long as the test needs: hold the object model's lock
         // (the job waits for it before its first inference).
@@ -105,8 +118,10 @@ class ObjectSelectOptionsRobolectricTest {
             assertTrue(tool.busy)
             RobolectricUi.settle(4, 50)
             assertTrue("still waiting for the model", tool.busy)
+            assertTrue(StripTestKit.openMoreRow())
             assertFalse("the hint makes room for the busy state", RobolectricUi.hasText(HINT))
             assertTrue(RobolectricUi.hasText("Selecting…"))
+            assertTrue(StripTestKit.closeMoreRow())
             val cancel = RobolectricUi.byDescription("Cancel object select")
             assertTrue("cancel at ${cancel.bounds} on a $width px screen", cancel.bounds.right <= width && cancel.bounds.left >= 0f)
             cancel.tap()
@@ -117,7 +132,9 @@ class ObjectSelectOptionsRobolectricTest {
         assertTrue(pumpUntil { !tool.busy })
         assertNull("cancelled: nothing selected", c.selection)
         RobolectricUi.settle(4, 50)
+        assertTrue(StripTestKit.openMoreRow())
         assertTrue("the hint is back", RobolectricUi.hasText(HINT))
+        assertTrue(StripTestKit.closeMoreRow())
         assertTrue(errors.isEmpty())
     }
 

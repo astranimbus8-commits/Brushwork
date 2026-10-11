@@ -74,23 +74,6 @@ import kotlin.math.roundToInt
 
 // ---------------------------------------------------------------------- tool option strips
 
-/** Magic wand: mode, tolerance, contiguous, reference, anti-alias. */
-@Composable
-fun MagicWandOptions(tool: MagicWandTool) {
-    val s = tool.settings
-    OptionsRow {
-        SelectionModeButtons(tool.mode) { tool.mode = it }
-        StripDivider()
-        SliderChip("Tolerance", s.tolerance, 0..255) { tool.settings = tool.settings.copy(tolerance = it) }
-        ToggleChip("Contiguous", s.contiguous) { tool.settings = tool.settings.copy(contiguous = it) }
-        ChoiceChip("Refer", SampleSource.entries, s.source, { it.label }) { tool.settings = tool.settings.copy(source = it) }
-        ToggleChip("Anti-alias", s.antiAlias) { tool.settings = tool.settings.copy(antiAlias = it) }
-        StripDivider()
-        SelectionShortcuts(tool.controller)
-        BusyIndicator(tool.busy)
-    }
-}
-
 /**
  * Lasso: Freehand / Polygon / Curve, mode, anti-alias. Polygon and curve: ✓ / ✕ for an
  * unfinished outline; curve: sharp / smooth / delete for the long-pressed point. (v1.8, F4: the
@@ -225,58 +208,6 @@ private val CurveLassoIcon: ImageVector by lazy {
         .build()
 }
 
-/** Rectangle / ellipse selection: shape, 1:1, from center, mode. */
-@Composable
-fun MarqueeOptions(tool: MarqueeTool) {
-    val s = tool.settings
-    OptionsRow {
-        ToolIconButton(Icons.Outlined.Rectangle, "Rectangle selection", onClick = { tool.settings = tool.settings.copy(shape = MarqueeShape.RECTANGLE) }, selected = s.shape == MarqueeShape.RECTANGLE, size = 40.dp)
-        ToolIconButton(Icons.Outlined.Circle, "Ellipse selection", onClick = { tool.settings = tool.settings.copy(shape = MarqueeShape.ELLIPSE) }, selected = s.shape == MarqueeShape.ELLIPSE, size = 40.dp)
-        StripDivider()
-        ToggleChip("1:1", s.square) { tool.settings = tool.settings.copy(square = it) }
-        ToggleChip("From center", s.fromCenter) { tool.settings = tool.settings.copy(fromCenter = it) }
-        SnapToObjectsChip(tool.controller)
-        StripDivider()
-        SelectionModeButtons(tool.mode) { tool.mode = it }
-        StripDivider()
-        SelectionShortcuts(tool.controller)
-        BusyIndicator(tool.busy)
-    }
-}
-
-/** Bucket fill: tolerance, reference, gap closing, expand, anti-alias. */
-@Composable
-fun FillOptions(tool: FillTool) {
-    val s = tool.settings
-    val c = tool.controller
-    OptionsRow {
-        ColorSwatch(ColorModeOps.displayColor(c.color, c.doc.colorMode), size = 28.dp)
-        StripDivider()
-        SliderChip("Tolerance", s.tolerance, 0..255) { tool.settings = tool.settings.copy(tolerance = it) }
-        ChoiceChip("Refer", SampleSource.entries, s.source, { it.label }) { tool.settings = tool.settings.copy(source = it) }
-        SliderChip("Close gaps", s.gapClose, 0..FillSettings.MAX_GAP_CLOSE, suffix = " px") { tool.settings = tool.settings.copy(gapClose = it) }
-        SliderChip("Expand", s.expand, 0..FillSettings.MAX_EXPAND, suffix = " px") { tool.settings = tool.settings.copy(expand = it) }
-        ToggleChip("Anti-alias", s.antiAlias) { tool.settings = tool.settings.copy(antiAlias = it) }
-        BusyIndicator(tool.busy)
-    }
-}
-
-/** Eyedropper: source, sample size, return to brush. */
-@Composable
-fun EyedropperOptions(tool: EyedropperTool) {
-    val s = tool.settings
-    val c = tool.controller
-    OptionsRow {
-        ColorSwatch(c.color, size = 28.dp)
-        StripDivider()
-        ChoiceChip("Sample", listOf(SampleSource.CANVAS, SampleSource.LAYER), s.source, { it.label }) { tool.settings = tool.settings.copy(source = it) }
-        ChoiceChip("Size", SAMPLE_SIZES, s.sampleSize, { "$it×$it" }) { tool.settings = tool.settings.copy(sampleSize = it) }
-        ToggleChip("Back to brush", s.returnToBrush) { tool.settings = tool.settings.copy(returnToBrush = it) }
-    }
-}
-
-private val SAMPLE_SIZES = listOf(1, 3, EyedropperTool.MAX_SAMPLE)
-
 // ---------------------------------------------------------------------- shared strip controls
 
 @Composable
@@ -344,63 +275,4 @@ internal fun ToggleChip(label: String, checked: Boolean, onChange: (Boolean) -> 
         leadingIcon = if (checked) ({ Icon(Icons.Filled.Check, contentDescription = null, Modifier.size(FilterChipDefaults.IconSize)) }) else null,
         colors = chipColors,
     )
-}
-
-/** "Label: value ▾" chip that opens a menu of [options]. */
-@Composable
-internal fun <T> ChoiceChip(label: String, options: List<T>, selected: T, text: (T) -> String, onSelect: (T) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        AssistChip(
-            onClick = { open = true },
-            label = { Text("$label: ${text(selected)}") },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
-            options.forEach { o ->
-                DropdownMenuItem(
-                    text = { Text(text(o)) },
-                    onClick = { onSelect(o); open = false },
-                    leadingIcon = { if (o == selected) Icon(Icons.Filled.Check, contentDescription = null) },
-                )
-            }
-        }
-    }
-}
-
-/** "Label value ▾" chip that opens a slider + numeric field for an integer in [range]. */
-@Composable
-internal fun SliderChip(label: String, value: Int, range: IntRange, suffix: String = "", onChange: (Int) -> Unit) {
-    var open by remember { mutableStateOf(false) }
-    Box {
-        AssistChip(
-            onClick = { open = true },
-            label = { Text("$label $value$suffix") },
-            trailingIcon = { Icon(Icons.Filled.ArrowDropDown, contentDescription = null, Modifier.size(AssistChipDefaults.IconSize)) },
-        )
-        DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
-            Column(Modifier.width(280.dp).padding(horizontal = 16.dp, vertical = 4.dp)) {
-                val span = range.last - range.first
-                LabeledSlider(
-                    label = label,
-                    value = value.toFloat(),
-                    onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
-                    valueRange = range.first.toFloat()..range.last.toFloat(),
-                    steps = if (span in 2..20) span - 1 else 0,
-                    valueText = "$value$suffix",
-                )
-                NumberField(
-                    label = label,
-                    value = value.toDouble(),
-                    onValueChange = { onChange(it.roundToInt().coerceIn(range)) },
-                    decimals = 0,
-                    suffix = suffix.trim(),
-                    min = range.first.toDouble(),
-                    max = range.last.toDouble(),
-                    step = 1.0,
-                    adjust = com.brushwork.paint.ui.common.NumberAdjust.NONE, // the slider is right above
-                )
-            }
-        }
-    }
 }
