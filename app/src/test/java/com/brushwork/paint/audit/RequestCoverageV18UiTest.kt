@@ -45,6 +45,7 @@ import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.select.colorrange.ColorPreset
+import com.brushwork.paint.tools.select.colorrange.ColorRange
 import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
 import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.tools.transform.TransformTool
@@ -99,6 +100,7 @@ import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * REQUEST COVERAGE AUDIT (v1.8, integration): every item 1–9 of the user's v1.8 request, done the
@@ -142,6 +144,7 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
                 Group.CHROME -> {
                     h.section("8 the More menu in five sections, an entry acts $at") { t.moreMenu() }
                     h.section("8 and 9 the options strip's More row, its first canvas touch, the chevron's name $at") { t.stripMoreRow() }
+                    h.section("8 the More row wraps: the clone stamp's $at") { t.cloneMoreRow() }
                     h.section("9 a long press names each top-row circle and does nothing else $at") { t.topRowLongPress() }
                     h.section("9 the More menu is opaque $at") { t.opaqueMoreMenu() }
                 }
@@ -168,6 +171,12 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         /** Color select's halves (as the area test): a red and a blue far apart in hue. */
         private const val SEL_RED = 0xFFE01010.toInt()
         private const val SEL_BLUE = 0xFF1030D0.toInt()
+
+        /** An orange about 49 ΔE from [SEL_RED]: out of its range at the default Fuzziness (40), wholly in at 120. */
+        private const val SEL_ORANGE = 0xFFE08820.toInt()
+
+        /** The Fuzziness the test sets with the slider. */
+        private const val WIDE_FUZZINESS = 120
 
         /** How long a render or a computed result may take: 10 s on a desktop, scaled on CI. */
         private val WAIT_MS: Long = PerfBudget.ms(10_000.0).toLong()
@@ -600,10 +609,10 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
 
     /**
      * Area C: "pick Magnetic lasso in the tool menu and tap points around the object. Each segment
-     * follows the nearest strong edge. [...] Tap a point to make it active, then tap Delete point.
-     * Undo and Redo in the top row step through the point changes. [...] close the outline by
-     * tapping the first point." Four taps on a disc's rim select the disc, not the four-sided
-     * figure straight segments would make.
+     * follows the nearest strong edge. [...] drag an existing point to move it. Tap a point to make
+     * it active, then tap Delete point. Undo and Redo in the top row step through the point
+     * changes. [...] close the outline by tapping the first point." Four taps on a disc's rim
+     * select the disc, not the four-sided figure straight segments would make.
      */
     private fun magneticLasso() {
         editor()
@@ -633,6 +642,21 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         Finger.tap(s, "Undo")
         idle()
         assertEquals("the top row's Undo brings it back", 3, tool.anchorCount)
+        // Clarification 2: "Every point can be dragged and undone": the second point dragged along
+        // the rim to 30°, then the top row's Undo puts it back.
+        val p1 = Vec2(tool.points.x(1), tool.points.y(1))
+        assertTrue("the second point sits at its tap: $p1", (p1 - rim[1]).length <= 6f)
+        val to = Vec2(200f + 100f * cos(PI / 6).toFloat(), 150f + 100f * sin(PI / 6).toFloat())
+        ui.stroke(p1.x to p1.y, (p1.x + to.x) / 2f to (p1.y + to.y) / 2f, to.x to to.y)
+        idle()
+        assertEquals("a drag moves a point and adds none", 3, tool.anchorCount)
+        val dragged = Vec2(tool.points.x(1), tool.points.y(1))
+        assertTrue("the point followed the finger: $dragged, the finger at $to", (dragged - to).length <= 6f)
+        Finger.tap(s, "Undo")
+        idle()
+        assertEquals(3, tool.anchorCount)
+        assertEquals("Undo puts the dragged point back (x)", p1.x, tool.points.x(1), 0.5f)
+        assertEquals("Undo puts the dragged point back (y)", p1.y, tool.points.y(1), 0.5f)
         tap(rim[3])
         idle()
         assertEquals(4, tool.anchorCount)
@@ -652,49 +676,107 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
 
     /**
      * Area C: "pick Color select in the tool menu and tap colors on the canvas to add samples. [...]
-     * tap the Color range chip to pick a preset [...]. Tap Fuzziness to open a one-line slider
-     * under the strip [...]. On narrow phones, Fuzziness is in the More row. [...] tap Select
-     * colors (✓) to make the selection."
+     * You can also add a color with Add from the color picker [...]. Tap the Color range chip to
+     * pick a preset [...]. Tap Fuzziness to open a one-line slider under the strip and widen or
+     * narrow the range. On narrow phones, Fuzziness is in the More row. [...] tap Select colors
+     * (✓) to make the selection." The widened Fuzziness shows in the selection: an orange stripe
+     * the red sample does not reach at first is selected after it.
      */
+    /** CIE ΔE76 between the colors [a] and [b] (as the tool measures a sample's reach). */
+    private fun deltaE(a: Int, b: Int): Float {
+        val la = FloatArray(3)
+        val lb = FloatArray(3)
+        ColorRange.lab(a, la)
+        ColorRange.lab(b, lb)
+        return sqrt((0 until 3).sumOf { ((la[it] - lb[it]) * (la[it] - lb[it])).toDouble() }).toFloat()
+    }
+
     private fun colorSelect() {
         editor()
         val layer = c.activeLayer
         seed(layer, 0f, 0f, 200f, 300f, SEL_RED)
         seed(layer, 200f, 0f, 400f, 300f, SEL_BLUE)
+        // An orange stripe over the red half's top: only a wider Fuzziness reaches it from the red.
+        seed(layer, 0f, 0f, 200f, 60f, SEL_ORANGE)
         tool("Color select")
         val tool = c.currentTool as ColorSelectTool
         assertTrue(Smoke.pumpUntil(WAIT_MS) { settle(1); tool.proxyReady && tool.idle && tool.preview != null })
-        fun selected(): Selection {
-            assertTrue("a selection", Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle && c.selection != null && c.busyMessage == null })
+        // The colors keep the Fuzziness check honest: the sampled red reaches its full color to F / 2
+        // ΔE and nothing from F on.
+        val fuzz = tool.settings.fuzziness
+        val toOrange = deltaE(SEL_RED, SEL_ORANGE)
+        val toBlue = deltaE(SEL_RED, SEL_BLUE)
+        assertTrue("the orange is out of the red's reach at Fuzziness $fuzz: ΔE $toOrange", toOrange >= fuzz + 2f)
+        assertTrue("and wholly in at $WIDE_FUZZINESS: ΔE $toOrange", toOrange <= WIDE_FUZZINESS / 2f - 2f)
+        assertTrue("the blue stays out at $WIDE_FUZZINESS: ΔE $toBlue", toBlue >= WIDE_FUZZINESS + 2f)
+        val red = 100 to 150
+        val orange = 100 to 30
+        val blue = 300 to 150
+
+        /** Taps Select colors (✓) and waits for the new selection it makes. */
+        fun select(what: String): Selection {
+            val prev = c.selection
+            click(ColorSelectLabels18.SELECT_COLORS, exact = true)
+            assertTrue("$what: a new selection", Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle && c.busyMessage == null && c.selection != null && c.selection !== prev })
             settle()
             return c.selection!!
         }
 
-        // A tap samples the red; Select colors selects the red half.
-        tap(100f, 150f)
-        assertTrue(Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle })
+        fun Selection.at(p: Pair<Int, Int>) = alphaAt(p.first, p.second)
+
+        /** The red preview's strength (0..255, what the overlay tints red) at document point [p]. */
+        fun previewAt(p: Pair<Int, Int>): Int {
+            val pv = tool.preview!!
+            return pv.mask[p.second * pv.height / c.doc.height * pv.width + p.first * pv.width / c.doc.width].toInt() and 0xFF
+        }
+
+        // A tap samples the red; the red preview shows it before the check; Select colors selects
+        // the red half, not the orange stripe.
+        val v0 = tool.preview!!.version
+        tap(red.first.toFloat(), red.second.toFloat())
+        assertTrue(Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle && tool.preview!!.version > v0 })
         assertEquals("the tap sampled the red", listOf(SEL_RED), tool.sampleColors)
-        click(ColorSelectLabels18.SELECT_COLORS, exact = true)
-        var sel = selected()
-        assertEquals("the red half is selected", 255, sel.alphaAt(100, 150))
-        assertEquals("the blue half is not", 0, sel.alphaAt(300, 150))
+        assertEquals("the preview shows the red half before the check", listOf(255, 0, 0), listOf(red, orange, blue).map { previewAt(it) })
+        var sel = select("the red")
+        assertEquals("the red half is selected", 255, sel.at(red))
+        assertEquals("the orange stripe is not, at Fuzziness $fuzz", 0, sel.at(orange))
+        assertEquals("the blue half is not", 0, sel.at(blue))
 
         // The fuzziness: on row 1 at 392 dp, on the More row on a narrower phone; its panel's slider.
         StripTestKit.closeMoreRow()
         assertEquals("Fuzziness on row 1 at 392 dp only", widthDp >= 391.5f, stateOf(ColorSelectLabels18.FUZZINESS) != null)
         click(ColorSelectLabels18.FUZZINESS, exact = true)
         val v = tool.preview!!.version
-        ui.setSlider(ColorSelectLabels18.FUZZINESS, 120f)
-        assertEquals(120, tool.settings.fuzziness)
+        ui.setSlider(ColorSelectLabels18.FUZZINESS, WIDE_FUZZINESS.toFloat())
+        assertEquals(WIDE_FUZZINESS, tool.settings.fuzziness)
         assertTrue("a new preview", Smoke.pumpUntil(WAIT_MS) { settle(1); (tool.preview?.version ?: 0) > v && tool.idle })
         Finger.back()
         StripTestKit.closeMoreRow()
-        assertEquals("the chip says the value", "120", stateOf(ColorSelectLabels18.FUZZINESS) ?: run {
+        assertEquals("the chip says the value", "$WIDE_FUZZINESS", stateOf(ColorSelectLabels18.FUZZINESS) ?: run {
             StripTestKit.openMoreRow()
             stateOf(ColorSelectLabels18.FUZZINESS).also { StripTestKit.closeMoreRow() }
         })
+        // The wider range reaches the orange, still not the blue: first in the preview, then selected.
+        assertEquals("the preview widens to the orange stripe", listOf(255, 255, 0), listOf(red, orange, blue).map { previewAt(it) })
+        sel = select("Fuzziness $WIDE_FUZZINESS")
+        assertEquals("the red half stays selected", 255, sel.at(red))
+        assertEquals("the orange stripe now is", 255, sel.at(orange))
+        assertEquals("the blue half still is not", 0, sel.at(blue))
 
-        // The preset chips: Color range › Blues, then Select colors: the blue half instead.
+        // A color from the color picker is a sample too: the blue, typed in the picker.
+        StripTestKit.closeMoreRow()
+        click(ColorSelectLabels18.FROM_PICKER, exact = true)
+        settle()
+        pickHex("1030D0")
+        assertEquals("the picker added the blue", listOf(SEL_RED, SEL_BLUE), tool.sampleColors)
+        assertTrue(Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle })
+        sel = select("two samples")
+        assertEquals("the red half", 255, sel.at(red))
+        assertEquals("the orange stripe", 255, sel.at(orange))
+        assertEquals("and now the blue half", 255, sel.at(blue))
+
+        // The preset chips: Color range › Blues, then Select colors: the blue half alone.
+        StripTestKit.closeMoreRow()
         click(ColorSelectLabels18.COLOR_RANGE, exact = true)
         val v2 = tool.preview!!.version
         click(ColorSelectLabels18.BLUES, exact = true)
@@ -705,11 +787,10 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
             StripTestKit.openMoreRow()
             stateOf(ColorSelectLabels18.COLOR_RANGE).also { StripTestKit.closeMoreRow() }
         })
-        click(ColorSelectLabels18.SELECT_COLORS, exact = true)
-        assertTrue("the selection changed", Smoke.pumpUntil(WAIT_MS) { settle(1); tool.idle && c.selection?.alphaAt(300, 150) == 255 })
-        sel = selected()
-        assertEquals("the blue half is selected", 255, sel.alphaAt(300, 150))
-        assertEquals("the red half no longer", 0, sel.alphaAt(100, 150))
+        sel = select("Blues")
+        assertEquals("the blue half is selected", 255, sel.at(blue))
+        assertEquals("the red half no longer", 0, sel.at(red))
+        assertEquals("nor the orange stripe", 0, sel.at(orange))
         StripTestKit.closeMoreRow()
         Smoke.assertQuiet(c, "color select")
     }
@@ -802,22 +883,11 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         Finger.tap(s, StripLabels18.MORE_TOGGLE)
         Smoke.pump(300); settle()
         assertEquals(StripLabels18.EXPANDED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
-        val more = s.tagged(V18Tags.STRIP_MORE_ROW) ?: throw AssertionError("the chevron opens no More row")
-        assertEquals("4 dp under row 1", row1.bottom + StripLayout.GAP_DP, more.top, 1f)
-        val lines = ((more.height + StripLayout.GAP_DP) / (StripLayout.LINE_DP + StripLayout.GAP_DP)).roundToInt()
+        val (more, lines) = moreRowLines("Shape (Points)", row1)
         println("RequestCoverageV18 item 8 at $widthDp dp: the Shape (Points) More row has $lines line(s), ${more.height} dp")
-        assertTrue("1 to ${StripLayout.MAX_MORE_LINES} lines: $lines", lines in 1..StripLayout.MAX_MORE_LINES)
-        assertEquals("$lines lines tall", StripLayout.moreRowDp(lines), more.height, 1f)
-        assertTrue("on screen: $more", more.left >= -0.5f && more.right <= s.widthDp + 0.5f && more.bottom <= s.heightDp + 0.5f)
-        val items = Clickables.onScreen(s, inside = more)
-        assertTrue("items on the More row", items.isNotEmpty())
-        for (item in items) {
-            val b = item.bounds
-            assertTrue("\"${item.own.firstOrNull()}\" on screen: $b", b.left >= -0.5f && b.right <= s.widthDp + 0.5f && b.top >= more.top - 0.5f && b.bottom <= more.bottom + 0.5f)
-        }
-        s.tagged(ChromeTags.PILL_SLOT)?.takeIf { it.height > 0f }?.let { pill ->
-            assertTrue("the pill slid down under the More row: $pill", pill.top >= more.bottom - 0.5f)
-        }
+        assertTrue("items on the More row", Clickables.onScreen(s, inside = more).isNotEmpty())
+        val pill = s.tagged(ChromeTags.PILL_SLOT)?.takeIf { it.height > 0f } ?: throw AssertionError("an open shape shows the X / Y pill")
+        assertTrue("the pill slid down under the More row: $pill", pill.top >= more.bottom - 0.5f)
 
         // The first canvas touch only closes the row: nothing drawn, moved or picked.
         val before = Fingers18.canvasState(s)
@@ -833,6 +903,63 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         tool.discard()
         settle()
         Smoke.assertQuiet(c, "the strip's More row")
+    }
+
+    private fun SemanticsNode.under(tag: String): Boolean =
+        generateSequence(this) { it.parent }.any { it.config.getOrNull(SemanticsProperties.TestTag) == tag }
+
+    /**
+     * The open More row (dp) and its line count, checked as the user sees it (clarification 5:
+     * "shows every option at once, wrapping onto a 2nd or 3rd line only when needed. Nothing
+     * scrolls or hides."): 4 dp under [row1], whole lines tall (at most three), every line showing
+     * something (an item or the hint, by the line its middle falls in), all of it wholly on
+     * screen, and no line scrolled sideways.
+     */
+    private fun moreRowLines(what: String, row1: Rect): Pair<Rect, Int> {
+        val more = s.tagged(V18Tags.STRIP_MORE_ROW) ?: throw AssertionError("$what: the chevron opens no More row")
+        assertEquals("$what: 4 dp under row 1", row1.bottom + StripLayout.GAP_DP, more.top, 1f)
+        val pitch = StripLayout.LINE_DP + StripLayout.GAP_DP
+        val lines = ((more.height + StripLayout.GAP_DP) / pitch).roundToInt()
+        assertTrue("$what: 1 to ${StripLayout.MAX_MORE_LINES} lines: $lines", lines in 1..StripLayout.MAX_MORE_LINES)
+        assertEquals("$what: $lines lines tall", StripLayout.moreRowDp(lines), more.height, 1f)
+        assertTrue("$what: on screen: $more", more.left >= -0.5f && more.right <= s.widthDp + 0.5f && more.bottom <= s.heightDp + 0.5f)
+        val inRow = s.placed().filter { it.node.under(V18Tags.STRIP_MORE_ROW) }
+        val shown = inRow.filter { e ->
+            e.node.config.getOrNull(SemanticsActions.OnClick) != null || e.node.config.getOrNull(SemanticsProperties.Text) != null
+        }.map { s.dp(it.bounds) }.filter { it.width > 0f && it.height > 0f }
+        val used = shown.map { ((it.center.y - more.top) / pitch).toInt() }.toSortedSet().toList()
+        assertEquals("$what: each of the $lines lines shows something", (0 until lines).toList(), used)
+        for (b in shown) {
+            assertTrue("$what: wholly on screen, inside the row: $b in $more", b.left >= -0.5f && b.right <= s.widthDp + 0.5f && b.top >= more.top - 0.5f && b.bottom <= more.bottom + 0.5f)
+        }
+        val sideways = inRow.filter { e -> (e.node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange)?.maxValue?.invoke() ?: 0f) > 0f }
+        assertTrue("$what: no line scrolls sideways (${sideways.size})", sideways.isEmpty())
+        return more to lines
+    }
+
+    /**
+     * Clarification 5 with a real wrap: the clone stamp's More row (its hint, "Show source" and the
+     * brush's four controls) takes three lines at 360 dp and two at 392 dp (CloneStripTest's
+     * layout), every option at once.
+     */
+    private fun cloneMoreRow() {
+        editor()
+        tool("Clone stamp")
+        StripTestKit.closeMoreRow()
+        val row1 = s.tagged(ChromeTags.OPTIONS_STRIP) ?: throw AssertionError("no options strip")
+        Finger.tap(s, StripLabels18.MORE_TOGGLE)
+        Smoke.pump(300); settle()
+        assertEquals(StripLabels18.EXPANDED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
+        val (more, lines) = moreRowLines("Clone stamp", row1)
+        // What each item says (its own name or the text it shows: the hint is a text).
+        val names = Clickables.onScreen(s, inside = more).flatMap { it.labels }
+        println("RequestCoverageV18 item 8 at $widthDp dp: the Clone stamp More row has $lines line(s): $names")
+        assertEquals("the More row wraps onto ${if (widthDp < 391.5f) "a 3rd" else "a 2nd"} line", if (widthDp < 391.5f) 3 else 2, lines)
+        for (want in listOf(CloneTool.HINT, "Show source", "Choose brush", "Brush size", "Opacity")) {
+            assertTrue("\"$want\" shows on the More row: $names", names.any { it.contains(want) })
+        }
+        StripTestKit.closeMoreRow()
+        Smoke.assertQuiet(c, "the clone stamp's More row")
     }
 
     // ================================================================== 9. long presses, opaque menus
@@ -991,7 +1118,9 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         lookStep(ArrayLabels18.END_SIZE) { u.typeField(ArrayLabels18.END_SIZE, "50") }
         assertEquals(0.5f, layer.array!!.spec.look!!.sizeEnd, 1e-4f)
         val smaller = faintRed(layer)
-        assertTrue("the last copy shrinks: $smaller faint px, $faint before", smaller in 1 until faint * 2 / 3)
+        println("RequestCoverageV18 item 2 at $widthDp dp: the last copy at 40 % takes $faint px, at half size $smaller px")
+        // Half the size is a quarter of the pixels (its soft edge aside).
+        assertTrue("the last copy at half size: $smaller faint px, $faint before (a quarter)", smaller >= faint * 0.18f && smaller <= faint * 0.3f)
         assertEquals(2 * 1600, count(layer, RED))
 
         // Tint: a preset colors the copies (strength 100 % at once); the source keeps its look.
@@ -1208,7 +1337,8 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
     /**
      * Area F: "tap Shape type, pick Cog (last in the list) and drag out a cog. To change it, open
      * Show more tool options, then Shape settings. The COG section has Number of teeth (slider or
-     * typed) [...]."
+     * typed) [...]." The ✓ places the cog in a new layer of its own (one step "Shape"), and that
+     * layer shows nine teeth.
      */
     private fun cog() {
         editor()
@@ -1232,9 +1362,16 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         val box = tool.box ?: throw AssertionError("no pending cog")
         assertTrue("a cog of some size: $box", box.w > 100f && box.h > 100f)
         val before = steps()
+        val layersBefore = c.doc.layers.toList()
         applyEdit("Apply shape edit")
-        assertTrue("one step (a new shape layer may add its own)", steps() > before)
-        val layer = c.doc.layers.drop(1).maxByOrNull { ink(it, 0, 0, 400, 300) } ?: throw AssertionError("no layer")
+        // An editable shape (on by default) goes into a new layer of its own: ONE step "Shape".
+        assertEquals("one step", before + 1, steps())
+        assertEquals("Shape", c.undoManager.undoLabel)
+        assertEquals("one new layer", layersBefore.size + 1, c.doc.layers.size)
+        val layer = c.doc.layers.single { it !in layersBefore }
+        assertTrue("the new layer is named after the cog: \"${layer.name}\"", layer.name.startsWith(ShapeType.COG.label))
+        assertNotNull("the new layer keeps the cog to edit it again", layer.shapeData)
+        assertTrue("the earlier layers stay blank but the page", layersBefore.drop(1).all { ink(it, 0, 0, 400, 300) == 0 })
         val n = teeth(layer, box, tool.settings.cogDepth)
         println("RequestCoverageV18 item 7 at $widthDp dp: $n teeth on \"${layer.name}\" in $box")
         assertEquals("nine teeth drawn", 9, n)
