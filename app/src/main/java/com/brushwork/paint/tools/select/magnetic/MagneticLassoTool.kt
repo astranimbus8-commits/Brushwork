@@ -122,7 +122,8 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     private val screenPath = Path()
     private val mapped = FloatArray(2)
 
-    private class Touch(val grabbed: Int, val downX: Float, val downY: Float) {
+    /** A finger on the canvas; [picked] is the anchor that was active before it (a cancelled touch picks it again). */
+    private class Touch(val grabbed: Int, val downX: Float, val downY: Float, val picked: Int) {
         var moved = false
         var x = downX
         var y = downY
@@ -333,7 +334,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         // The pixels may have changed since the map was built (an undo, a layer's late render).
         ensureEdgeMap()
         val grabbed = points.nearest(p.x, p.y, docLength(GRAB_DP))
-        touch = Touch(grabbed, p.x, p.y)
+        touch = Touch(grabbed, p.x, p.y, points.active)
         if (grabbed >= 0) points.activate(grabbed)
         livePath = null
         loupe = loupeAt(p)
@@ -394,7 +395,12 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
 
     override fun onCancel() {
         val t = touch
-        if (t != null && t.grabbed >= 0 && t.moved) points.cancelEdit()
+        if (t != null && t.grabbed >= 0) {
+            if (t.moved) points.cancelEdit()
+            // A cancelled touch (a second finger: a pinch, a pan, a two-finger tap) is no tap: the
+            // anchor picked before it stays the one "Delete point" and the pill act on.
+            points.activate(t.picked)
+        }
         endTouch()
         controller.invalidateOverlay()
     }

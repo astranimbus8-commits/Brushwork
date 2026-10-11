@@ -79,9 +79,9 @@ internal class MagneticPoints {
         set(next, segments.copyOf(n - 1), n - 1)
     }
 
-    /** Makes [i] the active anchor (not a step). */
+    /** Makes [i] the active anchor, -1 none (not a step). */
     fun activate(i: Int) {
-        if (i in 0 until count && i != active) { active = i; version++ }
+        if (i in -1 until count && i != active) { active = i; version++ }
     }
 
     /**

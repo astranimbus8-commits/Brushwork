@@ -1880,7 +1880,7 @@ The top row's Undo and Redo walk these steps and bring traced segments back with
 **Input.**
 - A tap places an anchor. With "Snap to edge" on, the anchor moves onto the strongest edge within "Edge reach" (in screen dp, so the reach is the same at any zoom), unless no edge there passes the contrast floor. It lands on that edge's nearest point: the nearest edge-map pixel at least half as strong as the strongest one within reach, then up to 2 px on across the edge, from its flank to its centre line (`snapped`). So the anchor moves across the edge, never along it, where a photo's edge is stronger in one place than another (v1.8 final QA, `Qa18SelectMagneticOutlineUiTest`). An anchor that snaps onto the last one (within 3 dp) is not added twice. A dragged anchor snaps the same way where the finger lifts.
 - Press and drag shows the live segment to the finger.
-- A touch within 24 dp of an anchor drags it, with a 6 dp slop. Its two segments are traced again, and a cancelled touch puts the anchor back. A tap on an anchor makes it the active anchor.
+- A touch within 24 dp of an anchor drags it, with a 6 dp slop. Its two segments are traced again, and a cancelled touch puts the anchor back. A tap on an anchor makes it the active anchor. A cancelled touch (a second finger: a pinch, a pan, a two-finger tap) is no tap: the anchor active before it stays active (v1.8 final QA, `Qa18SelectMagneticFingersUiTest`).
 
 Closing traces any missing segment (and the closing one) on the worker, then commits through `LassoCommit.apply`. This makes ONE selection step "Magnetic lasso", combined by the selection mode. On a vector layer, the outline selects objects.
 
