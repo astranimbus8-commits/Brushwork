@@ -11,6 +11,8 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
+import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.tools.vector.CurveKind
 import com.brushwork.paint.tools.vector.CurveTool
@@ -33,7 +35,8 @@ import org.robolectric.shadows.ShadowLog
  * v1.6 foundation (§4.1, §4.9): the new tools are registered everywhere a tool must be — a
  * factory entry, an icon, a tool-menu cell (v1.6: the menu replaced the tools grid), a history label, an options
  * strip, a coordinate source — and selecting and touching them is safe while they are stubs
- * (Path behaves as Curve; Text frames does nothing).
+ * (Path behaves as Curve; Text frames does nothing). v1.8 F3: Magnetic lasso and Color select
+ * are registered the same way, as stubs that draw, commit and push nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(instrumentedPackages = ["com.brushwork.paint.ui.editor.toolidregistrationsandbox"])
@@ -57,10 +60,15 @@ class ToolIdRegistrationTest {
         assertEquals(CurveKind.CURVE, (c.tools.getValue(ToolId.CURVE) as CurveTool).kind)
         assertTrue((c.tools.getValue(ToolId.POLYLINE) as CurveTool).polyline)
         assertTrue(c.tools.getValue(ToolId.TEXT_FRAMES) is TextFrameTool)
+        // v1.8 F3: the two selection tools, stubs until area C.
+        val v18Ids = listOf(ToolId.MAGNETIC_LASSO, ToolId.COLOR_SELECT)
+        assertTrue(c.tools.getValue(ToolId.MAGNETIC_LASSO) is MagneticLassoTool)
+        assertTrue(c.tools.getValue(ToolId.COLOR_SELECT) is ColorSelectTool)
+        for (id in v18Ids) assertEquals(id, c.tools.getValue(id).id)
         // v1.6 area B: Path's X / Y target is its own stable control-point position (nothing selected yet).
         assertNull(requireNotNull(path.splinePointPosition).position)
 
-        for (id in newIds) {
+        for (id in newIds + v18Ids) {
             assertNotNull(EditorIcons.tool(id))
             assertTrue("$id in the tool menu", id in ToolMenu.tools)
             assertTrue(HistoryLabels.stepName(id).isNotBlank())
@@ -81,7 +89,8 @@ class ToolIdRegistrationTest {
         var shown by mutableStateOf(0)
         activity.setContent { BrushworkTheme { shown; ToolOptionsBar(c) } }
         SmokeUi.settle()
-        for (id in newIds) {
+        for (id in newIds + v18Ids) {
+            val steps0 = c.undoManager.undoCount
             c.selectTool(id)
             shown++
             SmokeUi.settle()
@@ -91,6 +100,10 @@ class ToolIdRegistrationTest {
             c.pointerUp(ToolPoint(140f, 120f))
             SmokeUi.settle()
             Smoke.assertQuiet(c, "$id")
+            if (id in v18Ids) {
+                assertFalse("$id (a stub) has nothing pending", c.currentTool.hasPendingWork)
+                assertEquals("$id (a stub) pushes no step", steps0, c.undoManager.undoCount)
+            }
         }
         // Text frames (a stub) left nothing pending.
         assertFalse(c.tools.getValue(ToolId.TEXT_FRAMES).hasPendingWork)

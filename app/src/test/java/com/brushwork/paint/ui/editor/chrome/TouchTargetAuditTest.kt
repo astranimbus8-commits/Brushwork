@@ -76,7 +76,7 @@ internal object TouchTargets {
         val main = Clickables.onScreen(s)
         assertTrue(main.size >= 20)
         check("main screen", main)
-        // The tool menu (all 25 cells, scrolled or not).
+        // The tool menu (all 30 cells, scrolled or not).
         click("Tools (current: Brush)")
         check("tool menu", Clickables.onScreen(s))
         click("Tools (current: Brush)")

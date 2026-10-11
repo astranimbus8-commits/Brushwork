@@ -20,7 +20,8 @@ object LayerToolRules {
      * "Choose a layer inside the folder to paint" (Array too: a folder can't be arrayed). The
      * others work on a folder: Transform moves its block, the selections and samplers read the
      * composite (rule C), Text, Text frames and Shape add a new layer, Symmetry and the Ruler are
-     * drawing aids, and Pathfinder picks its operands itself.
+     * drawing aids, and Pathfinder picks its operands itself. v1.8: Magnetic lasso and Color
+     * select act on the layers Magic wand acts on, so they are in no set.
      */
     val FOLDER_REFUSED: Set<ToolId> = setOf(
         ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR, ToolId.FILL, ToolId.CLONE, ToolId.REMOVE,

@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.ViewModule
 import androidx.compose.material.icons.automirrored.filled.ViewQuilt
+import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.Gesture
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.PathFillType
 import androidx.compose.ui.graphics.SolidColor
@@ -140,5 +142,8 @@ object EditorIcons {
         ToolId.ARRAY -> Icons.Filled.ViewModule
         ToolId.SYMMETRY -> Icons.Filled.Flip
         ToolId.PATHFINDER -> Icons.Filled.JoinFull
+        // v1.8 (foundation; H may restyle them).
+        ToolId.MAGNETIC_LASSO -> Icons.Outlined.Gesture
+        ToolId.COLOR_SELECT -> Icons.Outlined.Colorize
     }
 }

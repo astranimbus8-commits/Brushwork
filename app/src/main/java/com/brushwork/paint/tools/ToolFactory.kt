@@ -13,6 +13,8 @@ import com.brushwork.paint.tools.select.FillTool
 import com.brushwork.paint.tools.select.LassoTool
 import com.brushwork.paint.tools.select.MagicWandTool
 import com.brushwork.paint.tools.select.MarqueeTool
+import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
+import com.brushwork.paint.tools.select.magnetic.MagneticLassoTool
 import com.brushwork.paint.tools.symmetry.SymmetryTool
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.frames.TextFrameTool
@@ -47,6 +49,9 @@ object ToolFactory {
             ToolId.ARRAY -> ArrayTool(c)
             ToolId.SYMMETRY -> SymmetryTool(c)
             ToolId.PATHFINDER -> PathfinderTool(c)
+            // v1.8 (pre-registered by the foundation as stubs; area C fills them).
+            ToolId.MAGNETIC_LASSO -> MagneticLassoTool(c)
+            ToolId.COLOR_SELECT -> ColorSelectTool(c)
         }
     }
 }

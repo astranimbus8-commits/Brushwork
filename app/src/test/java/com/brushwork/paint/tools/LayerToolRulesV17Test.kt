@@ -41,6 +41,8 @@ class LayerToolRulesV17Test {
     private val allowedOnFolder = setOf(
         ToolId.TRANSFORM, ToolId.SYMMETRY, ToolId.RULER, ToolId.LASSO, ToolId.MARQUEE, ToolId.EYEDROPPER,
         ToolId.MAGIC_WAND, ToolId.OBJECT_SELECT, ToolId.TEXT, ToolId.TEXT_FRAMES, ToolId.SHAPE, ToolId.PATHFINDER,
+        // v1.8 F3: they act where Magic wand acts (they read the composite).
+        ToolId.MAGNETIC_LASSO, ToolId.COLOR_SELECT,
     )
 
     private fun raster(doc: Document, name: String, parent: Long = Layer.ROOT_ID) =
@@ -135,5 +137,24 @@ class LayerToolRulesV17Test {
         assertFalse(ToolId.ARRAY in LayerToolRules.PIXEL_ONLY)
         assertFalse(ToolId.PATHFINDER in LayerToolRules.FOLDER_REFUSED)
         assertFalse(ToolId.SYMMETRY in LayerToolRules.FOLDER_REFUSED)
+    }
+
+    @Test
+    fun magneticLassoAndColorSelectActWhereMagicWandActs() {
+        // v1.8 F3 (§4.6): the two new selection tools follow Magic wand on every kind of layer.
+        val doc = Document("kinds", "kinds", w, h)
+        val plain = raster(doc, "Raster")
+        val text = raster(doc, "Text").also { it.textData = "{}" }
+        val shape = raster(doc, "Shape").also { it.shapeData = "{}" }
+        val vector = raster(doc, "Vector").also { it.vector = VectorContent.EMPTY }
+        val adjustment = raster(doc, "Adjustment").also { it.adjustment = AdjustmentSpec() }
+        val folder = Layer.newFolder(doc.newLayerId(), "Folder")
+        for (id in listOf(ToolId.MAGNETIC_LASSO, ToolId.COLOR_SELECT)) {
+            for (l in listOf(plain, text, shape, vector, adjustment, folder)) {
+                assertEquals("$id on ${l.name}", LayerToolRules.refusal(ToolId.MAGIC_WAND, l), LayerToolRules.refusal(id, l))
+            }
+            assertFalse(id in LayerToolRules.PIXEL_ONLY)
+            assertFalse(id in LayerToolRules.FOLDER_REFUSED)
+        }
     }
 }

@@ -46,6 +46,16 @@ enum class ToolId(val label: String) {
     SYMMETRY("Symmetry"),
     /** Illustrator's Pathfinder (v1.7 item 20; area G): unite, minus front, intersect... of shapes and paths. */
     PATHFINDER("Pathfinder"),
+    /**
+     * Tap-to-tap edge-snapping lasso (v1.8 item 3; area C): each segment between two taps follows
+     * the strongest edge. A stub from the foundation (F3) until C fills it.
+     */
+    MAGNETIC_LASSO("Magnetic lasso"),
+    /**
+     * Color Range plus hue / tone presets (v1.8 item 4; area C): selects every pixel near the
+     * sampled colors. A stub from the foundation (F3) until C fills it.
+     */
+    COLOR_SELECT("Color select"),
 }
 
 /**

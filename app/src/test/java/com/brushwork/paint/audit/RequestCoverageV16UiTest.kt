@@ -474,6 +474,10 @@ class RequestCoverageV16UiTest {
         assertEquals("Lasso | Filters", lasso.top, filters.top, 0.5f)
         assertTrue("row 2 under row 1", lasso.top >= transform.bottom - 0.5f)
         assertEquals(ToolMenuEntry.Canvas, ToolMenu.entries[14])
+        // v1.8: 30 cells in 15 rows; Symmetry [28] and Ruler [29] end the menu.
+        assertEquals(30, ToolMenu.entries.size)
+        assertEquals(ToolMenuEntry.Tool(ToolId.SYMMETRY), ToolMenu.entries[28])
+        assertEquals(ToolMenuEntry.Tool(ToolId.RULER), ToolMenu.entries[29])
         click("Tools (current: Brush)")
         // The More menu: the document's name and size head it.
         click("More options")
