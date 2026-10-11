@@ -367,11 +367,12 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         tap(200f, 80f)
         // v1.8: the paint modes are the entries of the "Stroke kind" dropdown.
         click("Stroke kind", exact = true)
+        ui.reach(CurveLabels17.FILL_ONLY, 32f)
         assertFalse("two points: no fill yet", SmokeUi.isEnabled(CurveLabels17.FILL_ONLY))
         Finger.back()
         tap(320f, 200f)
         click("Stroke kind", exact = true)
-        click(CurveLabels17.FILL_ONLY, exact = true)
+        press(CurveLabels17.FILL_ONLY)
         assertTrue(tool.settings.fill)
         applyEdit("Apply path edit")
         val layer = c.activeLayer

@@ -330,8 +330,9 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
 - `SymmetryGuides.showsFor(id)` (the nine tools the rulers repeat) and `drawFor(canvas, t, doc,
   id)`, called by `EditorController.drawOverlays` for the active tool; on the foundation it draws
   the v1.7 guides of Brush, Eraser, Smudge and Blur.
-- Stubs the areas fill: `CurveGenerators.build` (a valid Archimedean polyline) / `matches` (false),
-  `CogGeometry.contours` (the interim zigzag, no hole), `FringeControl`.
+- Stubs the areas filled (on the foundation): `CurveGenerators.build` (a valid Archimedean
+  polyline) / `matches` (false), area E's; `CogGeometry.contours` (the interim zigzag, no hole),
+  area F's; `FringeControl`, area A's.
 
 ### "Select several" in the X / Y pill; the strips' point undo removed (F4, gate 2)
 

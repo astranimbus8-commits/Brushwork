@@ -48,6 +48,16 @@ class Qa17ShapesNarrow360UiTest {
         Finger.tap(s, label)
     }
 
+    /**
+     * [press] for an entry of a popup menu, a window of its own: the finger goes to that window
+     * (SmokeUi.tap), as Finger.tap reaches the editor's window only.
+     */
+    private fun pressInMenu(s: ChromeScreen, label: String, minDp: Float) {
+        Qa16Ui(s).reach(label, minDp)
+        settle()
+        SmokeUi.tap(label, exact = true)
+    }
+
     @Test
     fun shapeAndPathfinderControlsAt360dp() {
         ShadowLog.stream = null
@@ -100,12 +110,11 @@ class Qa17ShapesNarrow360UiTest {
         assertEquals(2, pf.count)
         // v1.8: the ops are a dropdown whose button shows the last op (Unite); a tap opens it (the open
         // button leaves the semantics), and every op is an entry of the menu. The menu is a popup
-        // window of its own, which the editor's fingers never reach: the entry is picked through
-        // its click action.
+        // window of its own: the finger on the entry goes to that window.
         press(s, PathfinderOp.UNITE.description, 40f)
         for (op in PathfinderOp.entries) ui.reach(op.description, 40f)
         val before = c.undoManager.undoCount
-        click(PathfinderOp.EXCLUDE.description, exact = true)
+        pressInMenu(s, PathfinderOp.EXCLUDE.description, 40f)
         assertTrue("done", Smoke.pumpUntil(20_000) { settle(1); !pf.busy && !c.vectors.isRendering })
         settle()
         assertEquals("ONE step", before + 1, c.undoManager.undoCount)

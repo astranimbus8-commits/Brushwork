@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.view.MotionEvent
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.EditorController
@@ -12,6 +13,7 @@ import com.brushwork.paint.model.Selection
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
@@ -58,6 +60,9 @@ import org.robolectric.shadows.ShadowLog
  * "Smooth mesh" chip and, v1.8, the "Mesh size" button in front of the mesh steppers), the second
  * finger beside it. Each time: exactly one undo (the known last step "Seed", named in the
  * feedback), the control under the fingers does nothing, and three fingers then redo that step.
+ * The undo lets the untouched Free deform lift go and its strip with it, so "Mesh size" is checked
+ * between the lifts (its popup stays shut while the strip is still up), and one finger on it,
+ * after the same frames, shows that the look can see the popup.
  *
  * The text editor's Kerning row: "Increase Kerning" kerns on touch-down. While the editor is open
  * the history waits for it (v1.3's rule, as for the hotbar's Undo: "Finish the text first: OK or
@@ -90,6 +95,46 @@ class HistoryTapsV17ToolsUiTest {
         val steps = this.steps
         assertEquals(SEED, c.undoManager.undoLabel)
         twoFingers(first, second)
+        val tool = c.currentTool
+        assertEquals(
+            "exactly one undo (${c.activeToolId}: pending ${tool.hasPendingWork}, user's ${tool.hasUserChanges}; shown ${SmokeUi.shown().filter { it.startsWith("Undo") || it.startsWith("Redo") }})",
+            steps - 1, this.steps,
+        )
+        assertTrue("the feedback: ${SmokeUi.shown().take(60)}", saw("Undo: $SEED"))
+        assertTrue(c.canRedo)
+    }
+
+    /**
+     * [undoesTheSeed] with a look between the lifts, for a control whose action the undo would
+     * sweep away (it lets the untouched lift go, and the strip with it): the fingers of
+     * `Smoke.Touch.twoFingerTap`, and [betweenTheUps] runs once the first finger is up (where a
+     * control's click fires) and before the second lifts (the history tap waits for the last up,
+     * `HistoryTapHub.upsDone`), well inside the 300 ms of a tap.
+     */
+    private fun HistoryTapFingers.undoesTheSeed(
+        c: EditorController,
+        s: ChromeScreen,
+        first: Pair<Float, Float>,
+        second: Pair<Float, Float>,
+        betweenTheUps: () -> Unit,
+    ) {
+        val steps = this.steps
+        assertEquals(SEED, c.undoManager.undoLabel)
+        val a = px(first)
+        val b = px(second)
+        val t = s.touch
+        t.send(MotionEvent.ACTION_DOWN, P(0, a.first, a.second))
+        t.idle(30)
+        t.send(MotionEvent.ACTION_POINTER_DOWN, P(0, a.first, a.second), P(1, b.first, b.second), index = 1)
+        t.idle(70)
+        t.send(MotionEvent.ACTION_POINTER_UP, P(0, a.first, a.second), P(1, b.first, b.second), index = 0)
+        // Frames for whatever that up started (a popup composes and gets its window).
+        settle(4, 25)
+        assertEquals("no undo before the last finger lifts", steps, this.steps)
+        betweenTheUps()
+        t.send(MotionEvent.ACTION_UP, P(1, b.first, b.second))
+        t.idle(50)
+        settle()
         val tool = c.currentTool
         assertEquals(
             "exactly one undo (${c.activeToolId}: pending ${tool.hasPendingWork}, user's ${tool.hasUserChanges}; shown ${SmokeUi.shown().filter { it.startsWith("Undo") || it.startsWith("Redo") }})",
@@ -237,7 +282,19 @@ class HistoryTapsV17ToolsUiTest {
             for (label in listOf(TransformLabels17.SMOOTH, TransformLabels18.MESH_SIZE)) {
                 if (tool.transformState == null) freeDeform()
                 reach(label, 32f)
-                undoesTheSeed(c, control(label).at(0.5f), besideIt())
+                if (label == TransformLabels18.MESH_SIZE) {
+                    // The undo takes the strip away, popup and all: the button is checked between
+                    // the lifts, while the lift and its strip are still up.
+                    val windows = SmokeUi.windows().size
+                    undoesTheSeed(c, s, control(label).at(0.5f), besideIt()) {
+                        assertNotNull("$label: the lift is still up", tool.transformState)
+                        assertTrue("$label: the button shows closed (an open menu takes its label)", SmokeUi.has(label, exact = true))
+                        assertFalse("$label: the mesh popup did not open", SmokeUi.has(MeshStepperLabels.MORE_COLUMNS, exact = true))
+                        assertEquals("$label: no popup window", windows, SmokeUi.windows().size)
+                    }
+                } else {
+                    undoesTheSeed(c, control(label).at(0.5f), besideIt())
+                }
                 assertEquals("$label: the chip did nothing", smooth, tool.smoothMesh)
                 assertEquals("$label: the stepper did nothing", columns, tool.meshColumns)
                 assertFalse("$label: the mesh popup did not open", SmokeUi.has(MeshStepperLabels.MORE_COLUMNS, exact = true))
@@ -248,6 +305,21 @@ class HistoryTapsV17ToolsUiTest {
                 redoesTheSeed(s)
                 StripTestKit.closeMoreRow()
             }
+            // The look between the lifts sees a popup: one finger on the button, the same frames
+            // after its up, and the popup shows.
+            freeDeform()
+            reach(TransformLabels18.MESH_SIZE, 32f)
+            val windows = SmokeUi.windows().size
+            val a = px(control(TransformLabels18.MESH_SIZE).at(0.5f))
+            s.touch.send(MotionEvent.ACTION_DOWN, P(0, a.first, a.second))
+            s.touch.idle(100)
+            s.touch.send(MotionEvent.ACTION_UP, P(0, a.first, a.second))
+            settle(4, 25)
+            assertTrue("one finger opens the mesh popup", SmokeUi.has(MeshStepperLabels.MORE_COLUMNS, exact = true))
+            assertFalse("the open menu takes the button's label", SmokeUi.has(TransformLabels18.MESH_SIZE, exact = true))
+            assertEquals("the popup's window", windows + 1, SmokeUi.windows().size)
+            Finger.back()
+            assertFalse("closed again", SmokeUi.has(MeshStepperLabels.MORE_COLUMNS, exact = true))
         }
         assertEquals(smooth, tool.smoothMesh)
         assertEquals(columns, tool.meshColumns)

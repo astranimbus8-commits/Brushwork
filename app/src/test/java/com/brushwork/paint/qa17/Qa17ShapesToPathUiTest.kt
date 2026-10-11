@@ -70,6 +70,16 @@ class Qa17ShapesToPathUiTest {
         Finger.tap(s, label)
     }
 
+    /**
+     * [press] for an entry of a popup menu, a window of its own: the finger goes to that window
+     * (SmokeUi.tap), as Finger.tap reaches the editor's window only.
+     */
+    private fun pressInMenu(s: ChromeScreen, label: String, minDp: Float = 32f) {
+        Qa16Ui(s).reach(label, minDp)
+        settle()
+        SmokeUi.tap(label, exact = true)
+    }
+
     private fun dist(p: VSplinePoint, q: Vec2): Float = hypot(p.x - q.x, p.y - q.y)
 
     private fun rendered(s: ChromeScreen) {
@@ -145,13 +155,15 @@ class Qa17ShapesToPathUiTest {
         assertTrue("the arc's ends are sharp", a.sharp && b.sharp)
         assertEquals(30f, dist(a, corner), 0.05f)
         assertEquals(30f, dist(b, corner), 0.05f)
-        // v1.8: "Point weight" is a More-row item showing the value; its popup is v1.7's Weight control.
-        assertTrue("its weight shows", SmokeUi.find("Point weight", exact = true) != null && SmokeUi.has("0.71", exact = true))
+        // v1.8: "Point weight" is a More-row item showing the value (find opens the row); its popup
+        // is v1.7's Weight control, whose value is still "Point weight 0.71".
+        assertTrue("its weight on the item", SmokeUi.find("Point weight", exact = true) != null && SmokeUi.has("0.71", exact = true))
 
         // Weight, thickness and position, each ONE in-tool step.
         var k = steps(path)
         click("Point weight", exact = true)
-        click("Type the point weight", exact = true)
+        assertTrue("its weight shows", SmokeUi.has("Point weight 0.71", exact = true))
+        pressInMenu(s, "Type the point weight")
         SmokeUi.typeAndDone("Weight", "2")
         assertEquals(2f, path.spline!!.points[ci].weight, 1e-4f)
         assertEquals(k + 1, steps(path))

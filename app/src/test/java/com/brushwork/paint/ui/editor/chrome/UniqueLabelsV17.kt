@@ -554,6 +554,7 @@ internal object UniqueLabelsV17 {
         settle()
         // v1.8: Free deform is an entry of the mode dropdown (its button shows the current mode).
         click(TransformTool.Mode.FREE.label, exact = true)
+        ui.reach(TransformLabels17.FREE_DEFORM, 0f)
         click(TransformLabels17.FREE_DEFORM, exact = true)
         assertTrue(Smoke.pumpUntil { settle(1); tool.mode == TransformTool.Mode.MESH })
         settle()

@@ -436,6 +436,7 @@ class Qa17CompatSessionUiTest {
         for ((x, y) in spots) tap(x, y)
         assertTrue("three points pending", c.currentTool.hasPendingWork)
         click("Stroke kind", exact = true) // v1.8: the paint modes are the "Stroke kind" dropdown's entries
+        ui().reach(CurveLabels17.FILL_ONLY)
         click(CurveLabels17.FILL_ONLY, exact = true)
         assertPendingButtons("Fill only pending")
         backgroundAndBack()
@@ -600,6 +601,7 @@ class Qa17CompatSessionUiTest {
         assertTrue("lifted", Smoke.pumpUntil { settle(1); tool.transformState != null })
         // v1.8: Free deform is an entry of the mode dropdown (its button shows the current mode).
         click(TransformTool.Mode.FREE.label, exact = true)
+        ui().reach(TransformLabels17.FREE_DEFORM, 32f)
         click(TransformLabels17.FREE_DEFORM, exact = true)
         assertTrue("Free deform", Smoke.pumpUntil { settle(1); tool.isMeshShown })
         // A mesh point dragged by a finger: a pending deform.

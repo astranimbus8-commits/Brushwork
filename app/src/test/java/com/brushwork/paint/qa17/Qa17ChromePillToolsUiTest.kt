@@ -174,8 +174,10 @@ internal object Qa17ChromePill {
         // Folded: [✥][🗑], and the trash deletes the shape's layer.
         finger(s, "Fold the X / Y strip")
         assertNull("no row 2 folded", s.tagged(V17Tags.PILL_SCALE_ROW))
-        // v1.8: SmokeUi.find opens a closed More row when the label is absent, and that row would swallow the two-finger undo (D25).
-        assertFalse("no X folded", SmokeUi.has("X slider", exact = true))
+        // v1.8: SmokeUi.find opens a closed More row when the label is absent (so X is on neither
+        // row), and that row would swallow the two-finger undo (D25): it closes again.
+        assertNull("no X folded", SmokeUi.find("X slider", exact = true))
+        com.brushwork.paint.testing.StripTestKit.closeMoreRow()
         assertNull("no # folded", Finger.element(s, INCREMENTS_LABEL))
         assertTrue(SmokeUi.has("Unfold the X / Y strip", exact = true))
         assertEquals(PillLabels.deleteObject("shape"), trashLabel())

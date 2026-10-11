@@ -13,6 +13,7 @@ import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.clone.CloneTool
@@ -179,6 +180,21 @@ class Qa3StripsReachableUiRobolectricTest {
     }
 
     /**
+     * v1.8 (§3.9): [label] moved to the converted strip's More row; it shows whole there without
+     * scrolling once the row opens, as it did on the strip before. The row closes again.
+     */
+    private fun assertOnMoreRow(activity: ComponentActivity, what: String, label: String) {
+        density = activity.resources.displayMetrics.density
+        val width = activity.window.decorView.width
+        StripTestKit.openMoreRow()
+        settle()
+        val row = requireNotNull(StripTestKit.tagged(V18Tags.STRIP_MORE_ROW)) { "$what: no More row" }
+        val shown = controlsOf(row, all = true).filter { wholly(it, width) }.map { it.label() }
+        assertTrue("$what: \"$label\" shows whole on the More row without scrolling; shown: $shown", shown.any { it.contains(label) })
+        StripTestKit.closeMoreRow()
+    }
+
+    /**
      * [n] frames as a phone runs them: each frame's composition is laid out in that same frame
      * (Robolectric runs the layout pass later, so an effect that waits a frame and then scrolls a
      * control into view would see it unmeasured).
@@ -234,6 +250,7 @@ class Qa3StripsReachableUiRobolectricTest {
             deviceFrames(a)
             // v1.8: "Point thickness" is on the More row (§3.9); row 1 holds the point actions.
             assertStripReachable(a, "curve", first = listOf("Add point", "Delete point", "Closed", "Stroke kind"))
+            assertOnMoreRow(a, "curve", "Point thickness slider")
         }
         section("masks, a component selected") {
             val (a, c) = open(vector = false)
@@ -263,6 +280,7 @@ class Qa3StripsReachableUiRobolectricTest {
             deviceFrames(a)
             // v1.8: "Point thickness" is on the More row (§3.9); row 1 holds the point actions.
             assertStripReachable(a, "polyline", first = listOf("Add point", "Delete point", "Closed", "Stroke kind"))
+            assertOnMoreRow(a, "polyline", "Point thickness slider")
         }
         section("text, pending") {
             val (a, c) = open(vector = false)

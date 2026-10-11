@@ -88,6 +88,16 @@ class Qa17ShapesVectorCornersUiTest {
         Finger.tap(s, label)
     }
 
+    /**
+     * [press] for an entry of a popup menu, a window of its own: the finger goes to that window
+     * (SmokeUi.tap), as Finger.tap reaches the editor's window only.
+     */
+    private fun pressInMenu(s: ChromeScreen, label: String, minDp: Float = 32f) {
+        Qa16Ui(s).reach(label, minDp)
+        settle()
+        SmokeUi.tap(label, exact = true)
+    }
+
     private fun rendered(s: ChromeScreen) {
         assertTrue("rendered", Smoke.pumpUntil(20_000) { settle(1); !s.c.vectors.isRendering })
         settle()
@@ -229,7 +239,7 @@ class Qa17ShapesVectorCornersUiTest {
         var k = pathSteps(path)
         // v1.8: the group's weight field is the popup of the More row's "Point weight" item.
         click("Point weight", exact = true)
-        click("Type Point weight", exact = true)
+        pressInMenu(s, "Type Point weight", 40f)
         SmokeUi.typeAndDone("Point weight", "2")
         for (ci in sel) assertEquals(2f, path.spline!!.points[ci].weight, 1e-4f)
         assertEquals(k + 1, pathSteps(path))
@@ -295,11 +305,10 @@ class Qa17ShapesVectorCornersUiTest {
         assertEquals("the path and the ellipse", 2, pf.count)
         val pfBefore = c.undoManager.undoCount
         // v1.8: the ops are a dropdown whose button shows the last op (Unite): a tap opens it. The
-        // menu is a popup window of its own, which the editor's fingers never reach: the entry is
-        // reached whole there, then picked through its click action.
+        // menu is a popup window of its own: the entry is reached whole there and the finger on it
+        // goes to that window.
         press(s, PathfinderOp.UNITE.description, 40f)
-        Qa16Ui(s).reach(PathfinderOp.MINUS_FRONT.description, 40f)
-        click(PathfinderOp.MINUS_FRONT.description, exact = true)
+        pressInMenu(s, PathfinderOp.MINUS_FRONT.description, 40f)
         assertTrue("done", Smoke.pumpUntil(20_000) { settle(1); !pf.busy && !c.vectors.isRendering })
         settle()
         assertEquals("ONE step", pfBefore + 1, c.undoManager.undoCount)

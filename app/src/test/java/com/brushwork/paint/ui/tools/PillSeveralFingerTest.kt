@@ -166,12 +166,13 @@ class PillSeveralFingerTest {
             assertTrue(Smoke.pumpUntil { settle(1); tool.transformState != null })
             settle()
             // v1.8 (§3.9): Free deform is an entry of the mode dropdown; a finger opens it through
-            // its button (the current mode). The menu is a popup window of its own, which the
-            // editor's fingers never reach: its entry is picked through its click action.
+            // its button (the current mode). The menu is a popup window of its own: the finger on
+            // its entry goes to that window (SmokeUi.tap), not the editor's (Finger.tap).
             ui.reach(TransformTool.Mode.FREE.label, 32f)
             Finger.tap(s, TransformTool.Mode.FREE.label)
             settle()
-            SmokeUi.click(TransformLabels17.FREE_DEFORM, exact = true)
+            ui.reach(TransformLabels17.FREE_DEFORM, 32f)
+            SmokeUi.tap(TransformLabels17.FREE_DEFORM, exact = true)
             assertTrue(Smoke.pumpUntil { settle(1); tool.isMeshShown })
             settle()
             assertTrue("a mesh of at least 2 × 2 cells", tool.meshColumns >= 2 && tool.meshRows >= 2)

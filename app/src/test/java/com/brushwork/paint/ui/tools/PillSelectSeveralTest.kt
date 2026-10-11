@@ -165,6 +165,7 @@ class PillSelectSeveralTest {
             assertCell(s, "Transform, Free", tool, shown = false)
             // v1.8 (§3.9): Free deform is an entry of the mode dropdown (its button: the current mode).
             click(TransformTool.Mode.FREE.label, exact = true)
+            Qa16Ui(s).reach(TransformLabels17.FREE_DEFORM, 0f)
             click(TransformLabels17.FREE_DEFORM, exact = true)
             assertTrue(Smoke.pumpUntil { settle(1); tool.isMeshShown })
             settle()
