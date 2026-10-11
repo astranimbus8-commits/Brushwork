@@ -446,10 +446,6 @@ internal object V18CrossTestKit {
                 problems += "${state.name}: not reached: ${e.message}"
                 continue
             }
-            if (rig.spec.legacyContent != null) {
-                problems += "${state.name}: a legacy strip"
-                continue
-            }
             val toggle = StripTestKit.toggle() != null
             if (toggle) {
                 StripTestKit.openMoreRow()
