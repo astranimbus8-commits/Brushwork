@@ -80,8 +80,20 @@ android {
                 // core/Parallel's threads keep evicted sandboxes reachable: one JVM for the whole
                 // suite (~2650 tests) runs out of memory, so start a fresh one every 40 classes.
                 it.forkEvery = 40
-                // One test JVM, on CI too: with two, the timing-ratio QA tests (VectorBudgetQaTest's
-                // local erase against a full render) spiked past their budgets as the JVMs shared cores.
+                // v1.8 (CI2): on CI the non-timing tests run in two JVMs, and the timing tests
+                // (@Category(Timing), every class that reads a clock) run alone in a second, serial
+                // step (-PtimingOnly), so two JVMs sharing cores never skew a budget. Locally nothing
+                // changes: one JVM, every test.
+                val ci = System.getenv("CI") != null
+                val timingOnly = project.hasProperty("timingOnly")
+                it.maxParallelForks = if (ci && !timingOnly) 2 else 1
+                it.useJUnit {
+                    if (timingOnly) includeCategories("com.brushwork.paint.testing.Timing")
+                    else if (ci) excludeCategories("com.brushwork.paint.testing.Timing")
+                }
+                // Task inputs, so the build cache never hands back a run made with other settings.
+                it.systemProperty("bw.testForks", it.maxParallelForks.toString())
+                it.systemProperty("bw.testSet", if (timingOnly) "timing" else if (ci) "main" else "all")
                 // v1.7: the platform android.graphics.PathIterator (Pathfinder's reader on API 34,
                 // the SDK Robolectric runs) allocates through ShadowVMRuntime.newNonMovableArray,
                 // which reads a DirectByteBuffer's address by reflection.

@@ -45,6 +45,10 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
+      # The @Category(Timing) tests, alone in one JVM (app/build.gradle.kts, -PtimingOnly).
+      - name: Timing tests
+        run: ./gradlew --no-daemon testDebugUnitTest -PtimingOnly
+
       - name: Build release APK
         env:
           BW_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
