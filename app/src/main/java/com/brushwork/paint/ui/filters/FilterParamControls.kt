@@ -23,6 +23,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.filters.FilterParam
@@ -164,7 +167,17 @@ private fun ColorControl(host: ParamHost, p: FilterParam.Color, enabled: Boolean
             Text(p.label, style = MaterialTheme.typography.bodyMedium)
             Text(ColorUtils.toHex(color), style = MaterialTheme.typography.bodySmall, color = BrushworkColors.OnChromeDim)
         }
-        ColorSwatch(color, size = 40.dp, onClick = { if (enabled) picking = true })
+        // TalkBack names the swatch after its label ("Choose color of the static"), its color as
+        // its state. Lower case, so neither the label's text nor the name is inside the other.
+        ColorSwatch(
+            color,
+            modifier = Modifier.semantics {
+                contentDescription = "Choose ${p.label.lowercase()}"
+                stateDescription = ColorUtils.toHex(color)
+            },
+            size = 40.dp,
+            onClick = { if (enabled) picking = true },
+        )
     }
     if (picking) {
         ColorPickerDialog(

@@ -158,6 +158,7 @@ class LabelsV18Test {
             is FilterParam.Slider -> listOf(p.label, "Decrease ${p.label}", "Increase ${p.label}", "Reset ${p.label}")
             is FilterParam.Choice -> listOf(p.label) + p.options
             is FilterParam.Seed -> listOf(p.label, "New random ${p.label.lowercase()}")
+            is FilterParam.Color -> listOf(p.label, "Choose ${p.label.lowercase()}")
             else -> listOf(p.label)
         }
     } + listOf(
@@ -218,7 +219,8 @@ class LabelsV18Test {
         for (f in listOf(ChromaticAberrationMovingFilter(), ChromaticAberrationZoomingFilter())) {
             assertNoSubstrings(f.name, v18 = fringes - FringeLabels18.STATIC_COLOR, v17 = panel(f, skip = setOf("order", "fringes")) + "Color order")
         }
-        assertNoSubstrings("Glitch", v18 = fringes, v17 = panel(GlitchFilter(), skip = setOf("fringes", "static_color")))
+        // The static's swatch is named after its label (QA fix: "Choose " + the label in lower case).
+        assertNoSubstrings("Glitch", v18 = fringes + "Choose ${FringeLabels18.STATIC_COLOR.lowercase()}", v17 = panel(GlitchFilter(), skip = setOf("fringes", "static_color")))
         // "Static" (v1.7) and "Color of the static" differ in case only where they meet.
         assertTrue(GlitchFilter().params.any { it.label == "Static" })
     }

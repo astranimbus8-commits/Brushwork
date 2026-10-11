@@ -37,6 +37,7 @@ class FiltersLabelsTest {
             is FilterParam.Slider -> listOf(p.label, "Decrease ${p.label}", "Increase ${p.label}", "Reset ${p.label}")
             is FilterParam.Choice -> listOf(p.label) + p.options
             is FilterParam.Seed -> listOf(p.label, "New random ${p.label.lowercase()}")
+            is FilterParam.Color -> listOf(p.label, "Choose ${p.label.lowercase()}")
             else -> listOf(p.label)
         }
     } + listOf(
@@ -50,9 +51,9 @@ class FiltersLabelsTest {
 
     private fun fringesOf(f: Filter): FilterParam.Fringes = f.params.filterIsInstance<FilterParam.Fringes>().single()
 
-    /** The v1.8 texts of [f]'s panel: the fringe control's and (Glitch) the static color's label. */
+    /** The v1.8 texts of [f]'s panel: the fringe control's and (Glitch) the static color's label and its swatch's name. */
     private fun v18Texts(f: Filter): List<String> =
-        fringeTexts(fringesOf(f)) + f.params.filter { it.key == GlitchFilter.STATIC_COLOR_KEY }.map { it.label }
+        fringeTexts(fringesOf(f)) + f.params.filter { it.key == GlitchFilter.STATIC_COLOR_KEY }.flatMap { listOf(it.label, "Choose ${it.label.lowercase()}") }
 
     private val v18Keys = setOf(FringeColors.KEY, GlitchFilter.STATIC_COLOR_KEY)
 
