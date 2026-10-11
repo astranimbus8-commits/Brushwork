@@ -2908,11 +2908,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             specs += ShapeCopies.eachSpecs(o, maps, o.paintsWithBrush)
             if (!o.paintsWithBrush) continue
             if (live && o === brushObj) {
-                // v1.8 (D21): the teeth are the live stroke. A cog's hole gets no guide here: an
-                // object's brush replay paints its first contour only (VectorLayerRenderer's
-                // shapeBrushReplays, frozen), so the preview shows what the commit renders.
-                path = ShapeOutlines.brushContours(o).first()
+                // v1.8 (D21): the teeth are the live stroke. A cog's hole is a guide: the object
+                // is rendered from its data on commit, and VectorLayerRenderer's shapeBrushReplays
+                // replays every contour (seed + index), the hole included.
+                val contours = ShapeOutlines.brushContours(o)
+                path = contours.first()
                 liveMaps = maps
+                for (k in 1 until contours.size) guides += ShapeCopies.mappedAll(contours[k], maps).toAndroidPath()
             } else {
                 guides += ShapeCopies.mappedAll(ShapeOutlines.brushOutline(o), maps).toAndroidPath()
             }

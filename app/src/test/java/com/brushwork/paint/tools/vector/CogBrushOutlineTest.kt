@@ -20,7 +20,7 @@ import org.robolectric.RobolectricTestRunner
  * and the hole, a stroke each) in ONE undo step: into the active layer, into a shape layer of its
  * own, and again when that shape is edited. On a vector layer the object is rendered from its
  * data (the renderer's replay; the live stroke is not kept, since it would be the teeth alone);
- * that replay paints the teeth only for now (a known gap, asserted so the fix flips it).
+ * that replay paints every contour (the teeth, then the hole, seed + index), so both show there too.
  */
 @RunWith(RobolectricTestRunner::class)
 class CogBrushOutlineTest {
@@ -91,9 +91,8 @@ class CogBrushOutlineTest {
         VectorLayerRenderer.render(Canvas(b), layer.vector!!, Rect(0, 0, rig.w, rig.h), tips = TipCache(), document = Rect(0, 0, rig.w, rig.h))
         assertArrayEquals(rig.pixels(b), rig.pixels(layer.bitmap))
         assertNotEquals("the teeth", 0, rig.alphaAt(layer.bitmap, cx, cy - 100 + 1))
-        // KNOWN GAP (v1.8 F lead request): VectorLayerRenderer.shapeBrushReplays (frozen) replays
-        // an object's FIRST contour only, so the hole's line is missing on a vector layer. When
-        // it replays every contour (seed + index) this pixel is painted: flip the assertion then.
-        assertEquals("the hole's line (not replayed yet)", 0, rig.alphaAt(layer.bitmap, cx + 40, cy))
+        // VectorLayerRenderer.shapeBrushReplays replays every contour (seed + index): the hole's line too.
+        assertNotEquals("the hole's line", 0, rig.alphaAt(layer.bitmap, cx + 40, cy))
+        assertEquals("inside the hole", 0, rig.alphaAt(layer.bitmap, cx, cy))
     }
 }

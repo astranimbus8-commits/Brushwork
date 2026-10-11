@@ -423,12 +423,22 @@ object VectorLayerRenderer {
 
     // ------------------------------------------------------------------ shapes
 
-    /** A brush-stroked shape's outline, replayed along `brushStrokeSamples(brushOutline)` with the shape's seed. */
+    /**
+     * A brush-stroked shape's outline: every contour of `ShapeOutlines.brushContours` (one for
+     * every shape but a cog with a hole: the teeth, then the hole), each replayed along its
+     * `brushStrokeSamples` with the shape's seed plus the contour's index, as the Shape tool
+     * commits them (one stroke per contour, v1.8 D21).
+     */
     private fun shapeBrushReplays(s: VShape, ctx: Context): List<RenderCache.BrushReplay> {
         val o = s.shape
-        val input = brushStrokeSamples(ShapeOutlines.brushOutline(o), 0f, null, ctx.input)
-        if (input.size < 2) return emptyList()
-        return listOf(RenderCache.BrushReplay(VectorOps.brushPresetOf(o), o.strokeColor, s.seed, withLastPointAgain(input)))
+        val contours = ShapeOutlines.brushContours(o)
+        val preset = VectorOps.brushPresetOf(o)
+        val out = ArrayList<RenderCache.BrushReplay>(contours.size)
+        contours.forEachIndexed { index, contour ->
+            val input = brushStrokeSamples(contour, 0f, null, ctx.input)
+            if (input.size >= 2) out += RenderCache.BrushReplay(preset, o.strokeColor, s.seed + index, withLastPointAgain(input))
+        }
+        return out
     }
 
     // ------------------------------------------------------------------ paints
