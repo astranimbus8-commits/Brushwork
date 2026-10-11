@@ -63,6 +63,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * Options strip of the transform tool: mode, Delete, aspect lock, scaling from the center,
  * snapping to objects (smart guides), flips, quarter turns, fit, reset, interpolation and the
  * "Numbers" sheet. Emits items straight into the (scrolling) tool bar row.
+ *
+ * v1.8: the editor draws the converted strip ([transformSpec]); this v1.7 strip stays for the
+ * tests that render it alone.
  */
 @Composable
 fun TransformToolOptions(tool: TransformTool) {
@@ -216,7 +219,7 @@ private fun MeshOptions(tool: TransformTool) {
 
 /** "[label] [value]" between − and + buttons ([fewer], [more]), held to 1..12. */
 @Composable
-private fun MeshStepper(label: String, value: Int, fewer: String, more: String, onChange: (Int) -> Unit) {
+internal fun MeshStepper(label: String, value: Int, fewer: String, more: String, onChange: (Int) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 2.dp)) {
         ToolIconButton(Icons.Filled.Remove, fewer, onClick = { onChange(value - 1) }, enabled = value > 1, size = 40.dp)
         Text(

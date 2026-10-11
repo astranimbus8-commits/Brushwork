@@ -13,11 +13,14 @@ import com.brushwork.paint.qa17.Qa17ArrayUi.Companion.pixels
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.testing.PillTestKit
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.common.TransformLabels17
+import com.brushwork.paint.ui.common.TransformLabels18
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.placement.MeshStepperLabels
 import org.junit.Assert.assertArrayEquals
@@ -33,8 +36,9 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.7 final QA, item 16 (design §3.16) on the user's 392 dp phone, on a photo-like layer: the
- * Transform tool's "Free deform" chip; a finger drags a vertex of the 3 × 3 mesh; "More mesh
- * columns" / "More mesh rows" up to 8 × 8 and 12 × 12 keep the deformation (and stop at 12);
+ * Transform tool's "Free deform" mode (v1.8 §3.9: in the mode dropdown); a finger drags a vertex
+ * of the 3 × 3 mesh; "More mesh columns" / "More mesh rows" (v1.8: in the "Mesh size" popup, the
+ * button showing "3 × 3") up to 8 × 8 and 12 × 12 keep the deformation (and stop at 12);
  * "Smooth mesh" on and off; "Select several", three vertices tapped, the gizmo's corner dragged
  * (ONE in-tool step: one "Undo" takes the whole gesture back, "Redo" puts it back); ✓ "Apply
  * transform edit" is ONE step "Free deform" and a two-finger tap takes it back exactly.
@@ -53,6 +57,20 @@ class Qa17FreeDeformUiTest {
         h.section("3 × 3, 8 × 8, 12 × 12, Smooth mesh, Select several and the gizmo, ✓ and a two-finger undo") { deform(Qa17ArrayUi(h)) }
         dog.interrupt()
         h.finish()
+    }
+
+    /** v1.8 (§3.9): opens the "Mesh size" popup (the "Mesh columns" / "Mesh rows" steppers). */
+    private fun openMeshSize(u: Qa17ArrayUi) {
+        u.press(TransformLabels18.MESH_SIZE)
+        settle()
+        assertTrue("the Mesh size popup", has(MeshStepperLabels.MORE_COLUMNS, exact = true))
+    }
+
+    /** Closes the open popup with Back. */
+    private fun closePopup(u: Qa17ArrayUi) {
+        u.ui.backKey()
+        settle()
+        assertFalse("the popup closed", has(MeshStepperLabels.MORE_COLUMNS, exact = true))
     }
 
     private fun near(msg: String, want: Vec2, got: Vec2, tol: Float) =
@@ -83,11 +101,16 @@ class Qa17FreeDeformUiTest {
         val t = c.currentTool as TransformTool
         assertTrue("lifted", Smoke.pumpUntil(Qa17ArrayUi.WAIT_MS) { settle(1); t.lifted != null })
         assertEquals(TransformTool.Lifted.PIXELS, t.lifted)
+        // v1.8 (§3.9): the modes are in the mode dropdown, its button announced by the current mode.
+        u.press(TransformTool.Mode.FREE.label)
         u.press(TransformLabels17.FREE_DEFORM)
         assertEquals(TransformTool.Mode.MESH, t.mode)
         assertTrue(t.isMeshShown)
+        assertTrue("the Mesh size button shows the mesh", has("3 × 3", exact = true))
+        openMeshSize(u)
         assertEquals("3", u.stateOf(TransformLabels17.COLUMNS))
         assertEquals("3", u.stateOf(TransformLabels17.ROWS))
+        closePopup(u)
         assertEquals("a 3 × 3 mesh has 16 vertices", 16, t.pointCount)
 
         // A finger drags the vertex at a third across and a third down.
@@ -100,7 +123,9 @@ class Qa17FreeDeformUiTest {
         assertEquals("nothing recorded yet", n, u.steps())
         assertTrue("Reset mesh is enabled", SmokeUi.isEnabled(TransformLabels17.RESET))
 
-        // 8 × 8, then 12 × 12: the deformation stays (the vertex at a third, a third is still moved).
+        // 8 × 8, then 12 × 12 (the steppers in the "Mesh size" popup, which stays open): the
+        // deformation stays (the vertex at a third, a third is still moved).
+        openMeshSize(u)
         repeat(5) { u.press(MeshStepperLabels.MORE_COLUMNS) }
         repeat(5) { u.press(MeshStepperLabels.MORE_ROWS) }
         assertEquals(8, t.meshColumns)
@@ -118,6 +143,8 @@ class Qa17FreeDeformUiTest {
         assertTrue("still deformed at 12 × 12", t.isMeshChanged)
         near("the moved vertex is still where the finger left it", moved, t.pointAt(4 * 13 + 4), 3f)
         assertEquals("subdividing records nothing", n, u.steps())
+        closePopup(u)
+        assertTrue("the Mesh size button shows the mesh", has("12 × 12", exact = true))
 
         // "Smooth mesh" on and off: the mesh and its deformation stay.
         val smooth0 = t.smoothMesh
@@ -129,6 +156,9 @@ class Qa17FreeDeformUiTest {
         assertEquals(smooth0, t.smoothMesh)
         assertEquals("the vertices stay", mesh0, (0 until t.pointCount).map { t.pointAt(it) })
         assertTrue(t.isMeshChanged)
+        // ("Smooth mesh" is on the More row; closed again, it never takes a canvas touch, D25.)
+        StripTestKit.closeMoreRow()
+        settle()
 
         // "Select several" (v1.8, F4: the X / Y pill's cell): three vertices tapped; the gizmo's lower
         // right corner dragged outward.

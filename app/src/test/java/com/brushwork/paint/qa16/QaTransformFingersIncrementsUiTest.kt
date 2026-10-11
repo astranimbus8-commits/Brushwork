@@ -9,6 +9,7 @@ import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.HandleLayout
 import com.brushwork.paint.tools.transform.TransformTool
@@ -49,7 +50,11 @@ class QaTransformFingersIncrementsUiTest {
         val t = c.currentTool as TransformTool
         assertTrue("lifted", Smoke.pumpUntil { settle(1); t.transformState != null })
         settle()
+        // v1.8 (§3.9): "Snap to objects" is on the More row; closed again so it never takes a canvas touch (D25).
+        StripTestKit.openMoreRow()
         QaCurves.snapOff(c)
+        StripTestKit.closeMoreRow()
+        settle()
         val b = t.transformState!!.bounds()
         assertEquals(100f, b.left, 0.01f); assertEquals(80f, b.top, 0.01f); assertEquals(220f, b.right, 0.01f); assertEquals(180f, b.bottom, 0.01f)
         return t

@@ -9,6 +9,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -47,7 +48,11 @@ class QaTransformPillIncrementsUiTest {
         val t = c.currentTool as TransformTool
         assertTrue("lifted", Smoke.pumpUntil { settle(1); t.transformState != null })
         settle()
+        // v1.8 (§3.9): "Snap to objects" is on the More row; closed again so it never takes a canvas touch (D25).
+        StripTestKit.openMoreRow()
         QaCurves.snapOff(c)
+        StripTestKit.closeMoreRow()
+        settle()
         assertEquals("the pill places the Center", 160f, t.anchorPosition!!.x, 0.01f)
         assertEquals(130f, t.anchorPosition!!.y, 0.01f)
         return t

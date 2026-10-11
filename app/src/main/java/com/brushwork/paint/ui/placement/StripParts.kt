@@ -22,11 +22,13 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -42,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
+import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 
@@ -122,8 +125,8 @@ internal fun StripMenuButton(
 
 /**
  * A bordered strip button [width] wide showing [text] (its handle) on up to two lines at 11 sp,
- * with ▾ when [arrow] (it opens a dropdown). A toggle passes [checked]: it is then tinted while
- * on and announces its state ([state], else on / off).
+ * after [icon] when given, with ▾ when [arrow] (it opens a dropdown). A toggle passes [checked]:
+ * it is then a checkbox, tinted while on; [state] is an optional state description.
  */
 @Composable
 internal fun StripTextButton(
@@ -135,6 +138,7 @@ internal fun StripTextButton(
     state: String? = null,
     arrow: Boolean = false,
     color: Color = BrushworkColors.OnChrome,
+    icon: ImageVector? = null,
 ) {
     val on = checked == true
     val action = if (checked == null) {
@@ -156,6 +160,10 @@ internal fun StripTextButton(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = if (on) Color.White else color, modifier = Modifier.size(16.dp))
+            Box(Modifier.width(4.dp))
+        }
         Text(
             text,
             fontSize = 11.sp,
@@ -188,4 +196,15 @@ internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -
             modifier = Modifier.fillMaxWidth(),
         )
     }
+}
+
+/**
+ * For a strip state with nothing on the More row (Transform once nothing is transformed, after ✓):
+ * closes a More row left open by the state before. The host keeps it open unseen otherwise, and
+ * the next canvas touch would only close it (D25).
+ */
+@Composable
+internal fun ClosesMoreRow() {
+    val strip = LocalStripContext.current
+    LaunchedEffect(strip) { strip.closeMore() }
 }

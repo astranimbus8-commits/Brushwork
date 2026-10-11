@@ -47,8 +47,9 @@ import kotlin.math.abs
  * scales a text, a shape, a vector and an arrayed layer WITHOUT rasterizing them ("Rotate 90°
  * clockwise", "Numbers" › "Scale", a finger dragging the box), ✓ "Apply transform edit" is ONE
  * step, and each layer is then edited with its own tool (Text, Shape, Path, Array). Distort on a
- * text says "Rasterize to deform", on an array "Apply the array to deform". A folder holding a
- * text and pixels turns as ONE step that a two-finger tap takes back exactly.
+ * text says "Rasterize to deform", on an array "Apply the array to deform" (v1.8 §3.9: the states
+ * of the mode dropdown's entries). A folder holding a text and pixels turns as ONE step that a
+ * two-finger tap takes back exactly.
  * One test, own sandbox (Compose's frame clock serves the first test of a sandbox only).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -79,6 +80,25 @@ class Qa17TransformObjectsUiTest {
         settle()
         assertEquals(lifted, t.lifted)
         return t
+    }
+
+    /**
+     * v1.8 (§3.9): opens the mode dropdown (its button announced by the current mode, "Free"), whose
+     * entries carry the refused modes' captions as their states.
+     */
+    private fun openModes(u: Qa17ArrayUi, t: TransformTool) {
+        u.press(t.mode.label)
+        settle()
+        assertTrue("the mode dropdown is open", has(TransformLabels17.FREE_DEFORM, exact = true))
+    }
+
+    /** The state of mode [label] in the mode dropdown (null: offered), the dropdown closed again. */
+    private fun modeState(u: Qa17ArrayUi, t: TransformTool, label: String): String? {
+        openModes(u, t)
+        val state = u.stateOf(label)
+        u.ui.backKey()
+        settle()
+        return state
     }
 
     /** ✓ "Apply transform edit": ONE step [label]. */
@@ -117,10 +137,11 @@ class Qa17TransformObjectsUiTest {
         val before = layer.item()
 
         val t = transform(u, TransformTool.Lifted.TEXT)
+        assertFalse("a text kept as text is never mirrored", has("Flip horizontally", exact = true))
+        openModes(u, t)
         assertEquals("Distort on a text", TransformLabels17.RASTERIZE_TO_DEFORM, u.stateOf("Distort"))
         assertEquals(TransformLabels17.RASTERIZE_TO_FREE_DEFORM, u.stateOf(TransformLabels17.FREE_DEFORM))
-        assertFalse("a text kept as text is never mirrored", has("Flip horizontally", exact = true))
-        // A tap on the dimmed chip shows its caption and the way out; it switches nothing.
+        // A tap on the dimmed mode shows its caption and the way out; it switches nothing.
         u.press("Distort")
         assertEquals(TransformTool.Mode.FREE, t.mode)
         assertTrue(has(TransformLabels17.RASTERIZE_AND_DEFORM, exact = true))
@@ -166,8 +187,8 @@ class Qa17TransformObjectsUiTest {
         val layer = c.activeLayer
         val before = requireNotNull(ShapeCodec.decode(layer.shapeData)) { "a shape layer" }
 
-        transform(u, TransformTool.Lifted.SHAPE)
-        assertEquals("Distort on a shape", TransformLabels17.RASTERIZE_TO_DEFORM, u.stateOf("Distort"))
+        val t = transform(u, TransformTool.Lifted.SHAPE)
+        assertEquals("Distort on a shape", TransformLabels17.RASTERIZE_TO_DEFORM, modeState(u, t, "Distort"))
         // A finger drags the box 40 px right and 20 px down, then a quarter turn and 150 % (about the centre).
         u.ui.stroke(before.cx to before.cy, before.cx + 20f to before.cy + 10f, before.cx + 40f to before.cy + 20f)
         u.press("Rotate 90° clockwise")
@@ -209,8 +230,8 @@ class Qa17TransformObjectsUiTest {
         val before = (layer.vector!!.objects.single() as VPath).spline!!.points.map { Vec2(it.x, it.y) }
         assertEquals(3, before.size)
 
-        transform(u, TransformTool.Lifted.VECTOR)
-        assertNull("Distort is offered for paths", u.stateOf("Distort"))
+        val t = transform(u, TransformTool.Lifted.VECTOR)
+        assertNull("Distort is offered for paths", modeState(u, t, "Distort"))
         u.press("Rotate 90° clockwise")
         scaleByNumbers(u, "150")
         applyTransform(u, TransformTool.TRANSFORM_OBJECTS_LABEL)
@@ -290,8 +311,8 @@ class Qa17TransformObjectsUiTest {
         val wide = boundsOf(layer.bitmap, RED)
         assertTrue("copies in a row: $wide", wide.width() > 2 * wide.height())
 
-        transform(u, TransformTool.Lifted.ARRAY)
-        assertEquals("Distort on an array", ArrayLabels.DEFORM_REFUSAL, u.stateOf("Distort"))
+        val t = transform(u, TransformTool.Lifted.ARRAY)
+        assertEquals("Distort on an array", ArrayLabels.DEFORM_REFUSAL, modeState(u, t, "Distort"))
         u.press("Rotate 90° clockwise")
         scaleByNumbers(u, "150")
         applyTransform(u, TransformTool.TRANSFORM_LABEL)
@@ -350,9 +371,12 @@ class Qa17TransformObjectsUiTest {
         val textPixels = pixels(textLayer.bitmap)
         val blueBefore = pixels(pixelsLayer.bitmap)
         val n = u.steps()
-        transform(u, TransformTool.Lifted.FOLDER)
+        val t = transform(u, TransformTool.Lifted.FOLDER)
+        openModes(u, t)
         assertEquals("Distort works on one layer", u.stateOf("Distort"))
         assertEquals(TransformLabels17.ONE_LAYER, u.stateOf(TransformLabels17.FREE_DEFORM))
+        u.ui.backKey()
+        settle()
         u.press("Rotate 90° clockwise")
         applyTransform(u, TransformTool.TRANSFORM_LABEL)
         assertEquals(n + 1, u.steps())
