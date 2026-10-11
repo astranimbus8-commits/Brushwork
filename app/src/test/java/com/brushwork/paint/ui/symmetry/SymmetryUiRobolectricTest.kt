@@ -5,9 +5,11 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.assist.RulerPanel
 import com.brushwork.paint.ui.common.SymmetryLabels
@@ -24,8 +26,9 @@ import org.robolectric.annotation.Config
 
 /**
  * v1.7 (item 18, §3.18): the symmetry controls at the user's phone size, used like a finger
- * would. The Symmetry tool's strip: the ruler chips, "Divisions" typed in, "Reset symmetry", and
- * "Done" back to the brush. The Ruler panel: the symmetry rulers under the ruler's controls,
+ * would. The Symmetry tool's strip: the ruler dropdown (v1.8, design §3.9: the ruler chips became
+ * one dropdown, described by the current ruler, its entries the same texts), "Divisions" typed in,
+ * "Reset symmetry" (on the More row), and "Done" back to the brush. The Ruler panel: the symmetry rulers under the ruler's controls,
  * "Divisions" there too, and "Symmetry" (Place on canvas) picks the tool and closes the panel.
  * None of it is an undo step.
  */
@@ -52,18 +55,20 @@ class SymmetryUiRobolectricTest {
         }
         SmokeUi.settle()
 
-        // The strip: every ruler is a chip; the mirror shows its angle.
-        for (t in SymmetryType.entries) assertTrue(t.label, SmokeUi.has(t.label, exact = true))
+        // The strip: the current ruler's dropdown (the other rulers are its entries); the mirror
+        // shows its angle.
+        assertTrue(SmokeUi.has(SymmetryType.MIRROR.label, exact = true))
+        assertFalse("the other rulers are entries", SmokeUi.has(SymmetryType.KALEIDOSCOPE.label, exact = true))
         assertTrue(SmokeUi.has("Angle 0°", exact = true))
         assertFalse("nothing to reset yet", SmokeUi.isEnabled(SymmetryLabels.RESET))
-        SmokeUi.click(SymmetryType.KALEIDOSCOPE.label, exact = true)
-        assertEquals(SymmetryType.KALEIDOSCOPE, c.symmetry.type)
+        StripTestKit.closeMoreRow()
+        pick(c, SymmetryType.KALEIDOSCOPE)
         SmokeUi.click("${SymmetryLabels.DIVISIONS} 6", exact = true)
         SmokeUi.typeAndDone(SymmetryLabels.DIVISIONS, "8")
         assertEquals(8, c.symmetry.divisions)
-        SmokeUi.click(SymmetryType.ARRAY.label, exact = true)
+        pick(c, SymmetryType.ARRAY)
         assertTrue(SmokeUi.has("Spacing X 300 px", exact = true) && SmokeUi.has("Spacing Y 300 px", exact = true))
-        SmokeUi.click(SymmetryType.KALEIDOSCOPE.label, exact = true)
+        pick(c, SymmetryType.KALEIDOSCOPE)
         assertTrue(SmokeUi.isEnabled(SymmetryLabels.RESET))
         SmokeUi.click(SymmetryLabels.RESET, exact = true)
         assertEquals("reset keeps the ruler", SymmetryType.KALEIDOSCOPE, c.symmetry.type)
@@ -87,5 +92,15 @@ class SymmetryUiRobolectricTest {
         assertEquals(SymmetryType.ARRAY, c.symmetry.type)
         assertEquals("never an undo step", 0, c.undoManager.undoCount)
         SmokeUi.assertWindowsLaidOut()
+    }
+
+    /** [type] picked in the strip's ruler dropdown, opened through the current ruler (every other ruler is an entry). */
+    private fun pick(c: EditorController, type: SymmetryType) {
+        val current = c.symmetry.type
+        SmokeUi.click(current.label, exact = true)
+        for (t in SymmetryType.entries - current) assertTrue("the entry \"${t.label}\"", SmokeUi.has(t.label, exact = true))
+        SmokeUi.click(type.label, exact = true)
+        assertEquals(type, c.symmetry.type)
+        assertFalse("the dropdown closed", SmokeUi.has((SymmetryType.entries - type).first().label, exact = true))
     }
 }

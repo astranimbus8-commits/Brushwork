@@ -34,7 +34,7 @@ import kotlin.math.sin
 /**
  * v1.7 final QA, layers cluster (item 18, design §3.18; device checklist §6.4 row 12): the five
  * symmetry rulers on a raster layer, set the way the user sets them on the phone (the Symmetry
- * tool's ruler chips, a finger on the canvas handles, the "Label value ▾" chips typed into,
+ * tool's ruler dropdown (v1.8; its chips until v1.7), a finger on the canvas handles, the "Label value ▾" chips typed into,
  * "Reset symmetry", "Done"), then a Brush stroke on a clear layer and an Eraser and a Smudge stroke
  * on a checkered one, each by finger.
  *
@@ -247,13 +247,20 @@ internal class Qa17LayersSymmetry(private val h: ChromeHarness) {
         Qa17LayersShots.shoot(c, "symmetry-$name")
     }
 
-    /** The Symmetry tool picked and [type] chosen by its chip; settings changes are no step. */
+    /**
+     * The Symmetry tool picked and [type] chosen in its ruler dropdown (v1.8, design §3.9: the
+     * ruler chips became one dropdown, described by the current ruler, its entries the same texts;
+     * the finger opens it, the entry is picked in the menu's own window); settings changes are no step.
+     */
     private fun ruler(type: SymmetryType) {
         ui.tool(SymmetryLabels.TOOL)
         assertEquals("picking the tool turns the mirror on", SymmetryType.MIRROR, c.symmetry.type)
-        for (t in SymmetryType.entries) assertTrue("the chip \"${t.label}\"", has(t.label, exact = true))
-        if (type != SymmetryType.MIRROR) press(type.label)
+        press(SymmetryType.MIRROR.label)
+        for (t in SymmetryType.entries - SymmetryType.MIRROR) assertTrue("the entry \"${t.label}\"", has(t.label, exact = true))
+        if (type != SymmetryType.MIRROR) SmokeUi.click(type.label, exact = true) else Finger.back()
+        settle()
         assertEquals(type, c.symmetry.type)
+        assertFalse("the dropdown closed", has(SymmetryType.OFF.label, exact = true))
     }
 
     private fun done() {

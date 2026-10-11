@@ -12,6 +12,7 @@ import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.qa16.Finger
 import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.storage.ProjectRepository
@@ -179,7 +180,11 @@ internal class Qa17LayersSymmetryVector(private val h: ChromeHarness) {
         l.noStep("the rotation ruler") {
             l.ui.tool(SymmetryLabels.TOOL)
             assertEquals("picking the tool turns the mirror on", SymmetryType.MIRROR, c.symmetry.type)
-            press(SymmetryType.ROTATION.label)
+            // v1.8 (design §3.9): the rulers are one dropdown's entries; the finger opens it through
+            // the current ruler, the entry is picked in the menu's own window.
+            press(SymmetryType.MIRROR.label)
+            SmokeUi.click(SymmetryType.ROTATION.label, exact = true)
+            settle()
             assertEquals(SymmetryType.ROTATION, c.symmetry.type)
             assertTrue("\"Divisions 6\"", has("Divisions 6", exact = true))
             assertEquals(6, c.symmetry.divisions)
