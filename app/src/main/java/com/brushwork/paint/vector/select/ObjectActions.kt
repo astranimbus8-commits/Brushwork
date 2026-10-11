@@ -4,6 +4,8 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.lift.VectorLift
 import kotlin.math.max
@@ -11,7 +13,8 @@ import kotlin.math.roundToInt
 
 /**
  * The Object bar's actions on the selected vector objects (v1.5 §4.9, A2): Delete, Duplicate,
- * Forward / Backward / Front / Back, Recolor, Transform and Deselect. Each edit is ONE undo step
+ * Forward / Backward / Front / Back, Recolor, Transform and Deselect (v1.8: and detaching live
+ * mirror copies, [detachCopies]). Each edit is ONE undo step
  * through `controller.vectors.update` (data and pixels together, I1/I2); selecting is not history.
  *
  * Pending tool work is committed first (a transform of these very objects, a reopened shape or
@@ -109,6 +112,26 @@ object ObjectActions {
             return@edit false
         }
         apply(c, layer, after, if (linesOnly) RECOLOR_LINES_LABEL else RECOLOR_LABEL) {}
+    }
+
+    /**
+     * v1.8 (I15, §3.1): the live copies of the selected objects become objects of their own, in
+     * place (ONE step [HistoryLabels.DETACH_MIRROR_COPIES]: each source keeps its id, each copy
+     * takes a new one, `ObjectCopies.detached`); every piece is selected. False, recording
+     * nothing, when no selected object has copies.
+     */
+    fun detachCopies(c: EditorController): Boolean = edit(c, relift = true) { layer, content, ids ->
+        val (after, pieces) = ObjectCopies.detached(content, ids) ?: return@edit false
+        apply(c, layer, after, HistoryLabels.DETACH_MIRROR_COPIES) { c.vectors.setSelection(layer, pieces.toSet()) }
+    }
+
+    /** True when a selected object of the active layer has live copies (the Object bar then offers [detachCopies]). */
+    fun hasCopiesSelected(c: EditorController): Boolean {
+        val ids = c.vectors.selectedIds
+        if (ids.isEmpty()) return false
+        val layer = c.vectors.selectedLayer ?: return false
+        val content = layer.vector ?: return false
+        return content.objects.any { it.id in ids && ObjectCopies.hasCopies(it) }
     }
 
     /** The Transform tool lifts the selected objects (handles, Distort, Numbers, X / Y, pinch). */

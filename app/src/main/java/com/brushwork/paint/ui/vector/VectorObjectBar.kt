@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.Deselect
 import androidx.compose.material.icons.outlined.FlipToBack
 import androidx.compose.material.icons.outlined.FlipToFront
 import androidx.compose.material.icons.outlined.FormatColorFill
+import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material.icons.outlined.VerticalAlignTop
 import androidx.compose.material3.Icon
@@ -55,6 +56,7 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.editor.EditorIcons
 import com.brushwork.paint.ui.editor.endCanvasGesture
@@ -69,7 +71,8 @@ import com.brushwork.paint.vector.select.ObjectEdits
  * ([ObjectActions]); Recolor paints lines and fills with the main color, a long press only the
  * lines. All nine buttons fit a 392 dp phone (about 41 dp each, finger-sized); on a narrower
  * screen they keep 40 dp and the bar scrolls sideways. v1.7 adds "Array" (an array from the
- * selected objects) after Deselect, scrolled into view.
+ * selected objects) after Deselect, scrolled into view; v1.8 adds detaching live mirror copies
+ * after it ([ObjectActions.detachCopies]), shown only while a selected object has copies.
  *
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
  * worked on are not acted on).
@@ -80,6 +83,8 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier) {
     val count by remember(controller) { derivedStateOf { v.selectedIds.size } }
     val selectedLayer by remember(controller) { derivedStateOf { v.selectedLayer } }
     val activeLayer by remember(controller) { derivedStateOf { controller.layersVersion; controller.activeLayer } }
+    // v1.8: whether a selected object has live mirror copies (the detach button shows).
+    val hasCopies by remember(controller) { derivedStateOf { controller.layersVersion; ObjectActions.hasCopiesSelected(controller) } }
     LaunchedEffect(selectedLayer, activeLayer) {
         if (selectedLayer != null && selectedLayer !== activeLayer) v.setSelection(null, emptySet())
     }
@@ -142,6 +147,13 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier) {
                 // sizes (the bar scrolls sideways to it on a 392 dp phone).
                 ObjectBarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_OBJECTS, itemWidth) {
                     run { controller.arrayFromObjects(v.selectedIds.toSet()) }
+                }
+                // v1.8 (I15): only while a selected object has live mirror copies; twice as wide (its
+                // words stay readable), after Array.
+                if (hasCopies) {
+                    ObjectBarItem(Icons.Outlined.LinkOff, MirrorLabels18.DETACH, MirrorLabels18.DETACH, itemWidth * 2) {
+                        run { ObjectActions.detachCopies(controller) }
+                    }
                 }
             }
         }
