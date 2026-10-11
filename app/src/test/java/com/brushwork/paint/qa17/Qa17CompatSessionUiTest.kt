@@ -2,6 +2,7 @@ package com.brushwork.paint.qa17
 
 import android.graphics.Bitmap
 import android.os.Bundle
+import android.os.Looper
 import android.view.MotionEvent
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -55,8 +56,10 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowLog
 import java.io.File
+import java.time.Duration
 
 /**
  * v1.7 QA (compat): a project the real v1.6 build saved ([Qa17CompatV16Goldens], "V15 plain"),
@@ -259,6 +262,26 @@ class Qa17CompatSessionUiTest {
         settle()
     }
 
+    /**
+     * Waits for the onStop save: up to 10 s of real time (a loaded runner can take more than 3 s),
+     * letting at most 30 s of fake time pass, well short of the autosave (45 s of fake time), so
+     * only the onStop save can make [done] true.
+     */
+    private fun onStopSave(done: () -> Boolean): Boolean {
+        val end = System.currentTimeMillis() + 10_000
+        var fakeMs = 0L
+        while (System.currentTimeMillis() < end) {
+            if (fakeMs < 30_000) {
+                shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(20))
+                fakeMs += 20
+            } else {
+                shadowOf(Looper.getMainLooper()).idle()
+            }
+            if (done()) return true
+            Thread.sleep(5)
+        }
+        return done()
+    }
     private fun revision(): Long = ProjectFormat.json.decodeFromString(ProjectFileDto.serializer(), File(projectDir, ProjectFormat.PROJECT_FILE).readText()).revision
 
     /**
@@ -272,8 +295,7 @@ class Qa17CompatSessionUiTest {
         val bundle = Bundle()
         val t0 = System.nanoTime()
         ctl.pause().stop()
-        // 3 s: well short of the autosave (45 s of fake time), so only the onStop save counts.
-        assertTrue("the onStop save wrote \"${unsaved.name}\"", Smoke.pumpUntil(3_000) { unsaved.savedVersion == unsaved.contentVersion })
+        assertTrue("the onStop save wrote \"${unsaved.name}\"", onStopSave { unsaved.savedVersion == unsaved.contentVersion })
         val t1 = System.nanoTime()
         ctl.saveInstanceState(bundle)
         ctl.destroy()
@@ -533,8 +555,7 @@ class Qa17CompatSessionUiTest {
         for (k in 1..4) { t.idle(16); t.send(MotionEvent.ACTION_MOVE, Smoke.P(0, ax + (bx - ax) * k / 8f, ay + (by - ay) * k / 8f)) }
         val rev = revision()
         ctl.pause().stop()
-        // 3 s: well short of the autosave (45 s of fake time), so only the onStop save counts.
-        val savedOnStop = Smoke.pumpUntil(3_000) { revision() > rev }
+        val savedOnStop = onStopSave { revision() > rev }
         settle(2)
         ctl.restart().resume()
         settle()
