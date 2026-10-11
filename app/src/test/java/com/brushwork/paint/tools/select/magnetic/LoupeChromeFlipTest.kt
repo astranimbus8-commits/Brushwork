@@ -44,7 +44,10 @@ class LoupeChromeFlipTest {
         val offset = t.dp(Loupe.OFFSET_DP)
         // Before the editor measures its bars: the view's top, as before.
         assertEquals(0f, Loupe.chromeTop(c))
-        assertFalse(Loupe.at(Vec2(100f, flipAt + 10f), t).flipped)
+        assertFalse(Loupe.at(Vec2(100f, flipAt + t.dp(10f)), t).flipped)
+        // v1.8 final QA: 140 to 148 dp down (96 dp + the 52 dp radius), the circle above would
+        // cross the top: it flips too.
+        assertTrue(Loupe.at(Vec2(100f, flipAt + 10f), t).flipped)
 
         // The bars cover the top 137 dp (status bar, top row, strip).
         val bars = t.dp(137f)

@@ -94,7 +94,10 @@ class Loupe internal constructor(
         /** From the finger to the circle's centre (dp). */
         const val OFFSET_DP = 96f
 
-        /** A finger this close (dp) to the canvas's top (under the editor's bars) flips the loupe below it. */
+        /**
+         * A finger this close (dp) to the canvas's top (under the editor's bars) flips the loupe
+         * below it; so does one whose loupe above would reach under the bars ([at]).
+         */
         const val FLIP_DP = 140f
 
         private const val CROSS_DP = 9f
@@ -116,8 +119,10 @@ class Loupe internal constructor(
          */
         fun at(focus: Vec2, t: ViewTransform, top: Float = 0f): Loupe {
             val f = t.docToScreen(focus)
-            val flipped = f.y < top + t.dp(FLIP_DP)
             val dy = t.dp(OFFSET_DP)
+            // Below the finger in the canvas's top [FLIP_DP], and wherever the circle above it would
+            // reach under the bars (a finger up to OFFSET_DP + DIAMETER_DP / 2 = 148 dp under them).
+            val flipped = f.y < top + t.dp(FLIP_DP) || f.y - dy - t.dp(DIAMETER_DP) / 2f < top
             return Loupe(Vec2(f.x, if (flipped) f.y + dy else f.y - dy), flipped, focus, f)
         }
 

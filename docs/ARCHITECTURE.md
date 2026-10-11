@@ -1894,7 +1894,7 @@ With fewer than three anchors, nothing closes and the outline is dropped quietly
 **Loupe** (`Loupe`, D12). It shows from finger-down to lift for every touch that places or drags an anchor, and for Color select's taps too.
 - It is a 104 dp circle showing the canvas at 3x the view's zoom, rendered through `Compositor.drawDocument` with white paper under it.
 - It shows the outline, the live segment, the faint reach ring and a crosshair.
-- It sits 96 dp above the finger, and flips below it when the finger is within 140 dp of the canvas's visible top.
+- It sits 96 dp above the finger, and flips below it when the finger is within 140 dp of the canvas's visible top. It also flips wherever the circle above would reach under the top bars: 96 + 52 dp is 148 dp, so a finger 140 to 148 dp under them flips too (v1.8 final QA: at 392 dp the fitted picture's top edge sits 143 dp under the bars, `Qa18SelectMagneticLoupeReachOomUiTest`).
 
 The canvas view is full-bleed under the editor's status bar, top row and options strip, so the visible top is the bars' lower edge. `Loupe.chromeTop(controller)` reads it from `EyedropperTool.chromeTop`, which `CanvasView.setFitInsets` already feeds (the eyedropper's color preview keeps clear of the bars the same way). It is 0 until the editor has measured its bars.
 
