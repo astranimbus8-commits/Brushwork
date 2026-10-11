@@ -132,9 +132,6 @@ internal object TransformStripItems {
     /** "Delete picture" after its icon, at 11 sp. */
     const val DELETE_DP = 104f
 
-    /** "Snap to objects" at 11 sp. */
-    const val SNAP_DP = 96f
-
     /** The interpolation ("Smooth" / "Nearest") and ▾. */
     const val INTERPOLATION_DP = 80f
     const val NUMBERS_DP = 64f
@@ -153,7 +150,6 @@ internal object TransformStripItems {
     const val ROTATE_CW_LABEL = "Rotate 90° clockwise"
     const val FIT_LABEL = "Fit to canvas"
     const val RESET_LABEL = "Reset transform"
-    const val SNAP_LABEL = "Snap to objects"
     const val INTERPOLATION_LABEL = "Choose interpolation"
     const val NUMBERS_LABEL = "Numbers"
     const val DELETE_LABEL = "Delete"
@@ -166,8 +162,6 @@ internal object TransformStripItems {
     )
 
     fun keepAspectLabel(on: Boolean) = if (on) "Keep aspect ratio: on" else "Keep aspect ratio: off"
-
-    fun snapState(on: Boolean) = if (on) "Snap to objects: on" else "Snap to objects: off"
 
     fun deleteLabel(tool: TransformTool) = if (tool.isPlacement) DELETE_PICTURE else DELETE_LABEL
 
@@ -238,10 +232,7 @@ internal object TransformStripItems {
         ToolIconButton(Icons.Filled.RestartAlt, RESET_LABEL, onClick = { tool.reset() }, size = ICON_DP.dp)
     }
 
-    fun snap(tool: TransformTool) = StripItem(SNAP, SNAP_LABEL, SNAP_DP.dp, row = StripRow.MORE) {
-        val on = tool.snapToObjects
-        StripTextButton(SNAP_LABEL, SNAP_DP.dp, onClick = { tool.snapToObjects = !on }, checked = on, state = snapState(on))
-    }
+    fun snap(tool: TransformTool) = snapItem(SNAP, on = { tool.snapToObjects }) { tool.snapToObjects = it }
 
     fun interpolation(tool: TransformTool) = StripItem(INTERPOLATION, INTERPOLATION_LABEL, INTERPOLATION_DP.dp, row = StripRow.MORE) {
         InterpolationMenu(tool)

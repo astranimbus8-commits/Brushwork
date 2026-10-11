@@ -48,6 +48,9 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 /**
  * Options strip of the text tool; also hosts the text editor dialog and the "Numbers" sheet.
  * (An edited text layer whose text is emptied is deleted without a question; undo restores it.)
+ *
+ * v1.8: the editor draws the converted strip ([textSpec]); this v1.7 strip stays for the tests
+ * that render it alone.
  */
 @Composable
 fun TextToolOptions(tool: TextTool) {
@@ -138,7 +141,12 @@ internal fun LettersChip(tool: TextTool) {
     }
 }
 
-/** Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog. */
+/**
+ * Options strip of the frame divider; also hosts the frame settings sheet and the grid dialog.
+ *
+ * v1.8: the editor draws the converted strip ([frameDividerSpec]); this v1.7 strip stays for the
+ * tests that render it alone.
+ */
 @Composable
 fun FrameDividerOptions(tool: FrameDividerTool) {
     val c = tool.controller

@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -126,9 +127,12 @@ internal fun StripMenuButton(
 }
 
 /**
- * A bordered strip button [width] wide showing [text] (its handle) on up to two lines at 11 sp,
- * after [icon] when given, with ▾ when [arrow] (it opens a dropdown). A toggle passes [checked]:
- * it is then a checkbox, tinted while on; [state] is an optional state description.
+ * A bordered strip button [width] wide showing [text] on up to two lines at 11 sp, after [icon]
+ * when given (above it when [stacked], at 10 sp: a 40 dp button), with ▾ when [arrow] (it opens a
+ * dropdown). A toggle passes [checked]: it is then a checkbox, tinted while on (or [on] tints a
+ * plain button that opens what it switches); [state] is an optional state description. Its
+ * handle is [text], or [description] when given (the text is then announced too, unless
+ * [announceText] is false). [dimmed] draws it faded while still tappable (a tap explains why).
  */
 @Composable
 internal fun StripTextButton(
@@ -141,44 +145,88 @@ internal fun StripTextButton(
     arrow: Boolean = false,
     color: Color = BrushworkColors.OnChrome,
     icon: ImageVector? = null,
+    description: String? = null,
+    announceText: Boolean = true,
+    stacked: Boolean = false,
+    on: Boolean = checked == true,
+    dimmed: Boolean = false,
 ) {
-    val on = checked == true
     val action = if (checked == null) {
         Modifier.clickable(enabled = enabled, onClick = onClick)
     } else {
-        Modifier.triStateToggleable(state = ToggleableState(on), enabled = enabled, role = Role.Checkbox, onClick = onClick)
+        Modifier.triStateToggleable(state = ToggleableState(checked), enabled = enabled, role = Role.Checkbox, onClick = onClick)
+    }
+    val own: SemanticsPropertyReceiver.() -> Unit = {
+        if (description != null) contentDescription = description
+        if (state != null) stateDescription = state
+    }
+    val semantics = when {
+        description != null && !announceText -> Modifier.clearAndSetSemantics(own)
+        description != null || state != null -> Modifier.semantics(properties = own)
+        else -> Modifier
+    }
+    val tint = if (on) Color.White else color
+    val label: @Composable (Modifier) -> Unit = { m ->
+        Text(
+            text,
+            fontSize = if (stacked) 10.sp else 11.sp,
+            lineHeight = if (stacked) 12.sp else 13.sp,
+            color = tint,
+            maxLines = if (stacked) 1 else 2,
+            softWrap = !stacked,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = m,
+        )
+    }
+    val box = Modifier
+        .width(width)
+        .heightIn(min = 40.dp)
+        .clip(stripShape)
+        .then(if (on) Modifier else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, stripShape))
+        .then(if (on) Modifier.background(BrushworkColors.AccentDim) else Modifier)
+        .then(action)
+        .then(semantics)
+        .alpha(if (!enabled) 0.5f else if (dimmed) 0.45f else 1f)
+    if (stacked) {
+        Column(box, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            if (icon != null) Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+            label(Modifier)
+        }
+        return
     }
     Row(
-        Modifier
-            .width(width)
-            .heightIn(min = 40.dp)
-            .clip(stripShape)
-            .then(if (on) Modifier else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, stripShape))
-            .then(if (on) Modifier.background(BrushworkColors.AccentDim) else Modifier)
-            .then(action)
-            .then(if (state != null) Modifier.semantics { stateDescription = state } else Modifier)
-            .alpha(if (enabled) 1f else 0.5f)
-            .padding(start = 4.dp, end = if (arrow) 0.dp else 4.dp),
+        box.padding(start = 4.dp, end = if (arrow) 0.dp else 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.Center,
     ) {
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = if (on) Color.White else color, modifier = Modifier.size(16.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
             Box(Modifier.width(4.dp))
         }
-        Text(
-            text,
-            fontSize = 11.sp,
-            lineHeight = 13.sp,
-            color = if (on) Color.White else color,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.weight(1f, fill = false),
-        )
+        label(Modifier.weight(1f, fill = false))
         if (arrow) Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(18.dp))
     }
 }
+
+/** "Snap to objects" on G's More rows (§3.9: one name per tool, the longer one), 11 sp. */
+internal const val SNAP_LABEL = "Snap to objects"
+
+/** [SNAP_LABEL] at 11 sp on one line. */
+internal const val SNAP_DP = 96f
+
+/** "Snap to objects: on" / "off", the v1.7 chip's state. */
+internal fun snapState(on: Boolean) = if (on) "Snap to objects: on" else "Snap to objects: off"
+
+/**
+ * "Snap to objects" on the More row as [key]: a toggle of the app-wide setting, read through [on]
+ * and switched through [set] (the Transform tool also clears its guides).
+ */
+internal fun snapItem(key: String, on: () -> Boolean, set: (Boolean) -> Unit): StripItem =
+    StripItem(key, SNAP_LABEL, SNAP_DP.dp, row = StripRow.MORE) {
+        val now = on()
+        StripTextButton(SNAP_LABEL, SNAP_DP.dp, onClick = { set(!now) }, checked = now, state = snapState(now))
+    }
 
 /** A status or hint text that stays on row 1 (not a control), [width] wide, up to two lines at 11 sp. */
 @Composable
