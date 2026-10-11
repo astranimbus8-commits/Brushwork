@@ -53,9 +53,11 @@ class LabelsV18Test {
     fun everyV18LabelIsUniqueAndNotBlank() {
         val all = labels
         // 95 from F1, and three from the integration (v18I): the Color select no-match toast, the
-        // Magnetic lasso's out-of-memory toast and the Transform box hint.
-        assertEquals("the objects have their labels: ${all.keys}", 99, all.size)
+        // Magnetic lasso's out-of-memory toast and the Transform box hint; one from the v1.8 polish:
+        // the caption over "Choose interpolation" (it said only "Smooth", not what it chooses).
+        assertEquals("the objects have their labels: ${all.keys}", 100, all.size)
         assertTrue(all.keys.containsAll(listOf("ColorSelectLabels18.NO_MATCH", "MagneticLabels18.OUT_OF_MEMORY", "TransformLabels18.BOX_HINT")))
+        assertTrue(all.keys.contains("TransformLabels18.INTERPOLATION_CAPTION"))
         val dups = all.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
         assertTrue("labels declared twice: $dups", dups.isEmpty())
         assertTrue("blank: ${all.filterValues { it.isBlank() }}", all.values.none { it.isBlank() || it != it.trim() })
@@ -264,7 +266,7 @@ class LabelsV18Test {
     fun theFreeDeformStripWithItsMeshPopup() {
         assertNoSubstrings(
             "Free deform strip",
-            v18 = listOf(TransformLabels18.MESH_SIZE, StripLabels18.MORE_TOGGLE),
+            v18 = listOf(TransformLabels18.MESH_SIZE, TransformLabels18.INTERPOLATION_CAPTION, StripLabels18.MORE_TOGGLE),
             v17 = values(TransformLabels17) + listOf(
                 "Fewer mesh columns", "More mesh columns", "Fewer mesh rows", "More mesh rows", "Select all points", "Deselect all points",
                 "Delete", "Choose interpolation", "Transform", "3 × 3",
@@ -278,7 +280,7 @@ class LabelsV18Test {
         val t = TransformStripItems
         assertNoSubstrings(
             "Transform strip, box modes",
-            v18 = listOf(TransformLabels18.BOX_HINT, StripLabels18.MORE_TOGGLE),
+            v18 = listOf(TransformLabels18.BOX_HINT, TransformLabels18.INTERPOLATION_CAPTION, StripLabels18.MORE_TOGGLE),
             v17 = TransformTool.Mode.entries.map { it.label } + TransformTool.Interpolation.entries.flatMap { listOf(it.label, it.description) } +
                 listOf(
                     t.keepAspectLabel(true), t.keepAspectLabel(false), t.FROM_CENTER, t.FLIP_HORIZONTALLY, t.FLIP_VERTICALLY,

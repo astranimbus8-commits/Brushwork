@@ -2,10 +2,12 @@ package com.brushwork.paint.ui.placement
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CropFree
 import androidx.compose.material.icons.filled.Delete
@@ -29,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
@@ -135,7 +138,7 @@ internal object TransformStripItems {
     /** "Delete picture" after its icon, at 11 sp. */
     const val DELETE_DP = 104f
 
-    /** The interpolation ("Smooth" / "Nearest") and ▾. */
+    /** The caption over the interpolation ("Smooth" / "Nearest") and ▾. */
     const val INTERPOLATION_DP = 80f
     const val NUMBERS_DP = 64f
 
@@ -373,15 +376,26 @@ private fun MeshSizeMenu(tool: TransformTool) {
 }
 
 /**
- * "Choose interpolation": the current interpolation ("Smooth" / "Nearest") and ▾; its dropdown
- * lists both with their descriptions, the current one checked (v1.7's menu, now opaque).
+ * "Choose interpolation": the caption [TransformLabels18.INTERPOLATION_CAPTION] over the current
+ * interpolation ("Smooth" / "Nearest") and ▾; its dropdown lists both with their descriptions,
+ * the current one checked (v1.7's menu, now opaque).
  */
 @Composable
 private fun InterpolationMenu(tool: TransformTool) {
     var open by remember { mutableStateOf(false) }
     Box {
-        StripMenuButton(TransformStripItems.INTERPOLATION_LABEL, TransformStripItems.INTERPOLATION_DP.dp, open, onClick = { open = true }) {
-            Text(tool.interpolation.label, fontSize = 12.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
+        // The caption says what the button chooses; the current value and ▾ under it (v1.8 polish).
+        StripMenuButton(TransformStripItems.INTERPOLATION_LABEL, TransformStripItems.INTERPOLATION_DP.dp, open, onClick = { open = true }, arrow = false) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    TransformLabels18.INTERPOLATION_CAPTION, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim,
+                    maxLines = 1, softWrap = false,
+                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(tool.interpolation.label, fontSize = 12.sp, lineHeight = 14.sp, color = BrushworkColors.OnChrome, maxLines = 1, softWrap = false)
+                    Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(16.dp))
+                }
+            }
         }
         StripMenu(open, onDismiss = { open = false }) {
             TransformTool.Interpolation.entries.forEach { mode ->

@@ -135,7 +135,7 @@ class StripsLabelsTest {
         val interpolation = TransformTool.Interpolation.entries.flatMap { listOf(it.label, it.description) }
         assertNoSubstrings(
             "Transform, box modes",
-            v18 = toggle,
+            v18 = toggle + TransformLabels18.INTERPOLATION_CAPTION,
             v17 = TransformTool.Mode.entries.map { it.label } + interpolation + listOf(
                 T.keepAspectLabel(true), T.keepAspectLabel(false), T.FROM_CENTER, T.FLIP_HORIZONTALLY, T.FLIP_VERTICALLY, T.DELETE_LABEL,
                 T.DELETE_PICTURE, T.ROTATE_CCW_LABEL, T.ROTATE_CW_LABEL, T.FIT_LABEL, T.RESET_LABEL, SNAP_LABEL, T.INTERPOLATION_LABEL,
@@ -144,7 +144,7 @@ class StripsLabelsTest {
         )
         assertNoSubstrings(
             "Transform, Free deform",
-            v18 = toggle + TransformLabels18.MESH_SIZE,
+            v18 = toggle + TransformLabels18.MESH_SIZE + TransformLabels18.INTERPOLATION_CAPTION,
             v17 = TransformTool.Mode.entries.map { it.label } + interpolation + T.MESH_POPUP + listOf(
                 TransformLabels17.RESET, TransformLabels17.SMOOTH, PointLabels.SELECT_ALL, PointLabels.DESELECT_ALL, PointLabels.SEVERAL_HINT,
                 T.DELETE_LABEL, T.INTERPOLATION_LABEL, T.meshText(3, 3), T.meshText(12, 12),

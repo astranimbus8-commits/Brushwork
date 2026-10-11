@@ -106,6 +106,11 @@ object TransformLabels18 {
      * that corner or side (Distort); the round handle turns it.
      */
     const val BOX_HINT = "Drag to move; drag a handle to reshape or turn"
+    /**
+     * v1.8 polish: the caption over the current interpolation on "Choose interpolation" (the
+     * More row of Transform), so the button says what it chooses.
+     */
+    const val INTERPOLATION_CAPTION = "Interpolation"
 }
 
 /** The two-row tool strip (item 7). */
