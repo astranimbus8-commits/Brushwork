@@ -4,6 +4,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.mask.MaskTool
@@ -22,7 +23,8 @@ import org.robolectric.annotation.Config
 /**
  * v1.5 A5: the Masks tool's options strip and sheets in a real activity at the user's phone size
  * (392 dp): arming a kind, the Components sheet (one step per change), the Adjust sheet (the
- * effect changes live, one step when it closes) and the target menu.
+ * effect changes live, one step when it closes) and the target menu. v1.8: the target, the
+ * combine modes and "Components (N)" are on the strip's More row (design §3.9).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.mask.uisandbox"])
@@ -38,16 +40,22 @@ class MaskToolOptionsUiRobolectricTest {
         val tool = c.tools.getValue(ToolId.MASK) as MaskTool
         activity.setContent { BrushworkTheme { ToolOptionsBar(c) } }
         SmokeUi.settle()
-        for (label in listOf("+ Linear", "+ Radial", "+ Brush", "Components (0)", "Add", "Subtract", "Intersect", "New Tone")) {
+        for (label in listOf("+ Linear", "+ Radial", "+ Brush")) {
             assertTrue("strip shows $label (${SmokeUi.shown()})", SmokeUi.has(label, exact = true))
         }
         assertFalse("Adjust needs an adjustment layer", SmokeUi.isEnabled("Adjust…"))
+        // v1.8 (design §3.9): the target, the combine modes and the components are on the More row.
+        assertTrue(StripTestKit.openMoreRow())
+        for (label in listOf("Components (0)", "Add", "Subtract", "Intersect", "New Tone")) {
+            assertTrue("the More row shows $label (${SmokeUi.shown()})", SmokeUi.has(label, exact = true))
+        }
 
         // Arm a radial and drag: a new Tone layer with the component.
         SmokeUi.click("+ Radial", exact = true)
         assertEquals(MaskTool.Kind.RADIAL, tool.armed)
         c.pointerDown(ToolPoint(200f, 150f)); c.pointerMove(ToolPoint(230f, 150f)); c.pointerMove(ToolPoint(260f, 150f)); c.pointerUp(ToolPoint(260f, 150f))
         SmokeUi.settle()
+        StripTestKit.openMoreRow()
         assertTrue(SmokeUi.has("Components (1)", exact = true))
         assertTrue(SmokeUi.has("Tone 1 mask", exact = true))
         assertTrue(SmokeUi.isEnabled("Adjust…"))

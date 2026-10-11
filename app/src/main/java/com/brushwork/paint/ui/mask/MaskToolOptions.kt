@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -38,6 +39,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,26 +66,13 @@ import com.brushwork.paint.ui.theme.BrushworkColors
  * Options strip of the Masks tool (v1.5 §4.3a; owned by A5), horizontally scrollable:
  * `[Target ▾] [+ Linear] [+ Radial] [+ Brush] ([Brush|Erase] [Done]) [Add|Subtract|Intersect]
  * [Invert] [👁] [Adjust…] [Components (n)]`, plus the sheets and questions the tool asks for.
+ *
+ * v1.8: the editor draws the converted strip ([maskStrip]); this v1.7 strip stays for the tests
+ * that render it alone.
  */
 @Composable
 fun MaskToolOptions(tool: MaskTool) {
-    val c = tool.controller
-    // What the strip shows changes rarely; drags only move the live spec.
-    val info by remember(tool) {
-        derivedStateOf {
-            val layer = tool.editLayer
-            val sel = tool.selectedId?.let { id -> tool.spec?.components?.firstOrNull { it.id == id } }
-            StripInfo(
-                activeIsAdjustment = c.activeLayer.isAdjustmentLayer,
-                layerName = layer?.name ?: c.activeLayer.name,
-                count = tool.spec?.components?.size ?: 0,
-                selectedMode = sel?.mode,
-                selectedInvert = sel?.invert == true,
-                hasSelection = sel != null,
-                brushSelected = sel is BrushMask,
-            )
-        }
-    }
+    val info by rememberMaskStripInfo(tool)
     TargetChip(tool, info)
     BarDivider()
     AddChip("Linear", Icons.Filled.Gradient, tool.armed == MaskTool.Kind.LINEAR) { tool.arm(MaskTool.Kind.LINEAR) }
@@ -109,13 +98,23 @@ fun MaskToolOptions(tool: MaskTool) {
     BarDivider()
     AdjustChip(tool, enabled = info.activeIsAdjustment)
     TextButton(onClick = { tool.componentsOpen = true }) { Text("Components (${info.count})") }
+    MaskSheets(tool) { info.activeIsAdjustment }
+}
 
+/**
+ * The Masks tool's sheets and questions (the overlays of v1.7's strip and of v1.8's): the Adjust
+ * sheet (only while [activeIsAdjustment]: an adjustment layer is active), the components sheet,
+ * the filter browser and the "Replace the painted mask?" question.
+ */
+@Composable
+internal fun MaskSheets(tool: MaskTool, activeIsAdjustment: () -> Boolean) {
+    val adjustment = activeIsAdjustment()
     // Another kind of layer became active: the Adjust sheet closes (it recorded its step) and
     // doesn't pop up again by itself the next time an adjustment layer is selected.
-    LaunchedEffect(info.activeIsAdjustment) { if (!info.activeIsAdjustment) tool.adjustOpen = false }
-    if (tool.adjustOpen && info.activeIsAdjustment) AdjustmentSheet(tool)
+    LaunchedEffect(adjustment) { if (!adjustment) tool.adjustOpen = false }
+    if (tool.adjustOpen && adjustment) AdjustmentSheet(tool)
     if (tool.componentsOpen) MaskComponentsSheet(tool)
-    if (tool.filterBrowserOpen) FilterBrowser(c) { tool.filterBrowserOpen = false }
+    if (tool.filterBrowserOpen) FilterBrowser(tool.controller) { tool.filterBrowserOpen = false }
     tool.replacePrompt?.let { layer ->
         AlertDialog(
             onDismissRequest = { tool.answerReplace(false) },
@@ -128,7 +127,8 @@ fun MaskToolOptions(tool: MaskTool) {
     }
 }
 
-private data class StripInfo(
+/** What the Masks strip shows: it changes rarely (drags only move the live spec). */
+internal data class MaskStripInfo(
     val activeIsAdjustment: Boolean,
     val layerName: String,
     val count: Int,
@@ -137,6 +137,27 @@ private data class StripInfo(
     val hasSelection: Boolean,
     val brushSelected: Boolean,
 )
+
+/** The Masks strip's [MaskStripInfo], derived from the tool and the active layer. */
+@Composable
+internal fun rememberMaskStripInfo(tool: MaskTool): State<MaskStripInfo> {
+    val c = tool.controller
+    return remember(tool) {
+        derivedStateOf {
+            val layer = tool.editLayer
+            val sel = tool.selectedId?.let { id -> tool.spec?.components?.firstOrNull { it.id == id } }
+            MaskStripInfo(
+                activeIsAdjustment = c.activeLayer.isAdjustmentLayer,
+                layerName = layer?.name ?: c.activeLayer.name,
+                count = tool.spec?.components?.size ?: 0,
+                selectedMode = sel?.mode,
+                selectedInvert = sel?.invert == true,
+                hasSelection = sel != null,
+                brushSelected = sel is BrushMask,
+            )
+        }
+    }
+}
 
 internal fun modeLabel(m: MaskMode): String = when (m) {
     MaskMode.ADD -> "Add"
@@ -185,58 +206,70 @@ private fun AddChip(label: String, icon: androidx.compose.ui.graphics.vector.Ima
 
 /** Where creating gestures go: this adjustment's mask, this layer's mask, or a new adjustment layer. */
 @Composable
-private fun TargetChip(tool: MaskTool, info: StripInfo) {
+private fun TargetChip(tool: MaskTool, info: MaskStripInfo) {
     var open by remember { mutableStateOf(false) }
-    val target = tool.target
-    val label = when {
-        info.activeIsAdjustment -> "${info.layerName} mask"
-        target == MaskTool.Target.ThisLayer -> "${info.layerName} mask"
-        else -> "New ${AdjustmentEffects.filters.firstOrNull { it.id == tool.newEffectId }?.name ?: "adjustment"}"
-    }
     Box {
         TextButton(onClick = { open = true }, modifier = Modifier.widthIn(max = 170.dp)) {
             Icon(Icons.Filled.Layers, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(6.dp))
-            Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            Text(maskTargetLabel(tool, info), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Choose what the mask is for")
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }, modifier = Modifier.closeOnSecondFinger { open = false }) {
-            if (info.activeIsAdjustment) {
-                DropdownMenuItem(
-                    text = { Text("This adjustment's mask") },
-                    leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
-                    onClick = { open = false },
-                )
-                Text(
-                    "Select a pixel layer to start another adjustment.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = BrushworkColors.OnChromeDim,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).widthIn(max = 240.dp),
-                )
-                return@DropdownMenu
-            }
-            Text(
-                "NEW ADJUSTMENT LAYER",
-                style = MaterialTheme.typography.labelSmall,
-                color = BrushworkColors.OnChromeDim,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-            )
-            for (f in AdjustmentEffects.filters) {
-                val chosen = target == MaskTool.Target.NewAdjustment(f.id)
-                DropdownMenuItem(
-                    text = { Text(f.name) },
-                    leadingIcon = { if (chosen) Icon(Icons.Filled.Check, contentDescription = null) else Spacer(Modifier.size(24.dp)) },
-                    onClick = { open = false; tool.chooseTarget(MaskTool.Target.NewAdjustment(f.id)) },
-                )
-            }
-            HorizontalDivider(color = BrushworkColors.ChromeBorder)
-            DropdownMenuItem(
-                text = { Text("This layer's mask") },
-                leadingIcon = { if (target == MaskTool.Target.ThisLayer) Icon(Icons.Filled.Check, contentDescription = null) else Spacer(Modifier.size(24.dp)) },
-                onClick = { open = false; tool.chooseTarget(MaskTool.Target.ThisLayer) },
-            )
+            MaskTargetItems(tool, info) { open = false }
         }
     }
+}
+
+/** The target's name: "<layer> mask", or "New <adjustment>" (a new adjustment layer). */
+internal fun maskTargetLabel(tool: MaskTool, info: MaskStripInfo): String = when {
+    info.activeIsAdjustment -> "${info.layerName} mask"
+    tool.target == MaskTool.Target.ThisLayer -> "${info.layerName} mask"
+    else -> "New ${AdjustmentEffects.filters.firstOrNull { it.id == tool.newEffectId }?.name ?: "adjustment"}"
+}
+
+/**
+ * The target menu's entries: on an adjustment layer its own mask (and how to start another);
+ * else the adjustments a new adjustment layer can have, then "This layer's mask". Each choice
+ * calls [close] (the menu closes).
+ */
+@Composable
+internal fun ColumnScope.MaskTargetItems(tool: MaskTool, info: MaskStripInfo, close: () -> Unit) {
+    val target = tool.target
+    if (info.activeIsAdjustment) {
+        DropdownMenuItem(
+            text = { Text("This adjustment's mask") },
+            leadingIcon = { Icon(Icons.Filled.Check, contentDescription = null) },
+            onClick = close,
+        )
+        Text(
+            "Select a pixel layer to start another adjustment.",
+            style = MaterialTheme.typography.bodySmall,
+            color = BrushworkColors.OnChromeDim,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp).widthIn(max = 240.dp),
+        )
+        return
+    }
+    Text(
+        "NEW ADJUSTMENT LAYER",
+        style = MaterialTheme.typography.labelSmall,
+        color = BrushworkColors.OnChromeDim,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+    )
+    for (f in AdjustmentEffects.filters) {
+        val chosen = target == MaskTool.Target.NewAdjustment(f.id)
+        DropdownMenuItem(
+            text = { Text(f.name) },
+            leadingIcon = { if (chosen) Icon(Icons.Filled.Check, contentDescription = null) else Spacer(Modifier.size(24.dp)) },
+            onClick = { close(); tool.chooseTarget(MaskTool.Target.NewAdjustment(f.id)) },
+        )
+    }
+    HorizontalDivider(color = BrushworkColors.ChromeBorder)
+    DropdownMenuItem(
+        text = { Text("This layer's mask") },
+        leadingIcon = { if (target == MaskTool.Target.ThisLayer) Icon(Icons.Filled.Check, contentDescription = null) else Spacer(Modifier.size(24.dp)) },
+        onClick = { close(); tool.chooseTarget(MaskTool.Target.ThisLayer) },
+    )
 }
 
 /** "Adjust…": opens the Adjust sheet; pulses a few times after a new adjustment layer was made. */
@@ -275,4 +308,3 @@ private fun AdjustChip(tool: MaskTool, enabled: Boolean) {
         )
     }
 }
-

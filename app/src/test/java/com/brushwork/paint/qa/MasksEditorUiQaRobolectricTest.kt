@@ -39,7 +39,8 @@ import org.robolectric.shadows.ShadowLog
  * Masks → + Linear → a finger drag on the canvas → Adjust… (Tone's sliders, Amount reachable) →
  * Components (every action reachable) → the layers window's "Edit adjustment"; Filters → search
  * "exposure" → Tone → "As adjustment layer"; the clone stamp's strip. Everything a finger needs
- * must be on screen or scrollable into the window.
+ * must be on screen or scrollable into the window (v1.8: the Masks strip shows row 1 and its More
+ * row inside the window, design §3.9).
  *
  * Own sandbox; all UI work in ONE test split into sections (Compose's frame clock only serves
  * the first test of a sandbox).
@@ -177,14 +178,16 @@ class MasksEditorUiQaRobolectricTest {
         click("Masks", exact = true)
         assertEquals(ToolId.MASK, c.activeToolId)
         val tool = c.tools.getValue(ToolId.MASK) as MaskTool
-        // Every chip of the strip can be scrolled into the 360 dp window.
-        val strip = horizontalScrollerOf("+ Linear")
-        for (label in listOf("New Tone", "+ Linear", "+ Radial", "+ Brush", "Add", "Subtract", "Intersect", "Invert", "Adjust…", "Components (0)")) {
-            assertReachable("strip", strip, label, horizontal = true)
-            val b = SmokeUi.find(label, exact = true)!!.bounds
-            assertTrue("\"$label\" inside the window: $b (width ${s.width})", b.left >= 0f && b.right <= s.width + 1f)
+        // v1.8 (design §3.9): the strip no longer scrolls. Row 1 and then the More row show every
+        // control inside the 360 dp window.
+        val inside = { label: String ->
+            val b = SmokeUi.find(label, exact = true)?.bounds ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(80)}")
+            assertTrue("\"$label\" inside the window: $b (width ${s.width})", b.width > 0f && b.left >= 0f && b.right <= s.width + 1f)
         }
-        scrollIntoView(strip, "+ Linear", horizontal = true)
+        for (label in listOf("+ Linear", "+ Radial", "+ Brush", "Invert", "Adjust…")) inside(label)
+        assertTrue(StripTestKit.openMoreRow())
+        for (label in listOf("New Tone", "Add", "Subtract", "Intersect", "Components (0)")) inside(label)
+        // (Arming closes the More row: the next canvas touch makes the part.)
         click("+ Linear", exact = true)
         assertEquals(MaskTool.Kind.LINEAR, tool.armed)
         val steps = c.undoManager.undoCount
@@ -194,15 +197,15 @@ class MasksEditorUiQaRobolectricTest {
         assertTrue("a finger drag made the adjustment layer", adj.isAdjustmentLayer)
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertNotNull(adj.maskSpec)
+        StripTestKit.openMoreRow()
         assertTrue(has("Components (1)", exact = true))
         // Lightroom's flow: make a mask, then move the sliders. The pulsing Adjust… chip must be
-        // on screen without hunting for it (the strip was scrolled to "+ Linear").
+        // on screen without hunting for it (row 1 at 360 dp).
         assertEquals("a new adjustment layer makes the Adjust chip pulse", 1, tool.adjustPulse)
         val adjustChip = SmokeUi.find("Adjust…", exact = true)!!.bounds
         assertTrue("the pulsing Adjust… chip is on screen at 360 dp: $adjustChip (width ${s.width})", adjustChip.width > 0f && adjustChip.left >= 0f && adjustChip.right <= s.width + 1f)
 
         // Adjust…: Tone's sliders; Exposure changes live, Amount is reachable; one step on close.
-        assertTrue(scrollIntoView(horizontalScrollerOf("Adjust…"), "Adjust…", horizontal = true))
         assertTrue(SmokeUi.isEnabled("Adjust…"))
         click("Adjust…", exact = true)
         SmokeUi.assertPanelShown("Adjust: ${adj.name}")
@@ -222,7 +225,6 @@ class MasksEditorUiQaRobolectricTest {
         assertEquals(AdjustmentEdit.LABEL, c.undoManager.undoLabel)
 
         // Components: every row and action can be reached; Invert mask is one step.
-        scrollIntoView(horizontalScrollerOf("Components (1)"), "Components (1)", horizontal = true)
         click("Components (1)", exact = true)
         SmokeUi.assertPanelShown("Mask of ${adj.name}")
         for (label in listOf("Linear 1", "Invert mask", "Density", "Use mask as selection", "Apply a filter through this mask…", "Convert to pixel mask", "Delete mask", "Apply to layer below", "Safe compositing")) {
@@ -332,7 +334,6 @@ class MasksEditorUiQaRobolectricTest {
         val adj = c.activeLayer
         assertTrue(adj.isAdjustmentLayer)
         val before = IntArray(400 * 300).also { photo.bitmap.getPixels(it, 0, 400, 0, 0, 400, 300) }
-        scrollIntoView(horizontalScrollerOf("Components (1)"), "Components (1)", horizontal = true)
         click("Components (1)", exact = true)
         assertTrue(scrollIntoView(verticalScrollerOf("Invert mask"), "Apply a filter through this mask…", horizontal = false))
         click("Apply a filter through this mask…", exact = true)
@@ -375,7 +376,6 @@ class MasksEditorUiQaRobolectricTest {
         val tool = c.tools.getValue(ToolId.MASK) as MaskTool
         settle()
         assertTrue(tool.needsReplace)
-        scrollIntoView(horizontalScrollerOf("Components (0)"), "Components (0)", horizontal = true)
         click("Components (0)", exact = true)
         SmokeUi.assertPanelShown("Mask of ${adj.name}")
         click("Replace with an editable mask", exact = true)
@@ -385,7 +385,6 @@ class MasksEditorUiQaRobolectricTest {
         assertTrue("the sheet offers parts now", has("No parts yet", exact = false))
         click("Close", exact = true)
         // A radial drag makes it an editable mask: the painted half is gone.
-        scrollIntoView(horizontalScrollerOf("+ Radial"), "+ Radial", horizontal = true)
         click("+ Radial", exact = true)
         s.touch.stroke(s.screen(300f, 150f), s.screen(320f, 150f), s.screen(340f, 150f))
         settle()
