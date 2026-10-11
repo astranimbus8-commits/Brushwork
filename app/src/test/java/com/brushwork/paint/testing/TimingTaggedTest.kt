@@ -109,6 +109,7 @@ class TimingTaggedTest {
         /** Files that read the clock for a reason other than timing: path to the reason. */
         val NOT_TIMING: Map<String, String> = mapOf(
             "audit/RequestCoverageV17UiTest.kt" to "PerfBudget scales a UI wait's timeout; no time is asserted",
+            "audit/RequestCoverageV18UiTest.kt" to "PerfBudget scales a UI wait's timeout (WAIT_MS); no time is asserted",
             "filters/art/ArtFiltersBenchmark.kt" to "an @Ignore'd manual benchmark: prints times, asserts none",
             "filters/style/StyleVisualDump.kt" to "a visual dump: prints the filters' times, asserts none",
             "fonts/FontImportRobolectricTest.kt" to "the clock names a fresh fonts directory",
