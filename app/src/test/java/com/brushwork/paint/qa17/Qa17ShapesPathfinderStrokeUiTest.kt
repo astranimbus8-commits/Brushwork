@@ -11,6 +11,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeStyle
@@ -19,6 +20,7 @@ import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.ui.common.PathfinderLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.ui.pathfinder.PathfinderStripItems
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.pathfinder.PathfinderOp
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +53,16 @@ import org.robolectric.shadows.ShadowLog
 class Qa17ShapesPathfinderStrokeUiTest {
 
     private fun press(s: ChromeScreen, label: String, minDp: Float = 32f) {
+        // v1.8 (§3.9): the operations are inside the strip's operation dropdown: a finger opens
+        // it (its button, whatever operation it shows), then the entry is picked.
+        if (PathfinderOp.entries.any { it.description == label }) {
+            val button = StripTestKit.tagged(PathfinderStripItems.OPS_TAG) ?: throw AssertionError("no operation button; shown: ${SmokeUi.shown().take(60)}")
+            val r = s.dp(button.boundsInWindow)
+            Finger.tapAt(s, r.center.x, r.center.y)
+            SmokeUi.click(label, exact = true)
+            settle()
+            return
+        }
         Qa16Ui(s).reach(label, minDp)
         settle()
         Finger.tap(s, label)

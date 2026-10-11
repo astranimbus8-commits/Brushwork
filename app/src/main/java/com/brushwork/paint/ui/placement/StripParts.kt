@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -81,7 +82,8 @@ internal fun StripMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Compo
  * short text) and ▾ (none when [arrow] is false: a readout), described [description]. While
  * [open] it leaves the semantics (a tap outside the menu only closes it), so a label it shares
  * with a control inside belongs to that control alone: one control per label (as D's symmetry
- * type button).
+ * type button). With [announceContent] false the texts and icons inside are not announced
+ * either (a short name whose description is the handle, I10).
  */
 @Composable
 internal fun StripMenuButton(
@@ -92,8 +94,13 @@ internal fun StripMenuButton(
     enabled: Boolean = true,
     state: String? = null,
     arrow: Boolean = true,
+    announceContent: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val own: SemanticsPropertyReceiver.() -> Unit = {
+        contentDescription = description
+        if (state != null) stateDescription = state
+    }
     Row(
         Modifier
             .width(width)
@@ -102,10 +109,7 @@ internal fun StripMenuButton(
             .border(1.dp, MaterialTheme.colorScheme.outline, stripShape)
             .then(if (open) Modifier.clearAndSetSemantics { } else Modifier)
             .clickable(enabled = enabled, onClick = onClick)
-            .semantics {
-                contentDescription = description
-                if (state != null) stateDescription = state
-            }
+            .then(if (announceContent) Modifier.semantics(properties = own) else Modifier.clearAndSetSemantics(own))
             .alpha(if (enabled) 1f else 0.5f)
             .padding(start = 4.dp, end = if (arrow) 1.dp else 4.dp),
         verticalAlignment = Alignment.CenterVertically,
