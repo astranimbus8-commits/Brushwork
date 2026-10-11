@@ -35,8 +35,6 @@ class StripSpec(
     val items: List<StripItem>,
     /** Optional one-line hint, the More row's first line. */
     val hint: String? = null,
-    /** Migration only: the v1.7 composable, drawn in a scrolling row. Null for converted tools. */
-    val legacyContent: (@Composable () -> Unit)? = null,
     /**
      * Every sheet and dialog the strip opens (§3.9 "Overlays"). The host composes it whenever the
      * tool's strip shows, More row open or closed, so a sheet opened from the More row outlives it.
@@ -48,9 +46,6 @@ class StripSpec(
     companion object {
         /** A converted strip with nothing in it (a tool without options). */
         val EMPTY = StripSpec(emptyList())
-
-        /** The v1.7 strip of a tool not converted yet, drawn exactly as v1.7 drew it (a scrolling row). */
-        fun legacy(content: @Composable () -> Unit) = StripSpec(emptyList(), legacyContent = content)
     }
 }
 

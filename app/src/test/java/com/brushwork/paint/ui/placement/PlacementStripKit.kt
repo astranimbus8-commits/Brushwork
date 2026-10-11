@@ -18,7 +18,6 @@ import com.brushwork.paint.ui.tools.strip.StripRig
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.robolectric.RuntimeEnvironment
 
@@ -28,8 +27,7 @@ import org.robolectric.RuntimeEnvironment
  * strip tests do. Each runs one UI test (Compose's frame clock serves one test per sandbox) over
  * the two phone widths, a [StripRig] per width:
  * - [inspect]: the lead's inventory ([StripInventory.inspect]: rules 1 to 5, the measured widths,
- *   the v1.7 handles of [StripHandlesV17] on row 1, the More row or inside an item) and
- *   `legacyContent == null`;
+ *   the v1.7 handles of [StripHandlesV17] on row 1, the More row or inside an item);
  * - [assertSplits]: rule 3, row 1 and the More row of the spec at each of the four
  *   configurations (360 or 392 dp, with the VECTOR cell or not), pure;
  * - [row1Handles] / [moreHandles]: what the rows show on the screen now;
@@ -60,7 +58,6 @@ internal object PlacementStripKit {
 
     /** The inventory of the state the rig shows as [key] ("REMOVE", "MASK@vector", ...): no problems, converted. */
     fun inspect(rig: StripRig, key: String, record: Set<String>? = StripHandlesV17.HANDLES[key]): Set<String> {
-        assertNull("$key: converted (no legacy content)", rig.spec.legacyContent)
         val (shown, problems) = StripInventory.inspect(rig, key, record)
         assertEquals("$key: the inventory", emptyList<String>(), problems)
         assertFalse("$key: the inspection leaves the More row closed", rig.state.anyOpen)

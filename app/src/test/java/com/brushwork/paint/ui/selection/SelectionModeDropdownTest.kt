@@ -68,7 +68,7 @@ class SelectionModeDropdownTest {
             for (id in tools) {
                 rig.select(id)
                 val spec = rig.spec
-                if (spec.legacyContent != null || spec.items.isEmpty()) continue // converted by a later sub-step
+                assertTrue("$id: items on the strip", spec.items.isNotEmpty())
                 val first = spec.items.first()
                 assertEquals("$id: row 1 starts with the dropdown", MODE_KEY, first.key)
                 assertEquals(MagneticLabels18.SELECTION_MODE, first.label)
@@ -120,7 +120,7 @@ class SelectionModeDropdownTest {
                 }
                 rig.settle()
                 val bar = requireNotNull(shownBar) { "$id: no spec" }
-                if (bar.legacyContent != null || bar.items.isEmpty()) continue
+                assertTrue("$id: items on the strip under the selection bar", bar.items.isNotEmpty())
                 val labels = bar.items.map { it.label }
                 assertFalse("$id: $labels", labels.contains("Deselect") || labels.contains("Selection menu"))
                 assertEquals("$id: the mode dropdown stays", MODE_KEY, bar.items.first().key)

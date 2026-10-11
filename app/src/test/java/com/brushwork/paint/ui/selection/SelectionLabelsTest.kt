@@ -92,10 +92,6 @@ class SelectionLabelsTest {
                 val id = ToolId.valueOf(key)
                 val screen = key + if (vector) "@vector" else ""
                 rig.select(id, vector)
-                if (rig.spec.legacyContent != null) {
-                    problems += "$screen: still legacy"
-                    continue
-                }
                 problems += substringPairs("$screen row 1", shown())
                 problems += offScreen("$screen row 1", width)
                 if (StripTestKit.openMoreRow()) {

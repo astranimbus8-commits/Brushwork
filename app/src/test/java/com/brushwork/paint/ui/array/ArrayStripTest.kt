@@ -42,10 +42,10 @@ import org.robolectric.shadows.ShadowLog
  * (the v1.7 hint, 236 dp), an array (the chip, spoken "Array settings", 120 dp, and the room of
  * "Rendering array…", 112 dp), a raster source being edited ("Finish source edit" in the chip's
  * place), a render past 300 ms (the note shows, the chip does not move) and a vector array.
- * Every state is converted (`legacyContent == null`), all on row 1 with no toggle and no More row
- * in every configuration, keeps the inventory's rules (each item's own width measured no wider
- * than declared) and the v1.7 handles; every shown item lies wholly inside row 1. The chip opens
- * the Array sheet (an overlay), "Finish source edit" finishes in ONE step.
+ * Every state has all its items on row 1 with no toggle and no More row in every configuration,
+ * keeps the inventory's rules (each item's own width measured no wider than declared) and the
+ * v1.7 handles; every shown item lies wholly inside row 1. The chip opens the Array sheet (an
+ * overlay), "Finish source edit" finishes in ONE step.
  * One UI test, own sandbox; the 392 dp phone is a second rig after a change of qualifiers.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -184,7 +184,6 @@ class ArrayStripTest {
      */
     private fun check(rig: StripRig, what: String, keys: List<String>, record: Set<String>) {
         val spec = rig.spec
-        assertNull("$what: converted", spec.legacyContent)
         assertNull("$what: no hint line (it would add the toggle)", spec.hint)
         assertTrue("$what: nothing moved into a popup", spec.movedInto.isEmpty())
         assertEquals("$what: the items", keys, spec.items.map { it.key })

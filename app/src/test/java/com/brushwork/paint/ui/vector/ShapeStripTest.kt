@@ -32,7 +32,6 @@ import com.brushwork.paint.ui.vector.ShapeStripKit.withCopies
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -43,7 +42,7 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.8 F (design §3.9 "Shape"): the Shape tool's converted strip at 360 and 392 dp, on the raster
  * and the vector layer (the VECTOR cell):
- * - converted (`legacyContent == null`); row 1 "Shape type" 56, "Shape style" 56, the stroke
+ * - row 1 "Shape type" 56, "Shape style" 56, the stroke
  *   width 64 (AUTO 1: it alone leaves row 1, at 360 dp with the VECTOR cell, for the More row's
  *   front) and "Points" 72 (its room kept while no shape is open). No AUTO change was needed:
  *   the non-AUTO items take 192 dp, the whole row 260;
@@ -210,7 +209,6 @@ class ShapeStripTest {
             rig.settle()
             assertTrue("one in-tool step brings them back", t.hasCopies)
             StripTestKit.closeMoreRow()
-            assertNull(rig.spec.legacyContent)
         }
     }
 }

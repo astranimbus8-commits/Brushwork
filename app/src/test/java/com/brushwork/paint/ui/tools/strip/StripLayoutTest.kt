@@ -137,8 +137,9 @@ class StripLayoutTest {
     }
 
     @Test
-    fun emptyAndLegacySpecsSplitToNothing() {
-        for (spec in listOf(StripSpec.EMPTY, StripSpec.legacy {})) {
+    fun specsWithoutItemsSplitToNothing() {
+        // EMPTY, and a spec with overlays alone (its sheets, nothing on the rows).
+        for (spec in listOf(StripSpec.EMPTY, StripSpec(emptyList(), overlays = {}))) {
             val s = StripLayout.split(spec, content(360f))
             assertTrue(s.row1.isEmpty() && s.more.isEmpty())
             assertFalse(s.toggle)

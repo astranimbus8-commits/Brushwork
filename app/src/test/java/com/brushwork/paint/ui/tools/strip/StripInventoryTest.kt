@@ -143,20 +143,14 @@ internal object StripInventory {
     }
 
     /**
-     * Inspects the state the rig shows as [key]: a legacy spec only has its handles taken (and
-     * checked against [record]); a converted one is checked against every rule: [rules], its
-     * items' own widths (measuring copies: no wider than declared, 40 dp at least when tappable)
-     * and [record] covered by row 1, the More row and the `movedInto` items' popups.
-     * Returns the handles shown and the problems found.
+     * Inspects the state the rig shows as [key] against every rule: [rules], its items' own widths
+     * (measuring copies: no wider than declared, 40 dp at least when tappable) and [record] covered
+     * by row 1, the More row and the `movedInto` items' popups. Returns the handles shown and the
+     * problems found.
      */
     fun inspect(rig: StripRig, key: String, record: Set<String>?): Pair<Set<String>, List<String>> {
         val spec = rig.spec
         val p = mutableListOf<String>()
-        if (spec.legacyContent != null) {
-            val shown = handlesShown()
-            if (record != null) missing(record, shown).forEach { p += "$key (legacy): \"$it\" is no longer on the strip" }
-            return shown to p
-        }
         rules(spec).forEach { p += "$key: $it" }
         // Rule 4: each item's own width.
         rig.measuring = true
@@ -195,13 +189,6 @@ internal object StripInventory {
         StripTestKit.closeMoreRow()
         if (record != null) missing(record, shown).forEach { p += "$key: rule 5: \"$it\" is on neither row nor inside an item" }
         return shown to p
-    }
-
-    private fun quote(s: String) = "\"" + s.replace("\\", "\\\\").replace("\"", "\\\"").replace("$", "\\$") + "\""
-
-    /** [handles] as the Kotlin of [StripHandlesV17.HANDLES]' entries. */
-    fun literal(handles: Map<String, Set<String>>): String = handles.entries.joinToString("\n") { (k, v) ->
-        "        ${quote(k)} to setOf(${v.sorted().joinToString(", ") { quote(it) }}),"
     }
 }
 
@@ -252,9 +239,8 @@ class StripInventoryRulesTest {
 
 /**
  * v1.8 inventory (design §3.9, §4.9): every tool state, on the raster and on the vector layer, at
- * 360 dp. A legacy spec (every tool until its area converts it) is skipped by the rules; its
- * handles must still include the v1.7 record ([StripHandlesV17], recorded at F3 from these very
- * strips; a difference is printed as Kotlin). A converted spec keeps rules 1 to 5. The test first
+ * 360 dp: each keeps rules 1 to 5, and its handles (row 1, the More row and the `movedInto`
+ * items' popups) still include the v1.7 record ([StripHandlesV17], recorded at F3). The test first
  * runs its own inspection on two fake converted specs (one that keeps the rules, with a handle
  * moved into a dropdown, one whose item is wider than declared), so the machinery the areas meet
  * is known to work.
@@ -306,8 +292,6 @@ class StripInventoryTest {
             rig.settle()
 
             // Every tool state.
-            val shownLegacy = linkedMapOf<String, Set<String>>()
-            val keys = mutableListOf<String>()
             for (vector in listOf(false, true)) for (id in ToolId.entries) {
                 val key = id.name + if (vector) "@vector" else ""
                 rig.select(id, vector)
@@ -315,22 +299,11 @@ class StripInventoryTest {
                     problems += "$key: the tool was not selected"
                     continue
                 }
-                val record = StripHandlesV17.HANDLES[key]
-                if (rig.spec.legacyContent != null) {
-                    keys += key
-                    if (record == null) problems += "$key: legacy, but not recorded in StripHandlesV17"
-                }
-                val (shown, p) = StripInventory.inspect(rig, key, record)
+                val (_, p) = StripInventory.inspect(rig, key, StripHandlesV17.HANDLES[key])
                 problems += p
-                if (rig.spec.legacyContent != null) shownLegacy[key] = shown
             }
-            val drift = shownLegacy.filter { (k, v) -> StripHandlesV17.HANDLES[k] != v }
-            if (drift.isNotEmpty()) {
-                System.err.println("=== StripInventoryTest: the legacy strips' handles differ from StripHandlesV17 in ${drift.keys}; as Kotlin:")
-                System.err.println(StripInventory.literal(shownLegacy))
-            }
-            for (k in StripHandlesV17.HANDLES.keys) if (k !in shownLegacy && k !in keys) {
-                // A converted state is inspected above; a recorded state must still exist.
+            for (k in StripHandlesV17.HANDLES.keys) {
+                // Every state is inspected above; a recorded state must still exist.
                 val exists = ToolId.entries.any { it.name == k.removeSuffix("@vector") }
                 if (!exists) problems += "$k: recorded, but no such tool state"
             }

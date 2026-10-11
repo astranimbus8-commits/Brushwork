@@ -40,7 +40,7 @@ import org.robolectric.shadows.ShadowLog
  * placement strips at 360 and 392 dp, each state's row 1 / More row split at the four
  * configurations (with and without the VECTOR cell), every v1.7 handle reachable (the inventory,
  * with this test's own record for the states [StripHandlesV17] did not record), no label cut by
- * its item's width, `legacyContent == null`.
+ * its item's width.
  * - Transform: nothing to transform (its status alone on row 1, no toggle); the box modes (row 1
  *   the mode, "Keep aspect ratio", "From center", the flips; the More row under the status text);
  *   Free deform (row 1 the mode, [TransformLabels18.MESH_SIZE], "Reset mesh"; the steppers in its

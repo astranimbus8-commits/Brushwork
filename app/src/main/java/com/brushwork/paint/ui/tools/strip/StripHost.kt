@@ -48,7 +48,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,7 +108,7 @@ class StripState {
 
     /**
      * Drops [id]'s open entry. The host calls it while [id]'s spec shows no More toggle (nothing
-     * goes to the More row, the strip got wide enough, or a legacy spec): a row that cannot show
+     * goes to the More row, or the strip got wide enough): a row that cannot show
      * must not stay open unseen, or [anyOpen] stays true and the next canvas touch only closes it (D25).
      */
     fun drop(id: ToolId) {
@@ -126,13 +125,11 @@ class StripState {
  * The options strip (v1.8, design §3.9 and §4.6): row 1 and the More row of [spec], the active
  * tool's ([toolId]).
  *
- * - A legacy spec ([StripSpec.legacyContent], every tool until its area converts it) draws exactly
- *   as v1.7 did: the "VECTOR" chip and the tool's composable in one row that scrolls sideways,
- *   with no toggle and no More row. [modifier] is that row's, [panelModifier] its container's.
- * - A converted spec draws row 1 as one fixed row that never scrolls (I18): the VECTOR cell while
- *   [vectorMode], the items [StripLayout.split] keeps, and the toggle at the end when anything
- *   goes to the More row. The More row (opaque [IbisColors.Menu], tag [V18Tags.STRIP_MORE_ROW])
- *   drops down under row 1, 4 dp apart, while [state] has it open for [toolId].
+ * Row 1 is one fixed row that never scrolls (I18): the VECTOR cell while [vectorMode], the items
+ * [StripLayout.split] keeps, and the toggle at the end when anything goes to the More row.
+ * [modifier] is row 1's, [panelModifier] its container's. The More row (opaque [IbisColors.Menu],
+ * tag [V18Tags.STRIP_MORE_ROW]) drops down under row 1, 4 dp apart, while [state] has it open for
+ * [toolId].
  *
  * [StripSpec.overlays] are composed whenever the strip shows, after the rows, open or closed, so
  * a sheet or dialog opened from the More row outlives it. The row closes on a tool change and on
@@ -160,30 +157,7 @@ fun StripHost(
             state.moreRowDp = 0f
         }
     }
-    val legacy = spec.legacyContent
-    if (legacy != null) {
-        SideEffect {
-            if (state.moreRowDp != 0f) state.moreRowDp = 0f
-            // No toggle, no More row: an entry left open by the tool's converted strip goes.
-            state.drop(toolId)
-        }
-        Box(panelModifier) {
-            Row(
-                modifier = modifier
-                    .heightIn(min = IbisDims.OptionsStripHeight)
-                    .horizontalScroll(rememberScrollState())
-                    .padding(horizontal = ROW_PADDING.dp)
-                    .reportContentWidth(onContentWidth),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Vector mode (v1.5): what is drawn stays editable.
-                if (vectorMode) LegacyVectorChip()
-                legacy()
-            }
-        }
-    } else {
-        ConvertedStrip(spec, toolId, vectorMode, state, modifier, panelModifier, onContentWidth)
-    }
+    ConvertedStrip(spec, toolId, vectorMode, state, modifier, panelModifier, onContentWidth)
     spec.overlays()
 }
 
@@ -360,24 +334,6 @@ private fun VectorCell() {
     }
 }
 
-/** v1.7's accent "VECTOR" chip at the start of a legacy strip, unchanged. */
-@Composable
-private fun LegacyVectorChip() {
-    Text(
-        "VECTOR",
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        color = Color.White,
-        maxLines = 1,
-        modifier = Modifier
-            .padding(end = 6.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(BrushworkColors.AccentDim)
-            .padding(horizontal = 6.dp, vertical = 3.dp)
-            .semantics { contentDescription = VECTOR_MODE_ON },
-    )
-}
-
 /** Reports the content's own width (no minimum, before padding) to [onContentWidth] while it is measured. */
 private fun Modifier.reportContentWidth(onContentWidth: ((Int) -> Unit)?): Modifier =
     if (onContentWidth == null) {
@@ -393,5 +349,5 @@ private fun Modifier.reportContentWidth(onContentWidth: ((Int) -> Unit)?): Modif
 /** The rows' side padding (dp): row 1's content width is the panel's minus twice this. */
 private const val ROW_PADDING = 8f
 
-/** The v1.7 description of the vector-mode chip (V21), unchanged. */
+/** The v1.7 description of the vector-mode chip (V21), the VECTOR cell's, unchanged. */
 private const val VECTOR_MODE_ON = "Vector mode is on"

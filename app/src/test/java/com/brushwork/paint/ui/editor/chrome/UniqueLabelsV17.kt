@@ -125,8 +125,8 @@ internal object UniqueLabelsV17 {
     }
 
     /**
-     * The options strip: its panel (row 1; a legacy strip's whole row) or, v1.8, a converted
-     * strip's More row, which hangs under the panel, outside it (design §3.9).
+     * The options strip: its panel (row 1) or, v1.8, the strip's More row, which hangs under the
+     * panel, outside it (design §3.9).
      */
     private val isStrip: (SemanticsNode) -> Boolean = { it.tag() == ChromeTags.OPTIONS_STRIP || it.tag() == V18Tags.STRIP_MORE_ROW }
 

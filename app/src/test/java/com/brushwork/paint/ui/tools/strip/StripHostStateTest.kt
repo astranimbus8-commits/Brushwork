@@ -42,9 +42,9 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.8 merge (design §3.9, D25): the host's state rules that fake specs show best.
- * - A tool whose spec loses its More toggle (nothing goes to the More row any more, or a legacy
- *   spec) drops its open entry: [StripState.anyOpen] turns false, so the next canvas touch is not
- *   swallowed by a row nobody sees; when the toggle comes back, the row is closed.
+ * - A tool whose spec loses its More toggle (nothing goes to the More row any more) drops its
+ *   open entry: [StripState.anyOpen] turns false, so the next canvas touch is not swallowed by a
+ *   row nobody sees; when the toggle comes back, the row is closed.
  * - Each item is keyed by [StripItem.key]: an item that comes before an open dropdown, on row 1 or
  *   on the More row, never resets it (the dropdown stays open).
  */
@@ -109,7 +109,6 @@ class StripHostStateTest {
             ),
         )
         val rowOnly = StripSpec(listOf(StripItem("row", "Probe row item", 100.dp) { ProbeButton("Probe row item") }))
-        val legacy = StripSpec.legacy { ProbeButton("Probe legacy item") }
         var spec by mutableStateOf(withMore)
         show(state) { spec }
 
@@ -129,15 +128,6 @@ class StripHostStateTest {
         RobolectricUi.settle(10, 50)
         assertNotNull(StripTestKit.toggle())
         assertFalse("closed when the toggle comes back", StripTestKit.moreRowShown() || state.anyOpen)
-
-        // A legacy spec has no toggle either.
-        assertTrue(StripTestKit.openMoreRow())
-        assertTrue(state.anyOpen)
-        spec = legacy
-        RobolectricUi.settle(10, 50)
-        assertNotNull(node("Probe legacy item"))
-        assertFalse("the legacy spec dropped the open entry", state.isOpen(ToolId.SHAPE) || state.anyOpen)
-        assertEquals(0f, state.moreRowDp, 0f)
     }
 
     @Test

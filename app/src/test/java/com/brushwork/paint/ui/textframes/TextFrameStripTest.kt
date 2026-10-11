@@ -35,7 +35,7 @@ import org.robolectric.shadows.ShadowLog
  * v1.8 G (design §3.9 "Text frames"): the Text frames strip at 360 and 392 dp, each state's split
  * at the four configurations (with and without the VECTOR cell), every v1.7 handle reachable (the
  * inventory, with this test's record for the selected and linking states), no label cut by its
- * item's width, `legacyContent == null`:
+ * item's width:
  * - nothing selected: v1.7's draw hint alone on row 1; the More row "Threads", "Snap to objects";
  * - a frame selected whose story does not fit: row 1 "Edit story", "Link…", "Unlink here" (AUTO 1:
  *   the More row's front with the VECTOR cell), "Delete frame" and the red "+ N characters"; the

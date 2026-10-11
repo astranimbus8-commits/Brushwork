@@ -35,7 +35,7 @@ import org.robolectric.shadows.ShadowLog
  * v1.8 G (design §3.9 "Masks"): the Masks strip at 360 and 392 dp, each state's split at the four
  * configurations (with and without the VECTOR cell), every v1.7 handle reachable (the inventory,
  * with this test's record for the states [com.brushwork.paint.ui.tools.strip.StripHandlesV17] did
- * not record), no label cut by its item's width, `legacyContent == null`:
+ * not record), no label cut by its item's width:
  * - fresh (both layers) and on the new adjustment layer: row 1 "+ Linear", "+ Radial", "+ Brush",
  *   "Invert", "Adjust…" (AUTO 1: the More row's front at 360 dp with the VECTOR cell); the More
  *   row "Choose what the mask is for" (an opaque dropdown that keeps the row open), "Add",

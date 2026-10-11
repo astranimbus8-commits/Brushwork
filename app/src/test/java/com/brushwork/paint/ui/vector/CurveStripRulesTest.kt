@@ -19,7 +19,6 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
 import com.brushwork.paint.vector.CurveGenKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -84,7 +83,6 @@ class CurveStripRulesTest {
         for (kind in kinds) for ((name, f) in states(kind)) {
             val spec = spec(f)
             assertEquals(name, emptyList<String>(), StripInventory.rules(spec))
-            assertNull("$name: converted", spec.legacyContent)
             assertNotNull("$name: the sheets and dialogs are overlays", spec.overlays)
             n++
         }

@@ -24,10 +24,10 @@ import com.brushwork.paint.ui.tools.strip.StripState
 
 /**
  * The options strip panel (v1.6 §3.7.2): the tool's [ToolOptionsBar] with row 1 in a floating
- * rounded panel ([IbisColors.OptionsStrip], radius 10, 44 dp tall) with white content. A legacy
- * strip scrolls sideways inside it (v1.7); a converted one never scrolls and hangs its More row
- * under the panel, outside it (v1.8, design §3.9). A tool without options shows no panel at all
- * (it takes no room and no touches). [state] is the More row's open state (`EditorScreen`'s).
+ * rounded panel ([IbisColors.OptionsStrip], radius 10, 44 dp tall) with white content. The strip
+ * hangs its More row under the panel, outside it (v1.8, design §3.9). A tool without options
+ * shows no panel at all (it takes no room and no touches). [state] is the More row's open state
+ * (`EditorScreen`'s).
  *
  * The bar reports the width of what the tool shows while it is measured; the panel's layout reads
  * whether that is empty from state that is written only when it flips (once per tool at most),

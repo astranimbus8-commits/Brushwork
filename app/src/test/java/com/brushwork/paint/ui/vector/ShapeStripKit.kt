@@ -24,7 +24,6 @@ import com.brushwork.paint.ui.tools.strip.StripRig
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.robolectric.RuntimeEnvironment
 
@@ -35,7 +34,7 @@ import org.robolectric.RuntimeEnvironment
  * - the tool's states: [fresh] (nothing open), [open] (a shape pending), [points] (Points mode,
  *   [select] picking the points) and [withCopies] (a mirror ruler on: the open shape has a copy);
  * - [inspect]: the lead's inventory ([StripInventory.inspect]: rules 1 to 5, the measured widths,
- *   the v1.7 handles of [StripHandlesV17]) and `legacyContent == null`;
+ *   the v1.7 handles of [StripHandlesV17]);
  * - [split]: row 1 and the More row of a spec at each configuration, pure;
  * - [row1Handles] / [moreHandles]: what the rows show now; [clippedTexts]: texts cut by their item;
  * - [staysOpen]: a sheet opened from the More row outlives the row.
@@ -124,7 +123,6 @@ internal object ShapeStripKit {
 
     /** The inventory of the state the rig shows as [key] ("SHAPE", "SHAPE@vector", ...): no problems, converted. */
     fun inspect(rig: StripRig, key: String, record: Set<String>? = StripHandlesV17.HANDLES[key]): Set<String> {
-        assertNull("$key: converted (no legacy content)", rig.spec.legacyContent)
         val (shown, problems) = StripInventory.inspect(rig, key, record)
         assertEquals("$key: the inventory (shown: $shown)", emptyList<String>(), problems)
         assertFalse("$key: the inspection leaves the More row closed", rig.state.anyOpen)

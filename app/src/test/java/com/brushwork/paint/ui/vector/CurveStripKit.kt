@@ -19,7 +19,6 @@ import com.brushwork.paint.ui.tools.strip.StripRig
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.robolectric.RuntimeEnvironment
 
@@ -28,8 +27,7 @@ import org.robolectric.RuntimeEnvironment
  * `CurvesLabelsTest`) share, after area D's strip kit. Each test runs one UI test (Compose's frame
  * clock serves one test per sandbox) on a [StripRig]:
  * - [atEachWidth]: a fresh rig at 360 dp and at the T606's 392 dp;
- * - [inspect]: the lead's inventory of the state shown ([StripInventory.inspect]) and
- *   `legacyContent == null`;
+ * - [inspect]: the lead's inventory of the state shown ([StripInventory.inspect]);
  * - [split], [row1Handles], [moreHandles], [clippedTexts]: the split and what the screen shows;
  * - [staysOpen]: a sheet or dialog opened from the More row outlives the row;
  * - [tap], [back]: a canvas tap (More row closed first: a canvas touch only closes it) and Back.
@@ -61,7 +59,6 @@ internal object CurveStripKit {
     /** The inventory of the state the rig shows as [key]: no problems, converted, the More row left closed. */
     fun inspect(rig: StripRig, key: String, record: Set<String>?): Set<String> {
         rig.settle()
-        assertNull("$key: converted (no legacy content)", rig.spec.legacyContent)
         val (shown, problems) = StripInventory.inspect(rig, key, record)
         assertEquals("$key: the inventory", emptyList<String>(), problems)
         assertFalse("$key: the inspection leaves the More row closed", rig.state.anyOpen)

@@ -82,7 +82,7 @@ internal object TouchTargets {
      * on row 1, inside the strip panel that [check] leaves to the tools, so it is checked here at
      * [TOGGLE_MIN]; the toggle opens the More row, whose node (tag `V18Tags.STRIP_MORE_ROW`) hangs
      * under the panel, outside it, and every clickable on it is checked at [MIN]; the row is then
-     * closed again (an open row swallows the next canvas touch). A legacy strip has neither.
+     * closed again (an open row swallows the next canvas touch).
      */
     private fun moreRow(where: String) {
         val toggle = StripTestKit.toggle() ?: return

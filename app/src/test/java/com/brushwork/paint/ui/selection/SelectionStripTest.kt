@@ -24,13 +24,12 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.8 (C, design §3.9 and §5): area C's `*StripTest`. For every selection tool state, on a
- * picture layer and on a vector layer (the VECTOR chip): the spec is converted
- * (`legacyContent == null`); its row 1 and More row hold the §3.9 table's controls (keys, in
- * order); the inventory rules hold; at 360 and 392 dp, with and without the chip, exactly the
- * expected AUTO items leave row 1; every shown item's label is its control's handle on screen
- * (labels unchanged); row 1 and the More row lie on the screen. The More row's "Selection menu"
- * (a sheet) stays open after the row closes; an anchored dropdown opened from the More row stays
- * open with the row.
+ * picture layer and on a vector layer (the VECTOR chip): its row 1 and More row hold the §3.9
+ * table's controls (keys, in order); the inventory rules hold; at 360 and 392 dp, with and
+ * without the chip, exactly the expected AUTO items leave row 1; every shown item's label is its
+ * control's handle on screen (labels unchanged); row 1 and the More row lie on the screen. The
+ * More row's "Selection menu" (a sheet) stays open after the row closes; an anchored dropdown
+ * opened from the More row stays open with the row.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.selection.stripsandbox"])
@@ -123,7 +122,6 @@ class SelectionStripTest {
     /** The pure checks of [spec] in [s]: membership, rules, AUTO leaving per configuration. */
     private fun pure(s: State, where: String, spec: StripSpec): List<String> {
         val p = mutableListOf<String>()
-        if (spec.legacyContent != null) return listOf("$where: still legacy")
         val row1 = spec.items.filter { it.row == StripRow.ROW1 }.map { it.key }
         val more = spec.items.filter { it.row == StripRow.MORE }.map { it.key }
         if (row1 != s.row1) p += "$where: row 1 $row1, expected ${s.row1}"
@@ -200,7 +198,6 @@ class SelectionStripTest {
             rig.settle()
             val spec = rig.spec
             problems += pure(s, where, spec)
-            if (spec.legacyContent != null) continue
             problems += onScreen(where, spec, width)
             if (full && "select.menu" in s.more) problems += menuStaysOpen(where, rig)
             if (full && s.more.any { it.endsWith(".refer") }) problems += dropdownKeepsRow(where, rig)

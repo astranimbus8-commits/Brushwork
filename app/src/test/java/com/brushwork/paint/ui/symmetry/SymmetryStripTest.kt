@@ -20,7 +20,6 @@ import com.brushwork.paint.ui.tools.strip.StripInventory
 import com.brushwork.paint.ui.tools.strip.StripRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,7 +76,6 @@ class SymmetryStripTest {
                     val s = c.symmetry.sanitized()
                     val spec = rig.spec
                     val where = "$k, $type at $dp dp"
-                    assertNull("$where: converted", spec.legacyContent)
                     assertEquals("$where: the rules", emptyList<String>(), StripInventory.rules(spec))
                     val (full, auto) = row1(type)
                     // The AUTO item leaves only where the full row (268 dp) does not fit: 360 dp with the VECTOR

@@ -41,10 +41,9 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.8 (design §3.9, items 8 and 9): the v1.8 chrome on a small 360 × 640 dp phone, without and
  * with the VECTOR cell, with real touch events:
- * - every tool's strip (the inventory as merged, converted or not): row 1 on screen, a converted
- *   row 1 whole (nothing clipped, nothing scrolls, I18), the VECTOR cell first on it, the 44 dp
- *   toggle at its end; the opened More row 4 dp under it, on screen, at most
- *   `StripLayout.MAX_MORE_LINES` lines tall, and what it shows on screen;
+ * - every tool's strip: row 1 on screen and whole (nothing clipped, nothing scrolls, I18), the
+ *   VECTOR cell first on it, the 44 dp toggle at its end; the opened More row 4 dp under it, on
+ *   screen, at most `StripLayout.MAX_MORE_LINES` lines tall, and what it shows on screen;
  * - row 1's budget (§3.9's table: 284 dp with the toggle, 240 dp with the toggle and the VECTOR
  *   cell): an item that wide shows whole, a finger reaches it and the toggle, nothing overlaps;
  * - the vector object bar: its one row (seven buttons and "Show more object actions") inside the
@@ -115,7 +114,6 @@ class ChromeV18NarrowUiTest {
         val c = s.c
         assertEquals("360 dp wide", 360f, s.widthDp, 1f)
         var walked = 0
-        var converted = 0
         for (id in ToolId.entries) {
             c.selectTool(id)
             SmokeUi.settle()
@@ -129,8 +127,7 @@ class ChromeV18NarrowUiTest {
                 val cell = Fingers18.described(s, vectorCell)?.let { s.dp(it.boundsInWindow) } ?: throw AssertionError("$what: no VECTOR cell")
                 assertTrue("$what: the VECTOR cell on row 1: $cell in $row1", row1.contains(cell.center))
             }
-            if (s.tagged(V18Tags.STRIP_ROW1) == null) continue // a legacy strip scrolls sideways, as in v1.7
-            converted++
+            assertNotNull("$what: row 1 is the strip's fixed row", s.tagged(V18Tags.STRIP_ROW1))
             val items = Clickables.onScreen(s, inside = row1)
             for (item in items) {
                 val name = item.own.firstOrNull() ?: "?"
@@ -161,7 +158,7 @@ class ChromeV18NarrowUiTest {
         }
         c.selectTool(ToolId.BRUSH)
         SmokeUi.settle()
-        System.err.println("[narrow] ${if (vector) "vector" else "raster"}: $walked strips walked, $converted converted")
+        System.err.println("[narrow] ${if (vector) "vector" else "raster"}: $walked strips walked")
         assertTrue("the tools' strips were walked: $walked", walked >= 20)
         Smoke.assertQuiet(c, "every strip at 360 dp")
     }
