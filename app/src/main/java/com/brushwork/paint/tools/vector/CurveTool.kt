@@ -58,11 +58,14 @@ import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
 import com.brushwork.paint.ui.common.CurveGenLabels18
+import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
+import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.CurveGenKind
 import com.brushwork.paint.vector.CurveGenerator
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
@@ -278,12 +281,68 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /**
      * v1.8 (item 6, §3.7): the generator of the open path (a spiral, wave or rose picked from
-     * "Curves", or a reopened path that still matches its own, I16), or null (Compose state; always
+     * [CurveGenLabels18.CURVES], or a reopened path that still matches its own, I16), or null (Compose state; always
      * null for Polyline). Its settings, sheet and two canvas handles edit the curve until a point
      * is edited by hand ([editGeometry]).
      */
     var generator by mutableStateOf<CurveGenerator?>(null)
         private set
+
+    /**
+     * v1.8 (item 1a, §3.1): the symmetry maps the open path repeats with (row-major 3 × 3, the
+     * identity first): taken once, at its first point ([ObjectCopies.mapsAt]: whatever the ruler
+     * is later), or a reopened path's stored ones (whatever the ruler is now); empty for none
+     * (symmetry off, or [MirrorLabels18.REMOVE]); null until the path has a point.
+     */
+    private var maps: List<FloatArray>? = null
+
+    /** The copies drawn besides the path: [maps] without the identity ([CurveCopies.others]). */
+    private var copyMaps: List<FloatArray> = emptyList()
+
+    /**
+     * True while the open path has mirror copies (Compose state): the More row shows
+     * [MirrorLabels18.REMOVE] ([removeCopies]).
+     */
+    var hasCopies by mutableStateOf(false)
+        private set
+
+    /** The open path's copies become [m] (see [maps]). */
+    private fun setMaps(m: List<FloatArray>?) {
+        maps = m
+        copyMaps = CurveCopies.others(m.orEmpty())
+        hasCopies = copyMaps.isNotEmpty()
+        objectCopies = if (copyMaps.isEmpty()) CopyMaps.NONE else ObjectCopies.fromSymmetry(m.orEmpty()) ?: CopyMaps.NONE
+    }
+
+    /**
+     * What the path object stores ([VPath.copies]): the sanitized affine copies; none for
+     * perspective maps (✓ bakes them: [ObjectCopies.baked]).
+     */
+    private var objectCopies: CopyMaps = CopyMaps.NONE
+
+    /** The maps (row-major 3 × 3, the identity first) the open path's copies are drawn with; empty without copies (tests). */
+    internal val copyMapsNow: List<FloatArray> get() = if (copyMaps.isEmpty()) emptyList() else maps.orEmpty()
+
+    /** True when the copies are the Perspective array ruler's: ✓ on a vector layer bakes them into plain paths. */
+    private val perspectiveCopies: Boolean get() = copyMaps.isNotEmpty() && ObjectCopies.isPerspective(maps.orEmpty())
+
+    /** What a brush stroke of the open path is replicated with ([BrushStrokePreview.request]): its maps, or none. */
+    private fun brushMaps(): List<FloatArray> = copyMapsNow
+
+    /**
+     * [MirrorLabels18.REMOVE]: the open path loses its copies, as ONE
+     * in-tool step (✓ then stores none). False when it has none.
+     */
+    fun removeCopies(): Boolean {
+        if (!hasCopies) return false
+        pushHistory()
+        setMaps(emptyList())
+        changed()
+        return true
+    }
+
+    /** [MirrorLabels18.PERSPECTIVE_BAKED] was shown (once per session). */
+    private var bakedHintShown = false
 
     /** Where the generator's two canvas handles are (document px). */
     data class GeneratorHandles(
@@ -416,6 +475,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
          * is not an in-tool step for any other path.
          */
         val closed: Boolean = false,
+        /** v1.8 (item 1a): the copies' maps then ([maps]; [MirrorLabels18.REMOVE] is a step). */
+        val maps: List<FloatArray>? = null,
     )
 
     private val history = ArrayDeque<EditState>()
@@ -434,6 +495,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private val specOverlay = SpecOverlay()
     /** Plain items drawn in the overlay while the brush preview owns the render override (the fill). */
     private var overlaySpecs: List<VectorPaintSpec> = emptyList()
+    /** v1.8 (item 1a): the group alpha [overlaySpecs] and their copies are drawn with (255: none). */
+    private var overlayAlpha = 255
     private var observeJob: Job? = null
 
     /** The brush the live stroke is painted with instead of the painting tool's own (thickness, a reopened path's own brush). */
@@ -679,8 +742,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val look = if (ownSettings != null) settings else null
         val sel = pointSelection
         val g = generator
-        return if (isPath) EditState(emptyList(), spline, look = look, selection = sel, generator = g)
-        else EditState(anchors, null, look = look, selection = sel, generator = g, closed = settings.closed)
+        return if (isPath) EditState(emptyList(), spline, look = look, selection = sel, generator = g, maps = maps)
+        else EditState(anchors, null, look = look, selection = sel, generator = g, closed = settings.closed, maps = maps)
     }
 
     /** Keeps at most [MAX_HISTORY] states (never dropping the way back to the Path tool: it is the first one). */
@@ -790,7 +853,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     /**
-     * "Curves" ▸ [genKind] (Curve and Path, never Polyline), while nothing is open: places that
+     * [CurveGenLabels18.CURVES] ▸ [genKind] (Curve and Path, never Polyline), while nothing is open: places that
      * curve at the centre of the canvas seen in [viewArea] (as [shapeArea]: view px, null for the
      * whole canvas), its size handle [GENERATOR_VIEW_FRACTION] × the area's short side from the
      * centre (a wave is twice that long), with the last-used settings ([LAST_GENERATOR_KEY]), and
@@ -953,6 +1016,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // (A step into or out of a generated curve: the Closed setting it had comes back with it.)
         if (!isPath && (generator != null || state.generator != null)) showClosed(state.closed)
         generator = state.generator
+        setMaps(state.maps)
         if (isPath) setSplineState(state.spline) else anchors = state.anchors
         // v1.7 (item 1, I12): a step taken with several points selected (or undone while several
         // are) brings its selection back with the points; otherwise, as in v1.6, the selected
@@ -1720,13 +1784,15 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val generator: CurveGenerator?,
         /** Curve: the Closed setting while generated (null otherwise: v1.7's marks never see it). */
         val closed: Boolean?,
+        /** v1.8 (item 1a): the copies' maps. */
+        val maps: List<FloatArray>?,
     )
 
     /** Counts the paths the tool has edited: a mark of another path never rolls this one back. */
     private var historyEpoch = 0
 
     override fun historyMark(): Any? = ToolMark(
-        historyEpoch, reopened, history.toList(), redo.toList(), anchors, spline, pointSelection, severalState, trashedPending, targetLayer, generator, generator?.let { settings.closed },
+        historyEpoch, reopened, history.toList(), redo.toList(), anchors, spline, pointSelection, severalState, trashedPending, targetLayer, generator, generator?.let { settings.closed }, maps,
     )
 
     /**
@@ -1746,6 +1812,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         canUndoStep = history.isNotEmpty()
         m.closed?.let { showClosed(it) }
         generator = m.generator
+        setMaps(m.maps)
         if (isPath) setSplineState(m.spline) else anchors = m.anchors
         selectionState = m.selection.resized(pointCount)
         severalState = m.several && pointCount > 0
@@ -2691,8 +2758,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (k != kind && !switches) return null
         // A filled path with a visible line reopens from its line: a tap inside its fill starts
         // a new path there (curves are drawn over filled shapes; a fill alone reopens anywhere).
+        // v1.8 (item 1a): the line of any of its copies reopens the path itself (its source).
         val reach = lineReach(hit)
-        if (hit.fill != null && reach > 0f && distanceToLine(hit, p) > reach + tol) return null
+        if (hit.fill != null && reach > 0f && !ObjectCopies.hits(hit.copies, p, tol) { q, t -> distanceToLine(hit, q) <= reach + t }) return null
         return hit to k
     }
 
@@ -2846,6 +2914,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
         }
         generator = kept
+        // v1.8 (item 1a, §3.1): the stored copies, whatever the symmetry ruler is now.
+        setMaps(path.copies.maps)
         // v1.7 (item 6): [openPath] hands over the points to select (a converted shape's corner).
         val n = pointCount
         selectionState = select?.filter { it in 0 until n }?.takeIf { it.isNotEmpty() }
@@ -2935,7 +3005,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             }
         }
         val mode = controller.doc.colorMode
-        for (spec in sessionSpecs) renderer.draw(canvas, spec, false, mode)
+        // v1.8 (item 1a): and once per stored copy, as the layer draws the object.
+        ObjectCopies.drawEach(canvas, objectCopies) { c -> for (spec in sessionSpecs) renderer.draw(c, spec, false, mode) }
         canvas.restoreToCount(save)
     }
 
@@ -3003,15 +3074,16 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     // ------------------------------------------------------------------ preview
 
     /** Plain items of the path: the fill (when on) and the plain line (when that is the stroke). */
-    private fun buildSpecs(path: VectorPath, mode: CurveStroke, gradientFill: Boolean = false): List<VectorPaintSpec> {
+    private fun buildSpecs(path: VectorPath, mode: CurveStroke, gradientFill: Boolean = false, opaque: Boolean = false): List<VectorPaintSpec> {
         if (anchors.size < 2) return emptyList()
         val s = settings
         val fill = if (s.fill && canFill && !gradientFill) path else null
         val st = reopened?.original?.stroke
         val cap = st?.cap ?: LineCapStyle.ROUND
         val join = st?.join ?: JoinStyle.ROUND
-        val color = controller.color
-        val fillColor = s.fillColor ?: color
+        // v1.8 (item 1a): [opaque] items go into a translucent group (the copies of a raster path).
+        val color = controller.color.let { if (opaque) it or OPAQUE else it }
+        val fillColor = (s.fillColor ?: controller.color).let { if (opaque) it or OPAQUE else it }
         if (mode != CurveStroke.PLAIN) {
             return listOfNotNull(VectorPaintSpec.build(fill, fillColor, null, color, 0f))
         }
@@ -3076,6 +3148,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      */
     private fun changed(brushDelayMs: Long = 0L) {
         if (anchors.isNotEmpty()) ensureObserving()
+        // v1.8 (item 1a, §3.1): the copies' maps are taken once, at the path's first point.
+        if (maps == null && reopened == null && pointCount > 0) pointAt(0).let { setMaps(ObjectCopies.mapsAt(controller, it.x, it.y)) }
         val path = if (anchors.size >= 2) path() else null
         if (path != null) path.toAndroidPath(docPath) else docPath.rewind()
         val layer = targetLayer ?: controller.doc.activeLayer
@@ -3090,25 +3164,39 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             controller.invalidateOverlay()
             return
         }
-        val specs = if (path != null) buildSpecs(path, mode) else emptyList()
-        if (path != null && mode == CurveStroke.BRUSH && layer === controller.doc.activeLayer) {
+        val brushLine = path != null && mode == CurveStroke.BRUSH && layer === controller.doc.activeLayer
+        val copies = copyMaps
+        // v1.8 (item 1a): a raster layer's copies are one translucent group (the items opaque in it);
+        // a vector layer draws an object's copies one by one.
+        val alpha = if (copies.isNotEmpty() && !vectorTarget(layer)) groupAlpha(mode) else 255
+        val specs = if (path != null) buildSpecs(path, mode, opaque = alpha < 255) else emptyList()
+        if (brushLine && path != null) {
             preview.release()
+            hideCopies()
             overlaySpecs = specs
+            overlayAlpha = alpha
             val g = brushGeometry(path, settings)
             brushOverride = brushFor(path, g)
             val size = (brushOverride ?: controller.presetFor(brushToolId()))?.size ?: 0f
             if (specs.isNotEmpty()) specOverlay.setBand(docPath, size)
             val a = anchors
             val closed = isClosed && a.size > 2
-            brushPreview.request(g, brushDelayMs) { brushPoints(path, g, a, closed, it) }
+            brushPreview.request(g, brushDelayMs, brushMaps()) { brushPoints(path, g, a, closed, it) }
         } else {
             brushPreview.cancel()
             overlaySpecs = emptyList()
-            if (vectorTarget(layer) && (controller.selection != null || layer.alphaLocked)) {
+            if (copies.isNotEmpty() && specs.isNotEmpty()) {
+                // v1.8 (item 1a): the path and its copies, on every frame of the edit.
+                preview.release()
+                hideUnclipped()
+                showCopies(layer, specs, copies, alpha, clipped = !vectorTarget(layer))
+            } else if (vectorTarget(layer) && (controller.selection != null || layer.alphaLocked)) {
                 // An object is neither clipped by the selection nor by alpha lock.
+                hideCopies()
                 preview.release()
                 showUnclipped(layer, specs)
             } else {
+                hideCopies()
                 hideUnclipped()
                 preview.show(layer, specs)
             }
@@ -3116,9 +3204,25 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         controller.invalidateOverlay()
     }
 
+    /**
+     * v1.8 (item 1a, §3.1): the alpha a raster path's copies are painted with as ONE group, so
+     * overlapping copies never darken: the paint's, when the line and the fill share it; 255 (no
+     * group: each copy as a stroke of its own) when they differ.
+     */
+    private fun groupAlpha(mode: CurveStroke): Int {
+        val s = settings
+        val line = if (mode == CurveStroke.PLAIN) controller.color ushr 24 else null
+        val fill = if (s.fill && canFill) (s.fillColor ?: controller.color) ushr 24 else null
+        return when {
+            line != null && fill != null -> if (line == fill) line else 255
+            else -> line ?: fill ?: 255
+        }
+    }
+
     private fun changedReopened(r: Reopened, path: VectorPath?, mode: CurveStroke, brushDelayMs: Long) {
         preview.release()
         hideUnclipped()
+        hideCopies()
         overlaySpecs = emptyList()
         val vp = buildVPath()
         // (Path: the same spline and look are unchanged even when the stored Bézier form was
@@ -3127,8 +3231,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val gradient = r.original.fill?.takeIf { it !is VPaint.Solid && settings.fill && settings.fillColor == null && canFill }
         val specs = if (path != null) buildSpecs(path, mode, gradientFill = gradient != null) else emptyList()
         sessionGradient = if (gradient != null && vp != null) vp.copy(stroke = null) else null
-        val regions = ArrayList<Rect>()
-        for (s in specs) regions += s.regions
+        // v1.8 (item 1a): the specs are drawn once more per stored copy (the gradient fill's object
+        // carries them itself).
+        val doc = controller.doc
+        val regions = ArrayList<Rect>(CurveCopies.regions(specs, copyMaps, Rect(0, 0, doc.width, doc.height)))
         sessionGradient?.let { g -> regions += roundOut(VectorOps.bounds(g)) }
         // (Where the path's own pixels are shown while it is unchanged.)
         if (!r.session.floatingRect.isEmpty) regions += Rect(r.session.floatingRect)
@@ -3141,7 +3247,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             brushOverride = brushFor(path, g)
             val a = anchors
             val closed = isClosed && a.size > 2
-            brushPreview.request(g, brushDelayMs) { brushPoints(path, g, a, closed, it) }
+            brushPreview.request(g, brushDelayMs, brushMaps()) { brushPoints(path, g, a, closed, it) }
         } else {
             brushPreview.cancel()
         }
@@ -3195,6 +3301,45 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun hideUnclipped() {
         val ov = unclipped ?: return
         unclipped = null
+        if (controller.renderOverride === ov) controller.renderOverride = null
+        invalidateRegions(ov.regions)
+    }
+
+    // ------------------------------------------------------------------ the preview of a path with copies
+
+    /** v1.8 (item 1a): the preview of the pending path while it has copies (null: none). */
+    private var copiesPreview: CopiesPreview? = null
+
+    /** True while the pending path and its copies are previewed on the canvas (tests). */
+    internal val copiesShown: Boolean get() = copiesPreview != null
+
+    /**
+     * Previews [specs] on [layer] as they are and once per map of [copies] ([CurveCopies.draw]):
+     * [alpha] groups them on a raster layer ([clipped]); a vector layer's copies are drawn as its
+     * renderer draws them.
+     */
+    private fun showCopies(layer: Layer, specs: List<VectorPaintSpec>, copies: List<FloatArray>, alpha: Int, clipped: Boolean) {
+        if (specs.isEmpty()) { hideCopies(); return }
+        val ov = copiesPreview?.takeIf { it.layer === layer } ?: run {
+            hideCopies()
+            CopiesPreview(controller, layer).also { copiesPreview = it }
+        }
+        val old = ov.regions
+        val doc = controller.doc
+        val regions = CurveCopies.regions(specs, copies, Rect(0, 0, doc.width, doc.height))
+        ov.specs = specs
+        ov.copies = copies
+        ov.alpha = alpha
+        ov.clipped = clipped
+        ov.regions = regions
+        if (controller.renderOverride !== ov) controller.renderOverride = ov
+        invalidateRegions(old)
+        invalidateRegions(regions)
+    }
+
+    private fun hideCopies() {
+        val ov = copiesPreview ?: return
+        copiesPreview = null
         if (controller.renderOverride === ov) controller.renderOverride = null
         invalidateRegions(ov.regions)
     }
@@ -3259,6 +3404,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 stroke = stroke,
                 spline = sp,
                 generator = generator,
+                copies = objectCopies,
             )
         }
         return VPath(
@@ -3271,6 +3417,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             fill = fill,
             stroke = stroke,
             generator = if (polyline) null else generator,
+            copies = objectCopies,
         )
     }
 
@@ -3294,7 +3441,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val s = settings
         val path = path()
         val mode = strokeMode(layer)
-        val specs = buildSpecs(path, mode)
+        // v1.8 (item 1a): the copies are painted in the same step, as the preview drew them (taken
+        // before the path is reset).
+        val copies = copyMaps
+        val alpha = if (copies.isNotEmpty()) groupAlpha(mode) else 255
+        val specs = buildSpecs(path, mode, opaque = alpha < 255)
+        val bMaps = brushMaps()
         val brush = mode == CurveStroke.BRUSH && layer === controller.doc.activeLayer
         val g = brushGeometry(path, s)
         val a = anchors
@@ -3314,9 +3466,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                     polyline -> "Polyline"
                     else -> stepLabel
                 }
-                VectorCommit.commit(controller, layer, specs, label)
+                if (copies.isEmpty()) VectorCommit.commit(controller, layer, specs, label)
+                else CurveCopies.commit(controller, layer, specs, copies, alpha, label)
             }
-            if (brush) brushPreview.commit(g) { brushPoints(path, g, a, closed, it) }
+            if (brush) brushPreview.commit(g, bMaps) { brushPoints(path, g, a, closed, it) }
         }
         brushPreview.end()
         brushOverride = null
@@ -3337,13 +3490,23 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val g = brushGeometry(path, settings)
         val a = anchors
         val closed = isClosed && a.size > 2
+        // v1.8 (item 1a, D2): perspective copies become plain paths of their own, added with the
+        // path in ONE step and drawn by the layer (a brush line too).
+        val bake = perspectiveCopies
+        val bakeMaps = maps.orEmpty()
+        val bMaps = brushMaps()
         // (The painting tool paints the active layer: a path on another layer is drawn by its
         // layer, as is a brush line at 0 % everywhere, which paints nothing.)
-        if (vp.stroke?.kind != VStrokeKind.BRUSH || strokeMode(layer) != CurveStroke.BRUSH || layer !== controller.doc.activeLayer) {
+        if (bake || vp.stroke?.kind != VStrokeKind.BRUSH || strokeMode(layer) != CurveStroke.BRUSH || layer !== controller.doc.activeLayer) {
             brushPreview.cancel()
-            val ids = controller.vectors.addObjects(layer, listOf(vp), label)
+            val objects = if (bake) ObjectCopies.baked(vp, bakeMaps) else listOf(vp)
+            val ids = controller.vectors.addObjects(layer, objects, label)
             // Refused (no memory...): the path stays pending.
             if (ids.isEmpty()) return
+            if (bake && !bakedHintShown) {
+                bakedHintShown = true
+                controller.toast(MirrorLabels18.PERSPECTIVE_BAKED)
+            }
             resetPath()
             brushPreview.end()
             endLook()
@@ -3356,7 +3519,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         try {
             controller.undoStepNamed(label) {
                 vp.fill?.let { drawFillLikeTheLayer(layer, vp.copy(stroke = null), label) }
-                controller.keepLayerData(layer) { brushPreview.commit(g) { brushPoints(path, g, a, closed, it) } }
+                controller.keepLayerData(layer) { brushPreview.commit(g, bMaps) { brushPoints(path, g, a, closed, it) } }
                 controller.vectors.appendData(layer, listOf(vp), label)
             }
         } finally {
@@ -3434,6 +3597,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         spline = null
         generator = null
         genStart = null
+        setMaps(null)
         selectionState = PointSelection.none(0)
         severalState = false
         groupEdit = null
@@ -3450,6 +3614,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         preview.release()
         preview.interacting = false
         hideUnclipped()
+        hideCopies()
         thicknessRing = false
         warnedPlain = false
     }
@@ -3530,7 +3695,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         preview.drawOverlay(canvas, t)
         if (overlaySpecs.isNotEmpty()) {
             val layer = targetLayer ?: controller.doc.activeLayer
-            specOverlay.draw(canvas, t, controller, layer, overlaySpecs, keepBandFree = brushPreview.isLive, ignoreSelection = vectorTarget(layer))
+            specOverlay.draw(
+                canvas, t, controller, layer, overlaySpecs, keepBandFree = brushPreview.isLive, ignoreSelection = vectorTarget(layer),
+                copies = copyMaps, groupAlpha = overlayAlpha,
+            )
         }
         if (list.size >= 2) painter.path(canvas, t, docPath)
         val scale = handleSize
@@ -3606,6 +3774,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val history: List<EditState>,
         /** v1.8: the path's generator (Path ↔ Curve hand-back keeps it; To Bézier drops it: the Bézier form is no fit of the curve). */
         val generator: CurveGenerator? = null,
+        /** v1.8 (item 1a): the copies' maps ([maps]; they go along both ways). */
+        val maps: List<FloatArray>? = null,
     )
 
     /**
@@ -3621,9 +3791,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (curve === this || curve.hasPendingWork) return false
         val mine = detachPending()
         controller.selectTool(ToolId.CURVE)
-        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history, mine.generator)
+        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history, mine.generator, mine.maps)
         curve.adopt(
-            Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList()),
+            Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList(), maps = mine.maps),
             history = listOf(EditState(emptyList(), null, back = back)),
         )
         return true
@@ -3636,7 +3806,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val mine = detachPending()
         controller.selectTool(ToolId.PATH)
         path.adopt(
-            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList(), back.generator),
+            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList(), back.generator, back.maps),
             history = back.history,
         )
         // Redo converts it again.
@@ -3656,7 +3826,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val r = reopened
         val h = Handoff(
             anchors, spline, targetLayer ?: controller.doc.activeLayer, settings.copy(closed = if (isPath) pathCyclic else isClosed), r,
-            brushPreview.sessionSeed, history.toList(), generator,
+            brushPreview.sessionSeed, history.toList(), generator, maps,
         )
         if (r != null) {
             reopened = null
@@ -3706,6 +3876,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         targetLayer = h.targetLayer
         if (isPath) setSplineState(h.spline) else anchors = h.anchors
         generator = if (polyline) null else h.generator
+        setMaps(h.maps)
         selectionState = PointSelection.none(pointCount)
         severalState = false
         this.history.clear()

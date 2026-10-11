@@ -588,7 +588,8 @@ internal class BrushStrokePreview(
         val before = controller.message
         withPreset(key.toolId) {
             clipFree(key.layer) {
-                if (tool is BrushTool) tool.beginPath(input, seed, budget, key.maps.list)
+                // v1.8 (§3.1c): the live draft budget is shared by the copies, so the preview cost stays flat.
+                if (tool is BrushTool) tool.beginPath(input, seed, budget / key.maps.list.size.coerceAtLeast(1), key.maps.list)
                 else tool.onDown(ToolPoint(input.x[0], input.y[0], input.pressure[0], SystemClock.uptimeMillis(), isStylus = true))
             }
         }
@@ -796,7 +797,9 @@ internal class SpecOverlay {
      * [asNewLayer] they are drawn as the content of a new (visible, opaque, normal) layer that
      * will be added above [layer]: not into its mask, not with its visibility or opacity. With
      * [ignoreSelection] the items are not limited to the pixel selection (objects of a vector
-     * layer, v1.5).
+     * layer, v1.5). v1.8 (item 1a): [copies] (row-major 3 × 3 maps, the identity left out)
+     * draws them, and leaves the band out of them, once more under each map, all of them in
+     * one group of [groupAlpha] (the items are then opaque: overlapping copies never darken).
      */
     fun draw(
         canvas: Canvas,
@@ -807,6 +810,8 @@ internal class SpecOverlay {
         keepBandFree: Boolean = false,
         asNewLayer: Boolean = false,
         ignoreSelection: Boolean = false,
+        copies: List<FloatArray> = emptyList(),
+        groupAlpha: Int = 255,
     ) {
         if (specs.isEmpty() || (!asNewLayer && !controller.doc.effectiveVisible(layer))) return
         val doc = controller.doc
@@ -814,6 +819,14 @@ internal class SpecOverlay {
         clip.set(0, 0, doc.width, doc.height)
         bounds.setEmpty()
         for (s in specs) bounds.union(s.bounds)
+        if (copies.isNotEmpty()) {
+            val own = Rect()
+            bounds.roundOut(own)
+            for (m in copies) {
+                val b = CurveCopies.mappedBox(own, m)
+                if (b == null) bounds.union(0f, 0f, doc.width.toFloat(), doc.height.toFloat()) else bounds.union(RectF(b))
+            }
+        }
         if (!bounds.intersect(0f, 0f, doc.width.toFloat(), doc.height.toFloat())) return
         canvas.save()
         canvas.concat(t.matrix)
@@ -823,14 +836,33 @@ internal class SpecOverlay {
         val save = if (alpha < 255 || band) canvas.saveLayerAlpha(bounds, alpha) else canvas.save()
         canvas.clipRect(clip)
         val sel = if (ignoreSelection) null else controller.selection
-        for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
+        if (copies.isEmpty()) {
+            for (s in specs) renderer.drawClipped(canvas, s, sel, false, clip, maskMode, doc.colorMode)
+        } else {
+            // (The selection limits the copies where they land: it is never mapped with them.)
+            CurveCopies.drawClipped(canvas, renderer, specs, copies, groupAlpha, sel, false, clip, maskMode, doc.colorMode)
+        }
         if (band) {
             bandPaint.strokeWidth = bandWidth
-            canvas.drawPath(bandSource, bandPaint)
+            drawEach(canvas, copies) { c -> c.drawPath(bandSource, bandPaint) }
         }
         canvas.restoreToCount(save)
         canvas.restore()
     }
+
+    /** [draw] as it is, then once per map of [copies] under `canvas.concat`. */
+    private inline fun drawEach(canvas: Canvas, copies: List<FloatArray>, draw: (Canvas) -> Unit) {
+        draw(canvas)
+        for (m in copies) {
+            val c = canvas.save()
+            copyMatrix.setValues(m)
+            canvas.concat(copyMatrix)
+            draw(canvas)
+            canvas.restoreToCount(c)
+        }
+    }
+
+    private val copyMatrix = android.graphics.Matrix()
 }
 
 /**

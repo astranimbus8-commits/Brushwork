@@ -49,13 +49,13 @@ class CurveBuild(val subpath: VSubpath, val spline: VSpline?)
  *   2π·d otherwise), so the rose always ends where it started: it is closed.
  *
  * Curve (Bézier, [CurveKind.CURVE]): an adaptive Hermite fit. Anchors at parameter steps (at first
- * [DEFAULT_CURVE_DENSITY] per turn, wave or petal, or the generator's "Points per turn"), each with
+ * [DEFAULT_CURVE_DENSITY] per turn, wave or petal, or the generator's [com.brushwork.paint.ui.common.CurveGenLabels18.POINTS_PER_TURN]), each with
  * BOTH handles from the analytic derivative, `h = P'(t)·Δt/3` on each side, so every anchor is
  * smooth. The span that misses most (the largest distance at [SAMPLES_PER_SPAN] samples between
  * the cubic and the curve at the same parameters) is halved until every span is within
  * [TOLERANCE_PX], at most [MAX_ANCHORS] anchors.
  *
- * Path (NURBS, [CurveKind.PATH]): "Points per turn" samples (default [DEFAULT_PATH_DENSITY]) per
+ * Path (NURBS, [CurveKind.PATH]): [com.brushwork.paint.ui.common.CurveGenLabels18.POINTS_PER_TURN] samples (default [DEFAULT_PATH_DENSITY]) per
  * turn, wave or petal (at most [MAX_ANCHORS]), interpolated EXACTLY by a cubic B-spline on the
  * Path tool's own knots ([NurbsGeometry.basis]): clamped (order 4, endpoint on) with the end
  * tangents from the analytic derivative and a tridiagonal (Thomas) solve; cyclic for the rose (a
@@ -205,7 +205,7 @@ object CurveGenerators {
             CurveGenKind.ROSE -> if (roseOdd) PI * roseD else 2.0 * PI * roseD
         }
 
-        /** Turns, both arms' turns, waves or petals: what "Points per turn" counts. */
+        /** Turns, both arms' turns, waves or petals: what [com.brushwork.paint.ui.common.CurveGenLabels18.POINTS_PER_TURN] counts. */
         val units: Double = when (g.kind) {
             CurveGenKind.ARCHIMEDEAN, CurveGenKind.LOGARITHMIC, CurveGenKind.GOLDEN -> g.turns.toDouble()
             CurveGenKind.FERMAT -> 2.0 * g.turns
