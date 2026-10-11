@@ -112,12 +112,14 @@ internal object FringeColors {
     /**
      * The general path's mix of three swatches. [w] holds, at `3 * i + c`, the weight of sample i
      * in channel c: `F_i,c / Σ_j F_j,c`, or 1 for the middle sample of a channel no swatch covers.
-     * [colored] marks the samples whose alpha counts; [needed] the samples read at all.
+     * [colored] marks the samples whose alpha counts. [fixed] is [w] in 1/65536 with each
+     * channel's three summing to exactly 65536 (Glitch's pixels whose three samples share their
+     * alpha: integer arithmetic, a uniform picture stays exact).
      */
     class Mix(colors: IntArray) {
         val w = FloatArray(9)
+        val fixed = IntArray(9)
         val colored = BooleanArray(3) { colors[it] != NONE }
-        val needed = BooleanArray(3)
 
         init {
             for (c in 0 until 3) {
@@ -133,7 +135,16 @@ internal object FringeColors {
                     }
                 }
             }
-            for (i in 0 until 3) needed[i] = colored[i] || w[3 * i] != 0f || w[3 * i + 1] != 0f || w[3 * i + 2] != 0f
+            for (c in 0 until 3) {
+                var sum = 0
+                var big = 0
+                for (i in 0 until 3) {
+                    fixed[3 * i + c] = Math.round(w[3 * i + c] * 65536f)
+                    sum += fixed[3 * i + c]
+                    if (w[3 * i + c] > w[3 * big + c]) big = i
+                }
+                fixed[3 * big + c] += 65536 - sum
+            }
         }
     }
 }

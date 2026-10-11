@@ -100,10 +100,12 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         val colors = FringeColors.resolve(values, fringes)
         val none = FringeColors.allNone(colors)
         val k = if (none) null else FringeColors.oneHotFactors(colors)
+        val rgb = k != null && k[0] == 1 && k[1] == 0 && k[2] == -1
         val mix = if (none || k != null) null else FringeColors.Mix(colors)
         val static = (values.raw(STATIC_COLOR_KEY) as? Number)?.toInt() ?: FringeColors.WHITE
-        val sr = ((static shr 16) and 0xFF).toFloat(); val sg = ((static shr 8) and 0xFF).toFloat(); val sb = (static and 0xFF).toFloat()
+        val sr = ((static shr 16) and 0xFF) / 255f; val sg = ((static shr 8) and 0xFF) / 255f; val sb = (static and 0xFF) / 255f
         val sa = (static ushr 24) / 255f
+        val white = static == FringeColors.WHITE
 
         // (3) Render rows.
         val out = src.copy()
@@ -122,27 +124,15 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
                     fillOffsets(band, w, dxRow)
                     val cs = (band.colorShift * scale).roundToInt()
                     when {
-                        k != null -> {
-                            // A channel of the first fringe is sampled at sx - cs, of the last at sx + cs.
-                            val offR = -k[0] * cs; val offG = -k[1] * cs; val offB = -k[2] * cs
-                            for (x in 0 until w) {
-                                val sx = x - dxRow[x]
-                                val cr = sp[so + Math.floorMod(sx + offR, w)]
-                                val cg = sp[so + Math.floorMod(sx + offG, w)]
-                                val cb = sp[so + Math.floorMod(sx + offB, w)]
-                                dp[o + x] = combine(cr, cg, cb)
-                            }
-                        }
-                        mix != null -> for (x in 0 until w) {
-                            val sx = x - dxRow[x]
-                            dp[o + x] = mixed(sp[so + Math.floorMod(sx - cs, w)], sp[so + Math.floorMod(sx, w)], sp[so + Math.floorMod(sx + cs, w)], mix)
-                        }
+                        rgb -> splitRgb(sp, so, dp, o, w, dxRow, cs)
+                        k != null -> split(sp, so, dp, o, w, dxRow, -k[0] * cs, -k[1] * cs, -k[2] * cs)
+                        mix != null -> mixRow(sp, so, dp, o, w, dxRow, cs, mix)
                         else -> for (x in 0 until w) dp[o + x] = sp[so + Math.floorMod(x - dxRow[x], w)]
                     }
                 } else if (srcRow != row) {
                     System.arraycopy(sp, so, dp, o, w)
                 }
-                if (band.noise > 0f) addStatic(dp, o, w, row, scale, band.noise * sa, seed, sr, sg, sb)
+                if (band.noise > 0f) if (white) addStatic(dp, o, w, row, scale, band.noise, seed) else addColoredStatic(dp, o, w, row, scale, band.noise * sa, seed, sr, sg, sb)
             }
         }
         return out
@@ -181,6 +171,80 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         }
     }
 
+    /**
+     * v1.7's channel split, the default colors (red first, green, blue last): its loop as it was.
+     * Each row path is a method of its own, so each loop is compiled on its own (as fast as v1.7's).
+     */
+    private fun splitRgb(sp: IntArray, so: Int, dp: IntArray, o: Int, w: Int, dxRow: IntArray, cs: Int) {
+        for (x in 0 until w) {
+            val sx = x - dxRow[x]
+            val cr = sp[so + Math.floorMod(sx - cs, w)]
+            val cg = sp[so + Math.floorMod(sx, w)]
+            val cb = sp[so + Math.floorMod(sx + cs, w)]
+            dp[o + x] = combine(cr, cg, cb)
+        }
+    }
+
+    /** The fast path's split for other one-hot colors: channel c sampled at `sx + off_c` (`-k_c · cs`). */
+    private fun split(sp: IntArray, so: Int, dp: IntArray, o: Int, w: Int, dxRow: IntArray, offR: Int, offG: Int, offB: Int) {
+        for (x in 0 until w) {
+            val sx = x - dxRow[x]
+            val cr = sp[so + Math.floorMod(sx + offR, w)]
+            val cg = sp[so + Math.floorMod(sx + offG, w)]
+            val cb = sp[so + Math.floorMod(sx + offB, w)]
+            dp[o + x] = combine(cr, cg, cb)
+        }
+    }
+
+    /**
+     * The general path's split: the first sample at `sx - cs`, the middle at `sx`, the last at
+     * `sx + cs`. Channel c is the swatch-weighted mean `Σ_i w[3i + c] · P_i,c` of the three
+     * samples' coverage-weighted channels over the output alpha, the largest alpha among the
+     * colored samples (design §3.6 (c), as Chromatic aberration's). Where the three share one alpha
+     * (an opaque picture) that is the weighted mean of the straight channels, here in 16.16 fixed
+     * point ([FringeColors.Mix.fixed]: a uniform picture stays exact); elsewhere in floats. The
+     * weights live in locals, and a sample inside the row skips [Math.floorMod]'s division
+     * ([wrap]): the general path's budget is 1.3 x v1.7's time.
+     */
+    private fun mixRow(sp: IntArray, so: Int, dp: IntArray, o: Int, w: Int, dxRow: IntArray, cs: Int, mix: FringeColors.Mix) {
+        val f = mix.fixed
+        val f0r = f[0]; val f0g = f[1]; val f0b = f[2]; val f1r = f[3]; val f1g = f[4]; val f1b = f[5]
+        val f2r = f[6]; val f2g = f[7]; val f2b = f[8]
+        val m = mix.w
+        val w0r = m[0]; val w0g = m[1]; val w0b = m[2]; val w1r = m[3]; val w1g = m[4]; val w1b = m[5]
+        val w2r = m[6]; val w2g = m[7]; val w2b = m[8]
+        val k0 = mix.colored[0]; val k1 = mix.colored[1]; val k2 = mix.colored[2]
+        for (x in 0 until w) {
+            val sx = x - dxRow[x]
+            val c0 = sp[so + wrap(sx - cs, w)]
+            val c1 = sp[so + wrap(sx, w)]
+            val c2 = sp[so + wrap(sx + cs, w)]
+            val a0 = c0 ushr 24; val a1 = c1 ushr 24; val a2 = c2 ushr 24
+            dp[o + x] = if (a0 == a1 && a0 == a2) {
+                if (a0 == 0) 0 else (a0 shl 24) or
+                    (((f0r * ((c0 shr 16) and 0xFF) + f1r * ((c1 shr 16) and 0xFF) + f2r * ((c2 shr 16) and 0xFF) + 0x8000) ushr 16) shl 16) or
+                    (((f0g * ((c0 shr 8) and 0xFF) + f1g * ((c1 shr 8) and 0xFF) + f2g * ((c2 shr 8) and 0xFF) + 0x8000) ushr 16) shl 8) or
+                    ((f0b * (c0 and 0xFF) + f1b * (c1 and 0xFF) + f2b * (c2 and 0xFF) + 0x8000) ushr 16)
+            } else {
+                var a = 0
+                if (k0) a = a0
+                if (k1 && a1 > a) a = a1
+                if (k2 && a2 > a) a = a2
+                if (a == 0) 0 else {
+                    val p0 = a0.toFloat(); val p1 = a1.toFloat(); val p2 = a2.toFloat()
+                    val r = w0r * p0 * ((c0 shr 16) and 0xFF) + w1r * p1 * ((c1 shr 16) and 0xFF) + w2r * p2 * ((c2 shr 16) and 0xFF)
+                    val g = w0g * p0 * ((c0 shr 8) and 0xFF) + w1g * p1 * ((c1 shr 8) and 0xFF) + w2g * p2 * ((c2 shr 8) and 0xFF)
+                    val b = w0b * p0 * (c0 and 0xFF) + w1b * p1 * (c1 and 0xFF) + w2b * p2 * (c2 and 0xFF)
+                    val inv = 1f / a
+                    (a shl 24) or (ChannelShift.clamp(r * inv) shl 16) or (ChannelShift.clamp(g * inv) shl 8) or ChannelShift.clamp(b * inv)
+                }
+            }
+        }
+    }
+
+    /** [Math.floorMod] (i, w) with no division when i is already inside the row. */
+    private fun wrap(i: Int, w: Int): Int = if (i >= 0 && i < w) i else Math.floorMod(i, w)
+
     /** Red, green and blue from three samples; alpha is the largest of the three sampled alphas. */
     private fun combine(cr: Int, cg: Int, cb: Int): Int {
         val ar = cr ushr 24; val ag = cg ushr 24; val ab = cb ushr 24
@@ -193,32 +257,8 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
         return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
-    /**
-     * v1.8 general path: channel c is the swatch-weighted mean `Σ_i w[3i + c] · P_i,c` of the
-     * three samples' coverage-weighted channels (first, middle, last) over the output alpha, the
-     * largest alpha among the colored samples (design §3.6 (c), as Chromatic aberration's).
-     */
-    private fun mixed(c0: Int, c1: Int, c2: Int, mix: FringeColors.Mix): Int {
-        val a0 = c0 ushr 24; val a1 = c1 ushr 24; val a2 = c2 ushr 24
-        var a = 0
-        if (mix.colored[0]) a = a0
-        if (mix.colored[1] && a1 > a) a = a1
-        if (mix.colored[2] && a2 > a) a = a2
-        if (a == 0) return 0
-        val m = mix.w
-        val p0 = a0.toFloat(); val p1 = a1.toFloat(); val p2 = a2.toFloat()
-        val r = m[0] * p0 * ((c0 shr 16) and 0xFF) + m[3] * p1 * ((c1 shr 16) and 0xFF) + m[6] * p2 * ((c2 shr 16) and 0xFF)
-        val g = m[1] * p0 * ((c0 shr 8) and 0xFF) + m[4] * p1 * ((c1 shr 8) and 0xFF) + m[7] * p2 * ((c2 shr 8) and 0xFF)
-        val b = m[2] * p0 * (c0 and 0xFF) + m[5] * p1 * (c1 and 0xFF) + m[8] * p2 * (c2 and 0xFF)
-        val inv = 1f / a
-        return (a shl 24) or (ChannelShift.clamp(r * inv) shl 16) or (ChannelShift.clamp(g * inv) shl 8) or ChannelShift.clamp(b * inv)
-    }
-
-    /**
-     * Digital static: short horizontal dashes of random brightness of the static's color
-     * ([sr], [sg], [sb]; white in v1.7) mixed in by [amount].
-     */
-    private fun addStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int, sr: Float, sg: Float, sb: Float) {
+    /** Digital static: short horizontal dashes of random gray mixed in by [amount] (v1.7's, for white). */
+    private fun addStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int) {
         val fy = floor(row / scale).toInt()
         val inv = 1f / scale
         for (x in 0 until w) {
@@ -227,12 +267,35 @@ class GlitchFilter : Filter("art.glitch", "Glitch", FilterCategory.ART) {
             val fx = floor(x * inv).toInt()
             val n = FilterMath.hash01(fx / 3, fy, seed * 13 + 5)
             val k = amount * FilterMath.hash01(fx / 11, fy, seed * 13 + 9)
-            val vr = n * sr; val vg = n * sg; val vb = n * sb
+            val v = n * 255f
             val r = ((c shr 16) and 0xFF); val g = ((c shr 8) and 0xFF); val b = c and 0xFF
             dp[o + x] = (c and 0xFF000000.toInt()) or
-                (ChannelShift.clamp(r + (vr - r) * k) shl 16) or
-                (ChannelShift.clamp(g + (vg - g) * k) shl 8) or
-                ChannelShift.clamp(b + (vb - b) * k)
+                (ChannelShift.clamp(r + (v - r) * k) shl 16) or
+                (ChannelShift.clamp(g + (v - g) * k) shl 8) or
+                ChannelShift.clamp(b + (v - b) * k)
+        }
+    }
+
+    /**
+     * v1.8: [addStatic] in the static's color: the dashes mix toward `n · S_c`, here
+     * `(n · 255) · (S_c / 255)` with [sr], [sg], [sb] the color's channels over 255 (white gives
+     * [addStatic]'s bytes; this form measured as fast as it, `n · S_c` slower).
+     */
+    private fun addColoredStatic(dp: IntArray, o: Int, w: Int, row: Int, scale: Float, amount: Float, seed: Int, sr: Float, sg: Float, sb: Float) {
+        val fy = floor(row / scale).toInt()
+        val inv = 1f / scale
+        for (x in 0 until w) {
+            val c = dp[o + x]
+            if (c ushr 24 == 0) continue
+            val fx = floor(x * inv).toInt()
+            val n = FilterMath.hash01(fx / 3, fy, seed * 13 + 5)
+            val k = amount * FilterMath.hash01(fx / 11, fy, seed * 13 + 9)
+            val v = n * 255f
+            val r = ((c shr 16) and 0xFF); val g = ((c shr 8) and 0xFF); val b = c and 0xFF
+            dp[o + x] = (c and 0xFF000000.toInt()) or
+                (ChannelShift.clamp(r + (v * sr - r) * k) shl 16) or
+                (ChannelShift.clamp(g + (v * sg - g) * k) shl 8) or
+                ChannelShift.clamp(b + (v * sb - b) * k)
         }
     }
 }

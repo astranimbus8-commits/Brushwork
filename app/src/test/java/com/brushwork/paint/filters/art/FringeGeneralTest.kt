@@ -65,12 +65,10 @@ class FringeGeneralTest {
         val m = FringeColors.Mix(intArrayOf(R, 0xFFFF00FF.toInt(), NONE))
         assertArrayEquals(floatArrayOf(0.5f, 0f, 0f, 0.5f, 1f, 1f, 0f, 0f, 0f), m.w, 0f)
         assertArrayEquals(booleanArrayOf(true, true, false), m.colored)
-        assertArrayEquals(booleanArrayOf(true, true, false), m.needed)
         // A weight is the swatch's share of the channel: orange's green 0x80 against teal's 0x80.
         val ot = FringeColors.Mix(intArrayOf(orange, NONE, teal))
         assertEquals(0.5f, ot.w[1], 1e-6f); assertEquals(0.5f, ot.w[7], 1e-6f)
         assertEquals(1f, ot.w[0]); assertEquals(1f, ot.w[8])
-        assertArrayEquals(booleanArrayOf(true, false, true), ot.needed)
     }
 
     @Test
