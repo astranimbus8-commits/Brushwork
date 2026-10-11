@@ -364,12 +364,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * (whatever the symmetry ruler is now), or a NEW shape's, taken from the ruler at its start
      * point ([useNewMaps]); they become its copies when it is committed.
      */
-    private var openCopies: CopyMaps = CopyMaps.NONE
+    private var openCopies: CopyMaps by mutableStateOf(CopyMaps.NONE)
     /**
      * v1.8 (§3.1): a NEW shape's Perspective array maps (not affine, so not [openCopies]): its
      * copies are drawn through them and committed as pixels or as plain paths; empty otherwise.
      */
-    private var openPerspective: List<FloatArray> = emptyList()
+    private var openPerspective: List<FloatArray> by mutableStateOf(emptyList())
     /** v1.8 (§3.1): the symmetry maps of the shape being dragged out ([creatingBox]), taken at its start point. */
     private var creatingMaps: List<FloatArray> = emptyList()
     /** v1.8: [MirrorLabels18.PERSPECTIVE_BAKED] / [MirrorLabels18.PERSPECTIVE_PIXELS] were shown (once per session each). */
@@ -464,7 +464,18 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     // ------------------------------------------------------------------ in-tool history
 
-    private data class PendingState(val box: ShapeBox, val points: List<ShapePoint>?, val pointsMode: Boolean, val selection: PointSelection)
+    private data class PendingState(
+        val box: ShapeBox,
+        val points: List<ShapePoint>?,
+        val pointsMode: Boolean,
+        val selection: PointSelection,
+        // v1.8 (§3.1): the shape's live copies ("Remove mirror copies" is an in-tool step).
+        val copies: CopyMaps = CopyMaps.NONE,
+        val perspective: List<FloatArray> = emptyList(),
+    )
+
+    /** The pending shape as an in-tool step saves it ([b] its box). */
+    private fun pendingState(b: ShapeBox) = PendingState(b, points, pointsMode, pointSelection, openCopies, openPerspective)
 
     private val history = ArrayDeque<PendingState>()
     private val redo = ArrayDeque<PendingState>()
@@ -730,6 +741,26 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     /** The pending shape as it would be placed now (null when there is none). */
     fun pendingObject(): ShapeObject? = box?.let { objectFor(it, points) }
+
+    /**
+     * v1.8 (design §3.1): the open shape has symmetry copies (its stored ones, or a new shape's
+     * from the ruler): the More row then offers [MirrorLabels18.REMOVE]. Compose state.
+     */
+    val hasCopies: Boolean get() = box != null && (!openCopies.isEmpty || openPerspective.isNotEmpty())
+
+    /**
+     * v1.8 (design §3.1) [MirrorLabels18.REMOVE]: the open shape drops its copies, as ONE in-tool
+     * step (undo brings them back); the commit then stores none and paints the source alone.
+     * False when there are none.
+     */
+    fun removeCopies(): Boolean {
+        if (!hasCopies) return false
+        pushHistory()
+        openCopies = CopyMaps.NONE
+        openPerspective = emptyList()
+        refreshPreview()
+        return true
+    }
 
     /**
      * A NEW shape being dragged out in [b] (the user's own options and color, also while a shape
@@ -1614,7 +1645,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         historyKeyTime = now
         clearRedo()
         if (coalesce) return
-        history.addLast(PendingState(b, points, pointsMode, pointSelection))
+        history.addLast(pendingState(b))
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
     }
@@ -1646,7 +1677,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     override fun undoStep(): Boolean {
         val b = box ?: return false
         val prev = history.removeLastOrNull() ?: return false
-        redo.addLast(PendingState(b, points, pointsMode, pointSelection))
+        redo.addLast(pendingState(b))
         redoCount = redo.size
         historyKey = null
         restoreState(prev)
@@ -1659,7 +1690,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         val b = box ?: return false
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size
-        history.addLast(PendingState(b, points, pointsMode, pointSelection))
+        history.addLast(pendingState(b))
         while (history.size > MAX_HISTORY) history.removeFirst()
         canUndoStep = true
         historyKey = null
@@ -1677,6 +1708,8 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         points = s.points
         pointsMode = s.pointsMode && s.points != null
         pointSelection = s.selection.resized(s.points?.size ?: 0)
+        openCopies = s.copies
+        openPerspective = s.perspective
         refreshPreview()
     }
 
@@ -1700,7 +1733,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      */
     override fun historyMark(): Any = HistoryMark(
         settings, userSettings, history.size, history.lastOrNull(),
-        box?.let { PendingState(it, points, pointsMode, pointSelection) }, redo.toList(),
+        box?.let { pendingState(it) }, redo.toList(),
     )
 
     /**
@@ -1743,7 +1776,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         gesturePushed = false
         resizeGuides = emptyList()
         val b = box
-        gestureState = b?.let { PendingState(it, points, pointsMode, pointSelection) }
+        gestureState = b?.let { pendingState(it) }
         gestureHistory = history.size
         gestureRedo = redo.toList()
         if (b != null) {
