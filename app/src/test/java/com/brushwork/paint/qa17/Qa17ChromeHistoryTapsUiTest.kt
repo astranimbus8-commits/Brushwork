@@ -3,6 +3,8 @@ package com.brushwork.paint.qa17
 import android.view.MotionEvent
 import android.view.View
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.qa16.Finger
@@ -89,6 +91,23 @@ class Qa17ChromeHistoryTapsUiTest {
     }
 
     private fun Offset.pair(): Pair<Float, Float> = x to y
+
+    /**
+     * Scrolls the menu of [window] (its scroll action, as a finger pushing it up would) until the
+     * whole [text] shows. v1.8: the More menu's section headers push "Canvas…" under the fold.
+     */
+    private fun scrollTo(window: View, text: String) {
+        fun whole() = textsIn(window, text).any { it.bounds.height >= it.node.size.height - 1f }
+        repeat(30) {
+            if (whole()) return
+            var n: SemanticsNode? = textsIn(window, text).firstOrNull()?.node ?: throw AssertionError("no \"$text\" in the window")
+            while (n != null && n.config.getOrNull(SemanticsActions.ScrollBy) == null) n = n.parent
+            val scroll = requireNotNull(n?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$text\" is clipped and its menu does not scroll" }
+            scroll.invoke(0f, 60f * window.resources.displayMetrics.density)
+            settle()
+        }
+        throw AssertionError("\"$text\" never scrolled into its menu")
+    }
 
     /**
      * A two-finger tap into the open menu's [window] whose FIRST finger lands beside the menu
@@ -197,6 +216,7 @@ class Qa17ChromeHistoryTapsUiTest {
 
         // Both fingers on menu items.
         val menu = openMenu()
+        scrollTo(menu, "Canvas…")
         val flip = centerOf(menu, "Flip view")
         val canvas = centerOf(menu, "Canvas…")
         Smoke.Touch(menu).twoFingerTap(flip.pair(), canvas.pair())

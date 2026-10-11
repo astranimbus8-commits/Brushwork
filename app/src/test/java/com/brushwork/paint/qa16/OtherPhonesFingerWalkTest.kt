@@ -69,12 +69,14 @@ internal object OtherPhones {
         Smoke.pump(300); SmokeUi.settle()
         assertEquals(2, SmokeUi.windows().size)
         val popup = SmokeUi.windows().last()
-        // The menu scrolls on a short screen: a finger pushes it up until the entry shows.
-        repeat(4) {
+        // The menu scrolls on a short screen: a finger pushes it up until the entry shows, and holds
+        // still before it lifts (no fling). v1.8: the section headers make the menu longer, and a
+        // fling to its end would carry "Fit to screen" past the top of the landscape menu.
+        val from = popup.width / 2f to popup.height * 0.8f
+        val to = popup.width / 2f to popup.height * 0.3f
+        repeat(8) {
             val e = SmokeUi.find("Fit to screen", exact = true)
-            if (e == null || e.bounds.height < 40f) {
-                com.brushwork.paint.ui.color.RobolectricUi.drag(popup, popup.width / 2f to popup.height * 0.8f, popup.width / 2f to popup.height * 0.3f)
-            }
+            if (e == null || e.bounds.height < 40f) com.brushwork.paint.ui.color.RobolectricUi.drag(popup, from, to, to, to)
         }
         val fit = SmokeUi.find("Fit to screen", exact = true) ?: throw AssertionError("no More › Fit to screen")
         assertTrue("More › Fit to screen shows: ${fit.bounds} in ${popup.width} × ${popup.height}", fit.bounds.height > 0f && fit.bounds.bottom <= popup.height)

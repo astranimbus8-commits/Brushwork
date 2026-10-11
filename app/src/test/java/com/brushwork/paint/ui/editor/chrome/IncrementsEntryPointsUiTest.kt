@@ -1,5 +1,8 @@
 package com.brushwork.paint.ui.editor.chrome
 
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsNode
+import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
@@ -34,6 +37,29 @@ class IncrementsEntryPointsUiTest {
         settle()
     }
 
+    /**
+     * Scrolls the open More menu (its scroll action, as a finger pushing it up would) until the
+     * whole entry [label] shows: v1.8's section headers push the last entries under the fold.
+     */
+    private fun scrollMenuTo(s: ChromeScreen, label: String) {
+        fun entry(): SemanticsNode? {
+            var n = SmokeUi.find(label, exact = true)?.node
+            while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null) n = n.parent
+            return n
+        }
+        fun whole() = entry()?.let { n -> n.boundsInWindow.height >= n.size.height - 1f } == true
+        repeat(30) {
+            if (whole()) return
+            val n = entry() ?: throw AssertionError("no \"$label\" in the menu")
+            var scroller: SemanticsNode? = n
+            while (scroller != null && scroller.config.getOrNull(SemanticsActions.ScrollBy) == null) scroller = scroller.parent
+            requireNotNull(scroller?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is clipped and the menu does not scroll" }
+                .invoke(0f, 60f * s.density)
+            settle()
+        }
+        throw AssertionError("\"$label\" never scrolled into the menu")
+    }
+
     @Test
     fun moreIncrementsOpensTheSheetAndSettingsHasTheSection() {
         ShadowLog.stream = null
@@ -45,6 +71,7 @@ class IncrementsEntryPointsUiTest {
             val steps = s.c.undoManager.undoCount
             assertFalse("off by default (I8)", s.c.increments.state.enabled)
             click("More options")
+            scrollMenuTo(s, "Increments…")
             val entry = Clickables.onScreen(s).single { "Increments…" in it.labels }
             assertFalse("unchecked while off: ${entry.labels}", "On" in entry.labels)
             click("Increments…", exact = true)
@@ -56,6 +83,7 @@ class IncrementsEntryPointsUiTest {
             click("Close", exact = true)
             assertFalse("closed", title in SmokeUi.sheetTitles())
             click("More options")
+            scrollMenuTo(s, "Increments…")
             val checked = Clickables.onScreen(s).single { "Increments…" in it.labels }
             assertTrue("checked while on: ${checked.labels}", "On" in checked.labels)
             back()

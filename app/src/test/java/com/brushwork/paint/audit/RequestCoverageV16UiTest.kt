@@ -116,11 +116,11 @@ class RequestCoverageV16UiTest {
         return n
     }
 
-    /** Scrolls the tool menu (as a finger would) until the whole cell [label] shows. */
+    /** Scrolls the menu that holds [label] (the tool menu, the More menu) as a finger would, until the whole cell shows. */
     private fun scrollMenuTo(label: String) {
         fun inside() = cell(label)?.let { n -> n.boundsInWindow.height >= n.size.height - 1f && n.boundsInWindow.width >= n.size.width - 1f } == true
         if (inside()) return
-        val node = SmokeUi.find(label, exact = true)?.node ?: throw AssertionError("\"$label\" is not in the tool menu")
+        val node = SmokeUi.find(label, exact = true)?.node ?: throw AssertionError("\"$label\" is in no menu")
         var n: androidx.compose.ui.semantics.SemanticsNode? = node
         while (n != null && n.config.getOrNull(SemanticsActions.ScrollBy) == null) n = n.parent
         val scroll = requireNotNull(n?.config?.getOrNull(SemanticsActions.ScrollBy)?.action) { "\"$label\" is clipped and the menu does not scroll" }
@@ -129,7 +129,7 @@ class RequestCoverageV16UiTest {
             scroll.invoke(0f, 60f * s.density)
             settle(2)
         }
-        throw AssertionError("\"$label\" never scrolled into the tool menu")
+        throw AssertionError("\"$label\" never scrolled into its menu")
     }
 
     private fun slider(name: String): RobolectricUi.Element = RobolectricUi.elements().last { e ->
@@ -300,8 +300,9 @@ class RequestCoverageV16UiTest {
         assertTrue("switched on", c.increments.state.enabled)
         click("Close", exact = true)
         assertFalse("\"$sheet\" closed", sheet in SmokeUi.sheetTitles())
-        // The More entry shows the state.
+        // The More entry shows the state (v1.8: the section headers push it down, a finger scrolls to it).
         click("More options")
+        scrollMenuTo("Increments…")
         val entry = Clickables.onScreen(s).single { "Increments…" in it.labels }
         assertTrue("Increments… is checked: ${entry.labels}", "On" in entry.labels)
         backKey()
