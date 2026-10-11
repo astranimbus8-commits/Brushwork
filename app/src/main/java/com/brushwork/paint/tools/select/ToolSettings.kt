@@ -1,5 +1,6 @@
 package com.brushwork.paint.tools.select
 
+import com.brushwork.paint.tools.select.colorrange.ColorPreset
 import kotlinx.serialization.Serializable
 
 /** Magic wand options (persisted). */
@@ -83,5 +84,24 @@ data class MagneticSettings(
         const val MIN_REACH_DP = 8
         const val MAX_REACH_DP = 64
         const val MAX_CONTRAST = 50
+    }
+}
+
+/** Color select options (persisted; v1.8, design §3.5). */
+@Serializable
+data class ColorSelectSettings(
+    /** How far from a sample a color still counts (ΔE76 for sampled colors; widens the presets' bands), 0..[MAX_FUZZINESS]. */
+    val fuzziness: Int = 40,
+    /** The colors that count: the samples, or one of the presets. */
+    val preset: ColorPreset = ColorPreset.SAMPLED,
+    /** The pixels whose colors count (as Magic wand's Refer). */
+    val source: SampleSource = SampleSource.LAYER,
+    /** Soft edges from the fuzziness band; off: every pixel in or out. */
+    val antiAlias: Boolean = true,
+    /** Selects the colors that do NOT count (transparent pixels never count). */
+    val invert: Boolean = false,
+) {
+    companion object {
+        const val MAX_FUZZINESS = 200
     }
 }
