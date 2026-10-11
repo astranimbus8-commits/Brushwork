@@ -10,6 +10,7 @@ import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.tools.ToolId
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,9 +23,11 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.8 (F3, D25): [CanvasView.onConsumeTouch], the canvas side of "a canvas touch closes the More
  * row and is consumed", through a real view driven with MotionEvents. A gesture whose first
- * finger the hook consumes draws nothing, pans and zooms nothing and taps nothing until every
- * pointer lifts, whatever joins it (a second finger, a pen); the hook is asked once per gesture,
- * at its first finger, and the next gesture it declines works as before. H's `MoreRowCloseTest`
+ * finger the hook consumes draws nothing and pans and zooms nothing until every pointer lifts,
+ * whatever joins it (a second finger, a pen); its fingers' history taps still act (v1.8
+ * integration, a lead rule over part of D25): a two-finger tap undoes once, a three-finger tap
+ * redoes once, one finger changes no history. The hook is asked once per gesture, at its first
+ * finger, and the next gesture it declines works as before. H's `MoreRowCloseTest`
  * covers the editor wiring (the strip's `StripState` closing on that touch).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -79,7 +82,8 @@ class CanvasConsumedTouchRobolectricTest {
         assertEquals(2, asked)
         assertEquals("no zoom, no pan", view0, c.viewTransform.matrix)
 
-        // 3. A two-finger tap (undo) after a real stroke: it undoes nothing.
+        // 3. A two-finger tap after a real stroke undoes it, once; a three-finger tap redoes it, once;
+        //    a one-finger tap changes nothing.
         touch.idle(200)
         touch.stroke(screen(60f, 100f), screen(340f, 100f))
         assertEquals(3, asked)
@@ -90,8 +94,23 @@ class CanvasConsumedTouchRobolectricTest {
         touch.idle(200)
         touch.twoFingerTap(screen(150f, 200f), screen(250f, 200f))
         assertEquals(4, asked)
-        assertEquals("the tap undid nothing", undo1, c.undoManager.undoCount)
-        assertEquals(RED, layer.bitmap.getPixel(200, 100))
+        assertEquals("the two-finger tap undid one step", undo1 - 1, c.undoManager.undoCount)
+        assertEquals("…the stroke", 0, layer.bitmap.getPixel(200, 100))
+        assertTrue(c.canRedo)
+        open = true
+        touch.idle(200)
+        touch.threeFingerTap(screen(150f, 200f), screen(200f, 230f), screen(250f, 200f))
+        assertEquals(5, asked)
+        assertEquals("the three-finger tap redid one step", undo1, c.undoManager.undoCount)
+        assertEquals("…the stroke", RED, layer.bitmap.getPixel(200, 100))
+        assertFalse(c.canRedo)
+        open = true
+        touch.idle(200)
+        touch.tap(screen(200f, 250f).first, screen(200f, 250f).second)
+        assertEquals(6, asked)
+        assertEquals("a one-finger tap: no step", undo1, c.undoManager.undoCount)
+        assertEquals("…no dot", 0, layer.bitmap.getPixel(200, 250))
+        assertFalse(c.canRedo)
 
         // 4. A pen joining a consumed finger draws nothing either.
         open = true
@@ -111,14 +130,14 @@ class CanvasConsumedTouchRobolectricTest {
         touch.idle(16)
         touch.send(MotionEvent.ACTION_UP, P(0, fx, fy))
         touch.idle(50)
-        assertEquals("asked once for the whole gesture", 5, asked)
+        assertEquals("asked once for the whole gesture", 7, asked)
         assertEquals("the pen drew nothing", 0, layer.bitmap.getPixel(240, 220))
         assertEquals(undo1, c.undoManager.undoCount)
 
         // 5. Declined again: the next stroke draws.
         touch.idle(200)
         touch.stroke(screen(60f, 50f), screen(340f, 50f))
-        assertEquals(6, asked)
+        assertEquals(8, asked)
         assertEquals(RED, layer.bitmap.getPixel(200, 50))
         assertEquals(undo1 + 1, c.undoManager.undoCount)
         assertEquals("the view never moved", view0, c.viewTransform.matrix)

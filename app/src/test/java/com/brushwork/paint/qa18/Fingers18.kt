@@ -20,7 +20,7 @@ import java.time.Duration
 
 /**
  * v1.8 (area H): fingers on the editor for the qa18 chrome tests, beside [Finger]: long presses
- * with their bubble, one- and two-finger gestures on the canvas, and what the canvas shows (the
+ * with their bubble, one-, two- and three-finger gestures on the canvas, and what the canvas shows (the
  * view, the active layer's pixels, the history) to tell a touch that acted from one that was
  * consumed (D25).
  */
@@ -143,6 +143,44 @@ internal object Fingers18 {
         val (cx, cy) = s.screen(x, y)
         val d = 40f * s.density
         s.touch.twoFingerTap((cx - d) to cy, (cx + d) to cy)
+        Smoke.pump(300); SmokeUi.settle()
+    }
+
+    /** Three fingers tapping around document point ([x], [y]) (redo, when the canvas takes it). */
+    fun threeFingerTap(s: ChromeScreen, x: Float, y: Float) {
+        val (cx, cy) = s.screen(x, y)
+        val d = 40f * s.density
+        s.touch.threeFingerTap((cx - d) to cy, cx to (cy + d), (cx + d) to cy)
+        Smoke.pump(300); SmokeUi.settle()
+    }
+
+    /** One finger tapping document point ([x], [y]) (a dot, when the brush takes it). */
+    fun tap(s: ChromeScreen, x: Float, y: Float) {
+        val (cx, cy) = s.screen(x, y)
+        s.touch.tap(cx, cy)
+        Smoke.pump(300); SmokeUi.settle()
+    }
+
+    /** Two fingers 80 dp apart around document point ([x], [y]) moving 100 dp right together: a pan. */
+    fun pan(s: ChromeScreen, x: Float, y: Float) {
+        val (cx, cy) = s.screen(x, y)
+        val d = 40f * s.density
+        val move = 100f * s.density
+        val t = s.touch
+        t.send(MotionEvent.ACTION_DOWN, Smoke.P(0, cx - d, cy))
+        t.idle(16)
+        t.send(MotionEvent.ACTION_POINTER_DOWN, Smoke.P(0, cx - d, cy), Smoke.P(1, cx + d, cy), index = 1)
+        var dx = 0f
+        for (i in 1..12) {
+            t.idle(16)
+            dx = move * i / 12f
+            t.send(MotionEvent.ACTION_MOVE, Smoke.P(0, cx - d + dx, cy), Smoke.P(1, cx + d + dx, cy))
+        }
+        t.idle(16)
+        t.send(MotionEvent.ACTION_POINTER_UP, Smoke.P(0, cx - d + dx, cy), Smoke.P(1, cx + d + dx, cy), index = 1)
+        t.idle(16)
+        t.send(MotionEvent.ACTION_UP, Smoke.P(0, cx - d + dx, cy))
+        t.idle(50)
         Smoke.pump(300); SmokeUi.settle()
     }
 }

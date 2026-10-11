@@ -43,7 +43,8 @@ import org.robolectric.shadows.ShadowLog
  * ([StripLabels18.MORE_OBJECT]). The toggle drops the More row under the bar with Forward,
  * Backward, Array and, while a selected object has mirror copies, "Detach mirror copies" (twice as
  * wide). The row stays open while its buttons act; a canvas touch only closes it (one finger or
- * two: no stroke, no zoom, no step), the next one acts; the toggle, a tool change and the More menu
+ * a pinch: no stroke, no zoom, no step; a two- or three-finger tap closes it and undoes or redoes
+ * once, v1.8 integration), the next one acts; the toggle, a tool change and the More menu
  * close it; and when the bar goes (Deselect) nothing is left open.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -152,7 +153,8 @@ class ObjectBarMoreTest {
         assertFalse("nothing left to detach", SmokeUi.has(MirrorLabels18.DETACH, exact = true))
         assertNotNull(Finger.control(s, "Bring forward"))
 
-        // ---- D25: a canvas touch only closes the row; the next one acts
+        // ---- D25: a canvas touch only closes the row, the next one acts; a two- or three-finger
+        // tap closes it and undoes or redoes (v1.8 integration)
         var before = Fingers18.canvasState(s)
         Fingers18.stroke(s, 250f, 220f, 360f, 270f)
         assertEquals("one finger: nothing happened on the canvas", before, Fingers18.canvasState(s))
@@ -167,8 +169,19 @@ class ObjectBarMoreTest {
         open(s)
         before = Fingers18.canvasState(s)
         Fingers18.twoFingerTap(s, 200f, 150f)
-        assertEquals("a two-finger tap: no undo", before, Fingers18.canvasState(s))
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        SmokeUi.settle()
+        val undone = Fingers18.canvasState(s)
+        assertEquals("a two-finger tap: one undo (Detach)", before.undo - 1, undone.undo)
+        assertTrue("…to redo", undone.redo)
+        assertEquals("…the selection as before Detach (its copy gone)", setOf(1L), undone.objects)
         assertClosed(s, "a two-finger tap")
+        open(s)
+        Fingers18.threeFingerTap(s, 200f, 150f)
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        SmokeUi.settle()
+        assertEquals("a three-finger tap: one redo (Detach)", before, Fingers18.canvasState(s))
+        assertClosed(s, "a three-finger tap")
 
         // ---- the toggle, a tool change and the More menu close it
         open(s)

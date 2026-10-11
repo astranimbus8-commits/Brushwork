@@ -28,7 +28,9 @@ import org.robolectric.shadows.ShadowLog
  * v1.8 (design §3.9, D25): how the options strip's More row closes, in the editor on the user's
  * phone (392 × 873 dp), with real touch events and a fake strip ([FakeStrips]). It stays open while
  * its items act and while a finger lands on its empty part. A canvas touch while it is open only
- * closes it: one finger paints nothing, two fingers neither zoom nor undo; the next touch acts.
+ * closes it: one finger paints nothing, a pinch does not zoom; the next touch acts. A two-finger
+ * tap closes it and undoes (v1.8 integration, a lead rule over this part of D25; the history taps
+ * through an open row are `MoreRowHistoryTapsTest`'s).
  * A tool change, the More menu, the tool menu, the layer window, a panel, hiding the interface and
  * an item's `closeMore` (what an item opening a sheet calls) close it too. Beside the vector object
  * bar's own More row, one row shows at a time, and the bar going takes its row along at once.
@@ -92,6 +94,7 @@ class MoreRowCloseTest {
         assertEquals("…and reaches nothing under it", before, Fingers18.canvasState(s))
 
         // ---- one finger: consumed, the row closes; the next stroke paints
+        val blank = before
         Fingers18.stroke(s, 100f, 200f, 300f, 240f)
         assertEquals("one finger: nothing painted, no step", before, Fingers18.canvasState(s))
         assertClosed(s, "a one-finger touch")
@@ -100,7 +103,8 @@ class MoreRowCloseTest {
         assertNotEquals("the next stroke paints", before.pixels, painted.pixels)
         assertEquals("one step", before.undo + 1, painted.undo)
 
-        // ---- two fingers: no zoom, no undo; the next pinch zooms, the next two-finger tap undoes
+        // ---- two fingers: a pinch does not zoom, a two-finger tap closes the row and undoes (v1.8
+        // integration); the next pinch zooms, the next two-finger tap undoes
         open(s)
         before = Fingers18.canvasState(s)
         Fingers18.pinch(s, 200f, 150f)
@@ -108,8 +112,14 @@ class MoreRowCloseTest {
         assertClosed(s, "a pinch")
         open(s)
         Fingers18.twoFingerTap(s, 200f, 150f)
-        assertEquals("a two-finger tap: no undo", before, Fingers18.canvasState(s))
+        val undone = Fingers18.canvasState(s)
+        assertEquals("a two-finger tap: one undo (the stroke)", before.undo - 1, undone.undo)
+        assertEquals("…the stroke went, the view stayed", blank.copy(redo = true), undone)
         assertClosed(s, "a two-finger tap")
+        Fingers18.stroke(s, 100f, 200f, 300f, 240f)
+        val again = Fingers18.canvasState(s)
+        assertEquals("painted again: one step", before.undo, again.undo)
+        assertNotEquals("…a stroke", blank.pixels, again.pixels)
         Fingers18.pinch(s, 200f, 150f)
         assertNotEquals("the next pinch zooms", before.zoom, Fingers18.canvasState(s).zoom)
         val zoomed = Fingers18.canvasState(s)

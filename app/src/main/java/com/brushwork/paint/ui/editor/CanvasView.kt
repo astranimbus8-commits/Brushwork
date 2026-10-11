@@ -74,7 +74,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     /**
      * v1.8 (D25): asked when a touch gesture starts on the canvas, after [onTouchDown]. True (the
      * editor closed the strip's More row) consumes the whole gesture: until every finger and pen
-     * lifts it draws nothing, pans and zooms nothing, and taps nothing.
+     * lifts it draws nothing and pans and zooms nothing. Only its fingers' two- and three-finger
+     * taps still act (v1.8 integration): the gesture undoes or redoes once as any canvas tap does,
+     * so a history tap closes the row and undoes (redoes) at once; one finger only closes it.
      */
     var onConsumeTouch: (() -> Boolean)? = null
 
@@ -363,7 +365,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * until it turns out to be more than a tap (see [startPendingTap]).
      * IGNORE: the rest of the gesture does nothing.
      * CONSUMED (v1.8, D25): the gesture closed the strip's More row; like IGNORE, and a pen joining
-     * it does not draw either (see [onConsumeTouch]).
+     * it does not draw either (see [onConsumeTouch]). Its fingers still feed the classifier: the
+     * first one is held (never drawn) and the last lift decides; a two- or three-finger tap
+     * undoes or redoes ([handleTap]), anything else (one finger, a pinch, a pen) does nothing.
      */
     private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE, CONSUMED }
 
@@ -450,8 +454,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         val fingerPans = type == MotionEvent.TOOL_TYPE_FINGER && controller.settings.stylusOnlyDrawing
         onTouchDown?.invoke()
         if (onConsumeTouch?.invoke() == true) {
-            classifier.cancel()
-            ignore(id)
+            // The classifier keeps this finger: the gesture may still be a history tap.
             mode = Mode.CONSUMED
             return
         }
@@ -464,9 +467,20 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private fun onPointerDown(e: MotionEvent, idx: Int) {
         val id = e.getPointerId(idx)
-        // v1.8 (D25): the gesture that closed the More row stays consumed, whatever joins it.
-        if (mode == Mode.CONSUMED) { ignore(id); return }
         val stylus = isStylusType(e.getToolType(idx))
+        // v1.8 (D25): the gesture that closed the More row stays consumed, whatever joins it. A
+        // finger counts toward a two- or three-finger tap (decided at the last lift, onLastUp); a
+        // pen makes it no tap.
+        if (mode == Mode.CONSUMED) {
+            if (stylus) {
+                gestureHadStylus = true
+                classifier.invalidate()
+                ignore(id)
+            } else {
+                classifier.down(id, e.getX(idx), e.getY(idx), e.eventTime)
+            }
+            return
+        }
         if (mode == Mode.PENDING_TAP) {
             // A held pen keeps the gesture: another contact is a resting palm or a second pen.
             if (drawIsStylus) { ignore(id); return }
@@ -623,6 +637,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             }
             Mode.TOOL, Mode.TOOL_REST -> finishToolGesture(tap)
             Mode.PENDING_TAP -> if (id == drawPointerId) finishPendingTap() else dropPendingTap()
+            // v1.8 integration: closing the More row does not swallow a history tap.
+            Mode.CONSUMED -> if (!gestureHadStylus) handleTap(tap)
             else -> {}
         }
         mode = Mode.NONE
@@ -822,10 +838,15 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * v1.7 (item 10): a finger on the UI made this gesture a two- or three-finger history tap
      * ([HistoryTapHub], which undoes or redoes itself): what the canvas' fingers started is
      * dropped (no stroke, the view back where it was, the tool's two-finger gesture cancelled),
-     * and the rest of the gesture does nothing here, so it is never a canvas tap as well.
+     * and the rest of the gesture does nothing here, so it is never a canvas tap as well. A
+     * consumed gesture (Mode.CONSUMED) started nothing and stays consumed, but is no tap either.
      */
     fun yieldToHistoryTap() {
-        if (mode == Mode.NONE || mode == Mode.CONSUMED) return
+        if (mode == Mode.NONE) return
+        if (mode == Mode.CONSUMED) {
+            classifier.invalidate()
+            return
+        }
         revertView()
         abortGesture()
         mode = Mode.IGNORE

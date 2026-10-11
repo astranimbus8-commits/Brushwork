@@ -526,7 +526,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     v.onTouchDown = onCanvasTouch
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap
-                    // v1.8 (D25): with the strip's More row open, a canvas touch only closes it.
+                    // v1.8 (D25): with the strip's More row open, a canvas touch only closes it
+                    // (a two- or three-finger tap closes it and undoes or redoes, see onConsumeTouch).
                     v.onConsumeTouch = consumeCanvasTouch
                     v.setMirrored(controller.viewMirrored)
                     // Constant bands (V11): the pill, the selection bar and "hide interface" never move the canvas.

@@ -101,7 +101,10 @@ class StripState {
 
     fun isOpen(id: ToolId): Boolean = open[id] == true
 
-    /** A More row shows: some tool's, or the object bar's (a canvas touch then only closes it, D25). */
+    /**
+     * A More row shows: some tool's, or the object bar's (a canvas touch then only closes it, D25;
+     * a two- or three-finger tap closes it and undoes or redoes, `CanvasView.onConsumeTouch`).
+     */
     val anyOpen: Boolean get() = objectRowOpen || open.values.any { it }
 
     fun toggle(id: ToolId) {
