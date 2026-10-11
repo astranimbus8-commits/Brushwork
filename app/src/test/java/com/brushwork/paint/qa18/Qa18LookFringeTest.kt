@@ -65,9 +65,11 @@ import kotlin.math.abs
  * Glitch, on a colorful picture: the defaults are v1.7's bytes; small bands and full static
  * (the sliders) still are; then Magenta/Green and a red "Color of the static" (its swatch found
  * by its spoken name) change the colors only: the seed shown stays and the same rows change (the
- * seed keeps its layout). The apply equals the preview, one step, undone by two fingers.
- * PNGs: `look-fringe-*.png` (each preset, the custom set, Zooming on the selection, Glitch, the
- * panel on the phone).
+ * seed keeps its layout). The apply equals the preview, one step, undone by two fingers. Then
+ * Glitch on the rectangle selection (Magenta/Green): its result inside, the rest untouched, only
+ * rows its bands change on the whole picture; the apply equals the preview, undone.
+ * PNGs: `look-fringe-*.png` (each preset, the custom set, Zooming on the selection, Glitch whole
+ * and on the selection, the panel on the phone).
  * One test, own sandbox (Compose's frame clock serves the first test of a sandbox only).
  */
 @RunWith(RobolectricTestRunner::class)
@@ -430,6 +432,30 @@ class Qa18LookFringeTest {
         save(shown, w, h, "look-fringe-glitch.png")
         applyFilter(s, shown)
         undoTo(picPx, "Glitch")
+
+        // ================================================================ Glitch on a selection
+        c.setSelection(u.rectSelection(sl.toFloat(), st.toFloat(), sr.toFloat(), sb.toFloat()), recordUndo = false)
+        settle(4)
+        s = openFilter(glitch, "glitch")
+        setSlider("Height", 6f)
+        setSlider("Static", 100f)
+        tapChip(FringeLabels18.MAGENTA_GREEN)
+        assertArrayEquals(intArrayOf(FringeColors.MAGENTA, FringeColors.NONE, FringeColors.GREEN), s.values.colors(FringeColors.KEY))
+        shown = preview(s, "glitch on a selection")
+        fun maskedPic(full: IntArray) = IntArray(picPx.size) { if (inSel(it)) full[it] else picPx[it] }
+        val gsExpected = maskedPic(direct(glitch, pic, s.values))
+        assertTrue("Glitch on the selection: its result inside, the rest untouched: ${Fx.diff(gsExpected, shown, w)}", gsExpected.contentEquals(shown))
+        assertTrue("nothing outside the selection changes", (0 until shown.size).all { inSel(it) || shown[it] == picPx[it] })
+        val selRows = changedRows(picPx, shown, w)
+        assertTrue("Glitch changes rows inside the selection: $selRows", selRows.isNotEmpty() && selRows.all { it in st until sb })
+        // The seed keeps its layout under a selection too: the rows that change are rows its bands change on the whole picture.
+        val rowsAll = changedRows(picPx, Fx.roundTrip(GlitchV17.apply(BitmapUtils.toPixelBuffer(pic), s.values.copy(), ctx())), w)
+        assertTrue("rows changed in the selection are v1.7's band rows: ${selRows - rowsAll}", rowsAll.containsAll(selRows))
+        save(shown, w, h, "look-fringe-glitch-selection.png")
+        applyFilter(s, shown)
+        undoTo(picPx, "Glitch on a selection")
+        c.setSelection(null, recordUndo = false)
+        settle(4)
         Fx.assertNoErrorMessage(c, "fringe colors")
         Smoke.assertQuiet(c, "fringe colors")
     }
