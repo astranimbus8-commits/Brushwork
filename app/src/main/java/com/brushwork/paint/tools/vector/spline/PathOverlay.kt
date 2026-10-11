@@ -85,6 +85,29 @@ internal class PathOverlay {
         shape(canvas, x, y, r, square, pointEdge)
     }
 
+    /**
+     * v1.8 (item 6): a generator's handle at screen ([x], [y]): a ring of [GENERATOR_RING_DP] (times
+     * [scale]) over a dark rim, filled with the accent while dragged ([active]); the centre handle
+     * ([centre]) has a cross in it.
+     */
+    fun generatorHandle(canvas: Canvas, t: ViewTransform, x: Float, y: Float, scale: Float, centre: Boolean, active: Boolean) {
+        val r = t.dp(GENERATOR_RING_DP) * scale
+        val w = t.dp(2f)
+        pointEdge.color = 0x99000000.toInt()
+        pointEdge.strokeWidth = w + t.dp(1.5f)
+        canvas.drawCircle(x, y, r, pointEdge)
+        pointFill.color = if (active) ACCENT else 0x661E1F22
+        canvas.drawCircle(x, y, r, pointFill)
+        pointEdge.color = if (active) 0xFFFFFFFF.toInt() else ACCENT
+        pointEdge.strokeWidth = w
+        canvas.drawCircle(x, y, r, pointEdge)
+        if (centre) {
+            val a = r * 0.55f
+            canvas.drawLine(x - a, y, x + a, y, pointEdge)
+            canvas.drawLine(x, y - a, x, y + a, pointEdge)
+        }
+    }
+
     private fun shape(canvas: Canvas, x: Float, y: Float, r: Float, square: Boolean, paint: Paint) {
         if (square) canvas.drawRect(x - r, y - r, x + r, y + r, paint) else canvas.drawCircle(x, y, r, paint)
     }
@@ -115,5 +138,7 @@ internal class PathOverlay {
         val SELECTED_EDGE: Int = 0xFFFFE0A0.toInt()
         /** v1.7 (item 4): the side of a sharp control point's square (dp, before the handle-size scale). */
         const val SHARP_SIDE_DP = 10f
+        /** v1.8 (item 6): the radius of a generator's handle (dp, before the handle-size scale). */
+        const val GENERATOR_RING_DP = 11f
     }
 }

@@ -51,14 +51,18 @@ import com.brushwork.paint.tools.select.applyPointHits
 import com.brushwork.paint.tools.select.snapPointToObjects
 import com.brushwork.paint.tools.transform.SnapAxis
 import com.brushwork.paint.tools.transform.SnapGuide
+import com.brushwork.paint.tools.vector.gen.CurveGenerators
 import com.brushwork.paint.tools.vector.spline.NurbsGeometry
 import com.brushwork.paint.tools.vector.spline.PathOverlay
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
+import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
+import com.brushwork.paint.vector.CurveGenKind
+import com.brushwork.paint.vector.CurveGenerator
 import com.brushwork.paint.vector.VFillRule
 import com.brushwork.paint.vector.VPaint
 import com.brushwork.paint.vector.VPath
@@ -273,6 +277,27 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         private set
 
     /**
+     * v1.8 (item 6, §3.7): the generator of the open path (a spiral, wave or rose picked from
+     * "Curves", or a reopened path that still matches its own, I16), or null (Compose state; always
+     * null for Polyline). Its settings, sheet and two canvas handles edit the curve until a point
+     * is edited by hand ([editGeometry]).
+     */
+    var generator by mutableStateOf<CurveGenerator?>(null)
+        private set
+
+    /** Where the generator's two canvas handles are (document px). */
+    data class GeneratorHandles(
+        /** Drag it to move the curve. */
+        val centre: Vec2,
+        /** Drag it out to scale the curve, around the centre to turn it. */
+        val size: Vec2,
+    )
+
+    /** The generator's canvas handles (drawn in [drawOverlay]), or null without a generator. */
+    val generatorHandles: GeneratorHandles?
+        get() = generator?.let { GeneratorHandles(CurveGenerators.centre(it), CurveGenerators.sizeHandle(it)) }
+
+    /**
      * PATH: converts the pending spline to its Bézier form, re-converting only the spans an edit
      * touched (a point drag on a long path converts at most p + 1 spans per move); bit for bit
      * [SplineBezier.toSubpath], so the anchors and I9 are as a fresh conversion gives.
@@ -383,6 +408,14 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val look: CurveSettings? = null,
         /** v1.7 (item 1): the selected points then (in-tool undo restores them with the points). */
         val selection: PointSelection = PointSelection.none(0),
+        /** v1.8 (item 6, I16): the generator the path had then (undo brings it back with the points). */
+        val generator: CurveGenerator? = null,
+        /**
+         * Curve: the Closed setting then. Restored only around a generated path (a step into or
+         * out of one): a generated rose is closed and a spiral is open, while v1.7's Closed toggle
+         * is not an in-tool step for any other path.
+         */
+        val closed: Boolean = false,
     )
 
     private val history = ArrayDeque<EditState>()
@@ -409,8 +442,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /**
      * What the finger does. v1.7 (item 1): [GROUP] drags (or taps) a point of a group or, with
      * "Select several", any point; [GIZMO] drags a part of the group gizmo; [MARQUEE] box-selects.
+     * v1.8 (item 6): [GEN_CENTRE] / [GEN_SIZE] drag a generator's handle.
      */
-    private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, REOPEN, IGNORE, GROUP, GIZMO, MARQUEE }
+    private enum class Drag { NONE, ANCHOR, NEW_ANCHOR, HANDLE_IN, HANDLE_OUT, REOPEN, IGNORE, GROUP, GIZMO, MARQUEE, GEN_CENTRE, GEN_SIZE }
 
     private var drag = Drag.NONE
     private var dragIndex = -1
@@ -644,7 +678,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun currentState(): EditState {
         val look = if (ownSettings != null) settings else null
         val sel = pointSelection
-        return if (isPath) EditState(emptyList(), spline, look = look, selection = sel) else EditState(anchors, null, look = look, selection = sel)
+        val g = generator
+        return if (isPath) EditState(emptyList(), spline, look = look, selection = sel, generator = g)
+        else EditState(anchors, null, look = look, selection = sel, generator = g, closed = settings.closed)
     }
 
     /** Keeps at most [MAX_HISTORY] states (never dropping the way back to the Path tool: it is the first one). */
@@ -678,6 +714,203 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     fun endNumericEdit() {
         historyKey = null
         numericHeld = false
+        if (generatorUnsaved) {
+            generatorUnsaved = false
+            generator?.let { saveLastGenerator(it) }
+        }
+    }
+
+    // ------------------------------------------------------------------ generated curves (v1.8, item 6, §3.7)
+
+    /**
+     * I16: THE one place where a hand edit of the geometry clears the generator. It records the
+     * in-tool step as [pushHistory] does (edits keyed [key] share one) and, on a generated path,
+     * clears the generator in that same step (its undo brings the generator back with the
+     * points), with [CurveGenLabels18.EDITED_HINT] once per session. Moving, adding and deleting
+     * points, dragging a tangent handle, Sharp / Smooth, the automatic tangent, handle lengths,
+     * weights, the order, Endpoint, Cyclic and Closed come here; thickness, color and stroke edits
+     * do not. (A move, turn or uniform scale of EVERY point is no edit of the curve: the generator
+     * follows it, [mapGenerator].)
+     */
+    private fun editGeometry(key: Any? = null) {
+        pushHistory(key)
+        if (generator == null) return
+        generator = null
+        generatorDropped()
+    }
+
+    /** The hint was shown (once per session: the tool lives as long as the editor). */
+    private var editedHintShown = false
+
+    /** The generator went during the touch in progress: the hint waits until it ends (a cancelled touch shows none). */
+    private var droppedDuringTouch = false
+
+    /** A finger is down on the canvas (between [onDown] and [onUp] / [onCancel]). */
+    private var touching = false
+
+    /** A sheet's slider changed the generator: [endNumericEdit] saves the settings. */
+    private var generatorUnsaved = false
+
+    /** The generator was cleared by a hand edit: the hint, once per session (when the touch ends). */
+    private fun generatorDropped() {
+        if (touching) { droppedDuringTouch = true; return }
+        if (editedHintShown) return
+        editedHintShown = true
+        controller.toast(CurveGenLabels18.EDITED_HINT)
+    }
+
+    /**
+     * The points [sel] were mapped by [m]: a similarity (move, turn, uniform scale, mirror) of
+     * EVERY point carries the generator [base] along ([CurveGenerator.mapped]; the curve is still
+     * its generator's, as the Transform tool keeps it); any other map is a hand edit and clears it.
+     * [hint]: the hint now (else the caller shows it when the edit ends).
+     */
+    private fun mapGenerator(base: CurveGenerator?, sel: PointSelection, m: Affine2, hint: Boolean = true) {
+        if (base == null) return
+        val mapped = if (sel.count == pointCount && m.isFinite()) base.mapped(m.toArray9()) else null
+        generator = mapped
+        if (mapped == null && hint) generatorDropped()
+    }
+
+    /** Curve: the Closed setting the open path shows becomes [closed] (a generated rose is closed, a spiral open). */
+    private fun showClosed(closed: Boolean) {
+        if (isPath || settings.closed == closed) return
+        if (reopened != null) settings = settings.copy(closed = closed) else showLook(settings.copy(closed = closed))
+    }
+
+    /**
+     * Closed on / off (the strip's chip, "Closed path" in the settings): the Curve and Polyline
+     * setting, Path's Cyclic ([setCyclic]). On a generated curve it edits the geometry ([editGeometry]).
+     */
+    fun setClosed(on: Boolean) {
+        if (isPath) { setCyclic(on); return }
+        if (settings.closed == on) return
+        if (generator != null) editGeometry()
+        update { it.copy(closed = on) }
+    }
+
+    /**
+     * "Curves" ▸ [genKind] (Curve and Path, never Polyline), while nothing is open: places that
+     * curve at the centre of the canvas seen in [viewArea] (as [shapeArea]: view px, null for the
+     * whole canvas), its size handle [GENERATOR_VIEW_FRACTION] × the area's short side from the
+     * centre (a wave is twice that long), with the last-used settings ([LAST_GENERATOR_KEY]), and
+     * opens it for editing. One in-tool step. False when nothing was placed.
+     */
+    fun startGenerator(genKind: CurveGenKind, viewArea: RectF?): Boolean {
+        if (polyline || pointCount > 0 || opening) return false
+        if (!controller.checkEditable()) return false
+        val area = shapeArea(viewArea)
+        val reach = GENERATOR_VIEW_FRACTION * min(area.width(), area.height())
+        if (!(reach > 0f) || !reach.isFinite()) return false
+        val last = lastGenerator()
+        val size = if (genKind == CurveGenKind.SINE) reach * 2f else reach
+        val g = last.copy(kind = genKind, cx = area.centerX(), cy = area.centerY(), size = size, amplitude = last.amplitude * size, angleDeg = 0f)
+            .sanitized() ?: return false
+        pushHistory()
+        targetLayer = controller.doc.activeLayer
+        applyGenerator(g)
+        return true
+    }
+
+    /**
+     * The generator sheet changed a setting: the open curve is built again from [g]. Each change
+     * is one in-tool step, and a slider drag (between [beginNumericEdit] and [endNumericEdit]) is
+     * ONE step however long it is. The settings become the last-used ones ([LAST_GENERATOR_KEY]).
+     * Nothing happens without a generated path.
+     */
+    fun changeGenerator(g: CurveGenerator) {
+        val now = generator ?: return
+        val next = g.sanitized() ?: return
+        if (next == now) return
+        pushHistory(if (numericHeld) NumericKey("generator", -1) else null)
+        applyGenerator(next)
+        if (numericHeld) generatorUnsaved = true else saveLastGenerator(next)
+    }
+
+    /**
+     * The open path becomes [g]'s curve ([CurveGenerators.build]; [g] sanitized): its points (a
+     * thickness every point shared is kept, else 100 %), Curve's Closed setting, no point
+     * selected. No step of its own.
+     */
+    private fun applyGenerator(g: CurveGenerator) {
+        val b = CurveGenerators.build(g, kind)
+        val w = commonWidth()
+        if (isPath) {
+            val s = b.spline ?: return
+            setSplineState(if (w == 1f) s else s.copy(points = s.points.map { it.copy(width = w) }))
+        } else {
+            showClosed(b.subpath.closed)
+            anchors = b.subpath.anchors.map { v -> v.toCurveAnchor().let { if (w == 1f) it else it.copy(width = w) } }
+        }
+        generator = g
+        selectionState = PointSelection.none(pointCount)
+        changed()
+    }
+
+    /** The thickness every point has (1 when they differ or there is none). */
+    private fun commonWidth(): Float {
+        val n = pointCount
+        if (n == 0) return 1f
+        val w = widthOf(0)
+        for (i in 1 until n) if (widthOf(i) != w) return 1f
+        return w
+    }
+
+    /** The last-used generator settings: placement-free (centre 0, size 1, the wave height relative to the size, angle 0). */
+    private fun lastGenerator(): CurveGenerator =
+        runCatching { controller.settings.getObject(LAST_GENERATOR_KEY, CurveGenerator.serializer()) }.getOrNull()?.sanitized()
+            ?: placementFree(CurveGenerator())
+
+    private fun saveLastGenerator(g: CurveGenerator) {
+        runCatching { controller.settings.putObject(LAST_GENERATOR_KEY, CurveGenerator.serializer(), placementFree(g)) }
+    }
+
+    private fun placementFree(g: CurveGenerator) = g.copy(cx = 0f, cy = 0f, size = 1f, amplitude = g.amplitude / g.size, angleDeg = 0f)
+
+    /** The generator when a handle drag began. */
+    private var genStart: CurveGenerator? = null
+
+    /**
+     * A touch at [pt] on one of the generator's handles (the nearer within the grab radius; they
+     * win over the points under them) starts a [Drag.GEN_CENTRE] or [Drag.GEN_SIZE] drag.
+     */
+    private fun generatorDown(pt: Vec2): Boolean {
+        val g = generator ?: return false
+        val h = generatorHandles ?: return false
+        val dc = pt.distanceTo(h.centre)
+        val ds = pt.distanceTo(h.size)
+        if (min(dc, ds) > grabRadius()) return false
+        drag = if (ds <= dc) Drag.GEN_SIZE else Drag.GEN_CENTRE
+        genStart = g
+        return true
+    }
+
+    /** A move of a generator handle drag: the centre moves the curve, the size handle scales and turns it. One in-tool step. */
+    private fun generatorMove(pt: Vec2) {
+        val g0 = genStart ?: return
+        if (!moved) {
+            if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
+            pushHistory()
+            moved = true
+            setDragging(true)
+        }
+        val d = pt - downPoint
+        val next = if (drag == Drag.GEN_CENTRE) {
+            g0.copy(cx = g0.cx + d.x, cy = g0.cy + d.y).sanitized()
+        } else {
+            CurveGenerators.withSizeHandle(g0, CurveGenerators.sizeHandle(g0) + d)
+        }
+        if (next != null && next != generator) applyGenerator(next)
+    }
+
+    /** The generator's handles: a line from the centre to the size handle, the two handles over everything. */
+    private fun drawGeneratorHandles(canvas: Canvas, t: ViewTransform, scale: Float) {
+        val h = generatorHandles ?: return
+        val c = map(t, h.centre).let { it[0] to it[1] }
+        val s = map(t, h.size).let { it[0] to it[1] }
+        painter.line(canvas, t, c.first, c.second, s.first, s.second)
+        pointPainter.generatorHandle(canvas, t, c.first, c.second, scale, centre = true, active = drag == Drag.GEN_CENTRE)
+        pointPainter.generatorHandle(canvas, t, s.first, s.second, scale, centre = false, active = drag == Drag.GEN_SIZE)
     }
 
     /**
@@ -717,6 +950,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // own settings come back when the path is undone away.
         state.look?.let { if (ownSettings == null) showLook(it) }
         val before = pointSelection
+        // (A step into or out of a generated curve: the Closed setting it had comes back with it.)
+        if (!isPath && (generator != null || state.generator != null)) showClosed(state.closed)
+        generator = state.generator
         if (isPath) setSplineState(state.spline) else anchors = state.anchors
         // v1.7 (item 1, I12): a step taken with several points selected (or undone while several
         // are) brings its selection back with the points; otherwise, as in v1.6, the selected
@@ -758,7 +994,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 controller.toast(TOO_MANY_POINTS)
                 return false
             }
-            pushHistory()
+            editGeometry()
             if (targetLayer == null) targetLayer = controller.doc.activeLayer
             val keepSelecting = selectedPoint in s.points.indices
             val at = when {
@@ -774,7 +1010,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             changed()
             return true
         }
-        pushHistory()
+        editGeometry()
         if (targetLayer == null) targetLayer = controller.doc.activeLayer
         anchors = anchors + CurveAnchor(p.x.coerceIn(-lim, lim), p.y.coerceIn(-lim, lim), sharp = polyline)
         selected = anchors.lastIndex
@@ -803,7 +1039,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         val a = anchors.getOrNull(index) ?: return
         if (a.sharp == sharp && !a.hasCustomTangent) return
-        pushHistory()
+        editGeometry()
         replace(index, a.copy(sharp = sharp, handleIn = null, handleOut = null))
     }
 
@@ -831,13 +1067,13 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (isPath) {
             val s = spline ?: return
             if (want.all { s.points[it].sharp == sharp }) return
-            pushHistory()
+            editGeometry()
             setSplineState(s.copy(points = s.points.mapIndexed { i, p -> if (i in want && p.sharp != sharp) p.copy(sharp = sharp) else p }))
             changed()
             return
         }
         if (want.all { anchors[it].sharp == sharp && !anchors[it].hasCustomTangent }) return
-        pushHistory()
+        editGeometry()
         anchors = anchors.mapIndexed { i, a -> if (i in want && (a.sharp != sharp || a.hasCustomTangent)) a.copy(sharp = sharp, handleIn = null, handleOut = null) else a }
         changed()
     }
@@ -864,7 +1100,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (isPath) return
         val a = anchors.getOrNull(index) ?: return
         if (!a.hasCustomTangent) return
-        pushHistory()
+        editGeometry()
         replace(index, a.withAutoTangent())
     }
 
@@ -873,12 +1109,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (isPath) {
             val s = spline ?: return
             if (index !in s.points.indices) return
-            pushHistory()
+            editGeometry()
             setSplineState(SplineEditing.removed(s, index))
             selectedPoint = -1
         } else {
             if (index !in anchors.indices) return
-            pushHistory()
+            editGeometry()
             anchors = anchors.toMutableList().also { it.removeAt(index) }
             selected = -1
         }
@@ -900,14 +1136,14 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val s = spline ?: return
             val old = s.points.getOrNull(index) ?: return
             if (q.x == old.x && q.y == old.y) return
-            pushHistory(NumericKey("move", index))
+            editGeometry(NumericKey("move", index))
             setSplineState(SplineEditing.moved(s, index, q))
             changed()
             return
         }
         val a = anchors.getOrNull(index) ?: return
         if (q == a.pos) return
-        pushHistory(NumericKey("move", index))
+        editGeometry(NumericKey("move", index))
         replace(index, a.moved(q))
     }
 
@@ -964,6 +1200,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val redo: List<EditState>,
         /** Every point is mapped: PATH maps its Bézier form directly and converts once at the end. */
         val all: Boolean,
+        /** v1.8 (I16): the generator when it began (a similarity of every point maps it, [mapGenerator]). */
+        val generator: CurveGenerator?,
     )
 
     private var groupEdit: GroupEdit? = null
@@ -986,7 +1224,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val size = history.size
         val redoNow = redo.toList()
         pushHistory()
-        groupEdit = GroupEdit(anchors, spline, sel, size, redoNow, sel.count == pointCount)
+        groupEdit = GroupEdit(anchors, spline, sel, size, redoNow, sel.count == pointCount, generator)
     }
 
     override fun setGroupTransform(m: Affine2) {
@@ -1006,6 +1244,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         } else {
             anchors = CurveGroupMath.mappedAnchors(g.anchors, g.selection, m, ShapeSettings.MAX_LENGTH)
         }
+        // (Decided again every frame from where the edit began; the hint waits for its end.)
+        mapGenerator(g.generator, g.selection, m, hint = false)
         changed()
     }
 
@@ -1014,7 +1254,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         groupEdit = null
         if (isPath && g.all) setSplineState(spline)
         val unchanged = if (isPath) spline == g.spline else anchors == g.anchors
-        if (unchanged) dropStepsSince(g.historySize, g.redo)
+        if (unchanged) {
+            dropStepsSince(g.historySize, g.redo)
+            generator = g.generator
+        } else if (g.generator != null && generator == null) {
+            generatorDropped()
+        }
         endNumericEdit()
         changed()
     }
@@ -1024,6 +1269,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val g = groupEdit ?: return
         groupEdit = null
         if (isPath) setSplineState(g.spline) else anchors = g.anchors
+        generator = g.generator
         selectionState = g.selection
         dropStepsSince(g.historySize, g.redo)
         endNumericEdit()
@@ -1058,7 +1304,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             controller.toast(minPointsMessage())
             return false
         }
-        pushHistory()
+        editGeometry()
         if (isPath) {
             val s = spline ?: return false
             setSplineState(s.copy(points = s.points.filterIndexed { i, _ -> i !in sel }))
@@ -1107,6 +1353,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         pushHistory()
         if (isPath) setSplineState(null) else anchors = emptyList()
+        // (The whole curve goes, its generator with it: no hand edit, no hint; undo brings both.)
+        generator = null
         selectionState = PointSelection.none(0)
         severalState = false
         trashedPending = true
@@ -1167,7 +1415,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             want[i] = v.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT)
         }
         if (want.all { (i, w) -> s.points[i].weight == w }) return
-        pushHistory(NumericKey("weight", -1))
+        editGeometry(NumericKey("weight", -1))
         setSplineState(s.copy(points = s.points.mapIndexed { i, p -> want[i]?.let { if (it == p.weight) p else p.copy(weight = it) } ?: p }))
         changed()
     }
@@ -1200,7 +1448,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val v = order.coerceIn(VSpline.MIN_ORDER, VSpline.MAX_ORDER)
         val s = spline
         if (s != null && s.order != v) {
-            pushHistory()
+            editGeometry()
             setSplineState(s.copy(order = v))
         }
         if (settings.pathOrder != v) update { it.copy(pathOrder = v) } else changed()
@@ -1210,7 +1458,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     fun setEndpoint(on: Boolean) {
         val s = spline
         if (s != null && s.endpoint != on) {
-            pushHistory()
+            editGeometry()
             setSplineState(s.copy(endpoint = on))
         }
         if (settings.pathEndpoint != on) update { it.copy(pathEndpoint = on) } else changed()
@@ -1220,7 +1468,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     fun setCyclic(on: Boolean) {
         val s = spline
         if (s != null && s.cyclic != on) {
-            pushHistory()
+            editGeometry()
             setSplineState(s.copy(cyclic = on))
         }
         if (settings.closed != on) update { it.copy(closed = on) } else changed()
@@ -1239,7 +1487,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val old = s.points.getOrNull(index) ?: return
         val w = weight.coerceIn(VSpline.MIN_WEIGHT, VSpline.MAX_WEIGHT)
         if (w == old.weight) return
-        pushHistory(NumericKey("weight", index))
+        editGeometry(NumericKey("weight", index))
         setSplineState(SplineEditing.withWeight(s, index, w))
         changed()
     }
@@ -1328,7 +1576,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * Thickness is not scaled (item 12): it is a factor of the line width, as the Shape tool keeps
      * its stroke width.
      */
-    private fun mapPointsStep(key: Any?, sel: PointSelection, m: Affine2, baseAnchors: List<CurveAnchor>, baseSpline: VSpline?) {
+    private fun mapPointsStep(
+        key: Any?, sel: PointSelection, m: Affine2, baseAnchors: List<CurveAnchor>, baseSpline: VSpline?, baseGenerator: CurveGenerator? = generator,
+    ) {
         if (!m.isFinite() || anchors.isEmpty() || groupEdit != null) return
         pushHistory(key)
         if (isPath) {
@@ -1337,6 +1587,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         } else {
             anchors = CurveGroupMath.mappedAnchors(baseAnchors, sel, m, ShapeSettings.MAX_LENGTH)
         }
+        // v1.8 (I16): the whole curve moved or scaled alike keeps its generator, anything else clears it.
+        mapGenerator(baseGenerator, sel, m)
         changed()
     }
 
@@ -1386,7 +1638,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * row first saw this selection, about the centre of their box. [result] is what the row made
      * of them last, at [percent].
      */
-    private class ScaleRef(val sel: PointSelection, val anchors: List<CurveAnchor>, val spline: VSpline?, val centre: Vec2) {
+    private class ScaleRef(val sel: PointSelection, val anchors: List<CurveAnchor>, val spline: VSpline?, val centre: Vec2, val generator: CurveGenerator?) {
         var result: Any? = null
         var percent = HUNDRED
     }
@@ -1404,7 +1656,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val r = scaleRef
         if (r != null && r.sel == sel && (now === (if (isPath) r.spline else r.anchors) || now === r.result)) return r
         val box = PointGroupMath.bounds(pointPositions(), sel) ?: return null
-        return ScaleRef(sel, anchors, spline, Vec2(box.centerX(), box.centerY())).also { scaleRef = it }
+        return ScaleRef(sel, anchors, spline, Vec2(box.centerX(), box.centerY()), generator).also { scaleRef = it }
     }
 
     private inner class PillScale : ObjectScale {
@@ -1424,7 +1676,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val py = (yPercent?.takeIf { it.isFinite() } ?: cur.y).coerceIn(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT)
             if (px == cur.x && py == cur.y) return
             // From the reference points every time: a scrub never accumulates rounding.
-            mapPointsStep(NumericKey("scale", -1), r.sel, Affine2.scaleAbout(r.centre, px / 100f, py / 100f), r.anchors, r.spline)
+            mapPointsStep(NumericKey("scale", -1), r.sel, Affine2.scaleAbout(r.centre, px / 100f, py / 100f), r.anchors, r.spline, r.generator)
             r.result = pointsNow()
             r.percent = Vec2(px, py)
         }
@@ -1465,13 +1717,16 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val several: Boolean,
         val trashed: Boolean,
         val targetLayer: Layer?,
+        val generator: CurveGenerator?,
+        /** Curve: the Closed setting while generated (null otherwise: v1.7's marks never see it). */
+        val closed: Boolean?,
     )
 
     /** Counts the paths the tool has edited: a mark of another path never rolls this one back. */
     private var historyEpoch = 0
 
     override fun historyMark(): Any? = ToolMark(
-        historyEpoch, reopened, history.toList(), redo.toList(), anchors, spline, pointSelection, severalState, trashedPending, targetLayer,
+        historyEpoch, reopened, history.toList(), redo.toList(), anchors, spline, pointSelection, severalState, trashedPending, targetLayer, generator, generator?.let { settings.closed },
     )
 
     /**
@@ -1489,6 +1744,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         historyKey = null
         numericHeld = false
         canUndoStep = history.isNotEmpty()
+        m.closed?.let { showClosed(it) }
+        generator = m.generator
         if (isPath) setSplineState(m.spline) else anchors = m.anchors
         selectionState = m.selection.resized(pointCount)
         severalState = m.several && pointCount > 0
@@ -1514,24 +1771,30 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             val s = spline
             if (isPath && s != null) setSplineState(s.copy(points = CurveGroupMath.mappedPoints(s.points, group, m)))
             else anchors = CurveGroupMath.mappedAnchors(anchors, group, m, ShapeSettings.MAX_LENGTH)
+            // (Every point selected: the generated curve moves along with its generator.)
+            mapGenerator(generator, group, m)
             changed()
             return
         }
+        val whole = Affine2.translate(d.x, d.y)
         if (isPath) {
             val s = spline ?: return
             val i = selectedPoint
-            pushHistory(NumericKey("nudge", i))
             val p = s.points.getOrNull(i)
+            if (p != null) editGeometry(NumericKey("nudge", i)) else pushHistory(NumericKey("nudge", i))
             setSplineState(if (p != null) SplineEditing.moved(s, i, Vec2(p.x, p.y) + d) else SplineEditing.translated(s, d))
+            if (p == null) mapGenerator(generator, PointSelection.all(pointCount), whole)
             changed()
             return
         }
-        pushHistory(NumericKey("nudge", selected))
-        anchors = if (selected in anchors.indices) {
+        val one = selected in anchors.indices
+        if (one) editGeometry(NumericKey("nudge", selected)) else pushHistory(NumericKey("nudge", selected))
+        anchors = if (one) {
             anchors.mapIndexed { i, a -> if (i == selected) a.moved(a.pos + d) else a }
         } else {
             anchors.map { it.moved(it.pos + d) }
         }
+        if (!one) mapGenerator(generator, PointSelection.all(pointCount), whole)
         changed()
     }
 
@@ -1576,6 +1839,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private var handleTargets = IntArray(0)
     private var handleHistorySize = 0
     private var handleRedo: List<EditState> = emptyList()
+    /** The generator when the change began (back when it ends where it began). */
+    private var handleGenerator: CurveGenerator? = null
     /** A two-finger pinch is scaling the handles ([onTwoFingerStart]). */
     private var pinchingHandles = false
 
@@ -1600,6 +1865,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         handleTargets = handleTargetsNow()
         handleHistorySize = history.size
         handleRedo = redo.toList()
+        handleGenerator = generator
         handleScale = 1f
     }
 
@@ -1618,7 +1884,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // they still follow their neighbours); a change that changes nothing records no step.
         val next = if (f == 1f) base else CurveGeometry.scaledHandles(base, handleTargets, f, handleSide, isClosed, tension)
         if (next == anchors) return
-        pushHistory(NumericKey("handles", -1))
+        editGeometry(NumericKey("handles", -1))
         anchors = next
         changed()
     }
@@ -1629,6 +1895,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (base != null && anchors == base && history.size > handleHistorySize) {
             // It ended where it began (a slider dragged back to 100 %): no step.
             while (history.size > handleHistorySize) history.removeLast()
+            generator = handleGenerator
             redo.clear(); redo.addAll(handleRedo)
             redoCount = redo.size
             canUndoStep = history.isNotEmpty()
@@ -1682,6 +1949,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         redoCount = redo.size
         canUndoStep = history.isNotEmpty()
         anchors = base
+        generator = handleGenerator
         changed()
     }
 
@@ -1979,7 +2247,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         reopenKind = kind
         snap.end()
         snapMoving = null
+        touching = true
+        droppedDuringTouch = false
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
+        // v1.8 (item 6): a generator's handles win over the points under them.
+        if (generatorDown(pt)) return
         if (isPath) { if (!groupDown(pt)) pathDown(pt); return }
         val tol = grabRadius()
         val sel = if (pointSelection.isSingle) selected else -1
@@ -2057,7 +2329,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             return
         }
         beginSnap(except = -1)
-        pushHistory()
+        editGeometry()
         val s = s0 ?: newSpline()
         val hit = if (s.points.size >= 2) SplineEditing.polygonHit(s, pt) else null
         val keepSelecting = selectedPoint in s.points.indices
@@ -2095,7 +2367,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // New anchor: inserted when tapping on the path, appended otherwise. It snaps right away
         // (to objects, the other anchors and, with grid snapping, the grid).
         beginSnap(except = -1)
-        pushHistory()
+        editGeometry()
         val hit = if (anchors.size >= 2) CurveGeometry.nearest(anchors, pt, isClosed, tension, polyline) else null
         val list = anchors.toMutableList()
         if (hit != null && hit.distance <= tol * 0.6f) {
@@ -2132,6 +2404,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         when (drag) {
             Drag.NONE, Drag.IGNORE -> return
             Drag.GROUP, Drag.GIZMO, Drag.MARQUEE -> groupMove(pt)
+            Drag.GEN_CENTRE, Drag.GEN_SIZE -> generatorMove(pt)
             Drag.REOPEN -> {
                 if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
                 // Not a tap: a new path starts where the finger went down, as anywhere else.
@@ -2141,7 +2414,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             }
             Drag.ANCHOR, Drag.NEW_ANCHOR -> {
                 if (!moved && pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
-                if (!moved && drag == Drag.ANCHOR) pushHistory()
+                if (!moved && drag == Drag.ANCHOR) editGeometry()
                 // v1.7: a point dragged out of a group of two or more is then the only one selected.
                 if (!moved && drag == Drag.ANCHOR && pointSelection.count >= 2) selectionState = pointSelection.only(dragIndex)
                 moved = true
@@ -2163,7 +2436,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 val a = anchors.getOrNull(dragIndex) ?: return
                 if (!moved) {
                     if (pt.distanceTo(downPoint) < controller.docLength(TOUCH_SLOP_DP)) return
-                    pushHistory(); moved = true
+                    editGeometry(); moved = true
                     setDragging(true)
                 }
                 val (hIn, hOut) = handlesOf(dragIndex)
@@ -2200,6 +2473,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 if (!moved) changed()
             }
             Drag.HANDLE_IN, Drag.HANDLE_OUT -> if (moved) onMove(p)
+            Drag.GEN_CENTRE, Drag.GEN_SIZE -> if (moved) onMove(p)
             Drag.GROUP, Drag.GIZMO, Drag.MARQUEE -> groupUp(Vec2(p.x, p.y))
             Drag.REOPEN -> {
                 val path = reopenCandidate
@@ -2213,11 +2487,18 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             Drag.NONE, Drag.IGNORE -> {}
         }
         drag = Drag.NONE
+        genStart = null
         endSnap()
         controller.increments.readout = null
         // The drag is over: a plain line / fill goes back into the layer, a brush stroke is drawn
         // exactly once the path rests a moment.
         setDragging(false)
+        // (A generator the touch cleared: the hint now that it is over.)
+        touching = false
+        if (droppedDuringTouch) {
+            droppedDuringTouch = false
+            generatorDropped()
+        }
         controller.invalidateOverlay()
     }
 
@@ -2226,12 +2507,18 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         reopenCandidate = null
         marqueeTo = null
         gizmoLayout = null
+        genStart = null
+        // (A cancelled touch, e.g. the first finger of a two-finger undo, edited nothing: no hint.)
+        touching = false
+        droppedDuringTouch = false
         if (groupEditing) {
             // A group gesture: its points, selection and step go back as they were.
             abortGroupEdit()
             drag = Drag.NONE
         }
         if (drag != Drag.NONE && drag != Drag.IGNORE && drag != Drag.REOPEN) {
+            if (!isPath && (generator != null || gestureStart.generator != null)) showClosed(gestureStart.closed)
+            generator = gestureStart.generator
             if (isPath) setSplineState(gestureStart.spline) else anchors = gestureStart.anchors
             selectionState = gestureSelection
             while (history.size > gestureHistorySize) history.removeLast()
@@ -2329,6 +2616,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         Drag.GIZMO, Drag.MARQUEE -> true
         Drag.HANDLE_IN, Drag.HANDLE_OUT -> true
+        Drag.GEN_CENTRE, Drag.GEN_SIZE -> true
         else -> false
     }
 
@@ -2459,6 +2747,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val openedColor: Int,
         /** The path's plain line width until the user sets one (exact, also outside the settings' range). */
         var width: Float?,
+        /**
+         * What "unchanged" compares with: [original], without a generator its geometry no longer
+         * matches (I16: the tool dropped it silently; an untouched path is stored as it was).
+         */
+        val baseline: VPath = original,
     )
 
     private var reopened: Reopened? = null
@@ -2531,7 +2824,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val st = path.stroke
         val user = settings
         val strokeColor = st?.color ?: (path.fill as? VPaint.Solid)?.color ?: controller.color
-        reopened = Reopened(layer, session, path, user, controller.color, strokeColor, st?.takeIf { it.kind == VStrokeKind.PLAIN }?.width)
+        // v1.8 (I16): the generator stays only while the geometry is still its own (else it goes silently).
+        val kept = path.generator?.takeIf { !polyline && CurveGenerators.matches(path) }
+        val baseline = if (path.generator != null && kept == null) path.copy(generator = null) else path
+        reopened = Reopened(layer, session, path, user, controller.color, strokeColor, st?.takeIf { it.kind == VStrokeKind.PLAIN }?.width, baseline)
         reopenedState = true
         pristine = true
         settings = user.showing(path)
@@ -2549,6 +2845,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         } else {
             anchors = path.subpaths[0].anchors.map { it.toCurveAnchor() }
         }
+        generator = kept
         // v1.7 (item 6): [openPath] hands over the points to select (a converted shape's corner).
         val n = pointCount
         selectionState = select?.filter { it in 0 until n }?.takeIf { it.isNotEmpty() }
@@ -2826,7 +3123,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val vp = buildVPath()
         // (Path: the same spline and look are unchanged even when the stored Bézier form was
         // cut differently, e.g. an approximated spline mapped by a transform.)
-        pristine = vp != null && (vp == r.original || (isPath && vp.spline != null && vp.copy(subpaths = r.original.subpaths) == r.original))
+        pristine = vp != null && (vp == r.baseline || (isPath && vp.spline != null && vp.copy(subpaths = r.baseline.subpaths) == r.baseline))
         val gradient = r.original.fill?.takeIf { it !is VPaint.Solid && settings.fill && settings.fillColor == null && canFill }
         val specs = if (path != null) buildSpecs(path, mode, gradientFill = gradient != null) else emptyList()
         sessionGradient = if (gradient != null && vp != null) vp.copy(stroke = null) else null
@@ -2961,6 +3258,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                 fill = fill,
                 stroke = stroke,
                 spline = sp,
+                generator = generator,
             )
         }
         return VPath(
@@ -2972,8 +3270,17 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             fillRule = orig?.fillRule ?: VFillRule.NONZERO,
             fill = fill,
             stroke = stroke,
+            generator = if (polyline) null else generator,
         )
     }
+
+    /**
+     * I16 as the path is stored: [vp] keeps its generator only while its geometry is the
+     * generator's ([CurveGenerators.matches]; every hand edit already cleared it through
+     * [editGeometry], so this only guards what no step foresaw).
+     */
+    private fun checkedGenerator(vp: VPath): VPath =
+        if (vp.generator != null && !CurveGenerators.matches(vp)) vp.copy(generator = null) else vp
 
     // ------------------------------------------------------------------ commit / discard
 
@@ -3024,7 +3331,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * anything else is added and drawn by the layer. A path that draws nothing is dropped.
      */
     private fun commitObject(layer: Layer) {
-        val vp = buildVPath() ?: run { discard(); return }
+        val vp = buildVPath()?.let { checkedGenerator(it) } ?: run { discard(); return }
         val label = stepLabel
         val path = path()
         val g = brushGeometry(path, settings)
@@ -3102,7 +3409,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             r.session.inner = null
             r.session.drawPreview = null
             // (Untouched: the object as it was, so nothing is recorded.)
-            val replacement = if (pristine && vp != null) r.original else vp?.copy(id = r.original.id)
+            val replacement = if (pristine && vp != null) r.original else vp?.let { checkedGenerator(it) }?.copy(id = r.original.id)
             endReopen(cancelSession = false)
             r.session.commit(listOfNotNull(replacement), EDIT_PATH_LABEL)
             // A Path-tool path edited here (after To Bézier) is a plain Bézier path from now on.
@@ -3125,6 +3432,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun resetPath() {
         anchors = emptyList()
         spline = null
+        generator = null
+        genStart = null
         selectionState = PointSelection.none(0)
         severalState = false
         groupEdit = null
@@ -3228,6 +3537,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (isPath) {
             drawPathPoints(canvas, t, scale)
             drawGroupOverlay(canvas, t)
+            drawGeneratorHandles(canvas, t, scale)
             snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
             return
         }
@@ -3251,6 +3561,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
             pointPainter.handle(canvas, t, q[0], q[1], scale, square = list[i].sharp || polyline, active = i in group)
         }
         drawGroupOverlay(canvas, t)
+        drawGeneratorHandles(canvas, t, scale)
         // Smart guides of the dragged point (on top, labels away from the finger).
         snap.draw(canvas, t, snapMoving?.let { pointBox(it) })
     }
@@ -3293,6 +3604,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val seed: Long,
         /** The giving tool's in-tool history (a hand-back restores it). */
         val history: List<EditState>,
+        /** v1.8: the path's generator (Path ↔ Curve hand-back keeps it; To Bézier drops it: the Bézier form is no fit of the curve). */
+        val generator: CurveGenerator? = null,
     )
 
     /**
@@ -3308,7 +3621,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         if (curve === this || curve.hasPendingWork) return false
         val mine = detachPending()
         controller.selectTool(ToolId.CURVE)
-        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history)
+        val back = Handoff(emptyList(), mine.spline, mine.targetLayer, mine.look, null, mine.seed, mine.history, mine.generator)
         curve.adopt(
             Handoff(mine.anchors, null, mine.targetLayer, mine.look, mine.reopened, mine.seed, emptyList()),
             history = listOf(EditState(emptyList(), null, back = back)),
@@ -3323,7 +3636,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val mine = detachPending()
         controller.selectTool(ToolId.PATH)
         path.adopt(
-            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList()),
+            Handoff(emptyList(), back.spline, mine.targetLayer, back.look, mine.reopened, mine.seed, emptyList(), back.generator),
             history = back.history,
         )
         // Redo converts it again.
@@ -3343,7 +3656,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val r = reopened
         val h = Handoff(
             anchors, spline, targetLayer ?: controller.doc.activeLayer, settings.copy(closed = if (isPath) pathCyclic else isClosed), r,
-            brushPreview.sessionSeed, history.toList(),
+            brushPreview.sessionSeed, history.toList(), generator,
         )
         if (r != null) {
             reopened = null
@@ -3373,7 +3686,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     private fun adopt(h: Handoff, history: List<EditState>) {
         val r = h.reopened
         if (r != null) {
-            reopened = Reopened(r.layer, r.session, r.original, settings, r.userColor, r.openedColor, r.width)
+            reopened = Reopened(r.layer, r.session, r.original, settings, r.userColor, r.openedColor, r.width, r.baseline)
             reopenedState = true
             pristine = false
             // The strip shows the path's look (the unit and nudge step stay the user's).
@@ -3392,6 +3705,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         targetLayer = h.targetLayer
         if (isPath) setSplineState(h.spline) else anchors = h.anchors
+        generator = if (polyline) null else h.generator
         selectionState = PointSelection.none(pointCount)
         severalState = false
         this.history.clear()
@@ -3445,6 +3759,12 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         /** The pill's position labels besides "Point 3": two or more points, and no point selected (I10). */
         const val SELECTED_POINTS_LABEL = "Selected points"
         const val CENTER_LABEL = "Center"
+
+        /** v1.8 (item 6): the last-used generator settings (AppSettings object, placement-free; Curve and Path share it). */
+        const val LAST_GENERATOR_KEY = "curve.generator.last"
+
+        /** v1.8 (item 6): a picked curve's size handle lies this fraction of the view's short side from its centre. */
+        const val GENERATOR_VIEW_FRACTION = 0.3f
 
         /** The pill's Scale row: 100 % is the points as selected; held to 1 %..10 000 %. */
         private val HUNDRED = Vec2(100f, 100f)

@@ -6,6 +6,7 @@ import com.brushwork.paint.tools.vector.spline.NurbsGeometry
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.vector.CurveGenKind
 import com.brushwork.paint.vector.CurveGenerator
+import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VAnchor
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VSpline
@@ -108,13 +109,18 @@ object CurveGenerators {
         }
     }
 
-    /** True when [path]'s geometry is its generator's within 0.01 px (I16; see the class docs). */
+    /**
+     * True when [path]'s geometry is its generator's within 0.01 px (I16; see the class docs).
+     * The generator describes the source path alone (I17, §4.3: source only): its copies are maps
+     * of the source and never part of the comparison.
+     */
     fun matches(path: VPath): Boolean {
         val stored = path.generator ?: return false
         val g = stored.sanitized() ?: return false
-        if (path.subpaths.size != 1 || path.polyline) return false
-        val spline = path.spline
-        return if (spline != null) matchesSpline(g, path, spline) else matchesHermite(Analytic(g), path.subpaths[0], MATCH_TOLERANCE.toDouble())
+        val src = ObjectCopies.source(path) as VPath
+        if (src.subpaths.size != 1 || src.polyline) return false
+        val spline = src.spline
+        return if (spline != null) matchesSpline(g, src, spline) else matchesHermite(Analytic(g), src.subpaths[0], MATCH_TOLERANCE.toDouble())
     }
 
     // ------------------------------------------------------------------ the generator's handles

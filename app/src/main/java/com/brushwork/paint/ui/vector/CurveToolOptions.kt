@@ -236,7 +236,7 @@ private fun BezierToolOptions(tool: CurveTool) {
     }
     // v1.6 §3.3: the selected point's handles (all points' with none selected).
     if (handlesShown) HandlesGroup(tool)
-    OptionChip("Closed", s.closed, { set { it.copy(closed = !it.closed) } }, icon = Icons.Filled.Loop)
+    OptionChip("Closed", s.closed, { tool.setClosed(!s.closed) }, icon = Icons.Filled.Loop)
     StrokeFillAndSheets(tool, onSettings = { showSettings = true }, onNumbers = { showNumbers = true })
 
     if (showSettings) CurveSettingsSheet(tool) { showSettings = false; tool.persistBrushSize() }
@@ -1117,7 +1117,7 @@ private fun CurveSettingsSheet(tool: CurveTool, onDismiss: () -> Unit) {
             PathSettingsSection(tool)
         } else {
             SectionHeader("Path")
-            ToggleRow("Closed path", s.closed, { v -> set { it.copy(closed = v) } }, description = "Joins the last point back to the first")
+            ToggleRow("Closed path", s.closed, { v -> tool.setClosed(v) }, description = "Joins the last point back to the first")
             if (!tool.polyline) {
                 LabeledSlider(
                     label = "Tension",
