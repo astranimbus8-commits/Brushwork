@@ -21,6 +21,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
@@ -351,8 +352,7 @@ internal object UniqueLabelsV17 {
         for (p in FOUR) assertTrue(tool.addAnchor(p))
         tool.deselect()
         settle()
-        ui.reach(PointLabels.SELECT_SEVERAL, 0f)
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        PillTestKit.toggleSeveral() // v1.8 (F4): the X / Y pill's cell
         assertTrue("Select several is on", tool.selectSeveral)
         QaCurves.tap(s, FOUR[0])
         QaCurves.tap(s, FOUR[2])
@@ -395,8 +395,7 @@ internal object UniqueLabelsV17 {
         }
         deletes("Shape Points, one point", walkStrip(s, a, "Shape Points, one point", fingers = true))
         // Two of its four points (the strip's group controls and the pill's "Delete selected points").
-        ui.reach(PointLabels.SELECT_SEVERAL, 0f)
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        PillTestKit.toggleSeveral() // v1.8 (F4): the X / Y pill's cell
         assertTrue("Select several is on", tool.selectSeveral)
         QaCurves.tap(s, anchors[2].pos)
         assertEquals("two points picked", 2, tool.pointSelection.count)
@@ -544,8 +543,7 @@ internal object UniqueLabelsV17 {
         settle()
         walkStrip(s, a, "Free deform", fingers = true)
         // Its points picked: the pill's point controls join in.
-        ui.reach(PointLabels.SELECT_SEVERAL, 0f)
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        PillTestKit.toggleSeveral() // v1.8 (F4): the X / Y pill's cell
         ui.reach(PointLabels.SELECT_ALL, 0f)
         click(PointLabels.SELECT_ALL, exact = true)
         assertTrue("every point picked", tool.allPointsSelected)

@@ -9,6 +9,7 @@ import com.brushwork.paint.qa17.PointsQa.Companion.save
 import com.brushwork.paint.qa17.PointsQa.Companion.steps
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.ui.common.PointLabels
@@ -77,17 +78,17 @@ class Qa17PointsPathEditUiTest {
         save(composite(c), "prepend-doc")
         save(PointsQa.window(s), "prepend-screen")
 
-        // "Undo last point" takes back the last start; the selection stays on the first point, so
+        // The top row's Undo takes back the last start; the selection stays on the first point, so
         // the next point (a drag from empty canvas) is again put at the start and follows the finger.
-        press("Undo last point", 44f)
+        click("Undo", exact = true)
         assertEquals(listOf(90 to 120, 150 to 200, 250 to 120, 330 to 200), xs())
         assertEquals("still the first point", 0, tool.selectedPoint)
         QaCurves.drag(s, Vec2(60f, 60f), Vec2(10f, 20f))
         assertEquals("dragged into place at the start", listOf(70 to 80, 90 to 120, 150 to 200, 250 to 120, 330 to 200), xs())
         assertEquals(0, tool.selectedPoint)
         assertEquals(n + 2, steps(tool))
-        press("Undo last point", 44f)
-        press("Redo point", 44f)
+        click("Undo", exact = true)
+        click("Redo", exact = true)
         assertEquals(listOf(70 to 80, 90 to 120, 150 to 200, 250 to 120, 330 to 200), xs())
 
         // The last point selected: a tap still extends the END (v1.6).
@@ -131,13 +132,13 @@ class Qa17PointsPathEditUiTest {
         assertEquals(n + 2, steps(tool))
         assertTrue("through the dragged corner", Smoke.pumpUntil(PointsQa.WAIT_MS) { settle(1); inked(composite(c), 196, 254, 204, 262) > 0 })
         // Undo: back in place, still sharp; undo again: smooth; redo both.
-        press("Undo last point", 44f)
+        click("Undo", exact = true)
         assertEquals(220f, tool.spline!!.points[2].y, 0.01f)
         assertTrue(tool.spline!!.points[2].sharp)
-        press("Undo last point", 44f)
+        click("Undo", exact = true)
         assertFalse(tool.spline!!.points[2].sharp)
-        press("Redo point", 44f)
-        press("Redo point", 44f)
+        click("Redo", exact = true)
+        click("Redo", exact = true)
         assertTrue(tool.spline!!.points[2].sharp)
         assertEquals(260f, tool.spline!!.points[2].y, 0.01f)
 

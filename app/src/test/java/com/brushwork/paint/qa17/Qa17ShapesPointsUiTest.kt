@@ -13,6 +13,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.tools.vector.ShapeType
@@ -144,7 +145,7 @@ class Qa17ShapesPointsUiTest {
         Finger.tap(s, PillLabels.DELETE_POINTS)
         assertEquals("the corner is gone", 3, tool.pointCount)
         assertEquals("one in-tool step", n + 1, steps(tool))
-        click("Undo point edit", exact = true)
+        click("Undo", exact = true)
         assertEquals(4, tool.pointCount)
 
         // A placed shape: "Delete shape" from the trash cell is ONE step; one undo brings it back.
@@ -186,7 +187,7 @@ class Qa17ShapesPointsUiTest {
         fun pts() = tool.docAnchors()!!.map { it.pos }
 
         // "Select several": three outer points by three taps.
-        press(s, PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         assertTrue("its hint", has(PointLabels.SEVERAL_HINT, exact = true))
         for (i in listOf(0, 4, 6)) QaCurves.tap(s, tool.pointAt(i))
@@ -244,7 +245,7 @@ class Qa17ShapesPointsUiTest {
         Finger.tap(s, PillLabels.DELETE_POINTS)
         assertEquals(count - 3, tool.pointCount)
         assertEquals(n + 1, steps(tool))
-        click("Undo point edit", exact = true)
+        click("Undo", exact = true)
         assertEquals(count, tool.pointCount)
         Smoke.assertQuiet(c, "star points")
     }

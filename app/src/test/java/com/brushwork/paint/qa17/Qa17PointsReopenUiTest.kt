@@ -15,12 +15,12 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.vector.CurvePaint
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.ui.common.CurveLabels17
-import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.vector.VPath
 import kotlinx.coroutines.runBlocking
@@ -119,7 +119,7 @@ class Qa17PointsReopenUiTest {
 
         // "Select several": the new start plus two more points, dragged together by the last one,
         // which sits on the gizmo's SE corner (a point on a handle wins the touch).
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         tap(200f, 100f)
         tap(320f, 200f)
         assertEquals(listOf(0, 3, 4), tool.pointSelection.indices)

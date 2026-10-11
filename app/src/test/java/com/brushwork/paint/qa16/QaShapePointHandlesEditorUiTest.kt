@@ -27,7 +27,7 @@ import kotlin.math.ln1p
  * drawn with a finger, "Points", a point tapped; the Handles group's › steps one Scale increment,
  * its slider lands on the multiples, its typed-value dialog's + and slider too while a typed value
  * stays exact; a tangent handle dragged by a finger moves by whole Length steps from where it was
- * grabbed, the move in the info chip; each one in-tool step ("Undo point edit").
+ * grabbed, the move in the info chip; each one in-tool step (the top row's "Undo").
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa16.shapehandleseditorsandbox"])
@@ -73,13 +73,13 @@ class QaShapePointHandlesEditorUiTest {
             click("Longer handles")
             assertEquals("› : 125 %", base * 1.25f, out0().length, 1e-3f * base)
             assertEquals(1f, tool.handleScale, 0f)
-            click("Undo point edit")
+            click("Undo", exact = true)
             assertEquals(base, out0().length, 1e-3f * base)
 
             // The slider: 160 % → 150 % (a 25 % multiple).
             QaCurves.setSlider("Handle scale", pos(1.6))
             assertEquals("the slider lands on 150 %", base * 1.5f, out0().length, 2e-3f * base)
-            click("Undo point edit")
+            click("Undo", exact = true)
             assertEquals(base, out0().length, 1e-3f * base)
 
             // The typed-value dialog: + to the next multiple, its slider onto the multiples; typed exact.
@@ -92,7 +92,7 @@ class QaShapePointHandlesEditorUiTest {
             assertEquals("its slider: 150", "150", text("Scale"))
             SmokeUi.typeAndDone("Scale", "137")
             assertEquals("typed: exact", base * 1.37f, out0().length, 1e-3f * base)
-            click("Undo point edit")
+            click("Undo", exact = true)
             assertEquals(base, out0().length, 1e-3f * base)
 
             // A finger on the out-handle's end: +37, +12 → +25, 0 from where it was grabbed.
@@ -105,7 +105,7 @@ class QaShapePointHandlesEditorUiTest {
             assertEquals("y: no step", start.y, end.y, 0.01f)
             assertTrue("the info chip showed the move: $held", held != null)
             assertNull("gone when the finger lifts", c.increments.readout)
-            click("Undo point edit")
+            click("Undo", exact = true)
             val back = tool.docAnchors()!![0].pos + out0()
             assertEquals(start.x, back.x, 0.01f)
             assertEquals(start.y, back.y, 0.01f)

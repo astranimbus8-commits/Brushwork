@@ -8,6 +8,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.PillLabels
@@ -70,7 +71,7 @@ class Qa17PointsGroupUiTest {
         val start = points(tool)
 
         // "Select several", three points tapped.
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         assertTrue("the hint", has(PointLabels.SEVERAL_HINT, exact = true))
         for (i in 1..3) tap(start[i].x, start[i].y)
@@ -129,7 +130,7 @@ class Qa17PointsGroupUiTest {
         assertEquals(n0 + 3, steps(tool))
 
         // "Select several" off; two points get their own thickness (one tapped at a time).
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertFalse(tool.selectSeveral)
         val now = points(tool)
         for ((i, v) in listOf(2 to "50", 4 to "250")) {
@@ -155,7 +156,7 @@ class Qa17PointsGroupUiTest {
 
         // The pill's trash: every point selected = the whole object; one less = the selected points.
         assertTrue(has(PillLabels.deleteObject(noun), exact = true))
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         tap(now[0].x, now[0].y)
         assertEquals(listOf(1, 2, 3, 4), tool.pointSelection.indices)
         assertTrue("the trash says what it deletes", has(PillLabels.DELETE_POINTS, exact = true))
@@ -183,7 +184,7 @@ class Qa17PointsGroupUiTest {
         assertEquals(5, tool.pointCount)
 
         // "Select all points" selects every point; "Deselect all points" none.
-        if (tool.selectSeveral) press(PointLabels.SELECT_SEVERAL, 44f)
+        if (tool.selectSeveral) PillTestKit.toggleSeveral()
         press(PointLabels.SELECT_ALL, 44f)
         assertEquals(5, tool.pointSelection.count)
         assertTrue(has(PointLabels.DESELECT_ALL, exact = true))

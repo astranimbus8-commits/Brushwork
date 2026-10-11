@@ -77,13 +77,13 @@ class QaCurveHandlesGroupUiTest {
             assertTrue("back to 100 % at rest", has("100 %", exact = true))
             click("Shorter handles")
             assertEquals("‹ × 0.9", out0 * 1.1f * 0.9f, tool.outLen(), 1e-3f)
-            click("Undo last point")
-            click("Undo last point")
+            click("Undo", exact = true)
+            click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // The slider: 200 % in one drag (one step).
             QaCurves.setSlider("Handle scale", handleScaleToFraction(2f))
             assertEquals(out0 * 2f, tool.outLen(), 1e-2f)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // Typed: exact.
             click("Type handle scale")
@@ -122,16 +122,16 @@ class QaCurveHandlesGroupUiTest {
             val out0 = tool.outLen()
             click("Longer handles")
             assertEquals("› = 125 %", out0 * 1.25f, tool.outLen(), 1e-3f)
-            click("Undo last point")
+            click("Undo", exact = true)
             // The slider lands on 25 % multiples (160 % → 150 %).
             QaCurves.setSlider("Handle scale", handleScaleToFraction(1.6f))
             assertEquals(out0 * 1.5f, tool.outLen(), 1e-2f)
-            click("Undo last point")
+            click("Undo", exact = true)
             // Typed: exact.
             click("Type handle scale")
             SmokeUi.typeAndDone("Handles", "137")
             assertEquals("typed stays exact", out0 * 1.37f, tool.outLen(), 1e-3f)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // The dialog: + goes to the next Scale multiple (125), − to the one below (75).
             click("Type handle scale")
@@ -159,7 +159,7 @@ class QaCurveHandlesGroupUiTest {
             settle()
             assertEquals("× 2", out0 * 2f, tool.outLen(), out0 * 0.02f)
             assertEquals("in-tool, not a document step", steps, s.c.undoManager.undoCount)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals("one in-tool step", out0, tool.outLen(), 1e-3f)
             // With a Scale step of 25 %: × 1.6 → 150 %.
             QaCurves.incrementsOn(scale = "25")
@@ -169,7 +169,7 @@ class QaCurveHandlesGroupUiTest {
             s.touch.pinch(a1, b1, a1, a1.first + 240f to a1.second)
             settle()
             assertEquals("× 1.6 → 150 %", out0 * 1.5f, tool.outLen(), 1e-3f)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals(out0, tool.outLen(), 1e-3f)
             // Far from the point: the view zooms (never stepped), the handles stay.
             val z0 = s.canvas.zoom
@@ -190,7 +190,7 @@ class QaCurveHandlesGroupUiTest {
             // 100 %: 30 dp off is outside the 24 dp grab: a new point.
             QaCurves.tap(s, near)
             assertEquals(5, tool.anchors.size)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals(4, tool.anchors.size)
             // Curve settings › Handle size 150 %.
             click("Curve settings")

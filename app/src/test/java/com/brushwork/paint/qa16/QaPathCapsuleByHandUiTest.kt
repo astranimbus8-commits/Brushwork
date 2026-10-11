@@ -115,7 +115,7 @@ class QaPathCapsuleByHandUiTest {
             assertTrue("\"X position\": ${SmokeUi.shown()}", has("X position", exact = true))
             SmokeUi.typeAndDone("X", "123.4")
             assertEquals("typed: exact", 123.4f, tool.spline!!.points[0].x, 1e-4f)
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals("one in-tool step", target[0].x, tool.spline!!.points[0].x, 1e-4f)
             // "#" on (the default steps: Length 10 px); a drag of the X cell lands on multiples of 10.
             click("Increments", exact = true)

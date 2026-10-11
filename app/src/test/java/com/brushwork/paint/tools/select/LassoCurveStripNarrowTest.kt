@@ -25,7 +25,7 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * The lasso's options strip on a narrow (360 dp) phone: the three mode chips, and while curve
- * points are placed the ✓ / ✕, undo / redo and the selected point's sharp / delete actions stay
+ * points are placed the ✓ / ✕ and the selected point's sharp / delete actions stay
  * on the strip's first screen. Switching modes explains the mode in a message, because the
  * strip's own hint lies past the labelled chips.
  *
@@ -68,7 +68,8 @@ class LassoCurveStripNarrowTest {
         fun tap(x: Float, y: Float) { c.pointerDown(ToolPoint(x, y)); c.pointerUp(ToolPoint(x, y)) }
         tap(80f, 50f); tap(320f, 50f); tap(320f, 190f)
         settle()
-        for (label in listOf("Curve lasso", "Undo last point", "Redo point", "Discard curve", "Close curve")) assertOnFirstScreen(label, width)
+        // (v1.8, F4: the point Undo / Redo are the top row's, no longer on the strip.)
+        for (label in listOf("Curve lasso", "Discard curve", "Close curve")) assertOnFirstScreen(label, width)
 
         c.pointerDown(ToolPoint(320f, 50f))
         assertTrue(c.pointerLongPress(ToolPoint(320f, 50f)))

@@ -14,6 +14,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.ui.common.PillLabels
@@ -36,7 +37,7 @@ import kotlin.math.abs
  * v1.7 final QA (verifier), items 1 and 4 together on a narrower phone (360 dp), with fingers, in
  * the Path tool: "Select several", a box drawn on empty canvas picks the three middle points of
  * five (a tap on empty canvas drops them; no point is ever added meanwhile); the group dragged by
- * its lowest point (which sits on the gizmo's bottom handle); "Undo last point" / "Redo point"
+ * its lowest point (which sits on the gizmo's bottom handle); the top row's "Undo" / "Redo"
  * bring the points AND the selection back (§3.1: in-tool undo restores the selection, checked
  * directly, not through the steps helper). Then the group's own properties: the three-state sharp
  * chip ("Sharp corner" on all three at once; "Mixed" when they differ, a tap makes all of them
@@ -77,7 +78,7 @@ class Qa17PointsGroupPropsUiTest {
         val start = points(tool)
 
         // "Select several", then a box dragged on empty canvas around the three middle points.
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         val n0 = steps(tool)
         QaCurves.drag(s, Vec2(100f, 30f), Vec2(200f, 220f))
@@ -100,18 +101,18 @@ class Qa17PointsGroupPropsUiTest {
         // group's selection come back (read directly, not through the steps helper).
         tap(30f, 270f)
         assertTrue(tool.pointSelection.isEmpty)
-        press("Undo last point", 44f)
+        click("Undo", exact = true)
         for (i in 0 until 5) assertNear("undone point $i", start[i], points(tool)[i])
         assertEquals("undo restores the group's selection", listOf(1, 2, 3), tool.pointSelection.indices)
         // Redo goes back to just before the undo: moved, nothing selected (as it was then).
-        press("Redo point", 44f)
+        click("Redo", exact = true)
         for (i in 0 until 5) assertNear("redone point $i", moved[i], points(tool)[i])
         assertTrue("redo restores the selection of then (none)", tool.pointSelection.isEmpty)
         QaCurves.drag(s, Vec2(100f, 30f), Vec2(200f, 220f))
         assertEquals("the box picks the moved three", listOf(1, 2, 3), tool.pointSelection.indices)
 
         // "Select several" off: the group's sharp chip makes the three corners at once (one step).
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertFalse(tool.selectSeveral)
         val n1 = steps(tool)
         press("Sharp corner")
@@ -168,7 +169,7 @@ class Qa17PointsGroupPropsUiTest {
         assertEquals("with its selection", 5, tool.pointSelection.count)
 
         // ✓ (with "Select several" on): one app step; the corners, the weights and the I9 form kept.
-        press(PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         val before = c.undoManager.undoCount
         apply("Apply path")

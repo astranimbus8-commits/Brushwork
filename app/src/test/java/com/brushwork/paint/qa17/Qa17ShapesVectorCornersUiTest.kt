@@ -17,6 +17,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.pathfinder.PathfinderTool
 import com.brushwork.paint.tools.vector.CurveTool
@@ -165,7 +166,7 @@ class Qa17ShapesVectorCornersUiTest {
         assertEquals(4, tool.pointCount)
         val top = (0 until 4).filter { abs(tool.pointAt(it).y - 60f) < 1f }
         assertEquals("two top corners", 2, top.size)
-        press(s, PointLabels.SELECT_SEVERAL, 44f)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         for (i in top) QaCurves.tap(s, tool.pointAt(i))
         assertEquals(top, tool.pointSelection.indices)

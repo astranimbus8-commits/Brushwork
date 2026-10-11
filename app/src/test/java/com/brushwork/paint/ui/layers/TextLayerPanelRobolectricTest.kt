@@ -17,6 +17,7 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.ShapeBox
 import com.brushwork.paint.tools.vector.ShapeTool
+import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.vector.ShapeToolOptions
 import org.junit.Assert.assertEquals
@@ -157,7 +158,9 @@ class TextLayerPanelRobolectricTest {
         SmokeUi.click("Delete point", exact = true)
         assertEquals(3, tool.points!!.size)
         SmokeUi.settle()
-        SmokeUi.click("Undo point edit")
+        // v1.8 (F4, V9): the top row's Undo (not shown in this rig: called as it calls it) takes back the point edit.
+        HistoryLabels.performUndo(c)
+        SmokeUi.settle()
         assertEquals(4, tool.points!!.size)
         SmokeUi.settle()
         SmokeUi.click("Reset shape", exact = true)

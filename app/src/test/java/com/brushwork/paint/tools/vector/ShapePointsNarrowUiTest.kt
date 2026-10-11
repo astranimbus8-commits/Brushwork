@@ -5,6 +5,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.ui.common.PointLabels
@@ -22,8 +23,8 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.7 items 1, 2 and 6 for shapes (design §3.1, §3.2, §3.6; area C) through the editor screen
- * at 392 dp, the phone's width: in Points mode the strip reaches "Select several" (its hint as
- * the editor's message), "Select all points", "Point roundness" (typed, then "Reset point
+ * at 392 dp, the phone's width: in Points mode "Select several" (since v1.8, F4, the X / Y pill's
+ * cell; its hint as the editor's message), and the strip reaches "Select all points", "Point roundness" (typed, then "Reset point
  * roundness") and "Turn into path", each wholly on screen (chips at least 32 dp, the field and
  * the button 40 dp), and each does what it says. Its own sandbox: one test.
  */
@@ -66,9 +67,8 @@ class ShapePointsNarrowUiTest {
         assertTrue(tool.pointsMode)
         assertEquals(4, tool.pointCount)
 
-        // "Select several": on, with its one-line hint.
-        ui.reach(PointLabels.SELECT_SEVERAL, CHIP_DP)
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        // "Select several" (v1.8, F4: the X / Y pill's cell): on, with its one-line hint.
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
         assertTrue("the hint on screen", has(PointLabels.SEVERAL_HINT, exact = true))
 

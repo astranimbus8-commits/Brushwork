@@ -7,10 +7,12 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
@@ -27,10 +29,10 @@ import kotlin.math.sqrt
 
 /**
  * v1.7 QA (item 1, design §3.1d) on the full editor at the user's phone width (ZTE Axon 50 Lite,
- * 392 dp): the points bar of Curve, Polyline and Path shows "Select several" and "Select all
- * points" (44 dp) without sliding the strip, every group control and the Stroke / Fill / Both
- * segments are reached by sliding it at their full size, the hint stays on screen, and the
- * group gizmo's corner, edge and rotate handles are hit by a finger 20 dp off their centre (the
+ * 392 dp): the points bar of Curve, Polyline and Path shows "Select all points" (44 dp) without
+ * sliding the strip (and, v1.8 F4, the X / Y pill its 40 dp "Select several" cell), every group
+ * control and the Stroke / Fill / Both segments are reached by sliding it at their full size, the
+ * hint stays on screen, and the group gizmo's corner, edge and rotate handles are hit by a finger 20 dp off their centre (the
  * 44 dp touch), each gesture one in-tool step.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -86,13 +88,17 @@ class Qa17PointsNarrowUiTest {
         assertEquals("the phone is 392 dp wide", 392f, s.widthDp, 1f)
         val tool = open(s, label)
         val ui = Qa16Ui(s)
-        for (l in listOf(PointLabels.SELECT_SEVERAL, PointLabels.SELECT_ALL)) {
-            assertTrue("$label: \"$l\" on screen without sliding, 44 dp: ${where(l)}", ui.wholly(l, SELECTION_DP))
-        }
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        val all = PointLabels.SELECT_ALL
+        assertTrue("$label: \"$all\" on screen without sliding, 44 dp: ${where(all)}", ui.wholly(all, SELECTION_DP))
+        // v1.8 (F4): "Select several" is the X / Y pill's 40 dp cell, not a strip chip.
+        val several = requireNotNull(s.tagged(V18Tags.PILL_SEVERAL)) { "$label: the pill's \"${PointLabels.SELECT_SEVERAL}\" cell" }
+        assertTrue("$label: the cell is on screen: $several", several.left >= -0.5f && several.right <= s.widthDp + 0.5f && several.top >= -0.5f)
+        assertTrue("$label: the cell is 40 dp: $several", several.width >= PILL_CELL_DP - 0.5f && several.height >= PILL_CELL_DP - 0.5f)
+        PillTestKit.toggleSeveral()
+        assertTrue("$label: on", tool.selectSeveral)
         val hint = s.dp(requireNotNull(SmokeUi.find(PointLabels.SEVERAL_HINT, exact = true)).node.boundsInWindow)
         assertTrue("$label: the hint is on screen: $hint", hint.left >= -0.5f && hint.right <= s.widthDp + 0.5f)
-        click(PointLabels.SELECT_SEVERAL, exact = true)
+        PillTestKit.toggleSeveral()
 
         click(PointLabels.SELECT_ALL, exact = true)
         assertEquals(5, tool.pointSelection.count)
@@ -166,8 +172,10 @@ class Qa17PointsNarrowUiTest {
     }
 
     private companion object {
-        /** "Select several", "Select all points" / "Deselect all points" (§3.1a). */
+        /** "Select all points" / "Deselect all points" (§3.1a). */
         const val SELECTION_DP = 44f
+        /** v1.8 (F4): the X / Y pill's "Select several" cell (`IbisDims.PillIconTouch`). */
+        const val PILL_CELL_DP = 40f
         /** The thickness and weight fields and the Stroke / Fill / Both segments (§3.7a). */
         const val FIELD_DP = 40f
         /** The strip's chips ("Sharp corner", "Delete point"), as for a single point since v1.6. */

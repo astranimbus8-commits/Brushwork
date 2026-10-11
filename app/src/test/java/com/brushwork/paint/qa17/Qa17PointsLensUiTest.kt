@@ -135,12 +135,12 @@ class Qa17PointsLensUiTest {
 
         // The in-tool undo takes back the beginning's 0 % (the start is full again); redo brings it back.
         if (!sharpMiddle) {
-            press("Undo last point", 44f)
+            click("Undo", exact = true)
             idle()
             assertEquals(1f, tool.spline!!.points[0].width, 0f)
             val undone = composite(c)
             assertTrue("undone: the start is drawn again", thickness(undone, 84, INK, (Y - 40).toInt(), (Y + 40).toInt()) > SIZE * 0.5f)
-            press("Redo point", 44f)
+            click("Redo", exact = true)
             idle()
             assertEquals(0f, tool.spline!!.points[0].width, 0f)
         }

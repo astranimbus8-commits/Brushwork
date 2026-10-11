@@ -14,9 +14,9 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.Smoke.P
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.transform.TransformTool
-import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.placement.MeshStepperLabels
@@ -130,10 +130,11 @@ class Qa17FreeDeformUiTest {
         assertEquals("the vertices stay", mesh0, (0 until t.pointCount).map { t.pointAt(it) })
         assertTrue(t.isMeshChanged)
 
-        // "Select several": three vertices tapped; the gizmo's lower right corner dragged outward.
-        u.press(PointLabels.SELECT_SEVERAL)
+        // "Select several" (v1.8, F4: the X / Y pill's cell): three vertices tapped; the gizmo's lower
+        // right corner dragged outward.
+        PillTestKit.toggleSeveral()
         assertTrue(t.selectSeveral)
-        assertEquals("On", u.stateOf(PointLabels.SELECT_SEVERAL))
+        assertEquals("On", PillTestKit.severalState())
         val picked = listOf(8 * 13 + 6, 8 * 13 + 7, 8 * 13 + 8)
         for (i in picked) {
             val p = t.pointAt(i)

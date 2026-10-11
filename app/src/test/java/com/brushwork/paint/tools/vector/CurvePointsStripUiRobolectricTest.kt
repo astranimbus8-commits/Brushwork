@@ -7,6 +7,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
@@ -26,10 +27,11 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.7 (items 1 and 4, design §3.1a and §3.4a) on the real editor at the user's phone width: the
- * points bar of the Curve and Path tools. "Select several" (and its hint), "Select all points" /
- * "Deselect all points", the group's "Point thickness" (typed: one step for all), the three-state
- * sharp chip, "Delete point" on the group; a Path's "Sharp corner" pair for a middle point (one
- * in-tool step), disabled at an open end, and the thickness caption of a smooth middle point.
+ * points bar of the Curve and Path tools. "Select several" (the X / Y pill's cell since v1.8, F4;
+ * the hint under the bar), "Select all points" / "Deselect all points", the group's "Point
+ * thickness" (typed: one step for all), the three-state sharp chip, "Delete point" on the group;
+ * a Path's "Sharp corner" pair for a middle point (one in-tool step), disabled at an open end, and
+ * the thickness caption of a smooth middle point.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi")
@@ -62,12 +64,13 @@ class CurvePointsStripUiRobolectricTest {
         h.section("Curve: Select several, Select all, the group's thickness, sharp and delete") {
             val s = h.editor()
             val tool = open(s, "Curve")
-            assertTrue(SmokeUi.shown().toString(), has(PointLabels.SELECT_SEVERAL, exact = true))
+            // v1.8 (F4): "Select several" is the X / Y pill's cell now, not a strip chip.
+            assertTrue(SmokeUi.shown().toString(), PillTestKit.severalCell() != null)
             assertFalse(has(PointLabels.SEVERAL_HINT, exact = true))
-            click(PointLabels.SELECT_SEVERAL, exact = true)
+            PillTestKit.toggleSeveral()
             assertTrue(tool.selectSeveral)
             assertTrue("the hint under the bar", has(PointLabels.SEVERAL_HINT, exact = true))
-            click(PointLabels.SELECT_SEVERAL, exact = true)
+            PillTestKit.toggleSeveral()
             assertFalse(tool.selectSeveral)
             assertFalse(has(PointLabels.SEVERAL_HINT, exact = true))
 

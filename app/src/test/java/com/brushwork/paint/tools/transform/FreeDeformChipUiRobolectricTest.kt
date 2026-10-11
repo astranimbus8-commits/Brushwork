@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.Modifier
@@ -17,6 +18,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.PillTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.text.TextCodec
@@ -28,8 +30,10 @@ import com.brushwork.paint.ui.common.TransformLabels17
 import com.brushwork.paint.ui.placement.MeshStepperLabels
 import com.brushwork.paint.ui.placement.TransformToolOptions
 import com.brushwork.paint.ui.theme.BrushworkTheme
+import com.brushwork.paint.ui.tools.CoordinatePill
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -43,8 +47,9 @@ import org.robolectric.shadows.ShadowLog
  * v1.7 (item 16, design §3.16) on a 392 dp phone: on a text layer kept as text (a fake map stands
  * in for area D's) the "Free deform" chip is dimmed with "Rasterize to free deform" as its state;
  * a tap shows the caption and "Rasterize and deform", which rasterizes the layer and opens Free
- * deform. Its strip then shows "Select several", the "Mesh columns" and "Mesh rows" steppers,
- * "Smooth mesh" and "Reset mesh" (enabled once the mesh is deformed).
+ * deform. Its strip then shows "Select all points", the "Mesh columns" and "Mesh rows" steppers,
+ * "Smooth mesh" and "Reset mesh" (enabled once the mesh is deformed); since v1.8 (F4) the X / Y
+ * pill under it shows its "Select several" cell only then.
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -85,7 +90,10 @@ class FreeDeformChipUiRobolectricTest {
         tool.dataMaps = { MoveOnlyMaps }
         activity.setContent {
             BrushworkTheme {
-                Row(Modifier.horizontalScroll(rememberScrollState())) { TransformToolOptions(tool) }
+                Column {
+                    Row(Modifier.horizontalScroll(rememberScrollState())) { TransformToolOptions(tool) }
+                    CoordinatePill(c)
+                }
             }
         }
         c.selectTool(ToolId.TRANSFORM)
@@ -95,6 +103,7 @@ class FreeDeformChipUiRobolectricTest {
         assertTrue(SmokeUi.has(TransformLabels17.FREE_DEFORM, exact = true))
         assertEquals("the chip's caption", TransformLabels17.RASTERIZE_TO_FREE_DEFORM, stateOf(TransformLabels17.FREE_DEFORM))
         assertFalse("no mesh strip yet", SmokeUi.has(TransformLabels17.SMOOTH, exact = true))
+        assertNull("no \"Select several\" cell in the pill yet", PillTestKit.severalCell())
 
         // A tap shows the caption and the way out; Free deform itself is not switched to.
         SmokeUi.click(TransformLabels17.FREE_DEFORM, exact = true)
@@ -107,8 +116,9 @@ class FreeDeformChipUiRobolectricTest {
         assertTrue(tool.isMeshShown)
         assertNull("now available", stateOf(TransformLabels17.FREE_DEFORM))
 
-        // The Free deform strip.
-        assertTrue(SmokeUi.has(PointLabels.SELECT_SEVERAL, exact = true))
+        // The Free deform strip, and (v1.8, F4) the X / Y pill's "Select several" cell.
+        assertNotNull("the pill's \"Select several\" cell (v1.8, F4)", PillTestKit.severalCell())
+        assertEquals("Off", PillTestKit.severalState())
         assertTrue(SmokeUi.has(PointLabels.SELECT_ALL, exact = true))
         assertTrue(SmokeUi.has(TransformLabels17.SMOOTH, exact = true))
         assertEquals("3", stateOf(TransformLabels17.COLUMNS))
@@ -120,9 +130,9 @@ class FreeDeformChipUiRobolectricTest {
         SmokeUi.click(MeshStepperLabels.FEWER_ROWS, exact = true)
         assertEquals(2, tool.meshRows)
         assertEquals(15, tool.pointCount)
-        SmokeUi.click(PointLabels.SELECT_SEVERAL, exact = true)
+        PillTestKit.toggleSeveral()
         assertTrue(tool.selectSeveral)
-        assertEquals("On", stateOf(PointLabels.SELECT_SEVERAL))
+        assertEquals("On", PillTestKit.severalState())
         SmokeUi.click(PointLabels.SELECT_ALL, exact = true)
         assertTrue(tool.allPointsSelected)
         assertTrue(SmokeUi.has(PointLabels.DESELECT_ALL, exact = true))

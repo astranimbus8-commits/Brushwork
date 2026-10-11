@@ -11,6 +11,8 @@ import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.editor.HistoryLabels
+import com.brushwork.paint.ui.editor.canRedoNow
 import com.brushwork.paint.ui.selection.lassoKindHint
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.ui.tools.ToolOptionsBar
@@ -26,8 +28,9 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * The lasso's options strip on the user's phone size: Freehand / Polygon / Curve chips, and in
- * curve mode the point count, ✓ / ✕, undo / redo and the long-pressed point's sharp / smooth /
- * delete actions, all reachable on the strip's first screen while points are being placed.
+ * curve mode the point count, ✓ / ✕ and the long-pressed point's sharp / smooth / delete actions,
+ * all reachable on the strip's first screen while points are being placed (v1.8, F4: undo / redo
+ * of a point edit are the top row's, called here as it calls them).
  *
  * One test: Compose's frame clock only serves the first test of a Robolectric sandbox.
  */
@@ -86,15 +89,20 @@ class LassoCurveStripTest {
         click("Sharp", exact = true)
         assertTrue(tool.curve.anchors[1].sharp)
         assertTrue("the chip now offers the way back", has("Smooth", exact = true))
-        click("Undo last point")
+        // v1.8 (F4, V9): the top row's Undo / Redo take back and bring back one point edit (this
+        // rig shows the strip alone, so they are called as the top row calls them).
+        HistoryLabels.performUndo(c)
+        settle()
         assertFalse(tool.curve.anchors[1].sharp)
-        assertTrue(SmokeUi.isEnabled("Redo point"))
-        click("Redo point")
+        assertTrue("the top row's Redo is enabled", canRedoNow(c))
+        HistoryLabels.performRedo(c)
+        settle()
         assertTrue(tool.curve.anchors[1].sharp)
         click("Delete", exact = true)
         assertEquals(2, tool.curve.count)
         assertFalse("✓ needs three points", SmokeUi.isEnabled("Close curve"))
-        click("Undo last point")
+        HistoryLabels.performUndo(c)
+        settle()
         assertEquals(3, tool.curve.count)
 
         // ✓ closes the curve into a selection; the chips come back.

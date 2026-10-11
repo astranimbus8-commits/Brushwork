@@ -86,9 +86,9 @@ class QaCurveHandleDragIncrementsUiTest {
             val (hIn, hOut) = tool.handlesOf(1)
             assertEquals(0f, hIn.x * hOut.y - hIn.y * hOut.x, 1e-2f)
             // One in-tool step: undo puts the handle back, redo moves it again.
-            click("Undo last point")
+            click("Undo", exact = true)
             assertEquals(start.x, (tool.anchors[1].pos + tool.handlesOf(1).second).x, 0.01f)
-            click("Redo point")
+            click("Redo", exact = true)
             assertEquals(end.x, (tool.anchors[1].pos + tool.handlesOf(1).second).x, 0.01f)
             // −63, +40: whole steps from the grab on both axes.
             val (s2, e2, _) = dragOutHandle(s, tool, Vec2(-63f, 40f))
