@@ -11,7 +11,7 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.8 final QA (Color select's polish) at the T606's 392 dp: the "Color range" chip shows the samples as
- * swatches, "Sampled" with none and every other preset's name whole, at its 92 dp
+ * swatches, "None yet" with none and every other preset's name whole, at its 92 dp
  * ([Qa18SelectRangeChipKit]).
  */
 @RunWith(RobolectricTestRunner::class)
