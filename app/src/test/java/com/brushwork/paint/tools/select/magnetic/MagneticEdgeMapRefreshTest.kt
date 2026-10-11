@@ -18,9 +18,10 @@ import kotlin.math.abs
 
 /**
  * v1.8 (C, review): the magnetic lasso's edge map follows the pixels Refer names. A stroke
- * painted with another tool is snapped to when the user comes back; an undo of it is seen on
- * the next touch (its anchor never snaps to the edge that is gone). The map was keyed on the
- * layer list only, so both kept the stale map.
+ * painted with another tool is snapped to when the user comes back; an undo or a redo of it
+ * while the tool is active is seen on the next touch (its anchor never snaps to the edge that
+ * is gone). A pixel undo changes the layer's `contentVersion` but not `layersVersion`, which was
+ * all the map's key had: the stale map stayed until the tool was picked again.
  */
 @RunWith(RobolectricTestRunner::class)
 class MagneticEdgeMapRefreshTest {

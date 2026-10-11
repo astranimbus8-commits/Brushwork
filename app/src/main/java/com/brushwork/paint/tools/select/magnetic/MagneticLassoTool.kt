@@ -201,7 +201,8 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
     /**
      * Builds the edge map of the pixels Refer names, unless the one built (or building) is of
      * them as they are now: called on activation, on a new Refer and on every finger-down, so a
-     * stroke painted with another tool or an undo is seen.
+     * pixel undo or redo while the tool is active (it changes the layer's `contentVersion` only,
+     * not `layersVersion`) or a render landing is seen.
      */
     private fun ensureEdgeMap() {
         val c = controller
@@ -218,8 +219,7 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
         val snapshot = try {
             PixelSnapshot.take(c, source, c.activeLayer.bitmap)
         } catch (e: OutOfMemoryError) {
-            mapKey = null
-            failedKey = key
+            mapFailed(key)
             return
         }
         val docW = c.doc.width
@@ -234,11 +234,21 @@ class MagneticLassoTool(controller: EditorController) : Tool(controller), PillPo
                     c.invalidateOverlay()
                 }
             } catch (e: OutOfMemoryError) {
-                if (mapKey == key) { mapKey = null; failedKey = key }
+                if (mapKey == key) mapFailed(key)
             } finally {
                 snapshot.recycle()
             }
         }
+    }
+
+    /**
+     * No memory for the edge map of [key]'s pixels: said once, and segments stay straight (no new
+     * try on every touch; the next activation or other pixels try again).
+     */
+    private fun mapFailed(key: MapKey) {
+        mapKey = null
+        failedKey = key
+        controller.toast("Not enough memory for \"${ToolId.MAGNETIC_LASSO.label}\"")
     }
 
     // ------------------------------------------------------------------ tracing
