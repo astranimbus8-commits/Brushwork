@@ -387,7 +387,7 @@ class Qa17CompatSessionUiTest {
         pick(vector)
         tool(SymmetryLabels.TOOL)
         assertEquals("picking the tool turns the mirror on", SymmetryType.MIRROR, c.symmetry.type)
-        ui().reach(SymmetryType.ROTATION.label, 32f)
+        click(c.symmetry.type.label, exact = true) // v1.8: open the type dropdown
         click(SymmetryType.ROTATION.label, exact = true)
         assertEquals(SymmetryType.ROTATION, c.symmetry.type)
         click("Done", exact = true)
@@ -427,7 +427,7 @@ class Qa17CompatSessionUiTest {
         // Symmetry off again (the Symmetry tool's "Off" chip), then Path points made "Fill only",
         // pending while the app goes to the background and comes back.
         tool(SymmetryLabels.TOOL)
-        ui().reach(SymmetryType.OFF.label, 32f)
+        click(c.symmetry.type.label, exact = true) // v1.8: open the type dropdown
         click(SymmetryType.OFF.label, exact = true)
         assertEquals(SymmetryType.OFF, c.symmetry.type)
         click("Done", exact = true)

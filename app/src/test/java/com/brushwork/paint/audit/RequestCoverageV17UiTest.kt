@@ -728,7 +728,10 @@ internal class RequestCoverageV17 private constructor(private val h: ChromeHarne
         c.brush = c.brush.copy(size = 10f, opacity = 1f)
         tool("Symmetry")
         assertEquals("the mirror is on", SymmetryType.MIRROR, c.symmetry.type)
+        // v1.8: the rulers are entries of the type dropdown (its button shows the current type).
+        click(SymmetryType.MIRROR.label, exact = true)
         for (t in SymmetryType.entries) assertTrue("ruler \"${t.label}\"", has(t.label, exact = true))
+        Finger.back()
         click("Done", exact = true)
         assertEquals("back to the brush", ToolId.BRUSH, c.activeToolId)
         val layer = c.activeLayer

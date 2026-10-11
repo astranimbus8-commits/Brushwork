@@ -124,10 +124,12 @@ class HistoryTapsV17ToolsUiTest {
         c.selectTool(ToolId.SYMMETRY)
         settle()
         assertEquals("picking the tool turns the mirror on", SymmetryType.MIRROR, c.symmetry.type)
-        f.reach(SymmetryType.KALEIDOSCOPE.label, 32f)
+        // v1.8: the rulers are a dropdown; its button (the current type) is the strip control.
+        f.reach(SymmetryType.MIRROR.label, 32f)
         with(f) {
-            undoesTheSeed(c, control(SymmetryType.KALEIDOSCOPE.label).at(0.5f), besideIt())
+            undoesTheSeed(c, control(SymmetryType.MIRROR.label).at(0.5f), besideIt())
             assertEquals("the chip did nothing", SymmetryType.MIRROR, c.symmetry.type)
+            assertTrue("the dropdown did not open", !SmokeUi.has(SymmetryType.KALEIDOSCOPE.label, exact = true))
             assertEquals(ToolId.SYMMETRY, c.activeToolId)
             redoesTheSeed(s)
         }

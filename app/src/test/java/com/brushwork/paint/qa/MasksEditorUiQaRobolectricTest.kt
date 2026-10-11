@@ -13,6 +13,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.mask.AdjustmentEdit
@@ -400,11 +401,16 @@ class MasksEditorUiQaRobolectricTest {
         click("Clone stamp", exact = true)
         assertEquals(ToolId.CLONE, c.activeToolId)
         val tool = c.tools.getValue(ToolId.CLONE) as CloneTool
-        val strip = horizontalScrollerOf("Set source")
-        for (label in listOf(CloneTool.HINT, "Set source", "Aligned", "Sample: This layer", "Show source")) {
-            assertReachable("clone strip", strip, label, horizontal = true)
+        // v1.8: the converted strip has no horizontal scroller (I18): row 1 holds Set source,
+        // Aligned and Sample from; the hint and Show source are on the More row (find() opens it,
+        // and an open row swallows the next canvas touch, so it is closed again).
+        for (label in listOf("Set source", "Aligned", "Sample from: This layer")) {
+            assertTrue("clone strip: $label", has(label, exact = true))
         }
-        scrollIntoView(strip, "Set source", horizontal = true)
+        for (label in listOf(CloneTool.HINT, "Show source")) {
+            assertTrue("clone strip: $label", SmokeUi.find(label, exact = true) != null)
+        }
+        StripTestKit.closeMoreRow()
         click("Set source", exact = true)
         assertTrue(tool.armed)
         s.touch.tap(s.screen(100f, 100f).first, s.screen(100f, 100f).second)
@@ -413,7 +419,6 @@ class MasksEditorUiQaRobolectricTest {
         val src = tool.anchor.source
         assertNotNull(src)
         assertEquals(100f, src!!.x, 2f)
-        scrollIntoView(strip, "Aligned", horizontal = true)
         click("Aligned", exact = true)
         assertFalse(tool.aligned)
         // The X / Y strip shows and moves the source (tool state: no undo step).

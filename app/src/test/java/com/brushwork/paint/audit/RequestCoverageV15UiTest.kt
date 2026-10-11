@@ -18,6 +18,7 @@ import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.click
 import com.brushwork.paint.smoke.SmokeUi.has
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.clone.CloneTool
 import com.brushwork.paint.tools.mask.MaskTool
@@ -356,7 +357,9 @@ class RequestCoverageV15UiTest {
         c.undoManager.clear()
         tool("Clone stamp")
         assertEquals(ToolId.CLONE, c.activeToolId)
-        assertTrue("it says how to start", has(CloneTool.HINT, exact = true))
+        // v1.8: the hint is on the More row; find() opens it, and an open row swallows the next canvas touch.
+        assertTrue("it says how to start", SmokeUi.find(CloneTool.HINT, exact = true) != null)
+        StripTestKit.closeMoreRow()
         assertTrue("Aligned is on", (c.currentTool as CloneTool).aligned)
         c.cloneBrush = c.cloneBrush.copy(size = 12f, hardness = 1f, opacity = 1f, flow = 1f)
         // Long-press the area: the source.

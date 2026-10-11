@@ -443,11 +443,13 @@ internal object UniqueLabelsV17 {
         QaCurves.tool(s, "Symmetry")
         assertEquals(ToolId.SYMMETRY, s.c.activeToolId)
         for (type in SymmetryType.entries) {
-            ui.reach(type.label, 0f)
+            // v1.8: the type is a dropdown (its button shows the current type; the open menu's
+            // button leaves the semantics, so this works for the current type too).
+            click(s.c.symmetry.type.label, exact = true)
             click(type.label, exact = true)
             assertEquals(type, s.c.symmetry.type)
             val seen = walkStrip(s, a, type.label)
-            for (label in SymmetryType.entries.map { it.label } + SymmetryLabels.RESET) {
+            for (label in listOf(type.label, SymmetryLabels.RESET)) {
                 val n = seen.values.count { label in it.labels }
                 a.check(type.label, n == 1) { "\"$label\" on $n controls" }
             }
@@ -460,7 +462,8 @@ internal object UniqueLabelsV17 {
                 SymmetryType.PERSPECTIVE_ARRAY, SymmetryType.OFF -> emptyList()
             }
             for (chip in chips) {
-                val text = chipText(s, chip)
+                // v1.8: a chip may sit on the More row (the Array ruler's "Angle").
+                val text = chipText(s, chip) ?: if (com.brushwork.paint.testing.StripTestKit.openMoreRow()) chipText(s, chip) else null
                 a.check(type.label, text != null) { "no \"$chip …\" chip" }
                 if (text == null) continue
                 ui.reach(text, 0f)
@@ -472,13 +475,14 @@ internal object UniqueLabelsV17 {
         }
         // The Ruler panel (the top row's "Ruler") over the tool: the strip's rulers and "Reset
         // symmetry" are the only ones (the panel lists them for the Brush user, §3.18).
-        ui.reach(SymmetryType.KALEIDOSCOPE.label, 0f)
+        click(s.c.symmetry.type.label, exact = true)
         click(SymmetryType.KALEIDOSCOPE.label, exact = true)
         click("Ruler", exact = true)
         assertTrue("the Ruler panel", SmokeUi.has("Use ruler", exact = true))
         assertEquals("the tool stays", ToolId.SYMMETRY, s.c.activeToolId)
         val panel = walkSheetAndStrip(s, a, "Ruler panel over the Symmetry tool")
-        for (label in SymmetryType.entries.map { it.label } + SymmetryLabels.RESET) {
+        // v1.8: the strip shows only the current type (a dropdown), so it is the one type control.
+        for (label in listOf(SymmetryType.KALEIDOSCOPE.label, SymmetryLabels.RESET)) {
             val n = panel.values.count { label in it.labels }
             a.check("Ruler panel over the Symmetry tool", n == 1) { "\"$label\" on $n controls" }
         }

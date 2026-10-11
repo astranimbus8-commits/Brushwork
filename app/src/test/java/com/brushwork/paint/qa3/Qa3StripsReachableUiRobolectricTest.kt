@@ -22,6 +22,7 @@ import com.brushwork.paint.tools.transform.TransformTool
 import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.color.RobolectricUi
+import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.EditorScreen
 import com.brushwork.paint.ui.theme.BrushworkTheme
 import com.brushwork.paint.vector.VAnchor
@@ -89,7 +90,10 @@ class Qa3StripsReachableUiRobolectricTest {
     private fun strip(activity: ComponentActivity): RobolectricUi.Element = RobolectricUi.elements()
         .filter { it.window === activity.window.decorView.rootView || it.window.rootView === activity.window.decorView.rootView }
         .filter { it.node.layoutInfo.isPlaced && it.node.config.getOrNull(SemanticsProperties.HorizontalScrollAxisRange) != null }
-        .minByOrNull { it.bounds.top } ?: throw AssertionError("no options strip")
+        .minByOrNull { it.bounds.top }
+        // v1.8: a converted strip has no horizontal scroller (I18): its row 1 is the strip.
+        ?: RobolectricUi.elements().firstOrNull { it.node.config.getOrNull(SemanticsProperties.TestTag) == V18Tags.STRIP_ROW1 }
+        ?: throw AssertionError("no options strip")
 
     private fun SemanticsNode.isControl() =
         config.getOrNull(SemanticsActions.OnClick) != null || config.getOrNull(SemanticsActions.SetProgress) != null

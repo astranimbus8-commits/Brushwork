@@ -211,9 +211,9 @@ class LabelsV18Test {
         // Area A replaces the v1.7 "Color order" choice with the fringe colors.
         val fringes = values(FringeLabels18)
         for (f in listOf(ChromaticAberrationMovingFilter(), ChromaticAberrationZoomingFilter())) {
-            assertNoSubstrings(f.name, v18 = fringes - FringeLabels18.STATIC_COLOR, v17 = panel(f, skip = setOf("order")) + "Color order")
+            assertNoSubstrings(f.name, v18 = fringes - FringeLabels18.STATIC_COLOR, v17 = panel(f, skip = setOf("order", "fringes")) + "Color order")
         }
-        assertNoSubstrings("Glitch", v18 = fringes, v17 = panel(GlitchFilter()))
+        assertNoSubstrings("Glitch", v18 = fringes, v17 = panel(GlitchFilter(), skip = setOf("fringes", "static_color")))
         // "Static" (v1.7) and "Color of the static" differ in case only where they meet.
         assertTrue(GlitchFilter().params.any { it.label == "Static" })
     }

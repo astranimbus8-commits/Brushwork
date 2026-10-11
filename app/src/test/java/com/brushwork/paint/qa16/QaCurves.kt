@@ -200,7 +200,12 @@ internal object QaCurves {
     /** The options strip's "Snap to objects" chip ("Snap" when compact) switched off. */
     fun snapOff(c: com.brushwork.paint.EditorController) {
         if (!c.snapping.enabled) return
-        if (SmokeUi.has("Snap to objects", exact = true)) click("Snap to objects", exact = true) else click("Snap", exact = true)
+        // v1.8: the chip may sit on the More row (click opens it); an open row swallows the next canvas touch.
+        when {
+            SmokeUi.has("Snap to objects", exact = true) -> click("Snap to objects", exact = true)
+            SmokeUi.has("Snap", exact = true) -> click("Snap", exact = true)
+            else -> { click("Snap to objects", exact = true); com.brushwork.paint.testing.StripTestKit.closeMoreRow() }
+        }
         assertTrue("snapping is off", !c.snapping.enabled)
     }
 

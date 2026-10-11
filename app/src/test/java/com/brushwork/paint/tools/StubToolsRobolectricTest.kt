@@ -35,7 +35,8 @@ import org.robolectric.shadows.ShadowLog
  * owners' stub tests (see [StubToolFixtures]), which the owners retire.
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(instrumentedPackages = ["com.brushwork.paint.tools.stubtoolssandbox"])
+// v1.8: a phone width (Robolectric's default is 320 dp, below the 360 dp design minimum of the strips' row 1).
+@Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.tools.stubtoolssandbox"])
 class StubToolsRobolectricTest {
     private val stubs = listOf(ToolId.ARRAY, ToolId.SYMMETRY, ToolId.PATHFINDER)
 
