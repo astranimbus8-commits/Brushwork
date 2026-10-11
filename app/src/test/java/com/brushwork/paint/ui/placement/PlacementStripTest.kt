@@ -43,9 +43,9 @@ import org.robolectric.shadows.ShadowLog
  * its item's width, `legacyContent == null`.
  * - Transform: nothing to transform (its status alone on row 1, no toggle); the box modes (row 1
  *   the mode, "Keep aspect ratio", "From center", the flips; the More row under the status text);
- *   Free deform (row 1 the mode, [TransformLabels18.MESH_SIZE], "Reset mesh"; the steppers in the
- *   Mesh size popup, `movedInto`). The Numbers sheet outlives the More row; "Choose interpolation"
- *   keeps it open.
+ *   Free deform (row 1 the mode, [TransformLabels18.MESH_SIZE], "Reset mesh"; the steppers in its
+ *   popup, `movedInto`). The Numbers sheet outlives the More row; "Choose interpolation" keeps it
+ *   open.
  * - Text: row 1 "Edit text", the direction, "Letter scaling", "Wrap" (AUTO 1: the More row's
  *   front at 360 dp with the VECTOR cell); "Numbers" on the More row while a text is open, its
  *   sheet outliving the row.
@@ -125,7 +125,7 @@ class PlacementStripTest {
         val mesh = "TRANSFORM, Free deform"
         val meshRow1 = listOf(TransformLabels17.FREE_DEFORM, TransformLabels18.MESH_SIZE, TransformLabels17.RESET)
         val meshMore = listOf(TransformLabels17.SMOOTH, PointLabels.SELECT_ALL, T.DELETE_LABEL, T.INTERPOLATION_LABEL)
-        assertEquals("$mesh: the steppers are inside Mesh size", T.MESH_POPUP.toSet(), rig.spec.movedInto.keys)
+        assertEquals("$mesh: the steppers are inside ${TransformLabels18.MESH_SIZE}", T.MESH_POPUP.toSet(), rig.spec.movedInto.keys)
         inspect(rig, mesh, (meshRow1 + meshMore + T.MESH_POPUP).toSet())
         assertSplits(mesh, rig.spec) { _, _ -> listOf(T.MODE, T.MESH_SIZE, T.MESH_RESET) }
         assertEquals("$mesh at $dp dp: row 1", meshRow1, row1Handles())

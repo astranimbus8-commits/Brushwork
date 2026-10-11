@@ -35,12 +35,12 @@ import org.robolectric.shadows.ShadowLog
  * editor: Free deform's strip with "Select several" in the X / Y pill.
  * - The box modes offer no "Select several" cell (`selectSeveralAvailable` is `isMeshShown`);
  *   Free deform, picked in the mode dropdown, does ("Off").
- * - Row 1: the mode ("Free deform"), "Mesh size" showing "3 × 3", "Reset mesh" (enabled once the
+ * - Row 1: the mode ("Free deform"), the mesh button showing "3 × 3", "Reset mesh" (enabled once the
  *   mesh is deformed); the More row: "Smooth mesh", "Select all points", "Delete", "Choose
  *   interpolation".
  * - The cell on: the "Select several" hint is the More row's first line, taps add vertices; off:
  *   the hint is gone. "Select all points" turns into "Deselect all points".
- * - The "Mesh size" popup keeps the More row open, also after Back closes it.
+ * - The [TransformLabels18.MESH_SIZE] popup keeps the More row open, also after Back closes it.
  * - "Delete" on the More row is one step; the strip, now without a More row, leaves none open
  *   (D25): the next two-finger tap undoes it.
  */
@@ -54,7 +54,7 @@ class FreeDeformPillTest {
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog(limitMs = 90_000)
         val h = ChromeHarness()
-        h.section("Free deform: the strip, the pill's Select several, the Mesh size popup, Delete") { flow(h) }
+        h.section("Free deform: the strip, the pill's Select several, the mesh popup, Delete") { flow(h) }
         dog.interrupt()
         h.finish()
     }
@@ -87,7 +87,7 @@ class FreeDeformPillTest {
         assertTrue(t.selectSeveralAvailable)
         assertEquals("Off", PillTestKit.severalState())
         assertEquals(listOf(TransformLabels17.FREE_DEFORM, TransformLabels18.MESH_SIZE, TransformLabels17.RESET), row1Handles())
-        assertTrue("Mesh size shows the mesh", has(TransformStripItems.meshText(3, 3), exact = true))
+        assertTrue("the mesh button shows the mesh", has(TransformStripItems.meshText(3, 3), exact = true))
         assertFalse("Reset mesh waits for a deformation", SmokeUi.isEnabled(TransformLabels17.RESET))
         assertTrue(StripTestKit.openMoreRow())
         assertEquals(
@@ -126,7 +126,7 @@ class FreeDeformPillTest {
         StripTestKit.openMoreRow()
         assertFalse(PointLabels.SEVERAL_HINT in moreTexts())
 
-        // The Mesh size popup (on row 1) keeps the More row open, also after Back.
+        // The mesh popup (on row 1) keeps the More row open, also after Back.
         SmokeUi.click(TransformLabels18.MESH_SIZE, exact = true)
         assertTrue("the popup", has(MeshStepperLabels.MORE_COLUMNS, exact = true))
         assertTrue("the More row stays open", StripTestKit.moreRowShown())
