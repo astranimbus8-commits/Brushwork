@@ -42,7 +42,8 @@ import org.robolectric.shadows.ShadowLog
  *   More row "Wrap around picture" (its dropdown keeps the row open), "Threads", "Snap to objects"
  *   under v1.7's hint (about as wide as the row: the host may end it with "…");
  * - linking: "Cancel link" and the link hint on row 1.
- * "Edit story" opens the story editor (an overlay dialog).
+ * "Edit story" opens the story editor (an overlay dialog) and "Link…" waits for the next canvas
+ * touch: both close an open More row first (D25).
  * Widths against the planning table (rule 4, measured): "Edit story" 64 (two lines after its
  * icon) and "Link…" 60 instead of 92 and 72, which leaves room for the overset note (64, reserved
  * while the story fits) on row 1: the non-AUTO sum is 240.
@@ -130,18 +131,23 @@ class TextFrameStripTest {
         assertEquals(threads, tool.showThreads)
         StripTestKit.closeMoreRow()
 
-        // "Edit story": the story editor over the strip.
+        // "Edit story": the story editor over the strip; the More row closes first (D25).
+        assertTrue(StripTestKit.openMoreRow())
         SmokeUi.click(F.EDIT_LABEL, exact = true)
         rig.settle()
         assertTrue("$sel: the story editor", tool.story.isOpen && overlayWindowShown(rig))
+        assertFalse("$sel: \"Edit story\" closed the More row", StripTestKit.moreRowShown() || rig.state.anyOpen)
         tool.story.cancelEditor()
         rig.settle()
         assertFalse(tool.story.isOpen)
 
-        // Linking: "Cancel link" and the link hint.
+        // Linking: "Cancel link" and the link hint. The next canvas touch picks the next frame, so
+        // "Link…" closes the More row (an open row would take that touch, D25).
+        assertTrue(StripTestKit.openMoreRow())
         SmokeUi.click(F.LINK_LABEL, exact = true)
         rig.settle()
         assertTrue(tool.linkFrom === frame)
+        assertFalse("\"Link…\" closed the More row", StripTestKit.moreRowShown() || rig.state.anyOpen)
         val link = "TEXT_FRAMES, linking"
         inspect(rig, link, setOf(F.CANCEL_LINK_LABEL, F.THREADS_LABEL, SNAP_LABEL))
         assertSplits(link, rig.spec) { _, _ -> listOf(F.CANCEL_LINK, F.STATUS) }

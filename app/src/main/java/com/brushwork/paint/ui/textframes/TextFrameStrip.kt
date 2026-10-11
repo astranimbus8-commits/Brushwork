@@ -42,6 +42,7 @@ import com.brushwork.paint.ui.placement.StripTextButton
 import com.brushwork.paint.ui.placement.TextEditorDialog
 import com.brushwork.paint.ui.placement.snapItem
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
@@ -98,10 +99,21 @@ internal fun textFrameStrip(tool: TextFrameTool, c: EditorController): StripSpec
         else -> StripSpec(
             listOf(
                 StripItem(F.EDIT, F.EDIT_LABEL, F.EDIT_DP.dp) {
-                    StripTextButton(F.EDIT_LABEL, F.EDIT_DP.dp, onClick = { tool.openStoryEditor(selected) }, icon = Icons.Filled.Edit)
+                    val strip = LocalStripContext.current
+                    StripTextButton(F.EDIT_LABEL, F.EDIT_DP.dp, onClick = {
+                        // D25: the story editor is a dialog (an overlay); the More row closes first.
+                        strip.closeMore()
+                        tool.openStoryEditor(selected)
+                    }, icon = Icons.Filled.Edit)
                 },
                 StripItem(F.LINK, F.LINK_LABEL, F.LINK_DP.dp) {
-                    StripTextButton(F.LINK_LABEL, F.LINK_DP.dp, onClick = { tool.startLink(selected) }, icon = Icons.Filled.Link)
+                    val strip = LocalStripContext.current
+                    StripTextButton(F.LINK_LABEL, F.LINK_DP.dp, onClick = {
+                        // The next canvas touch draws or picks the next frame: an open More row
+                        // would only take it (D25), as for the Masks' add buttons.
+                        strip.closeMore()
+                        tool.startLink(selected)
+                    }, icon = Icons.Filled.Link)
                 },
                 StripItem(F.UNLINK, F.UNLINK_LABEL, F.ICON_DP.dp, overflowRank = 1) {
                     ToolIconButton(Icons.Filled.LinkOff, F.UNLINK_LABEL, onClick = { tool.unlinkAfter(selected) }, enabled = hasNext, size = F.ICON_DP.dp)

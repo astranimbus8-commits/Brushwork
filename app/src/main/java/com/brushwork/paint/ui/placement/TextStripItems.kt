@@ -57,10 +57,15 @@ internal fun textSpec(tool: TextTool): StripSpec {
     }
     val items = listOf(
         StripItem(T.EDIT, T.EDIT_LABEL, T.EDIT_DP.dp) {
+            val strip = LocalStripContext.current
             StripTextButton(
                 T.EDIT_LABEL,
                 T.EDIT_DP.dp,
-                onClick = { if (item != null) tool.openEditor() else if (activeText != null) tool.editLayer(activeText, openEditor = true) },
+                onClick = {
+                    // D25: the editor is a dialog (an overlay); the More row closes first.
+                    strip.closeMore()
+                    if (item != null) tool.openEditor() else if (activeText != null) tool.editLayer(activeText, openEditor = true)
+                },
                 enabled = item != null || activeText != null,
                 icon = Icons.Filled.Edit,
             )

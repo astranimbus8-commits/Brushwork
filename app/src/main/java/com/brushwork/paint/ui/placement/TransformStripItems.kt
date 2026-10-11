@@ -89,7 +89,7 @@ internal fun transformSpec(tool: TransformTool): StripSpec {
             ),
             hint = if (tool.selectSeveral) PointLabels.SEVERAL_HINT else null,
             overlays = overlays,
-            movedInto = TransformStripItems.MESH_POPUP.associateWith { TransformStripItems.MESH_SIZE },
+            movedInto = TransformStripItems.MESH_POPUP.associateWith { TransformStripItems.MESH_SIZE } + T.modesInside(tool.mode),
         )
     }
     return StripSpec(
@@ -98,8 +98,11 @@ internal fun transformSpec(tool: TransformTool): StripSpec {
             T.delete(tool), T.rotate(tool, clockwise = false), T.rotate(tool, clockwise = true), T.fit(tool), T.reset(tool),
             T.snap(tool), T.interpolation(tool), T.numbers(tool),
         ),
+        // Design §3.9: the v1.7 status text ("Touch the canvas to transform the layer", "... the
+        // selection", "... the layer mask"): still true while transforming, and it names what moves.
         hint = tool.statusText,
         overlays = overlays,
+        movedInto = T.modesInside(tool.mode),
     )
 }
 
@@ -160,6 +163,13 @@ internal object TransformStripItems {
         TransformLabels17.COLUMNS, TransformLabels17.ROWS,
         MeshStepperLabels.FEWER_COLUMNS, MeshStepperLabels.MORE_COLUMNS, MeshStepperLabels.FEWER_ROWS, MeshStepperLabels.MORE_ROWS,
     )
+
+    /**
+     * Rule 5 (`movedInto`): v1.7's mode chips other than [current] ("Distort", "Free deform", ...)
+     * are inside the mode dropdown, which row 1 shows as [current]'s label.
+     */
+    fun modesInside(current: TransformTool.Mode): Map<String, String> =
+        TransformTool.Mode.entries.filter { it != current }.associate { it.label to MODE }
 
     fun keepAspectLabel(on: Boolean) = if (on) "Keep aspect ratio: on" else "Keep aspect ratio: off"
 

@@ -44,11 +44,11 @@ import org.robolectric.shadows.ShadowLog
  * - Transform: nothing to transform (its status alone on row 1, no toggle); the box modes (row 1
  *   the mode, "Keep aspect ratio", "From center", the flips; the More row under the status text);
  *   Free deform (row 1 the mode, [TransformLabels18.MESH_SIZE], "Reset mesh"; the steppers in its
- *   popup, `movedInto`). The Numbers sheet outlives the More row; "Choose interpolation" keeps it
- *   open.
+ *   popup, `movedInto`). The other modes are inside the mode dropdown (`movedInto`, rule 5). The
+ *   Numbers sheet outlives the More row; "Choose interpolation" keeps it open.
  * - Text: row 1 "Edit text", the direction, "Letter scaling", "Wrap" (AUTO 1: the More row's
- *   front at 360 dp with the VECTOR cell); "Numbers" on the More row while a text is open, its
- *   sheet outliving the row.
+ *   front at 360 dp with the VECTOR cell); "Edit text" opens the editor dialog and closes the More
+ *   row first (D25); "Numbers" on the More row while a text is open, its sheet outliving the row.
  * - Frame divider: without a frame layer "New frame layer" and the status (no toggle; its sheet
  *   shows); with one "Rows × columns", "Remove panels mode", "Frame settings / new frame layer"
  *   (sheets from row 1 close the More row and show); edited by hand "Redraw", "New frame" and the
@@ -100,7 +100,11 @@ class PlacementStripTest {
         val box = "TRANSFORM, box modes"
         val boxRow1 = listOf(TransformTool.Mode.FREE.label, T.keepAspectLabel(t.keepAspect), T.FROM_CENTER, T.FLIP_HORIZONTALLY, T.FLIP_VERTICALLY)
         val boxMore = listOf(T.DELETE_LABEL, T.ROTATE_CCW_LABEL, T.ROTATE_CW_LABEL, T.FIT_LABEL, T.RESET_LABEL, SNAP_LABEL, T.INTERPOLATION_LABEL, T.NUMBERS_LABEL)
-        inspect(rig, box, (boxRow1 + boxMore).toSet())
+        // v1.7's other mode chips are inside the mode dropdown (rule 5: the inventory opens it).
+        val boxModes = listOf(TransformTool.Mode.DISTORT.label, TransformTool.Mode.MESH.label)
+        assertEquals(TransformLabels17.FREE_DEFORM, TransformTool.Mode.MESH.label)
+        assertEquals("$box: the other modes are inside the mode dropdown", boxModes.toSet(), rig.spec.movedInto.keys)
+        inspect(rig, box, (boxRow1 + boxMore + boxModes).toSet())
         assertSplits(box, rig.spec) { _, _ -> listOf(T.MODE, T.ASPECT, T.CENTER, T.FLIP_H, T.FLIP_V) }
         assertEquals("$box at $dp dp: row 1", boxRow1, row1Handles())
         assertEquals("$box: the status text is the hint", t.statusText, rig.spec.hint)
@@ -125,8 +129,13 @@ class PlacementStripTest {
         val mesh = "TRANSFORM, Free deform"
         val meshRow1 = listOf(TransformLabels17.FREE_DEFORM, TransformLabels18.MESH_SIZE, TransformLabels17.RESET)
         val meshMore = listOf(TransformLabels17.SMOOTH, PointLabels.SELECT_ALL, T.DELETE_LABEL, T.INTERPOLATION_LABEL)
-        assertEquals("$mesh: the steppers are inside ${TransformLabels18.MESH_SIZE}", T.MESH_POPUP.toSet(), rig.spec.movedInto.keys)
-        inspect(rig, mesh, (meshRow1 + meshMore + T.MESH_POPUP).toSet())
+        val meshModes = listOf(TransformTool.Mode.FREE.label, TransformTool.Mode.DISTORT.label)
+        assertEquals(
+            "$mesh: the steppers are inside ${TransformLabels18.MESH_SIZE}, the other modes inside the mode dropdown",
+            T.MESH_POPUP.associateWith { T.MESH_SIZE } + meshModes.associateWith { T.MODE },
+            rig.spec.movedInto,
+        )
+        inspect(rig, mesh, (meshRow1 + meshMore + T.MESH_POPUP + meshModes).toSet())
         assertSplits(mesh, rig.spec) { _, _ -> listOf(T.MODE, T.MESH_SIZE, T.MESH_RESET) }
         assertEquals("$mesh at $dp dp: row 1", meshRow1, row1Handles())
         assertTrue("$mesh: \"3 × 3\"", SmokeUi.has(T.meshText(t.meshColumns, t.meshRows), exact = true))
@@ -171,6 +180,15 @@ class PlacementStripTest {
         val open = "TEXT, an open text"
         inspect(rig, open, setOf(X.EDIT_LABEL, X.verticalLabel(false), X.LETTERS_LABEL, X.wrapLabel(tool), X.NUMBERS_LABEL, SNAP_LABEL))
         assertEquals("$open at $dp dp: row 1", listOf(X.EDIT_LABEL, X.verticalLabel(false), X.LETTERS_LABEL, X.wrapLabel(tool)), row1Handles())
+        // "Edit text" (row 1) opens the editor dialog: the More row closes first (D25).
+        assertTrue(StripTestKit.openMoreRow())
+        SmokeUi.click(X.EDIT_LABEL, exact = true)
+        rig.settle()
+        assertTrue("$open: the editor", tool.editorOpen)
+        assertFalse("$open: \"Edit text\" closed the More row", StripTestKit.moreRowShown() || rig.state.anyOpen)
+        tool.cancelEditor()
+        rig.settle()
+        assertNotNull("$open: still open after the editor", tool.item)
         staysOpen(rig, X.NUMBERS_LABEL, "$open: the Numbers sheet") { tool.numbersOpen && sheetShown(rig, "Position & size") }
         tool.numbersOpen = false
         rig.settle()
