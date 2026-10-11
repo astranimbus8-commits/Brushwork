@@ -57,6 +57,7 @@ import com.brushwork.paint.tools.select.ColorSelectSettings
 import com.brushwork.paint.tools.select.LassoCommit
 import com.brushwork.paint.tools.select.SampleSource
 import com.brushwork.paint.tools.select.colorrange.ColorPreset
+import com.brushwork.paint.tools.select.colorrange.ColorSamples
 import com.brushwork.paint.tools.select.colorrange.ColorSelectTool
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSelectLabels18
@@ -97,6 +98,18 @@ internal object ColorSelectStrip {
 
     /** The preset popup's width (dp). */
     const val PRESETS_DP = 296
+
+    /**
+     * The preset chip's sample swatches (dp): [SWATCH_ROW_DP] for the row (inside the 68 dp the
+     * 92 dp chip leaves its value), [SWATCH_GAP_DP] between dots, each dot [SWATCH_MAX_DP] at most
+     * ([swatchDp]: 12 dp up to four samples, 6 dp for eight).
+     */
+    const val SWATCH_ROW_DP = 62
+    const val SWATCH_GAP_DP = 2
+    const val SWATCH_MAX_DP = 12
+
+    /** The dot size (dp) for [count] samples: as large as the row takes, [SWATCH_MAX_DP] at most. */
+    fun swatchDp(count: Int): Int = ((SWATCH_ROW_DP - (count - 1) * SWATCH_GAP_DP) / count.coerceAtLeast(1)).coerceAtMost(SWATCH_MAX_DP)
 }
 
 /**
@@ -115,7 +128,7 @@ internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): Strip
     val items = listOf(
         selectionModeItem(tool.mode) { tool.mode = it },
         StripItem(ColorSelectStrip.RANGE, ColorSelectLabels18.COLOR_RANGE, ColorSelectStrip.RANGE_DP.dp) {
-            ColorRangeChip(s.preset) { set(tool.settings.copy(preset = it)) }
+            ColorRangeChip(s.preset, tool.sampleColors) { set(tool.settings.copy(preset = it)) }
         },
         StripItem(ColorSelectStrip.FUZZINESS, ColorSelectLabels18.FUZZINESS, ColorSelectStrip.FUZZINESS_DP.dp, overflowRank = 1) {
             FuzzinessChip(s.fuzziness) { set(tool.settings.copy(fuzziness = it)) }
@@ -171,14 +184,20 @@ internal fun colorSelectStrip(tool: ColorSelectTool, c: EditorController): Strip
 /**
  * The preset chip: its name over the current preset (cut to the width; the state says it whole), a
  * popup of the thirteen presets as chips; one is on at a time, a tap picks it and closes the popup.
+ * [ColorSelectLabels18.SAMPLED] does not fit the chip: it shows the [samples] instead, as a row of
+ * swatches (eight at most, [ColorSelectStrip.swatchDp] each), and [ColorSelectLabels18.NO_SAMPLES]
+ * while there is none.
  */
 @Composable
-private fun ColorRangeChip(preset: ColorPreset, onPick: (ColorPreset) -> Unit) {
+private fun ColorRangeChip(preset: ColorPreset, samples: List<Int>, onPick: (ColorPreset) -> Unit) {
     var open by remember { mutableStateOf(false) }
+    val sampled = preset == ColorPreset.SAMPLED
     Box {
         StripValueButton(
-            ColorSelectLabels18.COLOR_RANGE, preset.label, ColorSelectLabels18.COLOR_RANGE, ColorSelectStrip.RANGE_DP.dp,
+            ColorSelectLabels18.COLOR_RANGE, if (sampled) ColorSelectLabels18.NO_SAMPLES else preset.label,
+            ColorSelectLabels18.COLOR_RANGE, ColorSelectStrip.RANGE_DP.dp,
             onClick = { open = true }, state = preset.label, fixed = true,
+            valueContent = if (sampled && samples.isNotEmpty()) ({ SampleSwatches(samples) }) else null,
         )
         StripDropdown(open, onDismiss = { open = false }) {
             FlowRow(
@@ -201,6 +220,24 @@ private fun ColorRangeChip(preset: ColorPreset, onPick: (ColorPreset) -> Unit) {
                     )
                 }
             }
+        }
+    }
+}
+
+/** The samples' colors as outlined dots, in the order they were taken (the oldest first). */
+@Composable
+private fun SampleSwatches(samples: List<Int>) {
+    val shown = samples.takeLast(ColorSamples.MAX)
+    val dot = ColorSelectStrip.swatchDp(shown.size).dp
+    Row(horizontalArrangement = Arrangement.spacedBy(ColorSelectStrip.SWATCH_GAP_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (argb in shown) {
+            Box(
+                Modifier
+                    .size(dot)
+                    .clip(CircleShape)
+                    .background(Color(argb))
+                    .border(1.dp, BrushworkColors.OnChromeDim, CircleShape),
+            )
         }
     }
 }

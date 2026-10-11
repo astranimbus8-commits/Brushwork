@@ -54,7 +54,7 @@ class LabelsV18Test {
         val all = labels
         // 95 from F1, and three from the integration (v18I): the Color select no-match toast, the
         // Magnetic lasso's out-of-memory toast and the Transform box hint.
-        assertEquals("the objects have their labels: ${all.keys}", 98, all.size)
+        assertEquals("the objects have their labels: ${all.keys}", 99, all.size)
         assertTrue(all.keys.containsAll(listOf("ColorSelectLabels18.NO_MATCH", "MagneticLabels18.OUT_OF_MEMORY", "TransformLabels18.BOX_HINT")))
         val dups = all.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
         assertTrue("labels declared twice: $dups", dups.isEmpty())

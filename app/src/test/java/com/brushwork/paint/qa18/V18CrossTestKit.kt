@@ -340,7 +340,7 @@ internal object V18CrossTestKit {
     /**
      * [n]'s text is a value its control says whole as its state: a `fixed` StripValueButton keeps
      * its width and ellipsizes the value by design (ARCHITECTURE, "StripValueButton"), as Color
-     * select's preset chip does with "Sampled colors".
+     * select's preset chip does with "Vivid colors" and "Muted colors" ("Sampled colors" shows its samples).
      */
     private fun statedWhole(n: SemanticsNode): Boolean {
         val text = n.config.getOrNull(SemanticsProperties.Text).orEmpty().joinToString("") { it.text }

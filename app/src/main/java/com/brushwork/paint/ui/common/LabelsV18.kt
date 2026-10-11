@@ -63,6 +63,8 @@ object ColorSelectLabels18 {
     const val CLEAR_SAMPLES = "Clear samples"; const val INVERT_RANGE = "Invert range"
     /** v1.8 integration: the toast when the samples or the preset match no pixel (no selection step). */
     const val NO_MATCH = "No pixels match these colors"
+    /** v1.8 final QA: the "Color range" chip's value for [SAMPLED] with no sample (with samples it shows their swatches). */
+    const val NO_SAMPLES = "None yet"
 }
 
 /** The fringe colors of Chromatic aberration and Glitch (item 5). The preset chips' names are [RGB] .. [BLUE_YELLOW]. */

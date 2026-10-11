@@ -2002,7 +2002,7 @@ Every selection tool's strip is a converted `StripSpec` in `ui/selection/`:
 
 The compact controls are in `SelectionStripControls.kt`:
 - `SelectionModeDropdown` ("Selection mode", 56 dp, key `select.mode`): shows the mode's icon, carries the mode as its state, and holds the four v1.7 mode descriptions inside (`modesMovedInto`).
-- `StripValueButton`: a small label over the value and a ▾. A v1.7 control is found by its v1.7 handle ("Tolerance 32", "Refer: Layer"); a v1.8 control by its name, with the value as its state. `fixed` keeps the button exactly its width and ellipsizes the value.
+- `StripValueButton`: a small label over the value and a ▾. A v1.7 control is found by its v1.7 handle ("Tolerance 32", "Refer: Layer"); a v1.8 control by its name, with the value as its state. `fixed` keeps the button exactly its width and ellipsizes the value. `valueContent`, when given, is drawn in the value's place and never read out (the state says the value): Color select's sample swatches.
 - `StripSliderChip`: a popup with the v1.7 slider and number field. A v1.8 chip has no − / + buttons.
 - `StripChoiceChip`, `StripToggle`, `StripIconAction`.
 - `CountedCloseButton`: the ✓ with "N pt" under it, enabled from 3 points.
@@ -2023,7 +2023,7 @@ Rows, with widths in dp. AUTO items leave row 1 first when it is full.
 | Select shape | mode 56, shape 80, 1:1 56 | From center 96, Snap to objects 160, shortcuts |
 | Object select | mode 56, Refine edges 104, Cancel 40 (while busy) | Refer 80, shortcuts; hint |
 | Magnetic lasso | mode 56, Delete point 40, Discard 40, Close 40 (188; room kept while empty) | Edge reach 72, Edge contrast 88, Snap to edge 96, Refer 80, Anti-alias 88, shortcuts; hint while committing |
-| Color select | mode 56; Color range 92 (fixed, preset as state, a popup of 13 FilterChips); Fuzziness 64 (AUTO 1: a 44 dp opaque, full-width one-line slider panel right under the strip's row); Add from the color picker 40; Select colors 40 (off while nothing counts) | Use the current color 40, Clear samples 40, Invert range 96, Refer 80, Anti-alias 88, shortcuts; hint while selecting |
+| Color select | mode 56; Color range 92 (fixed, preset as state, a popup of 13 FilterChips; for Sampled colors the value is the samples as a row of outlined swatches, oldest first, `ColorSelectStrip.swatchDp`: 12 dp up to four samples, 6 dp for eight, in 62 dp; with no sample it is "None yet", `ColorSelectLabels18.NO_SAMPLES`; Vivid colors and Muted colors are cut by a letter or two, their state says them whole; v1.8 final QA, `Qa18SelectRangeChipUiTest` and its 360 dp twin); Fuzziness 64 (AUTO 1: a 44 dp opaque, full-width one-line slider panel right under the strip's row); Add from the color picker 40; Select colors 40 (off while nothing counts) | Use the current color 40, Clear samples 40, Invert range 96, Refer 80, Anti-alias 88, shortcuts; hint while selecting |
 
 Row 1 room (`StripInventory.content`) is 316 dp at 392 dp and 284 dp at 360 dp, and 44 dp less with the VECTOR chip.
 - Color select's row 1 is 308 dp with its gaps, so "Fuzziness" heads the More row at 360 dp (with or without the chip), and at 392 dp with the chip.
@@ -2294,7 +2294,7 @@ Corrections to design §8.1, found at integration: its "What v1.7 shows" column 
   - d. Chromatic aberration "Red/Cyan", then "Array from selection" with a "Sunset" look. The filter result is compared exactly, and the tinted copies carry the fringed pixels.
 - `V18CrossTestStrips360` and `V18CrossTestStrips392` (scenario e; the shared check is `V18CrossTestStrips`, the kit `V18CrossTestKit`) walk the More row of every tool on the raster and the vector layer, plus the v1.8 states: a generated rose on Curve and Path; the curve tools open with mirror copies; a holed cog; a cog with copies in Points mode; an open text, on the raster and on the vector layer; a selected text frame; a brush part of a mask; the Transform box and Free deform; an Array layer. For each walked More row:
   - at most `StripLayout.MAX_MORE_LINES` lines;
-  - nothing clipped or ellipsized, except a `fixed` `StripValueButton`'s value, which is its stateDescription ("The selection strips": a fixed value button ellipsizes its value), and a More-row hint ending in "…" (`TextFrameStripTest`);
+  - nothing clipped or ellipsized, except a `fixed` `StripValueButton`'s value, which is its stateDescription ("The selection strips": a fixed value button ellipsizes its value, as Color select's chip does with "Vivid colors" and "Muted colors"), and a More-row hint ending in "…" (`TextFrameStripTest`);
   - no text inside another where one of the two is a v1.8 text (`LabelsV18Test` rule 4). The exemptions carried over: equal texts count only on two different controls (the same text twice on one control, such as a value button's label and description, or a label repeated beside its control, is one text); a text strictly inside another counts even on one control; `CurvesLabelsTest`'s ignored digits and its ("Curve", CURVES) pair; `ShapesLabelsTest`'s derived prefixes.
 
   Each class also has a self-check that the machinery catches planted faults, a floor of v1.8 texts that must be seen, and at least 40 More rows walked.

@@ -118,7 +118,9 @@ internal fun StripMenuItem(text: String, checked: Boolean, icon: ImageVector? = 
 /**
  * A two-line button: a small [label] over its [value] and a ▾, known by [description] (the v1.7
  * handle, "Tolerance 32", "Refer: Layer") and, when given, [state]. [fixed]: exactly [width] wide,
- * a long value cut with an ellipsis (its [state] says it whole).
+ * a long value cut with an ellipsis (its [state] says it whole). [valueContent], when given, is
+ * drawn in the value's place (Color select's sample swatches); it is never read out, the
+ * [state] says the value.
  */
 @Composable
 internal fun StripValueButton(
@@ -129,6 +131,7 @@ internal fun StripValueButton(
     onClick: () -> Unit,
     state: String? = null,
     fixed: Boolean = false,
+    valueContent: (@Composable () -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -147,11 +150,18 @@ internal fun StripValueButton(
         Column {
             Text(label, fontSize = 10.sp, lineHeight = 12.sp, color = BrushworkColors.OnChromeDim, maxLines = 1, softWrap = false)
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    value, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = BrushworkColors.OnChrome,
-                    maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
-                    modifier = if (fixed) Modifier.weight(1f, fill = false) else Modifier,
-                )
+                if (valueContent != null) {
+                    Box(
+                        (if (fixed) Modifier.weight(1f, fill = false) else Modifier).height(14.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) { valueContent() }
+                } else {
+                    Text(
+                        value, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Medium, color = BrushworkColors.OnChrome,
+                        maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis,
+                        modifier = if (fixed) Modifier.weight(1f, fill = false) else Modifier,
+                    )
+                }
                 Icon(Icons.Filled.ArrowDropDown, contentDescription = null, tint = BrushworkColors.OnChromeDim, modifier = Modifier.size(12.dp))
             }
         }
