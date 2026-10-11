@@ -91,8 +91,13 @@ internal class Qa18CurvesUi(private val h: ChromeHarness, private val widthDp: F
     fun tap(label: String) {
         val first = SmokeUi.find(label, exact = true) ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(80)}")
         // The editor's own window: its strip may need a scroll; a sheet scrolls its column.
-        if (first.window === s.activity.window.decorView) ui.reach(label, 24f)
-        val e = visible { SmokeUi.find(label, exact = true) ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(80)}") }
+        val find = { SmokeUi.find(label, exact = true) ?: throw AssertionError("no \"$label\"; shown: ${SmokeUi.shown().take(80)}") }
+        if (first.window === s.activity.window.decorView) {
+            val at = first.node.positionInWindow
+            ui.reach(label, 24f)
+            if (find().node.positionInWindow != at) standStill(find)
+        }
+        val e = visible(find)
         var n: androidx.compose.ui.semantics.SemanticsNode? = e.node
         while (n != null && n.config.getOrNull(SemanticsActions.OnClick) == null && n.config.getOrNull(SemanticsActions.SetProgress) == null) n = n.parent
         val b = (n ?: e.node).boundsInWindow
@@ -129,13 +134,38 @@ internal class Qa18CurvesUi(private val h: ChromeHarness, private val widthDp: F
         settle()
     }
 
-    /** The slider under the text [label] (the next node after the last one showing it that sets a progress). */
+    /**
+     * The slider under the text [label] (the next node after the last one showing it that sets a
+     * progress), or the slider named "[label] slider" (a length field's own slider).
+     */
     fun sliderUnder(label: String): RobolectricUi.Element {
         val all = RobolectricUi.elements().filter { it.node.layoutInfo.isPlaced }
+        all.lastOrNull { e ->
+            e.node.config.getOrNull(SemanticsActions.SetProgress) != null &&
+                e.node.config.getOrNull(SemanticsProperties.ContentDescription)?.contains("$label slider") == true
+        }?.let { return it }
         val at = all.indexOfLast { e -> e.node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == label } == true }
         assertTrue("\"$label\" shows; shown: ${SmokeUi.shown().take(60)}", at >= 0)
         return all.drop(at + 1).firstOrNull { it.node.config.getOrNull(SemanticsActions.SetProgress) != null }
             ?: throw AssertionError("no slider under \"$label\"")
+    }
+
+    /**
+     * Waits until what [find] returns stands still: a scroll by its semantics is animated (a
+     * spring), and a touch while it still moves only stops it, as a finger on a moving list does.
+     */
+    fun standStill(find: () -> RobolectricUi.Element) {
+        var last = find().node.positionInWindow
+        var still = 0
+        var waited = 0
+        while (still < 3 && waited < 2000) {
+            Smoke.pump(100)
+            waited += 100
+            val now = find().node.positionInWindow
+            if (now == last) still++ else still = 0
+            last = now
+        }
+        settle()
     }
 
     /**
@@ -161,8 +191,7 @@ internal class Qa18CurvesUi(private val h: ChromeHarness, private val widthDp: F
                 if (delta != 0f) {
                     val scroll = requireNotNull(n.config[SemanticsActions.ScrollBy].action)
                     if (across) scroll(delta, 0f) else scroll(0f, delta)
-                    Smoke.pump(400)
-                    settle()
+                    standStill(find)
                     return@repeat
                 }
             }
