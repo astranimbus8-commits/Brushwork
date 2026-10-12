@@ -183,6 +183,7 @@ data class ShapeSettings(
         unit = o.unit,
         nudgeStepPx = o.nudgeStepPx,
         editable = o.editable,
+        newLayerEachTime = o.newLayerEachTime,
     )
 
     /** These options showing the look of the placed shape [s] (its width is fixed, not the brush size). */
