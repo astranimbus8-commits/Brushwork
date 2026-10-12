@@ -44,9 +44,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.filters.GradientStop
 import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSwatch
@@ -66,10 +72,17 @@ internal fun gradientBrush(stops: List<GradientStop>): Brush {
 }
 
 /**
+ * What a screen reader calls the stop numbered [number] (from the left) of [count] whose color is
+ * [hex], on a filter's gradient: "Color stop 2 of 3, #RRGGBB".
+ */
+internal fun colorStopDescription(number: Int, count: Int, hex: String): String = "Color stop $number of $count, $hex"
+
+/**
  * Gradient editor: tap the bar to add a stop, drag stops (drag one far off the bar to delete it),
  * tap a stop to change its color, plus presets and reverse. [onChangeFinished] (v1.6): a touch
  * on the bar ended, or a button changed the gradient at once (an adjustment layer's live preview
- * refines to the exact image then).
+ * refines to the exact image then). [stopDescription] (v1.8 polish): a stop's name for a screen
+ * reader, from its number (1 = leftmost), the count and its color's hex.
  */
 @Composable
 fun GradientEditor(
@@ -79,6 +92,7 @@ fun GradientEditor(
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     onChangeFinished: () -> Unit = {},
+    stopDescription: (number: Int, count: Int, hex: String) -> String = ::colorStopDescription,
 ) {
     val sorted = remember(stops) { GradientEditing.sorted(stops) }
     val current by rememberUpdatedState(sorted)
@@ -87,6 +101,12 @@ fun GradientEditor(
     var selected by remember { mutableIntStateOf(-1) }
     var pickerFor by remember { mutableIntStateOf(-1) }
     var removing by remember { mutableStateOf(false) }
+
+    /** Selects stop [i] and opens its color picker (a tap on the stop, or a screen reader's click). */
+    fun openStop(i: Int) {
+        selected = i
+        pickerFor = i
+    }
 
     Column(modifier.fillMaxWidth()) {
         Box(
@@ -156,7 +176,7 @@ fun GradientEditor(
                 val pad = SIDE_PAD.toPx()
                 val span = size.width - 2 * pad
                 val top = BAR_HEIGHT.toPx() + 2.dp.toPx()
-                val sw = 18.dp.toPx()
+                val sw = STOP_MARKER.toPx()
                 sorted.forEachIndexed { i, s ->
                     val x = pad + s.position * span
                     val active = i == selected
@@ -168,6 +188,36 @@ fun GradientEditor(
                     drawRoundRect(Color.White, Offset(x - sw / 2, boxTop), Size(sw, sw), CornerRadius(4.dp.toPx()))
                     drawRoundRect(Color(s.color), Offset(x - sw / 2 + 2.dp.toPx(), boxTop + 2.dp.toPx()), Size(sw - 4.dp.toPx(), sw - 4.dp.toPx()), CornerRadius(3.dp.toPx()))
                     if (active) drawRoundRect(BrushworkColors.Accent, Offset(x - sw / 2, boxTop), Size(sw, sw), CornerRadius(4.dp.toPx()), style = Stroke(2.dp.toPx()))
+                }
+            }
+            // v1.8 polish (accessibility): one node per stop over its marker (triangle and swatch)
+            // for a screen reader: its name, number and color, Selected when it is the selected
+            // stop; activated, it selects the stop and opens its color picker, as a tap on it does.
+            // Semantics only (no pointer input): a finger's touches still reach the bar's gesture.
+            Layout(
+                content = {
+                    sorted.forEachIndexed { i, s ->
+                        val description = stopDescription(i + 1, sorted.size, ColorUtils.toHex(s.color))
+                        val isSelected = i == selected
+                        Box(
+                            Modifier.semantics {
+                                contentDescription = description
+                                this.selected = isSelected
+                                if (enabled) onClick { openStop(i); true } else disabled()
+                            },
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+            ) { measurables, constraints ->
+                val pad = SIDE_PAD.toPx()
+                val span = (constraints.maxWidth - 2 * pad).coerceAtLeast(1f)
+                val w = STOP_MARKER.roundToPx()
+                val h = (STOP_MARKER + 7.dp).roundToPx()
+                val top = (BAR_HEIGHT + 2.dp).roundToPx()
+                val placeables = measurables.map { it.measure(Constraints.fixed(w, h)) }
+                layout(constraints.maxWidth, constraints.maxHeight) {
+                    placeables.forEachIndexed { i, p -> p.place((pad + sorted[i].position * span - w / 2f).roundToInt(), top) }
                 }
             }
         }
@@ -244,3 +294,6 @@ private fun presetMatches(a: List<GradientStop>, b: List<GradientStop>): Boolean
 private val SIDE_PAD = 14.dp
 private val BAR_HEIGHT = 34.dp
 private val LANE_HEIGHT = 30.dp
+
+/** A stop's swatch under the bar (its triangle above it is 7 dp). */
+private val STOP_MARKER = 18.dp

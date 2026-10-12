@@ -84,6 +84,7 @@ internal fun ArrayLookTab(tool: ArrayTool, spec: ArraySpec) {
             },
             defaultStops = DEFAULT_TINT,
             onChangeFinished = { tool.commitPreview() },
+            stopDescription = ArrayLabels18::tintColor,
         )
         NumberField(
             label = ArrayLabels18.TINT_STRENGTH,

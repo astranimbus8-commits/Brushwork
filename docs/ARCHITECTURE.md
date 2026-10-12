@@ -98,7 +98,7 @@ I1–I10 from `docs/ARCHITECTURE.md` stay as they are (I1 data and cache change 
 
 ## Invariants (v1.8)
 I1–I14 stay as they are. Three of them carry most of v1.8's weight:
-- **I10 (labels are an API):** every new visible text and description is a constant in `ui/common/LabelsV18.kt` (tags in `V18Tags`). `LabelsV18Test` checks the substring rule and that no main source retypes a value; `ownership-check-v18.ps1` rule L fails an area branch that adds one as a literal outside `ui/common/`. The integration added three, which `LabelsV18Test` counts: `MagneticLabels18.OUT_OF_MEMORY` ("Magnetic lasso"), `ColorSelectLabels18.NO_MATCH` ("Color select") and `TransformLabels18.BOX_HINT` ("The converted strips of area G"). The v1.8 polish added `TransformLabels18.INTERPOLATION_CAPTION` (the caption on "Choose interpolation"; 100 labels).
+- **I10 (labels are an API):** every new visible text and description is a constant in `ui/common/LabelsV18.kt` (tags in `V18Tags`). `LabelsV18Test` checks the substring rule and that no main source retypes a value; `ownership-check-v18.ps1` rule L fails an area branch that adds one as a literal outside `ui/common/`. The integration added three, which `LabelsV18Test` counts: `MagneticLabels18.OUT_OF_MEMORY` ("Magnetic lasso"), `ColorSelectLabels18.NO_MATCH` ("Color select") and `TransformLabels18.BOX_HINT` ("The converted strips of area G"). The final QA added `ColorSelectLabels18.NO_SAMPLES` (the Color range chip with no sample). The v1.8 polish added `TransformLabels18.INTERPOLATION_CAPTION` (the caption on "Choose interpolation") and `MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE` (the clone stamp's refusal under the Perspective array): 101 labels. It also adds screen-reader names composed from a value, which are functions, not counted constants: `ArrayLabels18.tintColor` (a Tint colors stop) in `LabelsV18.kt`; beside their v1.7 controls, `colorStopDescription` (a filter gradient's stop, `GradientEditor`), `newSeedDescription` (the seed's shuffle button, "New random seed") and the shared slider's "<label> slider" (`LabeledSlider`).
 - **I13 / I13b (byte-exact compatibility):** every new field is `@EncodeDefault(NEVER)` with a default that reproduces v1.7, and no codec `version` changes (`ShapeCodec` stays 2, `ArrayCodec` 1). The v1.6 goldens and the v1.7 fixtures re-encode byte for byte (`CodecV18GoldenTest`); frozen v1.7 decoders in test sources (`compat17`, copied from `885793b4`) read v1.8 files as the compatibility table says (`CompatV17DecodeTest`).
 - **I14 (ArrayDraw is the one draw seam):** it stays so; per-copy data comes from `ArrayInstances.of` (area B wires it).
 
@@ -1528,7 +1528,7 @@ v1.7 rebuilds the source on load. A project saved in "Edit source pixels" mode r
 - `ArrayLookTab` (tag `V18Tags.ARRAY_LOOK`) holds:
   - **Field pairs:** Start/End opacity 0..100 %; Start/End size `ArraySpec.MIN_SCALE..MAX_SCALE` as %; Start/End turn ±3600°.
   - **Pace:** one ChoiceChip per `ArrayEasing`.
-  - **Tint colors:** the filters' `GradientEditor`, 2..8 stops; a 9th is ignored. With no tint it shows the colors kept in `plainTint` (below), else the default warm-to-cool stops.
+  - **Tint colors:** the filters' `GradientEditor`, 2..8 stops; a 9th is ignored. With no tint it shows the colors kept in `plainTint` (below), else the default warm-to-cool stops. A screen reader reads each stop as `ArrayLabels18.tintColor` ("Tint color 2 of 3, #RRGGBB"), Selected when it is the selected stop (the editor's `stopDescription`).
   - **Tint strength:** 0..100 %.
   - **Reset look:** enabled when there is a look, the Pace is not Even or `plainTint` holds colors.
 - **Two tint rules** stop a tint from doing nothing:
@@ -2352,7 +2352,12 @@ The split cut the test time from about 41 minutes to 21 to 30 minutes, and the j
 `MainActivity` → gallery or editor. `ui/common/Components.kt` holds shared controls (sheets,
 nudge pad, chips, swatches) and `ui/common/NumberControls.kt` (v1.6) the number controls (typeable
 sliders, numeric/length fields with units + automatic sliders / drag-to-scrub, with increment
-parameters) — use them everywhere.
+parameters) — use them everywhere. For a screen reader (v1.8 polish), a `LabeledSlider`'s slider
+is named "<label> slider" and says its value text as its state (its progress range stays); the
+label's text keeps the only exact match. `GradientEditor` (ui/filters) puts a semantics-only node
+over each stop's marker: named by its `stopDescription` (number from the left, count, hex),
+Selected for the selected stop, and its click selects the stop and opens its picker as a tap
+does; finger touches still go to the bar's own gesture.
 
 Editor layout (`ui/editor`, v1.6 ibisPaint main screen): the canvas is full bleed on the light
 surround (`IbisColors.Surround`; dark status-bar icons, black navigation bar). At the top: the top

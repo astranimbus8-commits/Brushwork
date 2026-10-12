@@ -206,7 +206,9 @@ class LabelsV18Test {
     @Test
     fun theArraySheetsLookTab() {
         // The history name "Array look" is a step name, not on the sheet.
-        val v18 = values(ArrayLabels18) - ArrayLabels18.HISTORY_LOOK
+        // v1.8 polish: the Tint colors bar names each stop for a screen reader (two examples of them).
+        val v18 = values(ArrayLabels18) - ArrayLabels18.HISTORY_LOOK +
+            listOf(ArrayLabels18.tintColor(1, 2, "#FF8800"), ArrayLabels18.tintColor(2, 2, "#3366CC"))
         assertNoSubstrings(
             "Array sheet, Look tab",
             v18 = v18,

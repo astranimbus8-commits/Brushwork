@@ -43,6 +43,14 @@ object ArrayLabels18 {
     /** The easing dropdown ([com.brushwork.paint.model.ArrayEasing]) and its four choices. */
     const val PACE = "Pace"; const val EVEN = "Even"; const val SPEEDS_UP = "Speeds up"; const val SLOWS_DOWN = "Slows down"; const val S_CURVE = "S-curve"
     const val TINT_COLORS = "Tint colors"; const val TINT_STRENGTH = "Tint strength"
+
+    /**
+     * v1.8 polish (accessibility): a Tint colors stop's name for a screen reader, from its number
+     * (1 = leftmost), the count and its color's hex: "Tint color 2 of 3, #RRGGBB". A function, not
+     * a constant: "Tint color" alone would be a substring of [TINT_COLORS].
+     */
+    fun tintColor(number: Int, count: Int, hex: String): String = "Tint color $number of $count, $hex"
+
     const val RESET_LOOK = "Reset look"
     /** The history entry of a look change. */
     const val HISTORY_LOOK = "Array look"

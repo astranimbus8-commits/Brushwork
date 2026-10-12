@@ -41,7 +41,7 @@ import java.lang.reflect.Modifier
  *   corner selected), with the "Handles" popup open too; no "Undo point edit" / "Redo point edit".
  *
  * A control's own derived handles name the same control and are allowed: "Decrease X",
- * "Increase X", "Type X", "Type a value for X" and "Reset X" for a control labelled X (tests reach
+ * "Increase X", "Type X", "Type a value for X", "Reset X" and (v1.8 polish) "X slider" for a control labelled X (tests reach
  * each by its exact handle). The same text twice (a slider's label over its field's) is one text.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -59,6 +59,12 @@ class ShapesLabelsTest {
 
     private val derived = listOf("Decrease ", "Increase ", "Type ", "Type a value for ", "Reset ")
 
+    /**
+     * v1.8 polish (accessibility): the shared slider (`LabeledSlider`) is now named "X slider" for a
+     * screen reader, the same control as its label X (as "Type a value for X"); a derived handle.
+     */
+    private fun sliderOf(label: String) = "$label slider"
+
     /** Pairs (a, b) of what the screen shows now, a inside b, one of them a v1.8 text. */
     private fun clashes(): List<Pair<String, String>> {
         val shown = SmokeUi.shown().filter { it.isNotBlank() }.distinct()
@@ -66,7 +72,7 @@ class ShapesLabelsTest {
         for (a in shown) for (b in shown) {
             if (a == b || !b.contains(a)) continue
             if (a !in v18 && b !in v18) continue
-            if (derived.any { b == it + a }) continue
+            if (derived.any { b == it + a } || b == sliderOf(a)) continue
             out += a to b
         }
         return out

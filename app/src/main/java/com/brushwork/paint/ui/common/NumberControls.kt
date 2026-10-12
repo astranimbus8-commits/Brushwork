@@ -249,7 +249,14 @@ fun LabeledSlider(
             onValueChangeFinished = onValueChangeFinished,
             colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
             // A number being typed is committed before the slider moves (not over it later).
-            modifier = if (typing != null) Modifier.clearFocusOnTouch(focusManager) else Modifier,
+            // v1.8 polish (accessibility): a screen reader names the slider after its label and
+            // reads the value as shown (the slider is its own node, apart from the label's text;
+            // "$label slider" as the app's other sliders, so the label's text stays the only exact match).
+            modifier = (if (typing != null) Modifier.clearFocusOnTouch(focusManager) else Modifier)
+                .semantics {
+                    contentDescription = "$label slider"
+                    stateDescription = valueText
+                },
         )
     }
 }

@@ -65,6 +65,12 @@ class CurvesLabelsTest {
      */
     private fun typing(label: String) = "Type a value for $label"
 
+    /**
+     * v1.8 polish (accessibility): the shared slider is now named "[label] slider" for a screen
+     * reader (it had no name); like [typing], the same control as its label, not a clash.
+     */
+    private fun slider(label: String) = "$label slider"
+
     private fun SemanticsNode.labels(): List<String> =
         config.getOrNull(SemanticsProperties.Text).orEmpty().map { it.text } +
             config.getOrNull(SemanticsProperties.ContentDescription).orEmpty() +
@@ -84,7 +90,7 @@ class CurvesLabelsTest {
             if (!b.second.contains(a.second)) continue
             if (a.second !in v18 && b.second !in v18) continue
             if (a.second to b.second in allowed) continue
-            if (b.second == typing(a.second)) continue
+            if (b.second == typing(a.second) || b.second == slider(a.second)) continue
             out += a.second to b.second
         }
         return out.distinct()
