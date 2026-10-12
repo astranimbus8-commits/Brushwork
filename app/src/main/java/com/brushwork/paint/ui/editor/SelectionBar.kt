@@ -1,19 +1,25 @@
 package com.brushwork.paint.ui.editor
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.outlined.AutoFixHigh
 import androidx.compose.material.icons.outlined.BookmarkAdd
 import androidx.compose.material.icons.outlined.Close
@@ -36,7 +42,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -49,7 +58,9 @@ import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.remove.ContentAwareFillSheet
+import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.theme.BrushworkColors
+import com.brushwork.paint.ui.theme.IbisColors
 
 /**
  * Floating actions for the current selection (whatever made it: marquee, lasso, magic wand,
@@ -71,6 +82,7 @@ internal fun SelectionActionBar(
     // Content-aware fill options; Fill closes them (the busy overlay shows the progress).
     var fillOptionsOpen by remember { mutableStateOf(false) }
     if (fillOptionsOpen) ContentAwareFillSheet(controller, onDismiss = { fillOptionsOpen = false })
+    val scroll = rememberScrollState()
     Surface(
         color = SheetBackground,
         contentColor = BrushworkColors.OnChrome,
@@ -78,48 +90,92 @@ internal fun SelectionActionBar(
         shadowElevation = 4.dp,
         modifier = modifier,
     ) {
-        Row(
-            Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(0.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (hasSelection) {
-                BarItem(Icons.Outlined.ContentCopy, "Copy", "Copy selection") {
-                    controller.endCanvasGesture(); controller.copySelection()
+        Box {
+            Row(
+                Modifier.horizontalScroll(scroll).padding(horizontal = 4.dp, vertical = 2.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (hasSelection) {
+                    BarItem(Icons.Outlined.ContentCopy, "Copy", "Copy selection") {
+                        controller.endCanvasGesture(); controller.copySelection()
+                    }
+                    BarItem(Icons.Outlined.ContentCut, "Cut", "Cut selection") {
+                        controller.endCanvasGesture(); controller.cutSelection()
+                    }
                 }
-                BarItem(Icons.Outlined.ContentCut, "Cut", "Cut selection") {
-                    controller.endCanvasGesture(); controller.cutSelection()
+                BarItem(Icons.Outlined.ContentPaste, "Paste", "Paste as a new layer", enabled = canPaste) {
+                    controller.endCanvasGesture(); controller.paste()
                 }
+                if (hasSelection) {
+                    BarItem(Icons.Outlined.Deselect, "Deselect", "Clear the selection") { controller.endCanvasGesture(); controller.deselect() }
+                    // "Clear" (its step's name): the Transform strip beside it has its own "Delete" (I10).
+                    BarItem(Icons.Outlined.DeleteSweep, "Clear", "Delete the selected pixels") {
+                        controller.endCanvasGesture(); controller.clearLayer()
+                    }
+                    // Two short lines keep it as narrow as the others: eight items just fit a 392 dp phone.
+                    BarItem(Icons.Outlined.AutoFixHigh, "Content\naware", ContentAwareFillJob.FILL_LABEL, lines = 2) {
+                        controller.endCanvasGesture(); fillOptionsOpen = true
+                    }
+                    BarItem(Icons.Outlined.InvertColors, "Invert", "Invert the selection") { controller.endCanvasGesture(); controller.invertSelection() }
+                }
+                BarItem(Icons.Outlined.MoreHoriz, "More", "Selection menu", onClick = onMore)
+                if (hasSelection) {
+                    // v1.7 (items 3 and 14), after More so the eight v1.6 items keep their places.
+                    BarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_SELECTION) {
+                        controller.endCanvasGesture(); controller.arrayFromSelection()
+                    }
+                    BarItem(Icons.Outlined.BookmarkAdd, SavedSelectionLabels.SAVE_BUTTON, SavedSelectionLabels.SAVE) {
+                        controller.endCanvasGesture(); controller.saveSelection()
+                    }
+                }
+                if (onHide != null) BarItem(Icons.Outlined.Close, "Hide", "Hide the paste bar", onClick = onHide)
             }
-            BarItem(Icons.Outlined.ContentPaste, "Paste", "Paste as a new layer", enabled = canPaste) {
-                controller.endCanvasGesture(); controller.paste()
+            // v1.8 polish: the bar scrolls sideways (ten items are wider than a phone); a cue at each
+            // edge with items past it says so.
+            Box(Modifier.matchParentSize()) {
+                if (scroll.canScrollBackward) ScrollCue(forward = false, Modifier.align(Alignment.CenterStart))
+                if (scroll.canScrollForward) ScrollCue(forward = true, Modifier.align(Alignment.CenterEnd))
             }
-            if (hasSelection) {
-                BarItem(Icons.Outlined.Deselect, "Deselect", "Clear the selection") { controller.endCanvasGesture(); controller.deselect() }
-                // "Clear" (its step's name): the Transform strip beside it has its own "Delete" (I10).
-                BarItem(Icons.Outlined.DeleteSweep, "Clear", "Delete the selected pixels") {
-                    controller.endCanvasGesture(); controller.clearLayer()
-                }
-                // Two short lines keep it as narrow as the others: eight items just fit a 392 dp phone.
-                BarItem(Icons.Outlined.AutoFixHigh, "Content\naware", ContentAwareFillJob.FILL_LABEL, lines = 2) {
-                    controller.endCanvasGesture(); fillOptionsOpen = true
-                }
-                BarItem(Icons.Outlined.InvertColors, "Invert", "Invert the selection") { controller.endCanvasGesture(); controller.invertSelection() }
-            }
-            BarItem(Icons.Outlined.MoreHoriz, "More", "Selection menu", onClick = onMore)
-            if (hasSelection) {
-                // v1.7 (items 3 and 14), after More so the eight v1.6 items keep their places.
-                BarItem(EditorIcons.tool(ToolId.ARRAY), ArrayLabels.BUTTON, ArrayLabels.FROM_SELECTION) {
-                    controller.endCanvasGesture(); controller.arrayFromSelection()
-                }
-                BarItem(Icons.Outlined.BookmarkAdd, SavedSelectionLabels.SAVE_BUTTON, SavedSelectionLabels.SAVE) {
-                    controller.endCanvasGesture(); controller.saveSelection()
-                }
-            }
-            if (onHide != null) BarItem(Icons.Outlined.Close, "Hide", "Hide the paste bar", onClick = onHide)
         }
     }
 }
+
+/**
+ * A chevron over a fade to the menu color, [ScrollCueWidth] wide at the bar's edge: in the bar's
+ * edge padding and the items' own side margin, clear of a whole item's icon and label on the
+ * phones the bar is laid out for (it may lie over an item cut by the edge). The chevron is a
+ * standard 24 dp icon centred on the cue; its glyph (7 dp wide) stays inside it. It takes no
+ * touches: a finger there reaches the item under it. On the menu color it reads the same on a
+ * dark or a white canvas.
+ */
+@Composable
+private fun ScrollCue(forward: Boolean, modifier: Modifier) {
+    val fade = if (forward) listOf(Color.Transparent, IbisColors.Menu) else listOf(IbisColors.Menu, Color.Transparent)
+    Box(
+        modifier
+            .width(ScrollCueWidth)
+            .fillMaxHeight()
+            .background(Brush.horizontalGradient(fade))
+            .testTag(if (forward) ChromeTags.SELECTION_BAR_CUE_END else ChromeTags.SELECTION_BAR_CUE_START),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (forward) Icons.Filled.ChevronRight else Icons.Filled.ChevronLeft,
+            contentDescription = null,
+            tint = BrushworkColors.OnChrome,
+            // Wider than the cue: centred over it, only the glyph's empty sides overhang.
+            modifier = Modifier.requiredSize(24.dp),
+        )
+    }
+}
+
+/**
+ * The scroll cue's width: the bar's 4 dp edge padding and 8 dp of an item's side margin. Item
+ * labels are centred in 46 dp; on a 392 dp phone the bar slid to its end starts with a whole
+ * "Paste", whose label begins 8.7 dp past the bar's edge.
+ */
+private val ScrollCueWidth = 12.dp
 
 /** Icon over a short label; [clickLabel] tells a screen reader what it does, and a long press shows it (v1.8). */
 @Composable

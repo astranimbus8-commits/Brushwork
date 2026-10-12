@@ -2550,6 +2550,10 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
   - every icon-only control of a tool's strip, row 1 and the More row (v1.8 polish): `ToolIconButton`, the selection strips' `IconDropdown`, `CountedCloseButton` and `StripIconAction`, Transform's mode button (`StripMenuButton(longPress = true)`), the vector eraser's modes, Symmetry's type and Color select's current color. The shape and curve cells already had theirs.
     - They use `Modifier.iconLongPressLabel` (`ui/common/IconLongPress.kt`). It acts only inside an `IconLongPressScope`, which each `StripHost` cell provides, and only in that scope's own window. A popup or a dialog opened from a cell (Free deform's mesh size, the dropdowns) shows no bubble. A sheet raised from a cell shows none either: `SheetHost` resets the scope.
     - A number readout (an icon and its value, `StripReadout`) is not icon-only: it keeps v1.7's long press, which opens its editor like a tap.
+- **Selection bar scroll cue (v1.8 polish).** The selection bar's ten items are wider than a phone, so the bar scrolls sideways. At each edge with items past it, a 12 dp cue shows a 24 dp chevron over a fade to `IbisColors.Menu` (`ScrollCue` in `ui/editor/SelectionBar.kt`, tags `ChromeTags.SELECTION_BAR_CUE_START` / `_END`).
+  - The cue lies in the bar's edge padding and an item's side margin. It may cover an item cut by the edge, never a whole item's label. It takes no touches, so a finger on it reaches the item under it.
+  - It is an overlay, not a slot: the eight v1.6 items still fit 392 dp. The paste bar (Paste, More, Hide) fits and shows none.
+  - Only the selection bar uses it. The object bar's own row does not scroll. The strip's row 1 below 360 dp and a More row's too-wide last line scroll in `StripHost`, another component, and have no cue.
 - **Tests.**
   - In `qa18`:
     - `MoreMenuSectionsTest`, `TopRowLongPressTest`, `MoreRowOffsetsTest`;
@@ -2558,7 +2562,7 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
     - `OpaqueMenusTest` (Skia pixels of the menu card and both More rows);
     - `ChromeLabelsTest`;
     - `ChromeV18NarrowUiTest` (360 dp: every strip, the row-1 budgets, the object bar, the top row);
-    - from the v1.8 polish, `Qa18PolishChromeLongPressTest` (392 dp: a long press on every icon-only control of every tool's strip and of the bars, raster and vector, and in the states that show more icons, shows its name and changes nothing; taps still act; no bubble in the mesh size popup) and `Qa18PolishChromeLongPressShotsTest` (the strips QA named, at 392 and 360 dp, rendered with the bubble);
+    - from the v1.8 polish, `Qa18PolishChromeLongPressTest` (392 dp: a long press on every icon-only control of every tool's strip and of the bars, raster and vector, and in the states that show more icons, shows its name and changes nothing; taps still act; no bubble in the mesh size popup) and `Qa18PolishChromeLongPressShotsTest` (the strips QA named, at 392 and 360 dp, rendered with the bubble); `Qa18PolishChromeSelectionBarTest` (392 and 360 dp, dark and white pictures: the cue at the edge with items past it before and after a slide, clear of whole items' labels, legible, a tap through it);
     - from the integration, `MoreRowHistoryTapsTest` (history taps through an open More row) and `StripRow1NarrowFingerTest` (320 dp, real fingers on row 1), both under "The options strip and its More row".
   - Helpers:
     - `Fingers18`: real touch, with taps (`tap`, `twoFingerTap`, `threeFingerTap`), `quickTap` (no settle, for touches inside a fade), strokes, pinches, pans, `longPress` / `longPressAt` and the canvas state;

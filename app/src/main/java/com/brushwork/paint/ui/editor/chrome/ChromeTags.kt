@@ -14,4 +14,8 @@ internal object ChromeTags {
     const val TOOL_MENU = "ibis.toolMenu"
     const val LAYER_WINDOW = "ibis.layerWindow"
     const val PENDING_BAR = "ibis.pendingBar"
+
+    // v1.8 polish: the selection bar's scroll cues, at the edge with items past it.
+    const val SELECTION_BAR_CUE_START = "ibis.selectionBar.cueStart"
+    const val SELECTION_BAR_CUE_END = "ibis.selectionBar.cueEnd"
 }
