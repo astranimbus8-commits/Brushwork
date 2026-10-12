@@ -329,7 +329,7 @@ class Qa18CompatSessionUiTest {
 
     /**
      * Waits for the onStop save: up to 10 s of real time (a loaded runner can take more than 3 s),
-     * letting at most 30 s of fake time pass, well short of the autosave (45 s of fake time), so
+     * letting at most 30 s of fake time pass; the periodic autosave is off in this test, so
      * only the onStop save can make [done] true.
      */
     private fun onStopSave(done: () -> Boolean): Boolean {
@@ -590,6 +590,9 @@ class Qa18CompatSessionUiTest {
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog(limitMs = 120_000)
         app = RuntimeEnvironment.getApplication() as BrushworkApp
+        // No periodic autosave in this session: it could land just before a section's onStop and
+        // leave that save nothing to write, and only the onStop and close saves are under test here.
+        app.settings.autosaveSeconds = 24 * 3600
         Qa18CompatV17Golden.install(app)
         val dto = ProjectFormat.json.decodeFromString(ProjectFileDto.serializer(), File(projectDir, ProjectFormat.PROJECT_FILE).readText())
         v17FileOf = dto.layers.associate { it.id to it.file }
