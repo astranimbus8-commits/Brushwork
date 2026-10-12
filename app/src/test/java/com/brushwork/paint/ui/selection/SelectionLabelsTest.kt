@@ -60,6 +60,10 @@ class SelectionLabelsTest {
         val out = mutableListOf<String>()
         for (a in labels) for (b in labels) {
             if (a == b || !b.contains(a)) continue
+            // v1.8 polish (accessibility): a LabeledSlider's slider is named "<label> slider" on
+            // purpose (as the app's other sliders), so a screen reader names it; its label's text
+            // stays the only exact match. Derived from the label, not a clash.
+            if (b == "$a slider") continue
             if (a in v18 || b in v18) out += "$screen: \"$a\" inside \"$b\""
         }
         return out
