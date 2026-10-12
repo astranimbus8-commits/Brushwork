@@ -2,6 +2,7 @@ package com.brushwork.paint.compat18
 
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushTip
+import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.exchange.export.BrushworkPayload
 import com.brushwork.paint.exchange.export.Payload
@@ -14,12 +15,17 @@ import com.brushwork.paint.masks.MaskCodec
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.PaperSpec
 import com.brushwork.paint.storage.ProjectFileDto
 import com.brushwork.paint.storage.ProjectFormat
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextJustify
 import com.brushwork.paint.tools.text.TextKern
+import com.brushwork.paint.tools.text.TextKerningMode
+import com.brushwork.paint.tools.text.TextListSpec
+import com.brushwork.paint.tools.text.TextListType
 import com.brushwork.paint.tools.text.TextPathSpec
 import com.brushwork.paint.tools.text.TextPathType
 import com.brushwork.paint.tools.text.TextSpec
@@ -30,8 +36,11 @@ import com.brushwork.paint.tools.text.LetterScaleSpec
 import com.brushwork.paint.tools.text.TextWrapSpec
 import com.brushwork.paint.tools.text.WrapPolygon
 import com.brushwork.paint.tools.vector.CornerStyle
+import com.brushwork.paint.tools.vector.CurveSettings
+import com.brushwork.paint.tools.vector.CurveStroke
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
+import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
 import com.brushwork.paint.vector.CopyMaps
@@ -49,7 +58,9 @@ import com.brushwork.paint.vector.VStrokeStyle
 import com.brushwork.paint.vector.VSubpath
 import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -67,6 +78,8 @@ import java.util.zip.Inflater
  * the app builds of every v1.8 kind (cogs, live copies, generators, paths, threads, kerns) does
  * too, and the frozen Transform lift maps a text as the app's does. After F1a the app's codecs
  * are v1.9's; they must still write v1.8 content as v1.8 did (I13), which these comparisons keep.
+ * The F1a tests at the end write v1.9 data (several texts, nodes, paper, the new tool options)
+ * with the app's codecs and check what v1.8 reads and writes back of it.
  */
 class Compat18KitTest {
     private val textFixtures = listOf(
@@ -360,5 +373,121 @@ class Compat18KitTest {
         assertTrue("v1.8 drops the paper", !ProjectFormatV18.encode(dto).contains("paper"))
         val p = PayloadV18.fromJson("""{"version":2,"width":10,"height":10,"paper":{"color":-1},"layers":[{"id":1,"props":{"name":"a","opacity":1.0,"blendMode":"NORMAL","visible":true,"clipping":false,"alphaLocked":false,"locked":false,"maskEnabled":true},"kind":"PAPER"}]}""".toByteArray())
         assertEquals("an unknown layer kind reads as RASTER", PayloadKindV18.RASTER, p.layers.single().kind)
+    }
+
+    // v1.9 F1a: what the app's v1.9 codecs write, read by v1.8 (the frozen copies) and written back.
+
+    /** A text using every v1.9 text field. */
+    private val v19Text = TextItem(
+        "First", TextSpec(justify = TextJustify.ALL, kerningMode = TextKerningMode.OPTICAL, list = TextListSpec(type = TextListType.NUMBERS, start = 3, gapEm = 1f)),
+        10f, 20f, id = 4,
+    )
+
+    /** [item] without its v1.9 fields: what v1.8 keeps of it. */
+    private fun v18Part(item: TextItem) =
+        item.copy(spec = item.spec.copy(justify = TextJustify.OFF, kerningMode = null, list = TextListSpec()), path = item.path.copy(nodes = null), id = 0)
+
+    @Test
+    fun aLayerOfSeveralTextsReadsInV18AsItsFirstText() {
+        val items = listOf(v19Text, TextItem("Second", TextSpec(sizePx = 50f), id = 9), TextItem("Third"))
+        val data = TextCodec.encodeAll(items)
+        val v18 = TextCodecV18.decode(data)
+        assertNotNull("v1.8 reads a layer of several texts", v18)
+        assertEquals("only the first text", "First", v18!!.text)
+        val back = TextCodecV18.encode(v18)
+        assertTrue(back, back.startsWith("{\"version\":5,"))
+        for (key in listOf("\"more\"", "\"id\"", "\"justify\"", "\"list\"", "\"kerningMode\"")) assertFalse("v1.8 writes no $key", back.contains(key))
+        assertEquals("v1.8 writes the first text as v1.9 writes it without its v1.9 fields", TextCodec.encode(v18Part(v19Text)), back)
+        assertEquals("v1.9 reads v1.8's write as that one text", listOf(v18Part(v19Text).sanitized()), TextCodec.decodeAll(back))
+    }
+
+    @Test
+    fun aTextAlongNodesReadsInV18AsItsFallback() {
+        val guides = listOf(
+            VSpline(listOf(VSplinePoint(10f, 20f), VSplinePoint(110f, 70f)), order = 2),
+            VSpline(listOf(VSplinePoint(0f, 0f), VSplinePoint(90f, 0f), VSplinePoint(90f, 90f)), order = 2),
+            VSpline(listOf(VSplinePoint(0f, 0f), VSplinePoint(0f, 100f), VSplinePoint(100f, 100f), VSplinePoint(100f, 0f), VSplinePoint(160f, 40f))),
+            VSpline(listOf(VSplinePoint(0f, 0f), VSplinePoint(100f, 0f), VSplinePoint(100f, 100f), VSplinePoint(0f, 100f)), order = 2, cyclic = true),
+        )
+        for ((i, nodes) in guides.withIndex()) {
+            val item = TextItem("Along", TextSpec(), 0f, 0f, path = TextPathSpec(type = TextPathType.CURVE, nodes = nodes))
+            val data = TextCodec.encode(item)
+            val fallback = item.sanitized().path
+            val v18 = TextCodecV18.decode(data)!!.path
+            val type = if (nodes.points.size == 2) "LINE" else "CURVE"
+            assertEquals("guide $i: v1.8's type", type, v18.type.name)
+            assertEquals(
+                "guide $i: v1.8 reads the app's fallback",
+                listOf(fallback.x1, fallback.y1, fallback.cx1, fallback.cy1, fallback.cx2, fallback.cy2, fallback.x2, fallback.y2),
+                listOf(v18.x1, v18.y1, v18.cx1, v18.cy1, v18.cx2, v18.cy2, v18.x2, v18.y2),
+            )
+            val back = TextCodecV18.encode(TextCodecV18.decode(data)!!)
+            assertFalse("guide $i: v1.8 writes no nodes", back.contains("\"nodes\""))
+            val again = TextCodec.decode(back)!!
+            assertNull("guide $i: v1.9 reads v1.8's write without nodes", again.path.nodes)
+            assertEquals("guide $i: and with the fallback as its path", fallback.copy(nodes = null), again.path)
+        }
+    }
+
+    @Test
+    fun aV19ProjectKeepsItsTextsInV18AndLosesItsPaper() {
+        val multi = TextCodec.encodeAll(listOf(v19Text, TextItem("Second", id = 9)))
+        val base = project("v16/project-plain.json")
+        val dto = base.copy(layers = base.layers.map { if (it.textData != null) it.copy(textData = multi) else it }, paper = PaperSpec(0xFFF4ECD8.toInt()))
+        val json = ProjectFormat.json.encodeToString(ProjectFileDto.serializer(), dto)
+        assertTrue("the app writes the paper", json.contains("\"paper\":{\"color\":"))
+        val v18 = ProjectFormatV18.encode(ProjectFormatV18.decode(json))
+        assertFalse("v1.8 drops the paper", v18.contains("\"paper\""))
+        val texts = ProjectFormatV18.decode(v18).layers.mapNotNull { it.textData }
+        assertTrue("text layers: ${texts.size}", texts.size >= 10)
+        assertTrue("v1.8 keeps each text layer's v1.9 data unchanged", texts.all { it == multi })
+        assertEquals("v1.8 writes project.json as the app does without the paper", ProjectFormat.json.encodeToString(ProjectFileDto.serializer(), dto.copy(paper = null)), v18)
+    }
+
+    @Test
+    fun aV19PayloadKeepsItsTextsInV18AndLosesItsPaper() {
+        val multi = TextCodec.encodeAll(listOf(v19Text, TextItem("Second", id = 9)))
+        val base = payload()
+        val p = base.copy(layers = base.layers.map { if (it.textData != null) it.copy(textData = multi) else it }, paper = PaperSpec(0xFF102030.toInt()))
+        assertTrue("the payload has text layers", p.layers.any { it.textData == multi })
+        val json = Payload.toJson(p)
+        assertTrue("the app writes the paper", String(json, Charsets.UTF_8).contains("\"paper\":{\"color\":"))
+        val v18 = PayloadV18.fromJson(json)
+        assertTrue("v1.8 keeps each text layer's v1.9 data unchanged", v18.layers.filter { it.textData != null }.all { it.textData == multi })
+        val back = String(PayloadV18.toJson(v18), Charsets.UTF_8)
+        assertFalse("v1.8 drops the paper", back.contains("\"paper\""))
+        assertEquals("v1.8 writes the payload as the app does without the paper", String(Payload.toJson(p.copy(paper = null)), Charsets.UTF_8), back)
+        assertEquals("deflated too", back, String(PayloadV18.toJson(PayloadV18.fromDeflated(Payload.deflated(p))), Charsets.UTF_8))
+    }
+
+    @Test
+    fun theToolSettingsReadInV18AsV18WroteThemAndLoseTheV19Options() {
+        // AppSettings.json's configuration (an AppSettings needs a Context; the row 14 test uses the real one).
+        val settingsJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        fun app(s: CurveSettings) = settingsJson.encodeToString(CurveSettings.serializer(), s)
+        fun app(s: ShapeSettings) = settingsJson.encodeToString(ShapeSettings.serializer(), s)
+        assertEquals("v1.9's default curve options are v1.8's bytes", ToolSettingsV18.write(CurveSettingsV18()), app(CurveSettings()))
+        assertEquals("v1.9's default shape options are v1.8's bytes", ToolSettingsV18.write(ShapeSettingsV18()), app(ShapeSettings()))
+
+        val curve = CurveSettings(
+            closed = true, tension = 0.5f, stroke = CurveStroke.PLAIN, plainWidth = 9f, fill = true, fillColor = 0xFF336699.toInt(), taper = true,
+            taperPercent = 30f, unit = LengthUnit.MM, nudgeStepPx = 2f, useBrushSize = false, pathOrder = 3, pathEndpoint = false, lastStroke = CurveStroke.PLAIN,
+        )
+        assertEquals("v1.8 writes back the app's curve options", app(curve), ToolSettingsV18.write(ToolSettingsV18.curve(app(curve))))
+        val own = app(curve.copy(ownLayer = true))
+        assertTrue(own, own.contains("\"ownLayer\":true"))
+        val curveBack = ToolSettingsV18.write(ToolSettingsV18.curve(own))
+        assertEquals("v1.8 reads ownLayer as nothing and writes the rest as it was", app(curve), curveBack)
+        assertEquals("v1.9 reads v1.8's write with ownLayer off", curve, settingsJson.decodeFromString(CurveSettings.serializer(), curveBack))
+
+        val shape = ShapeSettings(
+            type = ShapeType.COG, style = ShapeStyle.STROKE_FILL, strokeWidth = 5f, editable = false, cogTeeth = 20, cogHole = 0.4f, unit = LengthUnit.CM,
+        )
+        assertEquals("v1.8 writes back the app's shape options", app(shape), ToolSettingsV18.write(ToolSettingsV18.shape(app(shape))))
+        val each = app(shape.copy(newLayerEachTime = true))
+        assertTrue(each, each.contains("\"newLayerEachTime\":true"))
+        val shapeBack = ToolSettingsV18.write(ToolSettingsV18.shape(each))
+        assertEquals("v1.8 reads newLayerEachTime as nothing and writes the rest as it was", app(shape), shapeBack)
+        assertEquals("v1.9 reads v1.8's write with newLayerEachTime off", shape, settingsJson.decodeFromString(ShapeSettings.serializer(), shapeBack))
     }
 }
