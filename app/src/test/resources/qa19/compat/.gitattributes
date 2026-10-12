@@ -1,0 +1,4 @@
+*.vec binary
+*.bin binary
+*.json -text
+*.tsv -text
