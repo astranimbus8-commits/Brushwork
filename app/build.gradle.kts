@@ -8,6 +8,10 @@ plugins {
 // locally). Without them the release APK is signed with the debug key so it still installs.
 val keystoreFile: String? = System.getenv("BW_KEYSTORE_FILE")?.takeIf { it.isNotBlank() && file(it).exists() }
 
+// v1.9 (LA3): the CI shard of a test class, by its fully qualified name before the first '$', so a
+// nested class runs with its outer class. CiShardFilterTest checks this exact line.
+fun ciShardOf(className: String, shards: Int): Int = (className.substringBefore('$').hashCode() and 0x7fffffff) % shards
+
 android {
     namespace = "com.brushwork.paint"
 
@@ -86,14 +90,37 @@ android {
                 // changes: one JVM, every test.
                 val ci = System.getenv("CI") != null
                 val timingOnly = project.hasProperty("timingOnly")
-                it.maxParallelForks = if (ci && !timingOnly) 2 else 1
+                // v1.9 (design 2.2, 5.5): -PsoakOnly runs SoakHarnessTest alone, serially (the
+                // nightly soak job), whatever its category.
+                val soakOnly = project.hasProperty("soakOnly")
+                it.maxParallelForks = if (ci && !timingOnly && !soakOnly) 2 else 1
                 it.useJUnit {
                     if (timingOnly) includeCategories("com.brushwork.paint.testing.Timing")
-                    else if (ci) excludeCategories("com.brushwork.paint.testing.Timing")
+                    else if (ci && !soakOnly) excludeCategories("com.brushwork.paint.testing.Timing")
                 }
-                // Task inputs, so the build cache never hands back a run made with other settings.
+                if (soakOnly) {
+                    it.filter.includeTestsMatching("*.SoakHarnessTest")
+                    it.filter.isFailOnNoMatchingTests = false
+                }
+                // v1.9 (LA3, design 2.2): -PtestShard=<i> -PtestShards=<n> runs only the classes of
+                // shard i of n (ciShardOf), so CI runs the non-timing tests as parallel jobs.
+                val testShard = project.findProperty("testShard")?.toString()?.toIntOrNull()
+                val testShards = project.findProperty("testShards")?.toString()?.toIntOrNull()
+                if ((testShard == null) != (testShards == null) || (testShards != null && (testShards < 1 || testShard!! !in 0 until testShards))) {
+                    throw GradleException("-PtestShard=<i> and -PtestShards=<n> go together, with 0 <= i < n")
+                }
+                if (testShard != null && testShards != null) {
+                    it.exclude { e ->
+                        !e.isDirectory && e.name.endsWith(".class") &&
+                            ciShardOf(e.relativePath.pathString.removeSuffix(".class").replace('/', '.'), testShards) != testShard
+                    }
+                }
+                // Task inputs, so the build cache never hands back a run made with other settings
+                // (the shard filter above is a closure, which Gradle cannot fingerprint).
+                it.inputs.property("testShard", testShard?.toString() ?: "all")
+                it.inputs.property("testShards", testShards?.toString() ?: "all")
                 it.systemProperty("bw.testForks", it.maxParallelForks.toString())
-                it.systemProperty("bw.testSet", if (timingOnly) "timing" else if (ci) "main" else "all")
+                it.systemProperty("bw.testSet", if (soakOnly) "soak" else if (timingOnly) "timing" else if (ci) "main" else "all")
                 // A failure prints its whole message (a timing guard's every measurement), so a CI
                 // log says why without the reports.
                 it.testLogging.exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
