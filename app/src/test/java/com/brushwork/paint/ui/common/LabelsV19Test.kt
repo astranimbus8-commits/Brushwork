@@ -195,6 +195,12 @@ class LabelsV19Test {
 
     private val eraseModes: List<String> = VectorEraseMode.entries.flatMap { listOf(it.label, it.description) }
 
+    /**
+     * The selection bar's "Cut" item and its description (`SelectionBar.kt`), shown over any tool
+     * while a selection exists: no v1.9 erase text may hold it (fact V12, the lead's ruling 3).
+     */
+    private val selectionBarCut: List<String> = listOf("Cut", "Cut selection")
+
     /** A filter panel: its parameters' labels and their controls' descriptions, and the panel's own buttons (as [LabelsV18Test]). */
     private fun panel(f: Filter): List<String> = f.params.flatMap { p ->
         when (p) {
@@ -280,12 +286,12 @@ class LabelsV19Test {
         assertNoSubstrings(
             "Curve, Polyline and Path strips",
             v19 = all("CurveLabels19") + pick("EraseLabels19", "WITH_CURVE", "WITH_POLYLINE", "WITH_PATH", "ERASING_CURVE", "ERASING_POLYLINE", "ERASING_PATH", *erasing.toTypedArray()),
-            older = curveStrip + values(StripLabels18) + values(PillLabels) + listOf(MirrorLabels18.DETACH, MirrorLabels18.REMOVE) + eraseModes,
+            older = curveStrip + values(StripLabels18) + values(PillLabels) + listOf(MirrorLabels18.DETACH, MirrorLabels18.REMOVE) + eraseModes + selectionBarCut,
         )
         assertNoSubstrings(
             "Shape strip with the cog",
             v19 = pick("PlaceLabels19", "NEW_LAYER_EACH_TIME", "SHAPE_EDITABLE_DESC") + pick("EraseLabels19", "WITH_SHAPE", "ERASING_SHAPE", *erasing.toTypedArray()),
-            older = shapeStrip + values(StripLabels18) + values(PillLabels) + values(CogLabels18) + eraseModes,
+            older = shapeStrip + values(StripLabels18) + values(PillLabels) + values(CogLabels18) + eraseModes + selectionBarCut,
         )
     }
 
@@ -295,7 +301,8 @@ class LabelsV19Test {
         assertNoSubstrings(
             "Eraser on a vector layer, its More row and the pixels dialog",
             v19 = pick("EraseLabels19", "TURN_INTO_PIXELS", "PIXELS_TITLE", "PIXELS_BODY", "PIXELS_CONFIRM", "PARTIAL_NOTE", "TOO_COMPLEX", "COPIES_BAKED"),
-            older = eraseModes + visible("ui/vector/VectorEraserOptions.kt") + values(StripLabels18) + listOf("Cancel", "Opacity"),
+            // The selection bar's "Cut" over the eraser while a selection exists (fact V12).
+            older = eraseModes + visible("ui/vector/VectorEraserOptions.kt") + values(StripLabels18) + listOf("Cancel", "Opacity") + selectionBarCut,
         )
     }
 

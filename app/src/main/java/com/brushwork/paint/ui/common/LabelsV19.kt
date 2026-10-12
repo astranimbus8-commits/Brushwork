@@ -115,7 +115,11 @@ object EraseLabels19 {      // R11
     const val PIXELS_TITLE = "Turn the layer into pixels?"
     const val PIXELS_BODY = "Its shapes and lines stop being editable, and the eraser erases pixels. Undo turns it back."
     const val PIXELS_CONFIRM = "Erase pixels"
-    const val PARTIAL_NOTE = "Cuts lines, shapes and fills where it passes; the pieces stay editable"
+    /**
+     * The note of the "Partial" mode. F1a review: "Splits", not the design's "Cuts", so no new text
+     * holds the selection bar's "Cut" (fact V12, lead ruling 3: a note is reworded, not paired).
+     */
+    const val PARTIAL_NOTE = "Splits lines, shapes and fills where it passes; the pieces stay editable"
     const val WITH_CURVE = "Erase with curve"; const val WITH_POLYLINE = "Erase with polyline"
     const val WITH_PATH = "Erase with path"; const val WITH_SHAPE = "Erase with shape"
     /** Slot 1 while erase mode is on (v1.8's "Eraser on: switch to <tool>" pattern). */
@@ -126,7 +130,11 @@ object EraseLabels19 {      // R11
     const val INSTEAD_OF_PAINT = "Erase instead of paint"
     const val STEP_LINE = "Erase line"; const val STEP_FILL = "Erase fill"; const val STEP_PATH = "Erase path"; const val STEP_SHAPE = "Erase shape"
     const val TOO_COMPLEX = "Some shapes were too complex to cut. They were not changed."
-    const val COPIES_BAKED = "Cut objects with copies became separate pieces"
+    /**
+     * The toast when erased objects with array copies are baked first. F1a review: not the design's
+     * "Cut objects with …" (fact V12), and not "Objects …", which would hold the eraser's "Object".
+     */
+    const val COPIES_BAKED = "Each copy of an erased object is now a separate piece"
 }
 
 object LayerLabels19 {      // R14, R19

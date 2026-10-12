@@ -167,25 +167,30 @@ class AppSettings(context: Context) {
         get() = prefs.getBoolean("text.newLayerEachTime", false)
         set(v) = prefs.edit { putBoolean("text.newLayerEachTime", v) }
 
-    /** R18: the bevel amount of Curve, Polyline and Path points (default 0.15). */
+    /**
+     * R18: the bevel amount of Curve, Polyline and Path points (default 0.15). Kept within the
+     * popup's 1-50 % (R18); a value that is not finite reads as the default.
+     */
     var curveBevelAmount: Float
-        get() = prefs.getFloat("curve.bevel.amount", DEFAULT_BEVEL_AMOUNT)
-        set(v) = prefs.edit { putFloat("curve.bevel.amount", v) }
+        get() = bevelAmount(prefs.getFloat("curve.bevel.amount", DEFAULT_BEVEL_AMOUNT))
+        set(v) = prefs.edit { putFloat("curve.bevel.amount", bevelAmount(v)) }
 
-    /** R18: the bevel segments of Curve, Polyline and Path points (default 1). */
+    /** R18: the bevel segments of Curve, Polyline and Path points (default 1), kept within 1..8. */
     var curveBevelSegments: Int
-        get() = prefs.getInt("curve.bevel.segments", DEFAULT_BEVEL_SEGMENTS)
-        set(v) = prefs.edit { putInt("curve.bevel.segments", v) }
+        get() = prefs.getInt("curve.bevel.segments", DEFAULT_BEVEL_SEGMENTS).coerceIn(1, MAX_BEVEL_SEGMENTS)
+        set(v) = prefs.edit { putInt("curve.bevel.segments", v.coerceIn(1, MAX_BEVEL_SEGMENTS)) }
 
-    /** R18: the bevel amount of shape points (default 0.15). */
+    /** R18: the bevel amount of shape points (default 0.15), kept like [curveBevelAmount]. */
     var shapeBevelAmount: Float
-        get() = prefs.getFloat("shape.bevel.amount", DEFAULT_BEVEL_AMOUNT)
-        set(v) = prefs.edit { putFloat("shape.bevel.amount", v) }
+        get() = bevelAmount(prefs.getFloat("shape.bevel.amount", DEFAULT_BEVEL_AMOUNT))
+        set(v) = prefs.edit { putFloat("shape.bevel.amount", bevelAmount(v)) }
 
-    /** R18: the bevel segments of shape points (default 1). */
+    /** R18: the bevel segments of shape points (default 1), kept within 1..8. */
     var shapeBevelSegments: Int
-        get() = prefs.getInt("shape.bevel.segments", DEFAULT_BEVEL_SEGMENTS)
-        set(v) = prefs.edit { putInt("shape.bevel.segments", v) }
+        get() = prefs.getInt("shape.bevel.segments", DEFAULT_BEVEL_SEGMENTS).coerceIn(1, MAX_BEVEL_SEGMENTS)
+        set(v) = prefs.edit { putInt("shape.bevel.segments", v.coerceIn(1, MAX_BEVEL_SEGMENTS)) }
+
+    private fun bevelAmount(v: Float): Float = if (v.isFinite()) v.coerceIn(MIN_BEVEL_AMOUNT, MAX_BEVEL_AMOUNT) else DEFAULT_BEVEL_AMOUNT
 
     // ------------------------------------------------------------------ v1.7 (item 10): the settings journal
 
@@ -226,6 +231,11 @@ class AppSettings(context: Context) {
         /** v1.9 (R18): the bevel defaults of [curveBevelAmount] / [shapeBevelAmount] and their segments. */
         const val DEFAULT_BEVEL_AMOUNT = 0.15f
         const val DEFAULT_BEVEL_SEGMENTS = 1
+
+        /** F1a review: the ranges the bevel getters and setters keep (R18: 1-50 %, 1-8 segments). */
+        private const val MIN_BEVEL_AMOUNT = 0.01f
+        private const val MAX_BEVEL_AMOUNT = 0.5f
+        private const val MAX_BEVEL_SEGMENTS = 8
     }
 }
 

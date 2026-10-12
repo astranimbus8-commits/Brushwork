@@ -66,6 +66,29 @@ class AppSettingsV19Test {
         assertEquals(AppSettings.NEW_CANVAS_PAPER, AppSettings(app).newCanvasBackground)
     }
 
+    /** F1a review: the bevel keys stay within R18's 1-50 % and 1-8 segments, written or read raw. */
+    @Test
+    fun theBevelKeysStayWithinTheirRanges() {
+        val s = AppSettings(app)
+        s.curveBevelAmount = 2f
+        s.curveBevelSegments = 0
+        s.shapeBevelAmount = Float.NaN
+        s.shapeBevelSegments = 40
+        assertEquals(0.5f, s.curveBevelAmount)
+        assertEquals(1, s.curveBevelSegments)
+        assertEquals(0.15f, s.shapeBevelAmount)
+        assertEquals(8, s.shapeBevelSegments)
+        app.getSharedPreferences("brushwork_settings", Context.MODE_PRIVATE).edit()
+            .putFloat("curve.bevel.amount", -1f).putInt("curve.bevel.segments", -3)
+            .putFloat("shape.bevel.amount", Float.POSITIVE_INFINITY).putInt("shape.bevel.segments", 9)
+            .commit()
+        val read = AppSettings(app)
+        assertEquals(0.01f, read.curveBevelAmount)
+        assertEquals(1, read.curveBevelSegments)
+        assertEquals(0.15f, read.shapeBevelAmount)
+        assertEquals(8, read.shapeBevelSegments)
+    }
+
     @Test
     fun theToolOptionsKeepTheirNewFields() {
         val s = AppSettings(app)
