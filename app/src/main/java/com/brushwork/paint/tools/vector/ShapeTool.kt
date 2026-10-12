@@ -77,6 +77,8 @@ import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlin.math.abs
@@ -96,6 +98,7 @@ enum class ShapeStroke(val label: String) {
 }
 
 /** Persisted options of the shape tool. Lengths are document pixels. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class ShapeSettings(
     val type: ShapeType = ShapeType.RECTANGLE,
@@ -141,6 +144,12 @@ data class ShapeSettings(
     val cogTaper: Float = CogParams.DEFAULT.taper,
     /** v1.8: the hole's radius, 0..0.8 of the root radius; 0 = no hole ([CogLabels18.HOLE_SIZE]). */
     val cogHole: Float = CogParams.DEFAULT.hole,
+    /**
+     * v1.9 (R14; PlaceLabels19.NEW_LAYER_EACH_TIME in the Shape cog): with [editable] on, every
+     * new shape gets a layer of its own (v1.8); off (default), a new shape joins the selected
+     * shape layer. Never written while off (I13), so v1.8 reads the settings.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val newLayerEachTime: Boolean = false,
 ) {
     /** v1.8: the cog fields as one value. */
     val cogParams: CogParams get() = CogParams(cogTeeth, cogDepth, cogToothWidth, cogTaper, cogHole)

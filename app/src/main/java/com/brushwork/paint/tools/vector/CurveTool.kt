@@ -82,6 +82,8 @@ import com.brushwork.paint.vector.render.VectorLayerRenderer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.serializer
 import kotlin.math.abs
@@ -115,6 +117,7 @@ enum class CurveKind { CURVE, POLYLINE, PATH }
 enum class CurvePaint { STROKE, FILL, BOTH }
 
 /** Persisted options of the curve / polyline tools. Lengths are document pixels. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class CurveSettings(
     val closed: Boolean = false,
@@ -148,6 +151,12 @@ data class CurveSettings(
      * document data; never [CurveStroke.NONE]).
      */
     val lastStroke: CurveStroke = CurveStroke.BRUSH,
+    /**
+     * v1.9 (R14, D22; CurveLabels19.OWN_LAYER): a new Curve, Polyline or Path line drawn on a
+     * pixel layer goes into a vector layer of its own and stays editable; off (default) paints it
+     * into the pixel layer as v1.8 does. Never written while off (I13), so v1.8 reads the settings.
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val ownLayer: Boolean = false,
 ) {
     /** Clamps every value to its supported range; non-finite values are taken from [fallback]. */
     fun sanitized(fallback: CurveSettings = DEFAULT) = copy(

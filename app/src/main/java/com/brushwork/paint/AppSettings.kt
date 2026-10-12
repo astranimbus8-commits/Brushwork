@@ -139,6 +139,54 @@ class AppSettings(context: Context) {
         get() = prefs.getFloat("curveHandleScale", 1f).let { if (it.isFinite()) it.coerceIn(MIN_CURVE_HANDLE_SCALE, MAX_CURVE_HANDLE_SCALE) else 1f }
         set(v) = prefs.edit { putFloat("curveHandleScale", if (v.isFinite()) v.coerceIn(MIN_CURVE_HANDLE_SCALE, MAX_CURVE_HANDLE_SCALE) else 1f) }
 
+    // ------------------------------------------------------------------ v1.9 (keys owned by the lead, F1a; areas read and write them)
+
+    /**
+     * R9: the drawing preview, "FASTER" (default: the stroke at screen resolution while the
+     * finger is down) or "EXACT" (every dab at full resolution). Read only once P4 ships (A6).
+     */
+    var drawPreview: String
+        get() = prefs.getString("drawPreview", DRAW_PREVIEW_FASTER) ?: DRAW_PREVIEW_FASTER
+        set(v) = prefs.edit { putString("drawPreview", v) }
+
+    /** R9: the frame-time overlay over the canvas (StabilityLabels19.SHOW_FRAME_TIMES; off by default). */
+    var showFrameTimes: Boolean
+        get() = prefs.getBoolean("showFrameTimes", false)
+        set(v) = prefs.edit { putBoolean("showFrameTimes", v) }
+
+    /** R15: the new-canvas dialog's last background: "WHITE" (default), "TRANSPARENT", "CUSTOM" or "PAPER". */
+    var newCanvasBackground: String
+        get() = prefs.getString("newCanvas.background", NEW_CANVAS_WHITE) ?: NEW_CANVAS_WHITE
+        set(v) = prefs.edit { putString("newCanvas.background", v) }
+
+    /**
+     * R14: the Text tool's More-row toggle (PlaceLabels19.NEW_LAYER_EACH_TIME): on, every new
+     * text gets a layer of its own (v1.8); off by default, a new text joins the active text layer.
+     */
+    var textNewLayerEachTime: Boolean
+        get() = prefs.getBoolean("text.newLayerEachTime", false)
+        set(v) = prefs.edit { putBoolean("text.newLayerEachTime", v) }
+
+    /** R18: the bevel amount of Curve, Polyline and Path points (default 0.15). */
+    var curveBevelAmount: Float
+        get() = prefs.getFloat("curve.bevel.amount", DEFAULT_BEVEL_AMOUNT)
+        set(v) = prefs.edit { putFloat("curve.bevel.amount", v) }
+
+    /** R18: the bevel segments of Curve, Polyline and Path points (default 1). */
+    var curveBevelSegments: Int
+        get() = prefs.getInt("curve.bevel.segments", DEFAULT_BEVEL_SEGMENTS)
+        set(v) = prefs.edit { putInt("curve.bevel.segments", v) }
+
+    /** R18: the bevel amount of shape points (default 0.15). */
+    var shapeBevelAmount: Float
+        get() = prefs.getFloat("shape.bevel.amount", DEFAULT_BEVEL_AMOUNT)
+        set(v) = prefs.edit { putFloat("shape.bevel.amount", v) }
+
+    /** R18: the bevel segments of shape points (default 1). */
+    var shapeBevelSegments: Int
+        get() = prefs.getInt("shape.bevel.segments", DEFAULT_BEVEL_SEGMENTS)
+        set(v) = prefs.edit { putInt("shape.bevel.segments", v) }
+
     // ------------------------------------------------------------------ v1.7 (item 10): the settings journal
 
     /**
@@ -164,6 +212,20 @@ class AppSettings(context: Context) {
     companion object {
         const val MIN_CURVE_HANDLE_SCALE = 0.75f
         const val MAX_CURVE_HANDLE_SCALE = 2f
+
+        /** v1.9 (R9): the values of [drawPreview]. */
+        const val DRAW_PREVIEW_FASTER = "FASTER"
+        const val DRAW_PREVIEW_EXACT = "EXACT"
+
+        /** v1.9 (R15): the values of [newCanvasBackground]. */
+        const val NEW_CANVAS_WHITE = "WHITE"
+        const val NEW_CANVAS_TRANSPARENT = "TRANSPARENT"
+        const val NEW_CANVAS_CUSTOM = "CUSTOM"
+        const val NEW_CANVAS_PAPER = "PAPER"
+
+        /** v1.9 (R18): the bevel defaults of [curveBevelAmount] / [shapeBevelAmount] and their segments. */
+        const val DEFAULT_BEVEL_AMOUNT = 0.15f
+        const val DEFAULT_BEVEL_SEGMENTS = 1
     }
 }
 
