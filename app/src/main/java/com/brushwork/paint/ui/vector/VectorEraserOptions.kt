@@ -33,6 +33,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.vector.draw.VectorEraseMode
@@ -97,7 +98,8 @@ private fun ModeChip(label: String, selected: Boolean, icon: ImageVector?, onCli
 /**
  * v1.8 (design §3.9; area D): the vector eraser's modes on the converted strip, one row-1 item of
  * three 40 dp icon buttons (120 dp) described by the mode labels ("Object", "Partial", "To
- * intersection", unchanged), the chosen one accent and selected.
+ * intersection", unchanged), the chosen one accent and selected; a long press shows the mode's
+ * label (v1.8 polish).
  */
 internal object VectorEraserStrip {
     const val KEY = "eraser.modes"
@@ -129,6 +131,7 @@ internal object VectorEraserStrip {
                 .size(40.dp)
                 .clip(shape)
                 .background(if (selected) BrushworkColors.AccentDim else Color.Transparent)
+                .iconLongPressLabel(m.label)
                 .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
             contentAlignment = Alignment.Center,
         ) {

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -91,7 +92,8 @@ internal fun StripMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Compo
  * [open] it leaves the semantics (a tap outside the menu only closes it), so a label it shares
  * with a control inside belongs to that control alone: one control per label (as D's symmetry
  * type button). With [announceContent] false the texts and icons inside are not announced
- * either (a short name whose description is the handle, I10).
+ * either (a short name whose description is the handle, I10). With [longPress] (an icon alone, no
+ * text) a long press shows [description] in a bubble and opens nothing (v1.8 polish).
  */
 @Composable
 internal fun StripMenuButton(
@@ -103,6 +105,7 @@ internal fun StripMenuButton(
     state: String? = null,
     arrow: Boolean = true,
     announceContent: Boolean = true,
+    longPress: Boolean = false,
     content: @Composable RowScope.() -> Unit,
 ) {
     val own: SemanticsPropertyReceiver.() -> Unit = {
@@ -116,6 +119,7 @@ internal fun StripMenuButton(
             .clip(stripShape)
             .border(1.dp, MaterialTheme.colorScheme.outline, stripShape)
             .then(if (open) Modifier.clearAndSetSemantics { } else Modifier)
+            .then(if (longPress) Modifier.iconLongPressLabel(description) else Modifier)
             .clickable(enabled = enabled, onClick = onClick)
             .then(if (announceContent) Modifier.semantics(properties = own) else Modifier.clearAndSetSemantics(own))
             .alpha(if (enabled) 1f else 0.5f)

@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.IconLongPressScope
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.longPressLabel
@@ -347,12 +348,13 @@ internal fun rememberHintLines(hint: String?, widthPx: Int): Int {
 /**
  * One item at its declared width; a hidden item keeps its room (neighbours never jump). Each cell
  * is composed under key(item.key), so an item inserted or removed before it in the same line
- * keeps its state (an open popup or dropdown stays open).
+ * keeps its state (an open popup or dropdown stays open). Its icon-only controls show their name
+ * on a long press ([IconLongPressScope], v1.8 polish).
  */
 @Composable
 private fun ItemCell(item: StripItem) {
     Box(Modifier.width(item.width), contentAlignment = Alignment.Center) {
-        if (item.shown) item.content()
+        if (item.shown) IconLongPressScope { item.content() }
     }
 }
 

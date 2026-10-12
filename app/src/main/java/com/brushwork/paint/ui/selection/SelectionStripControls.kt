@@ -56,6 +56,7 @@ import com.brushwork.paint.ui.common.NumberAdjust
 import com.brushwork.paint.ui.common.NumberField
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -276,7 +277,8 @@ internal fun SelectionModeDropdown(mode: SelectionMode, onChange: (SelectionMode
 
 /**
  * A [width] button showing [icon] and ▾, known by [description] (and [state] when given), that
- * opens [entries] in an opaque dropdown anchored in it; `close` closes the dropdown.
+ * opens [entries] in an opaque dropdown anchored in it; `close` closes the dropdown. On a strip,
+ * a long press shows [description] ([iconLongPressLabel]).
  */
 @Composable
 internal fun IconDropdown(
@@ -292,6 +294,7 @@ internal fun IconDropdown(
             Modifier
                 .width(width)
                 .stripButton()
+                .iconLongPressLabel(description)
                 .clickable(role = Role.Button) { open = true }
                 .clearAndSetSemantics {
                     contentDescription = description
@@ -311,7 +314,7 @@ internal fun IconDropdown(
 
 /**
  * A 40 dp ✓ known by [description] ("Close polygon"), with the outline's point count under it
- * ("3 pt", v1.7's readout); it needs three points.
+ * ("3 pt", v1.7's readout); it needs three points. A long press shows [description].
  */
 @Composable
 internal fun CountedCloseButton(description: String, count: Int, onClick: () -> Unit) {
@@ -320,6 +323,7 @@ internal fun CountedCloseButton(description: String, count: Int, onClick: () -> 
         Modifier
             .size(IconItemWidth)
             .clip(ButtonShape)
+            .iconLongPressLabel(description)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = description },
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -335,13 +339,14 @@ internal fun CountedCloseButton(description: String, count: Int, onClick: () -> 
     }
 }
 
-/** A 40 dp icon action known by [description], tinted [tint] (the curve point's actions). */
+/** A 40 dp icon action known by [description] (shown by a long press), tinted [tint] (the curve point's actions). */
 @Composable
 internal fun StripIconAction(icon: ImageVector, description: String, tint: Color = BrushworkColors.OnChrome, onClick: () -> Unit) {
     Box(
         Modifier
             .size(IconItemWidth)
             .clip(ButtonShape)
+            .iconLongPressLabel(description)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,

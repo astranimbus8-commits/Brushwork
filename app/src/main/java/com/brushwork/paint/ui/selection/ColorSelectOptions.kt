@@ -63,6 +63,7 @@ import com.brushwork.paint.ui.color.ColorPickerDialog
 import com.brushwork.paint.ui.common.ColorSelectLabels18
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
@@ -304,6 +305,7 @@ private fun CurrentColorButton(color: Int, onClick: () -> Unit) {
         Modifier
             .size(IconItemWidth)
             .clip(RoundedCornerShape(8.dp))
+            .iconLongPressLabel(ColorSelectLabels18.USE_CURRENT)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics {
                 contentDescription = ColorSelectLabels18.USE_CURRENT

@@ -51,6 +51,7 @@ import com.brushwork.paint.tools.symmetry.SymmetryTool
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.ui.common.ToolIconButton
 import com.brushwork.paint.ui.common.closeOnSecondFinger
+import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.StripItem
@@ -197,6 +198,7 @@ private fun TypeMenu(c: EditorController, current: SymmetryType) {
                 .clip(chipShape)
                 .border(1.dp, MaterialTheme.colorScheme.outline, chipShape)
                 .then(if (open) Modifier.clearAndSetSemantics { } else Modifier)
+                .iconLongPressLabel(current.label)
                 .clickable { open = true }
                 .semantics { contentDescription = current.label }
                 .padding(start = 6.dp, end = 1.dp),

@@ -277,13 +277,17 @@ fun SheetHost(state: SheetHostState, bottomInset: Dp, modifier: Modifier = Modif
         val top = entries.last()
         for (entry in entries) {
             key(entry) {
+                // A sheet raised from a strip cell keeps its caller's locals, but not the cell's
+                // long-press bubbles (they are the strips' and the bars', v1.8 polish).
                 CompositionLocalProvider(entry.locals.value) {
-                    HostedPanel(
-                        entry = entry,
-                        shown = entry === top && !minimized,
-                        screenHeight = screenHeight,
-                        onMinimize = onMinimize,
-                    )
+                    CompositionLocalProvider(LocalIconLongPressView provides null) {
+                        HostedPanel(
+                            entry = entry,
+                            shown = entry === top && !minimized,
+                            screenHeight = screenHeight,
+                            onMinimize = onMinimize,
+                        )
+                    }
                 }
             }
         }

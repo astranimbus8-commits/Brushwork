@@ -301,7 +301,7 @@ private fun ModeMenu(tool: TransformTool) {
     var explained by remember { mutableStateOf<TransformTool.Mode?>(null) }
     val current = tool.mode
     Box {
-        StripMenuButton(current.label, TransformStripItems.MODE_DP.dp, open, onClick = {
+        StripMenuButton(current.label, TransformStripItems.MODE_DP.dp, open, longPress = true, onClick = {
             explained = null
             open = true
         }) {

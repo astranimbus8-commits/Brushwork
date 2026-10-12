@@ -370,7 +370,11 @@ fun RepeatIconButton(
     }
 }
 
-/** Square-ish icon button with a highlighted "selected" state (toolbars, tool pickers). */
+/**
+ * Square-ish icon button with a highlighted "selected" state (toolbars, tool pickers). On the
+ * options strip ([IconLongPressScope]) a long press shows [contentDescription] in a bubble and
+ * fires nothing (v1.8 polish); never in a popup or a dialog.
+ */
 @Composable
 fun ToolIconButton(
     icon: ImageVector,
@@ -384,7 +388,7 @@ fun ToolIconButton(
     IconButton(
         onClick = onClick,
         enabled = enabled,
-        modifier = modifier.size(size),
+        modifier = modifier.iconLongPressLabel(contentDescription).size(size),
         colors = IconButtonDefaults.iconButtonColors(
             containerColor = if (selected) BrushworkColors.AccentDim else Color.Transparent,
             contentColor = if (selected) Color.White else BrushworkColors.OnChrome,
