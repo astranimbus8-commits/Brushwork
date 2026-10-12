@@ -75,6 +75,8 @@ internal fun Modifier.blockCanvasTouches(): Modifier = pointerInput(Unit) {}
 
 /** Whether the Redo button does something right now (see [EditorController.redo]). */
 internal fun canRedoNow(controller: EditorController): Boolean {
+    // v1.9 (D14): an open session's own step comes back first (also inside a filter session).
+    if (controller.inToolHistory?.canRedo == true) return true
     if (controller.filterSession != null) return false
     val tool = controller.currentTool
     // A tool that took back a step of its pending work (a curve point) redoes that first; an

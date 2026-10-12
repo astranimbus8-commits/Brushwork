@@ -445,7 +445,11 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     }
     val toolHasUserChanges by remember(controller) { derivedStateOf { controller.currentTool.hasUserChanges } }
     val undoEnabled by remember(controller) {
-        derivedStateOf { controller.canUndo || controller.currentTool.hasUserChanges || controller.filterSession != null }
+        derivedStateOf {
+            // v1.9 (D14): also while an open session's own history has a step to take back.
+            controller.canUndo || controller.currentTool.hasUserChanges || controller.filterSession != null ||
+                controller.inToolHistory?.canUndo == true
+        }
     }
     val redoEnabled by remember(controller) { derivedStateOf { canRedoNow(controller) } }
     val clipboard = controller.clipboard

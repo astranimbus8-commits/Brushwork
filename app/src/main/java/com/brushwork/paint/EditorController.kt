@@ -70,6 +70,7 @@ import com.brushwork.paint.model.SymmetrySettings
 import com.brushwork.paint.snap.Increments
 import com.brushwork.paint.snap.SnapService
 import com.brushwork.paint.snap.SnapSession
+import com.brushwork.paint.tools.InToolHistoryOwner
 import com.brushwork.paint.tools.LayerToolRules
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolFactory
@@ -648,7 +649,16 @@ class EditorController(
         settings.closeJournal()
     }
 
+    /**
+     * v1.9 (D14, design 2.4.2): the open session whose own steps Undo and Redo go through first
+     * (A2: the filter session; A3: the node editing of a text path), or null (v1.8). Set by the
+     * session when it opens; cleared when it closes.
+     */
+    var inToolHistory: InToolHistoryOwner? by mutableStateOf<InToolHistoryOwner?>(null)
+
     fun undo() {
+        // v1.9: an open session takes back its own step first; at its bottom, v1.8's undo runs.
+        if (inToolHistory?.undoStep() == true) return
         val session = filterSession
         if (session != null) { session.cancel(); return }
         // A pending live edit becomes its step first: undo then takes it back.
@@ -674,6 +684,8 @@ class EditorController(
     }
 
     fun redo() {
+        // v1.9: an open session brings back its own step first; at its top, v1.8's redo runs.
+        if (inToolHistory?.redoStep() == true) return
         if (filterSession != null) return
         // A pending live edit becomes its step first (it clears the redo stack, as any new edit).
         flushDeferredSteps()

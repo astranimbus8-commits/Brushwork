@@ -41,7 +41,9 @@ internal object HistoryLabels {
      * either way. Used by the hotbar's Undo and the canvas' two-finger tap.
      */
     fun performUndo(c: EditorController): String {
-        historyBlocked(c)?.let { return it }
+        // v1.9 (D14): a step of an open session's own history is never blocked (a text path's
+        // nodes are edited while the text editor is minimized to its pill; the typed text stays).
+        if (c.inToolHistory?.canUndo != true) historyBlocked(c)?.let { return it }
         // A saved selection still compressing lands first (v1.7), as undo() would: the feedback
         // then names the step undo takes back ("Undo: Save selection").
         c.landSavedSelections()
@@ -52,7 +54,7 @@ internal object HistoryLabels {
 
     /** Redo counterpart of [performUndo] (the hotbar's Redo, the three-finger tap). */
     fun performRedo(c: EditorController): String {
-        historyBlocked(c)?.let { return it }
+        if (c.inToolHistory?.canRedo != true) historyBlocked(c)?.let { return it }
         // (As performUndo: the save lands first; as a new edit it empties the redo stack.)
         c.landSavedSelections()
         val label = redo(c)
@@ -61,6 +63,8 @@ internal object HistoryLabels {
     }
 
     fun undo(c: EditorController): String {
+        // v1.9 (D14): an open session's own step first (see EditorController.inToolHistory).
+        c.inToolHistory?.let { owner -> if (owner.canUndo) owner.undoLabel?.let { return "Undo: $it" } }
         if (c.filterSession != null) return "Filter cancelled"
         val tool = c.currentTool
         if (tool.hasUserChanges) {
@@ -71,6 +75,7 @@ internal object HistoryLabels {
     }
 
     fun redo(c: EditorController): String {
+        c.inToolHistory?.let { owner -> if (owner.canRedo) owner.redoLabel?.let { return "Redo: $it" } }
         if (c.filterSession != null) return "Finish the filter first"
         val tool = c.currentTool
         if (tool.hasPendingWork && tool.canRedoStep) return "Redo: ${stepName(tool)}"
