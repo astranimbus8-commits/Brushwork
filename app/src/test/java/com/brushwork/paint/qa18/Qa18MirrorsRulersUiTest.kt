@@ -25,6 +25,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.PerspectiveBakeKit
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -189,13 +190,18 @@ class Qa18MirrorsRulersUiTest {
     private fun checkStored(what: String, added: List<com.brushwork.paint.vector.VObject>, maps: List<FloatArray>, perspective: Boolean, shape: Boolean) {
         if (perspective) {
             // The source stays what it is (a shape stays a shape: ARCHITECTURE "one extra plain path
-            // per copy beside the shape"), without copies; every copy is a plain path.
+            // per copy on the canvas beside the shape"), without copies; every copy is a plain path.
             val source = added.first()
             assertTrue("$what: the source first, without copies ($source)", (if (shape) source is VShape else source is VPath) && !ObjectCopies.hasCopies(source))
             assertTrue("$what: the copies are plain paths", added.drop(1).all { it is VPath && !ObjectCopies.hasCopies(it) })
             val off = added.count { o -> VectorOps.bounds(o).let { b -> b.right < 0f || b.bottom < 0f || b.left > W || b.top > H } }
             println("Qa18MirrorsRulers $what: ${maps.size} maps, ${added.size} paths baked, $off of them wholly off the canvas")
-            assertEquals("$what: the path and one path per copy", maps.size, added.size)
+            // v1.8 polish (a requested change, not a weaker check): the copies wholly off the canvas
+            // are no longer baked (they painted nothing): the path and one path per copy ON the canvas.
+            val kept = PerspectiveBakeKit.onCanvas(PerspectiveBakeKit.uncut(source, maps), W, H)
+            assertEquals("$what: none baked wholly off the canvas", 0, off)
+            assertTrue("$what: some copies lie off the canvas (${kept.size} of ${maps.size} kept)", kept.size < maps.size)
+            assertEquals("$what: the path and one path per copy on the canvas", kept.size, added.size)
         } else {
             assertEquals("$what: one object", 1, added.size)
             val copies = if (shape) (added.single() as VShape).shape.copies else (added.single() as VPath).copies

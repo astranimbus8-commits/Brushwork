@@ -1360,7 +1360,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             return false
         }
         val before = layer.dataSnapshot()
-        val baked = if (bake.isEmpty()) listOf(result.path) else ObjectCopies.baked(result.path, bake)
+        val baked = if (bake.isEmpty()) listOf(result.path) else ObjectCopies.baked(result.path, bake, ObjectCopies.bakeCanvas(doc, layer))
         val (content, ids) = VectorContent.EMPTY.plus(baked)
         val after = before.copy(text = null, shape = null, vector = content)
         // A live array keeps repeating the source: the cache shows the expanded content.
@@ -3191,7 +3191,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             copies.isEmpty && perspective.isEmpty() && ShapeOutlines.paintSpec(o, brush = true) == null && liveBrushOnVector(layer)
         }
         val shape = VShape(0, shape = o, seed = brushPreview.sessionSeed)
-        val objects = if (perspective.isEmpty()) listOf(shape) else ObjectCopies.baked(shape, perspective)
+        val objects = if (perspective.isEmpty()) listOf(shape) else ObjectCopies.baked(shape, perspective, ObjectCopies.bakeCanvas(doc, layer))
         val pendingPoints = points
         val pendingTarget = targetLayer
         var ids: List<Long> = emptyList()

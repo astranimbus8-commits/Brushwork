@@ -11,6 +11,7 @@ import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.plainLine
 import com.brushwork.paint.tools.vector.spline.CurveToolTestSupport.tool
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.PerspectiveBakeKit
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorOps
@@ -24,8 +25,9 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * v1.8 (item 1a, design §3.1, D2): a vector path drawn with the Perspective array ruler is stored
- * as N plain paths (the path and one per copy, each mapped with its homography), added in ONE
- * step; the hint that says so shows once per session.
+ * as plain paths (the path and one per copy on the canvas, each mapped with its homography; v1.8
+ * polish: a copy wholly off the canvas is dropped), added in ONE step; the hint that says so
+ * shows once per session.
  */
 @RunWith(RobolectricTestRunner::class)
 class CurvePerspectiveBakeTest {
@@ -45,7 +47,15 @@ class CurvePerspectiveBakeTest {
             assertTrue("$id: nothing to store as live copies", source.copies.isEmpty)
             t.commit()
             val objs = layer.vector!!.objects
-            assertEquals("$id: the path and one per copy", maps.size, objs.size)
+            // v1.8 polish (a requested change, not a weaker check): the copies wholly off the canvas
+            // are no longer baked (they painted nothing), so the layer holds the path and one path
+            // per copy ON the canvas: fewer than the maps here, and exactly the uncut bake's others.
+            val uncut = PerspectiveBakeKit.uncut(source, maps)
+            assertEquals("$id: before the cut, the path and one per copy", maps.size, uncut.size)
+            val kept = PerspectiveBakeKit.onCanvas(uncut, c.doc.width, c.doc.height)
+            assertTrue("$id: some copies lie off the canvas (${kept.size} of ${maps.size} kept)", kept.size < maps.size)
+            assertEquals("$id: the path and one per copy on the canvas", kept.size, objs.size)
+            assertEquals("$id: the same copies, in order", kept.map { VectorOps.bounds(it) }, objs.map { VectorOps.bounds(it) })
             assertTrue(objs.all { it is VPath && it.copies.isEmpty })
             assertEquals("$id: the first is the path itself", VectorOps.bounds(source), VectorOps.bounds(objs[0]))
             for (k in 1 until objs.size) {
@@ -102,11 +112,16 @@ class CurvePerspectiveBakeTest {
         t.update { it.copy(stroke = CurveStroke.BRUSH) }
         c.drawPath()
         val f = t.first()
-        val n = ObjectCopies.mapsAt(c, f.x, f.y).size
+        val maps = ObjectCopies.mapsAt(c, f.x, f.y)
+        val n = maps.size
+        val source = t.buildVPath()!!
         t.flushPreview()
         t.commit()
         val objs = c.activeLayer.vector!!.objects
-        assertEquals(n, objs.size)
+        // v1.8 polish (a requested change): one per copy ON the canvas (the off-canvas ones are dropped).
+        val kept = PerspectiveBakeKit.onCanvas(PerspectiveBakeKit.uncut(source, maps), c.doc.width, c.doc.height)
+        assertTrue("some copies lie off the canvas (${kept.size} of $n kept)", kept.size < n)
+        assertEquals(kept.size, objs.size)
         assertTrue(objs.all { (it as VPath).stroke?.kind == VStrokeKind.BRUSH && it.copies.isEmpty })
         assertEquals(1, c.undoManager.undoCount)
         assertTrue("no live stroke is left", !t.brushLive)

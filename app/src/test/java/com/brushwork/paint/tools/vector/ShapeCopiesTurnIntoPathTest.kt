@@ -4,8 +4,10 @@ import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.PerspectiveBakeKit
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VectorOps
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -24,7 +26,7 @@ import org.robolectric.RobolectricTestRunner
  * - Mirror, a shape object of a vector layer: replaced in place by a path with the same copies.
  * - Perspective array, a new shape on a raster layer: the source is placed in a shape layer (a
  *   shape layer can't keep perspective copies), then the vector layer holds the source path and
- *   one plain path per copy (the perspective bake, [MirrorLabels18.PERSPECTIVE_BAKED]).
+ *   one plain path per copy on the canvas (the perspective bake, [MirrorLabels18.PERSPECTIVE_BAKED]).
  */
 @RunWith(RobolectricTestRunner::class)
 class ShapeCopiesTurnIntoPathTest {
@@ -89,7 +91,7 @@ class ShapeCopiesTurnIntoPathTest {
             assertArrayEquals(kit.render(layer.vector!!), kit.rig.pixels(layer.bitmap))
             assertEquals(255, kit.alphaAt(layer.bitmap, 250, 100))
         }
-        // 3. Perspective array, raster layer: the source path plus one plain path per copy.
+        // 3. Perspective array, raster layer: the source path plus one plain path per copy on the canvas.
         run {
             val c = kit.controller(symmetry = SymmetryType.PERSPECTIVE_ARRAY)
             val tool = kit.rectTool(c, ShapeStyle.STROKE_FILL, editable = true)
@@ -107,7 +109,12 @@ class ShapeCopiesTurnIntoPathTest {
             val layer = c.doc.layers.single { it.id !in before }
             assertTrue(layer.isVectorLayer)
             val objects = layer.vector!!.objects
-            assertEquals("one path per map", maps.size, objects.size)
+            // v1.8 polish (a requested change, not a weaker check): the copies wholly off the canvas
+            // are no longer baked (they painted nothing): one path per map ON the canvas.
+            val kept = PerspectiveBakeKit.onCanvas(PerspectiveBakeKit.uncut(objects.first(), maps), c.doc.width, c.doc.height)
+            assertTrue("some copies lie off the canvas (${kept.size} of ${maps.size} kept)", kept.size < maps.size)
+            assertEquals("one path per map on the canvas", kept.size, objects.size)
+            assertEquals("the same copies, in order", kept.map { VectorOps.bounds(it) }, objects.map { VectorOps.bounds(it) })
             assertTrue(objects.all { it is VPath })
             assertTrue("none keeps copies", objects.none { ObjectCopies.hasCopies(it) })
             assertArrayEquals("data and pixels together", kit.render(layer.vector!!), kit.rig.pixels(layer.bitmap))

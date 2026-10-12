@@ -202,6 +202,36 @@ class ObjectCopiesTest {
         assertEquals(listOf<VObject>(box), ObjectCopies.baked(box, emptyList()))
     }
 
+    /**
+     * v1.8 polish (I15): with the canvas, the bake drops a copy wholly off it (it would paint
+     * nothing) and keeps every other copy as it was, in order; the source always stays, even
+     * wholly off the canvas. `bakeCanvas`: the document, or null (every copy kept) on a layer with
+     * a live array, whose instances follow the content's bounds.
+     */
+    @Test
+    fun theBakeOnTheCanvasDropsTheCopiesWhollyOffItAndAlwaysKeepsTheSource() {
+        val maps = perspectiveMaps()
+        val canvas = RectF(0f, 0f, kit.w.toFloat(), kit.h.toFloat())
+        val all = ObjectCopies.baked(box, maps)
+        val cut = ObjectCopies.baked(box, maps, canvas)
+        val kept = all.filterIndexed { k, o -> k == 0 || RectF.intersects(VectorOps.bounds(o), canvas) }
+        assertTrue("some copies lie off the canvas (${kept.size} of ${all.size} kept)", kept.size < all.size)
+        assertEquals("the copies on the canvas, as they were, in order", kept, cut)
+        // A source wholly off the canvas stays first; none of its kept copies is wholly off.
+        val away = kit.box(-300f, -260f, -200f, -180f).copy(id = 9)
+        assertFalse(RectF.intersects(VectorOps.bounds(away), canvas))
+        val bakedAway = ObjectCopies.baked(away, maps, canvas)
+        assertEquals("the source always stays", away, bakedAway[0])
+        assertTrue(bakedAway.drop(1).all { RectF.intersects(VectorOps.bounds(it), canvas) })
+        // Where the commits cut: the document; not on a layer with a live array.
+        val c = kit.controller()
+        val layer = c.doc.activeLayer
+        assertEquals(RectF(0f, 0f, c.doc.width.toFloat(), c.doc.height.toFloat()), ObjectCopies.bakeCanvas(c.doc, layer))
+        layer.array = com.brushwork.paint.model.LayerArray(com.brushwork.paint.model.ArraySpec())
+        assertNull("a live array: every copy kept", ObjectCopies.bakeCanvas(c.doc, layer))
+        layer.array = null
+    }
+
     @Test
     fun detachedReplacesTheObjectByItsPiecesInPlace() {
         val o = ObjectCopies.withCopies(box, copies)

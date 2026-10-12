@@ -103,7 +103,7 @@ I1–I14 stay as they are. Three of them carry most of v1.8's weight:
 - **I14 (ArrayDraw is the one draw seam):** it stays so; per-copy data comes from `ArrayInstances.of` (area B wires it).
 
 v1.8 adds five:
-- **I15 Copies are data.** An object's symmetry copies are a `CopyMaps` (`vector/CopyMaps.kt`): affine 3 × 3 maps, identity first, 2..256 maps (`StrokeCopies.MAX`), never baked into the object's geometry. A homography never becomes a copy: it bakes plain objects, in one step. Committing a symmetric curve or shape is ONE undo step, whatever the number of copies. Checked by `CopyMapsTest`, `CopyMapsCodecTest`, `SymmetricCommitUndoTest`.
+- **I15 Copies are data.** An object's symmetry copies are a `CopyMaps` (`vector/CopyMaps.kt`): affine 3 × 3 maps, identity first, 2..256 maps (`StrokeCopies.MAX`), never baked into the object's geometry. A homography never becomes a copy: it bakes plain objects, in one step; on a vector layer a baked copy whose bounds lie wholly off the canvas is dropped (it would paint nothing; the source always stays; not on a layer with a live array, whose instances follow the content's bounds: `ObjectCopies.baked(o, maps, canvas)`, `bakeCanvas`). Committing a symmetric curve or shape is ONE undo step, whatever the number of copies. Checked by `CopyMapsTest`, `CopyMapsCodecTest`, `SymmetricCommitUndoTest`.
 - **I16 Generators match their geometry.** A `VPath` with a `generator` has geometry equal to `CurveGenerators.build(generator, kind)` within 0.01 px. A hand edit of a point clears the generator in the same in-tool step (`CurveTool.editGeometry`); a reopened path that fails the check loses its generator silently; thickness edits are not geometry. `VectorOps.transformed` maps the generator with the path under a similarity (`CurveGenerator.mapped`) and drops it under any other map (`VectorOpsGeneratorTest`). On the foundation `CurveGenerators.matches` was a stub (false) that nothing called; area E made it real, and `CurveTool` runs it when it reopens a path and again when it stores one (`open`, `checkedGenerator`): a path that fails it loses its generator. Checked by E's `GeneratorMatchTest`, `GeneratorClearTest`, `GeneratorTransformTest`.
 - **I17 Copies have readers.** Every reader of a `VPath`, a `VShape` or a shape layer's `ShapeObject` goes through `vector/ObjectCopies.kt` and keeps, bakes or (documented) ignores the copies as the readers table below says. A new reader without copies fails `CopiesReadersAuditTest`.
 - **I18 Strip placement is a pure function.** Which items sit in row 1 and which in the More row is `StripLayout.split(spec, availableDp)`: a function of the items' declared widths, rows and ranks, never of measured text. At 360 dp and wider (`FIXED_ROW1_MIN_DP`, private in `StripHost.kt`) row 1 never scrolls, and a debug build (`FLAG_DEBUGGABLE`) checks that its items fit their budget: the check throws only at that width or wider. Below 360 dp the budgets do not hold: row 1's cells scroll sideways, the More toggle stays pinned at the end of row 1, and the check is skipped. Checked by `StripLayoutTest`, `StripInventoryTest`, `StripRow1CheckTest`, `StripRow1NarrowTest`.
@@ -1060,7 +1060,7 @@ Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape
 - Affine maps become the shape's `CopyMaps` (`openCopies`). They are stored with the shape on a shape layer or a vector layer and drawn per copy.
 - A Perspective array is not affine, so its maps (`openPerspective`) are not kept; they bake on commit:
   - on a raster layer or an Editable shape, pixels on the current layer (the new shape is then not kept as a shape layer);
-  - on a vector layer, one extra plain path per copy beside the shape (`ObjectCopies.baked`).
+  - on a vector layer, one extra plain path per copy on the canvas beside the shape (`ObjectCopies.baked` with `bakeCanvas`: of up to 256 maps, many put a copy wholly off the canvas, where it paints nothing, and such a copy is dropped; I15).
   - A one-time hint (`MirrorLabels18.PERSPECTIVE_PIXELS` / `PERSPECTIVE_BAKED`) says which.
 - A reopened shape keeps its stored maps even with the ruler off, and tapping a copy opens the shape. Every edit moves the copies along.
 - `PendingState` carries the copies, so in-tool undo restores them.
@@ -1083,7 +1083,7 @@ Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape
 - `ShapeTool.converted` puts the live copies back on the resulting path, so Turn into path keeps them:
   - a new shape on a raster layer: two steps, the shape layer, then the vector layer;
   - a vector object: replaced in place, same id, ONE step.
-- With a Perspective array, Turn into path places the source in a shape layer, then bakes the source path plus one plain path per copy into the vector layer (`ShapeCopiesTurnIntoPathTest`).
+- With a Perspective array, Turn into path places the source in a shape layer, then bakes the source path plus one plain path per copy on the canvas into the vector layer (`ShapeCopiesTurnIntoPathTest`).
 
 ### The Shape strip (§3.9)
 - `ui/vector/ShapeStrip.kt` builds the converted two-row `StripSpec`.
@@ -1369,7 +1369,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 - **Live preview** (`CopiesPreview`). The path's plain items are drawn once per copy under `canvas.concat(M_k)` (homographies too). Brush strokes replicate through `BrushStrokePreview.request(maps)`.
 - **Translucent paint on a raster layer** (preview and commit, `CurveTool.groupAlpha`). When the line alpha equals the fill alpha, all copies go inside ONE `saveLayerAlpha`, so overlaps never darken. When they differ, `groupAlpha` is 255 and each copy is composited on its own (known gap; the per-copy order then matches the vector renderer).
 - **Commit.**
-  - Vector layer: the path stores affine `CopyMaps` (`ObjectCopies.fromSymmetry`). Perspective copies are baked into plain paths (`ObjectCopies.baked`). The hint `MirrorLabels18.PERSPECTIVE_BAKED` shows once per editor session, shared by the three curve tools (`toastOncePerSession`).
+  - Vector layer: the path stores affine `CopyMaps` (`ObjectCopies.fromSymmetry`). Perspective copies are baked into plain paths, those on the canvas (`ObjectCopies.baked`, I15). The hint `MirrorLabels18.PERSPECTIVE_BAKED` shows once per editor session, shared by the three curve tools (`toastOncePerSession`).
   - Raster layer: every copy is painted in the commit's one step.
 - **Reopen.** A tap on any copy's line reopens the source (`ObjectCopies.hits`).
 - **Removing copies.** `MirrorLabels18.REMOVE` (More row) drops the open path's copies as one in-tool step; the generator stays (copies are no geometry).

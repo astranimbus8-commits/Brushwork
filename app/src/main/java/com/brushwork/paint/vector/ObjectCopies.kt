@@ -6,6 +6,8 @@ import android.graphics.RectF
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.model.Document
+import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeOutlines
@@ -119,18 +121,32 @@ object ObjectCopies {
      * The perspective bake (§3.1, D2): [o] (its source) plus one plain object per map of [maps]
      * other than the identity, each through [VectorOps.transformed] (a homography turns a shape
      * into a path). The commit adds them in ONE step (`VectorContent.plus`). [o] alone for no maps.
+     * v1.8 polish: with a [canvas] (the document's rect), a copy whose [VectorOps.bounds] (all it
+     * can paint, the stroke's reach included) lies wholly outside it is dropped: the Perspective
+     * array's up to 256 maps put many cells off the canvas, and their paths would paint nothing.
+     * The source is always kept; the copies kept paint exactly what they did.
      */
-    fun baked(o: VObject, maps: List<FloatArray>): List<VObject> {
+    fun baked(o: VObject, maps: List<FloatArray>, canvas: RectF? = null): List<VObject> {
         val src = source(o)
         if (maps.isEmpty()) return listOf(src)
         val out = ArrayList<VObject>(maps.size)
         out += src
         for (m in maps) {
             if (m.size < 9 || isIdentity(m) || m.any { !it.isFinite() }) continue
-            out += VectorOps.transformed(src, m)
+            val copy = VectorOps.transformed(src, m)
+            if (canvas != null && !RectF.intersects(VectorOps.bounds(copy), canvas)) continue
+            out += copy
         }
         return out
     }
+
+    /**
+     * The rect [baked] keeps copies in on [layer] of [doc]: the document; null (every copy kept)
+     * when the layer has a live array, which places its instances from the content's bounds and
+     * can bring an off-canvas copy onto the canvas.
+     */
+    fun bakeCanvas(doc: Document, layer: Layer): RectF? =
+        if (layer.array != null) null else RectF(0f, 0f, doc.width.toFloat(), doc.height.toFloat())
 
     // ------------------------------------------------------------------ bounds, hits, drawing
 

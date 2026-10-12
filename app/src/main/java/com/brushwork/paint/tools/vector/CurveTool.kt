@@ -3608,7 +3608,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         // layer, as is a brush line at 0 % everywhere, which paints nothing.)
         if (bake || vp.stroke?.kind != VStrokeKind.BRUSH || strokeMode(layer) != CurveStroke.BRUSH || layer !== controller.doc.activeLayer) {
             brushPreview.cancel()
-            val objects = if (bake) ObjectCopies.baked(vp, bakeMaps) else listOf(vp)
+            val objects = if (bake) ObjectCopies.baked(vp, bakeMaps, ObjectCopies.bakeCanvas(controller.doc, layer)) else listOf(vp)
             val ids = controller.vectors.addObjects(layer, objects, label)
             // Refused (no memory...): the path stays pending.
             if (ids.isEmpty()) return

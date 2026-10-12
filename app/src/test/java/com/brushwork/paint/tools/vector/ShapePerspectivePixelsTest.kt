@@ -3,8 +3,10 @@ package com.brushwork.paint.tools.vector
 import com.brushwork.paint.model.SymmetryType
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.vector.ObjectCopies
+import com.brushwork.paint.vector.PerspectiveBakeKit
 import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
+import com.brushwork.paint.vector.VectorOps
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -21,7 +23,7 @@ import org.robolectric.RobolectricTestRunner
  * so a shape drawn with them
  * - with Editable on over a raster layer is drawn as pixels on the CURRENT layer (no shape
  *   layer), with the hint [MirrorLabels18.PERSPECTIVE_PIXELS] once per session;
- * - on a vector layer becomes the source plus one plain path per copy, in ONE undo step, with the
+ * - on a vector layer becomes the source plus one plain path per copy on the canvas, in ONE undo step, with the
  *   hint [MirrorLabels18.PERSPECTIVE_BAKED] once per session.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -84,7 +86,12 @@ class ShapePerspectivePixelsTest {
             assertEquals("ONE step", steps + 1, c.undoManager.undoCount)
             assertEquals(MirrorLabels18.PERSPECTIVE_BAKED, c.message)
             val objects = layer.vector!!.objects
-            assertEquals("one object per map", maps.size, objects.size)
+            // v1.8 polish (a requested change, not a weaker check): the copies wholly off the canvas
+            // are no longer baked (they painted nothing): one object per map ON the canvas.
+            val kept = PerspectiveBakeKit.onCanvas(PerspectiveBakeKit.uncut(objects.first(), maps), c.doc.width, c.doc.height)
+            assertTrue("some copies lie off the canvas (${kept.size} of ${maps.size} kept)", kept.size < maps.size)
+            assertEquals("one object per map on the canvas", kept.size, objects.size)
+            assertEquals("the same copies, in order", kept.map { VectorOps.bounds(it) }, objects.map { VectorOps.bounds(it) })
             assertTrue("the source", objects.first() is VShape)
             assertTrue("plain paths", objects.drop(1).all { it is VPath })
             assertTrue("no copies kept", objects.none { ObjectCopies.hasCopies(it) })
