@@ -211,7 +211,7 @@ class ExportSceneBuilder(
 
         // Vector objects become items off the main thread (immutable data only).
         val sceneLayers = withContext(renderDispatcher) { plans.mapNotNull { sceneLayer(it) } }
-        // v1.9 (design 2.4.9): the paper (with "Include paper") is the background rectangle, under
+        // v1.9 (design 2.4.9): the paper (with includePaper) is the background rectangle, under
         // which a white background would not show; v1.8 without a paper.
         val paper = if (options.includePaper) PaperBackdrop.sampleColor(doc) else null
         return ExportScene(

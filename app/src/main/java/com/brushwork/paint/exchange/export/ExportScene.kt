@@ -52,7 +52,7 @@ data class ExportOptions(
     val page: PdfPage = PdfPage.CANVAS,
     /**
      * v1.9 (design 2.4.9, R15): the artwork's paper as the scene's background (no effect without a
-     * paper). A8 adds the export sheet's "Include paper" switch; until then it is always on.
+     * paper). A8 adds the export sheet's switch (CanvasLabels19.INCLUDE_PAPER); until then it is always on.
      */
     val includePaper: Boolean = true,
 )

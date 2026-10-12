@@ -4,7 +4,8 @@ package com.brushwork.paint.engine
  * v1.9 (design 2.4.4; owner A6): named timings of the hot paths (a frame, a brush lift, the
  * vector eraser's preview rebuild, a mask drag frame, a filter preview, a layer write, opening a
  * document), kept as the last [SAMPLES] samples per name. What P0 measures (2.7) and what the
- * "Show frame times" overlay shows. Off by default: then a [span] costs one volatile read.
+ * frame-times overlay shows (its switch: StabilityLabels19.SHOW_FRAME_TIMES). Off by default: then a
+ * [span] costs one volatile read.
  * Thread-safe ([record] is called from the main thread and from IO and Default workers).
  */
 object PerfTrace {
