@@ -222,8 +222,9 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
         // v1.8 D (design §3.1 D1): under a symmetry ruler the stroke is also drawn as copies,
         // the maps taken where it starts; more than [MAX_MAPS] copies is refused (no stroke, no step).
         val maps = ObjectCopies.mapsAt(controller, at.x, at.y)
-        if (copiesCounted(controller.symmetry.type, maps, at.x, at.y, controller.doc.width, controller.doc.height) > MAX_MAPS) {
-            controller.toast(MirrorLabels18.CLONE_TOO_MANY)
+        val type = controller.symmetry.type
+        if (copiesCounted(type, maps, at.x, at.y, controller.doc.width, controller.doc.height) > MAX_MAPS) {
+            controller.toast(tooManyMessage(type))
             gesture = Gesture.NONE
             strokeOffset = null
             return
@@ -451,10 +452,19 @@ class CloneTool(controller: EditorController) : Tool(controller), PositionedTool
 
         /**
          * v1.8 D: a stroke is drawn with at most this many copies, the original included
-         * ([copiesCounted]); a ruler with more refuses the stroke
-         * ([MirrorLabels18.CLONE_TOO_MANY]).
+         * ([copiesCounted]); a ruler with more refuses the stroke ([tooManyMessage]).
          */
         const val MAX_MAPS = 32
+
+        /**
+         * The refusal of a stroke with more than [MAX_MAPS] copies under a [type] ruler. The
+         * Perspective array's default cell already gives more on any canvas, so its message says
+         * how to fix it: a bigger cell (its corners dragged outward) fits fewer copies on the
+         * canvas ([MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE]). Every other ruler:
+         * [MirrorLabels18.CLONE_TOO_MANY].
+         */
+        fun tooManyMessage(type: SymmetryType): String =
+            if (type == SymmetryType.PERSPECTIVE_ARRAY) MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE else MirrorLabels18.CLONE_TOO_MANY
 
         /**
          * v1.8 D (design §3.1 D4): the copies a stroke of a [type] ruler starting at ([x], [y])

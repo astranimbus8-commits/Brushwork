@@ -22,6 +22,8 @@ object LabelsV18 {
 /** Mirror copies on objects (item 1). */
 object MirrorLabels18 {
     const val CLONE_TOO_MANY = "Clone stamp mirrors up to 32 copies"
+    /** v1.8 polish: the clone stamp's refusal under the Perspective array says how to fix it (a bigger cell fits fewer copies). */
+    const val CLONE_TOO_MANY_PERSPECTIVE = "Clone stamp: up to 32 copies. Drag the perspective cell's corners outward"
     const val PERSPECTIVE_BAKED = "Perspective copies become separate paths"
     const val PERSPECTIVE_PIXELS = "Perspective copies are drawn as pixels"
     const val DETACH = "Detach mirror copies"; const val REMOVE = "Remove mirror copies"

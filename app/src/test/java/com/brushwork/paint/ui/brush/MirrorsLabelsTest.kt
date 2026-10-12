@@ -25,6 +25,7 @@ import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.ui.vector.VectorEraserStrip
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Modifier
@@ -35,7 +36,7 @@ import java.lang.reflect.Modifier
  * RulerStripTest, SymmetryStripTest):
  * - every handle a D strip item declares is the v1.7 one ([StripHandlesV17]): "the v1.7 label wins";
  * - none is a v1.8-only label (rule L: those come from `LabelsV18` constants only, and D adds none
- *   but [MirrorLabels18.CLONE_TOO_MANY]);
+ *   but [MirrorLabels18.CLONE_TOO_MANY] and, v1.8 polish, [MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE]);
  * - the declared widths are rounded to 4 dp, tappable ones 40 dp at least (rule 4), and the row
  *   sums keep the design's budgets (rules 1 and 2).
  */
@@ -61,6 +62,10 @@ class MirrorsLabelsTest {
         assertEquals("Clone stamp mirrors up to 32 copies", MirrorLabels18.CLONE_TOO_MANY)
         assertEquals(32, CloneTool.MAX_MAPS)
         assertTrue(MirrorLabels18.CLONE_TOO_MANY.contains(" ${CloneTool.MAX_MAPS} "))
+        // v1.8 polish: the Perspective array's refusal names the cap too, and is neither label's substring.
+        assertTrue(MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE.contains(" ${CloneTool.MAX_MAPS} "))
+        assertFalse(MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE.contains(MirrorLabels18.CLONE_TOO_MANY))
+        assertFalse(MirrorLabels18.CLONE_TOO_MANY.contains(MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE))
     }
 
     @Test

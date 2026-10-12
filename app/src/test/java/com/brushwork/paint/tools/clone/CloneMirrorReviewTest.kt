@@ -175,6 +175,54 @@ class CloneMirrorReviewTest {
     }
 
     @Test
+    fun aPerspectiveArrayRefusalSaysToDragTheCellsCornersOutward() {
+        // v1.8 polish: the default cell (a fifth of the shorter side) gives more than 32 copies on
+        // any canvas, so a fresh Perspective array refuses every clone stroke. Its refusal says how
+        // to fix that: drag the cell's corners outward. Checked here: the corners moved away from
+        // the cell's centre fit fewer copies on the canvas (enough of that paints), towards it more.
+        val w = 200
+        val h = 200
+        val c = setup(scope, w, h, 10f)
+        pattern(c.activeLayer.bitmap)
+        c.updateSymmetry(SymmetrySettings(type = SymmetryType.PERSPECTIVE_ARRAY))
+        tool(c).setSource(Vec2(60f, 150f))
+        val x = 100f
+        val y = 110f
+        fun counted() = CloneTool.copiesCounted(SymmetryType.PERSPECTIVE_ARRAY, ObjectCopies.mapsAt(c, x, y), x, y, w, h)
+        val default = counted()
+        assertTrue("the default cell: $default copies", default > CloneTool.MAX_MAPS)
+        val before = pixels(c.activeLayer.bitmap)
+        stroke(c, x, y, x + 20f, y)
+        assertEquals(MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE, c.message)
+        assertEquals("refused: no step", 0, c.undoManager.undoCount)
+        assertArrayEquals("refused: no pixel", before, pixels(c.activeLayer.bitmap))
+
+        // The default cell with each corner [k] times as far from the cell's centre.
+        val q = com.brushwork.paint.assist.SymmetryMaps.defaultQuad(w, h)
+        val cx = (0 until 4).map { q[2 * it] }.average().toFloat()
+        val cy = (0 until 4).map { q[2 * it + 1] }.average().toFloat()
+        fun cell(k: Float) = q.mapIndexed { i, v -> if (i % 2 == 0) cx + (v - cx) * k else cy + (v - cy) * k }
+        val counts = listOf(0.7f, 1f, 1.5f, 2f, 3f).associateWith { k ->
+            c.updateSymmetry(SymmetrySettings(type = SymmetryType.PERSPECTIVE_ARRAY, quad = cell(k)))
+            counted()
+        }
+        println("CloneMirrorReview perspective copies counted by corner distance: $counts")
+        assertEquals(default, counts.getValue(1f))
+        assertTrue("corners inward: more copies: $counts", counts.getValue(0.7f) > default)
+        assertTrue("corners outward: fewer copies: $counts", counts.getValue(1.5f) < default && counts.getValue(2f) < counts.getValue(1.5f))
+        val k = counts.entries.first { it.key > 1f && it.value <= CloneTool.MAX_MAPS }.key
+        c.updateSymmetry(SymmetrySettings(type = SymmetryType.PERSPECTIVE_ARRAY, quad = cell(k)))
+        c.message = null
+        stroke(c, x, y, x + 20f, y)
+        assertEquals("corners $k times as far: the stroke paints", 1, c.undoManager.undoCount)
+        assertTrue(c.message != MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE)
+
+        // Every other ruler keeps the cap's message (Kaleidoscope 17 and a fine Array: the tests above).
+        for (t in SymmetryType.entries - SymmetryType.PERSPECTIVE_ARRAY) assertEquals("$t", MirrorLabels18.CLONE_TOO_MANY, CloneTool.tooManyMessage(t))
+        assertEquals(MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE, CloneTool.tooManyMessage(SymmetryType.PERSPECTIVE_ARRAY))
+    }
+
+    @Test
     fun anAlphaLockedLayerKeepsItsAlphaUnderEveryCopy() {
         val w = 200
         val h = 140

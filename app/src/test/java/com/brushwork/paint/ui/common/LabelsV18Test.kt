@@ -52,12 +52,14 @@ class LabelsV18Test {
     @Test
     fun everyV18LabelIsUniqueAndNotBlank() {
         val all = labels
-        // 95 from F1, and three from the integration (v18I): the Color select no-match toast, the
-        // Magnetic lasso's out-of-memory toast and the Transform box hint; one from the v1.8 polish:
-        // the caption over "Choose interpolation" (it said only "Smooth", not what it chooses).
-        assertEquals("the objects have their labels: ${all.keys}", 100, all.size)
+        // 95 from F1; three from the integration (v18I): the Color select no-match toast, the
+        // Magnetic lasso's out-of-memory toast and the Transform box hint; one from the final QA: the
+        // Color range chip's "None yet". 99 before the v1.8 polish, which adds two: the caption over
+        // "Choose interpolation" (it said only "Smooth", not what it chooses), and the clone stamp's
+        // refusal under the Perspective array, which says to drag the cell's corners outward.
+        assertEquals("the objects have their labels: ${all.keys}", 101, all.size)
         assertTrue(all.keys.containsAll(listOf("ColorSelectLabels18.NO_MATCH", "MagneticLabels18.OUT_OF_MEMORY", "TransformLabels18.BOX_HINT")))
-        assertTrue(all.keys.contains("TransformLabels18.INTERPOLATION_CAPTION"))
+        assertTrue(all.keys.containsAll(listOf("TransformLabels18.INTERPOLATION_CAPTION", "MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE")))
         val dups = all.entries.groupBy({ it.value }, { it.key }).filterValues { it.size > 1 }
         assertTrue("labels declared twice: $dups", dups.isEmpty())
         assertTrue("blank: ${all.filterValues { it.isBlank() }}", all.values.none { it.isBlank() || it != it.trim() })

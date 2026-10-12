@@ -255,9 +255,9 @@ class Qa18MirrorsCloneUiTest {
             editor(h)
             // The default cell (a fifth of the shorter side) gives every canvas more than 32 copies
             // counted (printed below: 75 on 400 x 300, 235 on 1080 x 2340), so a clone stroke under a
-            // fresh Perspective array is always refused with "Clone stamp mirrors up to 32 copies",
-            // which does not say to enlarge the cell. The corner drags below are the workaround the
-            // user must find first (a QA finding for the lead, not a design rule).
+            // fresh Perspective array is always refused. Since the v1.8 polish that refusal says to
+            // drag the cell's corners outward (MirrorLabels18.CLONE_TOO_MANY_PERSPECTIVE,
+            // Qa18PolishMirrorsCloneUiTest); the corner drags below do just that.
             for ((w, ht) in listOf(W to H, 1080 to 2340, 2048 to 2048, 1920 to 1080)) {
                 val st = com.brushwork.paint.model.SymmetrySettings(type = SymmetryType.PERSPECTIVE_ARRAY)
                 val m = com.brushwork.paint.assist.SymmetryMaps.transforms(st, w, ht, w / 2f, ht / 2f)
