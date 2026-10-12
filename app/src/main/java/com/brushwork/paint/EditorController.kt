@@ -241,6 +241,17 @@ class EditorController(
     var lastPaintTool by mutableStateOf(ToolId.BRUSH)
         private set
 
+    /**
+     * v1.8: the tool the user left for the Symmetry or the Ruler tool, when it is one the rulers
+     * work for ([SymmetryGuides.showsFor]: Brush, Eraser, Smudge, Blur, Curve, Polyline, Path,
+     * Shape, Clone stamp); null otherwise. Going from one of the two to the other keeps it.
+     */
+    var assistReturnTool: ToolId? by mutableStateOf(null)
+        private set
+
+    /** Where the Symmetry and the Ruler tools' "Done" go: [assistReturnTool], else [lastPaintTool]. */
+    val doneTool: ToolId get() = assistReturnTool ?: lastPaintTool
+
     /** Primary drawing color (opaque ARGB). */
     var color by mutableIntStateOf(0xFF000000.toInt())
     var secondaryColor by mutableIntStateOf(0xFFFFFFFF.toInt())
@@ -785,8 +796,10 @@ class EditorController(
         if (id == activeToolId) return
         filterSession?.cancel()
         currentTool.onDeactivate()
+        val from = activeToolId
         activeToolId = id
         if (id == ToolId.BRUSH || id == ToolId.SMUDGE || id == ToolId.BLUR) lastPaintTool = id
+        if (id in ASSIST_TOOLS && from !in ASSIST_TOOLS) assistReturnTool = from.takeIf { SymmetryGuides.showsFor(it) }
         currentTool.onActivate()
         currentTool.onSelected()
         invalidateOverlay()
@@ -2777,6 +2790,9 @@ class EditorController(
     companion object {
         /** Tools whose brush the side sliders show. CLONE and MASK never become [lastPaintTool]. */
         val PAINT_TOOLS = setOf(ToolId.BRUSH, ToolId.ERASER, ToolId.SMUDGE, ToolId.BLUR, ToolId.CLONE, ToolId.MASK)
+
+        /** The tools that place a ruler on the canvas, whose "Done" goes to [doneTool]. */
+        private val ASSIST_TOOLS = setOf(ToolId.SYMMETRY, ToolId.RULER)
 
         /** Rounds of edit-event delivery (listeners reacting to listeners) before the rest is dropped. */
         private const val MAX_EDIT_ROUNDS = 4

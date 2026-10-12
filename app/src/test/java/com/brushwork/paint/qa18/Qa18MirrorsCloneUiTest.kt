@@ -291,7 +291,9 @@ class Qa18MirrorsCloneUiTest {
 
             Qa18MirrorsKit.rulerOn(ui, SymmetryType.ROTATION, listOf(divisions("32")))
             assertEquals("Divisions 32 typed", 32, c.symmetry.divisions)
-            // Done goes back to the last painting tool (the brush: the clone stamp never is one, v1.7).
+            // v1.8 polish (a requested change): Done goes back to the tool the user came from, the
+            // clone stamp, no longer to the last painting tool (the brush). Picking it again is a no-op.
+            assertEquals("Done: back to the clone stamp", ToolId.CLONE, c.activeToolId)
             ui.tool("Clone stamp")
             assertEquals("the clone stamp again", ToolId.CLONE, c.activeToolId)
             if ((c.currentTool as CloneTool).anchor.source == null) setSource(c.currentTool as CloneTool, Vec2(230f, 70f))

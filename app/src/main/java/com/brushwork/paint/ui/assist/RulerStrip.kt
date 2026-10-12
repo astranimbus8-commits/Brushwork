@@ -51,7 +51,7 @@ internal fun rulerStrip(tool: RulerTool, c: EditorController): StripSpec {
         StripItem(RulerStripItems.TYPES, RulerStripItems.typeLabel(currentType), RulerStripItems.TYPES_DP.dp) { RulerTypeButtons(c) },
         StripItem(RulerStripItems.DONE, RulerStripItems.DONE_LABEL, RulerStripItems.DONE_DP.dp) {
             Button(
-                onClick = { c.selectTool(c.lastPaintTool) },
+                onClick = { c.selectTool(c.doneTool) },
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 modifier = Modifier.width(RulerStripItems.DONE_DP.dp),
             ) { Text(RulerStripItems.DONE_LABEL, maxLines = 1) }

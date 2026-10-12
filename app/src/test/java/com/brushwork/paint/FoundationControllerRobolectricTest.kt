@@ -583,6 +583,17 @@ class FoundationControllerRobolectricTest {
         c.selectTool(ToolId.CLONE)
         assertEquals("CLONE never becomes the last paint tool", ToolId.BRUSH, c.lastPaintTool)
         assertEquals(ToolId.CLONE, c.sliderToolId)
+        // v1.8 polish, a requested change: the Symmetry and Ruler tools' "Done" goes back to the tool
+        // the user came from when a ruler works for it (`doneTool`), so from the clone stamp it is the
+        // clone stamp; the last paint tool stays the Brush. From the Lasso it falls back to that.
+        c.selectTool(ToolId.SYMMETRY)
+        assertEquals(ToolId.CLONE, c.doneTool)
+        assertEquals("still never the last paint tool", ToolId.BRUSH, c.lastPaintTool)
+        c.selectTool(ToolId.RULER)
+        assertEquals("Symmetry to Ruler keeps it", ToolId.CLONE, c.doneTool)
+        c.selectTool(ToolId.LASSO)
+        c.selectTool(ToolId.RULER)
+        assertEquals("from the Lasso: the last paint tool", ToolId.BRUSH, c.doneTool)
         // The preset store keeps a clone preset per its own id.
         val store = com.brushwork.paint.brush.BrushPresetStore.get(app)
         store.remember(ToolId.CLONE, BrushLibrary.clones[1].copy(size = 50f))

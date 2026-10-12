@@ -153,11 +153,21 @@ class SymmetryStripTest {
             assertTrue("Reset keeps the More row", StripTestKit.moreRowShown())
             StripTestKit.closeMoreRow()
 
-            // "Done": back to the last painting tool.
-            val paint = c.lastPaintTool
+            // "Done": back to the tool the user came from (`doneTool`). A requested v1.8 change, not a
+            // weaker check: Done used to go to the last painting tool, which is still the fallback
+            // (here the strip was opened from the Brush, so both are the Brush).
+            val back = c.doneTool
+            assertEquals("opened from the Brush", ToolId.BRUSH, back)
             SmokeUi.click("Done", exact = true)
             rig.settle()
-            assertEquals(paint, c.activeToolId)
+            assertEquals(back, c.activeToolId)
+            // From the Curve, Done is the Curve again (not the last painting tool).
+            rig.select(ToolId.CURVE)
+            rig.select(ToolId.SYMMETRY)
+            SmokeUi.click("Done", exact = true)
+            rig.settle()
+            assertEquals("$dp dp: Done goes back to the Curve", ToolId.CURVE, c.activeToolId)
+            assertEquals("the last painting tool is unchanged", ToolId.BRUSH, c.lastPaintTool)
             rig.select(ToolId.SYMMETRY)
             SymmetryUi.update(c) { it.copy(type = SymmetryType.MIRROR) }
             rig.select(ToolId.BRUSH)

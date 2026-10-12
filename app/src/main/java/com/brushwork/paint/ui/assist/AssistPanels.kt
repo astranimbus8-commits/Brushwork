@@ -312,7 +312,7 @@ fun RulerToolOptions(tool: RulerTool) {
         }
         SnapToObjectsChip(controller)
         Button(
-            onClick = { controller.selectTool(controller.lastPaintTool) },
+            onClick = { controller.selectTool(controller.doneTool) },
             contentPadding = PaddingValues(horizontal = 14.dp),
         ) { Text("Done") }
     }

@@ -84,11 +84,27 @@ class RulerStripTest {
             assertFalse(SmokeUi.has("Use ruler", exact = true))
             assertEquals(ToolId.RULER, c.activeToolId)
 
-            // "Done": back to the last painting tool.
-            val paint = c.lastPaintTool
+            // "Done": back to the tool the user came from (`doneTool`). A requested v1.8 change, not a
+            // weaker check: Done used to go to the last painting tool, which is still the fallback
+            // (here the Ruler tool was opened from the Brush, so both are the Brush).
+            val back = c.doneTool
+            assertEquals("opened from the Brush", ToolId.BRUSH, back)
             SmokeUi.click("Done", exact = true)
             rig.settle()
-            assertEquals(paint, c.activeToolId)
+            assertEquals(back, c.activeToolId)
+            // From the Shape tool, Done is the Shape tool again; from the Lasso (no ruler works for
+            // it), the last painting tool.
+            rig.select(ToolId.SHAPE)
+            rig.select(ToolId.RULER)
+            SmokeUi.click("Done", exact = true)
+            rig.settle()
+            assertEquals("$dp dp: Done goes back to the Shape tool", ToolId.SHAPE, c.activeToolId)
+            rig.select(ToolId.LASSO)
+            rig.select(ToolId.RULER)
+            SmokeUi.click("Done", exact = true)
+            rig.settle()
+            assertEquals("$dp dp: from the Lasso, the last painting tool", c.lastPaintTool, c.activeToolId)
+            assertEquals(ToolId.BRUSH, c.activeToolId)
         }
     }
 }

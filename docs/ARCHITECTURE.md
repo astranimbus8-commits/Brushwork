@@ -2119,6 +2119,7 @@ sheet ("Increment steps", More › Increments…), in Settings, and behind the X
   - Corners stay convex.
   - Dragging elsewhere moves the ruler, with a 6 dp slop.
 - `SymmetryOptions`: type chips, value chips, "Reset symmetry" and "Done".
+- "Done" (the Symmetry strip, the Ruler strip and the legacy `RulerToolOptions`) selects `EditorController.doneTool`: the tool the user left for the Symmetry or the Ruler tool when the rulers work for it (`assistReturnTool`, set by `selectTool` from `SymmetryGuides.showsFor`; going between the two tools keeps it), else `lastPaintTool`. So Curve → Symmetry → Done is the Curve tool again, also through the top row's Ruler panel ("Place on canvas", "Edit on canvas"). `lastPaintTool` itself is unchanged (Brush, Smudge or Blur).
 - `SymmetryRulerSection` in the Ruler panel: "Place on canvas" closes the sheet and selects the tool.
 
 **Budgets** (§6.3, asserted by `SymmetryBudgetRobolectricTest` with `PerfBudget.ms`). These are JVM numbers for stroke work per frame; the T606 times are device checks.

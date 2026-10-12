@@ -68,7 +68,7 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * - Mirror: "Angle" 64 (AUTO 1);
  * - Array: "Spacing X" 64 and "Spacing Y" 64 (AUTO 1);
  * - Off and Perspective array: nothing (the perspective array is shaped on the canvas);
- * and "Done" 72 (back to the last painting tool). 268 dp in full, 200 without the AUTO item.
+ * and "Done" 72 (back to the tool the user came from, `EditorController.doneTool`). 268 dp in full, 200 without the AUTO item.
  * The More row: "Angle" (Array) and "Reset symmetry".
  *
  * A value control shows v1.7's "Label value" text ("Angle 0°", "Divisions 6", "Spacing X 300 px")
@@ -149,7 +149,7 @@ internal object SymmetryStripItems {
 
     fun done(c: EditorController) = StripItem(DONE, DONE_LABEL, DONE_DP.dp) {
         Button(
-            onClick = { c.selectTool(c.lastPaintTool) },
+            onClick = { c.selectTool(c.doneTool) },
             contentPadding = PaddingValues(horizontal = 8.dp),
             modifier = Modifier.width(DONE_DP.dp),
         ) { Text(DONE_LABEL, maxLines = 1) }
