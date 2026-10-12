@@ -119,6 +119,26 @@ class UndoManager(private val maxBytes: Long, private val maxSteps: Int = 150) {
     }
 
     /**
+     * v1.9 (V28, design 2.4.3): drops the oldest steps, one at a time, while [until] returns false
+     * and more than [keepAtLeast] steps remain. A no-op while [holdTrim] holds (I2 grouping). Each
+     * dropped action is disposed and counted in [dropped]; [onChanged] runs once at the end when a
+     * step was dropped. Returns the number of steps dropped. The only public way to drop old steps
+     * (a memory policy's, `MemoryGovernor`); the redo steps are kept.
+     */
+    fun trimOldest(keepAtLeast: Int = 1, until: () -> Boolean): Int {
+        if (trimHolds > 0) return 0
+        val keep = keepAtLeast.coerceAtLeast(0)
+        var n = 0
+        while (undoStack.size > keep && !until()) {
+            undoStack.removeFirst().dispose()
+            dropped++
+            n++
+        }
+        if (n > 0) onChanged?.invoke()
+        return n
+    }
+
+    /**
      * v1.7 (item 10): how many undo steps were ever dropped from the oldest end (trimmed) or by
      * [clear]. A history mark compares it to know whether steps it covers are gone.
      */

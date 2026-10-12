@@ -15,6 +15,7 @@ import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.ColorUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -238,7 +239,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val note = eraserNoteOnLift
         eraserNoteOnLift = false
         val toastBefore = controller.message
-        s.finish(p)
+        // v1.9 (design 2.4.4): the lift is timed as PerfTrace.LIFT.
+        PerfTrace.span(PerfTrace.LIFT) { s.finish(p) }
         store.persist(controller, id)
         // (Not over what the stroke itself said on lifting: then next time.)
         if (note && !symmetryEraserNoteShown && controller.message == toastBefore) {

@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import com.brushwork.paint.engine.BitmapUtils
+import com.brushwork.paint.engine.PerfTrace
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -127,7 +128,10 @@ internal object LayerCodec {
     }
 
     private fun writeStream(file: File, width: Int, height: Int, length: Int, body: (OutputStream) -> Unit) {
-        ProjectFormat.writeAtomically(file) { out -> writeBody(out, width, height, length, body) }
+        // v1.9 (design 2.4.4): every pixel file written is timed as PerfTrace.SAVE_LAYER.
+        PerfTrace.span(PerfTrace.SAVE_LAYER) {
+            ProjectFormat.writeAtomically(file) { out -> writeBody(out, width, height, length, body) }
+        }
     }
 
     /**

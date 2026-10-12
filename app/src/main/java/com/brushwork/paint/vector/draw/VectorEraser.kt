@@ -12,6 +12,7 @@ import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
 import com.brushwork.paint.brush.StrokeRecorder
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VectorContent
 import kotlin.math.max
@@ -58,10 +59,12 @@ internal class VectorEraserRecorder(
         val r = radius(rawPressure)
         if (pathSize + 3 > path.size) path = path.copyOf(path.size * 2)
         path[pathSize++] = x; path[pathSize++] = y; path[pathSize++] = r
-        session.add(x, y, r)
-        val changed = session.takeChanged()
-        if (changed.isEmpty()) return
-        val dirty = preview.update(changed)
+        // v1.9 (design 2.4.4): the preview's rebuild is timed as PerfTrace.ERASE_REBUILD.
+        val dirty = PerfTrace.span(PerfTrace.ERASE_REBUILD) {
+            session.add(x, y, r)
+            val changed = session.takeChanged()
+            if (changed.isEmpty()) null else preview.update(changed)
+        } ?: return
         if (!installed) {
             installed = true
             previous = c.renderOverride?.takeIf { it !== preview }

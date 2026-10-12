@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.brushwork.paint.engine.PerfTrace
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,8 +41,11 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     init {
         scope.launch {
             try {
-                val doc = app.repository.load(projectId)
-                val c = EditorController(app, doc, scope, app.settings)
+                // v1.9 (design 2.4.4): opening (loading the files, setting up the editor) as PerfTrace.OPEN.
+                val c = PerfTrace.span(PerfTrace.OPEN) {
+                    val doc = app.repository.load(projectId)
+                    EditorController(app, doc, scope, app.settings)
+                }
                 controller = c
                 state = State.Ready(c)
                 autosaveLoop(c)

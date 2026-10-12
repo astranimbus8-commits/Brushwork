@@ -21,6 +21,7 @@ import android.view.View
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
@@ -303,7 +304,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     // ------------------------------------------------------------------ rendering
 
-    override fun onDraw(canvas: Canvas) {
+    // v1.9 (design 2.4.4): every frame is timed as PerfTrace.FRAME (one volatile read while off).
+    override fun onDraw(canvas: Canvas) = PerfTrace.span(PerfTrace.FRAME) { drawFrame(canvas) }
+
+    private fun drawFrame(canvas: Canvas) {
         canvas.drawColor(backdropColor)
         if (!viewport.hasSize) return
         ensureFitted()

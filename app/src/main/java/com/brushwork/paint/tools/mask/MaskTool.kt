@@ -15,6 +15,7 @@ import com.brushwork.paint.engine.AdjustmentStage
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.MaskCoverageHint
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.PixelEditRecorder
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.filters.FilterRegistry
@@ -567,7 +568,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                 val comp = created(g.kind, g.start, pos, g.compId)
                 g.spec = MaskGeometry.added(g.base, comp)
                 liveSpec = g.spec
-                preview.update(g.spec)
+                PerfTrace.span(PerfTrace.MASK_FRAME) { preview.update(g.spec) }
                 showReadout(MaskHandles.createReadout(comp, controller.increments))
                 flashOverlay()
             }
@@ -587,11 +588,12 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                 } else {
                     null
                 }
-                preview.update(g.spec, moved)
+                PerfTrace.span(PerfTrace.MASK_FRAME) { preview.update(g.spec, moved) }
                 showReadout(MaskHandles.readout(g.startComp, g.handle, comp, g.start, pos, inc))
                 flashOverlay()
             }
-            is Paint -> paintTo(g, pos, p.pressure)
+            // v1.9 (design 2.4.4): each drag frame of a Linear, Radial or Brush mask as PerfTrace.MASK_FRAME.
+            is Paint -> PerfTrace.span(PerfTrace.MASK_FRAME) { paintTo(g, pos, p.pressure) }
             null -> {}
         }
     }

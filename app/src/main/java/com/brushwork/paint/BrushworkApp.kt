@@ -1,9 +1,13 @@
 package com.brushwork.paint
 
 import android.app.Application
+import android.content.ComponentCallbacks2
+import android.content.res.Configuration
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.brushwork.paint.engine.GovernorPolicies
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.storage.ProjectRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +30,20 @@ class BrushworkApp : Application() {
         super.onCreate()
         repository = ProjectRepository(this)
         settings = AppSettings(this)
+        // v1.9 (V28, design 2.4.3): one memory policy for the whole app (v1.8's until A7b).
+        MemoryGovernor.policy = GovernorPolicies.current()
+        registerComponentCallbacks(memoryCallbacks)
+    }
+
+    /** Hands the system's memory requests to [MemoryGovernor]. */
+    private val memoryCallbacks = object : ComponentCallbacks2 {
+        override fun onTrimMemory(level: Int) = MemoryGovernor.onTrimMemory(level)
+
+        override fun onConfigurationChanged(newConfig: Configuration) = Unit
+
+        @Deprecated("Deprecated in Java")
+        @Suppress("DEPRECATION")
+        override fun onLowMemory() = MemoryGovernor.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE)
     }
 
     /** Opens (or returns the already-open) editor session for [projectId]. */

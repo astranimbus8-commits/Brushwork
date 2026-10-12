@@ -19,6 +19,7 @@ import com.brushwork.paint.core.PixelBuffer
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
@@ -450,6 +451,8 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
             if (computingJob === self) computingJob = null
         }
         lastRenderMs = (System.nanoTime() - computeStartNs) / 1_000_000
+        // v1.9 (design 2.4.4): each preview render (renderPreview's and the live ones) as PerfTrace.FILTER_PREVIEW.
+        PerfTrace.record(PerfTrace.FILTER_PREVIEW, System.nanoTime() - computeStartNs)
         if (result == null || isClosed) return
         publishPreview(result, vals, src, selSource)
     }
