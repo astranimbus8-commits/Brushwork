@@ -229,6 +229,94 @@ data class LetterScaleSpec(
     }
 }
 
+/** R4. OFF = v1.8 (ragged by `align`). ON = every line but the last of each paragraph; ALL = the last line too. */
+@Serializable
+enum class TextJustify { OFF, ON, ALL }
+
+/** R5. TextSpec.kerningMode == null is Auto (v1.7/v1.8). Meaningful only while fontKerning is true. */
+@Serializable
+enum class TextKerningMode { OPTICAL, METRICS_LATIN }
+
+/** R7. */
+@Serializable
+enum class TextListType { NONE, BULLETS, NUMBERS }
+
+/** R7: the number style; [sample] is the marker for 1. Chips are found by tag, never by text. */
+@Serializable
+enum class TextNumbering(val sample: String) {
+    DECIMAL_DOT("1."), DECIMAL_PAREN("1)"), DECIMAL_PARENS("(1)"),
+    LOWER_ALPHA("a."), UPPER_ALPHA("A."), LOWER_ROMAN("i."), UPPER_ROMAN("I."), CIRCLED("①"),
+}
+
+/**
+ * R7: one list style for the whole TextItem (and for the whole story of threaded frames). Every
+ * field is never written at its default (I13), so a text without a list encodes as in v1.8.
+ */
+@OptIn(ExperimentalSerializationApi::class)
+@Serializable
+data class TextListSpec(
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val type: TextListType = TextListType.NONE,
+    /** One grapheme. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val bullet: String = "•",
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val numbering: TextNumbering = TextNumbering.DECIMAL_DOT,
+    /** The first number (TextLabels19.FIRST_NUMBER), 0..MAX_START. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val start: Int = 1,
+    /** The marker size (TextLabels19.MARKER_SIZE): 0.5..2.0 of the paragraph's first character size. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val markerScale: Float = 1f,
+    /** The marker thickness (TextLabels19.MARKER_THICKNESS): 0..1; 0 = the font as is, 1 = an outline of 0.08 em in the text colour. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val markerWeight: Float = 0f,
+    /** The marker gap (TextLabels19.MARKER_GAP): 0..3 em between the marker column and the text. */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val gapEm: Float = 0.5f,
+    /** The marker font (TextLabels19.MARKER_FONT), stored like TextSpec's font, fontId and fontName. All null = the text's font (TextLabels19.SAME_AS_TEXT). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val markerFont: TextFont? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val markerFontId: String? = null,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val markerFontName: String? = null,
+) {
+    val isOn: Boolean get() = type != TextListType.NONE
+    val sameFontAsText: Boolean get() = markerFont == null && markerFontId == null
+
+    /**
+     * bullet: its first grapheme, "•" when blank; start: 0..MAX_START; markerScale 0.5..2;
+     * markerWeight 0..1; gapEm 0..3 (non-finite values take the defaults); markerFontId kept only
+     * when FontIds.isValid, else markerFontId and markerFontName are null (a kept name is cleaned
+     * as TextSpec's fontName is). This instance when nothing changes.
+     */
+    fun sanitized(): TextListSpec {
+        fun f(v: Float, default: Float, min: Float, max: Float) = if (v.isFinite()) v.coerceIn(min, max) else default
+        val id = markerFontId?.takeIf { FontIds.isValid(it) }
+        val out = copy(
+            bullet = firstGrapheme(bullet),
+            start = start.coerceIn(0, MAX_START),
+            markerScale = f(markerScale, 1f, MIN_MARKER_SCALE, MAX_MARKER_SCALE),
+            markerWeight = f(markerWeight, 0f, 0f, MAX_MARKER_WEIGHT),
+            gapEm = f(gapEm, 0.5f, 0f, MAX_GAP_EM),
+            markerFontId = id,
+            markerFontName = if (id == null) null else markerFontName?.let { FontIds.cleanName(it) },
+        )
+        return if (out == this) this else out
+    }
+
+    companion object {
+        const val MAX_START = 9999
+        const val MIN_MARKER_SCALE = 0.5f
+        const val MAX_MARKER_SCALE = 2f
+        const val MAX_MARKER_WEIGHT = 1f
+        const val MAX_GAP_EM = 3f
+        const val DEFAULT_BULLET = "•"
+
+        /** The first grapheme cluster of [s] trimmed, or [DEFAULT_BULLET] when [s] is blank. */
+        private fun firstGrapheme(s: String): String {
+            val t = s.trim()
+            if (t.isEmpty()) return DEFAULT_BULLET
+            val it = java.text.BreakIterator.getCharacterInstance()
+            it.setText(t)
+            val end = it.next()
+            val cut = if (end == java.text.BreakIterator.DONE || end <= 0) Character.charCount(t.codePointAt(0)) else end
+            return if (cut >= t.length) t else t.substring(0, cut)
+        }
+    }
+}
+
 /**
  * Appearance of a text object. Sizes are DOCUMENT pixels; [letterSpacing] is in em (fraction of
  * the font size) and [lineSpacing] a multiplier of the font's line height (vertical text: of the
@@ -273,6 +361,15 @@ data class TextSpec(
      * text out without them. Never written when on (I13).
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER) val fontKerning: Boolean = true,
+    /** v1.9 (R4): justified lines; OFF is v1.8. Never written when OFF (I13). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val justify: TextJustify = TextJustify.OFF,
+    /**
+     * v1.9 (R5): the pair-kerning mode while [fontKerning] is on; null is Auto (v1.7/v1.8). Off is
+     * [fontKerning] false, which keeps the stored mode. Never written when null (I13).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val kerningMode: TextKerningMode? = null,
+    /** v1.9 (R7): bullets or numbering; none by default. Never written at its default (I13). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val list: TextListSpec = TextListSpec(),
 ) {
     /** True when the text uses an imported font (which may be missing). */
     val usesImportedFont: Boolean get() = fontId != null
@@ -314,6 +411,9 @@ data class TextSpec(
             fontId = id,
             fontName = if (id == null) null else fontName?.let { FontIds.cleanName(it) },
             letterScale = letterScale.sanitized(),
+            // v1.9: kerningMode is kept as it is, with fontKerning on or off (Off keeps the mode,
+            // R5); v1.8 reads a set mode as Auto while fontKerning is on, and no kerning while off.
+            list = list.sanitized(),
         )
     }
 
@@ -543,6 +643,11 @@ data class TextItem(
      * Never written when empty (I13): such text encodes as in v1.6.
      */
     @EncodeDefault(EncodeDefault.Mode.NEVER) val kerns: List<TextKern> = emptyList(),
+    /**
+     * R14: unique within its layer once the layer holds several items (1..n); 0 = "the only one".
+     * Never written when 0 (I13).
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val id: Int = 0,
 ) {
     /** True for a frame of a linked story (v1.6). */
     val threaded: Boolean get() = thread.isOn
@@ -618,6 +723,11 @@ data class TextItem(
      *
      * v1.7: [kerns] are reduced to usable ones ([TextKern.sanitized]) against the text, or the story
      * of a frame.
+     *
+     * v1.9: a negative [id] becomes 0; the path's flat fields hold the v1.8 fallback of its nodes
+     * ([TextPathSpec.withNodeFallback]); vertical text and text on a path have no list (R7:
+     * `spec.list` back to its default). `spec.justify` is kept on vertical text and on path text,
+     * where the layout ignores it (C23).
      */
     fun sanitized(): TextItem {
         val base = sanitizedNumbers()
@@ -635,7 +745,13 @@ data class TextItem(
         }
         // v1.7: kerns index the story of a frame, the text otherwise.
         val kerns = TextKern.sanitized(item.kerns, if (th.isOn) th.story.length else item.text.length)
-        return if (kerns === item.kerns) item else item.copy(kerns = kerns)
+        val kerned = if (kerns === item.kerns) item else item.copy(kerns = kerns)
+        // v1.9: the node fallback (R12), no list on vertical or path text (R7), ids from 0 (R14).
+        val path = kerned.path.withNodeFallback()
+        val noList = (kerned.spec.vertical || path.isActive) && kerned.spec.list != NO_LIST
+        val id = if (kerned.id < 0) 0 else kerned.id
+        if (path === kerned.path && !noList && id == kerned.id) return kerned
+        return kerned.copy(path = path, spec = if (noList) kerned.spec.copy(list = NO_LIST) else kerned.spec, id = id)
     }
 
     private fun sanitizedNumbers(): TextItem {
@@ -662,6 +778,9 @@ data class TextItem(
     }
 
     companion object {
+        /** v1.9 (R7): the list of a text without one. */
+        private val NO_LIST = TextListSpec()
+
         /** Normalizes an angle to (-180, 180]. */
         fun normalizeDegrees(deg: Float): Float {
             var d = deg % 360f
