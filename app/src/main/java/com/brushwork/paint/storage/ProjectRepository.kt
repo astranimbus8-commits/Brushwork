@@ -3,6 +3,9 @@ package com.brushwork.paint.storage
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Rect
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
@@ -38,13 +41,17 @@ data class ProjectInfo(
     val thumbnail: File?,
 )
 
-/** Parameters of a new blank canvas. [background] null = transparent. */
+/**
+ * Parameters of a new blank canvas. [background] null = transparent. v1.9 (design 2.4.8): [start]
+ * is how the canvas starts ([CanvasCreate]); null = v1.8 ("Background" + "Layer 1").
+ */
 data class NewCanvasSpec(
     val name: String,
     val width: Int,
     val height: Int,
     val dpi: Float,
     val background: Int? = 0xFFFFFFFF.toInt(),
+    val start: CanvasStart? = null,
 )
 
 enum class ExportFormat(val extension: String, val mimeType: String) {
@@ -103,7 +110,8 @@ class ProjectRepository(private val context: Context) {
     /**
      * Creates a project with a "Background" layer (filled with [NewCanvasSpec.background], or
      * transparent) and an empty "Layer 1" on top. Returns the new id. Writes the pixel files
-     * directly, so no full-size bitmaps are allocated.
+     * directly, so no full-size bitmaps are allocated. v1.9 (design 2.4.8): the layers, the active
+     * layer and the paper are [CanvasCreate.seed]'s (v1.8's for every spec in F1b).
      */
     suspend fun create(spec: NewCanvasSpec): String = withContext(Dispatchers.IO) {
         val w = spec.width
@@ -113,11 +121,8 @@ class ProjectRepository(private val context: Context) {
         val dir = dirOf(id)
         try {
             if (!dir.mkdirs()) throw IOException("Could not create the project folder")
-            val background = spec.background ?: 0
-            val bg = ProjectFormat.layerFile(1, 0)
-            val top = ProjectFormat.layerFile(2, 0)
-            LayerCodec.writeRepeatedRow(File(dir, bg), w, h, uniformRow(w, background))
-            LayerCodec.writeRepeatedRow(File(dir, top), w, h, ByteArray(w * 4))
+            val seed = CanvasCreate.seed(spec)
+            val layers = writeSeedLayers(dir, w, h, seed)
             val now = System.currentTimeMillis()
             ProjectFormat.write(
                 dir,
@@ -129,17 +134,15 @@ class ProjectRepository(private val context: Context) {
                     dpi = validDpi(spec.dpi),
                     createdAt = now,
                     modifiedAt = now,
-                    activeLayerIndex = 1,
-                    layers = listOf(
-                        LayerEntryDto(1, "Background", ProjectFormat.defaultProps("Background"), file = bg),
-                        LayerEntryDto(2, "Layer 1", ProjectFormat.defaultProps("Layer 1"), file = top),
-                    ),
+                    activeLayerIndex = seed.activeLayerIndex,
+                    layers = layers,
+                    paper = seed.paper,
                 ),
             )
             val (tw, th) = thumbnailSize(w, h)
             val thumb = Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888)
             try {
-                thumb.eraseColor(background)
+                drawSeedThumbnail(thumb, seed)
                 writeThumbnail(dir, thumb)
             } finally {
                 thumb.recycle()
@@ -157,7 +160,8 @@ class ProjectRepository(private val context: Context) {
      * most 4096 px) with the picture as a "Picture" layer and an empty "Layer 1" above it.
      * Pictures too large for this device's memory are scaled down until at least
      * [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the editor's layer limit uses);
-     * wide-gamut photos are converted to sRGB like every layer.
+     * wide-gamut photos are converted to sRGB like every layer. v1.9 (design 2.4.8): the layers,
+     * the active layer and the paper are [CanvasCreate.seedFromImage]'s (v1.8's in F1b).
      */
     suspend fun createFromImage(uri: Uri): String = withContext(Dispatchers.IO) {
         val maxSide = pictureBounds(uri)?.let { (w, h) ->
@@ -176,32 +180,32 @@ class ProjectRepository(private val context: Context) {
             val dir = dirOf(id)
             try {
                 if (!dir.mkdirs()) throw IOException("Could not create the project folder")
-                val pic = ProjectFormat.layerFile(1, 0)
-                val top = ProjectFormat.layerFile(2, 0)
-                val buffer = ByteArray(LayerCodec.byteLength(w, h))
-                LayerCodec.copyPixels(picture, buffer)
-                LayerCodec.write(File(dir, pic), w, h, buffer)
-                LayerCodec.writeRepeatedRow(File(dir, top), w, h, ByteArray(w * 4))
+                val name = cleanName(displayNameOf(uri) ?: "Imported picture")
+                val seed = CanvasCreate.seedFromImage(picture, name)
+                val layers = writeSeedLayers(dir, w, h, seed)
                 val now = System.currentTimeMillis()
                 ProjectFormat.write(
                     dir,
                     ProjectFileDto(
                         id = id,
-                        name = cleanName(displayNameOf(uri) ?: "Imported picture"),
+                        name = name,
                         width = w,
                         height = h,
                         dpi = 350f,
                         createdAt = now,
                         modifiedAt = now,
-                        activeLayerIndex = 1,
-                        layers = listOf(
-                            LayerEntryDto(1, "Picture", ProjectFormat.defaultProps("Picture"), file = pic),
-                            LayerEntryDto(2, "Layer 1", ProjectFormat.defaultProps("Layer 1"), file = top),
-                        ),
+                        activeLayerIndex = seed.activeLayerIndex,
+                        layers = layers,
+                        paper = seed.paper,
                     ),
                 )
                 val (tw, th) = thumbnailSize(w, h)
-                val thumb = if (tw == w && th == h) picture else Bitmap.createScaledBitmap(picture, tw, th, true)
+                // v1.8: the picture is the thumbnail; a seed with a paper (A8) draws it underneath.
+                val thumb = when {
+                    seed.paper != null -> Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888).also { drawSeedThumbnail(it, seed) }
+                    tw == w && th == h -> picture
+                    else -> Bitmap.createScaledBitmap(picture, tw, th, true)
+                }
                 try {
                     writeThumbnail(dir, thumb)
                 } finally {
@@ -452,6 +456,50 @@ class ProjectRepository(private val context: Context) {
     private fun validDpi(dpi: Float): Float = if (dpi.isFinite() && dpi >= 1f) dpi else 350f
 
     /** One row of `width` pixels of [color] in the bitmap's raw (premultiplied) byte layout. */
+    /**
+     * v1.9 (design 2.4.8): writes [seed]'s layers as the pixel files of a new project in [dir]
+     * (ids 1, 2, ... bottom first, revision 0, as v1.8 numbered them) and returns their entries.
+     * A filled layer is written row by row, so no full-size bitmap is allocated (v1.8).
+     */
+    private fun writeSeedLayers(dir: File, w: Int, h: Int, seed: CanvasCreate.Seed): List<LayerEntryDto> =
+        seed.layers.mapIndexed { i, layer ->
+            val layerId = i + 1L
+            val file = ProjectFormat.layerFile(layerId, 0)
+            val picture = layer.picture
+            if (picture != null) {
+                val buffer = ByteArray(LayerCodec.byteLength(w, h))
+                LayerCodec.copyPixels(picture, buffer)
+                LayerCodec.write(File(dir, file), w, h, buffer)
+            } else {
+                LayerCodec.writeRepeatedRow(File(dir, file), w, h, uniformRow(w, layer.fill))
+            }
+            LayerEntryDto(layerId, layer.name, ProjectFormat.defaultProps(layer.name), file = file)
+        }
+
+    /**
+     * v1.9 (design 2.4.8): [seed]'s look in [thumb]. Without a paper and with at most one filled
+     * layer (and no picture), v1.8's single erase with that fill (or transparent); otherwise the
+     * paper, then each layer bottom first.
+     */
+    private fun drawSeedThumbnail(thumb: Bitmap, seed: CanvasCreate.Seed) {
+        val fills = seed.layers.filter { it.picture == null && it.fill != 0 }
+        if (seed.paper == null && fills.size <= 1 && seed.layers.none { it.picture != null }) {
+            thumb.eraseColor(fills.firstOrNull()?.fill ?: 0)
+            return
+        }
+        val canvas = Canvas(thumb)
+        seed.paper?.let { canvas.drawColor(it.color) }
+        val paint = Paint(Paint.FILTER_BITMAP_FLAG)
+        val dst = Rect(0, 0, thumb.width, thumb.height)
+        for (layer in seed.layers) {
+            val picture = layer.picture
+            when {
+                picture != null -> canvas.drawBitmap(picture, null, dst, paint)
+                layer.fill != 0 -> canvas.drawColor(layer.fill)
+            }
+        }
+    }
+
     private fun uniformRow(width: Int, color: Int): ByteArray {
         val row = ByteArray(width * 4)
         if (color == 0) return row
