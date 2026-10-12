@@ -422,7 +422,15 @@ class LabelsV19Test {
          * The `allowed` pairs of 2.3.6: "Bevel" is the Shape cog's corner style and "Bevel points"
          * shows only in Points mode; "Add points" is on the text path sheet and "Add point" on the
          * node bar that replaces it.
+         * F1a adds three, where both texts are controls (the lead's ruling: a button label is never
+         * reworded) and tests find the v1.9 one by its tag: the export sheet's hidden-layers chip
+         * "Include" and the paper switch; the Settings section "Backup" and its folder row; the
+         * kerning chip "Off" (V19Tags.KERN_PREFIX) and the letter-scale row's value "Off" on the
+         * text dialog.
          */
-        val allowed: Set<Pair<String, String>> = setOf("Bevel" to "Bevel points", "Add point" to "Add points")
+        val allowed: Set<Pair<String, String>> = setOf(
+            "Bevel" to "Bevel points", "Add point" to "Add points",
+            "Include" to "Include paper", "Backup" to "Backup folder…", "Off" to "Off",
+        )
     }
 }
