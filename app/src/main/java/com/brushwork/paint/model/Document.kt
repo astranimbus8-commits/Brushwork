@@ -237,6 +237,13 @@ class Document(
     var symmetry: SymmetrySettings = SymmetrySettings()
 
     /**
+     * R15: null = no paper (v1.8). Set at creation only; part of no undo step. Persisted
+     * (`project.json` `paper`); drawn under the layers by `PaperBackdrop` only, never into a
+     * layer (I21).
+     */
+    var paper: PaperSpec? = null
+
+    /**
      * Problems found while loading that did not stop the project from opening (a layer's vector
      * or mask data could not be read, an unknown adjustment effect...). The editor shows them
      * once; main thread only.

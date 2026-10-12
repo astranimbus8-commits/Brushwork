@@ -6,6 +6,7 @@ import com.brushwork.paint.model.GridSettings
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.PaperSpec
 import com.brushwork.paint.model.RulerSettings
 import com.brushwork.paint.model.SymmetrySettings
 import kotlinx.serialization.EncodeDefault
@@ -53,6 +54,8 @@ internal data class ProjectFileDto(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val symmetry: SymmetrySettings = SymmetrySettings(),
     /** v1.7 (item 14): the id the next saved selection gets (ids are never reused). */
     @EncodeDefault(EncodeDefault.Mode.NEVER) val nextSelectionId: Long = 1L,
+    /** v1.9 (R15): the paper under the artwork (`Document.paper`); null = none, never written (I13). */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val paper: PaperSpec? = null,
 )
 
 @OptIn(ExperimentalSerializationApi::class)

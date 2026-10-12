@@ -5,6 +5,7 @@ import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.FolderSpec
 import com.brushwork.paint.model.LayerProps
+import com.brushwork.paint.model.PaperSpec
 import com.brushwork.paint.vector.VectorCodec
 import com.brushwork.paint.vector.VectorContent
 import kotlinx.serialization.EncodeDefault
@@ -25,6 +26,7 @@ import java.util.zip.Inflater
  * already holds (the SVG element id of an image, the PDF object number of an image XObject), and
  * vector layers are rendered again from their objects. Pure Kotlin.
  */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class BrushworkPayload(
     /**
@@ -41,6 +43,11 @@ data class BrushworkPayload(
     val activeLayer: Int = 0,
     /** Bottom first, hidden layers included. */
     val layers: List<PayloadLayer> = emptyList(),
+    /**
+     * v1.9 (R15): the artwork's paper (`Document.paper`), so a Brushwork SVG or PDF round trip
+     * keeps it; null = none, never written (I13). It does not change [Payload.writtenVersion].
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val paper: PaperSpec? = null,
 )
 
 /** What kind of layer a [PayloadLayer] restores. */

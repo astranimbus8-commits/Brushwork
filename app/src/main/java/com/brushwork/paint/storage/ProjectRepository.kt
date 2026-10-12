@@ -255,6 +255,7 @@ class ProjectRepository(private val context: Context) {
         LayerEntries.readLayers(dir, dto, doc)
         LayerEntries.readSelections(dir, dto, doc)
         doc.symmetry = dto.symmetry.sanitized()
+        doc.paper = dto.paper
         doc.activeLayerIndex = dto.activeLayerIndex.coerceIn(0, doc.layers.lastIndex)
         for (layer in doc.layers) layer.savedVersion = layer.contentVersion
         return doc
@@ -297,6 +298,7 @@ class ProjectRepository(private val context: Context) {
                 revision = revision,
                 symmetry = doc.symmetry,
                 nextSelectionId = doc.nextSelectionId,
+                paper = doc.paper,
             )
             // Layer entries: LayerEntries.Writer (v1.7 X3). Null = the document was resized
             // while we were writing: the next save retries.
