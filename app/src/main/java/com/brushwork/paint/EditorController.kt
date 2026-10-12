@@ -34,6 +34,7 @@ import com.brushwork.paint.engine.EditInvalidation
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LambdaAction
+import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerDataAction
 import com.brushwork.paint.engine.LayerMerge
 import com.brushwork.paint.engine.LayerPropsAction
@@ -82,12 +83,10 @@ import com.brushwork.paint.tools.select.SelectionOutline
 import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
-import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.vector.LayerDataTransforms
-import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
@@ -1386,12 +1385,22 @@ class EditorController(
         true
     }
 
-    /** Sets [after] as [layer]'s data with a data-only undo step (nothing when unchanged). */
-    private fun storeData(layer: Layer, before: LayerData, after: LayerData, label: String, target: EditTarget) {
+    /**
+     * Sets [after] as [layer]'s data with a data-only undo step (nothing when unchanged). v1.9
+     * (design 2.4.7): [record] receives the step (`LayerConvert` folds it into the caller's own).
+     */
+    internal fun storeData(
+        layer: Layer,
+        before: LayerData,
+        after: LayerData,
+        label: String,
+        target: EditTarget,
+        record: (UndoAction) -> Unit = ::pushUndo,
+    ) {
         if (before == after) return
         layer.restoreData(after)
         layer.markChanged()
-        pushUndo(LayerDataAction(label, layer, before, after))
+        record(LayerDataAction(label, layer, before, after))
         notifyLayersChanged()
         queueEdit(EditEvent(layer, target, null, label))
     }
@@ -1936,14 +1945,21 @@ class EditorController(
     }
 
     /** Applies property changes with undo. Use [previewLayerProps] for live slider dragging. */
-    fun setLayerProps(layer: Layer, props: LayerProps, label: String = "Layer properties") {
+    fun setLayerProps(layer: Layer, props: LayerProps, label: String = "Layer properties") =
+        applyLayerProps(layer, props, label, ::pushUndo)
+
+    /**
+     * [setLayerProps] whose undo action goes to [record] instead of being pushed (v1.9, design
+     * 2.4.7: `LayerConvert` folds it into the caller's own step). Nothing when unchanged.
+     */
+    internal fun applyLayerProps(layer: Layer, props: LayerProps, label: String, record: (UndoAction) -> Unit) {
         val before = layer.props()
         if (before == props) return
         // A live edit still on its way (a vector render in the background) lands BEFORE the
         // layer is hidden or locked: afterwards it would be refused there and lost (v1.5 QA).
         if (editDepth == 0) flushDeferredSteps()
         structural { layer.copyPropsFrom(props) }
-        pushUndo(LayerPropsAction(layer, before, props, label))
+        record(LayerPropsAction(layer, before, props, label))
     }
 
     /** Applies props WITHOUT undo (live preview). Finish with [setLayerProps] from the original. */
@@ -2626,10 +2642,11 @@ class EditorController(
 
     /**
      * Adds an empty vector layer above the active one ("Vector N" unless [name]) as one undo step
-     * [label]. Returns null at the layer limit.
+     * [label]. Returns null at the layer limit. v1.9 (design 2.4.7): [baseName] names it when
+     * [name] is null ("[baseName] N", e.g. A1's "Curves N").
      */
-    fun addVectorLayer(name: String? = null, label: String = "Add vector layer"): Layer? =
-        addLayerWith(name ?: uniqueLayerName("Vector ${doc.layers.count { it.isVectorLayer } + 1}"), null, label) { it.vector = VectorContent.EMPTY }
+    fun addVectorLayer(name: String? = null, label: String = "Add vector layer", baseName: String = "Vector"): Layer? =
+        addLayerWith(name ?: uniqueLayerName("$baseName ${doc.layers.count { it.isVectorLayer } + 1}"), null, label) { it.vector = VectorContent.EMPTY }
 
     /**
      * Turns [layer] into a vector layer in place as one undo step [label]: an empty plain layer
@@ -2641,22 +2658,16 @@ class EditorController(
         commitToolWork()
         if (doc.indexOf(layer) < 0 || layer.isVectorLayer) return false
         if (!checkUsable(layer)) return false
-        val before = layer.dataSnapshot()
         val content: VectorContent = when {
-            layer.isShapeLayer -> {
-                val shape = ShapeCodec.decode(layer.shapeData) ?: run { toast("This shape can't be converted"); return false }
-                // v1.8 (I15): the shape's live copies stay its copies (`ShapeObject.copies` goes with it).
-                VectorContent.EMPTY.plus(listOf(VShape(id = 0, shape = shape))).first
-            }
+            // v1.8 (I15): the shape's live copies stay its copies (`ShapeObject.copies` goes with it).
+            layer.isShapeLayer -> LayerConvert.shapeToVector(layer) ?: run { toast("This shape can't be converted"); return false }
             isEmptyPlainLayer(layer) -> VectorContent.EMPTY
             else -> { toast("Only empty layers and shape layers can become vector layers"); return false }
         }
-        val after = before.copy(text = null, shape = null, vector = content)
         val newName = Regex("Layer (\\d+)").matchEntire(layer.name)?.let { uniqueLayerName("Vector ${it.groupValues[1]}") }
-        groupUndo(label) {
-            if (newName != null) setLayerProps(layer, layer.props().copy(name = newName), label)
-            setLayerData(layer, after, label)
-        }
+        // v1.9 (design 2.4.7): the conversion itself is LayerConvert's (A4, A5 and A9 fold it into
+        // their own steps through LayerConvert.toVectorAction); here its two actions are pushed as in v1.8.
+        groupUndo(label) { LayerConvert.convert(this, layer, content, newName, label, ::pushUndo) }
         return layer.isVectorLayer
     }
 
