@@ -30,10 +30,12 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.DisplayTiles
+import com.brushwork.paint.engine.EditInvalidation
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.FolderComposite
 import com.brushwork.paint.engine.LambdaAction
 import com.brushwork.paint.engine.LayerDataAction
+import com.brushwork.paint.engine.LayerMerge
 import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
@@ -726,7 +728,7 @@ class EditorController(
      * pressed a moment ago); otherwise nothing, so an operation that records no step (switching
      * layers, painting the mask) never waits for a render still running in the background.
      */
-    private fun settleQueuedVectorWork() {
+    internal fun settleQueuedVectorWork() {
         if (PendingRenders.hasWaiting(this)) settleVectorWork()
     }
 
@@ -1128,8 +1130,17 @@ class EditorController(
      * action, marks the layer changed and redraws. Returns false if nothing was touched. Editable
      * data the edit made stale is cleared in the same step (see [rasterizeDataAction]); edit
      * listeners hear about it (see [editScope]).
+     *
+     * v1.9 (design 2.4.5) [displayCurrent]: the canvas already shows the result (A6's drawing
+     * preview, I25), so nothing is redrawn ([EditInvalidation.afterCommit]); false (v1.8) redraws
+     * the touched area.
      */
-    fun commitEdit(recorder: PixelEditRecorder, label: String, extraActions: List<UndoAction> = emptyList()): Boolean = editScope {
+    fun commitEdit(
+        recorder: PixelEditRecorder,
+        label: String,
+        extraActions: List<UndoAction> = emptyList(),
+        displayCurrent: Boolean = false,
+    ): Boolean = editScope {
         if (recorder.isEmpty) return@editScope false
         val rect = Rect(recorder.touched)
         if (recorder.target == EditTarget.CONTENT && doc.colorMode != ColorMode.RGB) {
@@ -1144,7 +1155,7 @@ class EditorController(
         pushUndo(if (all.size == 1) action else CompositeAction(label, all))
         recorder.layer.markChanged()
         layersVersion++
-        invalidateDoc(rect)
+        EditInvalidation.afterCommit(rect, displayCurrent)?.let { invalidateDoc(it) }
         queueEdit(EditEvent(recorder.layer, recorder.target, rect, label))
         true
     }
@@ -1197,7 +1208,7 @@ class EditorController(
      * Commits/pauses the current tool around a layer operation (onDeactivate before, onActivate
      * after), so pending work is baked in first and the tool re-targets the active layer after.
      */
-    private inline fun <T> withToolPaused(block: () -> T): T {
+    internal inline fun <T> withToolPaused(block: () -> T): T {
         // Object edits queued behind a vector render (v1.5) land first, while the tool is still
         // active: one of them may lift its objects again, which the pause then commits or lets go
         // (never a lift of the content as it was before this operation, left open across it).
@@ -1554,78 +1565,13 @@ class EditorController(
         moveBlock(layer, unit.first + (b.last - b.first), layer.parentId)
     }
 
+    /**
+     * v1.9 (design 2.4.6): "Merge down" lives in [LayerMerge] (A4); this delegate keeps the callers.
+     */
+    internal val layerMerge = LayerMerge(this)
+
     /** Merges [layer] into the layer below it (v1.7: its sibling below; a folder merges as "Merge folder"). */
-    fun mergeDown(layer: Layer = activeLayer) {
-        if (layer.isFolder) { mergeFolder(layer); return }
-        val idx = doc.indexOf(layer)
-        val lower = siblingBelow(idx)
-        if (lower == null) { toast("There is no layer below to merge into"); return }
-        if (lower.isFolder) { toast(FolderLabels.MERGE_INTO_REFUSAL); return }
-        // An adjustment layer has no pixels to receive the merge (its effect on the layers below
-        // would be lost); merging one DOWN applies its effect.
-        if (lower.isAdjustmentLayer) { toast("Layers can't be merged into an adjustment layer"); return }
-        withToolPaused { mergeDownNow(layer) }
-    }
-
-    /** The layer directly below the row at [idx] at its own level (v1.6: `layers[idx - 1]`), or null. */
-    private fun siblingBelow(idx: Int): Layer? {
-        if (idx <= 0 || idx > doc.layers.lastIndex) return null
-        return doc.layers[idx - 1].takeIf { it.parentId == doc.layers[idx].parentId }
-    }
-
-    private fun mergeDownNow(layer: Layer) {
-        val idx = doc.indexOf(layer)
-        val lower = siblingBelow(idx) ?: return
-        if (lower.isAdjustmentLayer || lower.isFolder) return
-        editScope { mergeDownInto(layer, idx, lower) }
-    }
-
-    private fun mergeDownInto(layer: Layer, idx: Int, lower: Layer) {
-        // Two vector layers can keep their objects (A1); otherwise the result is pixels.
-        if (layer.isVectorLayer && lower.isVectorLayer && VectorLayerOps.mergeVector(this, layer, lower)) {
-            queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
-            return
-        }
-        // Flatten lower (+ its mask, opacity) and upper (with blend, opacity, mask, clipping) via a
-        // temporary two-layer document so the result matches what's on screen. When both clip to
-        // the same base further down, the upper one is simply drawn over the lower one here (the
-        // merged layer keeps the lower layer's clipping). The views carry the adjustment and mask
-        // specs: merging an adjustment layer down applies its effect to the layer below.
-        val tmpDoc = Document("merge", "merge", doc.width, doc.height)
-        val lowerView = Layer(-1, lower.name, lower.bitmap).also {
-            it.copyPropsFrom(lower.props().copy(blendMode = LayerBlendMode.NORMAL, visible = true, clipping = false))
-            it.mask = lower.mask
-            it.maskSpec = lower.maskSpec
-            it.adjustment = lower.adjustment
-        }
-        val upperView = Layer(-2, layer.name, layer.bitmap).also {
-            it.copyPropsFrom(layer.props().copy(visible = true, clipping = layer.clipping && !lower.clipping))
-            it.mask = layer.mask
-            it.maskSpec = layer.maskSpec
-            it.adjustment = layer.adjustment
-        }
-        tmpDoc.layers += lowerView
-        tmpDoc.layers += upperView
-        val merged = Compositor(tmpDoc) { null }.renderFlattened()
-        val beforeBmp = lower.bitmap; val beforeMask = lower.mask; val beforeProps = lower.props()
-        val dataBefore = lower.dataSnapshot()
-        // The merged pixels are plain pixels: no editable data, no mask.
-        val dataAfter = LayerData.NONE
-        val afterProps = beforeProps.copy(opacity = 1f, maskEnabled = true)
-        val replace = LambdaAction("Merge down", byteSize = beforeBmp.byteCount.toLong() + (beforeMask?.byteCount ?: 0),
-            onUndo = { c -> c.structural { lower.bitmap = beforeBmp; lower.mask = beforeMask; lower.restoreData(dataBefore); lower.copyPropsFrom(beforeProps); lower.markChanged() } },
-            onRedo = { c -> c.structural { lower.bitmap = merged; lower.mask = null; lower.restoreData(dataAfter); lower.editingMask = false; lower.copyPropsFrom(afterProps); lower.markChanged() } },
-        )
-        val remove = RemoveLayerAction(layer, idx, "Merge down")
-        replace.redo(this)
-        remove.redo(this)
-        structural { doc.activeLayerIndex = doc.indexOf(lower) }
-        pushUndo(CompositeAction("Merge down", listOf(replace, remove)))
-        // A committed edit of the lower layer (text wrapped around it re-flows).
-        queueEdit(EditEvent(lower, EditTarget.CONTENT, null, "Merge down"))
-        // v1.6: the upper layer left the stack (a linked text frame heals).
-        queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
-    }
+    fun mergeDown(layer: Layer = activeLayer) = layerMerge.mergeDown(layer)
 
     // ------------------------------------------------------------------ layer tree (v1.7, item 8)
 

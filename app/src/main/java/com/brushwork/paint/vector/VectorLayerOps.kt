@@ -48,6 +48,22 @@ object VectorLayerOps {
     }
 
     /**
+     * v1.9 (design 2.4.6): true when [mergeVector] keeps the objects of [upper] and [lower] (its
+     * guard, before it waits for pending renders): two vector layers without live arrays, [upper]
+     * right above [lower], Normal, 100 %, without mask, not clipping, [lower] at 100 % without mask,
+     * neither an adjustment layer. `LayerMerge.kindOf` asks it.
+     */
+    internal fun mergesAsObjects(c: EditorController, upper: Layer, lower: Layer): Boolean {
+        if (upper.vector == null || lower.vector == null) return false
+        if (upper.array != null || lower.array != null) return false
+        if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.mask != null || upper.maskSpec != null ||
+            upper.clipping || upper.adjustment != null) return false
+        if (lower.opacity < 1f || lower.mask != null || lower.maskSpec != null || lower.adjustment != null) return false
+        val idx = c.doc.indexOf(upper)
+        return idx > 0 && c.doc.layers[idx - 1] === lower
+    }
+
+    /**
      * Merges the vector layer [upper] into the vector layer [lower] right below it by
      * concatenating their objects ([upper]'s on top, with new ids): both stay editable. Only when
      * the result looks the same: [upper] Normal, 100 %, without mask and not clipping, [lower] at
@@ -60,12 +76,7 @@ object VectorLayerOps {
     fun mergeVector(c: EditorController, upper: Layer, lower: Layer): Boolean {
         val uc = upper.vector ?: return false
         val lc = lower.vector ?: return false
-        if (upper.array != null || lower.array != null) return false
-        if (upper.blendMode != LayerBlendMode.NORMAL || upper.opacity < 1f || upper.mask != null || upper.maskSpec != null ||
-            upper.clipping || upper.adjustment != null) return false
-        if (lower.opacity < 1f || lower.mask != null || lower.maskSpec != null || lower.adjustment != null) return false
-        val idx = c.doc.indexOf(upper)
-        if (idx <= 0 || c.doc.layers[idx - 1] !== lower) return false
+        if (!mergesAsObjects(c, upper, lower)) return false
         c.vectors.flushPending()
         if (upper.vector !== uc || lower.vector !== lc) return false
         val merged = lc.plus(uc.objects).first
