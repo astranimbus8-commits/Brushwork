@@ -326,6 +326,9 @@ class ExchangeUiState(
         val target = target().let { it.copy(room = it.room + replace.size, colorMode = mode ?: it.colorMode) }
         val prepared = withContext(Dispatchers.IO) { PayloadImport.prepare(payload, images, target) }
         stopIfCancelled(prepared.layers)
+        // v1.9 (design 2.4.9, R15): a new artwork made for the file takes its paper, outside the
+        // import's undo step (I21: undoing the import leaves the paper); a file without one has none (v1.8).
+        if (newArtwork) controller.doc.paper = payload.paper
         report(PayloadImport.apply(controller, prepared, replace, mode))
     }
 

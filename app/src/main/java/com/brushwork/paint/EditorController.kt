@@ -83,10 +83,12 @@ import com.brushwork.paint.tools.select.SelectionOutline
 import com.brushwork.paint.tools.text.TextWrapReflow
 import com.brushwork.paint.tools.text.frames.TextThreads
 import com.brushwork.paint.tools.transform.TransformTool
+import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
 import com.brushwork.paint.vector.LayerDataTransforms
+import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
 import com.brushwork.paint.vector.VectorLayers
@@ -2782,5 +2784,16 @@ class EditorController(
          * v1.6: Path too; not Text frames (its drags must never turn into picks).
          */
         val HOLD_PICK_TOOLS = setOf(ToolId.BRUSH, ToolId.FILL, ToolId.SHAPE, ToolId.CURVE, ToolId.POLYLINE, ToolId.TEXT, ToolId.PATH)
+
+        /**
+         * A shape layer's shape as one VShape of a vector layer (the body of v1.9's
+         * `LayerConvert.shapeToVector`); null when its data does not decode. v1.8 (I15): the
+         * shape's live copies stay its copies (`ShapeObject.copies` goes with it). It stays in this
+         * file, the conversion's reader in `CopiesReadersAuditTest`'s list.
+         */
+        internal fun shapeLayerVector(layer: Layer): VectorContent? {
+            val shape = ShapeCodec.decode(layer.shapeData) ?: return null
+            return VectorContent.EMPTY.plus(listOf(VShape(id = 0, shape = shape))).first
+        }
     }
 }

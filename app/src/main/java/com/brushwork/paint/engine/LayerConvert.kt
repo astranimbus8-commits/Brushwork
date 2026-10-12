@@ -2,8 +2,6 @@ package com.brushwork.paint.engine
 
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
-import com.brushwork.paint.tools.vector.ShapeCodec
-import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
 
 /**
@@ -20,11 +18,8 @@ object LayerConvert {
      * v1.8 I15: its live copies stay its copies); null for any other layer or a shape that does not
      * decode. Pure.
      */
-    fun shapeToVector(layer: Layer): VectorContent? {
-        if (!layer.isShapeLayer) return null
-        val shape = ShapeCodec.decode(layer.shapeData) ?: return null
-        return VectorContent.EMPTY.plus(listOf(VShape(id = 0, shape = shape))).first
-    }
+    fun shapeToVector(layer: Layer): VectorContent? =
+        if (!layer.isShapeLayer) null else EditorController.shapeLayerVector(layer)
 
     /**
      * Converts [layer] in place without an undo step and returns the action that undoes it, for the

@@ -414,12 +414,15 @@ class ProjectRepository(private val context: Context) {
         try { exportForShare(flat, name, format) } finally { flat.recycle() }
     }
 
-    /** Full-resolution flattened image of a stored project. The caller recycles it. */
+    /**
+     * Full-resolution flattened image of a stored project. The caller recycles it. v1.9 (design
+     * 2.4.9): on its paper, if any, like the editor's export and share.
+     */
     private suspend fun renderFlattened(id: String): Pair<Bitmap, String> {
         val doc = load(id)
         return withContext(Dispatchers.Default) {
             try {
-                Compositor(doc) { null }.renderFlattened() to doc.name
+                Compositor(doc) { null }.renderFlattened(withPaper = true) to doc.name
             } finally {
                 for (layer in doc.layers) { layer.recycleBitmaps(); layer.array?.pixels?.bitmap?.recycle() }
             }

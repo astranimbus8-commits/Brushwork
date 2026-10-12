@@ -14,6 +14,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeAction
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.FolderComposite
+import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.model.ColorMode
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
@@ -118,7 +119,8 @@ object SelectionEdits {
             val doc = controller.doc
             val w = doc.width; val h = doc.height
             val base = controller.selection
-            val flat = controller.compositor.renderFlattened(background = 0xFFFFFFFF.toInt())
+            // v1.9 (design 2.4.9): over the paper when the artwork has one, else white (v1.8).
+            val flat = controller.compositor.renderFlattened(background = PaperBackdrop.sampleColor(doc) ?: 0xFFFFFFFF.toInt())
             val (fresh, combined) = withContext(Dispatchers.Default) {
                 val buffer = try { BitmapUtils.toPixelBuffer(flat) } finally { flat.recycle() }
                 val conf = SegmentationService.get(controller.appContext).segment(buffer, target)

@@ -112,7 +112,8 @@ internal object PixelSnapshot {
      * MUST be called on the main thread; the caller recycles the result.
      */
     fun take(controller: EditorController, source: SampleSource, layerBitmap: Bitmap): Bitmap =
-        if (source == SampleSource.CANVAS || layerBitmap === Layer.FOLDER_BITMAP) controller.compositor.renderFlattened()
+        // v1.9 (design 2.4.9): the composite on the paper, if any, as the Color select proxy sees it.
+        if (source == SampleSource.CANVAS || layerBitmap === Layer.FOLDER_BITMAP) controller.compositor.renderFlattened(withPaper = true)
         else layerBitmap.copy(Bitmap.Config.ARGB_8888, false)
 
     /**

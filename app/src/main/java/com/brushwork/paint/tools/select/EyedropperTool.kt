@@ -11,6 +11,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.CompositeTarget
+import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
@@ -128,7 +129,8 @@ class EyedropperTool(controller: EditorController) : Tool(controller) {
             if (!patchRect.contains(r)) return null
             patch.getPixels(pixels, 0, w, r.left - patchRect.left, r.top - patchRect.top, w, h)
         }
-        return averageOpaque(pixels, w * h)
+        // v1.9 (design 2.4.9): the canvas shows the paper under transparent pixels (none while doc.paper == null).
+        return averageOpaque(pixels, w * h) ?: if (layerSource) null else PaperBackdrop.sampleColor(doc)
     }
 
     /** Flattens the document area around ([cx], [cy]) into [patch] (no tool previews). */

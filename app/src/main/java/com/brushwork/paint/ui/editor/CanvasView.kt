@@ -21,6 +21,7 @@ import android.view.View
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.TransparencyDisplay
 import com.brushwork.paint.tools.ToolId
@@ -331,6 +332,14 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         }
         // v1.6: transparency as the layer window's squares say (a view preference only, I5).
         if (checkerMode != TransparencyDisplay.NONE) canvas.drawPath(docPath, checkerPaint)
+        // v1.9 (design 2.4.9, C16): the paper under the document, over the squares (none while
+        // doc.paper == null, v1.8).
+        if (doc.paper != null) {
+            val paperSave = canvas.save()
+            canvas.concat(controller.viewTransform.matrix)
+            PaperBackdrop.draw(canvas, doc)
+            canvas.restoreToCount(paperSave)
+        }
 
         // Composite tiles under the view matrix (v1.6: a live adjustment session draws the frame
         // itself, from its proxy tiles, while it runs).

@@ -15,6 +15,7 @@ import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.CompositeTarget
 import com.brushwork.paint.engine.Compositor
 import com.brushwork.paint.engine.FolderComposite
+import com.brushwork.paint.engine.PaperBackdrop
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.exchange.image.ArgbImage
 import com.brushwork.paint.model.ArrayCodec
@@ -200,17 +201,22 @@ class ExportSceneBuilder(
                 entries += payloadLayer(layer, ownImage, ownMask, payloadImages)
                 yield()
             }
+            // v1.9 (design 2.4.9, R15): the paper travels with the payload (never written without one, I13).
             payload = BrushworkPayload(
                 width = w, height = h, dpi = doc.dpi, colorMode = doc.colorMode,
                 activeLayer = doc.activeLayerIndex.coerceIn(0, max(0, layers.lastIndex)), layers = entries,
+                paper = doc.paper,
             )
         }
 
         // Vector objects become items off the main thread (immutable data only).
         val sceneLayers = withContext(renderDispatcher) { plans.mapNotNull { sceneLayer(it) } }
+        // v1.9 (design 2.4.9): the paper (with "Include paper") is the background rectangle, under
+        // which a white background would not show; v1.8 without a paper.
+        val paper = if (options.includePaper) PaperBackdrop.sampleColor(doc) else null
         return ExportScene(
             w, h, doc.dpi, doc.name,
-            if (options.whiteBackground) 0xFFFFFFFF.toInt() else null,
+            paper ?: if (options.whiteBackground) 0xFFFFFFFF.toInt() else null,
             sceneLayers, payload, payloadImages, notes.toList(),
         )
     }

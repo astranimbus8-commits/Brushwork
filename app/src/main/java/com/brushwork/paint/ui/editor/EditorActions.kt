@@ -56,7 +56,8 @@ internal class EditorActions(private val controller: EditorController, private v
             letOverlayShow()
             commitPendingWork()
             // JPEG has no alpha: flatten over white like other painting apps.
-            val flat = controller.compositor.renderFlattened(if (format == ExportFormat.JPEG) 0xFFFFFFFF.toInt() else null)
+            // v1.9 (design 2.4.9): on the paper when the artwork has one (it is drawn first, so the white does not show).
+            val flat = controller.compositor.renderFlattened(if (format == ExportFormat.JPEG) 0xFFFFFFFF.toInt() else null, withPaper = true)
             val uri = try {
                 app.repository.exportToGallery(flat, controller.doc.name, format)
             } finally {
@@ -72,7 +73,7 @@ internal class EditorActions(private val controller: EditorController, private v
         controller.runBusy("Preparing to share") {
             letOverlayShow()
             commitPendingWork()
-            val flat = controller.compositor.renderFlattened()
+            val flat = controller.compositor.renderFlattened(withPaper = true) // v1.9 (design 2.4.9): on the paper, if any
             val uri = try {
                 app.repository.exportForShare(flat, controller.doc.name, ExportFormat.PNG)
             } finally {

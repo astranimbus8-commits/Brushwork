@@ -257,14 +257,19 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      * the canvas shows transparency): an effect never changes it, so a JPG export of an Invert or
      * Tone adjustment over transparent areas stays [background] there, as on the canvas. Without
      * one the drawing is exactly v1.4's (I5).
+     *
+     * v1.9 (design 2.4.9, C16): [withPaper] (every flattened raster export and share, and canvas
+     * sampling) puts the document's paper ([PaperBackdrop]) under the artwork in place of
+     * [background], as the canvas shows it; the same as v1.8 while `doc.paper == null`.
      */
-    fun renderFlattened(background: Int? = null): Bitmap {
+    fun renderFlattened(background: Int? = null, withPaper: Boolean = false): Bitmap {
+        val bg = if (withPaper) PaperBackdrop.sampleColor(doc) ?: background else background
         val out = BitmapUtils.createLayerBitmap(doc.width, doc.height)
         val c = Canvas(out)
-        val matte = background != null && hasLiveAdjustment()
-        if (background != null && !matte) c.drawColor(background)
+        val matte = bg != null && hasLiveAdjustment()
+        if (bg != null && !matte) c.drawColor(bg)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget.identity(out))
-        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
+        if (matte) c.drawColor(bg, PorterDuff.Mode.DST_OVER)
         return out
     }
 
@@ -274,12 +279,17 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
      */
     private fun hasLiveAdjustment(): Boolean = doc.layers.any { it.isAdjustmentLayer && doc.effectiveVisible(it) && it.opacity > 0f }
 
-    /** Flattened image scaled to fit in [maxSize] x [maxSize]. */
+    /**
+     * Flattened image scaled to fit in [maxSize] x [maxSize]. v1.9 (design 2.4.9, C16): on the
+     * document's paper ([PaperBackdrop]) when it has one (gallery and save thumbnails, the Color
+     * select proxy), else on [background] as in v1.8.
+     */
     fun renderThumbnail(maxSize: Int, background: Int? = null): Bitmap {
+        val bg = PaperBackdrop.sampleColor(doc) ?: background
         val s = minOf(1f, maxSize.toFloat() / max(doc.width, doc.height))
         val w = max(1, (doc.width * s).roundToInt()); val h = max(1, (doc.height * s).roundToInt())
         if (s >= 0.5f) {
-            val full = renderFlattened(background)
+            val full = renderFlattened(bg)
             if (s >= 1f) return full
             val scaled = Bitmap.createScaledBitmap(full, w, h, true)
             full.recycle()
@@ -290,15 +300,15 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val w2 = max(1, (doc.width * s2).roundToInt()); val h2 = max(1, (doc.height * s2).roundToInt())
         val mid = BitmapUtils.createLayerBitmap(w2, h2)
         val c = Canvas(mid)
-        val matte = background != null && hasLiveAdjustment()
-        if (background != null && !matte) c.drawColor(background)
+        val matte = bg != null && hasLiveAdjustment()
+        if (bg != null && !matte) c.drawColor(bg)
         val sx = w2.toFloat() / doc.width
         val sy = h2.toFloat() / doc.height
         c.save()
         c.scale(sx, sy)
         drawDocument(c, null, useOverrides = false, target = CompositeTarget(mid, Matrix().apply { setScale(sx, sy) }))
         c.restore()
-        if (matte) c.drawColor(background!!, PorterDuff.Mode.DST_OVER)
+        if (matte) c.drawColor(bg, PorterDuff.Mode.DST_OVER)
         val out = Bitmap.createScaledBitmap(mid, w, h, true)
         if (out !== mid) mid.recycle()
         return out
