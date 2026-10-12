@@ -179,6 +179,8 @@ internal fun CurveGeneratorSheet(tool: CurveTool, onDismiss: () -> Unit) {
                 onValueChangeFinished = finished,
                 typing = SliderTyping(1f, 0),
             )
+            // v1.8 polish: an even rose draws twice the petals (rose maths): the count it draws.
+            Hint(CurveGenLabels18.petalsDrawn(CurveGenerators.rosePetals(g)))
             LabeledSlider(
                 label = CurveGenLabels18.PETAL_DIVISOR,
                 value = g.petalsD.toFloat(),
@@ -207,6 +209,12 @@ internal fun CurveGeneratorSheet(tool: CurveTool, onDismiss: () -> Unit) {
             valueText = density.toString(),
             onValueChangeFinished = finished,
             typing = SliderTyping(1f, 0),
+        )
+        // v1.8 polish: the anchor limit, and when the points per turn reach it (a higher value
+        // then builds the same curve). Always one line, so the sheet keeps its height.
+        Hint(
+            if (CurveGenerators.atAnchorLimit(g, tool.kind)) CurveGenLabels18.pointsAtLimit(CurveGenerators.MAX_ANCHORS)
+            else CurveGenLabels18.pointsLimit(CurveGenerators.MAX_ANCHORS),
         )
     }
 }

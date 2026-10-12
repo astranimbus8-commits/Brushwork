@@ -110,6 +110,22 @@ object CurveGenerators {
     }
 
     /**
+     * v1.8 polish: the petals [g]'s rose draws, n / d reduced: n when n·d is odd, else 2n (its
+     * [Analytic.units]; the generator sheet says it under [com.brushwork.paint.ui.common.CurveGenLabels18.PETALS]).
+     */
+    fun rosePetals(g: CurveGenerator): Int = Analytic(usable(g.copy(kind = CurveGenKind.ROSE))).units.toInt()
+
+    /**
+     * v1.8 polish: true when [g]'s points per turn (its own, else [kind]'s default) already reach
+     * [MAX_ANCHORS] on a curve of [kind]: the fit's first spans (Curve, Polyline) or the spline's
+     * samples (Path) are capped, so a higher points per turn builds the same curve.
+     */
+    fun atAnchorLimit(g: CurveGenerator, kind: CurveKind): Boolean {
+        val a = Analytic(usable(g))
+        return if (kind == CurveKind.PATH) splineSamples(a) >= MAX_ANCHORS else firstSpans(a) >= segmentCap(a)
+    }
+
+    /**
      * True when [path]'s geometry is its generator's within 0.01 px (I16; see the class docs).
      * The generator describes the source path alone (I17, §4.3: source only): its copies are maps
      * of the source and never part of the comparison.
@@ -258,11 +274,16 @@ object CurveGenerators {
     /** One span of the fit: its parameters and its error. */
     private class Span(val t0: Double, val t1: Double, val error: Double)
 
+    /** The fit's most spans: [MAX_ANCHORS] anchors, closed or open. */
+    private fun segmentCap(a: Analytic): Int = if (a.closed) MAX_ANCHORS else MAX_ANCHORS - 1
+
+    /** The fit's first spans before the caps: the points per turn (else the default) × [Analytic.units]. */
+    private fun firstSpans(a: Analytic): Int = ceil(a.units * (if (a.g.density > 0) a.g.density else DEFAULT_CURVE_DENSITY)).toInt()
+
     /** The adaptive Hermite fit of [a] (see the class docs). */
     private fun hermite(a: Analytic): VSubpath {
-        val segmentCap = if (a.closed) MAX_ANCHORS else MAX_ANCHORS - 1
-        val per = if (a.g.density > 0) a.g.density else DEFAULT_CURVE_DENSITY
-        val first = ceil(a.units * per).toInt().coerceIn(if (a.closed) 3 else 1, segmentCap)
+        val segmentCap = segmentCap(a)
+        val first = firstSpans(a).coerceIn(if (a.closed) 3 else 1, segmentCap)
         val v0 = DoubleArray(4)
         val v1 = DoubleArray(4)
         val vm = DoubleArray(4)
@@ -336,16 +357,14 @@ object CurveGenerators {
 
     // ------------------------------------------------------------------ Path: the interpolating spline
 
+    /** The spline's samples before the cap: the points per turn (else the default) × [Analytic.units], and the end when open. */
+    private fun splineSamples(a: Analytic): Int =
+        ceil(a.units * (if (a.g.density > 0) a.g.density else DEFAULT_PATH_DENSITY)).toInt() + (if (a.closed) 0 else 1)
+
     /** The interpolating cubic B-spline of [a]'s samples (see the class docs). */
     private fun spline(a: Analytic): VSpline {
-        val per = if (a.g.density > 0) a.g.density else DEFAULT_PATH_DENSITY
-        return if (a.closed) {
-            val m = ceil(a.units * per).toInt().coerceIn(3, MAX_ANCHORS)
-            cyclicSpline(a, m)
-        } else {
-            val m = (ceil(a.units * per).toInt() + 1).coerceIn(2, MAX_ANCHORS)
-            clampedSpline(a, m)
-        }
+        val m = splineSamples(a)
+        return if (a.closed) cyclicSpline(a, m.coerceIn(3, MAX_ANCHORS)) else clampedSpline(a, m.coerceIn(2, MAX_ANCHORS))
     }
 
     /** [m] samples from start to end, interpolated by a clamped uniform cubic with the curve's end tangents. */

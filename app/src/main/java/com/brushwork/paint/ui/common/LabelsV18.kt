@@ -101,6 +101,20 @@ object CurveGenLabels18 {
     const val PETALS = "Petals"; const val PETAL_DIVISOR = "Petal divisor"
     const val POINTS_PER_TURN = "Points per turn"
     const val EDITED_HINT = "Edited by hand: the curve settings are gone"
+
+    /*
+     * v1.8 polish: the generator sheet's lines under two sliders, composed from a value (functions,
+     * not counted constants; each holds a digit, and the sliders' labels only in lower case).
+     */
+
+    /** Under [PETALS]: the petals the rose draws, twice the value when n·d is even (rose maths). */
+    fun petalsDrawn(n: Int): String = if (n == 1) "Draws 1 petal" else "Draws $n petals"
+
+    /** Under [POINTS_PER_TURN], below the anchor limit [max]. */
+    fun pointsLimit(max: Int): String = "At most $max points in all"
+
+    /** Under [POINTS_PER_TURN], once the points per turn reach the limit [max]: a higher value changes nothing. */
+    fun pointsAtLimit(max: Int): String = "At the $max-point limit: more add nothing"
 }
 
 /** The cog's Shape settings (item 4); [TEETH] reads like v1.7's "Number of sides" / "Number of points". */
