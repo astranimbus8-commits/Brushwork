@@ -288,6 +288,7 @@ class Compat18KitTest {
         assertEquals("v1.8 reads and writes every v1.8 kind as the app does", appVector(b), frozenVector(b))
         val back = VectorCodecV18.decode(b)
         assertEquals("ids made unique as v1.8 does", listOf(1L, 2L, 3L, 4L, 5L), back.objects.map { it.id })
+        assertEquals("the stroke's points read bit for bit by the frozen PackedPointsV18", PackedPointsV18(points.x, points.y, points.p), (back.objects[0] as VStrokeV18).points)
         assertEquals("the path's live copies kept", 2, (back.objects[1] as VPathV18).copies.maps.size)
         assertEquals("the generator kept", CurveGenKindV18.ROSE, (back.objects[2] as VPathV18).generator?.kind)
         assertNull("the cog read back without its fallback points", (back.objects[3] as VShapeV18).shape.points)

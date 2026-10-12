@@ -1,6 +1,5 @@
 package com.brushwork.paint.compat18
 
-import com.brushwork.paint.core.PackedPoints
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -136,7 +135,7 @@ data class BrushMaskV18(
 
 /** v1.8's `MaskStroke`. */
 @Serializable
-data class MaskStrokeV18(val erase: Boolean, val size: Float, val hardness: Float, val flow: Float, val points: PackedPoints)
+data class MaskStrokeV18(val erase: Boolean, val size: Float, val hardness: Float, val flow: Float, val points: PackedPointsV18)
 
 /** v1.8's `MaskMode`. */
 @Serializable

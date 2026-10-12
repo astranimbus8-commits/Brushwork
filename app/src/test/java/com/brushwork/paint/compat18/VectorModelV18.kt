@@ -1,6 +1,5 @@
 package com.brushwork.paint.compat18
 
-import com.brushwork.paint.core.PackedPoints
 import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
@@ -12,8 +11,7 @@ import kotlinx.serialization.Serializable
  * files the way v1.8 reads them ([VectorCodecV18]). Every serialized property, its order,
  * default, serial name and `@EncodeDefault` is v1.8's; what the codec does not use (editing
  * helpers, approximate sizes, the generator's geometry) is left out. Never change it: it is what
- * v1.8 is. [PackedPoints] (and its serializer) is shared with the app, which keeps its format
- * (I13).
+ * v1.8 is. A stroke's points are the frozen [PackedPointsV18], not the app's class.
  */
 
 /** v1.8's `VectorContent`: all objects of one vector layer, bottom first. */
@@ -45,7 +43,7 @@ data class VStrokeV18(
     val color: Int,
     val seed: Long,
     val stylus: Boolean,
-    val points: PackedPoints,
+    val points: PackedPointsV18,
     val sizeScale: Float = 1f,
     val taperIn: Boolean = true,
     val taperOut: Boolean = true,
