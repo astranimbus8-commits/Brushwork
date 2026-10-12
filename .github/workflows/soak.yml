@@ -1,0 +1,62 @@
+name: Soak tests
+
+# v1.9 (design 2.2, 5.5): SoakHarnessTest, nightly and on demand, alone in one JVM
+# (app/build.gradle.kts, -PsoakOnly). Once it takes over 2 min, the lead also leaves it out of the
+# per-push Timing job (a test filter in app/build.gradle.kts).
+# A workflow of its own, so its schedule neither changes the triggers of "Build APK" nor shares
+# its concurrency group (a nightly run never cancels a push build of main, nor the reverse).
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soak:
+    name: Soak tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v7
+
+      # Until A7b adds SoakHarnessTest there is nothing to run: the job says so and stops green.
+      - name: Find SoakHarnessTest
+        id: find
+        run: |
+          if find app/src/test -name 'SoakHarnessTest.kt' | grep -q .; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No SoakHarnessTest yet: nothing to run."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v6
+        if: steps.find.outputs.present == 'true'
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v4
+        if: steps.find.outputs.present == 'true'
+
+      - uses: gradle/actions/setup-gradle@v6
+        if: steps.find.outputs.present == 'true'
+
+      - name: Soak tests
+        if: steps.find.outputs.present == 'true'
+        run: ./gradlew --no-daemon testDebugUnitTest -PsoakOnly
+
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.find.outputs.present == 'true'
+        with:
+          name: test-results-soak
+          path: app/build/test-results/testDebugUnitTest/*.xml
+          if-no-files-found: ignore
