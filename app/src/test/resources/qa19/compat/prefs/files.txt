@@ -1,0 +1,2 @@
+shared_prefs/brushwork_settings.xml
+shared_prefs/brushwork_ui.xml

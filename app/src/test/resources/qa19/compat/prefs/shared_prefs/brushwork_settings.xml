@@ -1,0 +1,15 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="drawPreview">EXACT</string>
+    <boolean name="showFrameTimes" value="true" />
+    <string name="vec.path">{&quot;closed&quot;:false,&quot;tension&quot;:0.0,&quot;stroke&quot;:&quot;BRUSH&quot;,&quot;plainWidth&quot;:6.0,&quot;fill&quot;:false,&quot;fillColor&quot;:null,&quot;taper&quot;:false,&quot;taperPercent&quot;:20.0,&quot;unit&quot;:&quot;PX&quot;,&quot;nudgeStepPx&quot;:1.0,&quot;useBrushSize&quot;:true,&quot;pathOrder&quot;:4,&quot;pathEndpoint&quot;:true,&quot;lastStroke&quot;:&quot;BRUSH&quot;,&quot;ownLayer&quot;:true}</string>
+    <float name="curve.bevel.amount" value="0.3" />
+    <string name="newCanvas.background">PAPER</string>
+    <string name="vec.curve">{&quot;closed&quot;:false,&quot;tension&quot;:0.0,&quot;stroke&quot;:&quot;BRUSH&quot;,&quot;plainWidth&quot;:6.0,&quot;fill&quot;:false,&quot;fillColor&quot;:null,&quot;taper&quot;:false,&quot;taperPercent&quot;:20.0,&quot;unit&quot;:&quot;PX&quot;,&quot;nudgeStepPx&quot;:1.0,&quot;useBrushSize&quot;:true,&quot;pathOrder&quot;:4,&quot;pathEndpoint&quot;:true,&quot;lastStroke&quot;:&quot;BRUSH&quot;,&quot;ownLayer&quot;:true}</string>
+    <string name="vec.polyline">{&quot;closed&quot;:false,&quot;tension&quot;:0.0,&quot;stroke&quot;:&quot;BRUSH&quot;,&quot;plainWidth&quot;:6.0,&quot;fill&quot;:false,&quot;fillColor&quot;:null,&quot;taper&quot;:false,&quot;taperPercent&quot;:20.0,&quot;unit&quot;:&quot;PX&quot;,&quot;nudgeStepPx&quot;:1.0,&quot;useBrushSize&quot;:true,&quot;pathOrder&quot;:4,&quot;pathEndpoint&quot;:true,&quot;lastStroke&quot;:&quot;BRUSH&quot;,&quot;ownLayer&quot;:true}</string>
+    <string name="vec.shape">{&quot;type&quot;:&quot;RECTANGLE&quot;,&quot;style&quot;:&quot;STROKE&quot;,&quot;strokeWidth&quot;:8.0,&quot;useBrushSize&quot;:true,&quot;strokeWith&quot;:&quot;PLAIN&quot;,&quot;fillColor&quot;:null,&quot;lineCap&quot;:&quot;ROUND&quot;,&quot;corner&quot;:&quot;SHARP&quot;,&quot;cornerRadius&quot;:30.0,&quot;sides&quot;:5,&quot;starPoints&quot;:5,&quot;innerRatio&quot;:0.45,&quot;arrowHeads&quot;:&quot;END&quot;,&quot;arrowHeadStyle&quot;:&quot;FILLED&quot;,&quot;arrowHeadScale&quot;:4.0,&quot;fromCenter&quot;:false,&quot;keepProportions&quot;:false,&quot;snapAngle&quot;:false,&quot;unit&quot;:&quot;PX&quot;,&quot;nudgeStepPx&quot;:1.0,&quot;editable&quot;:true,&quot;cogTeeth&quot;:12,&quot;cogDepth&quot;:0.2,&quot;cogToothWidth&quot;:0.5,&quot;cogTaper&quot;:0.3,&quot;cogHole&quot;:0.0,&quot;newLayerEachTime&quot;:true}</string>
+    <int name="shape.bevel.segments" value="2" />
+    <boolean name="text.newLayerEachTime" value="true" />
+    <int name="curve.bevel.segments" value="3" />
+    <float name="shape.bevel.amount" value="0.25" />
+</map>

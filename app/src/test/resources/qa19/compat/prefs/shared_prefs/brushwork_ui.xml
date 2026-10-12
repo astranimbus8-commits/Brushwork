@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <boolean name="objectBar.moreOpen" value="true" />
+    <set name="strip.openRows">
+        <string>text.more</string>
+        <string>shape.more</string>
+    </set>
+</map>

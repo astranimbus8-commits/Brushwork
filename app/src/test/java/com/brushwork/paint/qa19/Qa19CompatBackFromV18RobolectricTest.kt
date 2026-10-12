@@ -1,14 +1,22 @@
 package com.brushwork.paint.qa19
 
+import android.content.Context
+import com.brushwork.paint.AppSettings
+import com.brushwork.paint.UiPrefs
+import com.brushwork.paint.compat18.CurveSettingsV18
 import com.brushwork.paint.compat18.PayloadV18
 import com.brushwork.paint.compat18.ProjectFileDtoV18
 import com.brushwork.paint.compat18.ProjectFormatV18
 import com.brushwork.paint.compat18.ShapeCodecV18
+import com.brushwork.paint.compat18.ShapeSettingsV18
 import com.brushwork.paint.compat18.TextCodecV18
 import com.brushwork.paint.compat18.TextTransformsV18
+import com.brushwork.paint.compat18.ToolSettingsV18
 import com.brushwork.paint.compat18.VectorCodecV18
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.storage.ProjectRepository
+import com.brushwork.paint.tools.vector.CurveSettings
+import com.brushwork.paint.tools.vector.ShapeSettings
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -256,12 +264,28 @@ class Qa19CompatBackFromV18RobolectricTest {
         for (f in whole) assertArrayEquals("$f: byte for byte", resource("banded/whole/$f"), resource("banded/banded/$f"))
     }
 
-    @Ignore("5.2 row 14, prefs and tool settings (UiPrefs, drawPreview, showFrameTimes, newCanvas.background, text.newLayerEachTime, bevel, CurveSettings.ownLayer, ShapeSettings.newLayerEachTime): owner lead (F1a, AppSettings.kt)")
+    /** 5.2 row 14, prefs and tool settings: owner lead (F1a, AppSettings.kt, UiPrefs.kt), fixture by [writePrefs]. */
     @Test
     fun row14Prefs() {
-        assertTrue("written outside any project", text("prefs/files.txt").lines().none { it.startsWith("projects/") })
-        // Lead: v1.8's AppSettings reads the v1.9 settings JSON (unknown keys ignored) with its
-        // own values; needs compat18 copies of CurveSettings and ShapeSettings (F1a).
+        val files = text("prefs/files.txt").lines().filter { it.isNotBlank() }
+        assertTrue("written outside any project", files.none { it.startsWith("projects/") || it.startsWith("files/projects/") })
+        assertEquals("only the two preference files", listOf("shared_prefs/$SETTINGS_FILE.xml", "shared_prefs/${UiPrefs.FILE}.xml"), files)
+        val xml = text("prefs/shared_prefs/$SETTINGS_FILE.xml")
+        for (k in V19_SETTINGS_KEYS) assertTrue("$SETTINGS_FILE holds \"$k\"", xml.contains("name=\"$k\""))
+        assertFalse("UiPrefs keeps its own file", xml.contains("name=\"${UiPrefs.STRIP_OPEN_ROWS}\""))
+        val ui = text("prefs/shared_prefs/${UiPrefs.FILE}.xml")
+        assertTrue(ui.contains("name=\"${UiPrefs.STRIP_OPEN_ROWS}\"") && ui.contains("name=\"${UiPrefs.OBJECT_BAR_MORE_OPEN}\""))
+        // v1.8 never reads the new keys; its AppSettings reads the tool options' JSON with its own
+        // fields (unknown keys ignored) and writes them back without the v1.9 ones.
+        for (key in listOf(ToolSettingsV18.CURVE, ToolSettingsV18.POLYLINE, ToolSettingsV18.PATH)) {
+            val json = text("prefs/$key.json")
+            assertTrue("$key: the fixture has ownLayer on", json.contains("\"ownLayer\":true"))
+            val back = ToolSettingsV18.write(ToolSettingsV18.curve(json))
+            assertEquals("$key: v1.8 reads its own values and writes no ownLayer", ToolSettingsV18.write(CurveSettingsV18()), back)
+        }
+        val shape = text("prefs/${ToolSettingsV18.SHAPE}.json")
+        assertTrue("the fixture has newLayerEachTime on", shape.contains("\"newLayerEachTime\":true"))
+        assertEquals("v1.8 reads its own shape values and writes no newLayerEachTime", ToolSettingsV18.write(ShapeSettingsV18()), ToolSettingsV18.write(ToolSettingsV18.shape(shape)))
     }
 
     @Ignore("5.2 row 15 (crash reports), app files outside the projects: owner A7a, un-ignored by the lead")
@@ -290,7 +314,49 @@ class Qa19CompatBackFromV18RobolectricTest {
      * project saved by [saveProject], a payload, a `files.txt` listing what the row writes).
      * Each area adds its rows' writers.
      */
-    private val generators: Map<String, (File) -> Unit> = mapOf()
+    private val generators: Map<String, (File) -> Unit> = mapOf(
+        "prefs" to ::writePrefs,
+    )
+
+    /**
+     * Row 14 (lead, F1a): every v1.9 preference written by v1.9's code (AppSettings' new keys,
+     * [UiPrefs], the curve and shape tool options with their new fields on), both preference
+     * files committed. `files.txt` lists every file of the app's data folder those writes added
+     * or changed, copied alongside; the tool options are also copied as `<key>.json`.
+     */
+    private fun writePrefs(dir: File) {
+        val before = snapshot(app.dataDir)
+        val settings = AppSettings(app)
+        settings.drawPreview = AppSettings.DRAW_PREVIEW_EXACT
+        settings.showFrameTimes = true
+        settings.newCanvasBackground = AppSettings.NEW_CANVAS_PAPER
+        settings.textNewLayerEachTime = true
+        settings.curveBevelAmount = 0.3f
+        settings.curveBevelSegments = 3
+        settings.shapeBevelAmount = 0.25f
+        settings.shapeBevelSegments = 2
+        for (key in listOf(ToolSettingsV18.CURVE, ToolSettingsV18.POLYLINE, ToolSettingsV18.PATH)) {
+            settings.putObject(key, CurveSettings.serializer(), CurveSettings(ownLayer = true))
+        }
+        settings.putObject(ToolSettingsV18.SHAPE, ShapeSettings.serializer(), ShapeSettings(newLayerEachTime = true))
+        val ui = UiPrefs(app)
+        ui.stripOpenRows = setOf("text.more", "shape.more")
+        ui.objectBarMoreOpen = true
+        for (file in listOf(SETTINGS_FILE, UiPrefs.FILE)) {
+            assertTrue("$file committed", app.getSharedPreferences(file, Context.MODE_PRIVATE).edit().commit())
+        }
+        val after = snapshot(app.dataDir)
+        val changed = after.filter { (path, bytes) -> before[path]?.contentEquals(bytes) != true }.keys.sorted()
+        for (path in changed) File(app.dataDir, path).copyTo(File(dir, path), overwrite = true)
+        File(dir, "files.txt").writeText(changed.joinToString("\n", postfix = "\n"))
+        for (key in listOf(ToolSettingsV18.CURVE, ToolSettingsV18.POLYLINE, ToolSettingsV18.PATH, ToolSettingsV18.SHAPE)) {
+            File(dir, "$key.json").writeText(requireNotNull(settings.prefs.getString(key, null)) { key })
+        }
+    }
+
+    /** Every file under [root] by its path relative to it ('/'-separated), with its bytes. */
+    private fun snapshot(root: File): Map<String, ByteArray> =
+        root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
 
     /** [doc] saved by v1.9's repository and copied, every file, into [dir]. */
     @Suppress("unused")
@@ -320,5 +386,16 @@ class Qa19CompatBackFromV18RobolectricTest {
             write(dir)
             println("[qa19 compat] wrote $row: ${dir.list()?.sorted()}")
         }
+    }
+
+    private companion object {
+        /** AppSettings' preference file (v1.0 on). */
+        const val SETTINGS_FILE = "brushwork_settings"
+
+        /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
+        val V19_SETTINGS_KEYS = listOf(
+            "drawPreview", "showFrameTimes", "newCanvas.background", "text.newLayerEachTime",
+            "curve.bevel.amount", "curve.bevel.segments", "shape.bevel.amount", "shape.bevel.segments",
+        )
     }
 }
