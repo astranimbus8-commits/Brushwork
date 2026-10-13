@@ -35,9 +35,11 @@ import androidx.compose.material.icons.outlined.LinkOff
 import androidx.compose.material.icons.outlined.VerticalAlignBottom
 import androidx.compose.material.icons.outlined.VerticalAlignTop
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -47,7 +49,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
@@ -75,6 +79,7 @@ import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.StripLayout
 import com.brushwork.paint.ui.tools.strip.StripState
+import com.brushwork.paint.ui.tools.strip.passCanvasGesture
 import com.brushwork.paint.vector.select.ObjectActions
 import com.brushwork.paint.vector.select.ObjectEdits
 import kotlin.math.floor
@@ -207,18 +212,25 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
             }
             if (open) {
                 Spacer(Modifier.height(StripLayout.GAP_DP.dp))
-                Surface(
-                    color = IbisColors.Menu,
-                    contentColor = BrushworkColors.OnChrome,
-                    shape = BAR_SHAPE,
-                    border = BorderStroke(1.dp, BrushworkColors.ChromeBorder),
-                    shadowElevation = 4.dp,
-                    modifier = Modifier.width(moreWidth).testTag(V18Tags.STRIP_MORE_ROW),
-                ) {
-                    Column(Modifier.padding(horizontal = ROW_PADDING, vertical = 2.dp)) {
+                // v1.9 (R3): no Surface (it would take every touch on the row): a touch on the
+                // row's background reaches the canvas, a canvas gesture's finger landing on a
+                // button only joins that gesture (passCanvasGesture), and the row fades to 25 %
+                // once that gesture passes the touch slop, as the strip's row does.
+                CompositionLocalProvider(LocalContentColor provides BrushworkColors.OnChrome) {
+                    Column(
+                        Modifier
+                            .width(moreWidth)
+                            .graphicsLayer { alpha = if (strip.canvasTouchMoved) StripState.ROW_FADE_ALPHA else 1f }
+                            .shadow(4.dp, BAR_SHAPE)
+                            .background(IbisColors.Menu, BAR_SHAPE)
+                            .border(BorderStroke(1.dp, BrushworkColors.ChromeBorder), BAR_SHAPE)
+                            .testTag(V18Tags.STRIP_MORE_ROW)
+                            .padding(horizontal = ROW_PADDING, vertical = 2.dp),
+                    ) {
+                        val guard = Modifier.passCanvasGesture(strip)
                         for (line in split.more) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                for (i in line) buttons[i].content(item * buttons[i].units)
+                                for (i in line) Box(guard) { buttons[i].content(item * buttons[i].units) }
                             }
                         }
                     }
