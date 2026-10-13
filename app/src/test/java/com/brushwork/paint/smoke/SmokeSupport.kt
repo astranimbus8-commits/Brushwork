@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
@@ -100,9 +101,16 @@ internal object Smoke {
         return doc
     }
 
+    /**
+     * A controller with the default settings. v1.9 (R3): the [UiPrefs] (the More rows each tool
+     * remembers open) start empty too, so every editor a test opens starts with its rows closed,
+     * as each one did in v1.8; a test of the memory across a relaunch writes them in the editor's
+     * setup.
+     */
     fun controller(context: Context, doc: Document = document(), scope: CoroutineScope = newScope()): EditorController {
         val settings = AppSettings(context)
         settings.prefs.edit().clear().commit()
+        context.getSharedPreferences(UiPrefs.FILE, Context.MODE_PRIVATE).edit().clear().commit()
         return EditorController(context.applicationContext, doc, scope, settings)
     }
 

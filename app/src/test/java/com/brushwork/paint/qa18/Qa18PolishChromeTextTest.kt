@@ -29,6 +29,9 @@ import org.robolectric.shadows.ShadowLog
  * last control with nothing after it (no slot); with a text open, "Numbers" follows Snap 4 dp
  * after it, whole on one line, and Snap has not moved. "Numbers" still opens its sheet (the row
  * closes first, D25).
+ * v1.9 (R3): the row's lines are content-width, end-aligned under the toggle, so Snap's line ends
+ * at the row's end, and with a text open "Numbers" ends it: Snap stays on its line, moved left by
+ * Numbers' width and the gap. The sheet covers the row (hidden, remembered) instead of closing it.
  * Rendered: `polish-chrome-text-<width>[-vector]` and `...-open`.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -68,10 +71,9 @@ class Qa18PolishChromeTextTest {
         assertFalse("$idle: no Numbers without a text: $names", TextStripItems.NUMBERS_LABEL in names)
         val more = s.tagged(V18Tags.STRIP_MORE_ROW)!!
         val snap = closed.last().second
-        // The row shrinks to its content: its last line ends at Snap plus the row's own padding.
-        val lastLine = closed.filter { (it.second.top / 8f).toInt() == (snap.top / 8f).toInt() }
-        val lineStart = lastLine.first().second.left
-        assertEquals("$idle: Snap's line starts at the row's start", more.left, lineStart - SIDE_PADDING_DP, 1.5f)
+        // v1.9 (R3): each line is as wide as its items, end-aligned under the toggle: Snap's line
+        // ends at Snap plus the line's own padding, at the row's end.
+        assertEquals("$idle: Snap's line ends at the row's end", more.right, snap.right + SIDE_PADDING_DP, 1.5f)
         Qa18PolishChromeKit.shot(s, "text-$tag", heightDp = 220f)
         Qa18MenusShots.closeMore(s, idle)
 
@@ -89,7 +91,9 @@ class Qa18PolishChromeTextTest {
         assertTrue("$open: Snap, then Numbers: $openNames", i >= 0 && openNames.getOrNull(i + 1) == TextStripItems.NUMBERS_LABEL && i + 2 == openNames.size)
         val snapNow = opened[i].second
         val numbers = opened[i + 1].second
-        assertEquals("$open: Snap has not moved (left)", snap.left, snapNow.left, 0.5f)
+        // v1.9 (R3): Numbers ends the end-aligned line; Snap stays on it, Numbers' width and the gap further left.
+        assertEquals("$open: Numbers ends the line, at the row's end", more.right, numbers.right + SIDE_PADDING_DP, 1.5f)
+        assertEquals("$open: Snap moved left by Numbers and the gap", snap.left - numbers.width - StripLayout.GAP_DP, snapNow.left, 0.5f)
         assertEquals("$open: Snap has not moved (top)", snap.top, snapNow.top, 0.5f)
         assertEquals("$open: Numbers 4 dp after Snap", snapNow.right + StripLayout.GAP_DP, numbers.left, 0.5f)
         // Its word whole on one line (at 72 dp it broke as "Number" / "s").
@@ -98,12 +102,12 @@ class Qa18PolishChromeTextTest {
         assertEquals("$open: \"Numbers\" on one line: $wordLines", listOf(TextStripItems.NUMBERS_LABEL), wordLines)
         Qa18PolishChromeKit.shot(s, "text-$tag-open", heightDp = 220f)
 
-        // "Numbers" opens its sheet; the row closes first (D25). Back closes the sheet.
+        // "Numbers" opens its sheet; the sheet covers the row (v1.9, R3: hidden, remembered). Back closes the sheet.
         val before = s.c.undoManager.undoCount
         Finger.tap(s, TextStripItems.NUMBERS_LABEL)
         Smoke.pump(300); SmokeUi.settle()
         assertTrue("$open: the Numbers sheet", t.numbersOpen)
-        assertEquals("$open: the row closed", null, s.tagged(V18Tags.STRIP_MORE_ROW))
+        assertEquals("$open: the row hides under the sheet", null, s.tagged(V18Tags.STRIP_MORE_ROW))
         Finger.back()
         Smoke.pump(300); SmokeUi.settle()
         assertFalse("$open: Back closes the sheet", t.numbersOpen)
@@ -112,7 +116,7 @@ class Qa18PolishChromeTextTest {
     }
 
     private companion object {
-        /** The More row's side padding (StripHost's ROW_PADDING). */
+        /** A More row line's side padding (StripHost's ROW_PADDING). */
         const val SIDE_PADDING_DP = 8f
     }
 }

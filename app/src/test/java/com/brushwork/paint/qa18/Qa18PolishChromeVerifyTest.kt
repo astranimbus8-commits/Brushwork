@@ -44,8 +44,9 @@ import org.robolectric.shadows.ShadowLog
  *   differently there), and on the Magnetic lasso with three points and Color select with a
  *   sample (icons shown only then); the lasso's ✕ still drops the points after the census;
  * - the Text strip's More row (item 4) kept open while the open text is applied by the top row's
- *   ✓, then Undo / Redo: "Numbers" goes with the text, nothing blank is left after Snap, Snap
- *   never moves.
+ *   ✓, then Undo / Redo: "Numbers" goes with the text, nothing blank is left after Snap, and Snap
+ *   is back where it was each time. v1.9 (R3): the row's lines are end-aligned under the toggle,
+ *   so while a text is open "Numbers" ends Snap's line and Snap sits that much further left on it.
  * Rendered: `polish-chrome-verify-selection-bar-middle-360.png`.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -279,7 +280,10 @@ class Qa18PolishChromeVerifyTest {
             .map { (it.own.firstOrNull() ?: it.labels.firstOrNull() ?: "?") to it.bounds }
     }
 
-    /** No text open: Snap ends the row, at [snap] (when known), and its line starts at the row's start. */
+    /**
+     * No text open: Snap ends the row, at [snap] (when known), and its line ends at the row's end
+     * (v1.9, R3: each line is as wide as its items, end-aligned under the toggle).
+     */
     private fun closedRow(s: ChromeScreen, what: String, snap: Rect?): Rect {
         val row = moreRow(s)
         val names = row.map { it.first }
@@ -288,8 +292,7 @@ class Qa18PolishChromeVerifyTest {
         val at = row.last().second
         if (snap != null) assertEquals("$what: Snap has not moved", snap, at)
         val more = s.tagged(V18Tags.STRIP_MORE_ROW)!!
-        val line = row.filter { (it.second.top / 8f).toInt() == (at.top / 8f).toInt() }
-        assertEquals("$what: Snap's line starts at the row's start", more.left + 8f, line.first().second.left, 1.5f)
+        assertEquals("$what: Snap's line ends at the row's end", more.right - 8f, at.right, 1.5f)
         return at
     }
 
@@ -309,7 +312,11 @@ class Qa18PolishChromeVerifyTest {
         val names = open.map { it.first }
         val i = names.indexOf(SNAP_LABEL)
         assertTrue("a text open: Snap, then Numbers: $names", i >= 0 && names.getOrNull(i + 1) == TextStripItems.NUMBERS_LABEL)
-        assertEquals("a text open: Snap has not moved", snap, open[i].second)
+        // v1.9 (R3): Numbers ends the end-aligned line; Snap stays on it, Numbers' width and the gap further left.
+        val numbers = open[i + 1].second
+        assertEquals("a text open: Snap on its line", snap.top, open[i].second.top, 0.5f)
+        assertEquals("a text open: Snap moved left by Numbers and the gap", snap.left - numbers.width - 4f, open[i].second.left, 0.5f)
+        assertEquals("a text open: Numbers ends the line", snap.right, numbers.right, 0.5f)
 
         // Applied by the top row's ✓ with the More row open: Numbers goes, nothing blank after Snap.
         val steps = s.c.undoManager.undoCount
