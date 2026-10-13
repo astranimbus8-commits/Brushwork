@@ -66,6 +66,9 @@ object ObjectActions {
     /**
      * Copies the selected objects right and down ([duplicateOffset]: 16 document px, more when
      * that is less than 16 dp on screen), on top of them (one step); the copies are selected.
+     *
+     * v1.9 (design 2.4.11): this signature is frozen at Gate 1 (A9's Shape More row calls it);
+     * A4 changes only the body.
      */
     fun duplicate(c: EditorController): Boolean = edit(c, relift = true) { layer, content, ids ->
         val d = duplicateOffset(c)
@@ -76,6 +79,9 @@ object ObjectActions {
     /**
      * Duplicate's offset (document px, whole pixels so the copies stay on the pixel grid): 16 px,
      * or the document length of 16 dp on screen when that is more (a zoomed-out large canvas).
+     *
+     * v1.9 (design 2.4.11): this signature is frozen at Gate 1 (A9's Shape More row calls it);
+     * A4 changes only the body.
      */
     fun duplicateOffset(c: EditorController): Float {
         val t = c.viewTransform
@@ -85,7 +91,12 @@ object ObjectActions {
         return minOf(d, max(DUPLICATE_OFFSET, (minOf(c.doc.width, c.doc.height) / 10).toFloat()))
     }
 
-    /** Moves the selected objects in the stacking order (one step); "Already …" when nothing would change. */
+    /**
+     * Moves the selected objects in the stacking order (one step); "Already …" when nothing would change.
+     *
+     * v1.9 (design 2.4.11): this signature is frozen at Gate 1 (A9's Shape More row calls it);
+     * A4 changes only the body (Forward and Backward through [ArrangeOrder.step]).
+     */
     fun arrange(c: EditorController, how: ObjectEdits.Arrange): Boolean = edit(c, relift = true) { layer, content, ids ->
         val after = ObjectEdits.arrange(content, ids, how) { a, b -> ObjectBounds.overlap(content, a, b) }
         if (after == null) {
