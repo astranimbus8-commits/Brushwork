@@ -215,11 +215,13 @@ class EditorController(
     /** Set by the canvas view: schedules a redraw (postInvalidateOnAnimation). */
     var onInvalidate: (() -> Unit)? = null
 
+    // region v19-A6 invalidate
     /** Marks a document region (null = all) for recomposition and schedules a redraw. */
     fun invalidateDoc(rect: Rect?) {
         tiles.invalidate(rect)
         onInvalidate?.invoke()
     }
+    // endregion
 
     /** Redraw overlays only (handles, guides, marching ants). */
     fun invalidateOverlay() { onInvalidate?.invoke() }
@@ -321,6 +323,7 @@ class EditorController(
 
     // ------------------------------------------------------------------ memory / history
 
+    // region v19-A7b layerCap
     private val maxHeap = Runtime.getRuntime().maxMemory()
 
     val undoManager = UndoManager(maxBytes = max(48L shl 20, maxHeap / 4)).also { um ->
@@ -352,6 +355,7 @@ class EditorController(
 
     /** The message shown when a new layer would pass [maxLayers]. */
     internal fun layerLimitMessage(): String = "Layer limit reached (${maxLayers}) for this canvas size"
+    // endregion
 
     fun pushUndo(action: UndoAction) {
         // A pending live edit records its step first (inside an edit scope that was done when
@@ -652,6 +656,7 @@ class EditorController(
         settings.closeJournal()
     }
 
+    // region v19-lead history
     /**
      * v1.9 (D14, design 2.4.2): the open session whose own steps Undo and Redo go through first
      * (A2: the filter session; A3: the node editing of a text path), or null (v1.8). Set by the
@@ -709,7 +714,9 @@ class EditorController(
         if (!pending && !undoManager.canRedo && tool.canRedoStep && tool.redoStep()) { invalidateOverlay(); return }
         if (inHistoryDo { undoManager.redo(this) }) { editCount++; doc.touch() }
     }
+    // endregion
 
+    // region v19-A7b settle
     /**
      * Lands the vector work still on its way (v1.5): a render in flight and the object edits
      * queued behind it ([PendingRenders]: Object bar actions, lifts), in the order they were asked
@@ -732,6 +739,7 @@ class EditorController(
     internal fun settleQueuedVectorWork() {
         if (PendingRenders.hasWaiting(this)) settleVectorWork()
     }
+    // endregion
 
     /** Runs an undo / redo: edits it causes (a tool reacting to a restored selection...) are not reported to edit listeners. */
     private inline fun inHistoryDo(block: () -> Boolean): Boolean {
@@ -1084,6 +1092,7 @@ class EditorController(
         return LayerDataAction(label, layer, before, after)
     }
 
+    // region v19-A3 rasterizeMessage
     /** Shows what a data change from [before] to [after] made uneditable; returns a step label for it. */
     private fun rasterizeMessage(layer: Layer, before: LayerData, after: LayerData): String {
         // v1.7 (I14): a pixel edit bakes a live array in the same step.
@@ -1107,6 +1116,7 @@ class EditorController(
         }
         return "Edit layer data"
     }
+    // endregion
 
     /** While [keepLayerData] runs: the layer whose editable data pixel edits don't clear. */
     private var keepDataLayer: Layer? = null
@@ -1126,6 +1136,7 @@ class EditorController(
         }
     }
 
+    // region v19-A6 commitEdit
     /**
      * Finishes a pixel edit: applies color-mode constraints to the touched area, pushes the undo
      * action, marks the layer changed and redraws. Returns false if nothing was touched. Editable
@@ -1160,6 +1171,7 @@ class EditorController(
         queueEdit(EditEvent(recorder.layer, recorder.target, rect, label))
         true
     }
+    // endregion
 
     /**
      * Convenience: snapshot the whole target of [layer], run [block] on its bitmap, commit.
@@ -1495,6 +1507,7 @@ class EditorController(
         return true
     }
 
+    // region v19-A4 paste
     /**
      * Pastes the clipboard into a new layer above the active one, at the place it was copied
      * from, and starts the transform tool on it so it can be moved/scaled before confirming.
@@ -1507,6 +1520,7 @@ class EditorController(
         (tools[ToolId.TRANSFORM] as? TransformTool)?.startPlacement(layer, image, clip.left.toFloat(), clip.top.toFloat(), PASTE_LABEL)
         return layer
     }
+    // endregion
 
     /** Tight bounds of the non-transparent pixels of [bmp], or null if it is empty. */
     private fun contentBounds(bmp: Bitmap): Rect? {
@@ -1576,6 +1590,7 @@ class EditorController(
         moveBlock(layer, unit.first + (b.last - b.first), layer.parentId)
     }
 
+    // region v19-A4 mergeDown
     /**
      * v1.9 (design 2.4.6): "Merge down" lives in [LayerMerge] (A4); this delegate keeps the callers.
      */
@@ -1583,6 +1598,7 @@ class EditorController(
 
     /** Merges [layer] into the layer below it (v1.7: its sibling below; a folder merges as "Merge folder"). */
     fun mergeDown(layer: Layer = activeLayer) = layerMerge.mergeDown(layer)
+    // endregion
 
     // ------------------------------------------------------------------ layer tree (v1.7, item 8)
 
@@ -1700,6 +1716,7 @@ class EditorController(
         }
     }
 
+    // region v19-A4 mergeFolder
     /**
      * "Merge folder": one raster layer at the folder's place from the composite of its children
      * (`FolderComposite.renderBlock`), carrying the folder's name, opacity, blend (a pass-through
@@ -1738,7 +1755,9 @@ class EditorController(
             }
         }
     }
+    // endregion
 
+    // region v19-A4 layerFromFolder
     /**
      * "Layer from folder": a new raster layer directly above [folder] at its level with the
      * composite of its children (the folder's opacity and blend carried, Normal for pass-through);
@@ -1763,6 +1782,7 @@ class EditorController(
             }
         }
     }
+    // endregion
 
     /** The composite of [folder]'s children as new pixels in the document's color mode; null (with a message) without memory. */
     private fun folderPixels(folder: Layer): Bitmap? = try {
@@ -2060,6 +2080,7 @@ class EditorController(
 
     // ------------------------------------------------------------------ masks
 
+    // region v19-A7b addMask
     fun addMask(layer: Layer = activeLayer, fromSelection: Boolean = selection != null) {
         if (layer.isFolder) { toast(FolderLabels.NO_MASK); return }
         if (layer.mask != null) return
@@ -2071,6 +2092,7 @@ class EditorController(
         layer.editingMask = true
         pushUndo(action)
     }
+    // endregion
 
     fun deleteMask(layer: Layer = activeLayer) {
         val m = layer.mask ?: return
@@ -2292,6 +2314,7 @@ class EditorController(
         return true
     }
 
+    // region v19-A7a savedSelectionWork
     /**
      * Compresses [sel] for [p] on `Dispatchers.Default` (in [pendingSavedSelections] meanwhile)
      * and lands it when done, after the saves asked for before it.
@@ -2325,7 +2348,9 @@ class EditorController(
             }
         }
     }
+    // endregion
 
+    // region v19-A7b landSavedSelections
     /**
      * Lands every save and update still compressing now, oldest first, each as its step
      * (waiting for its work): before undo, redo, a history mark or rollback, a canvas operation,
@@ -2378,6 +2403,7 @@ class EditorController(
         val entry = if (now[i].name == saved.name) saved else SavedSelection(p.id, now[i].name, saved.bounds, saved.packed, saved.revision)
         setSavedSelections(now.toMutableList().also { it[i] = entry }, UPDATE_SAVED_SELECTION_LABEL)
     }
+    // endregion
 
     /** "Rename selection": one "Rename saved selection" step; a blank or unchanged name does nothing. */
     fun renameSavedSelection(id: Long, name: String) {
@@ -2650,6 +2676,7 @@ class EditorController(
     fun addVectorLayer(name: String? = null, label: String = "Add vector layer", baseName: String = "Vector"): Layer? =
         addLayerWith(name ?: uniqueLayerName("$baseName ${doc.layers.count { it.isVectorLayer } + 1}"), null, label) { it.vector = VectorContent.EMPTY }
 
+    // region v19-A4 convertToVectorLayer
     /**
      * Turns [layer] into a vector layer in place as one undo step [label]: an empty plain layer
      * (renamed "Vector N" when it has the default "Layer N" name), or a shape layer (its shape
@@ -2672,6 +2699,7 @@ class EditorController(
         groupUndo(label) { LayerConvert.convert(this, layer, content, newName, label, ::pushUndo) }
         return layer.isVectorLayer
     }
+    // endregion
 
     // ------------------------------------------------------------------ adjustment layers & editable masks (v1.5, §4.3)
 

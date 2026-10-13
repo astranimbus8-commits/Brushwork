@@ -70,6 +70,7 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
     /** Saves if there are unsaved edits. Runs on the app scope so it completes in the background. */
     fun saveNow(): Job = app.appScope.launch { save() }
 
+    // region v19-A7b saveOnLeaving
     /**
      * v1.7 QA: the app leaves the screen (Home, app switch, screen off) and may be killed in the
      * background long before the next autosave. Work the user asked for that is still landing (a
@@ -84,6 +85,7 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         }
         return saveNow()
     }
+    // endregion
 
     suspend fun save() {
         saveMutex.withLock {

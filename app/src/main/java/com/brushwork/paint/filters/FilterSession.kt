@@ -505,6 +505,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
 
     // ------------------------------------------------------------------ apply
 
+    // region v19-A7b apply
     /**
      * Runs the filter at full resolution in the background (with a progress overlay), then writes
      * the result inside the selection and records one undo step. On failure or out-of-memory the
@@ -610,6 +611,7 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         controller.commitEdit(rec, filter.name)
         close()
     }
+    // endregion
 
     /** False (and the session is closed) if the target layer was removed or its bitmap replaced. */
     private fun checkTarget(): Boolean {
