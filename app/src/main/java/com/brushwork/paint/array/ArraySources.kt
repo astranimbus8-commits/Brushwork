@@ -164,6 +164,6 @@ internal object ArraySources {
         return out
     }
 
-    /** True for a text layer that is a frame of linked text frames (refused, §3.3 a). */
-    fun isLinkedText(layer: Layer): Boolean = layer.textData?.let { TextCodec.decode(it)?.threaded } == true
+    /** True for a text layer that is a frame of linked text frames (refused, §3.3 a); v1.9 (F2): any of its texts. */
+    fun isLinkedText(layer: Layer): Boolean = layer.textData?.let { d -> TextCodec.decodeAll(d).any { it.threaded } } == true
 }

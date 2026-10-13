@@ -168,6 +168,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /** The text as loaded from [editingLayer]. */
     private var loadedItem: TextItem? = null
 
+    /**
+     * v1.9 (F2): the other texts of [editingLayer] (above [loadedItem], bottom first), kept as
+     * they are: the preview and ✓ draw them with the edited text, and ✓ stores them after it.
+     */
+    private var loadedRest: List<TextItem> = emptyList()
+
+    /** [loadedRest] laid out, in the same order. */
+    private var restPrepared: List<PreparedText> = emptyList()
+
     /** Where the edited layer's old pixels are (hidden while editing). */
     private var loadedInk: Rect? = null
     private var layerPreview: LayerPreview? = null
@@ -240,7 +249,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             return true
         }
         if (doc.indexOf(layer) < 0) return false
-        val loaded = TextCodec.decode(layer.textData)
+        // v1.9 (F2): the bottom text is edited as in v1.8; the others are kept and drawn with it.
+        val all = TextCodec.decodeAll(layer.textData)
+        val loaded = all.firstOrNull()
         if (loaded == null) {
             controller.toast("\"${layer.name}\" is not an editable text layer")
             return false
@@ -256,6 +267,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         vectorReturn = back
         editingLayer = layer
         loadedItem = loaded
+        loadedRest = all.drop(1)
+        restPrepared = loadedRest.map { TextRenderer.prepare(it) }
         loadedInk = inkOf(layer, loaded)
         editingNew = false
         editorBackup = null
@@ -281,11 +294,16 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * in their place THROUGH THE COMPOSITOR, so the layer's order, opacity, blend mode, mask and
      * the layers clipped to it look exactly like the result while editing (like the vector tools'
      * previews). The text is already laid out ([preparedFor] cache), so a tile redraw only draws it.
+     * v1.9 (F2): every text of the layer is drawn, in picture order, the edited one in place of
+     * the bottom text it was loaded from ([loadedRest] above it, as laid out when loaded).
      */
     private inner class LayerPreview(override val layer: Layer) : LayerRenderOverride {
         override fun drawContent(canvas: Canvas): Boolean {
             val cur = item ?: return true
             TextRenderer.drawItem(canvas, cur, preparedFor(cur), null, doc.colorMode)
+            val rest = loadedRest
+            val preps = restPrepared
+            for (k in rest.indices) TextRenderer.drawItem(canvas, rest[k], preps[k], null, doc.colorMode)
             return true
         }
     }
@@ -325,6 +343,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         loadedInk?.let { controller.tiles.invalidate(it) }
         loadedInk = null
         loadedItem = null
+        loadedRest = emptyList()
+        restPrepared = emptyList()
         editingLayer = null
         controller.invalidateOverlay()
     }
@@ -364,7 +384,8 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     private fun layerText(layer: Layer): Pair<TextItem, PreparedText>? {
         val data = layer.textData ?: return null
         layerTexts[layer.id]?.let { (d, it, p) -> if (d == data && p.fontsCurrent) return it to p }
-        val decoded = TextCodec.decode(data) ?: return null
+        // v1.9 (F2): the bottom text, the one a tap opens (item-level hits are A3's).
+        val decoded = TextCodec.decodeAll(data).firstOrNull() ?: return null
         val prep = TextRenderer.prepare(decoded)
         if (layerTexts.size >= LAYER_CACHE_SIZE) layerTexts.clear()
         layerTexts[layer.id] = Triple(data, decoded, prep)
@@ -386,14 +407,15 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
 
     /**
      * Closes the editor keeping the changes; an empty new text is removed. An edited text layer
-     * whose text was emptied is deleted right away as one undo step (see [deleteEmptiedLayer]).
+     * whose text was emptied is deleted right away as one undo step (see [deleteEmptiedLayer]);
+     * v1.9 (F2): one that holds other texts keeps them ([removeEmptiedText]).
      */
     override fun confirmEditor() {
         val cur = item
         if (cur != null && cur.text.isBlank() && editingLayer != null) {
             // Refused (the layer was locked or hidden meanwhile; a message says so): the editor
             // stays open, so the text can be typed again or the edit cancelled.
-            if (deleteEmptiedLayer()) {
+            if (emptiedText()) {
                 editorOpen = false
                 editorBackup = null
                 returnToVectorLayer()
@@ -447,6 +469,48 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         discardItem()
         controller.deleteLayer(layer)
         controller.toast("Text layer deleted — undo to restore")
+        return true
+    }
+
+    /**
+     * v1.9 (F2): the edited text was emptied. A layer that holds other texts keeps them
+     * ([removeEmptiedText]); a layer of one text is deleted as in v1.8 ([deleteEmptiedLayer]).
+     * Returns false (keep editing) when the layer got locked or hidden meanwhile.
+     */
+    private fun emptiedText(): Boolean {
+        val layer = editingLayer
+        if (layer != null && loadedRest.isNotEmpty() && doc.indexOf(layer) >= 0) return removeEmptiedText(layer)
+        return deleteEmptiedLayer()
+    }
+
+    /**
+     * v1.9 (F2): the edited (bottom) text of [layer] was emptied while the layer holds other
+     * texts: only it goes, as ONE "Edit text" step whose data is the other texts and whose
+     * pixels are a fresh rendering of them (I1, I2); the layer and its name stay. Returns false
+     * (keep editing) when the layer got locked or hidden meanwhile, or memory ran out.
+     */
+    private fun removeEmptiedText(layer: Layer): Boolean {
+        if (!controller.checkEditable(layer)) return false
+        val loaded = loadedItem
+        val rest = loadedRest
+        val preps = restPrepared
+        // Everything the old text covered (its real pixels and its computed bounds) and the others, drawn again.
+        val dirty = Rect()
+        loadedInk?.let { dirty.union(it) }
+        loaded?.let { textRectOf(it) }?.let { dirty.union(it) }
+        for (k in rest.indices) textRectOf(rest[k], preps[k])?.let { dirty.union(it) }
+        dirty.inset(-1, -1)
+        val json = TextCodec.encodeAll(rest)
+        var done = false
+        try {
+            done = controller.updateTextLayer(layer, json, "Edit text", dirty) { c ->
+                for (k in rest.indices) TextRenderer.drawItem(c, rest[k], preps[k], null)
+            }
+        } catch (e: OutOfMemoryError) {
+            controller.toast("Not enough memory to update the text")
+        }
+        if (!done) return false
+        discardItem()
         return true
     }
 
@@ -1101,7 +1165,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
             controller.toast("The text is outside the selection")
             return false
         }
-        val json = TextCodec.encode(cur)
+        val json = TextCodec.encodeAll(listOf(cur))
         // Clear the pending state first: addLayerWithContent deactivates the current tool (this one).
         item = null
         editorOpen = false
@@ -1129,11 +1193,18 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         return true
     }
 
-    /** Re-renders the edited text layer [layer] with [cur] (see [commitItem]). */
+    /**
+     * Re-renders the edited text layer [layer] with [cur] (see [commitItem]). v1.9 (F2): [cur]
+     * replaces the bottom text it was loaded from; the layer's other texts ([loadedRest]) are
+     * stored after it and drawn again with it, in the same step.
+     */
     private fun commitLayerEdit(layer: Layer, cur: TextItem): Boolean {
         val loaded = loadedItem
-        // An emptied text deletes its layer (undoable, see deleteEmptiedLayer).
-        if (cur.text.isBlank()) return deleteEmptiedLayer()
+        val rest = loadedRest
+        val restPreps = restPrepared
+        // An emptied text deletes its layer (undoable, see deleteEmptiedLayer), or only itself
+        // when the layer holds other texts (removeEmptiedText).
+        if (cur.text.isBlank()) return emptiedText()
         if (cur == loaded) { discardItem(); return true }
         val prep = preparedFor(cur)
         val newRect = Rect()
@@ -1147,14 +1218,19 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val dirty = Rect(newRect)
         loadedInk?.let { dirty.union(it) }
         loaded?.let { textRectOf(it) }?.let { dirty.union(it) }
+        // v1.9 (F2): the other texts are drawn again too.
+        for (k in rest.indices) textRectOf(rest[k], restPreps[k])?.let { dirty.union(it) }
         dirty.inset(-1, -1)
-        val json = TextCodec.encode(cur)
+        val json = TextCodec.encodeAll(listOf(cur) + rest)
         val oldName = layer.name
         val oldAuto = loaded?.layerName()
         var done = false
         try {
             controller.groupUndo("Edit text") {
-                done = controller.updateTextLayer(layer, json, "Edit text", dirty) { c -> TextRenderer.drawItem(c, cur, prep, null) }
+                done = controller.updateTextLayer(layer, json, "Edit text", dirty) { c ->
+                    TextRenderer.drawItem(c, cur, prep, null)
+                    for (k in rest.indices) TextRenderer.drawItem(c, rest[k], restPreps[k], null)
+                }
                 // A name that was made from the old text follows the new text.
                 if (done && oldAuto != null && isAutoName(oldName, oldAuto) && cur.layerName() != oldName) controller.renameLayer(layer, cur.layerName())
             }

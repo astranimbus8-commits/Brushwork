@@ -327,7 +327,7 @@ object ArrayDraw {
             val prep = TextRenderer.prepare(item)
             if (prep.isEmpty) continue
             val b = prep.docBounds(item)
-            if (r == null) r = b else r.union(b)
+            if (r == null) r = RectF(b) else r.union(b)
         }
         if (r == null) r = RectF()
         synchronized(lock) {
