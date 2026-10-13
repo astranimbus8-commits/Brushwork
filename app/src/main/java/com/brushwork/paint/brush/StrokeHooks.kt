@@ -37,6 +37,12 @@ data class StrokeInfo(
      * stroke (the vector eraser) gets no copies painted.
      */
     val copies: List<FloatArray> = emptyList(),
+    /**
+     * v1.9 (R11, design 2.4.12; additive): the eraser converts the layer to a vector layer first
+     * ([com.brushwork.paint.vector.draw.EraseRoute.CONVERT_THEN_OBJECTS]; A5 folds the conversion
+     * into the erase step). False in F1b (that route is never taken) and for every other stroke.
+     */
+    val convertFirst: Boolean = false,
 )
 
 /** The answer of [BrushTool.strokeHook] for a starting stroke. */

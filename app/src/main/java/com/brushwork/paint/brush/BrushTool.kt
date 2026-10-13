@@ -26,6 +26,9 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.common.SymmetryLabels
 import com.brushwork.paint.vector.StrokeCopies
+import com.brushwork.paint.vector.draw.EraseRoute
+import com.brushwork.paint.vector.draw.EraseRouting
+import com.brushwork.paint.vector.draw.EraseSource
 import kotlin.math.ceil
 import kotlin.math.hypot
 import kotlin.math.log2
@@ -113,7 +116,9 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         val maskTarget = target == EditTarget.MASK
         // On a vector layer's content the eraser removes objects (the stroke hook), not pixels:
         // alpha lock doesn't apply there (v1.5). A path stroke is never hooked: it erases pixels.
-        val erasesObjects = layer.isVectorLayer && !maskTarget && !isPath
+        // v1.9 (design 2.4.12): decided by EraseRouting (F1b: v1.8's `layer.isVectorLayer && !maskTarget && !isPath`).
+        val route = EraseRouting.route(layer, EraseSource.ERASER_BRUSH, maskTarget, isPath)
+        val erasesObjects = route == EraseRoute.OBJECTS || route == EraseRoute.CONVERT_THEN_OBJECTS
         if (kind == StrokeKind.ERASE && layer.alphaLocked && !maskTarget && !erasesObjects) {
             controller.toast("Transparency is locked on \"${layer.name}\": the eraser can't remove pixels")
             return null
@@ -122,7 +127,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         // v1.8: a path stroke is replicated with the maps its caller gives (none by default).
         val maps = if (isPath) StrokeCopies.sanitized(pathMaps) else symmetryMaps(p, isPath = false)
         val toastBefore = controller.message
-        val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false, copies = maps))
+        val hook = if (isPath) StrokeHook.None else strokeHook(StrokeInfo(id, kind, layer, target, preset, seed, p.isStylus, strokeColor(maskTarget), isPath = false, copies = maps, convertFirst = route == EraseRoute.CONVERT_THEN_OBJECTS))
         val recorder = when (hook) {
             StrokeHook.None -> null
             is StrokeHook.Refuse -> { controller.toast(hook.message); return null }

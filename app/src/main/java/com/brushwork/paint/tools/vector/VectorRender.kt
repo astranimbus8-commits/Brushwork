@@ -70,6 +70,11 @@ class VectorPaintSpec private constructor(
     val strokeFill: Path?,
     val bounds: RectF,
     val regions: List<Rect>,
+    /**
+     * v1.9 (R11, design 2.4.12): drawn with PorterDuff DST_OUT (it takes paint away) through the
+     * layer override; never drawn in the screen overlay. False (v1.8) paints.
+     */
+    val erase: Boolean = false,
 ) {
     companion object {
         /** Builds a spec; returns null when there is nothing to draw. */
@@ -82,6 +87,7 @@ class VectorPaintSpec private constructor(
             cap: LineCapStyle = LineCapStyle.ROUND,
             join: JoinStyle = JoinStyle.ROUND,
             strokeFill: VectorPath? = null,
+            erase: Boolean = false,
         ): VectorPaintSpec? {
             val f = fill?.takeUnless { it.isEmpty }
             val s = stroke?.takeUnless { it.isEmpty || strokeWidth <= 0f }
@@ -121,6 +127,7 @@ class VectorPaintSpec private constructor(
                 strokeFill = sf?.toAndroidPath(),
                 bounds = RectF(bb.left, bb.top, bb.right, bb.bottom),
                 regions = regions,
+                erase = erase,
             )
         }
 
@@ -173,6 +180,8 @@ class VectorRenderer {
     // Skia draws an ALPHA_8 bitmap as a coverage mask, which turns DST_IN into a no-op; a shader
     // over the mask supplies it as source alpha instead.
     private val selectionPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    // v1.9 (R11): an erasing spec takes paint away.
+    private val eraseMode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
     private var selectionShaderFor: Bitmap? = null
     private val layerRect = RectF()
 
@@ -186,6 +195,10 @@ class VectorRenderer {
     /** Draws [spec] straight into [canvas] (no selection / alpha-lock handling). */
     fun draw(canvas: Canvas, spec: VectorPaintSpec, maskMode: Boolean, colorMode: ColorMode) {
         val aa = maskMode || colorMode != ColorMode.MONOCHROME
+        // v1.9 (R11): DST_OUT for an erasing spec; none otherwise (v1.8).
+        val mode = if (spec.erase) eraseMode else null
+        if (fillPaint.xfermode !== mode) fillPaint.xfermode = mode
+        if (strokePaint.xfermode !== mode) strokePaint.xfermode = mode
         spec.fill?.let {
             fillPaint.isAntiAlias = aa
             fillPaint.color = paintColor(spec.fillColor, maskMode, colorMode)
@@ -401,7 +414,8 @@ internal class PreviewHost(private val controller: EditorController) {
     fun show(layer: Layer, specs: List<VectorPaintSpec>, asNewLayer: Boolean = false, overlayOnly: Boolean = false) {
         if (specs.isEmpty()) { release(); return }
         val always = overlayOnly && asNewLayer
-        if (always || (interacting && drawsInOverlay(layer, asNewLayer))) {
+        // v1.9 (R11): an erasing spec shows its true removal in the layer, never in the overlay.
+        if (specs.none { it.erase } && (always || (interacting && drawsInOverlay(layer, asNewLayer)))) {
             // Out of the layer (its tiles redraw once without the items) and into the overlay.
             removeOverride()
             overlayLayer = layer

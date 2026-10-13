@@ -47,7 +47,7 @@ object VectorStrokeCapture {
                     state.eraserHintShown = true
                     c.toast(eraserHint(mode))
                 }
-                StrokeHook.Record(VectorEraserRecorder(c, layer, info.preset, info.isStylus, mode))
+                StrokeHook.Record(VectorEraserRecorder(c, layer, info.preset, info.isStylus, mode, convertFirst = info.convertFirst))
             }
             info.toolId != ToolId.BRUSH -> StrokeHook.Refuse(LayerToolRules.pixelOnlyMessage(info.toolId))
             info.kind.isDirect || info.kind != StrokeKind.PAINT -> StrokeHook.Refuse(directTipMessage(info))

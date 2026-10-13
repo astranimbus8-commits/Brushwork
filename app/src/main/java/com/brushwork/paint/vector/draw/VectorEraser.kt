@@ -30,6 +30,11 @@ internal class VectorEraserRecorder(
     private val preset: BrushPreset,
     private val stylus: Boolean,
     private val mode: VectorEraseMode,
+    /**
+     * v1.9 (design 2.4.12): convert the layer to a vector layer first, in the erase step (A5).
+     * F1b: never true (EraseRouting never routes CONVERT_THEN_OBJECTS) and not read.
+     */
+    @Suppress("unused") private val convertFirst: Boolean = false,
 ) : StrokeRecorder {
     override val replacesStroke: Boolean = true
 
