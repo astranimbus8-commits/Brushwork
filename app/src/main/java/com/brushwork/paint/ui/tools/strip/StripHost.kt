@@ -454,35 +454,51 @@ private fun MoreRow(state: StripState, lines: List<List<StripItem>>, hint: Strin
     ) {
         lines.forEachIndexed { i, line ->
             // The hint's further lines are part of its block, drawn with its first.
-            if (hint != null && i in 1 until hintLines) return@forEachIndexed
-            if (i > 0) Spacer(Modifier.height(StripLayout.GAP_DP.dp))
-            if (i == 0 && hint != null && line.isEmpty()) {
-                Box(lineSurface.height(StripLayout.moreRowDp(hintLines).dp), contentAlignment = Alignment.CenterStart) {
-                    HintText(hint, hintLines, TextOverflow.Ellipsis)
-                }
-                return@forEachIndexed
+            if (hint == null || i !in 1 until hintLines) MoreLine(i, line, hint, hintLines, innerDp, lineSurface, guard)
+        }
+    }
+}
+
+/**
+ * Line [i] of the More row (a gap above it after the first): the hint's block when the hint is
+ * alone on its lines, else the line's items on an opaque background, content-width (end-aligned
+ * by the row), or the strip's width when it scrolls sideways.
+ *
+ * A composable of its own with if / else branches, never early returns inside the row's
+ * `forEachIndexed`: v1.9 (R3) keeps the row open while the tool's spec changes (Transform's box
+ * to Free deform, a polygon lasso's first corner), and those returns left the composition's
+ * groups inconsistent on such a change (a removed node not found, or a composition that never
+ * ended).
+ */
+@Composable
+private fun MoreLine(i: Int, line: List<StripItem>, hint: String?, hintLines: Int, innerDp: Float, lineSurface: Modifier, guard: Modifier) {
+    if (i > 0) Spacer(Modifier.height(StripLayout.GAP_DP.dp))
+    if (i == 0 && hint != null && line.isEmpty()) {
+        Box(lineSurface.height(StripLayout.moreRowDp(hintLines).dp), contentAlignment = Alignment.CenterStart) {
+            HintText(hint, hintLines, TextOverflow.Ellipsis)
+        }
+    } else {
+        // The hint shares its line only when MAX_MORE_LINES leaves no other.
+        val hintHere = i == 0 && hint != null
+        // Only the last line can be too wide (MAX_MORE_LINES reached): it scrolls sideways.
+        val scrolls = hintHere || StripLayout.rowWidth(line) > innerDp + 0.5f
+        val scroll = rememberScrollState()
+        Row(
+            (if (scrolls) Modifier.fillMaxWidth() else Modifier)
+                .then(lineSurface)
+                .height(StripLayout.LINE_DP.dp)
+                .then(if (scrolls) Modifier.horizontalScroll(scroll) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            var first = true
+            if (hintHere) {
+                HintText(hint.orEmpty(), 1, TextOverflow.Clip)
+                first = false
             }
-            // The hint shares its line only when MAX_MORE_LINES leaves no other.
-            val hintHere = i == 0 && hint != null
-            // Only the last line can be too wide (MAX_MORE_LINES reached): it scrolls sideways.
-            val scrolls = hintHere || StripLayout.rowWidth(line) > innerDp + 0.5f
-            Row(
-                (if (scrolls) Modifier.fillMaxWidth() else Modifier)
-                    .then(lineSurface)
-                    .height(StripLayout.LINE_DP.dp)
-                    .then(if (scrolls) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                var first = true
-                if (hintHere) {
-                    HintText(hint.orEmpty(), 1, TextOverflow.Clip)
-                    first = false
-                }
-                for (item in line) {
-                    if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
-                    first = false
-                    key(item.key) { ItemCell(item, guard) }
-                }
+            for (item in line) {
+                if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
+                first = false
+                key(item.key) { ItemCell(item, guard) }
             }
         }
     }
