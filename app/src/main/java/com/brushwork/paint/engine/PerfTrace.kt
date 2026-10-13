@@ -39,6 +39,12 @@ object PerfTrace {
         return Stats(samples.size, at(0.5f), at(0.9f), ms(samples.last()))
     }
 
+    /**
+     * v1.9 (F3): the newest sample of [name] in milliseconds, or null before the first: the
+     * frame-times overlay's "last lift".
+     */
+    fun lastMs(name: String): Float? = synchronized(rings) { rings[name]?.last() }?.let { it / 1_000_000f }
+
     /** Forgets every sample (tests, and the overlay when it is switched on). */
     fun clear() {
         synchronized(rings) { rings.clear() }
@@ -74,5 +80,7 @@ object PerfTrace {
         }
 
         fun snapshot(): LongArray = values.copyOf(size)
+
+        fun last(): Long? = if (size == 0) null else values[(next - 1 + SAMPLES) % SAMPLES]
     }
 }

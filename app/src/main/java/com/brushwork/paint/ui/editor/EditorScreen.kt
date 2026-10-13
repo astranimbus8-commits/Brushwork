@@ -87,6 +87,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.text
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -117,6 +120,7 @@ import com.brushwork.paint.ui.common.MenuLabels18
 import com.brushwork.paint.ui.common.SheetHost
 import com.brushwork.paint.ui.common.SheetHostState
 import com.brushwork.paint.ui.common.SheetPill
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.historyTapCanvas
 import com.brushwork.paint.ui.common.historyTaps
 import com.brushwork.paint.ui.common.rememberSheetHostState
@@ -517,6 +521,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         val fitRowExtra: () -> Float = remember(stripState, density, statusDp) {
             { with(density) { (ChromeLayout.fitInsetTop(statusDp, stripState.moreRowDp) - ChromeLayout.fitInsetTop(statusDp)).dp.toPx() } }
         }
+        // v1.9 (design 2.6 step 8): the frame-times overlay's text, as the canvas last drew it.
+        val frameTimes = remember(controller) { mutableStateOf<String?>(null) }
         val fitBottomPx = if (session != null) sessionPanelPx.toFloat() else with(density) { ChromeLayout.fitInsetBottom(navDp, sliderRows).dp.toPx() }
         val outsideTap = if (layersVisible || toolMenuVisible) closeFloating else null
         key(controller) {
@@ -537,6 +543,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     // hit-testable until its last pointer lifts and fade once it moves.
                     v.onTouchSlop = stripState::canvasTouchSlop
                     v.onTouchEnd = stripState::canvasTouchEnded
+                    v.onFrameTimes = { frameTimes.value = it }
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap
                     v.setMirrored(controller.viewMirrored)
@@ -547,6 +554,10 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 onRelease = { v -> if (canvasRef[0] === v) canvasRef[0] = null },
             )
         }
+        FrameTimesNode(
+            text = { frameTimes.value },
+            modifier = Modifier.align(Alignment.TopStart).offset(x = (insetLeftDp + 8f).dp, y = (ChromeLayout.fitInsetTop(statusDp) + 8f).dp),
+        )
 
         // ------------------------------------------------------------ top row + options strip
         val topButtons = listOf(
@@ -928,6 +939,27 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
 /** Room a minimized panel's pill takes above the bottom items (its 44 dp row and a gap). */
 private const val PILL_ROOM = 52f
+
+/**
+ * v1.9 (design 2.6 step 8): the frame-times overlay's semantics while "Show frame times" is on
+ * (tag [V19Tags.FRAME_TIMES], the overlay's two lines as its text). `CanvasView` draws the overlay;
+ * this node draws nothing and takes no touch. Its own scope reads [text], so a new reading
+ * recomposes only this node.
+ */
+@Composable
+private fun FrameTimesNode(text: () -> String?, modifier: Modifier) {
+    val shown = text() ?: return
+    Box(
+        modifier
+            .size(width = FRAME_TIMES_NODE_W.dp, height = FRAME_TIMES_NODE_H.dp)
+            .testTag(V19Tags.FRAME_TIMES)
+            .semantics { this.text = AnnotatedString(shown) },
+    )
+}
+
+/** The frame-times node's size (dp): about the drawn box of two 11 sp lines. */
+private const val FRAME_TIMES_NODE_W = 220f
+private const val FRAME_TIMES_NODE_H = 40f
 
 /** v1.8 (design §3.9): the pill and the bars follow the More row over this long (ms). */
 private const val MORE_ROW_ANIM_MS = 150

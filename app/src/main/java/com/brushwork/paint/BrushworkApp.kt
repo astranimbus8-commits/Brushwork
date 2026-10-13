@@ -11,6 +11,7 @@ import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.engine.GovernorPolicies
 import com.brushwork.paint.engine.MemoryGovernor
+import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.storage.backup.BackupService
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +40,8 @@ class BrushworkApp : Application() {
         CrashLog.install(this)
         repository = ProjectRepository(this)
         settings = AppSettings(this)
+        // v1.9 (design 2.6 step 8): "Show frame times" records the timings from the start.
+        PerfTrace.enabled = settings.showFrameTimes
         // v1.9 (V28, design 2.4.3): one memory policy for the whole app (v1.8's until A7b).
         MemoryGovernor.policy = GovernorPolicies.current()
         registerComponentCallbacks(memoryCallbacks)

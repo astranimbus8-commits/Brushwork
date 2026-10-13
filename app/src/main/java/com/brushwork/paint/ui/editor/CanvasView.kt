@@ -14,6 +14,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.os.SystemClock
+import android.util.TypedValue
 import android.view.HapticFeedbackConstants
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -29,6 +30,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.select.EyedropperTool
 import com.brushwork.paint.ui.theme.IbisColors
+import java.util.Locale
 import java.util.WeakHashMap
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -118,10 +120,24 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      */
     private var checkerMode: TransparencyDisplay = controller.settings.transparencyDisplay
 
+    /**
+     * v1.9 (design 2.6 step 8): "Show frame times" (`AppSettings.showFrameTimes`), cached like
+     * [checkerMode]: while on, the frame-times overlay is drawn at the free area's top left.
+     */
+    private var showFrameTimes: Boolean = controller.settings.showFrameTimes
+
+    /**
+     * v1.9: receives the frame-times overlay's text while it shows (at most every
+     * [FRAME_TIMES_REPORT_MS], when it changed), and null once it is switched off: `EditorScreen`
+     * gives it a semantics node (tag `V19Tags.FRAME_TIMES`) over the drawn text.
+     */
+    var onFrameTimes: ((String?) -> Unit)? = null
+
     /** Held here: SharedPreferences keeps its listeners only weakly. */
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         // A null key: the preferences were cleared (API 30+).
         if (key == null || key == TRANSPARENCY_KEY) refreshCheckerMode()
+        if (key == null || key == FRAME_TIMES_KEY) refreshFrameTimes()
     }
     private val checkerPaint = Paint().apply { shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), checkerMode) }
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -293,6 +309,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         controller.onInvalidate = invalidator
         controller.settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         refreshCheckerMode()
+        refreshFrameTimes()
         if (viewport.hasSize) applyTransform()
     }
 
@@ -317,6 +334,60 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         checkerMode = m
         checkerPaint.shader = createCheckerShader((CHECKER_CELL_DP * density).toInt().coerceAtLeast(2), m)
         invalidate()
+    }
+
+    /**
+     * Takes over a changed "Show frame times": while it is on the timings are recorded
+     * ([PerfTrace.enabled], also when it was switched on outside the settings); off, the overlay
+     * goes (recording is left as it is: a test may measure without it).
+     */
+    private fun refreshFrameTimes() {
+        val on = controller.settings.showFrameTimes
+        if (on) PerfTrace.enabled = true
+        if (on == showFrameTimes) return
+        showFrameTimes = on
+        frameTimesShown = null
+        if (!on) onFrameTimes?.invoke(null)
+        invalidate()
+    }
+
+    // ------------------------------------------------------------------ frame times (v1.9)
+
+    private val frameTimesPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+    private val frameTimesBackPaint = Paint().apply { color = 0xB0000000.toInt() }
+    private val frameTimesBox = RectF()
+    /** The text last reported to [onFrameTimes], and when (uptime ms). */
+    private var frameTimesShown: String? = null
+    private var frameTimesReportedAt = Long.MIN_VALUE / 2
+
+    /**
+     * The frame-times overlay: the last [PerfTrace.SAMPLES] frames' p50, p90 and longest, and
+     * the last brush lift, white on a dark box at the free area's top left (under the options
+     * strip, beside the More row's end-aligned lines). Drawn last, over the document.
+     */
+    private fun drawFrameTimes(canvas: Canvas) {
+        val f = PerfTrace.stats(PerfTrace.FRAME)
+        val lift = PerfTrace.lastMs(PerfTrace.LIFT)
+        val first = String.format(Locale.US, FRAME_TIMES_FORMAT, f.p50Ms, f.p90Ms, f.maxMs)
+        val second = if (lift == null) LIFT_NONE else String.format(Locale.US, LIFT_FORMAT, lift)
+        frameTimesPaint.textSize = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, FRAME_TIMES_SP, resources.displayMetrics)
+        val pad = 6f * density
+        val line = frameTimesPaint.fontSpacing
+        val left = insetLeft + 8f * density
+        val top = insetTop + 8f * density
+        val w = maxOf(frameTimesPaint.measureText(first), frameTimesPaint.measureText(second))
+        frameTimesBox.set(left, top, left + w + 2 * pad, top + 2 * line + 2 * pad)
+        canvas.drawRoundRect(frameTimesBox, pad, pad, frameTimesBackPaint)
+        val base = top + pad - frameTimesPaint.ascent()
+        canvas.drawText(first, left + pad, base, frameTimesPaint)
+        canvas.drawText(second, left + pad, base + line, frameTimesPaint)
+        val text = "$first\n$second"
+        val now = SystemClock.uptimeMillis()
+        if (text != frameTimesShown && now - frameTimesReportedAt >= FRAME_TIMES_REPORT_MS) {
+            frameTimesShown = text
+            frameTimesReportedAt = now
+            onFrameTimes?.invoke(text)
+        }
     }
 
     // ------------------------------------------------------------------ rendering
@@ -379,6 +450,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         // Marching ants: one pending tick at a time (~15 fps), none without a selection.
         removeCallbacks(antsTick)
         if (hasSelection) postDelayed(antsTick, ANTS_FRAME_MS)
+        if (showFrameTimes) drawFrameTimes(canvas)
     }
 
     private fun antsPhase(): Float = (SystemClock.uptimeMillis() % 3_600_000L) / ANTS_FRAME_MS.toFloat()
@@ -1027,6 +1099,14 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         const val CHECKER_CELL_DP = 8f
         /** The `AppSettings.transparencyDisplay` preferences key. */
         const val TRANSPARENCY_KEY = "transparencyDisplay"
+        /** The `AppSettings.showFrameTimes` preferences key (v1.9). */
+        const val FRAME_TIMES_KEY = "showFrameTimes"
+        // The frame-times overlay (v1.9): numbers for the lead, not labels.
+        const val FRAME_TIMES_FORMAT = "frame p50 %.1f  p90 %.1f  max %.1f ms"
+        const val LIFT_FORMAT = "last lift %.1f ms"
+        const val LIFT_NONE = "last lift -"
+        const val FRAME_TIMES_SP = 11f
+        const val FRAME_TIMES_REPORT_MS = 500L
         val SHADOW_WIDTHS_DP = floatArrayOf(22f, 14f, 8f, 3f)
         val SHADOW_ALPHAS = intArrayOf(8, 14, 24, 40)
     }
