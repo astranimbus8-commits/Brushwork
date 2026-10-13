@@ -486,7 +486,7 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   - Tests:
     - `StripHostStateTest`: a spec without the toggle hides its row remembered; the object row
       hides the tool's row and keeps every tool's entry, and deselecting brings it back; a tool
-      entry restores after `closeAll` with no flicker.
+      entry shows the remembered row again after `closeAll`.
     - `UiPrefsStickyRowsTest` (design 2.8's `UiPrefsJournalTest` cases): a history tap never
       changes "strip.openRows"; `closeAll`, `drop`, a tool entry, the chrome covers, the object bar
       and the one-row-at-a-time rule never write it; the object bar's toggle writes only its key.
