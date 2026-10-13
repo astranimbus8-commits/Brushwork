@@ -33,8 +33,8 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
 
     private var toolRef: WeakReference<TextTool>? = null
 
-    /** Decoded text of text layers, by layer id (dropped when the stored text changes). */
-    private val decoded = HashMap<Long, Pair<String, TextItem?>>()
+    /** Decoded texts of text layers, by layer id (dropped when the stored text changes). */
+    private val decoded = HashMap<Long, Pair<String, List<TextItem>>>()
 
     /** Texts re-flowed since this controller started (for tests and diagnostics). */
     var reflowCount: Int = 0
@@ -59,46 +59,71 @@ class TextWrapReflow(private val c: EditorController) : EditListener {
             val data = layer.textData ?: continue
             if (alive == null) alive = HashSet()
             alive += layer.id
-            val item = itemOf(layer, data) ?: continue
-            if (!item.wrapActive || item.wrap.sourceLayerId != source.id) continue
+            val items = itemsOf(layer, data)
+            if (items.none { wrapsAround(it, source) }) continue
             // A locked text stays as it is (locked = no edits); a hidden one follows its picture.
             if (layer === open || doc.effectiveLocked(layer)) continue
-            reflow(layer, item, source)
+            reflow(layer, items, source)
         }
         if (decoded.size > (alive?.size ?: 0) + CACHE_SLACK) decoded.keys.retainAll(alive ?: emptySet())
     }
 
-    private fun itemOf(layer: Layer, data: String): TextItem? {
+    private fun wrapsAround(item: TextItem, source: Layer): Boolean = item.wrapActive && item.wrap.sourceLayerId == source.id
+
+    /** Every text of [layer] (stored as [data]), bottom first; empty when it can't be read. */
+    private fun itemsOf(layer: Layer, data: String): List<TextItem> {
         val cached = decoded[layer.id]
         if (cached != null && (cached.first === data || cached.first == data)) return cached.second
-        val item = TextCodec.decode(data)
-        decoded[layer.id] = data to item
-        return item
+        val items = TextCodec.decodeAll(data)
+        decoded[layer.id] = data to items
+        return items
     }
 
     /**
-     * Draws text layer [layer] ([item]) again around [source]'s current outline, folded into the
-     * newest undo step. Nothing happens when the outline is unchanged (or can't be traced).
+     * Draws text layer [layer] ([items], bottom first) again with every text that wraps around
+     * [source] fitted to its current outline, folded into the newest undo step. Nothing happens
+     * when no outline changed (or none can be traced). v1.9 (F2): every wrapping text of the layer
+     * re-flows and every text is drawn again (a frame of a linked story re-flows its story only
+     * when it is alone in its layer, as I24 keeps it); one text re-flows exactly as in v1.8.
      */
-    private fun reflow(layer: Layer, item: TextItem, source: Layer) {
-        val polys = contours.polygons(source, item.wrap.contour) ?: return
-        if (polys == item.wrap.polygons) return
-        // v1.6 seam: a frame of a linked story re-flows its whole story (its frames' slices
-        // depend on each other), in this step; never re-rendered alone.
-        if (item.thread.isOn) {
-            c.textThreads.reflowStory(item.thread.storyId)
-            return
+    private fun reflow(layer: Layer, items: List<TextItem>, source: Layer) {
+        var changed = false
+        val next = ArrayList<TextItem>(items.size)
+        for (item in items) {
+            if (!wrapsAround(item, source)) {
+                next += item
+                continue
+            }
+            val polys = contours.polygons(source, item.wrap.contour)
+            if (polys == null || polys == item.wrap.polygons) {
+                next += item
+                continue
+            }
+            // v1.6 seam: a frame of a linked story re-flows its whole story (its frames' slices
+            // depend on each other), in this step; never re-rendered alone.
+            if (item.thread.isOn) {
+                if (items.size == 1) {
+                    c.textThreads.reflowStory(item.thread.storyId)
+                    return
+                }
+                next += item
+                continue
+            }
+            next += item.copy(wrap = item.wrap.copy(polygons = polys))
+            changed = true
         }
-        val next = item.copy(wrap = item.wrap.copy(polygons = polys))
-        val prep = TextRenderer.prepare(next)
-        // Everything the old text covered (its real pixels) and the new text.
+        if (!changed) return
+        val preps = next.map { TextRenderer.prepare(it) }
+        // Everything the old texts covered (their real pixels) and the new texts.
         val dirty = Rect()
-        textInkOf(layer, item)?.let { dirty.union(it) }
-        textRectOf(next, prep)?.let { dirty.union(it) }
+        for (k in items.indices) {
+            if (next[k] !== items[k]) textInkOf(layer, items[k])?.let { dirty.union(it) }
+            textRectOf(next[k], preps[k])?.let { dirty.union(it) }
+        }
         if (dirty.isEmpty) return
         dirty.inset(-1, -1)
-        val json = TextCodec.encode(next)
-        val draw: (Canvas) -> Unit = { cv -> TextRenderer.drawItem(cv, next, prep, null) }
+        val json = TextCodec.encodeAll(next)
+        val draw: (Canvas) -> Unit = { cv -> for (k in next.indices) TextRenderer.drawItem(cv, next[k], preps[k], null) }
         try {
             c.amendLastStep {
                 // A hidden text still follows its picture, so it is right when it is shown again.
