@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.tools.strip
 
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
@@ -48,6 +49,8 @@ import org.robolectric.shadows.ShadowLog
  *   back the row shows again. Tool entry shows the remembered row again after a closeAll.
  * - The object bar's row hides the tool's row while it shows and keeps every tool's entry; the
  *   objects deselected (the bar gone), the tool's row shows again.
+ * - A canvas touch fades the rows from the touch slop to its last lift, also when that lift came
+ *   on a finger that joined the gesture on a row.
  * - Each item is keyed by [StripItem.key]: an item that comes before an open dropdown, on row 1 or
  *   on the More row, never resets it (the dropdown stays open).
  */
@@ -205,6 +208,60 @@ class StripHostStateTest {
         state.hiddenByChrome = false
         assertTrue(state.objectRowOpen)
     }
+
+    /**
+     * v1.9 (R3 (a)): a canvas touch, as `CanvasView` reports it (down, past the slop, the last
+     * lift) and as a finger that joined it on a row ends it (no UI): the rows fade only between the
+     * slop and the end, to [StripState.ROW_FADE_ALPHA].
+     */
+    @Test
+    fun aCanvasTouchFadesTheRowsFromTheSlopToTheLastLift() {
+        val state = StripState()
+        assertEquals(0.25f, StripState.ROW_FADE_ALPHA, 0f)
+        assertFalse(state.canvasTouchDown || state.canvasTouchMoved)
+        state.canvasTouchSlop()
+        assertFalse("no slop without a touch", state.canvasTouchMoved)
+
+        state.canvasTouchStarted()
+        assertTrue("down", state.canvasTouchDown)
+        assertFalse("…not faded before the slop", state.canvasTouchMoved)
+        state.canvasTouchSlop()
+        assertTrue("past the slop: faded", state.canvasTouchDown && state.canvasTouchMoved)
+        state.canvasTouchEnded()
+        assertFalse("the last lift: shown again", state.canvasTouchDown || state.canvasTouchMoved)
+
+        // A new touch starts unfaded.
+        state.canvasTouchStarted()
+        state.canvasTouchSlop()
+        state.canvasTouchStarted()
+        assertTrue(state.canvasTouchDown)
+        assertFalse("a new touch starts unfaded", state.canvasTouchMoved)
+
+        // A gesture whose last finger joined it on a row: its end goes to the canvas view, and
+        // the touch ends here, also without a view.
+        state.canvasTouchSlop()
+        val ended = mutableListOf<Int>()
+        state.endCanvasGesture = { ended += it.actionMasked }
+        val up = MotionEvent.obtain(0L, 10L, MotionEvent.ACTION_UP, 10f, 10f, 0)
+        try {
+            state.joinedGestureEnded(up)
+        } finally {
+            up.recycle()
+        }
+        assertEquals(listOf(MotionEvent.ACTION_UP), ended)
+        assertFalse(state.canvasTouchDown || state.canvasTouchMoved)
+        state.endCanvasGesture = null
+        state.canvasTouchStarted()
+        val cancel = MotionEvent.obtain(0L, 10L, MotionEvent.ACTION_CANCEL, 10f, 10f, 0)
+        try {
+            state.joinedGestureEnded(cancel)
+        } finally {
+            cancel.recycle()
+        }
+        assertFalse("ended without a view", state.canvasTouchDown)
+        assertEquals(1, ended.size)
+    }
+
     @Test
     fun anInsertedItemKeepsAnOpenDropdown() {
         val state = StripState()
