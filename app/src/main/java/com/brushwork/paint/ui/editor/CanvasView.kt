@@ -121,8 +121,9 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private var checkerMode: TransparencyDisplay = controller.settings.transparencyDisplay
 
     /**
-     * v1.9 (design 2.6 step 8): "Show frame times" (`AppSettings.showFrameTimes`), cached like
-     * [checkerMode]: while on, the frame-times overlay is drawn at the free area's top left.
+     * v1.9 (design 2.6 step 8): the frame-times switch (`StabilityLabels19.SHOW_FRAME_TIMES`,
+     * `AppSettings.showFrameTimes`), cached like [checkerMode]: while on, the frame-times overlay
+     * is drawn at the free area's top left.
      */
     private var showFrameTimes: Boolean = controller.settings.showFrameTimes
 
@@ -337,7 +338,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     }
 
     /**
-     * Takes over a changed "Show frame times": while it is on the timings are recorded
+     * Takes over a changed frame-times switch: while it is on the timings are recorded
      * ([PerfTrace.enabled], also when it was switched on outside the settings); off, the overlay
      * goes (recording is left as it is: a test may measure without it).
      */

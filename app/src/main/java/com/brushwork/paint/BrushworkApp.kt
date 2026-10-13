@@ -40,7 +40,8 @@ class BrushworkApp : Application() {
         CrashLog.install(this)
         repository = ProjectRepository(this)
         settings = AppSettings(this)
-        // v1.9 (design 2.6 step 8): "Show frame times" records the timings from the start.
+        // v1.9 (design 2.6 step 8): the frame-times switch (StabilityLabels19.SHOW_FRAME_TIMES)
+        // records the timings from the start.
         PerfTrace.enabled = settings.showFrameTimes
         // v1.9 (V28, design 2.4.3): one memory policy for the whole app (v1.8's until A7b).
         MemoryGovernor.policy = GovernorPolicies.current()

@@ -941,8 +941,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 private const val PILL_ROOM = 52f
 
 /**
- * v1.9 (design 2.6 step 8): the frame-times overlay's semantics while "Show frame times" is on
- * (tag [V19Tags.FRAME_TIMES], the overlay's two lines as its text). `CanvasView` draws the overlay;
+ * v1.9 (design 2.6 step 8): the frame-times overlay's semantics while the frame-times switch
+ * (`StabilityLabels19.SHOW_FRAME_TIMES`) is on (tag [V19Tags.FRAME_TIMES], the overlay's two
+ * lines as its text). `CanvasView` draws the overlay;
  * this node draws nothing and takes no touch. Its own scope reads [text], so a new reading
  * recomposes only this node.
  */
