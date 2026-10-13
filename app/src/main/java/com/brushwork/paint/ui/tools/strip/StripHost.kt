@@ -42,6 +42,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -64,7 +70,6 @@ import com.brushwork.paint.ui.common.IconLongPressScope
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.longPressLabel
-import com.brushwork.paint.ui.editor.blockCanvasTouches
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
@@ -400,38 +405,49 @@ private fun ConvertedStrip(
             }
             if (open) {
                 Spacer(Modifier.height(StripLayout.GAP_DP.dp))
-                MoreRow(lines, spec.hint, StripLayout.hintLineCount(split, measuredHint), inner)
+                MoreRow(state, lines, spec.hint, StripLayout.hintLineCount(split, measuredHint), inner)
             }
         }
     }
 }
 
 /**
- * The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first;
- * opaque, with a 1 dp edge. The hint alone on its [hintLines] lines (see
- * [StripLayout.hintLineCount]) is one block that tall, its text in up to that many lines, then an
- * ellipsis.
+ * The More row: up to [StripLayout.MAX_MORE_LINES] lines of 44 dp, 4 dp apart, the hint first.
+ * The hint alone on its [hintLines] lines (see [StripLayout.hintLineCount]) is one block that
+ * tall, its text in up to that many lines, then an ellipsis.
+ *
+ * v1.9 (R3): the row stays open over the canvas, so it covers as little of it as it can. Each
+ * line (and the hint's block) is opaque only behind its own items, with a 1 dp edge, end-aligned
+ * under the toggle; only a line too wide for the strip (it scrolls sideways) spans the strip. The
+ * band itself (tag [V18Tags.STRIP_MORE_ROW], the strip's width, the same height as before) has
+ * no pointer input: a touch beside a line, in the 4 dp gaps or on a line's background between
+ * its controls reaches the canvas. From a canvas pointer down until the last lift the controls
+ * take no touch ([passCanvasGesture]), and once that gesture passes the touch slop the row fades
+ * to [StripState.ROW_FADE_ALPHA] (drawn only, never recomposed), back when the last finger lifts.
  */
 @Composable
-private fun MoreRow(lines: List<List<StripItem>>, hint: String?, hintLines: Int, innerDp: Float) {
+private fun MoreRow(state: StripState, lines: List<List<StripItem>>, hint: String?, hintLines: Int, innerDp: Float) {
     val shape = RoundedCornerShape(IbisDims.OptionsStripRadius)
+    // A 1 dp edge sets each line apart from row 1 and from the canvas under it.
+    val lineSurface = Modifier
+        .clip(shape)
+        .background(IbisColors.Menu, shape)
+        .border(1.dp, BrushworkColors.ChromeBorder, shape)
+        .padding(horizontal = ROW_PADDING.dp)
+    val guard = Modifier.passCanvasGesture(state)
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(shape)
-            .background(IbisColors.Menu, shape)
-            // A 1 dp edge sets the row apart from row 1 and from the canvas under it.
-            .border(1.dp, BrushworkColors.ChromeBorder, shape)
-            .blockCanvasTouches()
-            .testTag(V18Tags.STRIP_MORE_ROW)
-            .padding(horizontal = ROW_PADDING.dp),
+            .graphicsLayer { alpha = if (state.canvasTouchMoved) StripState.ROW_FADE_ALPHA else 1f }
+            .testTag(V18Tags.STRIP_MORE_ROW),
+        horizontalAlignment = Alignment.End,
     ) {
         lines.forEachIndexed { i, line ->
             // The hint's further lines are part of its block, drawn with its first.
             if (hint != null && i in 1 until hintLines) return@forEachIndexed
             if (i > 0) Spacer(Modifier.height(StripLayout.GAP_DP.dp))
             if (i == 0 && hint != null && line.isEmpty()) {
-                Box(Modifier.fillMaxWidth().height(StripLayout.moreRowDp(hintLines).dp), contentAlignment = Alignment.CenterStart) {
+                Box(lineSurface.height(StripLayout.moreRowDp(hintLines).dp), contentAlignment = Alignment.CenterStart) {
                     HintText(hint, hintLines, TextOverflow.Ellipsis)
                 }
                 return@forEachIndexed
@@ -441,8 +457,8 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, hintLines: Int,
             // Only the last line can be too wide (MAX_MORE_LINES reached): it scrolls sideways.
             val scrolls = hintHere || StripLayout.rowWidth(line) > innerDp + 0.5f
             Row(
-                Modifier
-                    .fillMaxWidth()
+                (if (scrolls) Modifier.fillMaxWidth() else Modifier)
+                    .then(lineSurface)
                     .height(StripLayout.LINE_DP.dp)
                     .then(if (scrolls) Modifier.horizontalScroll(rememberScrollState()) else Modifier),
                 verticalAlignment = Alignment.CenterVertically,
@@ -455,7 +471,31 @@ private fun MoreRow(lines: List<List<StripItem>>, hint: String?, hintLines: Int,
                 for (item in line) {
                     if (!first) Spacer(Modifier.width(StripLayout.GAP_DP.dp))
                     first = false
-                    key(item.key) { ItemCell(item) }
+                    key(item.key) { ItemCell(item, guard) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * v1.9 (R3): while a canvas gesture is down ([StripState.canvasTouchDown]) a pointer that lands on
+ * a More-row control is consumed before the control sees it (a clickable, a slider or a dropdown
+ * ignores consumed events), to its lift: it only joins the canvas' gesture (the canvas view gets
+ * every pointer of the screen, so a second finger there pinches or pans). Pointers that landed
+ * before the canvas gesture keep working. Put on a control's own bounds only, never on a line, so
+ * a line's background between controls passes touches to the canvas.
+ */
+internal fun Modifier.passCanvasGesture(state: StripState): Modifier = pointerInput(state) {
+    awaitPointerEventScope {
+        val joined = HashSet<PointerId>()
+        while (true) {
+            val event = awaitPointerEvent(PointerEventPass.Initial)
+            for (change in event.changes) {
+                if (change.changedToDownIgnoreConsumed() && state.canvasTouchDown) joined += change.id
+                if (change.id in joined) {
+                    change.consume()
+                    if (change.changedToUpIgnoreConsumed()) joined -= change.id
                 }
             }
         }
@@ -496,12 +536,19 @@ internal fun rememberHintLines(hint: String?, widthPx: Int): Int {
  * One item at its declared width; a hidden item keeps its room (neighbours never jump). Each cell
  * is composed under key(item.key), so an item inserted or removed before it in the same line
  * keeps its state (an open popup or dropdown stays open). Its icon-only controls show their name
- * on a long press ([IconLongPressScope], v1.8 polish).
+ * on a long press ([IconLongPressScope], v1.8 polish). [guard] wraps the shown control itself,
+ * not its cell (the More row's [passCanvasGesture]).
  */
 @Composable
-private fun ItemCell(item: StripItem) {
+private fun ItemCell(item: StripItem, guard: Modifier = Modifier) {
     Box(Modifier.width(item.width), contentAlignment = Alignment.Center) {
-        if (item.shown) IconLongPressScope { item.content() }
+        if (item.shown) {
+            if (guard === Modifier) {
+                IconLongPressScope { item.content() }
+            } else {
+                Box(guard, contentAlignment = Alignment.Center) { IconLongPressScope { item.content() } }
+            }
+        }
     }
 }
 
