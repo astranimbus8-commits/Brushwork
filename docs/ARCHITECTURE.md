@@ -311,8 +311,8 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   optional `hint` (the More row's first line, or first two: `StripLayout.MAX_HINT_LINES`),
   `overlays` (every sheet and dialog the strip opens) and `movedInto` (v1.7 handles now inside an
   item's popup). `StripSpec.EMPTY` shows nothing. `StripContext`
-  (`selectionBarShown`, `vectorMode`, `closeMore`) reaches the builders through
-  `LocalStripContext`.
+  (`selectionBarShown`, `vectorMode`, `closeMore`; the editor's `closeMore` is a no-op since
+  v1.9, R3) reaches the builders through `LocalStripContext`.
 - **Layout (`StripLayout.kt`, frozen, I18).** `split(spec, availableDp)` is pure: available = row 1's
   content width (the screen less 28 dp: 332 dp at 360, 364 dp at 392) less 44 dp while the VECTOR
   cell shows; the 44 dp toggle (plus its 4 dp gap) is reserved as soon as an item or the hint goes
@@ -331,15 +331,17 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
   `StripHost(ToolStrips.of(controller), ...)`. The host draws row 1 (tag `V18Tags.STRIP_ROW1`:
   the 40 dp VECTOR cell on a vector layer, the items, the 44 dp toggle at the end, described
   `StripLabels18.MORE_TOGGLE`, Expanded / Collapsed, tag `V18Tags.STRIP_TOGGLE`) and, while open,
-  the opaque More row (`IbisColors.Menu`, tag `V18Tags.STRIP_MORE_ROW`) 4 dp under it, floating
-  over the canvas. Row 1 is fixed at 360 dp and wider (see "Row 1 below 360 dp").
+  the More row (tag `V18Tags.STRIP_MORE_ROW`) 4 dp under it, floating over the canvas. Since v1.9
+  (R3) only its lines are opaque (`IbisColors.Menu`), content-width and end-aligned under the
+  toggle (see "State, memory and canvas touches"). Row 1 is fixed at 360 dp and wider (see "Row 1
+  below 360 dp").
   `spec.overlays` are composed whenever the strip shows, so a sheet opened from the More row
   outlives it.
   While the row is open, the toggle is filled with `IbisColors.Accent` and the chevron points up.
-  A long press shows its label without toggling. A `SideEffect` drops the open entry of a spec
-  that can no longer open its row (`StripState.drop`): one that became wide enough for every
-  item, or one with nothing left for the More row. So a row never stays open unseen and
-  swallows a canvas touch, and it comes back closed. Each cell is composed under
+  A long press shows its label without toggling. A `SideEffect` hides the row of a spec that can
+  no longer open it (`StripState.drop`): one that became wide enough for every item, or one with
+  nothing left for the More row. v1.9 (R3): the row stays remembered and shows again as soon as
+  the spec shows its toggle again (`StripState.undrop`). Each cell is composed under
   `key(item.key)`, so an item that comes or goes before an open popup, on row 1 or on the More
   row, never resets it (`StripHostStateTest`). `LocalStripOverride` (`ui/tools/ToolOptionsBar.kt`,
   null in the app) lets a test show a fake `StripSpec` on any tool.
@@ -399,46 +401,121 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
     `StripRig.WIDTHS` with `rememberHintLines`; rule 5 of `StripInventory.rules(spec, hintLines)`
     counts those lines, and no hint line may hold items. `TextFrameStripTest` checks every text
     for clipping, the hint included, and checks the row height for the hint's lines.
-- **State and close rules (D25).** `StripState` (hoisted in `EditorScreen`, per tool, for the
-  session) holds the open rows and `moreRowDp`. The host closes the row on a tool or vector-mode
-  change and when the strip leaves the screen; `EditorScreen` closes it when a chrome surface
-  opens or the interface hides, and wires `StripContext.closeMore` to it (an item calls it before
-  it opens a sheet or a dialog; an anchored dropdown never does). The X / Y pill and the
-  selection and object bars move down by `moreRowDp` + 4 dp (`ChromeLayout.pillTop(statusDp,
-  moreRowDp)`, `selectionBarTop(..., moreRowDp)`), animated over 150 ms.
-
-  A canvas touch closes an open row. The v1.8 integration replaced part of D25 (a lead rule):
-  history taps reach the document through an open row.
-  - When the strip's More row or the object bar's is open (`StripState.anyOpen`, which counts
-    `objectRowOpen`), a canvas gesture closes it at its first finger:
-    `EditorScreen.consumeCanvasTouch` returns true to `CanvasView.onConsumeTouch`, and the
-    gesture runs in `Mode.CONSUMED` until every pointer lifts. In that mode it never draws, pans,
-    zooms or long-presses, and a pen that joins it draws nothing.
-  - Its fingers still feed `TouchGestureClassifier`: the first finger is held and never given to
-    the tool, each finger that joins is counted, and the last lift decides.
-  - A two-finger tap undoes once, and a three-finger tap redoes once, through
-    `CanvasView.handleTap`. The `twoFingerUndo` / `threeFingerRedo` settings still gate them, and
-    the feedback is the same as for any canvas tap. So one history tap both closes the row and
-    acts.
-  - These close the row and change no history: one finger (a tap or a drag); a pinch or a
-    two-finger pan; any gesture that a pen joins (`gestureHadStylus`; the classifier is
-    invalidated).
-  - Canvas finger first, then a finger on the UI: `HistoryTapHub` claims the gesture in its
-    `downsDone`, and `yieldToHistoryTap` invalidates the consumed gesture's classifier and keeps
-    the gesture consumed. Once the hub claims, the canvas never completes its own tap: Compose
-    stops dispatching to the interop view after a consumed change, so the yield's invalidate is a
-    second guard. The hub runs the one undo or redo, so the history never moves twice, and the
-    control under the UI finger does not fire.
-  - Tests: `MoreRowHistoryTapsTest` (`qa18`, 392 × 873 dp) sends real multi-finger events
-    through the editor's window, on the strip's row and on the object bar's. The canvas has three
-    states, so a doubled undo or redo shows. It covers a one-finger tap and a drag, a pinch and a
-    pan (these only close the row); a two-finger tap (one undo) and a three-finger tap (one
-    redo); `twoFingerUndo` off (a two-finger tap only closes the row) and `threeFingerRedo` off (a
-    three-finger tap only closes it); a canvas finger plus a UI finger (exactly one undo) and two
-    canvas fingers plus a UI finger (exactly one redo), the control under the UI finger never
-    firing. `CanvasConsumedTouchRobolectricTest`, `MoreRowCloseTest` and `ObjectBarMoreTest` now
-    expect one undo (and one redo) where they expected none. `MoreRowOverlayTest` is unchanged: it
-    has no canvas or history assertions and covers overlays and dropdowns only.
+- **State, memory and canvas touches (D25; v1.9, R3 "sticky rows").** `StripState` (hoisted in
+  `EditorScreen` per controller, with the app's `UiPrefs`) holds the rows the user opened and
+  `moreRowDp`. A row opens and closes only through its own toggle (the strip's
+  `V18Tags.STRIP_TOGGLE`, the object bar's More toggle); nothing else forgets it. v1.9 replaced
+  v1.8's rule that a canvas touch, a tool change, a chrome surface or an item's `closeMore`
+  closes the row.
+  - Memory (fact V27, I26). `toggle(id)` (the strip's toggle) writes `UiPrefs.stripOpenRows`
+    (file "brushwork_ui", key "strip.openRows": a string set of `ToolId` names; names this version
+    does not know are written back as they were). `toggleObjectRow()` (the object bar's toggle)
+    writes `UiPrefs.objectBarMoreOpen` ("objectBar.moreOpen"). Both load when the state is made,
+    so after a relaunch the remembered row shows from the tool's first frame. Nothing else writes
+    them, and a history tap's `restoreUiMark` never takes them back. `UiPrefs` is not journaled
+    and not in the backup's settings.json. Without `prefs` (a test rig, a bar on its own) the
+    memory lasts as long as the state.
+  - Hiding never forgets:
+    - `closeAll()` hides every remembered row until its tool's next `enter(id)` or its toggle.
+      The host's `LaunchedEffect(state, toolId, vectorMode)` calls `enter(toolId)` on a tool or
+      vector-mode change: `closeAll()`, then the tool's memory and the object bar's row show
+      again, in one snapshot. `showsFor(id)` (what the host draws) ignores the hides until
+      `enter` ran for that tool, so the remembered row shows from the tool's first frame and the
+      entry changes nothing on screen. The host's `DisposableEffect` calls `left()` when the strip
+      leaves the screen (a filter, the interface hidden).
+    - `drop(id)` / `undrop(id)`: the host's `SideEffect` hides a tool's row while its spec shows
+      no More toggle, until it shows one again (Transform's next transformation, a narrower
+      window).
+    - `hiddenByChrome` hides every row while it is true. `EditorScreen` sets it, edge-triggered,
+      while the layer window, a panel (not minimized to its pill), an expanded sheet, the tool menu
+      or "Hide interface" covers the rows; they show again when the cover goes. A toggle tap
+      meanwhile clears it: the user asked for that row. The top-right "More options" menu,
+      dropdowns, dialogs and anchored popups are windows over the row: they keep closing on an
+      outside tap and leave the row as it was.
+    - One row at a time: while objects are selected and the object bar's row shows
+      (`objectRowOpen`: remembered, not hidden, and the bar shows its toggle, `objectBarShown`),
+      the tool's row is hidden. When the objects are deselected (`objectBarGone()`) or that row
+      closes, the tool's remembered row shows again. The strip's toggle opening its row hides the
+      object bar's row likewise, until the next `enter` or the bar's next showing.
+  - `StripContext.closeMore` is a no-op in the editor ("v1.9 (R3): rows close only by their
+    toggle"); the 33 call sites stay, and the sheet an item opens covers the row instead.
+    `ToolOptionsBar` forwards the outer context's `closeMore`, so a test rig (`StripRig`, whose
+    `closeMore` is `closeAll`) can still hide the row with it.
+  - The X / Y pill and the selection and object bars move down by `moreRowDp` + 4 dp
+    (`ChromeLayout.pillTop(statusDp, moreRowDp)`, `selectionBarTop(..., moreRowDp)`), animated
+    over 150 ms.
+  - Opening or closing a row never moves the canvas: the row floats over it. An explicit fit
+    (opening an artwork, the first fit after a relaunch, "Fit to screen") leaves room for the open
+    row: `ChromeLayout.fitInsetTop(statusDp, moreRowDp = 0f)` adds the row's height and its 4 dp
+    gap to v1.8's inset (137 dp on the reference phone, 185 dp with a one-line row), and
+    `EditorScreen` gives `CanvasView.fitTopExtra` the difference, which only a fit reads.
+  - Canvas touches. A canvas touch is never consumed (v1.8's `Mode.CONSUMED`,
+    `EditorScreen.consumeCanvasTouch` and `CanvasView.onConsumeTouch` are gone): one finger uses
+    the tool, two fingers pan and zoom, two- and three-finger taps undo and redo, and the row
+    stays open.
+    - The row covers only its lines (`MoreRow`, `MoreLine`): each line, and the hint's block, is
+      opaque behind its own items with a 1 dp edge, content-width and end-aligned under the
+      toggle; only a line too wide for the strip spans it and scrolls sideways. The band (tag
+      `V18Tags.STRIP_MORE_ROW`, the strip's width, the row's height) has no pointer input, so a
+      touch beside a line, in the 4 dp gaps or on a line's background between controls reaches
+      the canvas.
+    - `CanvasView.onTouchDown` / `onTouchSlop` / `onTouchEnd` drive `StripState.canvasTouchStarted`
+      / `canvasTouchSlop` / `canvasTouchEnded` (`canvasTouchDown`, `canvasTouchMoved`). Once the
+      touch passes the touch slop the rows fade to `StripState.ROW_FADE_ALPHA` (0.25, in a
+      graphics layer, never a recomposition) and come back when the last finger lifts.
+    - While a canvas touch is down, `Modifier.passCanvasGesture(state, taps)` on each control of
+      the More row and of the object bar's row (never on a line) consumes a pointer that lands on
+      it, in the Initial pass, so the control never sees it; pointers that landed before the
+      canvas touch keep working. The canvas view gets every pointer of the window, so that finger
+      pinches or pans with the canvas' own. `HistoryTapSink.onCanvasDown(HistoryTapSlots.EDITOR,
+      id)` tells the hub it is a canvas pointer, so the canvas keeps the gesture and recognizes
+      its two- and three-finger taps itself instead of the hub claiming a tap over the UI.
+    - When such a joined finger lifts last (the window's `ACTION_UP` or `ACTION_CANCEL`), Compose
+      gives that event to the row only. `StripState.joinedGestureEnded(e)` hands it to
+      `endCanvasGesture`, which `EditorScreen` sets to `CanvasView.endJoinedGesture(e)` (the event
+      moved to the view's coordinates and dispatched while the view's touch span is open), and
+      ends the touch. The joined finger's moves after the canvas' own fingers lifted do not reach
+      the view.
+    - A canvas finger first, then a finger on any other control (row 1, the pill, the top row):
+      `HistoryTapHub` claims the gesture as before, and the canvas yields
+      (`CanvasView.yieldToHistoryTap`; see "History taps over the UI").
+  - `MoreLine` is a composable of its own, with if / else branches instead of early returns in
+    the row's loop: the row now stays open while a tool's spec changes (Transform's box to Free
+    deform, a polygon lasso's first corner), and those returns left the composition's groups
+    inconsistent (a removed node not found, or a composition that never ended).
+  - Tests:
+    - `StripHostStateTest`: a spec without the toggle hides its row remembered; the object row
+      hides the tool's row and keeps every tool's entry, and deselecting brings it back; a tool
+      entry restores after `closeAll` with no flicker.
+    - `UiPrefsStickyRowsTest` (design 2.8's `UiPrefsJournalTest` cases): a history tap never
+      changes "strip.openRows"; `closeAll`, `drop`, a tool entry, the chrome covers, the object bar
+      and the one-row-at-a-time rule never write it; the object bar's toggle writes only its key.
+    - `FitInsetTopTest` (JVM): `fitInsetTop` without a row is v1.8's, and each of 1 to 3 lines adds
+      its height and gap.
+    - `MoreRowHistoryTapsTest` (`qa18`, 392 × 873 dp, real multi-finger events through the
+      editor's window, on the strip's row and on the object bar's; the canvas has three states, so
+      a doubled undo or redo shows): a two-finger tap undoes once and a three-finger tap redoes
+      once, and neither acts with its setting off; a canvas finger plus a finger on a row-1
+      control (exactly one undo) and two canvas fingers plus one (exactly one redo), the control
+      never firing; a pinch zooms and a pan pans, with no step; with the strip's row a brush drag
+      paints one step. The row stays open throughout.
+    - `MoreRowCloseTest`, `ObjectBarMoreTest`, `MoreRowOverlayTest`, `Qa18CompatSessionUiTest`,
+      the QA menu tests and the cross kit pin the sticky rows: items, canvas touches, tool
+      changes, chrome covers and sheets leave the rows remembered.
+      `CanvasConsumedTouchRobolectricTest` went with `Mode.CONSUMED`.
+    - `qa19/Qa19StickyRowsUiTest` (392 dp, the Shape tool's row in the real editor, a 300 × 600
+      artwork that a fit frames under the row): shapes drawn under the row and beside a short line
+      land, one step each; a pinch with one finger on the row zooms, with no shape and no step,
+      whichever finger lifts first, and the row then takes taps; two-finger taps undo, also with
+      one finger on the row; after a tool switch, the layers panel and "Hide interface" the row
+      shows again; the "More options" menu still closes on an outside tap; a relaunch shows the
+      row from the start, the first fit and "Fit to screen" leave room for it, and opening or
+      closing it never moves the canvas. `Qa19StickyRowsNarrowUiTest` runs the canvas touches at
+      360 dp at font scales 1, 1.3 and 2.0, with no text overflow in the open row except the Shape
+      strip's angle cell (`ShapeStripItems.ANGLE_LABEL`, area A9's; `StripFontScaleTest` checks it,
+      I27).
+    - `Smoke.controller` clears the `UiPrefs` file, so each test's editors start with no
+      remembered row (otherwise a row one editor opened shows in the next).
 - **The vector object bar (`ui/vector/VectorObjectBar.kt`, H).**
   - `VectorObjectBar(controller, modifier, state: StripState?)` is one row that never scrolls. `EditorScreen` passes its `stripState`.
   - `ObjectBarLayout.split(units, ranks, innerDp)` is pure. When all the buttons fit at 40 dp (`MIN_ITEM_DP`), they share the row at up to `MAX_ITEM_DP` (46 dp) each, with no toggle.
@@ -458,9 +535,10 @@ by hand outside `engine/`) and rule L (no v1.8 label retyped as a literal outsid
 
     This continues until the rest fit beside the 44 dp toggle `StripLabels18.MORE_OBJECT`. The kept buttons are widened to fill the row. Widths are floored to whole px so the toggle measures exactly 44 dp.
   - At 360 and 392 dp, row 1 holds Delete, Duplicate, Front, Back, Recolor, Transform and Deselect. Bring forward, Send backward, Array and Detach mirror copies wait, in that order, in the More row under the bar. Detach mirror copies shows only while a selected object has copies.
-  - The open state is `StripState.objectRowOpen`. `anyOpen` counts it and `closeAll` clears it, so the D25 rules close it like the strip's row.
-  - A `DisposableEffect` closes it when the bar leaves. Deselecting swaps the bar out at once, so nothing stays open during its fade-out.
-  - **One More row at a time.** `StripState.toggle(id)` clears `objectRowOpen` when it opens the strip's row. `StripState.toggleObjectRow()` (the object bar's toggle) clears the strip's open map when it opens. The two rows never stack, and neither do their offsets.
+  - The open state follows the strip's rules (v1.9, R3; "State, memory and canvas touches"). The bar shows its row while `StripState.objectRowShows()` and it has a toggle, and reports the toggle with `objectBarShown` from a `SideEffect`; `StripState.objectRowOpen` is both. Only `toggleObjectRow()` writes `UiPrefs.objectBarMoreOpen`. `anyOpen` counts the row, and `closeAll`, `hiddenByChrome` and the strip's toggle hide it without forgetting it.
+  - A `DisposableEffect` calls `objectBarGone()` when the bar leaves (the objects deselected, a filter, the interface hidden): its row goes along, remembered, and the next selection shows it again. Deselecting swaps the bar out at once, so nothing stays open during its fade-out.
+  - The row is a `Column` with the opaque background, no `Surface`, so a touch on its background between buttons reaches the canvas. Each button sits in a `Box` with `passCanvasGesture`, and the row fades to `StripState.ROW_FADE_ALPHA` once a canvas touch passes the slop, as the strip's row does.
+  - **One More row at a time.** While the object bar's row shows, the strip's row is hidden, never forgotten; it shows again when the objects are deselected or that row closes. The strip's toggle opening its row hides the object bar's row until the next tool entry or the bar's next showing. The two rows never stack, and neither do their offsets.
   - The toggle and the row reuse `V18Tags.STRIP_TOGGLE` / `V18Tags.STRIP_MORE_ROW` and the Expanded / Collapsed state. The test helpers therefore never take "the last node tagged ...": the strip's helpers reach the options strip only, and `StripTestKit.openObjectRow` reaches this row (see "Testing and CI (v1.8)").
 - **Long-press labels (`ui/common/LongPressLabel.kt`, frozen).** `Modifier.longPressLabel(label)`
   shows the label in a bubble (tag `V18Tags.LONG_PRESS_BUBBLE`) under the element for
@@ -1095,7 +1173,7 @@ Each pill edit (`begin…end`) is ONE in-tool step. A never-placed pending shape
   - "Turn into path" (`ShapeStripItems.TO_PATH`) shows in Points mode, and also for an open shape whose Points mode is refused (`ShapeStripInfo.toPathShown`, `ShapePoints.refusal`): a cog with a hole (D21). Before the v1.8 integration it showed in Points mode only, so a holed cog could not reach its Turn into path. A tap gives one compound plain `VPath` and the `CogLabels18.COMPOUND_HINT` toast. A cog without a hole keeps v1.7's rule: the item waits for Points mode.
   - `CogTurnIntoPathStripTest` (`qa18`, 360 dp) covers both cogs.
 - The cells are in `ShapeStripParts.kt`. Every icon cell, dropdown cells included (`ShapeMenuCell`), shows its label on a long press (`Modifier.longPressLabel`).
-- The Shape settings and Numbers sheets are `overlays`, so they outlive the More row. Each item closes the row (`StripContext.closeMore`) before it opens a sheet.
+- The Shape settings and Numbers sheets are `overlays`, so they outlive the More row. Each item calls `StripContext.closeMore` before it opens a sheet (a no-op since v1.9, R3: the sheet covers the row, which shows again when it closes).
 - `movedInto` maps the v1.7 handles that now live in a dropdown or popup.
 
 ## Vector layers (`vector/`, v1.5)
@@ -1378,7 +1456,7 @@ Result: a 3-point Path at 0/100/0 % draws a lens immediately (v1.6 drew nothing 
 ## The curve strips (§3.9, area E)
 - `curveSpec(tool, CurveStripFacts, CurveStripUi)` is pure and fully converted. The keys are `CurveKeys.*`.
 - `curveFacts` clamps `points` to 2. The spec asks only "open" and "two or more", so a generator slider frame that changes the point count rebuilds no spec (`GeneratorRoundTripTest.aTurnsChangeKeepsTheStripFacts`). Keep every `points` test as `> 0` or `>= 2`.
-- The paint modes are in the Stroke kind dropdown (`movedInto`); Order, Handles and Point weight are popups. Sheets and typing dialogs close the More row; popups and toggles keep it open.
+- The paint modes are in the Stroke kind dropdown (`movedInto`); Order, Handles and Point weight are popups. Sheets and typing dialogs call `closeMore` (a no-op since v1.9, R3: a sheet covers the row); popups and toggles keep it open.
 - Items that come and go sit after the popups in their line. (They were placed so while StripHost composed its cells by position. Since the merge it keys each cell by `StripItem.key`, so an item coming or going before an open popup no longer resets it: `StripHostStateTest`.)
 - Tests:
   - `CurveStripRulesTest` (every state, pure).
@@ -1959,7 +2037,7 @@ Nothing counts when the preset is Sampled colors, there is no sample and invert 
 **Samples** (`ColorSamples`). There are at most 8; a 9th replaces the oldest. Ways to change them:
 - A tap on the canvas adds the Refer color under the finger, as an opaque color. A transparent pixel or a point outside the document adds nothing. The loupe shows while the finger is down, and a swatch dot marks the tap point.
 - "Use the current color" adds the brush color.
-- "Add from the color picker" closes the More row (`StripContext.closeMore()`, §3.9) and opens `ColorPickerDialog`; its OK adds the color.
+- "Add from the color picker" calls `StripContext.closeMore()` (§3.9; a no-op since v1.9, R3) and opens `ColorPickerDialog`; its OK adds the color.
 - "Clear samples" removes them all.
 
 Each change is one in-tool step (Undo / Redo, at most 100). ✕ (discard) goes back to the samples of the last confirm.
@@ -2010,7 +2088,7 @@ The compact controls are in `SelectionStripControls.kt`:
 
 Rules for these controls:
 - Every dropdown and popup is opaque (`IbisColors.Menu`), anchored in its item, and closed by a second finger, so it never closes the More row.
-- An item that opens a sheet or a dialog (the Selection menu, the color picker) calls `StripContext.closeMore()` first.
+- An item that opens a sheet or a dialog (the Selection menu, the color picker) calls `StripContext.closeMore()` first (a no-op since v1.9, R3).
 - The More row's "Deselect" and "Selection menu" (a sheet raised through the strip's overlays) show only while the selection bar is hidden.
 
 Rows, with widths in dp. AUTO items leave row 1 first when it is full.
@@ -2272,7 +2350,7 @@ Corrections to design §8.1, found at integration: its "What v1.7 shows" column 
 **Frozen test helpers (`$FrozenTests`).** `.wt/_tools/ownership-check-v18.ps1` fails an area branch that changes any of eight helpers, with "frozen test helper (lead)": `smoke/SmokeUi.kt`, `testing/StripTestKit.kt`, `testing/PerfBudget.kt`, `qa16/QaCurves.kt`, `qa16/Qa16Ui.kt`, `ui/editor/HistoryTapFingers.kt`, `ui/editor/chrome/UniqueLabelsV17.kt` and (from F4) `testing/PillTestKit.kt`. Only the lead changes them.
 
 **The kits for converted strips and the pill.**
-- `SmokeUi` (the More-row fallbacks): `find` and `click` look for a label; when it is not on screen and the options strip shows its More-row toggle closed, they open the row (`openMoreRow`, through the tag `V18Tags.STRIP_TOGGLE` on the strip's row 1) and try once more. `has` never opens the row, so a check for absence leaves no row open to swallow the next canvas touch (D25). v1.7 tests therefore still find a control an area moved to the More row.
+- `SmokeUi` (the More-row fallbacks): `find` and `click` look for a label; when it is not on screen and the options strip shows its More-row toggle closed, they open the row (`openMoreRow`, through the tag `V18Tags.STRIP_TOGGLE` on the strip's row 1) and try once more. `has` never opens the row, so a check for absence leaves the row as it was (v1.9, R3: an open row no longer takes a canvas touch, and the tool remembers it). v1.7 tests therefore still find a control an area moved to the More row.
 - `testing/StripTestKit` does the same for tests that drive `RobolectricUi` directly: `tagged`, `toggle`, `moreRowShown`, `stripMoreRow`, `openMoreRow`, `closeMoreRow`, `reach { find }` (find, else open the row and find again), `inConvertedStrip(node)` (on row 1 or the More row) and `horizontalScroller(node)` (null on row 1 at 360 dp and wider, where row 1 never scrolls, I18; below 360 dp, row 1's scroller).
 - **Two toggles, two More rows (v1.8 integration).** The vector object bar's More toggle and More row reuse `V18Tags.STRIP_TOGGLE` and `V18Tags.STRIP_MORE_ROW`, so no helper takes "the last node tagged ...".
   - `StripTestKit`'s `toggle`, `openMoreRow`, `closeMoreRow`, `moreRowShown`, `stripMoreRow`, `reach` and `inConvertedStrip` reach the options strip only. So do `SmokeUi.openMoreRow` (and with it the More-row fallback of `SmokeUi.find` and `click`) and `UniqueLabelsV17`'s strip walk.
@@ -2301,11 +2379,11 @@ Corrections to design §8.1, found at integration: its "What v1.7 shows" column 
 
   Each class also has a self-check that the machinery catches planted faults, a floor of v1.8 texts that must be seen, and at least 40 More rows walked.
 - `V18CrossTestOverlays` (360 dp, scenario f) runs `MoreRowOverlayTest`'s rule D25 on the real strips. Each control of each walked More row is clicked in turn. The state is set up anew for each click, and the document's steps are undone after it. A disabled control keeps its semantic click action, but a tap never reaches it, so it is skipped where it would be clicked. It stays in the row's index count, because enabled-ness can follow a tool setting an earlier click changed. What each click must do:
-  - A sheet or dialog: the More row has closed and the window still shows after two more settles. It lives in `StripSpec.overlays`, and its item calls `closeMore()` first.
+  - A sheet or dialog: the window still shows after two more settles. It lives in `StripSpec.overlays`, and its item calls `closeMore()` first. v1.9 (R3): `closeMore()` is a no-op in the editor and only hides the row in the rig, so whether the row stays open under the window is not checked; the window must outlive the row hiding under it.
   - An anchored popup: the More row stays open while it shows, and is still open after Back closes it.
   - A click that opens no window must leave the More row open, unless the click changed the tool, the strip has no More-row toggle, or it is one of `CLOSES_WITH_NOTHING_OPEN`: the Clone stamp's hint arming Set source, on raster and vector (the next canvas touch must reach the canvas), and TEXT@vector "Wrap around picture" with no text, which only toasts.
 
-  This catches a sheet or dialog composed inside its own item, which dies with the row it closed and never shows. The self-check (`overlayMachineryCatches`) runs on fake specs: a good sheet, a good dialog and a good dropdown are found as their kinds, and a dialog over an open row, a popup behind a closed row and a dialog composed inside its item are each caught. A floor of 33 named openers (from each strip's own tests and the close rules in this file) must each be found as its kind. Among them is "TEXT@vector, an open text: Wrap around picture" (sheet). When the test was written, the walk found 126 openers.
+  This catches a sheet or dialog composed inside its own item, which dies with the row it closed and never shows. The self-check (`overlayMachineryCatches`) runs on fake specs: a good sheet, a good dialog and a good dropdown are found as their kinds, a dialog over an open row passes (v1.9, R3), and a popup behind a closed row and a dialog composed inside its item are each caught. A floor of 33 named openers (from each strip's own tests and the close rules in this file) must each be found as its kind. Among them is "TEXT@vector, an open text: Wrap around picture" (sheet). When the test was written, the walk found 126 openers.
 - `CogTurnIntoPathStripTest` (360 dp) covers the Shape strip's "Turn into path" for a holed cog ("The Shape strip").
 
 **Request coverage (`audit/RequestCoverageV18*UiTest`).** Each v1.8 request item (1–9) gets one end-to-end check. The checks drive the UI as a finger does: the canvas, the tool menu, the top row, the options strip and its More row, the X / Y pill, dropdowns, sheets, the filter panel and the color picker. They find controls by their `LabelsV18` labels and `V18Tags`, and they follow the area reports' "how to use" lines. Setup that is not part of the item (seed pixels, a vector layer, a test picture) is done in code. The item's own action always goes through the screen.
@@ -2422,6 +2500,18 @@ otherwise pan/zoom/rotate the view; two-finger tap = undo (tools with steps take
 step via `Tool.undoStep`), three-finger tap = redo; holding still with a color tool picks a color
 (`EditorController.pointerLongPress` → temporary eyedropper with a preview square).
 
+Frame times (v1.9, design 2.6 step 8; F3). Every `CanvasView.onDraw` is timed as
+`PerfTrace.FRAME` (one volatile read while recording is off). While `AppSettings.showFrameTimes`
+is on (cached in the view and refreshed by its preferences listener), the view records
+(`PerfTrace.enabled`) and draws the frame-times overlay last, at the free area's top left: the
+last `PerfTrace.SAMPLES` (120) frames' p50, p90 and longest, and the last brush lift
+(`PerfTrace.lastMs(PerfTrace.LIFT)`), white on a dark box. It reports the text to
+`onFrameTimes` at most every 500 ms when it changed, and null when switched off; `EditorScreen`
+puts a semantics-only node (tag `V19Tags.FRAME_TIMES`, the two lines as its text) over it.
+`DiagnosticsSection` (`ui/diagnostics/`) gets its first content: its header and the
+`StabilityLabels19.SHOW_FRAME_TIMES` switch, which clears and enables `PerfTrace` when turned
+on. `BrushworkApp` enables `PerfTrace` at start while the switch is on.
+
 ## History taps over the UI (v1.7, item 10; `ui/editor/HistoryTapHub`, `ui/editor/EditorHistoryTaps`, `ui/common/HistoryTaps`)
 
 The canvas still recognizes its own two- and three-finger taps (`TouchGestureClassifier`). `HistoryTapHub` recognizes the ones that touch the UI too. It is pure and allocation-free: fixed arrays, one call per pointer change, pointers told apart by window slot and id.
@@ -2439,8 +2529,8 @@ Each window feeds it exactly once:
 - Two fingers on a dialog's button act as a plain tap on that button: dialogs are outside history taps by design (§7).
 
 A gesture counts as a history tap under the canvas' rules: every finger goes down and up within 300 ms of the first down, none moves the 12 dp tap slop, there are at most 3 fingers, and all are fingers (a stylus or mouse ends it).
-- **Canvas alone:** the gesture stays the canvas', including a gesture that closed a More row (`Mode.CONSUMED`): its two- and three-finger taps undo or redo there ("State and close rules (D25)").
-- **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`). A gesture that closed a More row (`Mode.CONSUMED`) started nothing. The yield invalidates its tap classifier, and the gesture stays consumed.
+- **Canvas alone:** the gesture stays the canvas': its two- and three-finger taps undo or redo there, also through an open More row. v1.9 (R3): a finger that joins a canvas gesture on a More-row control counts as a canvas finger (`passCanvasGesture` calls `onCanvasDown`), so the gesture stays the canvas' ("State, memory and canvas touches").
+- **A finger on the UI:** the hub CLAIMS the gesture in the Initial pass, before the new finger reaches anything, and only when the tap with that many fingers is on: at the second finger when two-finger undo is on; at the third finger when only three-finger redo is on (two UI fingers then stay the controls'). With both settings off, or while the editor is busy (`busyMessage`; the busy scrim takes the touches), nothing is claimed. From the claim every event is consumed: the control under the first finger cancels instead of firing (Compose's clickable / drag detectors, and the pill cells, which check `isConsumed`), and the canvas drops what its fingers started (`CanvasView.yieldToHistoryTap`).
 - **After the last up**, in the Final pass so a control's own up has run: the hub puts back what the fingers did and runs ONE `HistoryLabels.performUndo` / `performRedo` with the hotbar's feedback. With a filter open, undo cancels it and redo says "Finish the filter first".
 
 **The mark has two parts.** This differs from design §3.10, which takes `uiMark()` at the first down. `uiMark()` → `undoMarker()` records a pending live edit first. Taken at every first down, it split the Adjust sheet's live edit into one step per tap, and it `runBlocking`-waited for a running vector render on every touch, the canvas' included.
@@ -2483,10 +2573,10 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
   - `StripTextButton`: icon and text at 10 to 11 sp, `stacked` for icon over text, with `checked`/`on`/`dimmed` states.
   - `StripStatusText`: 11 sp, 2 lines.
   - `snapItem`: "Snap to objects", 96 dp.
-  - `ClosesMoreRow()`: used in toggle-less states, so a stale open More-row entry cannot swallow the next canvas touch. Since the merge the host also drops a toggle-less spec's open entry itself (`StripState.drop`); `ClosesMoreRow()` stays as the strips' own guard.
-- **Close rules (D25).**
+  - `ClosesMoreRow()`: used in toggle-less states. A no-op since v1.9 (R3): the host hides a toggle-less spec's row itself, remembered (`StripState.drop`, `undrop`), and the call sites stay.
+- **Close rules (D25; v1.9, R3: a row closes only by its toggle).**
   - Anchored dropdowns and popups keep the More row open: the Transform mode, Mesh size, interpolation, the Text frames wrap, the Masks target, the Remove sample and size, the Pathfinder ops.
-  - An item that opens a sheet or dialog, or that waits for the next canvas touch, calls `LocalStripContext.current.closeMore()` first. Examples: "Edit text", "Letters", "Wrap", "Numbers", "Edit story", "Link…", the Masks add buttons, the Frame divider sheets.
+  - An item that opens a sheet or dialog, or that waits for the next canvas touch, calls `LocalStripContext.current.closeMore()` first (a no-op since v1.9: a sheet covers the row, and a canvas touch reaches the canvas through it). Examples: "Edit text", "Letters", "Wrap", "Numbers", "Edit story", "Link…", the Masks add buttons, the Frame divider sheets.
   - Every sheet and dialog is composed from `StripSpec.overlays`.
 - **Transform (`TransformStripItems.kt`).**
   - Idle: v1.7's status text alone (284 dp, no toggle).
@@ -2564,7 +2654,7 @@ Seven builders return real `StripSpec`s: `transformStrip`, `textStrip` and `fram
 - **Tests.**
   - In `qa18`:
     - `MoreMenuSectionsTest`, `TopRowLongPressTest`, `MoreRowOffsetsTest`;
-    - `MoreRowCloseTest` (the D25 rules, plus the object bar's row beside the strip's; a two-finger canvas tap through an open row now undoes once);
+    - `MoreRowCloseTest` (the D25 rules, plus the object bar's row beside the strip's; v1.9, R3: only the toggle closes a row, and a canvas touch through it acts and leaves it open);
     - `ObjectBarMoreTest`;
     - `OpaqueMenusTest` (Skia pixels of the menu card and both More rows);
     - `ChromeLabelsTest`;
