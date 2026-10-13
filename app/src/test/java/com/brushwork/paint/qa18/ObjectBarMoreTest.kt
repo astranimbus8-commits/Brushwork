@@ -42,10 +42,11 @@ import org.robolectric.shadows.ShadowLog
  * Deselect), finger-sized, in their v1.6 order, then "Show more object actions"
  * ([StripLabels18.MORE_OBJECT]). The toggle drops the More row under the bar with Forward,
  * Backward, Array and, while a selected object has mirror copies, "Detach mirror copies" (twice as
- * wide). The row stays open while its buttons act; a canvas touch only closes it (one finger or
- * a pinch: no stroke, no zoom, no step; a two- or three-finger tap closes it and undoes or redoes
- * once, v1.8 integration), the next one acts; the toggle, a tool change and the More menu
- * close it; and when the bar goes (Deselect) nothing is left open.
+ * wide). The row stays open while its buttons act. v1.9 (R3, design 2.6): only the toggle closes
+ * it. A canvas touch is never consumed and leaves it open (one finger paints, a pinch zooms, a
+ * two- or three-finger tap undoes or redoes once), and so do a tool change and the More menu; when
+ * the bar goes (Deselect) its row goes along, remembered, and nothing open takes the next touch;
+ * the next selection shows it again.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.objectbarsandbox"])
@@ -79,8 +80,14 @@ class ObjectBarMoreTest {
         assertNull("$why: no More row", s.tagged(V18Tags.STRIP_MORE_ROW))
     }
 
+    private fun assertOpen(s: ChromeScreen, why: String) {
+        Smoke.pump(300); SmokeUi.settle()
+        assertTrue("$why: the row stays open", expanded(s))
+        assertNotNull("$why: its buttons show", Finger.control(s, "Bring forward"))
+    }
+
     @Test
-    fun oneRowAndAMoreRowThatClosesByTheStripRules() {
+    fun oneRowAndAMoreRowThatClosesOnlyByItsToggle() {
         ShadowLog.stream = null
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog()
@@ -153,21 +160,15 @@ class ObjectBarMoreTest {
         assertFalse("nothing left to detach", SmokeUi.has(MirrorLabels18.DETACH, exact = true))
         assertNotNull(Finger.control(s, "Bring forward"))
 
-        // ---- D25: a canvas touch only closes the row, the next one acts; a two- or three-finger
-        // tap closes it and undoes or redoes (v1.8 integration)
+        // ---- v1.9 (R3): a canvas touch never closes the row and is never consumed: a pinch
+        // zooms, a two- or three-finger tap undoes or redoes once, one finger reaches the tool
         var before = Fingers18.canvasState(s)
-        Fingers18.stroke(s, 250f, 220f, 360f, 270f)
-        assertEquals("one finger: nothing happened on the canvas", before, Fingers18.canvasState(s))
-        assertClosed(s, "a one-finger touch")
         Fingers18.pinch(s, 200f, 150f)
-        assertNotEquals("the next pinch zooms", before.zoom, Fingers18.canvasState(s).zoom)
-        open(s)
-        before = Fingers18.canvasState(s)
-        Fingers18.pinch(s, 200f, 150f)
-        assertEquals("two fingers: no zoom", before, Fingers18.canvasState(s))
-        assertClosed(s, "a pinch")
-        open(s)
-        before = Fingers18.canvasState(s)
+        val zoomed = Fingers18.canvasState(s)
+        assertNotEquals("a pinch zooms", before.zoom, zoomed.zoom)
+        assertEquals("…and does nothing else", before.copy(zoom = zoomed.zoom), zoomed)
+        assertOpen(s, "a pinch")
+        before = zoomed
         Fingers18.twoFingerTap(s, 200f, 150f)
         Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
         SmokeUi.settle()
@@ -175,31 +176,35 @@ class ObjectBarMoreTest {
         assertEquals("a two-finger tap: one undo (Detach)", before.undo - 1, undone.undo)
         assertTrue("…to redo", undone.redo)
         assertEquals("…the selection as before Detach (its copy gone)", setOf(1L), undone.objects)
-        assertClosed(s, "a two-finger tap")
-        open(s)
+        assertOpen(s, "a two-finger tap")
         Fingers18.threeFingerTap(s, 200f, 150f)
         Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
         SmokeUi.settle()
         assertEquals("a three-finger tap: one redo (Detach)", before, Fingers18.canvasState(s))
-        assertClosed(s, "a three-finger tap")
+        assertOpen(s, "a three-finger tap")
+        Fingers18.stroke(s, 190f, 140f, 215f, 160f)
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        SmokeUi.settle()
+        val stroked = Fingers18.canvasState(s)
+        assertNotEquals("one finger: the brush paints", before.pixels, stroked.pixels)
+        assertEquals("…one step", before.undo + 1, stroked.undo)
+        assertEquals("…the selection kept", before.objects, stroked.objects)
+        assertOpen(s, "a one-finger stroke")
 
-        // ---- the toggle, a tool change and the More menu close it
-        open(s)
-        Finger.tap(s, StripLabels18.MORE_OBJECT)
-        assertClosed(s, "the toggle")
-        open(s)
+        // ---- a tool change and the More menu leave it open (one memory for the bar's row)
         Finger.tap(s, "Switch to eraser")
         assertEquals(ToolId.ERASER, c.activeToolId)
-        assertClosed(s, "a tool change")
-        open(s)
+        assertOpen(s, "a tool change")
         Finger.tap(s, "More options")
         Smoke.pump(300); SmokeUi.settle()
         assertEquals("the More menu drops", 2, SmokeUi.windows().size)
+        assertOpen(s, "the More menu")
         Finger.back()
-        assertClosed(s, "the More menu")
+        assertEquals(1, SmokeUi.windows().size)
+        assertOpen(s, "the More menu closed")
 
-        // ---- Deselect (row 1) while the More row is open: the bar goes and leaves nothing open
-        open(s)
+        // ---- Deselect (row 1) while the More row is open: the bar goes and its row with it,
+        // remembered; nothing open takes the next touch; a new selection shows the row again
         Finger.tap(s, "Deselect the objects")
         Smoke.pump(500); SmokeUi.settle()
         assertTrue("deselected", c.vectors.selectedIds.isEmpty())
@@ -207,7 +212,15 @@ class ObjectBarMoreTest {
         assertNull(s.tagged(V18Tags.STRIP_MORE_ROW))
         val zoom = c.viewTransform.zoom
         Fingers18.pinch(s, 200f, 150f)
-        assertNotEquals("nothing open swallows the next touch", zoom, c.viewTransform.zoom)
+        assertNotEquals("the next pinch zooms", zoom, c.viewTransform.zoom)
+        c.vectors.setSelection(c.doc.layers[1], setOf(1L))
+        Smoke.pumpUntil(10_000) { !c.vectors.isRendering }
+        assertOpen(s, "selected again: the remembered row")
+
+        // ---- only the toggle closes it
+        Finger.tap(s, StripLabels18.MORE_OBJECT)
+        Smoke.pump(300); SmokeUi.settle()
+        assertClosed(s, "the toggle")
         Smoke.assertQuiet(c, "object bar")
     }
 }

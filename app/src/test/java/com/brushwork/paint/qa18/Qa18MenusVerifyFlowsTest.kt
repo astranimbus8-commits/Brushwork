@@ -28,15 +28,16 @@ import org.robolectric.shadows.ShadowLog
 
 /**
  * v1.8 final QA verification (items 8 and 9, D25) on the user's phone (392 × 873 dp): what the
- * controls ON a real More row do to it, by fingers. Transform with a lifted picture: "Numbers"
- * closes the row and opens its sheet (Back closes the sheet, the row stays closed); "Choose
- * interpolation" drops its menu over the open row (rendered `menus-verify-interpolation.png`), a
- * pick changes the interpolation and leaves the row open; the tool menu closes it. Lasso polygon
- * over a selection: while the selection bar shows, the More row repeats none of its buttons; while
- * a polygon is pending the bar hides and the row offers "Deselect" and "Selection menu" whole on
- * screen (`menus-verify-lasso-shortcuts.png`); "Selection menu" closes the row and opens the sheet,
- * "Deselect" drops the selection in one step and keeps the row and the polygon; the bar comes back
- * when the polygon goes and the selection is undone back.
+ * controls ON a real More row do to it, by fingers. v1.9 (R3, design 2.6): only the toggle closes
+ * the row; a sheet or the tool menu covers it and it shows again when they close. Transform with
+ * a lifted picture: "Numbers" opens its sheet over the row (Back closes the sheet, the row shows
+ * again); "Choose interpolation" drops its menu over the open row (rendered
+ * `menus-verify-interpolation.png`), a pick changes the interpolation and leaves the row open; the
+ * tool menu covers it. Lasso polygon over a selection: while the selection bar shows, the More row
+ * repeats none of its buttons; while a polygon is pending the bar hides and the row offers
+ * "Deselect" and "Selection menu" whole on screen (`menus-verify-lasso-shortcuts.png`); "Selection
+ * menu" opens the sheet over the row, "Deselect" drops the selection in one step and keeps the row
+ * and the polygon; the bar comes back when the polygon goes and the selection is undone back.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.menusverifyflowssandbox"])
@@ -85,22 +86,22 @@ class Qa18MenusVerifyFlowsTest {
         val t = s.c.currentTool as TransformTool
         assertTrue("the picture is lifted", Smoke.pumpUntil(10_000) { SmokeUi.settle(); t.transformState != null })
 
-        // "Numbers" opens a sheet: the row closes first (D25), the sheet stays until Back.
+        // "Numbers" opens a sheet over the row (v1.9: it covers the row, remembered), the sheet
+        // stays until Back, and the row shows again.
         open(s, "Numbers")
         Finger.tap(s, TransformStripItems.NUMBERS_LABEL)
         Smoke.pump(300); SmokeUi.settle()
         assertTrue("\"Numbers\" opens the Numbers sheet: ${SmokeUi.sheetTitles()}", t.numbersOpen && "Numbers" in SmokeUi.sheetTitles())
-        assertClosed(s, "\"Numbers\"")
+        assertClosed(s, "under the Numbers sheet")
         Smoke.pump(500); SmokeUi.settle()
         assertTrue("the Numbers sheet stays", "Numbers" in SmokeUi.sheetTitles())
         Finger.back()
         Smoke.pump(300); SmokeUi.settle()
         assertFalse("Back closes the Numbers sheet", t.numbersOpen || "Numbers" in SmokeUi.sheetTitles())
-        assertClosed(s, "Back from the Numbers sheet")
+        assertOpen(s, "Back from the Numbers sheet")
         assertTrue("the picture is still lifted", t.transformState != null)
 
         // "Choose interpolation" drops an anchored menu: the row stays open under it and after a pick.
-        open(s, "Choose interpolation")
         assertEquals(TransformTool.Interpolation.SMOOTH, t.interpolation)
         Finger.tap(s, TransformStripItems.INTERPOLATION_LABEL)
         Smoke.pump(300); SmokeUi.settle()
@@ -113,17 +114,18 @@ class Qa18MenusVerifyFlowsTest {
         assertEquals("…and closes the menu", 1, SmokeUi.windows().size)
         assertOpen(s, "a pick in the interpolation menu")
 
-        // The tool menu opening (a chrome surface) closes the row.
+        // The tool menu opening (a chrome surface) covers the row; it shows again when it closes.
         val menuButton = Finger.control(s, "Tools (current: ", exact = false) ?: throw AssertionError("no tool menu button")
         Finger.tapAt(s, menuButton.center.x, menuButton.center.y)
         Smoke.pump(300); SmokeUi.settle()
         assertNotNull("the tool menu opens", s.tagged(ChromeTags.TOOL_MENU))
-        assertClosed(s, "the tool menu")
+        assertClosed(s, "under the tool menu")
         Finger.tapAt(s, menuButton.center.x, menuButton.center.y)
         Smoke.pump(300); SmokeUi.settle()
         assertNull("the tool menu closes", s.tagged(ChromeTags.TOOL_MENU))
-        assertClosed(s, "the tool menu closed again")
+        assertOpen(s, "the tool menu closed again")
         assertEquals(ToolId.TRANSFORM, s.c.activeToolId)
+        Qa18MenusShots.closeMore(s, "Transform, at the end")
         Smoke.assertQuiet(s.c, "Transform")
     }
 
@@ -157,20 +159,19 @@ class Qa18MenusVerifyFlowsTest {
         assertEquals("the bar hidden, the More row offers both", listOf("Deselect", "Selection menu"), shortcuts(s, "Polygon lasso, two corners").sorted())
         shot(s, "lasso-shortcuts")
 
-        // "Selection menu" is a sheet: the row closes, the sheet shows; Back closes it.
+        // "Selection menu" is a sheet: it covers the row; Back closes it and the row shows again.
         Finger.tap(s, "Selection menu")
         Smoke.pump(300); SmokeUi.settle()
         assertTrue("\"Selection menu\" opens the Selection sheet: ${SmokeUi.sheetTitles()}", "Selection" in SmokeUi.sheetTitles())
-        assertClosed(s, "\"Selection menu\"")
+        assertClosed(s, "under the Selection sheet")
         Finger.back()
         Smoke.pump(300); SmokeUi.settle()
         assertFalse("Back closes the Selection sheet", "Selection" in SmokeUi.sheetTitles())
-        assertClosed(s, "Back from the Selection sheet")
+        assertOpen(s, "Back from the Selection sheet")
         assertEquals("the polygon is kept", 2, t.vertexCount)
         assertNotNull("the selection is kept", c.selection)
 
         // "Deselect" drops the selection in one step: the row and the polygon stay.
-        open(s, "Deselect")
         val undo = c.undoManager.undoCount
         Finger.tap(s, "Deselect")
         Smoke.pump(300); SmokeUi.settle()

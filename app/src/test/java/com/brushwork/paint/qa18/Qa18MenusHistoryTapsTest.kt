@@ -11,6 +11,7 @@ import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -22,16 +23,17 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.8 final QA (items 8 and 9, D25) on the user's phone (392 × 873 dp), with REAL strips picked
  * from the tool menu (`MoreRowHistoryTapsTest` drives a fake one): a long press on "Show more
- * tool options" shows its name and opens nothing; with the More row open, one finger on the canvas
- * only closes it (Bucket fills nothing, Curve adds no point), and the next touch acts; a two-finger
- * tap closes it and undoes once; three fingers close it and redo once.
+ * tool options" shows its name and opens nothing. v1.9 (R3, design 2.6): with the More row open,
+ * a canvas touch is never consumed and the row stays open: one finger acts at once (Bucket fills,
+ * Curve adds a point), a two-finger tap undoes once, three fingers redo once. Only the toggle
+ * closes the row.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.qa18.menushistorytapssandbox"])
 class Qa18MenusHistoryTapsTest {
 
     @Test
-    fun anOpenMoreRowTakesOneTouchAndHistoryTapsActOnce() {
+    fun anOpenMoreRowLetsEveryTouchActAndHistoryTapsActOnce() {
         ShadowLog.stream = null
         SmokeUi.installTestRecomposer()
         val dog = Smoke.watchdog()
@@ -50,9 +52,22 @@ class Qa18MenusHistoryTapsTest {
         assertTrue("the toggle opens the More row", expanded(s) && s.tagged(V18Tags.STRIP_MORE_ROW) != null)
     }
 
+    private fun assertOpen(s: ChromeScreen, why: String) {
+        Smoke.pump(300); SmokeUi.settle()
+        assertTrue("$why: the toggle says Expanded", expanded(s))
+        assertNotNull("$why: the More row stays", s.tagged(V18Tags.STRIP_MORE_ROW))
+    }
+
     private fun assertClosed(s: ChromeScreen, why: String) {
         assertTrue("$why: the toggle says Collapsed", !expanded(s))
         assertNull("$why: no More row", s.tagged(V18Tags.STRIP_MORE_ROW))
+    }
+
+    /** Only the toggle closes the row (v1.9); the next section starts with nothing remembered. */
+    private fun closeByToggle(s: ChromeScreen) {
+        Finger.tap(s, StripLabels18.MORE_TOGGLE)
+        Smoke.pump(300); SmokeUi.settle()
+        assertClosed(s, "the toggle")
     }
 
     /** The active layer's pixel under the taps (document 200, 150). */
@@ -70,7 +85,7 @@ class Qa18MenusHistoryTapsTest {
         assertEquals("the long press names the toggle", StripLabels18.MORE_TOGGLE, named)
         assertClosed(s, "a long press")
 
-        // One finger on the canvas only closes the row: no fill, no step. The next tap fills.
+        // One finger on the canvas fills at once, one step; the row stays open.
         // (A colour that is not black: a whole 400 × 300 layer of opaque black hashes as an empty one.)
         val red = 0xFFCC3322.toInt()
         c.color = red
@@ -78,30 +93,25 @@ class Qa18MenusHistoryTapsTest {
         assertEquals("an empty layer", 0, at(s))
         open(s)
         Fingers18.tap(s, 200f, 150f)
-        Smoke.pump(300); SmokeUi.settle()
-        assertEquals("one finger: the Bucket filled nothing", blank, Fingers18.canvasState(s))
-        assertEquals("…nothing under the finger", 0, at(s))
-        assertClosed(s, "one finger")
-        Fingers18.tap(s, 200f, 150f)
-        assertTrue("the next tap fills", Smoke.pumpUntil(5_000) { SmokeUi.settle(); at(s) == red })
+        assertTrue("one finger: the Bucket fills", Smoke.pumpUntil(5_000) { SmokeUi.settle(); at(s) == red })
         val filled = Fingers18.canvasState(s)
         assertNotEquals("…the layer changes", blank.pixels, filled.pixels)
         assertEquals("…one step", blank.undo + 1, filled.undo)
+        assertOpen(s, "one finger")
 
-        // Two fingers close it and undo once; three fingers close it and redo once.
-        open(s)
+        // Two fingers undo once; three fingers redo once; the row stays open.
         Fingers18.twoFingerTap(s, 200f, 150f)
         val undone = Fingers18.canvasState(s)
         assertEquals("two fingers: the fill undone, once", blank.pixels, undone.pixels)
         assertEquals("…the layer empty again", 0, at(s))
         assertEquals(blank.undo, undone.undo)
         assertTrue("…to redo", undone.redo)
-        assertClosed(s, "a two-finger tap")
-        open(s)
+        assertOpen(s, "a two-finger tap")
         Fingers18.threeFingerTap(s, 200f, 150f)
         assertEquals("three fingers: the fill redone, once", filled, Fingers18.canvasState(s))
         assertEquals("…filled again", red, at(s))
-        assertClosed(s, "a three-finger tap")
+        assertOpen(s, "a three-finger tap")
+        closeByToggle(s)
         Smoke.assertQuiet(c, "Bucket")
     }
 
@@ -114,19 +124,16 @@ class Qa18MenusHistoryTapsTest {
         assertEquals("two points by two taps", 2, t.pointCount)
         open(s)
         Fingers18.tap(s, 150f, 80f)
-        assertEquals("one finger with the row open: no point", 2, t.pointCount)
-        assertClosed(s, "one finger")
-        Fingers18.tap(s, 150f, 80f)
-        assertEquals("the next tap adds it", 3, t.pointCount)
+        assertEquals("one finger with the row open adds a point", 3, t.pointCount)
+        assertOpen(s, "one finger")
         // A two-finger tap through the open row steps the last point back (the top row's Undo does).
-        open(s)
         Fingers18.twoFingerTap(s, 200f, 150f)
         assertEquals("two fingers: one point back", 2, t.pointCount)
-        assertClosed(s, "a two-finger tap")
-        open(s)
+        assertOpen(s, "a two-finger tap")
         Fingers18.threeFingerTap(s, 200f, 150f)
         assertEquals("three fingers: the point again", 3, t.pointCount)
-        assertClosed(s, "a three-finger tap")
+        assertOpen(s, "a three-finger tap")
+        closeByToggle(s)
         Smoke.assertQuiet(s.c, "Curve")
     }
 }
