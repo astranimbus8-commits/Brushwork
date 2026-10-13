@@ -2506,11 +2506,14 @@ is on (cached in the view and refreshed by its preferences listener), the view r
 (`PerfTrace.enabled`) and draws the frame-times overlay last, at the free area's top left: the
 last `PerfTrace.SAMPLES` (120) frames' p50, p90 and longest, and the last brush lift
 (`PerfTrace.lastMs(PerfTrace.LIFT)`), white on a dark box. It reports the text to
-`onFrameTimes` at most every 500 ms when it changed, and null when switched off; `EditorScreen`
-puts a semantics-only node (tag `V19Tags.FRAME_TIMES`, the two lines as its text) over it.
+`onFrameTimes` at most every 500 ms when it changed (the first frame after the switch at once),
+and null when switched off; `EditorScreen` puts a semantics-only node (tag `V19Tags.FRAME_TIMES`,
+the two lines as its text) over it, 8 dp into the fit area as the overlay is drawn.
 `DiagnosticsSection` (`ui/diagnostics/`) gets its first content: its header and the
 `StabilityLabels19.SHOW_FRAME_TIMES` switch, which clears and enables `PerfTrace` when turned
-on. `BrushworkApp` enables `PerfTrace` at start while the switch is on.
+on. `BrushworkApp` enables `PerfTrace` at start while the switch is on. `Qa19FrameTimesUiTest`
+checks the section at font scales 1, 1.3 and 2, and in the editor the overlay (drawn into a
+bitmap), its node and its last-lift line, switched on and off through Settings.
 
 ## History taps over the UI (v1.7, item 10; `ui/editor/HistoryTapHub`, `ui/editor/EditorHistoryTaps`, `ui/common/HistoryTaps`)
 

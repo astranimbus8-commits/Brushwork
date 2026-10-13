@@ -347,7 +347,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         if (on) PerfTrace.enabled = true
         if (on == showFrameTimes) return
         showFrameTimes = on
+        // The next frame reports at once: switched off and on within FRAME_TIMES_REPORT_MS, the
+        // overlay would be drawn without its node until a later frame.
         frameTimesShown = null
+        frameTimesReportedAt = Long.MIN_VALUE / 2
         if (!on) onFrameTimes?.invoke(null)
         invalidate()
     }

@@ -556,9 +556,10 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                 onRelease = { v -> if (canvasRef[0] === v) canvasRef[0] = null },
             )
         }
+        // Where the canvas draws it: 8 dp into its fit area, whose left band is 0 (setFitInsets above).
         FrameTimesNode(
             text = { frameTimes.value },
-            modifier = Modifier.align(Alignment.TopStart).offset(x = (insetLeftDp + 8f).dp, y = (ChromeLayout.fitInsetTop(statusDp) + 8f).dp),
+            modifier = Modifier.align(Alignment.TopStart).offset(x = 8f.dp, y = (ChromeLayout.fitInsetTop(statusDp) + 8f).dp),
         )
 
         // ------------------------------------------------------------ top row + options strip
