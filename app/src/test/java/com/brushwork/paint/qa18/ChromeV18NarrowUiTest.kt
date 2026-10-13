@@ -2,6 +2,7 @@ package com.brushwork.paint.qa18
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.model.Document
@@ -43,7 +44,8 @@ import org.robolectric.shadows.ShadowLog
  * with the VECTOR cell, with real touch events:
  * - every tool's strip: row 1 on screen and whole (nothing clipped, nothing scrolls, I18), the
  *   VECTOR cell first on it, the 44 dp toggle at its end; the opened More row 4 dp under it, on
- *   screen, at most `StripLayout.MAX_MORE_LINES` lines tall, and what it shows on screen;
+ *   screen, at most `StripLayout.MAX_MORE_LINES` lines tall, and what it shows on screen; the
+ *   toggle closes it again (v1.9, R3: the only way, and it forgets the row);
  * - row 1's budget (§3.9's table: 284 dp with the toggle, 240 dp with the toggle and the VECTOR
  *   cell): an item that wide shows whole, a finger reaches it and the toggle, nothing overlaps;
  * - the vector object bar: its one row (seven buttons and "Show more object actions") inside the
@@ -155,6 +157,8 @@ class ChromeV18NarrowUiTest {
             Finger.tap(s, StripLabels18.MORE_TOGGLE)
             Smoke.pump(300); SmokeUi.settle()
             assertNull("$what: the toggle closes the More row", s.tagged(V18Tags.STRIP_MORE_ROW))
+            // v1.9 (R3): only the toggle closes a row, and it forgets it (the next tool starts closed).
+            assertFalse("$what: …and forgets it", c.activeToolId.name in UiPrefs(s.activity).stripOpenRows)
         }
         c.selectTool(ToolId.BRUSH)
         SmokeUi.settle()

@@ -392,7 +392,8 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         assertTrue("with its copies", tool.hasCopies)
         press(MirrorLabels18.REMOVE)
         assertFalse("the copies removed", tool.hasCopies)
-        // The More row (where Remove is) swallows the next canvas touch (D25): closed first.
+        // The More row (where Remove is) closed by its toggle (v1.9, R3: the only way; ✓ is no
+        // canvas touch either way).
         StripTestKit.closeMoreRow()
         applyEdit("Apply curve edit")
         val after = layer.vector!!.objects.single() as VPath
@@ -856,7 +857,8 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
      * Area H: "when a tool's options don't fit one row, a chevron (Show more tool options) sits at
      * the end of the options strip. Tap it to drop a second row (up to 3 lines). [...] The More
      * row also closes when you touch the canvas (that first touch only closes it)." Area F: "Long-
-     * press any icon or dropdown cell to see its name."
+     * press any icon or dropdown cell to see its name." v1.9 (R3, design 2.6) replaces the close on
+     * a canvas touch: the row stays open and the touch reaches the canvas (a pinch zooms).
      */
     private fun stripMoreRow() {
         editor()
@@ -889,17 +891,22 @@ internal class RequestCoverageV18 private constructor(private val h: ChromeHarne
         val pill = s.tagged(ChromeTags.PILL_SLOT)?.takeIf { it.height > 0f } ?: throw AssertionError("an open shape shows the X / Y pill")
         assertTrue("the pill slid down under the More row: $pill", pill.top >= more.bottom - 0.5f)
 
-        // The first canvas touch only closes the row: nothing drawn, moved or picked.
+        // v1.9 (R3): a canvas touch never closes the row and reaches the canvas: a pinch zooms;
+        // nothing is drawn, moved or picked, and the row stays open. Only the chevron closes it.
         val before = Fingers18.canvasState(s)
         val points = (0 until tool.pointCount).map { tool.pointAt(it) }
         val box = tool.box
-        tap(320f, 230f)
-        assertNull("the touch closed the More row", s.tagged(V18Tags.STRIP_MORE_ROW))
-        assertEquals(StripLabels18.COLLAPSED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
-        assertEquals("…and did nothing else", before, Fingers18.canvasState(s))
+        Fingers18.pinch(s, 320f, 230f)
+        assertNotNull("the More row stays open", s.tagged(V18Tags.STRIP_MORE_ROW))
+        assertEquals(StripLabels18.EXPANDED, Fingers18.state(s, StripLabels18.MORE_TOGGLE))
+        val zoomed = Fingers18.canvasState(s)
+        assertNotEquals("the pinch zooms", before.zoom, zoomed.zoom)
+        assertEquals("…and does nothing else", before.copy(zoom = zoomed.zoom), zoomed)
         assertTrue("still in Points mode", tool.pointsMode)
         assertEquals(box, tool.box)
         assertEquals(points, (0 until tool.pointCount).map { tool.pointAt(it) })
+        assertTrue("the chevron closes it", StripTestKit.closeMoreRow())
+        assertNull(s.tagged(V18Tags.STRIP_MORE_ROW))
         tool.discard()
         settle()
         Smoke.assertQuiet(c, "the strip's More row")

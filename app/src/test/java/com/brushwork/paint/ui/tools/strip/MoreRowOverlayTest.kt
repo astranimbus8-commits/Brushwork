@@ -44,9 +44,12 @@ import org.robolectric.shadows.ShadowLog
 /**
  * v1.8 (F3, design §3.9 overlays, D25): a fake converted spec whose More-row items open a sheet, a
  * dialog and an anchored dropdown. The sheet and the dialog live in [StripSpec.overlays] (their
- * open flags outside the items): the item calls `StripContext.closeMore()` and opens them, and
- * they stay open after the row closes. The dropdown stays inside its item and keeps the row
- * open, and its dismissal leaves the row open.
+ * open flags outside the items): the item calls `StripContext.closeMore()` and opens them. The
+ * dropdown stays inside its item and keeps the row open, and its dismissal leaves the row open.
+ * v1.9 (R3, design 2.6): `closeMore()` is a no-op (the rig passes `EditorScreen`'s), so the row
+ * stays open under the sheet and the dialog; a chrome cover ([StripState.hiddenByChrome], what
+ * `EditorScreen` sets while a sheet shows) hides it, remembered, and the overlays outlive that;
+ * only the toggle closes it.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w392dp-h873dp-xxhdpi", instrumentedPackages = ["com.brushwork.paint.ui.tools.strip.moreoverlaysandbox"])
@@ -74,7 +77,7 @@ class MoreRowOverlayTest {
     private fun toggleState(): String? = StripTestKit.toggle()?.config?.getOrNull(SemanticsProperties.StateDescription)
 
     @Test
-    fun overlaysOutliveTheRowAndDropdownsKeepItOpen() {
+    fun overlaysShowOverTheOpenRowAndOnlyTheToggleClosesIt() {
         ShadowLog.stream = null
         SmokeUi.installTestRecomposer()
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
@@ -120,7 +123,7 @@ class MoreRowOverlayTest {
         activity.setContent {
             BrushworkTheme {
                 Surface {
-                    CompositionLocalProvider(LocalStripContext provides StripContext(false, false, closeMore = state::closeAll)) {
+                    CompositionLocalProvider(LocalStripContext provides StripContext(false, false, closeMore = {})) {
                         StripHost(spec, ToolId.SHAPE, vectorMode = false, state = state)
                     }
                 }
@@ -134,30 +137,37 @@ class MoreRowOverlayTest {
         assertFalse(StripTestKit.moreRowShown())
         assertEquals(0f, state.moreRowDp, 0f)
 
-        // The sheet: the row closes, the sheet stays.
+        // The sheet: closeMore() is a no-op, the row stays open with the sheet over it.
         assertTrue(StripTestKit.openMoreRow())
         assertTrue(StripTestKit.moreRowShown())
         assertEquals(StripLabels18.EXPANDED, toggleState())
         assertEquals("one line", StripLayout.moreRowDp(1), state.moreRowDp, 0f)
         click("Open probe sheet")
-        assertFalse("closeMore() closed the row", StripTestKit.moreRowShown() || state.anyOpen)
-        assertEquals(0f, state.moreRowDp, 0f)
+        assertTrue("the sheet shows", sheetOpen && node("Probe sheet body") != null)
+        assertTrue("closeMore() left the row open (v1.9)", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
+        assertEquals(StripLayout.moreRowDp(1), state.moreRowDp, 0f)
+        // The editor covers the row while a sheet shows: hidden, remembered; the sheet outlives it.
+        state.hiddenByChrome = true
         RobolectricUi.settle(10, 50)
+        assertFalse("covered: the row hides", StripTestKit.moreRowShown() || state.anyOpen)
+        assertEquals(0f, state.moreRowDp, 0f)
+        assertTrue("…remembered", state.remembers(ToolId.SHAPE))
         assertTrue("the sheet outlives the row", sheetOpen && node("Probe sheet body") != null)
         sheetOpen = false
+        state.hiddenByChrome = false
         RobolectricUi.settle(10, 50)
+        assertTrue("the sheet closed: the row shows again", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
 
-        // The dialog: likewise.
-        assertTrue(StripTestKit.openMoreRow())
+        // The dialog: it shows over the open row, which stays.
         click("Open probe dialog")
-        assertFalse("closeMore() closed the row", StripTestKit.moreRowShown() || state.anyOpen)
         RobolectricUi.settle(10, 50)
-        assertTrue("the dialog outlives the row", dialogOpen && node("Probe dialog body") != null)
+        assertTrue("the dialog shows", dialogOpen && node("Probe dialog body") != null)
+        assertTrue("closeMore() left the row open (v1.9)", state.isOpen(ToolId.SHAPE))
         dialogOpen = false
         RobolectricUi.settle(10, 50)
+        assertTrue("the dialog closed: the row still open", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
 
         // The dropdown: the row stays open while it shows and after it is dismissed.
-        assertTrue(StripTestKit.openMoreRow())
         click("Open probe menu")
         assertTrue("the dropdown shows", node("Probe menu entry") != null)
         assertTrue("the dropdown keeps the row open", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
@@ -165,8 +175,7 @@ class MoreRowOverlayTest {
         assertEquals(1, picked)
         assertFalse(menuOpen)
         assertTrue("the row is still open after the dropdown", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
-
-        // The toggle closes it.
+        // Only the toggle closes it.
         assertTrue(StripTestKit.closeMoreRow())
         assertFalse(StripTestKit.moreRowShown())
         assertEquals(StripLabels18.COLLAPSED, toggleState())
