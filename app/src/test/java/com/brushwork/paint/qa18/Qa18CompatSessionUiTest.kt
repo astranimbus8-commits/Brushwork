@@ -14,6 +14,7 @@ import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.EditorSession
 import com.brushwork.paint.MainActivity
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.filters.Filter
 import com.brushwork.paint.filters.FilterRegistry
@@ -96,7 +97,8 @@ import kotlin.math.abs
  *   sheet's Look › End opacity), Chromatic aberration with Blue/Yellow fringes and Glitch with a
  *   picked static color.
  * - Tools switched in the middle of a brush stroke and of a shape drag; the strip's More row left
- *   open while the tool changes, the layer window opens and the app goes to the background; a
+ *   open while the tool changes, the layer window opens and the app goes to the background (v1.9,
+ *   R3: each tool shows its own remembered row, the layer window covers it and it comes back); a
  *   Magnetic lasso outline pending through the background.
  * - Undo of every step and redo of every step with the top row's buttons: all undone, every v1.7
  *   layer holds v1.7's pixels and data again.
@@ -240,6 +242,17 @@ class Qa18CompatSessionUiTest {
         val toggle = StripTestKit.toggle()
         val state = toggle?.config?.getOrNull(SemanticsProperties.StateDescription)
         assertEquals("$where: the More row shows exactly while its toggle says Expanded (toggle $state)", state == StripLabels18.EXPANDED, StripTestKit.moreRowShown())
+    }
+
+    /**
+     * v1.9 (R3): the strip's More row shows exactly while the active tool's row is remembered
+     * (`UiPrefs.stripOpenRows`): a tool change shows that tool's own row, opened or not.
+     */
+    private fun assertRowAsRemembered(where: String) {
+        settle(2)
+        val remembered = c.activeToolId.name in UiPrefs(activity).stripOpenRows
+        assertEquals("$where: the tool's own row, as remembered ($remembered)", remembered, StripTestKit.moreRowShown())
+        assertMoreRowAgrees(where)
     }
 
     /** The strip's More row opened by a finger on its toggle ("Show more tool options"). */
@@ -704,7 +717,7 @@ class Qa18CompatSessionUiTest {
         assertTrue("a hole about 40 %: $hole", hole in 0.3f..0.5f)
         Finger.back()
         assertFalse("the sheet closed", has(CogLabels18.HOLE_SIZE, exact = true))
-        // The More row (where Shape settings is) swallows the next canvas touch (D25): closed first.
+        // The More row (where Shape settings is) closed by its toggle, so the cog is drawn clear of it.
         StripTestKit.closeMoreRow()
         stroke(50f to 120f, 90f to 160f, 130f to 200f)
         assertNotNull("a pending cog", shape.box)
@@ -879,11 +892,15 @@ class Qa18CompatSessionUiTest {
     private fun moreRows() {
         val paths = layer("Paths")
         pick(paths)
-        // Open on Curve, then the tool menu picks Shape: the tool change closes it (D25), nothing stuck, the next touch acts.
+        // Open on Curve, then the tool menu picks Shape: Shape's own row shows (v1.9, R3: as
+        // remembered), nothing stuck, the next touch acts.
         tool("Curve")
         openMoreRowByFinger("Curve")
         tool("Shape")
-        assertFalse("a tool change closes the More row", StripTestKit.moreRowShown())
+        assertRowAsRemembered("Curve's More row, then Shape")
+        assertTrue("Curve's row stays remembered", ToolId.CURVE.name in UiPrefs(activity).stripOpenRows)
+        // Closed by its toggle (the kits' searches may have opened it before), so the stroke lands clear of it.
+        StripTestKit.closeMoreRow()
         assertPendingButtons("Curve's More row, then Shape")
         stroke(240f to 200f, 280f to 230f, 320f to 260f)
         val shape = c.currentTool as ShapeTool
@@ -892,15 +909,20 @@ class Qa18CompatSessionUiTest {
         finger("Discard shape edit")
         assertNull(shape.box)
 
-        // Open on Shape, then the layer window: closed by it, and still closed after it.
+        // Open on Shape, then the layer window: it covers the row, which shows again after it (v1.9).
         openMoreRowByFinger("Shape")
         openLayers()
-        assertFalse("the layer window closes the More row", StripTestKit.moreRowShown())
+        assertFalse("the layer window covers the More row", StripTestKit.moreRowShown())
         closeLayers()
+        assertTrue("…and it shows again after it", StripTestKit.moreRowShown())
         assertPendingButtons("Shape's More row, then the layer window")
+        StripTestKit.closeMoreRow()
 
         // Three curve points pending, the More row open: the floating ✓ applies them (it is no canvas touch).
         tool("Curve")
+        assertTrue("back on Curve: its remembered row (v1.9)", StripTestKit.moreRowShown())
+        // Closed by its toggle so the taps land clear of it, then open again with the points pending.
+        StripTestKit.closeMoreRow()
         val curve = c.currentTool as CurveTool
         val spots = emptySpots(paths, 3, mirror = false)
         for ((x, y) in spots) tap(x, y)
@@ -923,8 +945,12 @@ class Qa18CompatSessionUiTest {
         tool("Color select")
         openMoreRowByFinger("Color select")
         tool("Magnetic lasso")
-        assertFalse(StripTestKit.moreRowShown())
+        assertRowAsRemembered("Color select's More row, then Magnetic lasso")
         assertPendingButtons("Color select's More row, then Magnetic lasso")
+        tool("Color select")
+        assertTrue("back on Color select: its remembered row (v1.9)", StripTestKit.moreRowShown())
+        assertPendingButtons("back on Color select")
+        StripTestKit.closeMoreRow()
         tool(ToolId.BRUSH.label)
         assertPendingButtons("Brush")
         Smoke.assertQuiet(c, "More rows")
