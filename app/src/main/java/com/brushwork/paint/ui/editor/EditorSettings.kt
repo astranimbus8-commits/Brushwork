@@ -9,11 +9,13 @@ import androidx.compose.runtime.setValue
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.AdjustmentStage
+import com.brushwork.paint.ui.backup.BackupSection
 import com.brushwork.paint.ui.common.BwDialog
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.IncrementsSettingsSection
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToggleRow
+import com.brushwork.paint.ui.diagnostics.DiagnosticsSection
 import com.brushwork.paint.ui.mask.FastAdjustPreviewToggle
 
 /**
@@ -118,6 +120,8 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChan
         )
         SectionHeader("Display")
         FastAdjustPreviewToggle(prefs.settings)
+        // v1.9 (design 2.4.14): A6's drawing preview (empty in F1b).
+        DrawingPreviewSetting()
         ToggleRow(
             "Safe compositing",
             prefs.safeCompositing,
@@ -135,5 +139,8 @@ fun EditorSettingsDialog(prefs: EditorPrefs, onDismiss: () -> Unit, onCanvasChan
             selected = choices.indexOf(prefs.autosaveSeconds),
             onSelect = { prefs.autosaveSeconds = choices[it] },
         )
+        // v1.9 (design 2.4.14, C9): A8's Backup, then A7a's Diagnostics (both empty in F1b).
+        BackupSection()
+        DiagnosticsSection()
     }
 }

@@ -250,22 +250,39 @@ fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> 
     Box(Modifier.fillMaxSize()) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
+            // v1.9 (design 2.4.14): the notice slot under the top bar, above the grid (empty in F1b).
             topBar = {
-                TopAppBar(
-                    title = { Text("Brushwork", fontWeight = FontWeight.SemiBold) },
-                    actions = {
-                        TextButton(onClick = importPicture) {
-                            Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text("Import picture")
-                        }
-                        // v1.5: a new artwork from an SVG or PDF file.
-                        IconButton(onClick = importVector) {
-                            Icon(Icons.Outlined.FileOpen, contentDescription = "New from SVG or PDF")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
-                )
+                Column {
+                    TopAppBar(
+                        title = { Text("Brushwork", fontWeight = FontWeight.SemiBold) },
+                        actions = {
+                            TextButton(onClick = importPicture) {
+                                Icon(Icons.Outlined.AddPhotoAlternate, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Import picture")
+                            }
+                            // v1.5: a new artwork from an SVG or PDF file.
+                            IconButton(onClick = importVector) {
+                                Icon(Icons.Outlined.FileOpen, contentDescription = "New from SVG or PDF")
+                            }
+                            // v1.9 (design 2.4.14): the overflow menu of the backup actions (A8); hidden while
+                            // galleryBackupMenuShown is false (F1b).
+                            if (galleryBackupMenuShown) {
+                                Box {
+                                    var overflowOpen by remember { mutableStateOf(false) }
+                                    IconButton(onClick = { overflowOpen = true }) {
+                                        Icon(Icons.Filled.MoreVert, contentDescription = "More options")
+                                    }
+                                    DropdownMenu(expanded = overflowOpen, onDismissRequest = { overflowOpen = false }) {
+                                        GalleryBackupMenuItems(onDismissMenu = { overflowOpen = false })
+                                    }
+                                }
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background),
+                    )
+                    GalleryNotices(Modifier.fillMaxWidth())
+                }
             },
             floatingActionButton = {
                 ExtendedFloatingActionButton(
@@ -506,6 +523,8 @@ private fun EmptyGallery(modifier: Modifier, onNewCanvas: () -> Unit, onImport: 
                 color = BrushworkColors.OnChromeDim,
                 textAlign = TextAlign.Center,
             )
+            // v1.9 (design 2.4.14): the restore offer (A8; empty in F1b).
+            EmptyGalleryRestore()
             Spacer(Modifier.height(24.dp))
             Button(onClick = onNewCanvas, colors = ButtonDefaults.buttonColors(containerColor = BrushworkColors.Accent)) {
                 Icon(Icons.Filled.Add, contentDescription = null)
