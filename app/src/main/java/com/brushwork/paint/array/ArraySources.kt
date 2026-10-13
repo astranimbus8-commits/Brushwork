@@ -57,13 +57,15 @@ internal object ArraySources {
      * Draws a text or shape source ALONE at identity (document px), the way its tool draws it:
      * the Text tool's `TextRenderer.drawItem` of the prepared item, the Shape tool's
      * `VectorRenderer.draw` of `ShapeOutlines.paintSpec` (and a brush-stroked outline replayed
-     * by the vector renderer). Null when [d] holds neither, or it can't be read.
+     * by the vector renderer). Null when [d] holds neither, or it can't be read. v1.9 (F2): a text
+     * source is every text of the layer, drawn in picture order (bottom first).
      */
     fun sourceDraw(d: LayerData, colorMode: ColorMode, docW: Int, docH: Int): ((Canvas) -> Unit)? {
         d.text?.let { t ->
-            val item = TextCodec.decode(t) ?: return null
-            val prep = TextRenderer.prepare(item)
-            return { cv -> TextRenderer.drawItem(cv, item, prep, null) }
+            val items = TextCodec.decodeAll(t)
+            if (items.isEmpty()) return null
+            val preps = items.map { TextRenderer.prepare(it) }
+            return { cv -> for (k in items.indices) TextRenderer.drawItem(cv, items[k], preps[k], null) }
         }
         d.shape?.let { s ->
             val o = ShapeCodec.decode(s) ?: return null

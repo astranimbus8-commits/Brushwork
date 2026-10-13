@@ -42,14 +42,16 @@ object TextTransforms {
      * The text layer data [textData] (TextCodec JSON) mapped by [m], or null when it can't be:
      * [m] is no similarity ([canMap]), the data is no text, the scaled sizes leave their ranges
      * ([TextSpec.MIN_SIZE_PX] … [TextSpec.MAX_SIZE_PX], lengths up to [TextSpec.MAX_LENGTH_PX]),
-     * or [m] turns a frame of a linked story. [textData] itself for the identity.
+     * or [m] turns a frame of a linked story. [textData] itself for the identity. v1.9 (F2): every
+     * text of the layer is mapped; null when any of them can't be.
      */
     fun mapped(textData: String, m: FloatArray): String? {
         val sim = similarity(m) ?: return null
-        val item = TextCodec.decode(textData) ?: return null
+        val items = TextCodec.decodeAll(textData)
+        if (items.isEmpty()) return null
         if (sim.isIdentity) return textData
-        val next = mapped(item, sim) ?: return null
-        return TextCodec.encode(next)
+        val next = items.map { mapped(it, sim) ?: return null }
+        return TextCodec.encodeAll(next)
     }
 
     /** [item] mapped by [m] (see [mapped]), or null when it can't be. */

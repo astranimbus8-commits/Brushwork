@@ -422,8 +422,8 @@ class ExportSceneBuilder(
                 return Content.Copies(vector, spec)
             }
             if (vector == null && array.pixels == null) {
-                val item = layer.textData?.let { TextCodec.decode(it) }
-                if (item != null) textCopies(layer, item, array)?.let { return Content.Items(it) }
+                val items = layer.textData?.let { TextCodec.decodeAll(it) }.orEmpty()
+                if (items.isNotEmpty()) textCopies(layer, items, array)?.let { return Content.Items(it) }
             }
             val cache = layerImage(layer) ?: return Content.Picture(null)
             ownImage[layer] = cache
@@ -432,8 +432,8 @@ class ExportSceneBuilder(
         if (vector != null) return Content.Objects(vector.objects)
         val shape = layer.shapeData?.let { ShapeCodec.decode(it) }
         if (shape != null) return Content.Objects(listOf(VShape(1, shape = shape)))
-        val item = layer.textData?.let { TextCodec.decode(it) }
-        if (item != null) textItems(layer, item)?.let { return Content.Items(it) }
+        val items = layer.textData?.let { TextCodec.decodeAll(it) }.orEmpty()
+        if (items.isNotEmpty()) textItems(layer, items)?.let { return Content.Items(it) }
         val image = layerImage(layer) ?: return Content.Picture(null)
         ownImage[layer] = image
         return Content.Picture(image)
@@ -445,8 +445,24 @@ class ExportSceneBuilder(
      * outlines, every part the text paints with its own color (box, outline stroke, letters; PDF
      * always); null = its pixels: letters without outlines, i.e. color emoji (their glyphs are
      * pictures, so outlines would leave them out; a real `<text>` keeps them).
+     *
+     * v1.9 (F2): a layer of several texts gives each text's items in picture order (bottom
+     * first), each text as above (its letters' outlines its own, [TextExport.outlines] of the
+     * item); a text that draws nothing (empty) is left out, and the layer is its pixels when any
+     * text can only be pixels. One text: v1.8's items.
      */
-    private fun textItems(layer: Layer, item: TextItem): List<SceneItem>? {
+    private fun textItems(layer: Layer, items: List<TextItem>): List<SceneItem>? {
+        if (items.size == 1) return textItems(items[0]) { text.outlines(doc, layer) }
+        val out = ArrayList<SceneItem>()
+        for (item in items) {
+            if (item.text.isEmpty()) continue
+            out += textItems(item) { TextExport.outlines(item) } ?: return null
+        }
+        return out.ifEmpty { null }
+    }
+
+    /** One text [item] of a text layer (see the layer's [textItems]); [outlines]: its letters' outlines. */
+    private fun textItems(item: TextItem, outlines: () -> Path?): List<SceneItem>? {
         val spec = item.spec
         val straight = !item.path.isActive
         val parts = text.parts(item)
@@ -470,7 +486,7 @@ class ExportSceneBuilder(
             if (!runs.isNullOrEmpty()) return frame.orEmpty() + realText(spec, runs)
         }
         if (emoji) return null
-        val outline = text.outlines(doc, layer) ?: return null
+        val outline = outlines() ?: return null
         val path = vectorPathOf(outline)
         if (path.isEmpty) return null
         val evenOdd = outline.fillType == Path.FillType.EVEN_ODD
@@ -494,12 +510,20 @@ class ExportSceneBuilder(
      * v1.8 (area B): placed by the [ArrayInstances] matrices; a copy with a look has every part's
      * paint tinted ([ArrayDraw.tinted]) and its opacity multiplied by the copy's, and a copy with
      * opacity 0 is left out. Without a look the items are v1.7's.
+     *
+     * v1.9 (F2): the source is every text of the layer ([items], picture order, bottom first;
+     * an empty text of several is left out), so each copy holds all of them; null when any of
+     * them is unknown or has letters without outlines.
      */
-    private fun textCopies(layer: Layer, item: TextItem, array: LayerArray): List<SceneItem>? {
-        val parts = text.parts(item) ?: return null
-        if (ColorGlyphs.has(item.text)) return null
-        if (item.text.isNotBlank() && parts.none { it.kind == TextOutlinePart.Kind.TEXT }) return null
-        val own = partItems(parts)
+    private fun textCopies(layer: Layer, items: List<TextItem>, array: LayerArray): List<SceneItem>? {
+        val own = ArrayList<SceneItem>()
+        for (item in items) {
+            if (items.size > 1 && item.text.isEmpty()) continue
+            val parts = text.parts(item) ?: return null
+            if (ColorGlyphs.has(item.text)) return null
+            if (item.text.isNotBlank() && parts.none { it.kind == TextOutlinePart.Kind.TEXT }) return null
+            own += partItems(parts)
+        }
         if (own.isEmpty()) return null
         val source = ArrayDraw.sourceBounds(layer.dataSnapshot()) ?: return null
         // As the cache: the source alone while editing it or without a usable source rectangle.

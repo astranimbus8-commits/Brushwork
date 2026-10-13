@@ -319,9 +319,17 @@ object ArrayDraw {
         synchronized(lock) {
             for ((d, r) in textMemo) if (d == data) return RectF(r)
         }
-        val item = TextCodec.decode(data) ?: return null
-        val prep = TextRenderer.prepare(item)
-        val r = if (prep.isEmpty) RectF() else prep.docBounds(item)
+        // v1.9 (F2): the union over every text of the layer; empty when none paints, null when unreadable.
+        val items = TextCodec.decodeAll(data)
+        if (items.isEmpty()) return null
+        var r: RectF? = null
+        for (item in items) {
+            val prep = TextRenderer.prepare(item)
+            if (prep.isEmpty) continue
+            val b = prep.docBounds(item)
+            if (r == null) r = b else r.union(b)
+        }
+        if (r == null) r = RectF()
         synchronized(lock) {
             textMemo.addFirst(data to RectF(r))
             while (textMemo.size > MEMO) textMemo.removeLast()

@@ -194,16 +194,26 @@ object ImportLayers {
      * -> new id). A picture that didn't come in (layer limit) gets an id no layer has
      * ([unusedId]), as if it had been deleted: the text keeps its outline and layout, and never
      * follows a layer of this document that happens to have the file's id. The pixels don't
-     * change (the layout doesn't depend on the id).
+     * change (the layout doesn't depend on the id). v1.9 (F2): every text of the layer is relinked
+     * (texts that wrapped around the same missing picture share one unused id); [data] itself
+     * when none changes.
      */
     internal fun relinked(data: LayerData, links: Map<Long, Long>, unusedId: () -> Long): LayerData {
         val text = data.text ?: return data
-        val item = TextCodec.decode(text) ?: return data
-        val from = item.wrap.sourceLayerId
-        if (from == 0L) return data
-        val to = links[from] ?: unusedId()
-        if (to == from) return data
-        return data.copy(text = TextCodec.encode(item.copy(wrap = item.wrap.copy(sourceLayerId = to))))
+        val items = TextCodec.decodeAll(text)
+        if (items.isEmpty()) return data
+        val unused = HashMap<Long, Long>()
+        var changed = false
+        val out = items.map { item ->
+            val from = item.wrap.sourceLayerId
+            if (from == 0L) return@map item
+            val to = links[from] ?: unused.getOrPut(from, unusedId)
+            if (to == from) return@map item
+            changed = true
+            item.copy(wrap = item.wrap.copy(sourceLayerId = to))
+        }
+        if (!changed) return data
+        return data.copy(text = TextCodec.encodeAll(out))
     }
 
     /** The document's color mode changed by an import (part of the import's step). */

@@ -85,12 +85,23 @@ object TextExport {
      * vertical, on a path), to fill with the text's color ([TextSpec.color]); null when [layer] is
      * not a text layer or draws no letters. The letters only: the box (background, border) and the
      * text's outline stroke have other colors and come from [outlineParts], which gives every part
-     * of the exact look with its color.
+     * of the exact look with its color. v1.9 (F2): a layer of several texts gives the union of
+     * every text's letters ([outlines] of each; each text's own color is in its [outlineParts]).
      */
     fun outlines(doc: Document, layer: Layer): Path? {
-        val item = TextCodec.decode(layer.textData) ?: return null
-        return outlineParts(item)?.lastOrNull { it.kind == TextOutlinePart.Kind.TEXT }?.path
+        val items = TextCodec.decodeAll(layer.textData)
+        if (items.size <= 1) return items.firstOrNull()?.let { outlines(it) }
+        var union: Path? = null
+        for (item in items) {
+            val p = outlines(item) ?: continue
+            val u = union
+            union = if (u == null) Path(p) else Path().also { if (!it.op(u, p, Path.Op.UNION)) { it.set(u); it.addPath(p) } }
+        }
+        return union
     }
+
+    /** v1.9 (F2): the glyph outlines of the one text [item] in document px (see the layer's [outlines]); null when it draws no letters. */
+    fun outlines(item: TextItem): Path? = outlineParts(item)?.lastOrNull { it.kind == TextOutlinePart.Kind.TEXT }?.path
 
     /**
      * Everything [item] paints as ONE outline in document px (box, outline stroke and letters

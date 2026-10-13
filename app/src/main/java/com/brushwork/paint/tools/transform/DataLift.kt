@@ -106,9 +106,11 @@ internal object DataRender {
                 ({ cv -> if (!region.isEmpty) VectorLayerRenderer.render(cv, content, region, tips = tips, document = doc) })
             }
             after.text != null -> {
-                val item = TextCodec.decode(after.text) ?: return false
-                val prep = TextRenderer.prepare(item)
-                ({ cv -> TextRenderer.drawItem(cv, item, prep, null) })
+                // v1.9 (F2): every text of the layer, in picture order (bottom first).
+                val items = TextCodec.decodeAll(after.text)
+                if (items.isEmpty()) return false
+                val preps = items.map { TextRenderer.prepare(it) }
+                ({ cv -> for (k in items.indices) TextRenderer.drawItem(cv, items[k], preps[k], null) })
             }
             after.shape != null -> {
                 val o = ShapeCodec.decode(after.shape) ?: return false
