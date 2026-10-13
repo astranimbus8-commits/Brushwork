@@ -112,6 +112,12 @@ internal object Qa19Ui {
      * The texts on screen (the windows shown since [SmokeUi.markBaseline], placed nodes only)
      * whose layout has a visual overflow: wider or taller than their box, or cut by `maxLines`
      * (clipped or ellipsized), as `"text" in <bounds> (why)`. [include] picks the nodes to check.
+     *
+     * v1.9 F1b: "too wide" is a line wider than the text's box, not `didOverflowWidth`. The
+     * semantics action lays the text out again at the max width of its last constraints
+     * (`TextStringSimpleNode`'s slow path), so `multiParagraph.width` is that max width and
+     * `didOverflowWidth` was true for every text narrower than the room it was given (a short
+     * label in a row). An ellipsized line counts as cut.
      */
     fun textOverflows(include: (RobolectricUi.Element) -> Boolean = { true }): List<String> {
         val windows = RobolectricUi.windowRoots()
@@ -119,11 +125,14 @@ internal object Qa19Ui {
         for (e in RobolectricUi.elements()) {
             if (windows.indexOf(e.window) < SmokeUi.baseline || !e.node.layoutInfo.isPlaced || !include(e)) continue
             val r = textLayout(e.node) ?: continue
-            if (!r.hasVisualOverflow) continue
+            val wide = (0 until r.lineCount).any { r.getLineRight(it) - r.getLineLeft(it) > r.size.width + 0.5f }
+            val tall = r.didOverflowHeight && !r.multiParagraph.didExceedMaxLines
+            val cut = r.multiParagraph.didExceedMaxLines || (0 until r.lineCount).any { r.isLineEllipsized(it) }
+            if (!wide && !tall && !cut) continue
             val why = listOfNotNull(
-                "too wide".takeIf { r.didOverflowWidth },
-                "too tall".takeIf { r.didOverflowHeight && !r.multiParagraph.didExceedMaxLines },
-                "past its max lines".takeIf { r.multiParagraph.didExceedMaxLines },
+                "too wide".takeIf { wide },
+                "too tall".takeIf { tall },
+                "past its max lines".takeIf { cut },
             ).joinToString(", ")
             out += "\"${r.layoutInput.text.text}\" in ${e.bounds} at font scale ${r.layoutInput.density.fontScale} ($why)"
         }

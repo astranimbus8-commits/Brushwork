@@ -1,7 +1,9 @@
 package com.brushwork.paint.qa19
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -79,6 +81,16 @@ class Qa19UiSelfTest {
             assertTrue("it wraps", layoutOf(wrapped).lineCount > 1)
             assertEquals(emptyList<String>(), Qa19Ui.textOverflows())
             Qa19Ui.assertNoTextOverflow()
+        }
+
+        h.section("a short one-line text with room to spare passes (F1b)") {
+            h.show {
+                Row(Modifier.width(300.dp)) {
+                    Text("Short", maxLines = 1)
+                    Box(Modifier.widthIn(min = 40.dp)) { Text("1", maxLines = 1) }
+                }
+            }
+            assertEquals(emptyList<String>(), Qa19Ui.textOverflows())
         }
 
         var base = 0f
