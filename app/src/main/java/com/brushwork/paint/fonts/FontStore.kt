@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.tools.text.TextFont
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -273,8 +274,9 @@ class FontStore internal constructor(
         /**
          * App-wide scope (main thread) for imports that must outlive the screen that started them:
          * "Open with Brushwork", or an import whose font picker is closed before it finishes.
+         * v1.9 (design 2.4.13): with [ErrorReporter.handler] (F1b: v1.8's outcome).
          */
-        val appScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+        val appScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + ErrorReporter.handler) }
 
         private fun bumpGeneration() { generation++ }
 

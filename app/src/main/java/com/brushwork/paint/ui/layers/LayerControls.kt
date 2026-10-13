@@ -113,6 +113,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.array.ArrayOps
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.IncrementKind
@@ -745,7 +746,7 @@ private fun BlendEntry(label: String, current: Boolean, onClick: () -> Unit) {
  */
 @Composable
 internal fun OpacityRow(controller: EditorController, layer: Layer, opacity: Float, onType: () -> Unit, modifier: Modifier = Modifier) {
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     val preview = remember(layer) { OpacityPreview(controller, layer, scope) }
     var dragValue by remember(layer) { mutableStateOf<Float?>(null) }
     val readout = remember(layer) { booleanArrayOf(false) }

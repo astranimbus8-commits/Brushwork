@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.brushwork.paint.diagnostics.Breadcrumbs
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.engine.PerfTrace
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -28,7 +30,8 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
         data class Failed(val message: String) : State
     }
 
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    /** The editor scope; v1.9 (design 2.4.13): with [ErrorReporter.handler] (F1b: v1.8's outcome). */
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + ErrorReporter.handler)
     var state by mutableStateOf<State>(State.Loading)
         private set
 
@@ -47,6 +50,8 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
                     EditorController(app, doc, scope, app.settings)
                 }
                 controller = c
+                // v1.9 (design 2.4.13): sizes and counts only.
+                Breadcrumbs.add("open:${c.doc.width}x${c.doc.height}/${c.doc.layers.size}")
                 state = State.Ready(c)
                 autosaveLoop(c)
             } catch (e: OutOfMemoryError) {
@@ -93,9 +98,11 @@ class EditorSession(private val app: BrushworkApp, val projectId: String) {
             val edits = c.editCount
             if (edits == lastSavedEdit) return
             try {
+                Breadcrumbs.add("save:start")
                 val thumb = c.compositor.renderThumbnail(512)
                 app.repository.save(c.doc, thumb)
                 lastSavedEdit = edits
+                Breadcrumbs.add("save:end")
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Throwable) {

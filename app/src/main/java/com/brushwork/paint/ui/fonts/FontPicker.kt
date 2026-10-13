@@ -61,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.fonts.FontIds
 import com.brushwork.paint.fonts.FontStore
 import com.brushwork.paint.fonts.ImportedFont
@@ -127,7 +128,7 @@ fun FontPickerSheet(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     var query by remember { mutableStateOf("") }
     var status by remember { mutableStateOf<String?>(null) }
     var confirmDelete by remember { mutableStateOf<ImportedFont?>(null) }

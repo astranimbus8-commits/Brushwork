@@ -93,6 +93,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.exchange.PendingImports
 import com.brushwork.paint.exchange.VectorFormat
 import com.brushwork.paint.model.Layer
@@ -321,7 +322,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
     // ---------------------------------------------------------------- snackbar messages
     val snackbar = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     // Problems found while opening (unreadable vector or mask data...), shown once.
     LaunchedEffect(controller) {
         val warnings = controller.doc.loadWarnings

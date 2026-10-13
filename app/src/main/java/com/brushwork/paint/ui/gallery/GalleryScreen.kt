@@ -107,6 +107,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.storage.ExportFormat
 import com.brushwork.paint.storage.ProjectInfo
 import com.brushwork.paint.storage.ProjectRepository
@@ -134,7 +135,7 @@ private enum class ProjectAction(val label: String, val icon: ImageVector) {
 @Composable
 fun GalleryScreen(repository: ProjectRepository, onOpenProject: (id: String) -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     val snackbar = remember { SnackbarHostState() }
 
     val changes by repository.changes.collectAsState()

@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.ui.theme.BrushworkColors
 import kotlinx.coroutines.launch
 import kotlin.math.atan2
@@ -91,7 +92,7 @@ internal fun ColumnScope.TabScaffold(footer: @Composable ColumnScope.() -> Unit 
 @Composable
 internal fun rememberAfterFieldCommit(): (() -> Unit) -> Unit {
     val focus = LocalFocusManager.current
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     return remember(focus, scope) {
         { action ->
             focus.clearFocus()

@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPresetStore
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.stepOnLongPress
@@ -386,7 +387,7 @@ private fun RelativeTrack(
 private fun StepButton(label: String, plus: Boolean, onStep: () -> Unit, onDone: () -> Unit, glyphCenter: Dp, modifier: Modifier) {
     val step by rememberUpdatedState(onStep)
     val done by rememberUpdatedState(onDone)
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     Box(
         modifier
             .size(IbisDims.SliderButtonTouch)

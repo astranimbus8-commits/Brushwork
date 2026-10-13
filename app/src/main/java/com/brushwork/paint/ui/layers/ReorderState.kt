@@ -29,6 +29,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.brushwork.paint.diagnostics.ErrorReporter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -193,7 +194,7 @@ fun rememberReorderState(
     onDrop: (index: Int) -> Unit,
     isReorderable: (index: Int) -> Boolean = { true },
 ): ReorderState {
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     val canDragState = rememberUpdatedState(canDrag)
     val startState = rememberUpdatedState(onStart)
     val moveState = rememberUpdatedState(onMove)

@@ -24,6 +24,7 @@ import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.BrushPresetStore
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.diagnostics.Breadcrumbs
 import com.brushwork.paint.engine.AddLayerAction
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.BitmapUtils
@@ -41,6 +42,7 @@ import com.brushwork.paint.engine.LayerPropsAction
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.MaskChangeAction
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.MoveLayerAction
 import com.brushwork.paint.engine.PixelEditRecorder
 import com.brushwork.paint.engine.RemoveLayerAction
@@ -87,6 +89,7 @@ import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.ui.common.ArrayLabels
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.SavedSelectionLabels
+import com.brushwork.paint.ui.common.StabilityLabels19
 import com.brushwork.paint.vector.LayerDataTransforms
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VectorContent
@@ -821,6 +824,7 @@ class EditorController(
         currentTool.onDeactivate()
         val from = activeToolId
         activeToolId = id
+        Breadcrumbs.add("tool:${id.name}")
         if (id == ToolId.BRUSH || id == ToolId.SMUDGE || id == ToolId.BLUR) lastPaintTool = id
         if (id in ASSIST_TOOLS && from !in ASSIST_TOOLS) assistReturnTool = from.takeIf { SymmetryGuides.showsFor(it) }
         currentTool.onActivate()
@@ -1734,6 +1738,11 @@ class EditorController(
                 val members = doc.layers.subList(block.first, f + 1).toList()
                 // A block without pixel layers turns into one more pixel layer.
                 if (members.all { it.isFolder } && !canAddLayer) { toast(layerLimitMessage()); return@editScope false }
+                // v1.9 (design 2.4.13): the merged bitmap must fit (A7b's policy; DefaultPolicy admits everything).
+                if (!MemoryGovernor.admit(doc.width.toLong() * doc.height * 4, FolderLabels.MERGE)) {
+                    toast(String.format(StabilityLabels19.NO_MEMORY_FOR, FolderLabels.MERGE))
+                    return@editScope false
+                }
                 val pixels = folderPixels(folder) ?: return@editScope false
                 val merged = Layer(doc.newLayerId(), folder.name, pixels)
                 val props = folder.props()
@@ -2505,6 +2514,7 @@ class EditorController(
         // (What the tool's commit rendered in the background lands too.)
         vectors.flushPending()
         if (!checkEditable()) return
+        Breadcrumbs.add("filter:${filter.id}")
         // A session that closes itself during start() (target not usable) must not stay installed.
         filterSession = FilterSession(this, filter).also { it.start() }.takeUnless { it.isClosed }
     }

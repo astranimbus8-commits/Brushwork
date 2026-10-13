@@ -40,6 +40,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.core.LengthUnit
 import com.brushwork.paint.core.Units
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.model.IncrementKind
 import com.brushwork.paint.tools.text.KerningEditor
 import com.brushwork.paint.tools.text.PlaceholderAmount
@@ -455,7 +456,7 @@ private fun PlaceholderSection(tool: TextEditorHost, onPath: Boolean) {
     val item = tool.item ?: return
     val spec = item.spec
     val dpi = tool.controller.doc.dpi.toDouble()
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     var busy by remember { mutableStateOf(false) }
     // A message about the last Insert, shown while the text and its look stay as they were then
     // (a "no room" note goes away once the box or the text changes).

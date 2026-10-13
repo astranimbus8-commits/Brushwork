@@ -9,6 +9,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.StabilityLabels19
 import com.brushwork.paint.vector.VectorLayerOps
 
 /** v1.9 (design 2.4.6): what merging two layers keeps (see [LayerMerge.kindOf]). */
@@ -48,6 +49,11 @@ internal class LayerMerge(private val c: EditorController) {
         val idx = c.doc.indexOf(layer)
         val lower = siblingBelow(idx) ?: return
         if (lower.isAdjustmentLayer || lower.isFolder) return
+        // v1.9 (design 2.4.13): the merged bitmap must fit (A7b's policy; DefaultPolicy admits everything).
+        if (!MemoryGovernor.admit(c.doc.width.toLong() * c.doc.height * 4, "Merge down")) {
+            c.toast(String.format(StabilityLabels19.NO_MEMORY_FOR, "Merge down"))
+            return
+        }
         c.editScope { mergeDownInto(layer, idx, lower) }
     }
 

@@ -87,6 +87,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.core.LengthUnit
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import kotlinx.coroutines.delay
@@ -331,7 +332,7 @@ fun RepeatIconButton(
 ) {
     val current by rememberUpdatedState(onClick)
     val released by rememberUpdatedState(onRelease)
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     Box(
         modifier
             .size(40.dp)

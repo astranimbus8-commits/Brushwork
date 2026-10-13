@@ -27,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.exchange.ImportException
 import com.brushwork.paint.exchange.ImportFile
 import com.brushwork.paint.exchange.ImportKind
@@ -116,7 +117,7 @@ internal object GalleryImports {
 @Composable
 fun rememberGalleryImport(repository: ProjectRepository, onOpenProject: (String) -> Unit): () -> Unit {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val scope = rememberCoroutineScope { ErrorReporter.handler }
     var busy by remember { mutableStateOf(false) }
     var pdf by remember { mutableStateOf<GalleryPdf?>(null) }
 

@@ -10,7 +10,10 @@ import android.net.Uri
 import com.brushwork.paint.BrushworkApp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.ImageImport
+import com.brushwork.paint.diagnostics.Breadcrumbs
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.storage.ExportFormat
+import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.withContext
@@ -52,6 +55,8 @@ internal class EditorActions(private val controller: EditorController, private v
     /** Flattens the artwork and saves it to the device gallery. */
     fun exportToGallery(format: ExportFormat) {
         if (!readyForDocumentAction()) return
+        Breadcrumbs.add("export:${format.name}")
+        if (!admitFlatten("Export ${format.extension.uppercase()}")) return
         controller.runBusy("Exporting ${format.extension.uppercase()}") {
             letOverlayShow()
             commitPendingWork()
@@ -70,6 +75,8 @@ internal class EditorActions(private val controller: EditorController, private v
     /** Flattens the artwork to a PNG in the share cache and opens the system share sheet. */
     fun share() {
         if (!readyForDocumentAction()) return
+        Breadcrumbs.add("export:share")
+        if (!admitFlatten("Share")) return
         controller.runBusy("Preparing to share") {
             letOverlayShow()
             commitPendingWork()
@@ -101,6 +108,17 @@ internal class EditorActions(private val controller: EditorController, private v
                 controller.toast("No app available to share with")
             }
         }
+    }
+
+    /**
+     * v1.9 (design 2.4.13): the full-resolution flatten must fit (A7b's policy; DefaultPolicy admits
+     * everything). False after showing [StabilityLabels19.NO_MEMORY_FOR] with [purpose].
+     */
+    private fun admitFlatten(purpose: String): Boolean {
+        val doc = controller.doc
+        if (MemoryGovernor.admit(doc.width.toLong() * doc.height * 4, purpose)) return true
+        controller.toast(String.format(StabilityLabels19.NO_MEMORY_FOR, purpose))
+        return false
     }
 
     /**

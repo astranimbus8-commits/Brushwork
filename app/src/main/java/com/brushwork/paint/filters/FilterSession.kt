@@ -16,9 +16,11 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Parallel
 import com.brushwork.paint.core.PixelBuffer
+import com.brushwork.paint.diagnostics.Breadcrumbs
 import com.brushwork.paint.engine.BitmapUtils
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.ViewTransform
 import com.brushwork.paint.model.ColorMode
@@ -26,6 +28,7 @@ import com.brushwork.paint.model.Layer
 import com.brushwork.paint.model.Selection
 import com.brushwork.paint.segmentation.SegmentationService
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.ui.common.StabilityLabels19
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -515,6 +518,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) {
         if (isClosed || isApplying) return
         if (!checkTarget()) return
         if (!controller.checkEditable(layer)) return
+        Breadcrumbs.add("filter:${filter.id}:apply")
+        // v1.9 (design 2.4.13): the source and result buffers must fit (A7b's policy; DefaultPolicy
+        // admits everything).
+        if (!MemoryGovernor.admit(targetBitmap.width.toLong() * targetBitmap.height * 8, filter.name)) {
+            controller.toast(String.format(StabilityLabels19.NO_MEMORY_FOR, filter.name))
+            return
+        }
         // A pending preview is dropped (CPU goes to the apply); it's re-run if the apply stops.
         val droppedPreview = previewJob?.isActive == true
         previewJob?.cancel()
