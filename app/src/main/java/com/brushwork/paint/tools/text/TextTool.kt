@@ -484,12 +484,13 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     }
 
     /**
-     * v1.9 (F2): the edited (bottom) text of [layer] was emptied while the layer holds other
-     * texts: only it goes, as ONE "Edit text" step whose data is the other texts and whose
-     * pixels are a fresh rendering of them (I1, I2); the layer and its name stay. Returns false
-     * (keep editing) when the layer got locked or hidden meanwhile, or memory ran out.
+     * v1.9 (F2): the edited (bottom) text of [layer] was emptied (or deleted with the pill's
+     * trash, [deleteObject]) while the layer holds other texts: only it goes, as ONE step named
+     * [label] ("Edit text" by default) whose data is the other texts and whose pixels are a fresh
+     * rendering of them (I1, I2); the layer and its name stay. Returns false (keep editing) when
+     * the layer got locked or hidden meanwhile, or memory ran out.
      */
-    private fun removeEmptiedText(layer: Layer): Boolean {
+    private fun removeEmptiedText(layer: Layer, label: String = "Edit text"): Boolean {
         if (!controller.checkEditable(layer)) return false
         val loaded = loadedItem
         val rest = loadedRest
@@ -503,7 +504,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val json = TextCodec.encodeAll(rest)
         var done = false
         try {
-            done = controller.updateTextLayer(layer, json, "Edit text", dirty) { c ->
+            done = controller.updateTextLayer(layer, json, label, dirty) { c ->
                 for (k in rest.indices) TextRenderer.drawItem(c, rest[k], preps[k], null)
             }
         } catch (e: OutOfMemoryError) {
@@ -1051,13 +1052,21 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * The pill's trash cell (item 13), without a confirmation: a text never committed is dropped
      * (as ✕); an opened text layer is deleted with its pending changes as ONE step ("Delete
      * text", undo brings the layer back as it was) and the session ends. The last layer of the
-     * drawing stays (the layer window's message). True when something was deleted.
+     * drawing stays (the layer window's message). True when something was deleted. v1.9 (F2): in
+     * a layer that holds other texts only the open text goes, as ONE "Delete text" step; the
+     * layer keeps the others ([removeEmptiedText]).
      */
     fun deleteObject(): Boolean {
         if (item == null) return false
         val layer = editingLayer?.takeIf { doc.indexOf(it) >= 0 }
         if (layer == null) {
             discard()
+            return true
+        }
+        if (loadedRest.isNotEmpty()) {
+            if (!removeEmptiedText(layer, HistoryLabels.DELETE_TEXT)) return false
+            returnToVectorLayer()
+            controller.invalidateOverlay()
             return true
         }
         if (doc.pixelLayerCount <= 1) {

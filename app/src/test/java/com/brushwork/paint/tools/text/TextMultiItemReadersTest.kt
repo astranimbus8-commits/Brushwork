@@ -27,6 +27,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.frames.FrameFixtures
 import com.brushwork.paint.tools.transform.DataRender
+import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.layers.FrameInfoCache
 import com.brushwork.paint.vector.VPaint
 import kotlinx.coroutines.CoroutineScope
@@ -52,7 +53,8 @@ import org.robolectric.RobolectricTestRunner
  * one-text `TextCodec` sites, on real Skia (Robolectric NATIVE graphics), plus the Text tool's
  * editing paths (fact V32): editing the bottom text keeps the other text (I1: the pixels equal
  * the data's rendering after ✓), the in-layer preview shows both texts, and emptying the bottom
- * text leaves the other one in the layer in one "Edit text" step (I2).
+ * text leaves the other one in the layer in one "Edit text" step (I2); the pill's trash on the
+ * open text removes only that text, in one "Delete text" step.
  */
 @RunWith(RobolectricTestRunner::class)
 class TextMultiItemReadersTest {
@@ -203,6 +205,43 @@ class TextMultiItemReadersTest {
         assertEquals(listOf(before[1]), TextCodec.decodeAll(layer.textData))
         assertEquals("Edit text", c.undoManager.undoLabel)
         assertRendered(layer, "after ✓ of an emptied text")
+    }
+
+    @Test
+    fun thePillTrashDeletesOnlyTheOpenTextOfALayerOfSeveral() {
+        val (c, tool) = newController()
+        val layer = twoTextLayer(c, tool)
+        val before = TextCodec.decodeAll(layer.textData)
+        val layers = c.doc.layers.size
+        val name = layer.name
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.editLayer(layer))
+        tool.setText("Alpha changed")
+        assertTrue(tool.deleteObject())
+        assertNull("the edit ended", tool.item)
+        assertTrue("the layer stays", c.doc.indexOf(layer) >= 0)
+        assertEquals(layers, c.doc.layers.size)
+        assertEquals("its name stays", name, layer.name)
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(HistoryLabels.DELETE_TEXT, c.undoManager.undoLabel)
+        assertEquals("only the other text is left", listOf(before[1]), TextCodec.decodeAll(layer.textData))
+        assertRendered(layer, "after the trash")
+        c.undo()
+        assertEquals(before, TextCodec.decodeAll(layer.textData))
+        assertRendered(layer, "after undo")
+        // A layer of one text is deleted whole, as in v1.8.
+        tool.startTextAt(150f, 120f)
+        tool.setText("Solo")
+        tool.confirmEditor()
+        assertTrue(tool.commitItem())
+        val solo = c.activeLayer
+        assertEquals(1, TextCodec.decodeAll(solo.textData).size)
+        val count = c.doc.layers.size
+        assertTrue(tool.editLayer(solo))
+        assertTrue(tool.deleteObject())
+        assertEquals(count - 1, c.doc.layers.size)
+        assertTrue(c.doc.indexOf(solo) < 0)
+        assertEquals(HistoryLabels.DELETE_TEXT, c.undoManager.undoLabel)
     }
 
     @Test
