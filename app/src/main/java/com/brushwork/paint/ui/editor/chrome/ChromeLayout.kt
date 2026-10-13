@@ -95,8 +95,14 @@ object ChromeLayout {
     /**
      * Canvas fit inset at the top: the top row and the options strip. The pill and the selection
      * bar are left out (they never move the canvas, V11), and so is the hidden state of the interface.
+     *
+     * v1.9 (R3): an explicit fit (opening an artwork, "Fit to screen") also leaves room for the
+     * open More row, [moreRowDp] tall ([moreRowShift]: its height and its 4 dp gap), so the
+     * artwork's top is not under it. The row opening or closing never refits: `CanvasView` reads
+     * the row's part only when it fits (`CanvasView.fitTopExtra`).
      */
-    fun fitInsetTop(statusDp: Float): Float = optionsStripTop(statusDp) + IbisDims.OptionsStripHeight.value + fitGap
+    fun fitInsetTop(statusDp: Float, moreRowDp: Float = 0f): Float =
+        optionsStripTop(statusDp) + IbisDims.OptionsStripHeight.value + fitGap + moreRowShift(moreRowDp)
 
     /**
      * How many slider rows the brush sliders take on a screen [widthDp] wide: size over opacity

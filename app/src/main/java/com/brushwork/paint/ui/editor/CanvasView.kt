@@ -87,6 +87,14 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      */
     var onTouchEnd: (() -> Unit)? = null
 
+    /**
+     * v1.9 (R3): extra room (view px) a fit leaves at the top, under [setFitInsets]' top: the open
+     * More row (`ChromeLayout.fitInsetTop`). It is read only when a fit runs (opening an artwork,
+     * a geometry change, [fitToScreen], a refit of [setFitInsets]), so a row opening or closing
+     * never moves the canvas, and the first fit sees the row a relaunch shows remembered.
+     */
+    var fitTopExtra: (() -> Float)? = null
+
     private val viewport = ViewportStore.of(controller)
     // The activity handles density changes itself (manifest configChanges): see onConfigurationChanged.
     private var density = resources.displayMetrics.density
@@ -240,9 +248,11 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private fun fitNow() {
         if (!viewport.hasSize) return
         val doc = controller.doc
+        // v1.9 (R3): the open More row, read now: only a fit makes room for it.
+        val rowTop = fitTopExtra?.invoke()?.coerceAtLeast(0f) ?: 0f
         viewport.fit(
             doc.width, doc.height,
-            left = insetLeft, top = insetTop,
+            left = insetLeft, top = insetTop + rowTop,
             right = viewport.viewWidth - insetRight, bottom = viewport.viewHeight - insetBottom,
         )
         viewport.fittedDocVersion = controller.docVersion

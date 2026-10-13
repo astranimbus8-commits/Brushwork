@@ -498,7 +498,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
         val contentW = (screenW - insetLeftDp - insetRightDp).coerceAtLeast(1f)
         val topSpec = ChromeLayout.topRow(contentW)
         // v1.8 (design §3.9): the open More row moves the pill and the bars down by its height
-        // plus 4 dp, over 150 ms. It floats over the canvas: the fit insets never see it.
+        // plus 4 dp, over 150 ms. It floats over the canvas: opening or closing it never refits
+        // (v1.9, R3: only an explicit fit leaves room for it, fitRowExtra below).
         val moreRowDp by animateFloatAsState(stripState.moreRowDp, tween(MORE_ROW_ANIM_MS), label = "moreRow")
         val pillTop = ChromeLayout.pillTop(statusDp, moreRowDp)
         val pillDp = with(density) { pillPx.toDp() }.value
@@ -511,6 +512,11 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
 
         // ------------------------------------------------------------ canvas (full bleed)
         val fitTopPx = with(density) { ChromeLayout.fitInsetTop(statusDp).dp.toPx() }
+        // v1.9 (R3): an explicit fit also leaves room for the open More row, read when it runs
+        // (never a refit of its own: the row opening or closing never moves the canvas).
+        val fitRowExtra: () -> Float = remember(stripState, density, statusDp) {
+            { with(density) { (ChromeLayout.fitInsetTop(statusDp, stripState.moreRowDp) - ChromeLayout.fitInsetTop(statusDp)).dp.toPx() } }
+        }
         val fitBottomPx = if (session != null) sessionPanelPx.toFloat() else with(density) { ChromeLayout.fitInsetBottom(navDp, sliderRows).dp.toPx() }
         val outsideTap = if (layersVisible || toolMenuVisible) closeFloating else null
         key(controller) {
@@ -534,6 +540,7 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap
                     v.setMirrored(controller.viewMirrored)
+                    v.fitTopExtra = fitRowExtra
                     // Constant bands (V11): the pill, the selection bar and "hide interface" never move the canvas.
                     v.setFitInsets(0f, fitTopPx, 0f, fitBottomPx)
                 },
