@@ -458,7 +458,6 @@ class ProjectRepository(private val context: Context) {
 
     private fun validDpi(dpi: Float): Float = if (dpi.isFinite() && dpi >= 1f) dpi else 350f
 
-    /** One row of `width` pixels of [color] in the bitmap's raw (premultiplied) byte layout. */
     /**
      * v1.9 (design 2.4.8): writes [seed]'s layers as the pixel files of a new project in [dir]
      * (ids 1, 2, ... bottom first, revision 0, as v1.8 numbered them) and returns their entries.
@@ -503,6 +502,7 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
+    /** One row of `width` pixels of [color] in the bitmap's raw (premultiplied) byte layout. */
     private fun uniformRow(width: Int, color: Int): ByteArray {
         val row = ByteArray(width * 4)
         if (color == 0) return row
