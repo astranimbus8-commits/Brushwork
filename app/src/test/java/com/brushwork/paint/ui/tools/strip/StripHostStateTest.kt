@@ -41,10 +41,13 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLog
 
 /**
- * v1.8 merge (design §3.9, D25): the host's state rules that fake specs show best.
- * - A tool whose spec loses its More toggle (nothing goes to the More row any more) drops its
- *   open entry: [StripState.anyOpen] turns false, so the next canvas touch is not swallowed by a
- *   row nobody sees; when the toggle comes back, the row is closed.
+ * v1.8 merge (design §3.9, D25): the host's state rules that fake specs show best. v1.9 (R3,
+ * design 2.8): rows close only by their toggle; hiding never forgets.
+ * - A tool whose spec loses its More toggle (nothing goes to the More row any more) hides its
+ *   open row, remembered: [StripState.anyOpen] turns false meanwhile, and when the toggle comes
+ *   back the row shows again. Tool entry shows the remembered row again after a closeAll.
+ * - The object bar's row hides the tool's row while it shows and keeps every tool's entry; the
+ *   objects deselected (the bar gone), the tool's row shows again.
  * - Each item is keyed by [StripItem.key]: an item that comes before an open dropdown, on row 1 or
  *   on the More row, never resets it (the dropdown stays open).
  */
@@ -83,7 +86,7 @@ class StripHostStateTest {
         RobolectricUi.settle(10, 50)
     }
 
-    private fun show(state: StripState, spec: () -> StripSpec) {
+    private fun show(state: StripState, tool: () -> ToolId = { ToolId.SHAPE }, spec: () -> StripSpec) {
         ShadowLog.stream = null
         SmokeUi.installTestRecomposer()
         val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().get()
@@ -91,7 +94,7 @@ class StripHostStateTest {
             BrushworkTheme {
                 Surface {
                     CompositionLocalProvider(LocalStripContext provides StripContext(false, false, closeMore = state::closeAll)) {
-                        StripHost(spec(), ToolId.SHAPE, vectorMode = false, state = state)
+                        StripHost(spec(), tool(), vectorMode = false, state = state)
                     }
                 }
             }
@@ -100,7 +103,7 @@ class StripHostStateTest {
     }
 
     @Test
-    fun aSpecWithoutTheToggleDropsItsOpenRow() {
+    fun aSpecWithoutTheToggleHidesItsOpenRowRemembered() {
         val state = StripState()
         val withMore = StripSpec(
             listOf(
@@ -110,9 +113,10 @@ class StripHostStateTest {
         )
         val rowOnly = StripSpec(listOf(StripItem("row", "Probe row item", 100.dp) { ProbeButton("Probe row item") }))
         var spec by mutableStateOf(withMore)
-        show(state) { spec }
+        var tool by mutableStateOf(ToolId.SHAPE)
+        show(state, { tool }) { spec }
 
-        // Open, then the spec loses its More items: no toggle, the entry is dropped.
+        // Open, then the spec loses its More items: no toggle, the row hides, remembered.
         assertTrue(StripTestKit.openMoreRow())
         assertTrue(state.isOpen(ToolId.SHAPE) && state.anyOpen)
         assertTrue(state.moreRowDp > 0f)
@@ -120,16 +124,87 @@ class StripHostStateTest {
         RobolectricUi.settle(10, 50)
         assertNull("no toggle", StripTestKit.toggle())
         assertFalse("no More row", StripTestKit.moreRowShown())
-        assertFalse("the toggle-less spec dropped the open entry", state.isOpen(ToolId.SHAPE) || state.anyOpen)
+        assertFalse("hidden while there is no toggle", state.isOpen(ToolId.SHAPE) || state.anyOpen)
+        assertTrue("…and remembered (v1.9, R3)", state.remembers(ToolId.SHAPE))
         assertEquals(0f, state.moreRowDp, 0f)
 
-        // The toggle comes back closed.
+        // The toggle comes back: the remembered row shows again.
         spec = withMore
         RobolectricUi.settle(10, 50)
         assertNotNull(StripTestKit.toggle())
-        assertFalse("closed when the toggle comes back", StripTestKit.moreRowShown() || state.anyOpen)
+        assertTrue("open again when the toggle comes back", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
+        assertTrue(state.moreRowDp > 0f)
+
+        // closeAll (the rig's closeMore) only hides: the tool's next entry shows the row again.
+        state.closeAll()
+        RobolectricUi.settle(10, 50)
+        assertFalse("closeAll hides the row", StripTestKit.moreRowShown() || state.anyOpen)
+        assertTrue("…without forgetting it", state.remembers(ToolId.SHAPE))
+        tool = ToolId.BRUSH
+        RobolectricUi.settle(10, 50)
+        assertFalse("another tool: its own (closed) row", StripTestKit.moreRowShown())
+        tool = ToolId.SHAPE
+        RobolectricUi.settle(10, 50)
+        assertTrue("tool entry restores the row after closeAll", StripTestKit.moreRowShown() && state.isOpen(ToolId.SHAPE))
+
+        // Only the toggle closes it, and forgets it.
+        assertTrue(StripTestKit.closeMoreRow())
+        assertFalse(StripTestKit.moreRowShown() || state.remembers(ToolId.SHAPE))
     }
 
+    /** v1.9 (R3): the object bar's row and the tools' rows, as `VectorObjectBar` and the host drive them (no UI). */
+    @Test
+    fun theObjectRowHidesTheToolsRowWithoutForgettingIt() {
+        val state = StripState()
+        state.enter(ToolId.SHAPE)
+        state.toggle(ToolId.SHAPE)
+        state.toggle(ToolId.BRUSH)
+        assertTrue(state.isOpen(ToolId.SHAPE) && state.remembers(ToolId.BRUSH))
+
+        // Objects selected: the bar shows its toggle; opening its row hides the tool's row.
+        state.objectBarShown(true)
+        assertFalse("the object row is closed at first", state.objectRowOpen)
+        state.toggleObjectRow()
+        assertTrue(state.objectRowOpen && state.objectRowRemembered)
+        assertFalse("the tool's row hides", state.isOpen(ToolId.SHAPE))
+        assertTrue("…and every tool keeps its entry", state.remembers(ToolId.SHAPE) && state.remembers(ToolId.BRUSH))
+
+        // Deselected (the bar leaves): the tool's row shows again; the object row stays remembered.
+        state.objectBarGone()
+        assertFalse(state.objectRowOpen)
+        assertTrue("deselecting brings the tool's row back", state.isOpen(ToolId.SHAPE))
+        assertTrue(state.objectRowRemembered)
+
+        // Selected again: the remembered object row shows again, over the tool's.
+        state.objectBarShown(true)
+        assertTrue(state.objectRowOpen && !state.isOpen(ToolId.SHAPE))
+
+        // The strip's toggle while the object row shows: the tool's row shows, the object row
+        // hides (one row at a time), remembered.
+        state.toggle(ToolId.SHAPE)
+        assertTrue(state.isOpen(ToolId.SHAPE) && state.remembers(ToolId.SHAPE))
+        assertFalse(state.objectRowOpen)
+        assertTrue(state.objectRowRemembered)
+
+        // Its own toggle closes the object row and forgets it; the tools' rows stay.
+        state.toggleObjectRow()
+        assertTrue("its toggle shows it again first", state.objectRowOpen)
+        state.toggleObjectRow()
+        assertFalse(state.objectRowOpen || state.objectRowRemembered)
+        assertTrue(state.isOpen(ToolId.SHAPE) && state.remembers(ToolId.BRUSH))
+
+        // closeAll and the chrome covers hide everything, remembered.
+        state.toggleObjectRow()
+        state.closeAll()
+        assertFalse(state.anyOpen)
+        assertTrue(state.remembers(ToolId.SHAPE) && state.objectRowRemembered)
+        state.enter(ToolId.SHAPE)
+        assertTrue("the entry shows the object row again", state.objectRowOpen)
+        state.hiddenByChrome = true
+        assertFalse(state.anyOpen || state.objectRowShows())
+        state.hiddenByChrome = false
+        assertTrue(state.objectRowOpen)
+    }
     @Test
     fun anInsertedItemKeepsAnOpenDropdown() {
         val state = StripState()
