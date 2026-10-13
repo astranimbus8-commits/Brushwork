@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.hypot
 
-/** v1.9 (R7, design 2.4.10): [PointBevel]'s geometry, its origin row and its predicates. */
+/** v1.9 (R18, design 2.4.10): [PointBevel]'s geometry, its origin row and its predicates. */
 class PointBevelTest {
 
     private fun p(x: Float, y: Float, w: Float = 1f) = BevelPoint(x, y, w)

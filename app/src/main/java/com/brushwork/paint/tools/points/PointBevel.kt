@@ -8,11 +8,11 @@ import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.sin
 
-/** v1.9 (R7, design 2.4.10): a point of the line [PointBevel] works on; [width] is the caller's per-point width. */
+/** v1.9 (R18, design 2.4.10): a point of the line [PointBevel] works on; [width] is the caller's per-point width. */
 data class BevelPoint(val x: Float, val y: Float, val width: Float = 1f)
 
 /**
- * v1.9 (R7, design 2.4.10; frozen): [com.brushwork.paint.ui.common.PointLabels19.BEVEL] for Polyline (A1) and Shape (A9). Pure math:
+ * v1.9 (R18, design 2.4.10; frozen): [com.brushwork.paint.ui.common.PointLabels19.BEVEL] for Polyline (A1) and Shape (A9). Pure math:
  * the callers own their data, the step and the popup's values ([com.brushwork.paint.ui.points.BevelPopup]).
  */
 object PointBevel {
