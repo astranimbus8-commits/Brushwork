@@ -18,6 +18,7 @@ import android.view.HapticFeedbackConstants
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import androidx.compose.ui.graphics.toArgb
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
@@ -74,13 +75,17 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     var onOutsideTap: (() -> Unit)? = null
 
     /**
-     * v1.8 (D25): asked when a touch gesture starts on the canvas, after [onTouchDown]. True (the
-     * editor closed the strip's More row) consumes the whole gesture: until every finger and pen
-     * lifts it draws nothing and pans and zooms nothing. Only its fingers' two- and three-finger
-     * taps still act (v1.8 integration): the gesture undoes or redoes once as any canvas tap does,
-     * so a history tap closes the row and undoes (redoes) at once; one finger only closes it.
+     * v1.9 (R3): called once per touch gesture on the canvas, when one of its pointers first moves
+     * past the touch slop from where it went down (the editor fades the open More row). A canvas
+     * touch is never consumed: the More row stays open and the gesture reaches the tool.
      */
-    var onConsumeTouch: (() -> Boolean)? = null
+    var onTouchSlop: (() -> Unit)? = null
+
+    /**
+     * v1.9 (R3): called when the canvas' touch gesture ends: the last pointer lifts or the gesture
+     * is cancelled (also while input is blocked), or the view leaves the window mid-gesture.
+     */
+    var onTouchEnd: (() -> Unit)? = null
 
     private val viewport = ViewportStore.of(controller)
     // The activity handles density changes itself (manifest configChanges): see onConfigurationChanged.
@@ -289,6 +294,7 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         if (mode == Mode.TRANSFORM) endTransform()
         endToolGesture(cancelled = true)
         mode = Mode.NONE
+        endTouchSpan()
         if (controller.onInvalidate === invalidator) controller.onInvalidate = null
         controller.settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         super.onDetachedFromWindow()
@@ -377,12 +383,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * PENDING_TAP: one pointer is down while [onOutsideTap] is set; it is held back from the tool
      * until it turns out to be more than a tap (see [startPendingTap]).
      * IGNORE: the rest of the gesture does nothing.
-     * CONSUMED (v1.8, D25): the gesture closed the strip's More row; like IGNORE, and a pen joining
-     * it does not draw either (see [onConsumeTouch]). Its fingers still feed the classifier: the
-     * first one is held (never drawn) and the last lift decides; a two- or three-finger tap
-     * undoes or redoes ([handleTap]), anything else (one finger, a pinch, a pen) does nothing.
+     * (v1.8's CONSUMED, a gesture that only closed the strip's More row, is gone in v1.9 (R3):
+     * the row stays open and the gesture is the canvas'.)
      */
-    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE, CONSUMED }
+    private enum class Mode { NONE, DRAW, TRANSFORM, TOOL, TOOL_REST, PENDING_TAP, IGNORE }
 
     private var mode = Mode.NONE
     private var drawPointerId = -1
@@ -421,8 +425,58 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private fun isStylusType(type: Int) = type == MotionEvent.TOOL_TYPE_STYLUS || type == MotionEvent.TOOL_TYPE_ERASER
 
+    // v1.9 (R3): where each pointer of the gesture went down (ids below SPAN_POINTERS), for
+    // [onTouchSlop]; [spanOpen] while a gesture is between its first down and its end.
+    private val spanDownX = FloatArray(SPAN_POINTERS)
+    private val spanDownY = FloatArray(SPAN_POINTERS)
+    private var spanDownMask = 0
+    private var spanSlopPassed = false
+    private var spanOpen = false
+
+    /** Reports the gesture's touch slop and end ([onTouchSlop], [onTouchEnd]), whatever the mode. */
+    private fun watchTouchSpan(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                spanOpen = true
+                spanSlopPassed = false
+                spanDownMask = 0
+                markSpanDown(e, 0)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> markSpanDown(e, e.actionIndex)
+            MotionEvent.ACTION_MOVE -> if (spanOpen && !spanSlopPassed) {
+                val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
+                for (i in 0 until e.pointerCount) {
+                    val id = e.getPointerId(i)
+                    if (id !in 0 until SPAN_POINTERS || spanDownMask and (1 shl id) == 0) continue
+                    if (hypot(e.getX(i) - spanDownX[id], e.getY(i) - spanDownY[id]) >= slop) {
+                        spanSlopPassed = true
+                        onTouchSlop?.invoke()
+                        break
+                    }
+                }
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> endTouchSpan()
+        }
+    }
+
+    private fun markSpanDown(e: MotionEvent, idx: Int) {
+        val id = e.getPointerId(idx)
+        if (id !in 0 until SPAN_POINTERS) return
+        spanDownX[id] = e.getX(idx)
+        spanDownY[id] = e.getY(idx)
+        spanDownMask = spanDownMask or (1 shl id)
+    }
+
+    private fun endTouchSpan() {
+        if (!spanOpen) return
+        spanOpen = false
+        spanDownMask = 0
+        onTouchEnd?.invoke()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        watchTouchSpan(e)
         if (!viewport.hasSize) return true
         val action = e.actionMasked
         if (controller.busyMessage != null) {
@@ -466,11 +520,6 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             (e.buttonState and (MotionEvent.BUTTON_SECONDARY or MotionEvent.BUTTON_TERTIARY)) != 0
         val fingerPans = type == MotionEvent.TOOL_TYPE_FINGER && controller.settings.stylusOnlyDrawing
         onTouchDown?.invoke()
-        if (onConsumeTouch?.invoke() == true) {
-            // The classifier keeps this finger: the gesture may still be a history tap.
-            mode = Mode.CONSUMED
-            return
-        }
         when {
             mousePan || fingerPans -> restartTransform(e, -1)
             onOutsideTap != null -> startPendingTap(e)
@@ -481,19 +530,6 @@ class CanvasView(context: Context, private val controller: EditorController) : V
     private fun onPointerDown(e: MotionEvent, idx: Int) {
         val id = e.getPointerId(idx)
         val stylus = isStylusType(e.getToolType(idx))
-        // v1.8 (D25): the gesture that closed the More row stays consumed, whatever joins it. A
-        // finger counts toward a two- or three-finger tap (decided at the last lift, onLastUp); a
-        // pen makes it no tap.
-        if (mode == Mode.CONSUMED) {
-            if (stylus) {
-                gestureHadStylus = true
-                classifier.invalidate()
-                ignore(id)
-            } else {
-                classifier.down(id, e.getX(idx), e.getY(idx), e.eventTime)
-            }
-            return
-        }
         if (mode == Mode.PENDING_TAP) {
             // A held pen keeps the gesture: another contact is a resting palm or a second pen.
             if (drawIsStylus) { ignore(id); return }
@@ -650,8 +686,6 @@ class CanvasView(context: Context, private val controller: EditorController) : V
             }
             Mode.TOOL, Mode.TOOL_REST -> finishToolGesture(tap)
             Mode.PENDING_TAP -> if (id == drawPointerId) finishPendingTap() else dropPendingTap()
-            // v1.8 integration: closing the More row does not swallow a history tap.
-            Mode.CONSUMED -> if (!gestureHadStylus) handleTap(tap)
             else -> {}
         }
         mode = Mode.NONE
@@ -851,15 +885,10 @@ class CanvasView(context: Context, private val controller: EditorController) : V
      * v1.7 (item 10): a finger on the UI made this gesture a two- or three-finger history tap
      * ([HistoryTapHub], which undoes or redoes itself): what the canvas' fingers started is
      * dropped (no stroke, the view back where it was, the tool's two-finger gesture cancelled),
-     * and the rest of the gesture does nothing here, so it is never a canvas tap as well. A
-     * consumed gesture (Mode.CONSUMED) started nothing and stays consumed, but is no tap either.
+     * and the rest of the gesture does nothing here, so it is never a canvas tap as well.
      */
     fun yieldToHistoryTap() {
         if (mode == Mode.NONE) return
-        if (mode == Mode.CONSUMED) {
-            classifier.invalidate()
-            return
-        }
         revertView()
         abortGesture()
         mode = Mode.IGNORE
@@ -976,6 +1005,8 @@ class CanvasView(context: Context, private val controller: EditorController) : V
 
     private companion object {
         const val MAX_GESTURE_POINTERS = 10
+        /** Pointer ids watched for the touch slop (v1.9, R3); higher ids never fade the row. */
+        const val SPAN_POINTERS = 32
         /** Moves kept while a touch is held back (PENDING_TAP); more means it is no tap anyway. */
         const val MAX_PENDING_MOVES = 64
         const val ANTS_FRAME_MS = 66L

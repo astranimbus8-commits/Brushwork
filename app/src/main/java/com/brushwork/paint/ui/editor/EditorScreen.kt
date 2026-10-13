@@ -400,13 +400,6 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     val rowsCovered = interfaceHidden || layersVisible || toolMenuVisible || sheetHost.hasExpanded ||
         (panel != null && !sheetHost.minimized)
     LaunchedEffect(stripState, rowsCovered) { stripState.hiddenByChrome = rowsCovered }
-    val consumeCanvasTouch: () -> Boolean = remember(stripState) {
-        {
-            val open = stripState.anyOpen
-            if (open) stripState.closeAll()
-            open
-        }
-    }
     // Back stops a cancellable operation; otherwise it waits for the operation to finish.
     BackHandler(enabled = busy != null) { controller.busyCancel?.invoke() }
     BackHandler(enabled = busy == null && session != null) { session?.cancel() }
@@ -422,8 +415,10 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // A touch on the canvas while a panel is up: the panel folds into its pill so the canvas can
     // be used (the touch goes on to the canvas). The layer window hidden under the panel is
     // closed too, or it would pop up in its place. The tool menu closes on any canvas touch.
-    val onCanvasTouch: () -> Unit = remember(sheetHost) {
+    // v1.9 (R3): the open More rows stay; they let touches through until the gesture ends.
+    val onCanvasTouch: () -> Unit = remember(sheetHost, stripState) {
         {
+            stripState.canvasTouchStarted()
             toolMenuOpen = false
             if (sheetHost.hasExpanded) {
                 sheetHost.minimize()
@@ -532,11 +527,12 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                         }
                     }
                     v.onTouchDown = onCanvasTouch
+                    // v1.9 (R3): a canvas touch is never consumed. The open More rows are not
+                    // hit-testable until its last pointer lifts and fade once it moves.
+                    v.onTouchSlop = stripState::canvasTouchSlop
+                    v.onTouchEnd = stripState::canvasTouchEnded
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap
-                    // v1.8 (D25): with the strip's More row open, a canvas touch only closes it
-                    // (a two- or three-finger tap closes it and undoes or redoes, see onConsumeTouch).
-                    v.onConsumeTouch = consumeCanvasTouch
                     v.setMirrored(controller.viewMirrored)
                     // Constant bands (V11): the pill, the selection bar and "hide interface" never move the canvas.
                     v.setFitInsets(0f, fitTopPx, 0f, fitBottomPx)
