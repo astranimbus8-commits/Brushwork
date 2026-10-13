@@ -391,14 +391,15 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // close it instead of the panel on top. (The menu's own cells close it before they open one.)
     val toolMenuVisible = toolMenuOpen && session == null && !sheetHost.hasExpanded
     LaunchedEffect(sheetHost.hasExpanded) { if (sheetHost.hasExpanded) toolMenuOpen = false }
-    // v1.8 (D25): a chrome surface opening (the More menu, a top-row panel, the tool menu, the
-    // layer window) and hiding the interface close the strip's More row. (The host closes it on a
-    // tool or vector-mode change; a canvas touch closes it below, consumed.)
-    LaunchedEffect(stripState, moreOpen) { if (moreOpen) stripState.closeAll() }
-    LaunchedEffect(stripState, panel) { if (panel != null) stripState.closeAll() }
-    LaunchedEffect(stripState, toolMenuOpen) { if (toolMenuOpen) stripState.closeAll() }
-    LaunchedEffect(stripState, layersOpen) { if (layersOpen) stripState.closeAll() }
-    LaunchedEffect(stripState, interfaceHidden) { if (interfaceHidden) stripState.closeAll() }
+    // v1.9 (R3): the layer window, a panel (the colour panel among them) or a tool's sheet shown
+    // expanded, the tool menu and "Hide interface" cover the strip's More row and the object
+    // bar's extra row without forgetting them: they show again when the cover goes (a panel
+    // minimized to its pill uncovers them, so the canvas works with the row). Edge-triggered, so
+    // the row's own toggle, still on screen beside the layer window, opens it under that cover.
+    // The "More options" menu is a popup over the row and does not cover it.
+    val rowsCovered = interfaceHidden || layersVisible || toolMenuVisible || sheetHost.hasExpanded ||
+        (panel != null && !sheetHost.minimized)
+    LaunchedEffect(stripState, rowsCovered) { stripState.hiddenByChrome = rowsCovered }
     val consumeCanvasTouch: () -> Boolean = remember(stripState) {
         {
             val open = stripState.anyOpen
