@@ -55,7 +55,11 @@ class StripContext(
     /** The selection bar or the object bar is showing (EditorScreen.selectionBarVisible / objectBarVisible). */
     val selectionBarShown: Boolean,
     val vectorMode: Boolean,
-    /** Closes the More row (D25). An item calls it before it opens a sheet or a dialog; an anchored dropdown never does. */
+    /**
+     * v1.9 (R3): rows close only by their toggle. A no-op: v1.8's items still call it before they
+     * open a sheet or a dialog (an anchored dropdown never did), and the 33 call sites stay; the
+     * sheet or dialog covers the row instead (EditorScreen's hiddenByChrome).
+     */
     val closeMore: () -> Unit = {},
 )
 

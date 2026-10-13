@@ -24,9 +24,6 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -50,7 +47,6 @@ import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
-import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 
@@ -263,12 +259,12 @@ internal fun StripStatusText(text: String, width: Dp, leading: (@Composable () -
 private val BALANCED_LINES = LineBreak(LineBreak.Strategy.Balanced, LineBreak.Strictness.Normal, LineBreak.WordBreak.Default)
 
 /**
- * For a strip state with nothing on the More row (Transform once nothing is transformed, after ✓):
- * closes a More row left open by the state before. The host keeps it open unseen otherwise, and
- * the next canvas touch would only close it (D25).
+ * v1.8: for a strip state with nothing on the More row (Transform once nothing is transformed,
+ * after ✓), closed a More row left open by the state before (D25). v1.9 (R3): rows close only by
+ * their toggle, so this is a no-op; a row with nothing to show is hidden by its host (and shows
+ * again when the state has items for it). The call sites stay.
  */
 @Composable
 internal fun ClosesMoreRow() {
-    val close by rememberUpdatedState(LocalStripContext.current.closeMore)
-    LaunchedEffect(Unit) { close() }
+    // Nothing: v1.9 (R3), rows close only by their toggle.
 }

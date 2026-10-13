@@ -84,16 +84,18 @@ import com.brushwork.paint.ui.theme.IbisDims
  * on its own) the memory lasts as long as this state. History taps never touch it (I26).
  *
  * Hiding never forgets:
- * - [closeAll] and [drop] hide a remembered row until its tool is entered again ([enter]) or its
- *   toggle opens it; one row at a time (the strip's toggle opening while the object bar's row
- *   shows) hides the object bar's row likewise.
+ * - [closeAll] hides a remembered row until its tool is entered again ([enter]) or its toggle
+ *   opens it; one row at a time (the strip's toggle opening while the object bar's row shows)
+ *   hides the object bar's row likewise.
+ * - [drop] hides a tool's row while its spec has no More toggle; it shows again as soon as the
+ *   spec has one ([undrop]: Transform's next transformation, a narrower window).
  * - [hiddenByChrome] (`EditorScreen`: the layers panel, a panel or sheet, the tool menu, "hide
  *   interface") hides every row while it is true; a toggle tap meanwhile shows its row anyway.
  * - While objects are selected and the object bar's row is open ([objectRowOpen]), the tool's
  *   row is hidden: when the objects are deselected or that row closes, it shows again.
  *
  * `EditorScreen` hoists one. The host applies the memory on each tool entry, hides a tool's row
- * while its spec shows no More toggle ([drop]) and reports the row's height in [moreRowDp], which
+ * while its spec shows no More toggle ([drop], [undrop]) and reports the row's height in [moreRowDp], which
  * moves the X / Y pill and the selection and object bars down. A canvas touch never closes a row
  * ([canvasTouchDown], [canvasTouchMoved]: the rows let it through and fade).
  */
@@ -112,8 +114,11 @@ class StripState(private val prefs: UiPrefs? = null) {
         unknown = names - known.map { it.name }.toSet()
     }
 
-    /** Remembered rows hidden for now ([closeAll], [drop]) until their tool's next [enter] or toggle. */
+    /** Remembered rows hidden for now ([closeAll]) until their tool's next [enter] or toggle. */
     private val hidden = mutableStateMapOf<ToolId, Boolean>()
+
+    /** Tools whose spec shows no More toggle now ([drop]): hidden until it has one again ([undrop]). */
+    private val dropped = mutableStateMapOf<ToolId, Boolean>()
 
     /** The object bar's row is remembered open. */
     private var objectRemembered by mutableStateOf(prefs?.objectBarMoreOpen == true)
@@ -174,7 +179,7 @@ class StripState(private val prefs: UiPrefs? = null) {
     internal fun showsFor(id: ToolId): Boolean = shows(id, hides = entered == id)
 
     private fun shows(id: ToolId, hides: Boolean): Boolean =
-        remembered[id] == true && !(hides && hidden[id] == true) && !hiddenByChrome && !objectRowOpen
+        remembered[id] == true && !(hides && hidden[id] == true) && dropped[id] != true && !hiddenByChrome && !objectRowOpen
 
     /** [id]'s row is remembered open (shown or not). */
     fun remembers(id: ToolId): Boolean = remembered[id] == true
@@ -184,7 +189,7 @@ class StripState(private val prefs: UiPrefs? = null) {
 
     /** A More row shows: some tool's, or the object bar's. */
     val anyOpen: Boolean
-        get() = objectRowOpen || (!hiddenByChrome && remembered.keys.any { hidden[it] != true })
+        get() = objectRowOpen || (!hiddenByChrome && remembered.keys.any { hidden[it] != true && dropped[it] != true })
 
     /**
      * The strip's More toggle for [id]: closes its row (forgets it) or opens it (remembers it,
@@ -219,12 +224,17 @@ class StripState(private val prefs: UiPrefs? = null) {
     }
 
     /**
-     * Hides [id]'s row, remembered. The host calls it while [id]'s spec shows no More toggle
-     * (nothing goes to the More row, or the strip got wide enough); the row shows again at the
-     * tool's next entry or when its toggle opens it.
+     * Hides [id]'s row, remembered: the host calls it while [id]'s spec shows no More toggle
+     * (nothing goes to the More row, or the strip got wide enough), and [undrop] once the spec
+     * shows one again, when the remembered row shows again.
      */
     fun drop(id: ToolId) {
-        if (remembered[id] == true && hidden[id] != true) hidden[id] = true
+        if (dropped[id] != true) dropped[id] = true
+    }
+
+    /** [id]'s spec shows its More toggle again: the hide of [drop] ends. */
+    internal fun undrop(id: ToolId) {
+        if (dropped.containsKey(id)) dropped.remove(id)
     }
 
     /** Hides every row, remembered (v1.9: nothing is forgotten), until the next [enter] or a toggle. */
@@ -359,8 +369,8 @@ private fun ConvertedStrip(
         SideEffect {
             if (state.moreRowDp != moreDp) state.moreRowDp = moreDp
             // A row that can no longer show (the strip got wide enough, nothing left for it) hides,
-            // remembered (v1.9, R3): the tool's next entry or its toggle shows it again.
-            if (!canOpen) state.drop(toolId)
+            // remembered (v1.9, R3): it shows again once the spec has a More toggle again.
+            if (!canOpen) state.drop(toolId) else state.undrop(toolId)
         }
         // Below FIXED_ROW1_MIN_DP (display-size scaling) the design's budgets do not hold: row 1 scrolls.
         val narrow = screenDp < FIXED_ROW1_MIN_DP

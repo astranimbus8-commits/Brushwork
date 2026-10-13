@@ -607,7 +607,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     // v1.8 (design §4.6): what the strip's builders need from the chrome.
                     val barShown = selectionBarVisible || objectBarVisible
                     val stripContext = remember(barShown, vectorMode, stripState) {
-                        StripContext(selectionBarShown = barShown, vectorMode = vectorMode, closeMore = stripState::closeAll)
+                        // v1.9 (R3): rows close only by their toggle; the items' closeMore() is a no-op.
+                        StripContext(selectionBarShown = barShown, vectorMode = vectorMode, closeMore = {})
                     }
                     CompositionLocalProvider(LocalStripContext provides stripContext) {
                         OptionsStripPanel(controller, Modifier.fillMaxWidth().padding(horizontal = IbisDims.OptionsStripSide), stripState)

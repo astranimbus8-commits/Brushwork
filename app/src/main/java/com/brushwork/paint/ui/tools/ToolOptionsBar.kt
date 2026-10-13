@@ -26,8 +26,9 @@ import com.brushwork.paint.ui.tools.strip.StripState
  * (the More row hangs under it, outside it). [state] is the More row's open state, hoisted in
  * `EditorScreen`; without one the bar keeps its own.
  *
- * The [LocalStripContext] the builders read is the caller's with this bar's vector mode, and with
- * `closeMore` closing this bar's More row too.
+ * The [LocalStripContext] the builders read is the caller's with this bar's vector mode. Its
+ * `closeMore` is the caller's (v1.9, R3: rows close only by their toggle, so it no longer closes
+ * this bar's More row).
  */
 @Composable
 fun ToolOptionsBar(
@@ -48,10 +49,7 @@ fun ToolOptionsBar(
         StripContext(
             selectionBarShown = outer.selectionBarShown,
             vectorMode = vectorMode,
-            closeMore = {
-                outer.closeMore()
-                strip.closeAll()
-            },
+            closeMore = outer.closeMore,
         )
     }
     CompositionLocalProvider(LocalStripContext provides context) {
