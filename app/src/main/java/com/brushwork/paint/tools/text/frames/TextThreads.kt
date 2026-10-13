@@ -100,7 +100,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
     private fun itemOf(data: String): TextItem? {
         val key = DataRef(data)
         if (decoded.containsKey(key)) return decoded[key]
-        val item = if (maybeThreaded(data)) TextCodec.decode(data)?.takeIf { it.thread.isOn } else null
+        val item = if (maybeThreaded(data)) TextCodec.decodeAll(data).firstOrNull()?.takeIf { it.thread.isOn } else null
         decoded[key] = item
         return item
     }
@@ -394,7 +394,7 @@ class TextThreads(private val c: EditorController) : EditListener, LayerListList
             c.toast("Not enough memory to flow the linked text")
             return null
         }
-        val olds = chain.map { f -> f.layer?.let { frameOf(it) ?: TextCodec.decode(it.textData) } }
+        val olds = chain.map { f -> f.layer?.let { frameOf(it) ?: TextCodec.decodeAll(it.textData).firstOrNull() } }
         // A re-flow (the story, its kerns, its look, a slice or the chain changes) bumps rev for
         // every frame; a frame only moved (its lines the same) changes alone.
         val reflowed = extra.isNotEmpty() || before.size != chain.size || chain.indices.any { k ->

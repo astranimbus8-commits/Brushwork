@@ -863,10 +863,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         return null
     }
 
-    /** Decoded and laid-out text layers for hit tests, by stored data instance. */
-    private val hitTexts = HashMap<Long, Triple<String, TextItem, PreparedText>>()
+    /** Decoded and laid-out text layers for hit tests (every text of the layer), by stored data instance. */
+    private val hitTexts = HashMap<Long, Triple<String, List<TextItem>, List<PreparedText>>>()
 
-    /** The topmost visible text layer (frame or plain text) whose text is at [p], or null. */
+    /**
+     * The topmost visible text layer (frame or plain text) one of whose texts is at [p], or null.
+     * v1.9 (F2): every text of a layer counts, so a tap on any of them stops at that layer
+     * ([join] then refuses a layer of several texts).
+     */
     private fun textLayerAt(p: Vec2): Layer? {
         frameAt(p)?.let { return it.layer }
         val t = controller.viewTransform
@@ -876,14 +880,18 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
             val data = l.textData ?: continue
             if (!doc.effectiveVisible(l) || threads.isFrame(l)) continue
             val cached = hitTexts[l.id]?.takeIf { it.first === data }
-            val (item, prep) = if (cached != null) cached.second to cached.third else {
-                val item = TextCodec.decode(data) ?: continue
-                val prep = TextRenderer.prepare(item)
+            val (items, preps) = if (cached != null) cached.second to cached.third else {
+                val items = TextCodec.decodeAll(data)
+                if (items.isEmpty()) continue
+                val preps = items.map { TextRenderer.prepare(it) }
                 if (hitTexts.size >= HIT_CACHE_SIZE) hitTexts.clear()
-                hitTexts[l.id] = Triple(data, item, prep)
-                item to prep
+                hitTexts[l.id] = Triple(data, items, preps)
+                items to preps
             }
-            if (item.text.isNotBlank() && prep.contains(item, p, tol)) return l
+            for (k in items.indices) {
+                val item = items[k]
+                if (item.text.isNotBlank() && preps[k].contains(item, p, tol)) return l
+            }
         }
         return null
     }
@@ -952,7 +960,9 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
     fun join(from: Layer, target: Layer): Boolean {
         cancelLink()
         val fromItem = threads.frameOf(from) ?: return false
-        val tItem = TextCodec.decode(target.textData) ?: return false
+        // v1.9 (F2): only a layer of one text joins (it becomes a frame, and a frame is alone in
+        // its layer, I24); a layer of several texts is refused, so none of its texts is lost.
+        val tItem = TextCodec.decodeAll(target.textData).singleOrNull() ?: return false
         val tFrame = threads.frameOf(target)
         if (tFrame != null && tFrame.thread.storyId == fromItem.thread.storyId) {
             controller.toast(SAME_STORY)

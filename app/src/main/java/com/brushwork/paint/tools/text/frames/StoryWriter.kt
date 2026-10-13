@@ -65,7 +65,7 @@ internal class StoryWriter(
     private fun create(w: FrameWrite, label: String): Layer? {
         val item = w.after
         val prep = measures.prepare(item)
-        val json = TextCodec.encode(item)
+        val json = TextCodec.encodeAll(listOf(item))
         val layer = try {
             c.addLayerWithContent(w.name.ifBlank { "Frame" }, label, textData = json) { cv ->
                 TextRenderer.drawItem(cv, item, prep, null)
@@ -84,7 +84,7 @@ internal class StoryWriter(
      */
     fun update(layer: Layer, before: TextItem?, after: TextItem, label: String = TextWrapReflow.REFLOW_LABEL): Boolean {
         if (before == after) return true
-        val json = TextCodec.encode(after)
+        val json = TextCodec.encodeAll(listOf(after))
         val ok = try {
             if (before != null && sameRendering(before, after)) {
                 c.updateLayerData(layer, layer.dataSnapshot().copy(text = json), label, null, EditTarget.CONTENT, allowHidden = true, draw = null)

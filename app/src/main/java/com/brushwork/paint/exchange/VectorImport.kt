@@ -384,6 +384,6 @@ object VectorImport {
         val bmp = BitmapUtils.createLayerBitmap(c.doc.width, c.doc.height)
         TextRenderer.drawItem(Canvas(bmp), item, TextRenderer.prepare(item), null)
         if (c.doc.colorMode != ColorMode.RGB) ColorModeOps.constrain(bmp, Rect(0, 0, bmp.width, bmp.height), c.doc.colorMode)
-        return NewLayer(item.layerName(), bmp, data = LayerData(text = TextCodec.encode(item)))
+        return NewLayer(item.layerName(), bmp, data = LayerData(text = TextCodec.encodeAll(listOf(item))))
     }
 }

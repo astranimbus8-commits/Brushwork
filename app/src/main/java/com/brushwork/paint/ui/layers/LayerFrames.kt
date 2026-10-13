@@ -20,7 +20,7 @@ class FrameInfoCache {
         val data = layer.textData ?: run { entries.remove(layer.id); return null }
         val cached = entries[layer.id]
         if (cached != null && cached.data === data) return cached.thread
-        val thread = TextCodec.decode(data)?.thread?.takeIf { it.isOn }
+        val thread = TextCodec.decodeAll(data).firstOrNull { it.thread.isOn }?.thread
         entries[layer.id] = Entry(data, thread)
         return thread
     }
