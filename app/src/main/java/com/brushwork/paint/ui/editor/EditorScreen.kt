@@ -93,6 +93,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import com.brushwork.paint.EditorController
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.diagnostics.ErrorReporter
 import com.brushwork.paint.exchange.PendingImports
 import com.brushwork.paint.exchange.VectorFormat
@@ -212,8 +213,9 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
     // "Hide interface" (bottom bar slot 5): a session state, like ibisPaint's.
     var interfaceHidden by rememberSaveable { mutableStateOf(false) }
     var moreOpen by remember { mutableStateOf(false) }
-    // v1.8 (design §3.9): the options strip's More row, open per tool for the session (never persisted).
-    val stripState = remember(controller) { StripState() }
+    // v1.8 (design §3.9): the options strip's More row, open per tool. v1.9 (R3): remembered across
+    // tool switches and relaunches in UiPrefs (not journaled, I26), written only by the toggles.
+    val stripState = remember(controller) { StripState(UiPrefs(context)) }
     // Typed brush size / opacity (tapping a value of the slider rows).
     var editingValue by rememberSaveable { mutableStateOf<SliderKind?>(null) }
     // The clipboard content whose paste bar the user hid (shown again for a new copy).

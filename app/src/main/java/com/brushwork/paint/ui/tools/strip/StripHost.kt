@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.IconLongPressScope
 import com.brushwork.paint.ui.common.StripLabels18
@@ -69,66 +70,213 @@ import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 
 /**
- * The More row's open state (v1.8, design §3.9 (b)): per tool, for the session, never persisted.
- * `EditorScreen` hoists one and closes it on the chrome's events (D25); the host closes it on a
- * tool or vector-mode change, drops a tool's entry while its spec shows no More toggle ([drop]),
- * and reports the row's height in [moreRowDp], which moves the X / Y pill and the selection and
- * object bars down.
+ * The More rows' state (v1.9, R3 "sticky rows"; v1.8 design §3.9 (b)): which rows the user
+ * opened, remembered per tool and across relaunches, and what hides them for now.
  *
- * The vector object bar's own More row ([StripLabels18.MORE_OBJECT], [objectRowOpen]) follows the
- * same rules: [anyOpen] counts it, [closeAll] closes it. One More row shows at a time: opening the
- * strip's closes the object bar's ([toggle]), and the other way round ([toggleObjectRow]).
+ * Memory (fact V27): only the explicit taps write it. [toggle] (the strip's More toggle) writes
+ * [UiPrefs.stripOpenRows], [toggleObjectRow] (the vector object bar's toggle) writes
+ * [UiPrefs.objectBarMoreOpen]; both load at construction. Without [prefs] (a test's rig, a bar
+ * on its own) the memory lasts as long as this state. History taps never touch it (I26).
+ *
+ * Hiding never forgets:
+ * - [closeAll] and [drop] hide a remembered row until its tool is entered again ([enter]) or its
+ *   toggle opens it; one row at a time (the strip's toggle opening while the object bar's row
+ *   shows) hides the object bar's row likewise.
+ * - [hiddenByChrome] (`EditorScreen`: the layers panel, a panel or sheet, the tool menu, "hide
+ *   interface") hides every row while it is true; a toggle tap meanwhile shows its row anyway.
+ * - While objects are selected and the object bar's row is open ([objectRowOpen]), the tool's
+ *   row is hidden: when the objects are deselected or that row closes, it shows again.
+ *
+ * `EditorScreen` hoists one. The host applies the memory on each tool entry, hides a tool's row
+ * while its spec shows no More toggle ([drop]) and reports the row's height in [moreRowDp], which
+ * moves the X / Y pill and the selection and object bars down. A canvas touch never closes a row
+ * ([canvasTouchDown], [canvasTouchMoved]: the rows let it through and fade).
  */
 @Stable
-class StripState {
-    private val open = mutableStateMapOf<ToolId, Boolean>()
+class StripState(private val prefs: UiPrefs? = null) {
+    /** The tools whose More row the user opened (the memory). */
+    private val remembered = mutableStateMapOf<ToolId, Boolean>()
 
-    /** The vector object bar's More row is open (`VectorObjectBar`; closed whenever the bar leaves). */
-    var objectRowOpen by mutableStateOf(false)
+    /** Remembered names that are no [ToolId] of this version: written back as they were. */
+    private val unknown: Set<String>
 
-    /** The object bar's toggle: opens its More row (closing the strip's) or closes it. */
-    fun toggleObjectRow() {
-        if (objectRowOpen) {
-            objectRowOpen = false
-        } else {
-            if (open.isNotEmpty()) open.clear()
-            objectRowOpen = true
-        }
+    init {
+        val names = prefs?.stripOpenRows.orEmpty()
+        val known = names.mapNotNull { name -> ToolId.entries.firstOrNull { it.name == name } }
+        known.forEach { remembered[it] = true }
+        unknown = names - known.map { it.name }.toSet()
     }
+
+    /** Remembered rows hidden for now ([closeAll], [drop]) until their tool's next [enter] or toggle. */
+    private val hidden = mutableStateMapOf<ToolId, Boolean>()
+
+    /** The object bar's row is remembered open. */
+    private var objectRemembered by mutableStateOf(prefs?.objectBarMoreOpen == true)
+
+    /** The object bar's row is hidden for now ([closeAll], one row at a time) until the next [enter], the bar's next showing or its toggle. */
+    private var objectHidden by mutableStateOf(false)
+
+    /** The tool [enter] last applied the memory for (null before, and after the host left). */
+    private var entered by mutableStateOf<ToolId?>(null)
+
+    /**
+     * The vector object bar shows its More toggle (`VectorObjectBar` reports it while it shows):
+     * only then can its row take precedence over the tool's.
+     */
+    var objectBarToggle by mutableStateOf(false)
+        private set
+
+    /**
+     * v1.9 (R3): a chrome surface covers the rows (`EditorScreen`: the layers panel, a panel or
+     * sheet, the tool menu, "hide interface"). They hide, remembered, and show again when it
+     * turns false. A toggle tap meanwhile clears it: the user asked for that row.
+     */
+    var hiddenByChrome by mutableStateOf(false)
+
+    /**
+     * v1.9 (R3): a canvas touch is down, from its first pointer down until the last lift
+     * (`CanvasView.onTouchDown` / `onTouchEnd`). The rows' controls let every pointer through
+     * meanwhile, so a finger that lands on a row joins the canvas gesture.
+     */
+    var canvasTouchDown by mutableStateOf(false)
+        private set
+
+    /** v1.9 (R3): that canvas touch moved past the touch slop (`CanvasView.onTouchSlop`): the rows fade to [ROW_FADE_ALPHA]. */
+    var canvasTouchMoved by mutableStateOf(false)
+        private set
 
     /** The More row's height (dp) as the host draws it now: 0 while it is closed or the strip is not shown. */
     var moreRowDp by mutableFloatStateOf(0f)
         internal set
 
-    fun isOpen(id: ToolId): Boolean = open[id] == true
+    /**
+     * The vector object bar's More row shows: remembered open, not hidden, the bar shows its
+     * toggle and nothing covers it. The tool's row is hidden meanwhile.
+     */
+    val objectRowOpen: Boolean get() = objectBarToggle && objectRowShows()
+
+    /** The object bar's row shows whenever the bar shows its toggle (`VectorObjectBar` reads it for its own row). */
+    fun objectRowShows(): Boolean = objectRemembered && !objectHidden && !hiddenByChrome
+
+    /** [id]'s row shows: remembered open, not hidden, nothing covers it and the object bar's row does not show. */
+    fun isOpen(id: ToolId): Boolean = shows(id, hides = true)
 
     /**
-     * A More row shows: some tool's, or the object bar's (a canvas touch then only closes it, D25;
-     * a two- or three-finger tap closes it and undoes or redoes, `CanvasView.onConsumeTouch`).
+     * What the host shows for [id], the active tool: [isOpen], except that before [enter] ran for
+     * [id] its hides do not count yet. So the memory shows from the tool's first frame, and the
+     * entry's [closeAll] then memory in one effect changes nothing on screen (no flicker).
      */
-    val anyOpen: Boolean get() = objectRowOpen || open.values.any { it }
+    internal fun showsFor(id: ToolId): Boolean = shows(id, hides = entered == id)
 
+    private fun shows(id: ToolId, hides: Boolean): Boolean =
+        remembered[id] == true && !(hides && hidden[id] == true) && !hiddenByChrome && !objectRowOpen
+
+    /** [id]'s row is remembered open (shown or not). */
+    fun remembers(id: ToolId): Boolean = remembered[id] == true
+
+    /** The object bar's row is remembered open (shown or not). */
+    val objectRowRemembered: Boolean get() = objectRemembered
+
+    /** A More row shows: some tool's, or the object bar's. */
+    val anyOpen: Boolean
+        get() = objectRowOpen || (!hiddenByChrome && remembered.keys.any { hidden[it] != true })
+
+    /**
+     * The strip's More toggle for [id]: closes its row (forgets it) or opens it (remembers it,
+     * shows it whatever hid it, and hides the object bar's row: one row at a time). Writes
+     * [UiPrefs.stripOpenRows].
+     */
     fun toggle(id: ToolId) {
         if (isOpen(id)) {
-            open.remove(id)
+            remembered.remove(id)
         } else {
-            open[id] = true
-            if (objectRowOpen) objectRowOpen = false
+            remembered[id] = true
+            if (hiddenByChrome) hiddenByChrome = false
+            if (objectRowOpen) objectHidden = true
         }
+        if (hidden.containsKey(id)) hidden.remove(id)
+        prefs?.stripOpenRows = remembered.keys.mapTo(unknown.toHashSet()) { it.name }
     }
 
     /**
-     * Drops [id]'s open entry. The host calls it while [id]'s spec shows no More toggle (nothing
-     * goes to the More row, or the strip got wide enough): a row that cannot show
-     * must not stay open unseen, or [anyOpen] stays true and the next canvas touch only closes it (D25).
+     * The object bar's toggle: closes its row (forgets it) or opens it (remembers it and shows
+     * it; the tool's row is hidden meanwhile, never forgotten). Writes [UiPrefs.objectBarMoreOpen].
      */
-    fun drop(id: ToolId) {
-        if (open.containsKey(id)) open.remove(id)
+    fun toggleObjectRow() {
+        if (objectRowShows()) {
+            objectRemembered = false
+        } else {
+            objectRemembered = true
+            objectHidden = false
+            if (hiddenByChrome) hiddenByChrome = false
+        }
+        prefs?.objectBarMoreOpen = objectRemembered
     }
 
+    /**
+     * Hides [id]'s row, remembered. The host calls it while [id]'s spec shows no More toggle
+     * (nothing goes to the More row, or the strip got wide enough); the row shows again at the
+     * tool's next entry or when its toggle opens it.
+     */
+    fun drop(id: ToolId) {
+        if (remembered[id] == true && hidden[id] != true) hidden[id] = true
+    }
+
+    /** Hides every row, remembered (v1.9: nothing is forgotten), until the next [enter] or a toggle. */
     fun closeAll() {
-        if (open.isNotEmpty()) open.clear()
-        if (objectRowOpen) objectRowOpen = false
+        for (id in remembered.keys) if (hidden[id] != true) hidden[id] = true
+        if (objectRemembered && !objectHidden) objectHidden = true
+    }
+
+    /**
+     * A tool entry (the host's effect on a tool or vector-mode change): [closeAll], then the
+     * memory of [id] and of the object bar's row shows again, in one snapshot.
+     */
+    fun enter(id: ToolId) {
+        closeAll()
+        if (hidden.containsKey(id)) hidden.remove(id)
+        if (objectHidden) objectHidden = false
+        entered = id
+    }
+
+    /** The host left the screen (a filter, the interface hidden): it hides, and its next entry shows the memory from its first frame. */
+    internal fun left() {
+        closeAll()
+        entered = null
+        moreRowDp = 0f
+    }
+
+    /** `VectorObjectBar` shows, with its More toggle when [toggle]. */
+    fun objectBarShown(toggle: Boolean) {
+        if (objectBarToggle != toggle) objectBarToggle = toggle
+    }
+
+    /** `VectorObjectBar` left (the objects deselected): the tool's row shows again, and the bar's next showing starts from the memory. */
+    fun objectBarGone() {
+        if (objectBarToggle) objectBarToggle = false
+        if (objectHidden) objectHidden = false
+    }
+
+    /** A canvas touch started (its first pointer down). */
+    fun canvasTouchStarted() {
+        if (!canvasTouchDown) canvasTouchDown = true
+        if (canvasTouchMoved) canvasTouchMoved = false
+    }
+
+    /** The canvas touch moved past the touch slop. */
+    fun canvasTouchSlop() {
+        if (canvasTouchDown && !canvasTouchMoved) canvasTouchMoved = true
+    }
+
+    /** The canvas touch ended (its last pointer lifted, or it was cancelled). */
+    fun canvasTouchEnded() {
+        if (canvasTouchDown) canvasTouchDown = false
+        if (canvasTouchMoved) canvasTouchMoved = false
+    }
+
+    companion object {
+        /** The rows' alpha while a canvas touch that moved past the touch slop is down (R3 (a)). */
+        const val ROW_FADE_ALPHA = 0.25f
     }
 }
 
@@ -147,8 +295,9 @@ class StripState {
  * [toolId].
  *
  * [StripSpec.overlays] are composed whenever the strip shows, after the rows, open or closed, so
- * a sheet or dialog opened from the More row outlives it. The row closes on a tool change and on
- * a vector-mode change; `EditorScreen` closes it on the rest of D25.
+ * a sheet or dialog opened from the More row outlives it. v1.9 (R3): the row opens and closes
+ * only through its toggle; a tool or vector-mode change shows the new tool's remembered row
+ * ([StripState.enter]), and `EditorScreen` hides it under the chrome ([StripState.hiddenByChrome]).
  *
  * [onContentWidth] receives the width (px) of what row 1 shows, at layout time (0 = nothing: the
  * panel hides itself then).
@@ -163,14 +312,12 @@ fun StripHost(
     panelModifier: Modifier = Modifier,
     onContentWidth: ((Int) -> Unit)? = null,
 ) {
-    LaunchedEffect(state, toolId, vectorMode) { state.closeAll() }
-    // A strip that leaves the screen (a filter session, the interface hidden) takes its row along:
-    // nothing open is left to swallow a canvas touch.
+    // v1.9 (R3): closeAll, then the new tool's memory, in one effect (nothing flickers).
+    LaunchedEffect(state, toolId, vectorMode) { state.enter(toolId) }
+    // A strip that leaves the screen (a filter session, the interface hidden) hides its row,
+    // remembered: it shows again when the strip comes back.
     DisposableEffect(state) {
-        onDispose {
-            state.closeAll()
-            state.moreRowDp = 0f
-        }
+        onDispose { state.left() }
     }
     ConvertedStrip(spec, toolId, vectorMode, state, modifier, panelModifier, onContentWidth)
     spec.overlays()
@@ -202,12 +349,12 @@ private fun ConvertedStrip(
         val measuredHint = rememberHintLines(spec.hint, hintPx)
         val lines = StripLayout.moreLines(split, spec.hint, inner, measuredHint)
         val canOpen = split.toggle && lines.isNotEmpty()
-        val open = state.isOpen(toolId) && canOpen
+        val open = state.showsFor(toolId) && canOpen
         val moreDp = if (open) StripLayout.moreRowDp(lines.size) else 0f
         SideEffect {
             if (state.moreRowDp != moreDp) state.moreRowDp = moreDp
-            // A row that can no longer show (the strip got wide enough) must not stay open unseen:
-            // it would swallow the next canvas touch (D25).
+            // A row that can no longer show (the strip got wide enough, nothing left for it) hides,
+            // remembered (v1.9, R3): the tool's next entry or its toggle shows it again.
             if (!canOpen) state.drop(toolId)
         }
         // Below FIXED_ROW1_MIN_DP (display-size scaling) the design's budgets do not hold: row 1 scrolls.

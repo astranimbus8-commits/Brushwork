@@ -96,11 +96,12 @@ import kotlin.math.max
  * in their order, on the bar's More row, opaque ([IbisColors.Menu]), under the bar. On the user's
  * 392 dp phone (and at 360 dp) row 1 holds Delete, Duplicate, Front, Back, Recolor, Transform and
  * Deselect; Forward, Backward, Array and the detach button are one tap away. The More row's open
- * state is [state]'s ([StripState.objectRowOpen], the options strip's state, so the same rules
- * close it, D25: a canvas touch that is then consumed, a tool change, a menu or panel opening);
- * it closes when the bar leaves, and only one More row shows at a time (opening this one closes the
- * strip's, and the other way round). A long press on a button shows what it does in a bubble (Recolor
- * keeps its own long press).
+ * state is [state]'s ([StripState.objectRowOpen], the options strip's state). v1.9 (R3): the same
+ * rules as the strip's row apply: only its toggle opens and closes it, remembered in
+ * `UiPrefs.objectBarMoreOpen`; a canvas touch never closes it, the chrome covers only hide it.
+ * While it shows, the strip's row hides (remembered) and shows again when the bar leaves or this
+ * row closes; the strip's toggle opening hides this row in turn (one More row at a time). A long
+ * press on a button shows what it does in a bubble (Recolor keeps its own long press).
  *
  * Selecting another layer drops the object selection (the objects of a layer that isn't being
  * worked on are not acted on).
@@ -117,9 +118,9 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
     LaunchedEffect(selectedLayer, activeLayer) {
         if (selectedLayer != null && selectedLayer !== activeLayer) v.setSelection(null, emptySet())
     }
-    // The bar leaving (the objects deselected, a filter, the interface hidden) takes its More row
-    // along: nothing open is left to swallow a canvas touch.
-    DisposableEffect(strip) { onDispose { strip.objectRowOpen = false } }
+    // v1.9 (R3): the bar leaving (the objects deselected, a filter, the interface hidden) hides its
+    // More row, remembered; the strip's row shows again.
+    DisposableEffect(strip) { onDispose { strip.objectBarGone() } }
     // The swatch shows the color as this document will paint it (grayscale / 1-bit documents).
     val color = Color(ColorModeOps.displayColor(controller.color, controller.doc.colorMode))
     fun run(action: () -> Unit) {
@@ -184,9 +185,9 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
         val barWidth = with(density) { (used * itemPx + (if (split.toggle) togglePx else 0) + padPx).toDp() }
         val widest = split.more.maxOfOrNull { line -> line.sumOf { buttons[it].units } } ?: 0
         val moreWidth = maxOf(barWidth, with(density) { (widest * itemPx + padPx).toDp() })
-        val open = strip.objectRowOpen && split.toggle
-        // A row that can no longer show (the bar got wide enough) must not stay open unseen (D25).
-        SideEffect { if (!split.toggle && strip.objectRowOpen) strip.objectRowOpen = false }
+        val open = strip.objectRowShows() && split.toggle
+        // v1.9 (R3): only while the bar shows its toggle does its row take the strip's row's place.
+        SideEffect { strip.objectBarShown(split.toggle) }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Surface(
                 color = SheetBackground,
