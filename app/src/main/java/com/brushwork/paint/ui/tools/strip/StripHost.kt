@@ -1,6 +1,7 @@
 package com.brushwork.paint.ui.tools.strip
 
 import android.content.pm.ApplicationInfo
+import android.view.MotionEvent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -66,7 +67,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.tools.ToolId
+import com.brushwork.paint.ui.common.HistoryTapSink
+import com.brushwork.paint.ui.common.HistoryTapSlots
 import com.brushwork.paint.ui.common.IconLongPressScope
+import com.brushwork.paint.ui.common.LocalHistoryTaps
 import com.brushwork.paint.ui.common.StripLabels18
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.common.longPressLabel
@@ -289,6 +293,24 @@ class StripState(private val prefs: UiPrefs? = null) {
         if (canvasTouchMoved) canvasTouchMoved = false
     }
 
+    /**
+     * v1.9 (R3): set by the editor: gives the canvas view the end of its gesture ([MotionEvent]
+     * as the editor's window got it: the last lift, or a cancel) when that end came on a finger
+     * that joined the gesture on a row after the canvas' own fingers had lifted. Compose sends
+     * such a finger's events to the row only, so the view would never see its gesture end.
+     */
+    var endCanvasGesture: ((MotionEvent) -> Unit)? = null
+
+    /**
+     * The canvas gesture's last pointer, one that joined it on a row ([passCanvasGesture]),
+     * lifted or was cancelled: [e] goes to the canvas view ([endCanvasGesture]), and the touch
+     * ends here even without a view.
+     */
+    fun joinedGestureEnded(e: MotionEvent) {
+        endCanvasGesture?.invoke(e)
+        canvasTouchEnded()
+    }
+
     companion object {
         /** The rows' alpha while a canvas touch that moved past the touch slop is down (R3 (a)). */
         const val ROW_FADE_ALPHA = 0.25f
@@ -444,7 +466,7 @@ private fun MoreRow(state: StripState, lines: List<List<StripItem>>, hint: Strin
         .background(IbisColors.Menu, shape)
         .border(1.dp, BrushworkColors.ChromeBorder, shape)
         .padding(horizontal = ROW_PADDING.dp)
-    val guard = Modifier.passCanvasGesture(state)
+    val guard = Modifier.passCanvasGesture(state, LocalHistoryTaps.current)
     Column(
         Modifier
             .fillMaxWidth()
@@ -511,17 +533,32 @@ private fun MoreLine(i: Int, line: List<StripItem>, hint: String?, hintLines: In
  * every pointer of the screen, so a second finger there pinches or pans). Pointers that landed
  * before the canvas gesture keep working. Put on a control's own bounds only, never on a line, so
  * a line's background between controls passes touches to the canvas.
+ *
+ * The editor's history taps ([taps], in the editor's window) count a joined pointer as the
+ * canvas' own, as if it had landed beside the row: the gesture stays the canvas', which pinches,
+ * pans and recognizes its two- and three-finger taps itself, instead of being claimed as a tap
+ * over the UI (whose claim would cancel the canvas' fingers). When such a finger is the last to
+ * lift (the window's `ACTION_UP` or `ACTION_CANCEL`), the canvas view gets that event through
+ * [StripState.joinedGestureEnded], so its gesture always ends.
  */
-internal fun Modifier.passCanvasGesture(state: StripState): Modifier = pointerInput(state) {
+internal fun Modifier.passCanvasGesture(state: StripState, taps: HistoryTapSink?): Modifier = pointerInput(state, taps) {
     awaitPointerEventScope {
         val joined = HashSet<PointerId>()
         while (true) {
             val event = awaitPointerEvent(PointerEventPass.Initial)
             for (change in event.changes) {
-                if (change.changedToDownIgnoreConsumed() && state.canvasTouchDown) joined += change.id
+                if (change.changedToDownIgnoreConsumed() && state.canvasTouchDown) {
+                    joined += change.id
+                    taps?.onCanvasDown(HistoryTapSlots.EDITOR, change.id.value)
+                }
                 if (change.id in joined) {
                     change.consume()
-                    if (change.changedToUpIgnoreConsumed()) joined -= change.id
+                    if (change.changedToUpIgnoreConsumed()) {
+                        joined -= change.id
+                        // The window's last finger: the canvas' own have lifted, the view never sees this.
+                        val e = event.motionEvent
+                        if (e != null && (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL)) state.joinedGestureEnded(e)
+                    }
                 }
             }
         }

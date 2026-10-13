@@ -68,6 +68,7 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.common.ArrayLabels
+import com.brushwork.paint.ui.common.LocalHistoryTaps
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.SheetBackground
 import com.brushwork.paint.ui.common.StripLabels18
@@ -227,7 +228,7 @@ fun VectorObjectBar(controller: EditorController, modifier: Modifier, state: Str
                             .testTag(V18Tags.STRIP_MORE_ROW)
                             .padding(horizontal = ROW_PADDING, vertical = 2.dp),
                     ) {
-                        val guard = Modifier.passCanvasGesture(strip)
+                        val guard = Modifier.passCanvasGesture(strip, LocalHistoryTaps.current)
                         for (line in split.more) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 for (i in line) Box(guard) { buttons[i].content(item * buttons[i].units) }

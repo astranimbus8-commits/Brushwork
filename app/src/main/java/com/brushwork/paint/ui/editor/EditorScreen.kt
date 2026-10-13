@@ -543,6 +543,8 @@ private fun EditorScreenContent(controller: EditorController, sheetHost: SheetHo
                     // hit-testable until its last pointer lifts and fade once it moves.
                     v.onTouchSlop = stripState::canvasTouchSlop
                     v.onTouchEnd = stripState::canvasTouchEnded
+                    // ...and gets its gesture's end when its last finger lifts on a row.
+                    stripState.endCanvasGesture = { e -> canvasRef[0]?.endJoinedGesture(e) }
                     v.onFrameTimes = { frameTimes.value = it }
                     // With the layer window or the tool menu open, a tap on the canvas only closes them.
                     v.onOutsideTap = outsideTap

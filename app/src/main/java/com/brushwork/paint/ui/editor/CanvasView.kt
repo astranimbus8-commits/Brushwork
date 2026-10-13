@@ -557,6 +557,24 @@ class CanvasView(context: Context, private val controller: EditorController) : V
         onTouchEnd?.invoke()
     }
 
+    /**
+     * v1.9 (R3): the end of this view's gesture ([e]: the last lift or a cancel, as the editor's
+     * window got it) when it came on a finger that joined the gesture on an open More row after
+     * the canvas' own fingers had lifted (`StripState.endCanvasGesture`): Compose sends that
+     * finger's events to the row only. Handled as if it had come here, so a two-finger tap still
+     * undoes and the gesture ends; a no-op once the gesture has ended.
+     */
+    fun endJoinedGesture(e: MotionEvent) {
+        if (!spanOpen) return
+        val at = IntArray(2)
+        getLocationOnScreen(at)
+        val here = MotionEvent.obtain(e)
+        // e's coordinates are the window root's; raw - local is where that root is on screen.
+        here.offsetLocation(e.rawX - e.x - at[0], e.rawY - e.y - at[1])
+        dispatchTouchEvent(here)
+        here.recycle()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         watchTouchSpan(e)
