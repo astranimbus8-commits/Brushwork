@@ -26,6 +26,7 @@ import com.brushwork.paint.core.PackedPoints
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.engine.ArrayDraw
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.LayerStructure
 import com.brushwork.paint.engine.ViewTransform
@@ -74,6 +75,7 @@ import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStrokeKind
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.render.VectorLayerRenderer
@@ -3860,6 +3862,11 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             commitVectorNew(layer, b)
             return
         }
+        // v1.9 (R14, S1): into the selected shape layer, which becomes a vector layer.
+        joinTarget(settings)?.let {
+            commitJoin(it, b)
+            return
+        }
         if (placesInNewLayer(settings)) {
             commitNewLayer(b)
             return
@@ -3953,6 +3960,57 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             refreshPreview()
         }
         controller.invalidateOverlay()
+    }
+
+    // ------------------------------------------------------------------ joining a shape layer (v1.9, R14 S1)
+
+    /**
+     * v1.9 (R14, S1): the legacy shape layer a NEW shape joins, or null (v1.8: a layer of its
+     * own). With "Editable (own layer)" on and [ShapeSettings.newLayerEachTime] off, a new shape
+     * that would get a layer of its own joins the selected shape layer instead: the layer becomes
+     * a vector layer in place ([LayerConvert]) and the shape one of its objects, in the same step.
+     * Not into a layer that may not be edited (locked or hidden, also through a folder; its mask
+     * edited), nor with Perspective copies or an outline whose brush moves pixels: those place
+     * the shape as in v1.8.
+     */
+    private fun joinTarget(s: ShapeSettings = newShapeSettings()): Layer? {
+        if (s.newLayerEachTime || editingLayer != null || vectorSession != null) return null
+        if (!placesInNewLayer(s)) return null
+        val doc = controller.doc
+        val layer = targetLayer ?: doc.activeLayer
+        if (!layer.isShapeLayer || layer.isVectorLayer || doc.indexOf(layer) < 0) return null
+        if (controller.editTargetOf(layer) != EditTarget.CONTENT) return null
+        if (layer.isFolder || !doc.effectiveVisible(layer) || doc.effectiveLocked(layer)) return null
+        val b = box ?: return null
+        if (objectFor(b, points).paintsWithBrush && brushMovesPixels()) return null
+        if (LayerConvert.shapeToVector(layer) == null) return null
+        return layer
+    }
+
+    /**
+     * S1: the pending new shape joins [layer] (see [joinTarget]): the conversion and the new
+     * object are ONE step [SHAPE_LABEL] (rendered at once: no render may land as a step of its
+     * own). A shape outside the canvas stays pending and nothing converts.
+     */
+    private fun commitJoin(layer: Layer, b: ShapeBox) {
+        val o = objectFor(b, points)
+        val doc = controller.doc
+        val area = paintRect(o)
+        if (area == null || !area.intersect(0, 0, doc.width, doc.height)) {
+            controller.toast("The shape is outside the canvas")
+            return
+        }
+        val vectors = controller.vectors
+        val policy = vectors.policy
+        vectors.policy = VectorLayers.Policy.SYNC
+        try {
+            controller.undoStepNamed(SHAPE_LABEL) {
+                LayerConvert.toVectorAction(controller, layer, label = SHAPE_LABEL)?.let { controller.pushUndo(it) }
+                commitVectorNew(layer, b)
+            }
+        } finally {
+            vectors.policy = policy
+        }
     }
 
     /** Draws [spec] into a new layer's canvas, limited to [sel] (in bounded tiles). */

@@ -15,6 +15,7 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.layers.LayerOps
+import com.brushwork.paint.vector.VShape
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -142,7 +143,9 @@ class ShapeLayerEditTest {
         assertEquals(undos + 1, c.undoManager.undoCount)
         assertEquals("Shape", c.undoManager.undoLabel)
         assertNull(c.renderOverride)
-        // Names are made unique.
+        // Names are made unique (v1.9: "New layer each time"; off, the shape joins the selected
+        // shape layer, v19/a9/ShapeJoinLayerTest).
+        tool.update { it.copy(newLayerEachTime = true) }
         c.drag(120f to 120f, 180f to 180f)
         tool.commit()
         assertEquals("Rectangle 2", c.activeLayer.name)
@@ -290,10 +293,13 @@ class ShapeLayerEditTest {
         assertEquals(ShapeType.ELLIPSE, tool.settings.type)
         assertEquals(blue, c.color)
         tool.commit()
-        val o = ShapeCodec.decode(c.activeLayer.shapeData)!!
+        // v1.9 (R14, S1): the new shape joins the selected shape layer (the rectangle's), now a
+        // vector layer: it is its last object.
+        assertSame(layer, c.activeLayer)
+        val o = (layer.vector!!.objects.last() as VShape).shape
         assertEquals(ShapeType.ELLIPSE, o.type)
         assertEquals(blue, o.strokeColor)
-        assertEquals(3, c.doc.layers.size)
+        assertEquals(2, c.doc.layers.size)
     }
 
     @Test
@@ -483,7 +489,9 @@ class ShapeLayerEditTest {
         assertNull(tool.editingLayer)
         assertEquals(ShapeBox(105f, 100f, 90f, 100f, 0f), tool.box)
         tool.commit()
-        assertEquals(3, c.doc.layers.size)
+        // v1.9 (R14, S1): it joins the selected shape layer, now a vector layer of two objects.
+        assertEquals(2, c.doc.layers.size)
+        assertEquals(2, c.activeLayer.vector!!.objects.size)
     }
 
     @Test
@@ -491,6 +499,8 @@ class ShapeLayerEditTest {
         val c = controller()
         val tool = shapeTool(c)
         val first = placeRect(c, tool, ShapeStyle.FILL)
+        // v1.9: in a layer of its own (off, it joins the first one's layer, ShapeJoinLayerTest).
+        tool.update { it.copy(newLayerEachTime = true) }
         // A second shape pending somewhere else; a tap on the first one places it and opens the first.
         c.drag(130f to 130f, 190f to 190f)
         assertTrue(tool.hasPendingWork)
