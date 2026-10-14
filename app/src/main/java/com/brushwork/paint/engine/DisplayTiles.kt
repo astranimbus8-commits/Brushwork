@@ -12,18 +12,42 @@ import kotlin.math.min
  * What one [DisplayTiles.updateBudgeted] call did (v1.6): [changed] = at least one tile was
  * rendered; [hasMore] = dirty visible tiles (not skipped) are still waiting.
  */
-data class TileUpdate(val changed: Boolean, val hasMore: Boolean)
+data class TileUpdate(val changed: Boolean, val hasMore: Boolean) {
+    internal companion object {
+        private val ALL = arrayOf(TileUpdate(false, false), TileUpdate(false, true), TileUpdate(true, false), TileUpdate(true, true))
+
+        /** v1.9 A6 (P2): the shared instance (one per pair; a frame allocates none). */
+        fun of(changed: Boolean, hasMore: Boolean): TileUpdate = ALL[(if (changed) 2 else 0) + (if (hasMore) 1 else 0)]
+    }
+}
 
 /**
  * The on-screen composite, split into tiles so that a brush stroke only re-renders (and the GPU
  * only re-uploads) the tiles it touched. Not thread-safe: use from the main thread.
+ *
+ * v1.9 A6 (P2): a frame allocates nothing here. Each tile keeps its dirty rect, its canvas and
+ * its composite target for its bitmap's life; the scratch rects and the budgeted order are
+ * reused.
  */
 class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 512) {
     val cols = (docWidth + tileSize - 1) / tileSize
     val rows = (docHeight + tileSize - 1) / tileSize
     private val tiles = arrayOfNulls<Bitmap>(cols * rows)
-    private val dirty = arrayOfNulls<Rect>(cols * rows)
+    /** v1.9 A6 (P2): the canvas and composite target of each tile's current bitmap. */
+    private val canvases = arrayOfNulls<Canvas>(cols * rows)
+    private val targets = arrayOfNulls<CompositeTarget>(cols * rows)
+    /** The part of each tile waiting to be rendered; meaningful only where [isDirtyAt] is set. */
+    private val dirty = Array(cols * rows) { Rect() }
+    private val isDirtyAt = BooleanArray(cols * rows)
+    private var dirtyCount = 0
     private val tmpRect = Rect()
+    private val invRect = Rect()
+    private val partRect = Rect()
+    private val updateRect = Rect()
+    private val budgetRect = Rect()
+    private val renderClip = Rect()
+    private val order = IntArray(cols * rows)
+    private val orderDist = FloatArray(cols * rows)
     private val drawPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     init { invalidate(null) }
@@ -41,24 +65,30 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
      */
     internal var invalidationHook: ((Rect) -> Unit)? = null
 
-    /** Marks [rect] (document coords; null = everything) for re-rendering. */
+    /**
+     * Marks [rect] (document coords; null = everything) for re-rendering. The [invalidationHook]
+     * gets a scratch rect valid during the call only (its users copy what they keep).
+     */
     fun invalidate(rect: Rect?) {
-        val r = if (rect == null) Rect(0, 0, docWidth, docHeight) else Rect(rect)
+        val r = invRect
+        if (rect == null) r.set(0, 0, docWidth, docHeight) else r.set(rect)
         if (!r.intersect(0, 0, docWidth, docHeight)) return
+        val left = r.left; val top = r.top; val right = r.right; val bottom = r.bottom
         invalidationHook?.invoke(r)
-        val c0 = r.left / tileSize; val c1 = (r.right - 1) / tileSize
-        val r0 = r.top / tileSize; val r1 = (r.bottom - 1) / tileSize
+        val c0 = left / tileSize; val c1 = (right - 1) / tileSize
+        val r0 = top / tileSize; val r1 = (bottom - 1) / tileSize
         for (row in r0..r1) for (col in c0..c1) {
             val idx = row * cols + col
             tileRect(col, row, tmpRect)
-            val part = Rect(r)
+            val part = partRect
+            part.set(left, top, right, bottom)
             if (!part.intersect(tmpRect)) continue
-            val d = dirty[idx]
-            if (d == null) dirty[idx] = part else d.union(part)
+            if (isDirtyAt[idx]) dirty[idx].union(part)
+            else { dirty[idx].set(part); isDirtyAt[idx] = true; dirtyCount++ }
         }
     }
 
-    val hasDirty: Boolean get() = dirty.any { it != null }
+    val hasDirty: Boolean get() = dirtyCount > 0
 
     /**
      * Re-renders dirty tiles with [compositor]. Returns true if anything changed. [visibleDoc]
@@ -67,32 +97,44 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
      * only pays for what is on screen). Null renders every dirty tile.
      */
     fun update(compositor: Compositor, visibleDoc: Rect? = null): Boolean {
+        if (dirtyCount == 0) return false
         var changed = false
+        val tr = updateRect
         for (idx in tiles.indices) {
-            val d = dirty[idx] ?: continue
+            if (!isDirtyAt[idx]) continue
             val col = idx % cols; val row = idx / cols
-            val tr = tileRect(col, row)
+            tileRect(col, row, tr)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
-            render(compositor, idx, d, tr)
+            render(compositor, idx, tr)
             changed = true
         }
         return changed
     }
 
-    /** Renders the dirty part [d] of tile [idx] (document rect [tr]) and marks it clean. */
-    private fun render(compositor: Compositor, idx: Int, d: Rect, tr: Rect) {
-        dirty[idx] = null
+    /** Renders the dirty part of tile [idx] (document rect [tr]) and marks it clean. */
+    private fun render(compositor: Compositor, idx: Int, tr: Rect) {
+        val d = renderClip
+        d.set(dirty[idx])
+        isDirtyAt[idx] = false
+        dirtyCount--
         var bmp = tiles[idx]
-        if (bmp == null || bmp.isRecycled) {
+        var c = canvases[idx]
+        var target = targets[idx]
+        if (bmp == null || bmp.isRecycled || c == null || target == null) {
             bmp = Bitmap.createBitmap(tr.width(), tr.height(), Bitmap.Config.ARGB_8888)
             bmp.setHasMipMap(true)
             tiles[idx] = bmp
+            c = Canvas(bmp)
+            canvases[idx] = c
+            target = CompositeTarget.displayTile(bmp, tr.left, tr.top)
+            targets[idx] = target
         }
-        val c = Canvas(bmp)
+        val save = c.save()
         c.translate(-tr.left.toFloat(), -tr.top.toFloat())
         c.clipRect(d)
         c.drawColor(0, PorterDuff.Mode.CLEAR)
-        compositor.drawDocument(c, d, target = CompositeTarget.displayTile(bmp, tr.left, tr.top))
+        compositor.drawDocument(c, d, target = target)
+        c.restoreToCount(save)
     }
 
     // ------------------------------------------------------------------ v1.6: budgeted refinement (§3.1, §4.3)
@@ -104,7 +146,7 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     fun tileIndexOf(col: Int, row: Int): Int = row * cols + col
 
     /** True while tile [index] has a part waiting to be rendered. */
-    fun isDirty(index: Int): Boolean = dirty.getOrNull(index) != null
+    fun isDirty(index: Int): Boolean = index in isDirtyAt.indices && isDirtyAt[index]
 
     /** Time source of [updateBudgeted] in nanoseconds (replaceable in tests). */
     internal var nanoClock: () -> Long = System::nanoTime
@@ -124,41 +166,45 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
         skip: ((Int) -> Boolean)? = null,
         center: PointF? = null,
     ): TileUpdate {
+        if (dirtyCount == 0) return TileUpdate.of(changed = false, hasMore = false)
         var n = 0
-        val order = IntArray(tiles.size)
-        val tr = Rect()
+        val tr = budgetRect
         for (idx in tiles.indices) {
-            if (dirty[idx] == null) continue
+            if (!isDirtyAt[idx]) continue
             tileRect(idx % cols, idx / cols, tr)
             if (visibleDoc != null && !Rect.intersects(visibleDoc, tr)) continue
             if (skip != null && skip(idx)) continue
-            order[n++] = idx
-        }
-        if (n == 0) return TileUpdate(changed = false, hasMore = false)
-        val sorted: List<Int> = if (center == null) order.take(n) else {
-            val cx = center.x; val cy = center.y
-            fun dist2(idx: Int): Float {
-                val r = tileRect(idx % cols, idx / cols)
-                val dx = r.exactCenterX() - cx
-                val dy = r.exactCenterY() - cy
-                return dx * dx + dy * dy
+            if (center == null) { order[n++] = idx; continue }
+            // Nearest first, ties in index order: a stable insertion by distance (the indices
+            // arrive in increasing order, so an equal distance stays behind).
+            val dx = tr.exactCenterX() - center.x
+            val dy = tr.exactCenterY() - center.y
+            val dist = dx * dx + dy * dy
+            var k = n++
+            while (k > 0 && orderDist[k - 1] > dist) {
+                order[k] = order[k - 1]; orderDist[k] = orderDist[k - 1]; k--
             }
-            order.take(n).sortedWith(compareBy<Int>({ dist2(it) }, { it }))
+            order[k] = idx; orderDist[k] = dist
         }
+        if (n == 0) return TileUpdate.of(changed = false, hasMore = false)
         val start = nanoClock()
         var done = 0
-        for (idx in sorted) {
-            val d = dirty[idx] ?: continue
-            render(compositor, idx, d, tileRect(idx % cols, idx / cols))
+        var pos = 0
+        while (pos < n) {
+            val idx = order[pos++]
+            if (!isDirtyAt[idx]) continue
+            tileRect(idx % cols, idx / cols, tr)
+            render(compositor, idx, tr)
             done++
             if (budgetNanos != Long.MAX_VALUE && nanoClock() - start >= budgetNanos) break
         }
-        val more = sorted.drop(done).any { dirty[it] != null }
-        return TileUpdate(changed = done > 0, hasMore = more)
+        var more = false
+        while (pos < n) if (isDirtyAt[order[pos++]]) { more = true; break }
+        return TileUpdate.of(changed = done > 0, hasMore = more)
     }
 
     /** The part of tile [index] waiting to be rendered (document px; a copy), or null when it is clean. */
-    fun dirtyRect(index: Int): Rect? = dirty.getOrNull(index)?.let { Rect(it) }
+    fun dirtyRect(index: Int): Rect? = if (isDirty(index)) Rect(dirty[index]) else null
 
     /**
      * Draws the tiles into a canvas whose matrix already maps document -> screen.
@@ -186,6 +232,6 @@ class DisplayTiles(val docWidth: Int, val docHeight: Int, val tileSize: Int = 51
     }
 
     fun release() {
-        for (i in tiles.indices) { tiles[i]?.recycle(); tiles[i] = null }
+        for (i in tiles.indices) { tiles[i]?.recycle(); tiles[i] = null; canvases[i] = null; targets[i] = null }
     }
 }

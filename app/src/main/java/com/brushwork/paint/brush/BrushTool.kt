@@ -1456,6 +1456,14 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             pending.addLast(dab)
         }
 
+        /**
+         * v1.9 A6 (P2): rendered dabs, reused for the next samples (a dab is done with once
+         * [render] returns: nothing keeps it), so a long smudge or blur stroke stops allocating.
+         */
+        private val spare = ArrayList<Dab>()
+
+        override fun recycledDab(): Dab? = if (spare.isEmpty()) null else spare.removeAt(spare.lastIndex)
+
         override fun afterEvent() {
             drain(final = false)
             flushDirty()
@@ -1470,6 +1478,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 pending.removeFirst()
                 dynamics.resolve(dab, if (final) length else null, scaleShort = false)
                 render(dab)
+                spare += dab
             }
         }
 

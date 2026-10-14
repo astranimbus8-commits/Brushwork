@@ -8,8 +8,10 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Looper
 import com.brushwork.paint.model.Document
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.model.LayerBlendMode
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -215,8 +217,25 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         return if (override.layer === layer) override else null
     }
 
+    /**
+     * v1.9 A6 (P2): the group paints [BlendModes.paint] makes, one per blend mode and alpha,
+     * made once on the main thread (where every frame draws) instead of per layer and tile;
+     * never changed after they are made. Other threads get a new paint, as before.
+     */
+    private var blendPaints: Array<Paint?>? = null
+
+    /** [BlendModes.paint] for [mode] and [opacity]: the shared one on the main thread. */
+    private fun blendPaint(mode: LayerBlendMode, opacity: Float): Paint {
+        if (Looper.myLooper() !== Looper.getMainLooper()) return BlendModes.paint(mode, opacity)
+        // The alpha BlendModes.paint gives the paint: equal alphas make equal paints.
+        val alpha = (opacity.coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+        val cache = blendPaints ?: arrayOfNulls<Paint>(LayerBlendMode.values().size * 256).also { blendPaints = it }
+        val key = mode.ordinal * 256 + alpha
+        return cache[key] ?: BlendModes.paint(mode, opacity).also { cache[key] = it }
+    }
+
     internal fun drawGroup(canvas: Canvas, base: Layer, clips: List<Layer>, bounds: RectF, override: LayerRenderOverride?) {
-        val groupPaint = BlendModes.paint(base.blendMode, base.opacity)
+        val groupPaint = blendPaint(base.blendMode, base.opacity)
         if (clips.isEmpty()) {
             drawLayer(canvas, base, groupPaint, bounds, override)
             return
@@ -224,7 +243,7 @@ class Compositor(private val doc: Document, private val overrideProvider: () -> 
         val save = canvas.saveLayer(bounds, groupPaint)
         drawLayer(canvas, base, null, bounds, override)
         for (c in clips) {
-            val cs = canvas.saveLayer(bounds, BlendModes.paint(c.blendMode, c.opacity))
+            val cs = canvas.saveLayer(bounds, blendPaint(c.blendMode, c.opacity))
             drawLayer(canvas, c, null, bounds, override)
             // Keep only where the base (with its mask) has alpha.
             val bs = canvas.saveLayer(bounds, dstInPaint)
