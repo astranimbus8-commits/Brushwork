@@ -3,6 +3,8 @@ package com.brushwork.paint.tools.mask
 import android.graphics.Canvas
 import android.graphics.Rect
 import android.graphics.RectF
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -18,6 +20,8 @@ import com.brushwork.paint.engine.MaskCoverageHint
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.engine.PixelEditRecorder
 import com.brushwork.paint.engine.ViewTransform
+import com.brushwork.paint.engine.live.BeforeFrame
+import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.masks.AdjustmentEffects
 import com.brushwork.paint.masks.BrushMask
@@ -69,7 +73,7 @@ import kotlin.math.min
  *   render override; brush strokes paint the mask directly (tiles recorded as they go).
  * - A red overlay shows the mask's coverage for 1.2 s after every edit, or always (👁).
  */
-class MaskTool(controller: EditorController) : Tool(controller), PositionedTool {
+class MaskTool(controller: EditorController) : Tool(controller), PositionedTool, BeforeFrame {
     override val id = ToolId.MASK
 
     init {
@@ -148,6 +152,102 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     internal val preview = MaskPreview(controller)
     private val tint = MaskTint()
     private var cache: MaskBrushCache? = null
+
+    // ------------------------------------------------------------------ v1.9 A6 (R13): drags once per frame, at a low scale
+
+    /**
+     * The preview work of the drag's last move, waiting for the next frame ([beforeFrame]): touch
+     * events come faster than frames, and only the latest state is shown. Only while [coalesced].
+     */
+    private var pendingFrame: (() -> Unit)? = null
+
+    /** This drag defers its preview work to the frame (decided when the drag starts). */
+    private var coalesced = false
+
+    /**
+     * Preview px per document px of this drag while the finger moves: the interaction scale
+     * ([interactionScaleFor]) when the "Fast adjustment preview" is on, else the v1.8 scale.
+     */
+    private var dragScale = 0.5f
+
+    /** When the drag last moved ([LiveAdjust.clock], ns). */
+    private var lastMoveNanos = 0L
+
+    /** The drag showed its first move (that one is drawn at once: the preview and its session start with the gesture). */
+    private var dragShown = false
+
+    /**
+     * Decides how a drag that starts now previews (R13): under the live policy (I8: Robolectric
+     * runs EXACT unless a test opts in, and then every move previews at once, as in v1.8) the
+     * moves are drawn once per frame, and with "Fast adjustment preview" on at the interaction
+     * scale.
+     */
+    private fun startDrag() {
+        val live = controller.liveAdjust.policy == LiveAdjust.Policy.LIVE
+        coalesced = live
+        pendingFrame = null
+        dragShown = false
+        val w = controller.doc.width; val h = controller.doc.height
+        dragScale = if (live && controller.settings.fastAdjustPreview) interactionScaleFor(controller.viewTransform.zoom, w, h) else MaskPreview.previewScale(w, h)
+        lastMoveNanos = controller.liveAdjust.clock()
+        if (live) wakeAfterRest()
+    }
+
+    /** Runs [work] (a move's preview update) now, or at the next frame when this drag is [coalesced]. */
+    private fun previewMove(work: () -> Unit) {
+        if (coalesced) {
+            lastMoveNanos = controller.liveAdjust.clock()
+            wakeAfterRest()
+        }
+        if (!coalesced || !dragShown) {
+            dragShown = true
+            // v1.9 (design 2.4.4): each drag frame of a Linear, Radial or Brush mask as PerfTrace.MASK_FRAME.
+            PerfTrace.span(PerfTrace.MASK_FRAME) { work() }
+            return
+        }
+        pendingFrame = work
+        controller.invalidateOverlay()
+    }
+
+    /**
+     * v1.9 A6 (R13): the frame's preview work. The last move's update (back at the drag's low
+     * scale if the preview had sharpened), as PerfTrace.MASK_FRAME; else, once the finger has
+     * rested [REST_NANOS], the preview sharpens to [MaskPreview.previewScale].
+     */
+    override fun beforeFrame() {
+        if (!coalesced) return
+        val work = pendingFrame
+        if (work != null) {
+            pendingFrame = null
+            PerfTrace.span(PerfTrace.MASK_FRAME) {
+                if (preview.isActive && preview.scale != dragScale) preview.rescale(dragScale)
+                work()
+            }
+            return
+        }
+        if (!preview.isActive || gesture !is Create && gesture !is Drag && gesture !is Paint) return
+        if (controller.liveAdjust.clock() - lastMoveNanos < REST_NANOS) return
+        val sharp = MaskPreview.previewScale(controller.doc.width, controller.doc.height)
+        if (preview.scale != sharp) preview.rescale(sharp, resting = true)
+    }
+
+    private var restHandler: Handler? = null
+
+    /** Asks for a frame once the finger rested [REST_NANOS] (the preview sharpens there). */
+    private val restWake = Runnable { if (coalesced && preview.isActive) controller.invalidateOverlay() }
+
+    private fun wakeAfterRest() {
+        val h = restHandler ?: (Looper.getMainLooper()?.let { Handler(it) } ?: return).also { restHandler = it }
+        h.removeCallbacks(restWake)
+        h.postDelayed(restWake, REST_NANOS / 1_000_000L + 1L)
+    }
+
+    /** The drag ended or was cancelled: nothing waits for a frame any more. */
+    private fun endDrag() {
+        pendingFrame = null
+        coalesced = false
+        restHandler?.removeCallbacks(restWake)
+    }
 
     // ------------------------------------------------------------------ what is edited
 
@@ -563,12 +663,14 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                 if (!g.moved && !movedEnough(g.start, pos)) return
                 if (!g.moved) {
                     g.moved = true
-                    preview.begin(g.layer, g.base, cache)
+                    startDrag()
+                    preview.begin(g.layer, g.base, cache, dragScale)
                 }
                 val comp = created(g.kind, g.start, pos, g.compId)
-                g.spec = MaskGeometry.added(g.base, comp)
-                liveSpec = g.spec
-                PerfTrace.span(PerfTrace.MASK_FRAME) { preview.update(g.spec) }
+                val spec = MaskGeometry.added(g.base, comp)
+                g.spec = spec
+                liveSpec = spec
+                previewMove { preview.update(spec) }
                 showReadout(MaskHandles.createReadout(comp, controller.increments))
                 flashOverlay()
             }
@@ -576,24 +678,31 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                 if (!g.moved && !movedEnough(g.start, pos)) return
                 if (!g.moved) {
                     g.moved = true
-                    preview.begin(g.layer, g.base, cache)
+                    startDrag()
+                    preview.begin(g.layer, g.base, cache, dragScale)
                 }
                 val inc = controller.increments
                 val comp = MaskHandles.dragged(g.startComp, g.handle, g.start, pos, inc)
-                g.spec = MaskGeometry.replaced(g.base, comp.id, comp)
-                liveSpec = g.spec
+                val spec = MaskGeometry.replaced(g.base, comp.id, comp)
+                g.spec = spec
+                liveSpec = spec
                 val moved = if (g.startComp is BrushMask && g.handle == MaskHandles.Kind.PIN) {
                     val d = MaskHandles.pinDelta(g.start, pos, inc)
                     g.startComp.id to MaskGeometry.Affine.translate(d.x, d.y)
                 } else {
                     null
                 }
-                PerfTrace.span(PerfTrace.MASK_FRAME) { preview.update(g.spec, moved) }
+                previewMove { preview.update(spec, moved) }
                 showReadout(MaskHandles.readout(g.startComp, g.handle, comp, g.start, pos, inc))
                 flashOverlay()
             }
             // v1.9 (design 2.4.4): each drag frame of a Linear, Radial or Brush mask as PerfTrace.MASK_FRAME.
-            is Paint -> PerfTrace.span(PerfTrace.MASK_FRAME) { paintTo(g, pos, p.pressure) }
+            // v1.9 A6 (R13): a coalesced stroke keeps every sample; its frame draws them all.
+            is Paint -> if (coalesced) {
+                if (addSample(g, pos, p.pressure)) previewMove { paintFrame(g) }
+            } else {
+                PerfTrace.span(PerfTrace.MASK_FRAME) { paintTo(g, pos, p.pressure) }
+            }
             null -> {}
         }
     }
@@ -602,6 +711,10 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val g = gesture ?: return
         val pos = Vec2(p.x, p.y)
         showReadout(null)
+        // v1.9 A6 (R13): a move still waiting for its frame is not drawn (the release commits);
+        // a brush stroke's last samples are drawn below.
+        val hadPending = pendingFrame != null
+        endDrag()
         when (g) {
             is PinTap -> {
                 gesture = null
@@ -644,7 +757,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
                 commitSpec(MaskGeometry.replaced(g.base, comp.id, comp), if (g.handle == MaskHandles.Kind.PIN) "Move mask" else "Edit mask")
             }
             is Paint -> {
-                paintTo(g, pos, p.pressure)
+                if (addSample(g, pos, p.pressure) || hadPending) paintFrame(g)
                 gesture = null
                 finishPaint(g)
             }
@@ -654,6 +767,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     override fun onCancel() {
         val g = gesture ?: return
         gesture = null
+        endDrag()
         showReadout(null)
         if (g is Paint && g.live) {
             g.rec?.abort()
@@ -729,23 +843,35 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
         val rec = if (local) controller.beginEdit(layer, EditTarget.MASK) else null
         val size = preset.size.coerceIn(1f, 5000f)
         val g = Paint(layer, base, compId, baseComp, newComp, brushErase, size, preset.hardness, preset.opacity, local, rec)
+        startDrag()
         if (local) {
             if (baseComp != null && cache?.serves(baseComp) != true) ensureCache()?.full(baseComp)
             installPaintOverride(layer)
         } else {
             // An adjustment layer without a mask previews its future mask too (the effect shows
             // only where the stroke paints, as it will after the stroke).
-            preview.begin(layer?.takeIf { it.mask != null || it.isAdjustmentLayer }, base, cache)
+            preview.begin(layer?.takeIf { it.mask != null || it.isAdjustmentLayer }, base, cache, dragScale)
         }
         gesture = g
         paintTo(g, pos, pressure)
+        dragShown = true
     }
 
     private fun paintTo(g: Paint, pos: Vec2, pressure: Float) {
-        if (!pos.x.isFinite() || !pos.y.isFinite()) return
+        if (addSample(g, pos, pressure)) paintFrame(g)
+    }
+
+    /** Adds a finger sample to the stroke; false when it adds nothing (not finite, or where the last one is). */
+    private fun addSample(g: Paint, pos: Vec2, pressure: Float): Boolean {
+        if (!pos.x.isFinite() || !pos.y.isFinite()) return false
         val n = g.xs.size
-        if (n > 0 && g.xs.data[n - 1] == pos.x && g.ys.data[n - 1] == pos.y) return
+        if (n > 0 && g.xs.data[n - 1] == pos.x && g.ys.data[n - 1] == pos.y) return false
         g.xs.add(pos.x); g.ys.add(pos.y); g.ps.add(pressure)
+        return true
+    }
+
+    /** Shows the stroke with every sample added so far (the new dabs' area). */
+    private fun paintFrame(g: Paint) {
         val stroke = strokeOf(g)
         val comp = g.newComp.copy(strokes = (g.baseComp?.strokes ?: emptyList()) + stroke)
         g.spec = if (g.baseComp == null) g.base.copy(components = g.base.components + comp, nextId = g.compId + 1) else MaskGeometry.replaced(g.base, g.compId, comp)
@@ -1059,6 +1185,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
     }
 
     override fun onDispose() {
+        endDrag()
         preview.release()
         tint.release()
         cache?.clear()
@@ -1122,5 +1249,24 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool 
 
         /** Shown for an erase stroke with no brush part to erase from. */
         const val ERASE_HINT = "Erase works on a brush part: tap its B pin first, or paint with Subtract"
+
+        /**
+         * v1.9 A6 (R13): how long the finger rests before a coalesced drag's preview sharpens to
+         * [MaskPreview.previewScale] (the live session's idle time: both refine together).
+         */
+        const val REST_NANOS: Long = LiveAdjust.IDLE_NANOS
+
+        /**
+         * v1.9 A6 (R13): preview px per document px while a finger drags a mask at view [zoom] on a
+         * [w] x [h] document: the live proxies' own scale ([LiveAdjust.proxyScaleFor], at least
+         * [LiveAdjust.MIN_SCALE]), never above the v1.8 preview ([MaskPreview.previewScale]).
+         * While the finger moves the canvas is itself drawn from proxies at that scale, so the
+         * coarser mask doesn't show, and the proxies take the preview's pixels one to one (the
+         * design's half of the proxy scale made every live frame resample the preview through the
+         * luminance mask paint: 38 % of v1.5's frame for a handle drag on the JVM against 7 % at
+         * the proxy scale). It sharpens when the finger rests and is exact on release.
+         */
+        fun interactionScaleFor(zoom: Float, w: Int, h: Int): Float =
+            min(MaskPreview.previewScale(w, h), max(LiveAdjust.MIN_SCALE, LiveAdjust.proxyScaleFor(zoom)))
     }
 }

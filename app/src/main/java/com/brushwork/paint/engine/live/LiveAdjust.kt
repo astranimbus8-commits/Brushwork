@@ -195,8 +195,10 @@ class LiveAdjust(private val c: EditorController) {
      * all) needs redrawing. Starts or continues a session when [policy] is LIVE, the "Fast
      * adjustment preview" setting is on and [layer] is a visible adjustment layer; otherwise (and
      * always under Robolectric's EXACT policy) it only invalidates, as v1.5 did.
+     * v1.9 A6 (R13) [resting]: the change comes from a finger that rests (a preview sharpening),
+     * so it does not restart the idle time: refinement starts when it would have.
      */
-    fun touch(layer: Layer, region: Rect?) {
+    fun touch(layer: Layer, region: Rect?, resting: Boolean = false) {
         // A new drag picks up a setting changed elsewhere (Settings); frames use the cached value.
         if (session == null && policy == Policy.LIVE) fastPreview = c.settings.fastAdjustPreview
         if (!canRun(layer) || refused === layer) {
@@ -221,9 +223,11 @@ class LiveAdjust(private val c: EditorController) {
             s.layer = layer
             proxies?.invalidateAll()
         }
-        s.lastTouch = clock()
-        s.ended = false
-        s.refining = false
+        if (!resting) {
+            s.lastTouch = clock()
+            s.ended = false
+            s.refining = false
+        }
         s.mark(region)
         ownInvalidation = true
         try {

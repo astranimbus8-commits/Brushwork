@@ -114,6 +114,8 @@ class LiveAdjustSessionRobolectricTest {
 
     /** One canvas frame at [zoom] as `CanvasView.onDraw` makes it; true when the session drew it. */
     private fun frame(zoom: Float = 0.5f): Boolean {
+        // v1.9 A6 (R13): the current tool's coalesced preview work first, as CanvasView does.
+        (c.currentTool as? BeforeFrame)?.beforeFrame()
         val cv = Canvas(screen)
         cv.drawColor(0, PorterDuff.Mode.CLEAR)
         val m = view(zoom)

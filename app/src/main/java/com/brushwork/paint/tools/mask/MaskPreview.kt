@@ -55,6 +55,14 @@ internal class MaskPreview(private val c: EditorController) {
     /** Everything the preview made the display show differently (redrawn when it ends). */
     private var touched: Rect? = null
 
+    /** v1.9 A6 (R13): what [begin] got, for [rescale] (the base's brush rasters at another scale). */
+    private var baseSpec: MaskSpec? = null
+    private var baseCache: MaskBrushCache? = null
+    /** The brush component moved by the last [update] (kept for [rescale]). */
+    private var lastMoved: Pair<Long, MaskGeometry.Affine>? = null
+    /** v1.9 A6 (R13): the bitmap of the other scale, kept for the next switch (a drag that rests and moves on). */
+    private var spare: Bitmap? = null
+
     val isActive: Boolean get() = shown != null
 
     private inner class Override(override val layer: Layer) : LayerRenderOverride, MaskCoverageHint {
@@ -66,15 +74,18 @@ internal class MaskPreview(private val c: EditorController) {
         /** Where the preview can be non-black: the shown spec's coverage, plus the reach of the upscaling. */
         override fun maskCoverage(): Rect? {
             val s = shown ?: return null
-            if (s !== coverageOf) {
+            if (s !== coverageOf || scale != coverageScale) {
                 coverageOf = s
+                coverageScale = scale
                 coverage = MaskSpecs.coverageBounds(s, c.doc.width, c.doc.height)?.let { padded(it) }?.takeUnless { it.isEmpty }
             }
             return coverage?.let { Rect(it) }
         }
 
-        // The coverage of the spec last asked about (every display tile asks on every frame).
+        // The coverage of the spec last asked about (every display tile asks on every frame), at
+        // the scale it was padded for (v1.9 A6: the scale changes during a drag, R13).
         private var coverageOf: MaskSpec? = null
+        private var coverageScale = 0f
         private var coverage: Rect? = null
 
         override fun drawMask(canvas: Canvas, maskPaint: Paint): Boolean {
@@ -88,26 +99,71 @@ internal class MaskPreview(private val c: EditorController) {
     /**
      * Starts previewing edits of [base] (the current spec of [layer], or of a mask about to be
      * created when [layer] is null or has no mask). [cache] provides brush coverage it holds.
+     * v1.9 A6 (R13) [atScale]: preview px per document px (default [previewScale]; the Masks
+     * tool passes its lower interaction scale while the finger moves).
      */
-    fun begin(layer: Layer?, base: MaskSpec, cache: MaskBrushCache?) {
+    fun begin(layer: Layer?, base: MaskSpec, cache: MaskBrushCache?, atScale: Float = previewScale(c.doc.width, c.doc.height)) {
         end()
+        baseSpec = base
+        baseCache = cache
+        lastMoved = null
+        setUp(atScale)
+        this.layer = layer
+        val g = grid ?: return
+        renderRegion(base, 0, 0, g.cols, g.rows)
+        shown = base
+    }
+
+    /** The bitmap, grid and base brush rasters at scale [s] (the bitmap of the other scale is kept). */
+    private fun setUp(s: Float) {
         val w = c.doc.width; val h = c.doc.height
-        val s = previewScale(w, h)
         val pw = max(1, ceil(w * s).toInt()); val ph = max(1, ceil(h * s).toInt())
-        val bmp = bitmap?.takeIf { !it.isRecycled && it.width == pw && it.height == ph && scale == s }
-            ?: run {
-                bitmap?.recycle()
-                bitmap = null
+        fun fits(b: Bitmap?) = b != null && !b.isRecycled && b.width == pw && b.height == ph
+        val cur = bitmap
+        val bmp = when {
+            fits(cur) && scale == s -> cur!!
+            fits(spare) -> spare!!.also { spare = cur?.takeUnless { it.isRecycled } }
+            else -> {
+                spare?.recycle()
+                spare = cur?.takeUnless { it.isRecycled }
                 Bitmap.createBitmap(pw, ph, Bitmap.Config.ARGB_8888)
             }
+        }
         bitmap = bmp
         scale = s
         val g = SampleGrid(0f, 0f, 1f / s, pw, ph)
         grid = g
-        brushes = PreviewBrushes(g, baseRasters(base, g, cache))
-        this.layer = layer
-        renderRegion(base, 0, 0, pw, ph)
-        shown = base
+        brushes = PreviewBrushes(g, baseRasters(baseSpec ?: MaskSpec(), g, baseCache))
+    }
+
+    /**
+     * v1.9 A6 (R13): shows the current spec at [s] preview px per document px instead (the
+     * interaction scale while the finger moves; [previewScale] once it rests 150 ms): the whole
+     * preview renders again at [s] and the canvas redraws where the preview can show. [resting]:
+     * the finger rests (the live session keeps its idle time, see [LiveAdjust.touch]).
+     */
+    fun rescale(s: Float, resting: Boolean = false) {
+        val spec = shown ?: return
+        if (s == scale && bitmap != null) return
+        // How far the old upscaled preview reached (see [padded]).
+        val oldPad = ceil(2f / scale).toInt() + 2
+        setUp(s)
+        val g = grid ?: return
+        brushes?.moved = lastMoved
+        renderRegion(spec, 0, 0, g.cols, g.rows)
+        val ov = override ?: return
+        val w = c.doc.width; val h = c.doc.height
+        val region = MaskSpecs.coverageBounds(spec, w, h)?.let { r ->
+            Rect(r).apply {
+                val pad = max(oldPad, ceil(2f / scale).toInt() + 2)
+                inset(-pad, -pad)
+                if (!intersect(0, 0, w, h)) setEmpty()
+            }
+        } ?: return
+        if (region.isEmpty) return
+        touched = union(touched, region)
+        redraw(ov.layer, region, resting)
+        c.invalidateOverlay()
     }
 
     /**
@@ -120,6 +176,7 @@ internal class MaskPreview(private val c: EditorController) {
         val prev = shown ?: return
         val g = grid ?: return
         brushes?.moved = moved
+        lastMoved = moved
         val w = c.doc.width; val h = c.doc.height
         val changed = if (region != null) region.takeUnless { it.isEmpty } else MaskSpecs.changedRegion(prev, spec, w, h)
         shown = spec
@@ -163,8 +220,8 @@ internal class MaskPreview(private val c: EditorController) {
      * Shows what changed in [region] of [l]'s mask: an adjustment layer's live session (v1.6
      * §3.1 C2: drawn from proxies while the finger moves), else a plain redraw.
      */
-    private fun redraw(l: Layer, region: Rect) {
-        if (l.isAdjustmentLayer) c.liveAdjust.touch(l, region) else c.invalidateDoc(region)
+    private fun redraw(l: Layer, region: Rect, resting: Boolean = false) {
+        if (l.isAdjustmentLayer) c.liveAdjust.touch(l, region, resting) else c.invalidateDoc(region)
     }
 
     /**
@@ -185,6 +242,9 @@ internal class MaskPreview(private val c: EditorController) {
         shown = null
         brushes = null
         layer = null
+        baseSpec = null
+        baseCache = null
+        lastMoved = null
         c.invalidateOverlay()
     }
 
@@ -193,6 +253,8 @@ internal class MaskPreview(private val c: EditorController) {
         end()
         bitmap?.recycle()
         bitmap = null
+        spare?.recycle()
+        spare = null
         buffer = IntArray(0)
     }
 

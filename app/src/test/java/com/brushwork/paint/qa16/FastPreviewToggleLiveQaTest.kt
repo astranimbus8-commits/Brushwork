@@ -1,5 +1,6 @@
 package com.brushwork.paint.qa16
 
+import com.brushwork.paint.engine.live.BeforeFrame
 import com.brushwork.paint.engine.live.LiveAdjust
 import com.brushwork.paint.masks.RadialMask
 import com.brushwork.paint.smoke.Smoke
@@ -65,6 +66,8 @@ class FastPreviewToggleLiveQaTest {
                 var liveFrames = 0
                 val shots = mutableListOf<IntArray>()
                 live.canvasDrag(p.x to p.y, p.x + dx to p.y, moves = 8) { i ->
+                    // v1.9 A6 (R13): the Masks tool's coalesced move first, as CanvasView.onDraw does.
+                    (c.currentTool as? BeforeFrame)?.beforeFrame()
                     if (c.liveAdjust.isActive) { live.liveFrame("handle move $i"); liveFrames++ } else live.draw()
                     if (!expectLive && (i == 3 || i == 7)) shots += live.lastPixels()
                 }
