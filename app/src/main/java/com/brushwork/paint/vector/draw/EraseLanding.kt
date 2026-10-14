@@ -43,7 +43,8 @@ internal interface EraseFootprint {
  * immutable objects ([cutInBackground]; the busy overlay shows after [CUT_BUSY_AFTER_MS]); when the
  * layer changed while it ran, the whole erase runs again on what it holds then. It runs on this
  * thread for at most [syncTargets] targets, inside another step, under another busy operation,
- * while a pending step is flushed and after [MAX_RERUNS] reruns.
+ * while a pending step is flushed, after [MAX_RERUNS] reruns, and under a test's render policy
+ * without a cut dispatcher ([VectorDrawState.cutsInBackground]).
  *
  * [onDone] is called once: true when the step was recorded. The owner's preview goes then.
  */
@@ -91,7 +92,7 @@ internal class EraseLanding(
         if (targets.isEmpty()) { land(final, EraseCut.Cuts.NONE, finish); return }
         val region = footprint.region()
         val now = targets.size <= syncTargets || state.cutsNow > 0 || reruns >= MAX_RERUNS ||
-            c.editDepth != 0 || c.busyMessage != null || !c.scope.isActive
+            c.editDepth != 0 || c.busyMessage != null || !c.scope.isActive || !state.cutsInBackground(c)
         if (now) {
             val cuts = try {
                 PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) }

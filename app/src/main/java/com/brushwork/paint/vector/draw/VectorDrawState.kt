@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.VectorLayers
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import java.util.IdentityHashMap
@@ -40,6 +41,14 @@ internal class VectorDrawState(initialMode: VectorEraseMode) {
 
     /** Test seam: where the eraser's region cut runs (null: `Dispatchers.Default`). */
     var cutDispatcher: CoroutineDispatcher? = null
+
+    /**
+     * The region cut of a large erase may go to the background ([EraseLanding]): in the app, as
+     * the vector layers' renders do ([VectorLayers.Policy.AUTO]), or on [cutDispatcher] when a test
+     * gives one. Under a test's render policy (SYNC or ASYNC) it runs on the main thread at the
+     * lift, as deterministic as the renders' tests expect.
+     */
+    fun cutsInBackground(c: EditorController): Boolean = cutDispatcher != null || c.vectors.policy == VectorLayers.Policy.AUTO
 
     /** What the eraser does on a vector layer (and where its modes are) was shown. */
     var eraserHintShown = false
