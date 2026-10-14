@@ -269,13 +269,12 @@ class ShapePointsToolTest {
         c.redo()
         assertVec(Vec2(30f, 40f), tool.docAnchors()!![0].pos)
         c.undo()
-        // The conversion itself: back to the regular rectangle, points mode off.
+        // v1.9 (R17): the conversion after the typed placement is no step of its own (the outline
+        // stays as it is): this undo takes back the placement (back to the shape Numbers made),
+        // the regular rectangle, points mode off.
         c.undo()
         assertNull(tool.points)
         assertFalse(tool.pointsMode)
-        assertTrue(tool.hasPendingWork)
-        // v1.9 (R17): then the typed placement (back to the shape Numbers made).
-        c.undo()
         assertTrue(tool.hasPendingWork)
         assertFalse(tool.canUndoStep)
         // Nothing left to step back: undo discards the shape.
@@ -376,7 +375,7 @@ class ShapePointsToolTest {
         c.pointerMove(ToolPoint(20f, 30f))
         c.pointerCancel()
         assertEquals(pts, tool.points)
-        // v1.9 (R17): the typed placement is a step too.
-        assertEquals("only the conversion and the placement can be undone", 2, generateSequence { if (tool.undoStep()) 1 else null }.count())
+        // v1.9 (R17): the typed placement is a step too; the conversion after it is none of its own.
+        assertEquals("only the placement can be undone", 1, generateSequence { if (tool.undoStep()) 1 else null }.count())
     }
 }

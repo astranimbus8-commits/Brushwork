@@ -71,7 +71,10 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * path); and [MirrorLabels18.REMOVE] while the open shape has copies (§3.1, one in-tool step).
  * v1.9 (R18) adds [PointLabels19.BEVEL] in Points mode, last ([shapeBevelItem]; its popup is an overlay,
  * [ShapeBevelPopupHost]), and shows the box's Center and Proportional / Circle outside Points
- * mode only ([ShapeStripInfo.boxModifiersShown]).
+ * mode only ([ShapeStripInfo.boxModifiersShown]). v1.9 (R14) adds the object items
+ * ([shapeObjectItems]: duplicate, bring forward, send backward) after v1.8's More items while an
+ * open shape is or becomes a shape object ([ShapeTool.objectActionsApply], never in Points
+ * mode), hidden while the selection bar or the object bar shows (`StripContext.selectionBarShown`).
  *
  * Every handle is the v1.7 one (StripHandlesV17 "SHAPE"; "Snap" became "Snap to objects"). The
  * Shape settings and Numbers sheets and the typed handle scale are overlays: they outlive the
@@ -106,6 +109,7 @@ internal fun shapeStrip(tool: ShapeTool, c: EditorController): StripSpec {
             strip.closeMore()
             typingRoundness = true
         },
+        barShown = strip.selectionBarShown,
     )
     val keys = items.map { it.key }.toSet()
     return StripSpec(
@@ -144,6 +148,8 @@ internal data class ShapeStripInfo(
     val toPathShown: Boolean,
     val toPathRefusal: String?,
     val hasCopies: Boolean,
+    /** v1.9 (R14): the object items show ([ShapeTool.objectActionsApply]; [shapeObjectItems]). */
+    val objectActions: Boolean,
 ) {
     val lineLike: Boolean get() = type.isLineLike
 
@@ -188,6 +194,7 @@ internal data class ShapeStripInfo(
                 toPathShown = toPathShown,
                 toPathRefusal = if (toPathShown) tool.turnIntoPathRefusal else null,
                 hasCopies = tool.hasCopies,
+                objectActions = tool.objectActionsApply,
             )
         }
     }
@@ -265,6 +272,7 @@ internal object ShapeStripItems {
         openNumbers: () -> Unit,
         typeHandles: () -> Unit,
         typeRoundness: () -> Unit,
+        barShown: Boolean,
     ): List<StripItem> = buildList {
         fun set(f: (com.brushwork.paint.tools.vector.ShapeSettings) -> com.brushwork.paint.tools.vector.ShapeSettings) = tool.update(f)
         val lineLike = info.lineLike
@@ -423,6 +431,9 @@ internal object ShapeStripItems {
         if (info.hasCopies) {
             add(more(REMOVE_COPIES, MirrorLabels18.REMOVE) { ShapeIconAction(Icons.Filled.LayersClear, MirrorLabels18.REMOVE) { tool.removeCopies() } })
         }
+        // v1.9 (R14): the object items (outside Points mode), hidden while the selection bar or the
+        // object bar shows: they offer the same labels (I10).
+        if (info.objectActions && !barShown) addAll(shapeObjectItems(tool))
         // v1.9 (R18): [PointLabels19.BEVEL], after v1.8's More items (StripKeysV19 rank 60); in
         // Points mode the box's Center and Proportional are hidden ([ShapeStripInfo.boxModifiersShown]).
         if (info.pointsMode) add(shapeBevelItem(tool))

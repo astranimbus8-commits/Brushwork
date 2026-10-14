@@ -66,6 +66,7 @@ import com.brushwork.paint.tools.transform.TransformIncrements
 import com.brushwork.paint.tools.transform.offset
 import com.brushwork.paint.ui.common.CogLabels18
 import com.brushwork.paint.ui.common.FolderLabels
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.PointLabels19
@@ -79,6 +80,9 @@ import com.brushwork.paint.vector.VectorLayers
 import com.brushwork.paint.vector.VectorOps
 import com.brushwork.paint.vector.edit.VectorEditSession
 import com.brushwork.paint.vector.render.VectorLayerRenderer
+import com.brushwork.paint.vector.select.ObjectActions
+import com.brushwork.paint.vector.select.ObjectEdits
+import com.brushwork.paint.vector.select.PendingRenders
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
@@ -948,7 +952,16 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                     controller.toast(it)
                     return
                 }
-                pushHistory()
+                // v1.9 (R17): turning the outline into points changes nothing on screen, so after
+                // other edits it is no step of its own: undo takes back the edit before it (and
+                // leaves Points mode). At the bottom of the steps it is one, as in v1.8: undo
+                // then gives the regular shape back instead of discarding or closing it.
+                if (history.isEmpty()) {
+                    pushHistory()
+                } else {
+                    clearRedo()
+                    historyKey = null
+                }
                 points = ShapePoints.fromRegular(settings.type, settings.outlineParams)
             }
             pointsMode = true
@@ -3971,9 +3984,10 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
      * a vector layer in place ([LayerConvert]) and the shape one of its objects, in the same step.
      * Not into a layer that may not be edited (locked or hidden, also through a folder; its mask
      * edited), nor with Perspective copies or an outline whose brush moves pixels: those place
-     * the shape as in v1.8.
+     * the shape as in v1.8. Without [decode] the layer's shape data is not decoded (the strip asks
+     * every drag frame, [objectActionsApply]); a layer whose data does not decode is then taken.
      */
-    private fun joinTarget(s: ShapeSettings = newShapeSettings()): Layer? {
+    private fun joinTarget(s: ShapeSettings = newShapeSettings(), decode: Boolean = true): Layer? {
         if (s.newLayerEachTime || editingLayer != null || vectorSession != null) return null
         if (!placesInNewLayer(s)) return null
         val doc = controller.doc
@@ -3983,7 +3997,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         if (layer.isFolder || !doc.effectiveVisible(layer) || doc.effectiveLocked(layer)) return null
         val b = box ?: return null
         if (objectFor(b, points).paintsWithBrush && brushMovesPixels()) return null
-        if (LayerConvert.shapeToVector(layer) == null) return null
+        if (decode && LayerConvert.shapeToVector(layer) == null) return null
         return layer
     }
 
@@ -4008,6 +4022,83 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
                 LayerConvert.toVectorAction(controller, layer, label = SHAPE_LABEL)?.let { controller.pushUndo(it) }
                 commitVectorNew(layer, b)
             }
+        } finally {
+            vectors.policy = policy
+        }
+    }
+
+    // ------------------------------------------------------------------ object actions (v1.9, R14)
+
+    /**
+     * v1.9 (R14): the More row's object items apply ([LayerLabels19.DUPLICATE],
+     * [ObjectEdits.Arrange.FORWARD], [ObjectEdits.Arrange.BACKWARD]): a shape is open outside
+     * Points mode and is, or once placed becomes, a shape object of a vector layer: a reopened
+     * shape object, a new shape on a vector layer, or a new shape that joins the selected shape
+     * layer ([joinTarget]). Not for a reopened legacy shape layer (its one shape has no objects
+     * beside it) nor for a shape painted or placed in a layer of its own. Compose state; cheap
+     * (the strip asks every drag frame).
+     */
+    val objectActionsApply: Boolean get() = objectActionsApply(decode = false)
+
+    private fun objectActionsApply(decode: Boolean): Boolean {
+        if (box == null || pointsMode) return false
+        if (editingObject) return true
+        if (editingLayer != null) return false
+        controller.layersVersion
+        val layer = targetLayer ?: controller.doc.activeLayer
+        return isVectorTarget(layer) || joinTarget(settings, decode) != null
+    }
+
+    /**
+     * v1.9 (R14): the More row's [LayerLabels19.DUPLICATE]. The open shape is placed (a new one:
+     * its own step [SHAPE_LABEL]; a reopened one: its edit, nothing for an untouched one), the
+     * object bar's [ObjectActions.duplicate] copies it (its own step), and the copy opens. False
+     * when nothing was copied: the placed shape opens again (or stays pending when it could not
+     * be placed, with the message).
+     */
+    fun duplicateOpen(): Boolean = actOnPlaced { ObjectActions.duplicate(controller) }
+
+    /**
+     * v1.9 (R14): the More row's [ObjectEdits.Arrange.FORWARD] / [ObjectEdits.Arrange.BACKWARD]:
+     * as [duplicateOpen], through the object bar's [ObjectActions.arrange] (past the next object
+     * it overlaps, one step; "already" with nothing to pass); the shape opens again.
+     */
+    fun arrangeOpen(how: ObjectEdits.Arrange): Boolean = actOnPlaced { ObjectActions.arrange(controller, how) }
+
+    /**
+     * Places the open shape, runs the object bar's [action] on it alone (selected for the call),
+     * and opens the object it leaves selected (the copy) or the shape itself. Renders land at once
+     * meanwhile (as [commitJoin]): the object acted on and the one opened are known now.
+     */
+    private fun actOnPlaced(action: () -> Boolean): Boolean {
+        if (!objectActionsApply(decode = true)) return false
+        val vectors = controller.vectors
+        val policy = vectors.policy
+        vectors.policy = VectorLayers.Policy.SYNC
+        try {
+            val layer = vectorSession?.layer ?: (targetLayer ?: controller.doc.activeLayer)
+            lastVectorId = null
+            commit()
+            vectors.flushPending()
+            val id = lastVectorId
+            // Refused (locked, outside the canvas...): the shape stays pending, with the message.
+            if (box != null || id == null || layer.vector?.byId(id) !is VShape) return false
+            if (controller.doc.activeLayer !== layer) controller.selectLayer(layer)
+            var done = false
+            if (controller.doc.activeLayer === layer) {
+                if (PendingRenders.busy(controller)) {
+                    controller.toast(ObjectActions.STILL_UPDATING)
+                } else {
+                    vectors.setSelection(layer, setOf(id))
+                    done = action()
+                }
+            }
+            val left = vectors.selectedIds.singleOrNull()?.takeIf { done && vectors.selectedLayer === layer }
+            vectors.setSelection(null, emptySet())
+            val open = left?.takeIf { layer.vector?.byId(it) is VShape } ?: id
+            if (controller.doc.activeLayer === layer) editShapeObject(layer, open)
+            controller.invalidateOverlay()
+            return done
         } finally {
             vectors.policy = policy
         }
