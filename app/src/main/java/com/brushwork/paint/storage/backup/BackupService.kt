@@ -446,6 +446,8 @@ object BackupService {
         for ((i, id) in todo.withIndex()) {
             if (gen != generation) return
             try {
+                // Restored from `deleted/` with its id: the deleted copy leaves `deleted/` first.
+                if (synchronized(lock) { id in data.deleted }) mirror.reviveDeleted(id)
                 when (val r = mirror.mirror(id)) {
                     is BackupMirror.Result.Done -> synchronized(lock) {
                         data = data.copy(artworks = data.artworks + (id to MirroredArtwork(r.entry, r.hash)), deleted = data.deleted - id)

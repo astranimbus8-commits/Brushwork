@@ -4,7 +4,9 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.brushwork.paint.storage.ProjectFormat
 import com.brushwork.paint.storage.backup.BackupLayout
+import com.brushwork.paint.storage.backup.BackupRestore
 import com.brushwork.paint.storage.backup.BackupService
+import com.brushwork.paint.storage.backup.RestoreItem
 import com.brushwork.paint.v19.a8.BackupKit.DAY
 import com.brushwork.paint.v19.a8.BackupKit.MB
 import com.brushwork.paint.v19.a8.BackupKit.ROOT
@@ -116,6 +118,70 @@ class BackupDeletedRetentionTest {
         idle()
         assertFalse(deletedDir(b).exists())
         assertEquals(emptyList<String>(), index().deleted)
+    }
+
+    /** Restores [id] from the backup folder, as "Restore artworks…" does, and waits for its backup. */
+    private fun restore(id: String) {
+        val n = runBlocking { BackupService.restore(app, BackupKit.source(), listOf(id), alsoSettings = false) }
+        assertEquals("restored", 1, n)
+        idle()
+    }
+
+    /** The restore list's rows for [id]. */
+    private fun rows(id: String): List<RestoreItem> {
+        val s = BackupKit.source()
+        return BackupRestore.list(s.tree, s.root!!, BackupKit.projects).filter { it.id == id }
+    }
+
+    /**
+     * v1.9 A8 review: an artwork restored with its id from "Deleted in the last 30 days" leaves
+     * `deleted/`. Its folder moves back (no data file is copied again), the index lists it once,
+     * and the restore list shows it once, already in the gallery. Before, the folder stayed in
+     * `deleted/` for good: the purge never saw it again, and the list showed the artwork twice.
+     */
+    @Test
+    fun aDeletedArtworkRestoredWithItsIdLeavesDeleted() {
+        val a = newArtwork("Back again")
+        val keep = newArtwork("Kept")
+        choose()
+        delete(a, T0 + 1000)
+        assertEquals(listOf(true), rows(a).map { it.deleted })
+
+        FakeDocumentsProvider.resetCounts()
+        restore(a)
+        assertTrue("in the gallery", local(a).isDirectory)
+        assertFalse("gone from deleted/", deletedDir(a).exists())
+        assertEquals(BackupKit.expectedFiles(local(a)), BackupKit.names(remote(a)))
+        val log = FakeDocumentsProvider.log.toList()
+        assertTrue("moved back: $log", log.any { it == "move $ROOT/${BackupLayout.DELETED}/$a $ROOT/$a" })
+        for (name in ProjectFormat.referencedFiles(ProjectFormat.read(local(a)))) {
+            assertFalse("$name is not copied again: $log", log.any { it.startsWith("write $ROOT/$a/$name ") })
+        }
+        val index = index()
+        assertEquals(setOf(a, keep), index.artworks.map { it.id }.toSet())
+        assertEquals(emptyList<String>(), index.deleted.map { it.id })
+        assertEquals("listed once, already in the gallery", listOf(false to true), rows(a).map { it.deleted to it.already })
+
+        // A second backup and the 30 days change nothing.
+        BackupKit.now = T0 + 31 * DAY
+        BackupService.backUpNow()
+        idle()
+        assertTrue(File(remote(a), ProjectFormat.PROJECT_FILE).isFile)
+        assertFalse(deletedDir(a).exists())
+    }
+
+    /** A deleted copy beside a folder of the same id in the root (a move cut short) is dropped once the artwork is back. */
+    @Test
+    fun aDeletedCopyBesideTheRootsFolderIsDropped() {
+        val a = newArtwork("Back again")
+        choose()
+        delete(a, T0 + 1000)
+        deletedDir(a).copyRecursively(remote(a))
+        restore(a)
+        assertFalse("gone from deleted/", deletedDir(a).exists())
+        assertEquals(BackupKit.expectedFiles(local(a)), BackupKit.names(remote(a)))
+        assertEquals(emptyList<String>(), index().deleted.map { it.id })
+        assertEquals(listOf(false), rows(a).map { it.deleted })
     }
 
     @Test

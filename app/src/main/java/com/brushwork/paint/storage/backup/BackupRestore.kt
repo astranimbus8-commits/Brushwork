@@ -80,7 +80,8 @@ internal object BackupRestore {
 
     /**
      * The artworks [root] holds, newest first: the index's (its names and revisions), then any
-     * folder the index leaves out (read from its `project.json`), then the deleted ones. Each is
+     * folder the index leaves out (read from its `project.json`), then the deleted ones (each id
+     * once: a deleted folder whose id is listed above is left out). Each is
      * [RestoreItem.already] when [projectsDir] has its id at its revision.
      */
     fun list(tree: SafTree, root: SafDoc, projectsDir: File): List<RestoreItem> {
@@ -107,7 +108,8 @@ internal object BackupRestore {
             val names = index?.deleted.orEmpty().associateBy { it.id }
             val deleted = ArrayList<Pair<RestoreItem, Long>>()
             for (doc in tree.list(deletedDir).values) {
-                if (!doc.isDir || !ProjectFormat.isValidId(doc.name)) continue
+                // An id listed above is restored from there ([restore] takes the root's folder first).
+                if (!doc.isDir || !ProjectFormat.isValidId(doc.name) || doc.name in seen) continue
                 val dto = readProject(tree, doc)?.second ?: continue
                 val local = ProjectFormat.readOrNull(File(projectsDir, doc.name))
                 val item = RestoreItem(doc.name, dto.name, dto.modifiedAt, dto.revision, deleted = true, already = local != null && local.revision == dto.revision)

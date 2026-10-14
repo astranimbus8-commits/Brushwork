@@ -8,7 +8,9 @@ import org.robolectric.annotation.Config
 /**
  * v1.9 A8 (R16; I27): the gallery's no-folder notice, the folder picker, the restore offer and the
  * restore list on the 392 dp phone, at font scale 1 and at each of [Qa19Ui.FONT_SCALES]
- * ([Qa19Backup.chooseAndRestore]), and "Later" putting the notice off ([Qa19Backup.later]).
+ * ([Qa19Backup.chooseAndRestore]), "Later" putting the notice off ([Qa19Backup.later]), and the
+ * other ways in: the empty gallery ([Qa19Backup.emptyGalleryRestore]), the editor Settings'
+ * Backup section ([Qa19Backup.settings]) and the gallery's ⋮ menu ([Qa19Backup.menu]).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.backup392sandbox"])
@@ -20,5 +22,12 @@ class Qa19BackupUiTest {
             Qa19Backup.chooseAndRestore(h, scale, 392f)
         }
         h.section("Later puts the notice off") { Qa19Backup.later(h, 392f) }
+        for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) h.section("the empty gallery's restore at font scale $scale") {
+            Qa19Backup.emptyGalleryRestore(h, scale, 392f)
+        }
+        for (scale in listOf(1f) + Qa19Ui.FONT_SCALES) h.section("the Settings' Backup section at font scale $scale") {
+            Qa19Backup.settings(h, scale, 392f)
+        }
+        h.section("the gallery's menu") { Qa19Backup.menu(h, 392f) }
     }
 }

@@ -132,6 +132,19 @@ internal class BackupMirror(
         tree.child(deleted, id)?.let { tree.delete(deleted, it) }
     }
 
+    /**
+     * The artwork [id] is in the gallery again (restored from `deleted/` with its id): its
+     * `deleted/<id>/` folder moves back to `<id>/` when the root has none, so [mirror] copies only
+     * what changed; else it is deleted (the root's copy is the one [mirror] keeps). Without this the
+     * folder would stay in `deleted/` for good: the purge only knows the artworks still deleted.
+     */
+    fun reviveDeleted(id: String) {
+        if (!ProjectFormat.isValidId(id)) return
+        val deleted = tree.dir(root, BackupLayout.DELETED, create = false) ?: return
+        val doc = tree.child(deleted, id) ?: return
+        if (doc.isDir && tree.child(root, id) == null) tree.move(doc, deleted, root) else tree.delete(deleted, doc)
+    }
+
     /** The artwork folders the root holds (by id), for the catch-up. */
     fun artworkFolders(): Set<String> =
         tree.list(root).values.filter { it.isDir && it.name !in BackupLayout.RESERVED && ProjectFormat.isValidId(it.name) }.mapTo(HashSet()) { it.name }

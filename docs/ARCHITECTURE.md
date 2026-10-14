@@ -1143,7 +1143,9 @@ switch.
   `FLAG_SUPPORTS_RENAME` instead gets `.new` written, `project.json` rewritten "wt", and `.new`
   deleted. Stale revisions and a leftover `.new` go.
 - A deleted artwork moves to `deleted/<id>/`. It is purged after 30 days, and oldest first while
-  the folder's volume has less than 500 MB free.
+  the folder's volume has less than 500 MB free. Restored with its id, it moves back
+  (`BackupMirror.reviveDeleted`), so no data file is copied again and nothing stays in
+  `deleted/` that the purge no longer knows. The restore list shows each id once.
 - `BackupIndex` writes `brushwork-backup.json`, format 1. `BackupSettings` writes `settings.json`,
   format 1: the settings, brush edits and palettes (their three preference files), plus the
   imported fonts' list (the files go under `fonts/`). It leaves out UI state, filter recents and
@@ -1214,7 +1216,9 @@ replaces on rename, can lack rename support or fail the next rename, and reports
 again.
 
 The UI classes are `qa19/Qa19NewCanvasUiTest` and `Qa19NewCanvasNarrowUiTest`, and
-`Qa19BackupUiTest` and `Qa19BackupNarrowUiTest` (392 and 360 dp, font scales to 2). The compat
+`Qa19BackupUiTest` and `Qa19BackupNarrowUiTest` (392 and 360 dp, font scales to 2: the notice,
+the offer and the list, "Later", the empty gallery's restore, the editor Settings' Backup section
+and the gallery's ⋮ menu). The compat
 rows 09, 11, 15 and 16 of `qa19/Qa19CompatBackFromV18RobolectricTest` read A8's fixtures in
 `test/resources/qa19/compat/` with v1.8's readers.
 
