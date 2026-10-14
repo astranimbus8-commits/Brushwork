@@ -18,7 +18,7 @@ object Breadcrumbs {
      * process's summary when it changed: `ExitReasons.publishSummary`).
      */
     @Volatile
-    var version = 0
+    var added = 0
         private set
 
     /** Thread-safe ring. Never personal data: tool ids, sizes, counts. */
@@ -27,7 +27,7 @@ object Breadcrumbs {
             ring[next] = event
             next = (next + 1) % SIZE
             if (count < SIZE) count++
-            version++
+            added++
         }
     }
 

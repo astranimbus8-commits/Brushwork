@@ -117,7 +117,7 @@ internal class FreezeWatchdog(
             if (!ticking) return
             try {
                 if (!Debug.isDebuggerConnected()) dog.tick() else dog.reset()
-                val v = Breadcrumbs.version
+                val v = Breadcrumbs.added
                 if (v != crumbs) {
                     crumbs = v
                     CrashLog.background { ExitReasons.publishSummary(app) }
