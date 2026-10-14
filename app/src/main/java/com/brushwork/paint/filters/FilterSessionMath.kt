@@ -138,6 +138,42 @@ object FilterSessionMath {
     /** True when every pixel of [buf] is fully transparent. */
     fun isFullyTransparent(buf: PixelBuffer): Boolean = buf.pixels.all { (it ushr 24) == 0 }
 
+    // ------------------------------------------------------------------ v1.9 values (R8)
+
+    /**
+     * v1.9 (R8): whether two parameter values are the same: a point ([FloatArray]) and fringes
+     * ([IntArray]) by content, numbers by value (a slider's 20f equals a typed 20), lists and
+     * the rest by `==`. A session's steps compare values with it, never by reference.
+     */
+    fun sameValue(a: Any?, b: Any?): Boolean = when {
+        a === b -> true
+        a == null || b == null -> false
+        a is FloatArray && b is FloatArray -> a.contentEquals(b)
+        a is IntArray && b is IntArray -> a.contentEquals(b)
+        a is Number && b is Number -> a.toDouble() == b.toDouble()
+        else -> a == b
+    }
+
+    /** Whether [a] and [b] hold the same value ([sameValue]) for every key either holds. */
+    fun sameValues(a: FilterValues, b: FilterValues): Boolean {
+        if (a === b) return true
+        val am = a.asMap()
+        val bm = b.asMap()
+        for ((key, value) in am) if (!sameValue(value, bm[key])) return false
+        for (key in bm.keys) if (key !in am) return false
+        return true
+    }
+
+    /**
+     * The first of [params] whose value differs between [a] and [b], skipping the one keyed
+     * [except]; null when they agree on all of them.
+     */
+    fun firstDifference(params: List<FilterParam>, a: FilterValues, b: FilterValues, except: String? = null): FilterParam? {
+        if (a === b) return null
+        for (p in params) if (p.key != except && !sameValue(a.raw(p.key), b.raw(p.key))) return p
+        return null
+    }
+
     private fun clampRegion(r: PixelRect, w: Int, h: Int): PixelRect? {
         val c = PixelRect(max(0, r.left), max(0, r.top), min(w, r.right), min(h, r.bottom))
         return if (c.isEmpty) null else c
