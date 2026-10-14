@@ -33,6 +33,7 @@ import com.brushwork.paint.masks.MaskComponent
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.masks.MaskGeometry
 import com.brushwork.paint.masks.MaskMode
+import com.brushwork.paint.masks.MaskRefine
 import com.brushwork.paint.masks.MaskSpec
 import com.brushwork.paint.masks.MaskSpecRenderer
 import com.brushwork.paint.masks.MaskSpecs
@@ -152,6 +153,47 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     internal val preview = MaskPreview(controller)
     private val tint = MaskTint()
     private var cache: MaskBrushCache? = null
+
+    /**
+     * v1.9 A6 (R13): a released edit rendering at full resolution in bands (null: none). It lands
+     * before this tool does anything else with a mask (a finger, a sheet, the strip, leaving), and
+     * before any step or undo ([MaskRefine] is a deferred step). Internal: tests watch it.
+     */
+    internal var refine: MaskRefine? = null
+        private set
+
+    /** Lands a pending [refine] now (the bands still missing are rendered first). */
+    private fun landRefine() {
+        refine?.land()
+    }
+
+    /**
+     * v1.9 A6 (R13): records [s] as [layer]'s spec (one step [label], from [base]) through a
+     * [MaskRefine] when that pays: the live policy, the preview showing [layer], and the
+     * full-resolution render of the change estimated above [refineMinMillis]. The preview shows
+     * [s] until it lands. False: the caller records it at once, as v1.8 did.
+     */
+    private fun refineRelease(layer: Layer, base: MaskSpec, s: MaskSpec, label: String): Boolean {
+        if (controller.liveAdjust.policy != LiveAdjust.Policy.LIVE || refine != null) return false
+        if (!preview.isActive || preview.layer !== layer || s == base) return false
+        if (layer.mask == null || layer.maskSpec == null || layer.maskSpec != base) return false
+        val d = controller.doc
+        if (d.indexOf(layer) < 0 || d.effectiveLocked(layer) || !d.effectiveVisible(layer)) return false
+        val region = MaskSpecs.changedRegion(base, s, d.width, d.height) ?: return false
+        if (!region.intersect(0, 0, d.width, d.height)) return false
+        if (MaskSpecs.estimateMillis(s, region) <= refineMinMillis) return false
+        // The release's own position (moves still waiting for a frame were dropped).
+        preview.update(s)
+        val r = MaskRefine(controller, layer, base, s, label, region, brushSource()) { done ->
+            if (refine === done) refine = null
+            if (preview.shown === done.after) preview.end()
+            revision++
+            flashOverlay()
+        }
+        refine = r
+        r.start()
+        return true
+    }
 
     // ------------------------------------------------------------------ v1.9 A6 (R13): drags once per frame, at a low scale
 
@@ -275,6 +317,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
 
     private fun specOf(l: Layer?): MaskSpec? = when {
         l == null -> null
+        // v1.9 A6 (R13): a released edit still refining is the layer's spec already.
+        refine?.takeIf { it.isPending && it.layer === l } != null -> refine!!.after
         l.mask == null -> MaskSpec()
         l.maskSpec != null -> l.maskSpec
         replaceConfirmedFor === l -> MaskSpec()
@@ -398,6 +442,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
      * [moved]: a brush component moved by an affine map since the live edit began.
      */
     fun previewSpec(s: MaskSpec, moved: Pair<Long, MaskGeometry.Affine>? = null) {
+        landRefine()
         val base = spec ?: return
         val layer = editLayer ?: return
         if (!preview.isActive) preview.begin(layer, base, cache)
@@ -408,8 +453,17 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
 
     /** Ends a live edit: [s] becomes the edited layer's spec as one step [label] (nothing when unchanged). */
     fun commitSpec(s: MaskSpec, label: String): Boolean {
+        landRefine()
         val base = spec
         val layer = editLayer
+        // v1.9 A6 (R13): a large edit released under the live policy renders in bands.
+        if (layer != null && base != null && refineRelease(layer, base, s, label)) {
+            liveSpec = null
+            hintIfMaskOff(layer)
+            revision++
+            flashOverlay()
+            return true
+        }
         preview.end()
         liveSpec = null
         if (layer == null || base == null) return false
@@ -438,6 +492,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
 
     /** Throws a live edit away. */
     fun cancelSpecPreview() {
+        // A released edit still refining is not a live edit: it is recorded.
+        landRefine()
         if (liveSpec == null && !preview.isActive) return
         preview.end()
         liveSpec = null
@@ -512,6 +568,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         var lastDab: RectF? = null
         val touched = Rect()
         var spec: MaskSpec = base
+        /** v1.9 A6 (R13): the live stroke's coverage, each dab applied once (null: v1.8's way). */
+        var tiles: MaskBrushRaster.StrokeTiles? = null
     }
 
     private class FloatList {
@@ -542,6 +600,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
 
     override fun onDown(p: ToolPoint) {
         if (gesture != null) onCancel()
+        // v1.9 A6 (R13): the last release, still refining, is recorded before the finger acts.
+        landRefine()
         // A move typed or slid in the X / Y strip that wasn't ended is recorded before the finger
         // does anything else (its preview would otherwise be replaced and lost).
         endStripEdit()
@@ -740,7 +800,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
                     return
                 }
                 g.spec = MaskGeometry.added(g.base, created(g.kind, g.start, pos, g.compId))
-                commitCreated(g.layer, g.spec, g.compId, if (g.kind == Kind.LINEAR) "Mask: linear" else "Mask: radial")
+                commitCreated(g.layer, g.base, g.spec, g.compId, if (g.kind == Kind.LINEAR) "Mask: linear" else "Mask: radial")
                 armed = null
             }
             is Drag -> {
@@ -807,7 +867,16 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
      * A created component becomes real: a new adjustment layer with it (one step), or the edited
      * layer's spec. The component is selected and the Adjust chip pulses for a new layer.
      */
-    private fun commitCreated(layer: Layer?, newSpec: MaskSpec, compId: Long, label: String) {
+    private fun commitCreated(layer: Layer?, base: MaskSpec, newSpec: MaskSpec, compId: Long, label: String) {
+        // v1.9 A6 (R13): a large edit of an existing mask released under the live policy renders in bands.
+        if (layer != null && refineRelease(layer, base, newSpec, label)) {
+            liveSpec = null
+            selectedId = compId
+            hintIfMaskOff(layer)
+            revision++
+            flashOverlay()
+            return
+        }
         preview.end()
         liveSpec = null
         if (layer == null) {
@@ -831,6 +900,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     // ------------------------------------------------------------------ brush strokes
 
     private fun startPaint(layer: Layer?, base: MaskSpec, pos: Vec2, pressure: Float) {
+        landRefine()
         val preset = controller.maskBrush
         val sel = selected as? BrushMask
         val baseComp = if (armed == Kind.BRUSH && sel == null) null else sel
@@ -847,6 +917,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         if (local) {
             if (baseComp != null && cache?.serves(baseComp) != true) ensureCache()?.full(baseComp)
             installPaintOverride(layer)
+            // v1.9 A6 (R13): under the live policy each new dab is applied once (the same bytes).
+            if (coalesced) g.tiles = newStrokeTiles(g)
         } else {
             // An adjustment layer without a mask previews its future mask too (the effect shows
             // only where the stroke paints, as it will after the stroke).
@@ -867,49 +939,86 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         val n = g.xs.size
         if (n > 0 && g.xs.data[n - 1] == pos.x && g.ys.data[n - 1] == pos.y) return false
         g.xs.add(pos.x); g.ys.add(pos.y); g.ps.add(pressure)
+        // Past its tile cap the stroke goes on v1.8's way (the dabs so far are in the samples).
+        g.tiles?.let { if (!it.add(pos.x, pos.y)) g.tiles = null }
         return true
     }
+
+    /**
+     * v1.9 A6 (R13): the coverage of [g]'s part as the stroke paints into it, from the part's
+     * coverage before the stroke (the tool's cache, else rasterized where a dab first reaches).
+     */
+    private fun newStrokeTiles(g: Paint): MaskBrushRaster.StrokeTiles {
+        val before = g.baseComp
+        val trail = MaskBrushRaster.DabTrail(g.size, g.hardness, g.flow, g.erase)
+        return MaskBrushRaster.StrokeTiles(controller.doc.width, controller.doc.height, trail, { l, t, w, h ->
+            before?.let { bc ->
+                val grid = SampleGrid.pixels(l, t, w, h)
+                brushSource()?.coverage(bc, grid) ?: MaskBrushRaster.rasterize(bc.strokes, grid)
+            }
+        }, strokeTileCap)
+    }
+
+    /** v1.9 A6 (R13): tiles of the stroke being painted (-1: it paints v1.8's way, or none paints); tests read it. */
+    internal val strokeTiles: Int get() = (gesture as? Paint)?.tiles?.tileCount ?: -1
 
     /** Shows the stroke with every sample added so far (the new dabs' area). */
     private fun paintFrame(g: Paint) {
         val stroke = strokeOf(g)
         val comp = g.newComp.copy(strokes = (g.baseComp?.strokes ?: emptyList()) + stroke)
         g.spec = if (g.baseComp == null) g.base.copy(components = g.base.components + comp, nextId = g.compId + 1) else MaskGeometry.replaced(g.base, g.compId, comp)
+        val tiles = g.tiles
+        if (tiles != null) {
+            // v1.9 A6 (R13): the tiles hold every dab so far (each applied once): the new dabs'
+            // box is rendered from them; the trail's dabs are the stroke's (MaskBrushRaster.dabsOf).
+            val t = tiles.trail
+            val n = t.withEnd() // first: it may grow the trail's arrays
+            val region = newDabsRegion(g, t.x, t.y, n, t.radius) ?: return
+            renderLive(g, region) { grid -> tiles.coverage(grid) }
+            liveSpec = g.spec
+            return
+        }
         val dabs = MaskBrushRaster.dabsOf(stroke)
         if (!g.live) {
             // Only the samples under the new dabs change from one frame to the next (each stroke
             // is accumulated dab by dab, in order): the preview re-renders just there. The first
             // frame adds the part itself, which can change the whole mask (Intersect, inverted).
             val first = g.renderedDabs == 0
-            val region = newDabsRegion(g, dabs)
+            val region = newDabsRegion(g, dabs.x, dabs.y, dabs.count, dabs.radius)
             liveSpec = g.spec
             preview.update(g.spec, region = if (first) null else region ?: Rect())
             flashOverlay()
             return
         }
-        val region = newDabsRegion(g, dabs) ?: return
-        renderLive(g, stroke, dabs, region)
+        val region = newDabsRegion(g, dabs.x, dabs.y, dabs.count, dabs.radius) ?: return
+        val base = brushSource()
+        renderLive(g, region) { grid ->
+            val prior = g.baseComp?.let { bc -> base?.coverage(bc, grid) ?: MaskBrushRaster.rasterize(bc.strokes, grid) } ?: ByteArray(grid.size)
+            MaskBrushRaster.apply(listOf(dabs), grid, prior)
+            prior
+        }
         liveSpec = g.spec
     }
 
     /**
-     * The document area (clamped to the document; null = none) that the dabs added to [dabs]
-     * since the last frame can change — plus the previous last dab, which may have been an end
-     * dab that moved on — and remembers what was rendered.
+     * The document area (clamped to the document; null = none) that the stroke's dabs added since
+     * the last frame can change — plus the previous last dab, which may have been an end dab that
+     * moved on — and remembers what was rendered. The stroke's dabs so far: [count] centres in
+     * [xs] / [ys], of [radius].
      */
-    private fun newDabsRegion(g: Paint, dabs: MaskBrushRaster.Dabs): Rect? {
-        if (dabs.count == 0) return null
+    private fun newDabsRegion(g: Paint, xs: FloatArray, ys: FloatArray, count: Int, radius: Float): Rect? {
+        if (count == 0) return null
         val from = max(0, g.renderedDabs - 1)
         var l = Float.POSITIVE_INFINITY; var tp = Float.POSITIVE_INFINITY; var r = Float.NEGATIVE_INFINITY; var b = Float.NEGATIVE_INFINITY
-        for (k in from until dabs.count) {
-            l = min(l, dabs.x[k]); r = max(r, dabs.x[k]); tp = min(tp, dabs.y[k]); b = max(b, dabs.y[k])
+        for (k in from until count) {
+            l = min(l, xs[k]); r = max(r, xs[k]); tp = min(tp, ys[k]); b = max(b, ys[k])
         }
-        val rad = dabs.radius + 1f
+        val rad = radius + 1f
         val box = RectF(l - rad, tp - rad, r + rad, b + rad)
         g.lastDab?.let { box.union(it) }
-        val last = dabs.count - 1
-        g.lastDab = RectF(dabs.x[last] - rad, dabs.y[last] - rad, dabs.x[last] + rad, dabs.y[last] + rad)
-        g.renderedDabs = dabs.count
+        val last = count - 1
+        g.lastDab = RectF(xs[last] - rad, ys[last] - rad, xs[last] + rad, ys[last] + rad)
+        g.renderedDabs = count
         val region = Rect(floor(box.left).toInt(), floor(box.top).toInt(), ceil(box.right).toInt(), ceil(box.bottom).toInt())
         return region.takeIf { it.intersect(0, 0, controller.doc.width, controller.doc.height) }
     }
@@ -917,21 +1026,16 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     private fun strokeOf(g: Paint): MaskStroke =
         MaskStroke(g.erase, g.size, g.hardness, g.flow, PackedPoints(g.xs.toArray(), g.ys.toArray(), g.ps.toArray()))
 
-    /** Renders the edited spec (with the stroke so far) into the mask within [region]. */
-    private fun renderLive(g: Paint, stroke: MaskStroke, dabs: MaskBrushRaster.Dabs, region: Rect) {
+    /**
+     * Renders the edited spec (with the stroke so far) into the mask within [region]; [ours]: the
+     * coverage of the part being painted on a grid (the other parts come from the tool's cache).
+     */
+    private fun renderLive(g: Paint, region: Rect, ours: (SampleGrid) -> ByteArray?) {
         val layer = g.layer ?: return
         val mask = layer.mask ?: return
         val rec = g.rec ?: return
         val base = brushSource()
-        val source = BrushSource { comp, grid ->
-            if (comp.id == g.compId) {
-                val prior = g.baseComp?.let { bc -> base?.coverage(bc, grid) ?: MaskBrushRaster.rasterize(bc.strokes, grid) } ?: ByteArray(grid.size)
-                MaskBrushRaster.apply(listOf(dabs), grid, prior)
-                prior
-            } else {
-                base?.coverage(comp, grid)
-            }
-        }
+        val source = BrushSource { comp, grid -> if (comp.id == g.compId) ours(grid) else base?.coverage(comp, grid) }
         val w = region.width(); val h = region.height()
         if (liveBuffer.size < w * h) liveBuffer = IntArray(w * h)
         val px = liveBuffer
@@ -955,7 +1059,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
         }
         if (armed == Kind.BRUSH) armed = null
         if (!g.live) {
-            commitCreated(g.layer, g.spec, g.compId, label)
+            commitCreated(g.layer, g.base, g.spec, g.compId, label)
             return
         }
         val layer = g.layer ?: return
@@ -1020,6 +1124,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     private var pinch: Pinch? = null
 
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        landRefine()
         val c = selected ?: return false
         val layer = editLayer ?: return false
         if (spec == null) return false
@@ -1163,6 +1268,8 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     }
 
     override fun onDeactivate() {
+        // v1.9 A6 (R13): a release still refining is recorded on its layer first.
+        landRefine()
         onCancel()
         pinch?.let { pinch = null; preview.end(); liveSpec = null }
         showReadout(null)
@@ -1185,6 +1292,7 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
     }
 
     override fun onDispose() {
+        landRefine()
         endDrag()
         preview.release()
         tint.release()
@@ -1268,5 +1376,17 @@ class MaskTool(controller: EditorController) : Tool(controller), PositionedTool,
          */
         fun interactionScaleFor(zoom: Float, w: Int, h: Int): Float =
             min(MaskPreview.previewScale(w, h), max(LiveAdjust.MIN_SCALE, LiveAdjust.proxyScaleFor(zoom)))
+
+        /**
+         * v1.9 A6 (R13): above this estimated full-resolution time (ms, `MaskSpecs.estimateMillis`)
+         * a released edit renders in bands ([MaskRefine]); below it the release renders at once.
+         */
+        const val REFINE_MIN_MS = 24.0
+
+        /** [REFINE_MIN_MS]; tests lower it to refine their small documents. */
+        var refineMinMillis = REFINE_MIN_MS
+
+        /** Most tiles of a live stroke's [MaskBrushRaster.StrokeTiles]; tests lower it to reach v1.8's way. */
+        var strokeTileCap = MaskBrushRaster.MAX_TILES
     }
 }
