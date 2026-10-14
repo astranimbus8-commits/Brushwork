@@ -1,6 +1,8 @@
 package com.brushwork.paint.qa19
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.net.Uri
 import com.brushwork.paint.AppSettings
 import com.brushwork.paint.UiPrefs
 import com.brushwork.paint.compat18.CurveSettingsV18
@@ -16,10 +18,20 @@ import com.brushwork.paint.compat18.VectorCodecV18
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.CrashReport
 import com.brushwork.paint.diagnostics.ReportText
+import com.brushwork.paint.exchange.VectorFormat
+import com.brushwork.paint.exchange.export.ExportOptions
+import com.brushwork.paint.exchange.export.ExportSceneBuilder
+import com.brushwork.paint.exchange.export.Payload
+import com.brushwork.paint.exchange.export.TextSource
 import com.brushwork.paint.model.Document
+import com.brushwork.paint.smoke.Smoke
+import com.brushwork.paint.storage.CanvasStart
+import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeSettings
+import com.brushwork.paint.v19.a8.BackupKit
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -175,7 +187,7 @@ class Qa19CompatBackFromV18RobolectricTest {
     // Row 8, v1.8's wrap re-flow (TextWrapReflow): not reachable, no section (a wrapping or
     // framed text is alone in its layer, I24, checked by MultiTextLayerRobolectricTest).
 
-    @Ignore("5.2 row 9, ProjectFileDto.paper and BrushworkPayload.paper (NEVER): owner A8")
+    /** 5.2 row 9, ProjectFileDto.paper and BrushworkPayload.paper (NEVER): owner A8, fixture by [writePaper]. */
     @Test
     fun row09Paper() {
         val raw = text("paper/project.json")
@@ -185,6 +197,9 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertTrue(String(payload, Charsets.UTF_8).contains("\"paper\""))
         assertFalse("v1.8's payload drops the paper", String(PayloadV18.toJson(PayloadV18.fromJson(payload)), Charsets.UTF_8).contains("\"paper\""))
         // A8: v1.8 opens one transparent layer over the checker; its PNG is transparent, its JPEG on white.
+        val dto = v18Reads("paper", listOf("paper"))
+        assertEquals("one empty layer", listOf("Layer 1"), dto.layers.map { it.name })
+        assertEquals("v1.8's payload keeps the size", 64, PayloadV18.fromJson(payload).width)
     }
 
     @Ignore("5.2 row 10 (shapes joined into a vector layer, S1), existing kinds only: owner A9")
@@ -236,12 +251,18 @@ class Qa19CompatBackFromV18RobolectricTest {
         // A9: fully read and fully editable in v1.8.
     }
 
-    @Ignore("5.2 row 11, one-layer new canvases and \"Picture\" alone (existing format): owner A8")
+    /** 5.2 row 11, one-layer new canvases and "Picture" alone (existing format): owner A8, fixture by [writeNewCanvases]. */
     @Test
     fun row11OneLayerNewCanvases() {
         val dto = v18Reads("new-canvas")
         assertEquals("one layer", 1, dto.layers.size)
         // A8: and the imported picture's project ("Picture" alone): fully read, fully editable.
+        for ((row, layer) in listOf("new-canvas" to "Layer 1", "new-canvas/transparent" to "Layer 1", "new-canvas/picture" to "Picture")) {
+            val d = v18Reads(row)
+            assertEquals("$row: one layer, as v1.8 reads it", listOf(layer), d.layers.map { it.name })
+            assertEquals("$row: active", 0, d.activeLayerIndex)
+            assertFalse("$row: no paper", text("$row/project.json").contains("\"paper\""))
+        }
     }
 
     @Ignore("5.2 row 12 (text arrange order), existing fields: owner A3")
@@ -323,17 +344,27 @@ class Qa19CompatBackFromV18RobolectricTest {
         CrashLog.deleteAll(app)
     }
 
-    @Ignore("5.2 row 15 (backup-state.json), app files outside the projects: owner A8")
+    /** 5.2 row 15 (backup-state.json), app files outside the projects: owner A8, fixture by [writeBackupState]. */
     @Test
     fun row15BackupState() {
         assertTrue("written outside any project", text("backup-state/files.txt").lines().none { it.startsWith("projects/") })
+        // A8: what choosing a folder writes into the app's data folder: the state alone, under
+        // noBackupFilesDir, which v1.8 never reads.
+        val files = text("backup-state/files.txt").lines().filter { it.isNotBlank() }
+        assertEquals(listOf("no_backup/backup-state.json"), files)
     }
 
-    @Ignore("5.2 row 16, the backup folder (outside the app): owner A8")
+    /** 5.2 row 16, the backup folder (outside the app): owner A8, fixture by [writeBackupFolder]. */
     @Test
     fun row16BackupFolder() {
         assertTrue("format 1", text("backup-folder/brushwork-backup.json").contains("\"format\":1"))
         // A8: v1.8 cannot restore from it and leaves it untouched (it never opens the folder).
+        assertTrue("settings.json format 1", text("backup-folder/settings.json").contains("\"format\":1"))
+        val files = text("backup-folder/files.txt").lines().filter { it.isNotBlank() }
+        assertTrue("the index and the settings: $files", files.containsAll(listOf("brushwork-backup.json", "settings.json")))
+        assertTrue("a mirrored project: $files", files.any { it.endsWith("/project.json") })
+        // The mirrored project.json is the project's own: v1.8 reads it as it reads the projects folder.
+        assertEquals(1, v18Reads("backup-folder").layers.size)
     }
 
     // ------------------------------------------------------------------ the generator
@@ -346,7 +377,84 @@ class Qa19CompatBackFromV18RobolectricTest {
     private val generators: Map<String, (File) -> Unit> = mapOf(
         "crash" to ::writeCrashReports,
         "prefs" to ::writePrefs,
+        "paper" to ::writePaper,
+        "new-canvas" to ::writeNewCanvases,
+        "backup-state" to ::writeBackupState,
+        "backup-folder" to ::writeBackupFolder,
     )
+
+    /** `project.json` of the gallery's project [id], copied into [dir]. */
+    private fun copyProjectJson(id: String, dir: File) {
+        dir.mkdirs()
+        File(app.filesDir, "projects/$id/project.json").copyTo(File(dir, "project.json"), overwrite = true)
+    }
+
+    /**
+     * Row 9 (A8): a new 64 x 48 canvas on paper (R15), its `project.json`, and the Brushwork
+     * payload of its SVG export as `payload.json`.
+     */
+    private fun writePaper(dir: File) {
+        val repo = ProjectRepository(app)
+        val id = runBlocking { repo.create(NewCanvasSpec("Paper", 64, 48, 300f, null, CanvasStart.PAPER)) }
+        copyProjectJson(id, dir)
+        val doc = runBlocking { repo.load(id) }
+        val c = Smoke.controller(app, doc)
+        val payload = runBlocking {
+            ExportSceneBuilder(c, ExportOptions(VectorFormat.SVG), TextSource.Default, Dispatchers.Unconfined, Dispatchers.Unconfined).build().payload
+        }
+        File(dir, "payload.json").writeBytes(Payload.toJson(requireNotNull(payload) { "the SVG export's payload" }))
+    }
+
+    /**
+     * Row 11 (A8): the `project.json` of a new white canvas (here), of a transparent one
+     * (`transparent/`) and of a project made from a picture (`picture/`), one layer each.
+     */
+    private fun writeNewCanvases(dir: File) {
+        val repo = ProjectRepository(app)
+        val white = runBlocking { repo.create(NewCanvasSpec("White", 64, 48, 300f, 0xFFFFFFFF.toInt(), CanvasStart.FILL)) }
+        copyProjectJson(white, dir)
+        val clear = runBlocking { repo.create(NewCanvasSpec("Transparent", 64, 48, 300f, null, CanvasStart.TRANSPARENT)) }
+        copyProjectJson(clear, File(dir, "transparent"))
+        val png = File(app.cacheDir, "qa19-compat-picture.png")
+        val b = Bitmap.createBitmap(64, 48, Bitmap.Config.ARGB_8888).apply { eraseColor(0xFF2050C0.toInt()) }
+        png.outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val picture = runBlocking { repo.createFromImage(Uri.fromFile(png)) }
+        copyProjectJson(picture, File(dir, "picture"))
+        png.delete()
+    }
+
+    /**
+     * Row 15 (A8): what choosing a backup folder writes into the app's data folder, as
+     * `files.txt` (paths relative to it; the stand-in storage provider's folder left out).
+     */
+    private fun writeBackupState(dir: File) {
+        BackupKit.freshInstall()
+        BackupKit.newArtwork("Backed up", BackupKit.BLUE)
+        BackupKit.idle()
+        val fake = BackupKit.storage.relativeTo(app.dataDir).invariantSeparatorsPath + "/"
+        val before = snapshot(app.dataDir)
+        BackupKit.choose()
+        BackupKit.idle()
+        val after = snapshot(app.dataDir)
+        val changed = after.filter { (path, bytes) -> !path.startsWith(fake) && before[path]?.contentEquals(bytes) != true }.keys.sorted()
+        File(dir, "files.txt").writeText(changed.joinToString("\n", postfix = "\n"))
+    }
+
+    /**
+     * Row 16 (A8): a backup folder with one artwork: its index, `settings.json`, the mirrored
+     * `project.json` and `files.txt` (every file of the folder, relative to it).
+     */
+    private fun writeBackupFolder(dir: File) {
+        BackupKit.freshInstall()
+        val id = BackupKit.newArtwork("Backed up", BackupKit.BLUE)
+        BackupKit.choose()
+        BackupKit.idle()
+        val root = BackupKit.rootDir()
+        for (f in listOf("brushwork-backup.json", "settings.json")) File(root, f).copyTo(File(dir, f), overwrite = true)
+        File(root, "$id/project.json").copyTo(File(dir, "project.json"), overwrite = true)
+        val files = root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath }.sorted().toList()
+        File(dir, "files.txt").writeText(files.joinToString("\n", postfix = "\n"))
+    }
 
     /**
      * Row 15, crash reports (A7a's `CrashLog`, written by the lead at A7a's merge): one fatal

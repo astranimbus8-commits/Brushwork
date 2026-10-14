@@ -1094,6 +1094,130 @@ policy for errors no job caught, and the two tools' jobs guarded and moved off t
 
 <!-- v19-A8 -->
 
+R15 (one layer, the paper) and R16 (the artworks outlive an uninstall). Steps 1-8, 10 and 11 are
+built; step 9 (the zip archive: Save all / Open file) is cut, because the backup folder already
+keeps the artworks across an uninstall. `CanvasLabels19.SAVE_ALL` and `OPEN_FILE` stay unused.
+
+**New canvas (R15).** The New canvas dialog's Background row (`ui/gallery/NewCanvasBackground.kt`)
+offers White, Transparent, a colour and Paper, in that order. `AppSettings.newCanvasBackground`
+remembers the choice (not the custom colour), and a caption sits under the row. Each choice maps
+to a `CanvasStart`, and `CanvasCreate.seed` makes one "Layer 1", active:
+- `FILL`: filled with `NewCanvasSpec.background`;
+- `TRANSPARENT`: empty;
+- `PAPER`: empty over `PaperSpec()` (white).
+
+A null `start` keeps the v1.8 two-layer seed. Test fixtures and the SVG/PDF import use it, and
+`storage/CanvasCreateV18Test` pins it. `seedFromImage` ("New from photo") gives the "Picture"
+layer alone, active, with no paper.
+
+**The paper (I21).** `PaperBackdrop.draw` is one clipped `drawColor`, with no allocation, so the
+canvas calls it every frame. The sites listed under "Paper and its sites" above are pinned by
+`v19/a8/PaperBackdropSitesTest`: a search of the main sources fails on a new site and on a site
+that is gone. Every flattened raster export and share (gallery and editor; PNG, WEBP, JPEG) is on
+the paper. Layer exports and the payload's layer pictures are the layer's own pixels.
+
+The paper travels in the Brushwork payload of SVG and PDF (`BrushworkPayload.paper`; no `paper`
+key without one, I13). An import that makes a new artwork takes the payload's paper outside the
+import's undo step; an import into an open artwork never changes its paper.
+
+A memory refusal of a flatten or of JPEG's white copy throws `NotEnoughMemoryException(purpose)`
+(`storage/ImageExport.kt`). Its message is `StabilityLabels19.NO_MEMORY_FOR`, and the gallery and
+editor show it.
+
+**Include paper (step 10).** In `ui/exchange/ExportOptionsSheet.kt`, a document on paper shows
+`CanvasLabels19.INCLUDE_PAPER` (`ExportOptions.includePaper`, on by default) in the SVG / PDF
+Background section. While it is on, the paper is the scene's background, and the Transparent /
+White chips are hidden. With it off, those chips decide. A document without paper shows no
+switch.
+
+**Backup folder (R16).** The `storage/backup/` package:
+- `BackupService` (started by `BrushworkApp`) reads `noBackupFilesDir/backup-state.json`
+  (`BackupStateStore`, `BackupStateData`). With no folder the status is `NotSet`; with a lost
+  grant it is `Unavailable`; otherwise a catch-up runs. `ProjectRepository` calls
+  `onSaved(id)` / `onDeleted(id)` after each save, create, rename, duplicate and delete, outside
+  the project's lock. They only queue the id, conflated per artwork. One low-priority worker
+  thread mirrors the queue, then rewrites the index and, when changed, the settings.
+- `BackupMirror` mirrors one artwork into `Brushwork backup/<id>/` (layout in `BackupLayout`).
+  Data files are copied once. `project.json` is replaced in the R16 order: create
+  `project.json.new`, write it "wt", delete `project.json`, rename. A provider without
+  `FLAG_SUPPORTS_RENAME` instead gets `.new` written, `project.json` rewritten "wt", and `.new`
+  deleted. Stale revisions and a leftover `.new` go.
+- A deleted artwork moves to `deleted/<id>/`. It is purged after 30 days, and oldest first while
+  the folder's volume has less than 500 MB free.
+- `BackupIndex` writes `brushwork-backup.json`, format 1. `BackupSettings` writes `settings.json`,
+  format 1: the settings, brush edits and palettes (their three preference files), plus the
+  imported fonts' list (the files go under `fonts/`). It leaves out UI state, filter recents and
+  diagnostics.
+- `SafTree` lists each folder with one children query per run and never calls
+  `DocumentFile.findFile`. It writes with "wt", and falls back to "w" on a fresh file for a
+  provider that refuses "wt".
+
+**Restore (R16).** `BackupRestore` accepts the picked folder or its `Brushwork backup` child, even
+when that child is renamed (found by its index). It lists the artworks from the index, or by a
+folder scan when the index is missing or leaves some out. It reads `project.json.new` when
+`project.json` is missing or damaged.
+
+Each artwork is staged in `projects/` under a staging prefix, then checked: every file is copied
+in full (the size the folder lists), and every file `project.json` references is present. Only
+then is it renamed into the gallery. A restore never
+overwrites an artwork (I23): an id the gallery has gets a new id and
+`BackupLabels19.RESTORED_SUFFIX`. Works the gallery holds at the same revision are marked
+`BackupLabels19.ALREADY` and unchecked, and deleted ones sit unchecked in a collapsed section.
+`BackupLabels19.ALSO_SETTINGS` writes the settings back and merges brushes, palettes
+(`PaletteStore.mergeMissing`) and fonts (`FontStore.restoreFonts`) by id, adding only the missing
+ones.
+
+**The UI.** `ui/backup/BackupFlow` holds the folder pick, the restore offer and the restore list.
+The picker opens at `Documents` (`BackupFlow.INITIAL_URI`). The gallery's notice, its ⋮ menu and
+its empty state share the flow, and so does the editor's Settings `BackupSection`. The screen's
+`BackupHost` runs the picker and the dialogs (`RestoreDialogs.kt`).
+
+A storage root, Download or no answer is refused (`CHOOSE_AGAIN`). A folder that already holds a
+backup offers `RESTORE_THEM` / `BACK_UP_HERE` and writes nothing until the user chooses.
+`GalleryNotices.pickNotice` shows one notice, in this order: an unseen crash report, the folder
+unavailable, no folder, then the first backup's progress. The no-folder notice waits for the first
+artwork, and `LATER` hides it for 7 days, kept in the state file.
+
+**Auto Backup.** The manifest names `res/xml/backup_rules.xml` (Android 8 to 11) and
+`data_extraction_rules.xml` (12 and newer, cloud and device transfer). Both are includes only:
+`brushwork_settings.xml`, `brushwork_brushes.xml` and `brushwork_palettes.xml`. Lint's
+`FullBackupContent` check is fatal on an exclude outside the includes. The backup state lies under
+`noBackupFilesDir`, so a folder grant never comes back on a new install.
+`android:hasFragileUserData` makes the uninstall dialog offer to keep the app's data.
+
+**Release guards (step 8).** `app/build.gradle.kts` registers `checkReleaseGuards` before
+`preReleaseBuild`. The `versionCode` is `BW_VERSION_CODE`, the workflow's run number, or 1
+locally. With `BW_RELEASE_GUARD=true`, which the workflow sets for a push or a tag and never for a
+pull request, a release build fails in either case:
+- the release keystore is missing (`BW_KEYSTORE_FILE`); a debug-signed APK does not install over
+  the release, and uninstalling deletes the artworks;
+- the `versionCode` is not above `BW_LAST_VERSION_CODE`.
+
+The workflow looks up `BW_LAST_VERSION_CODE`: the run number of the successful push build of the
+last `vX.Y.Z` release (`gh release list`, `gh run list`; `actions: read`). Without the guard, a
+build only warns. The workflow also uploads R8's `mapping.txt` as the `mapping-<run>` artifact.
+
+**Gallery thumbnails (step 11).** `ui/gallery/ThumbnailCache` holds at most 24 MB
+(`MAX_BYTES`, LRU by bytes). It is registered with `MemoryGovernor` at priority 0 (a display
+cache) as "Gallery thumbnails". MODERATE pressure halves it, and LOW and CRITICAL empty it. A
+dropped thumbnail is decoded again when the gallery shows it.
+
+**Tests.** `v19/a8/`: `NewCanvasStartTest`, `PaperBackdropSitesTest`, `PaperExportTest`,
+`PaperPayloadRoundTripTest`, `IncludePaperSwitchTest` (UI), `RestoreOfferTest`,
+`GalleryNoticePriorityTest`, `BackupMirrorTest`, `BackupDeletedRetentionTest`,
+`RestoreFindsFolderTest`, `RestoreNeverOverwritesTest`, `RestoreRepeatTest`,
+`AutoBackupRulesTest`, `BackupStateNotBackedUpTest`, `ThumbnailCacheGovernorTest`.
+
+`FakeDocumentsProvider` stands in for the phone's storage. It does not truncate on "w", never
+replaces on rename, can lack rename support or fail the next rename, and reports its free space.
+`BackupKit` scripts the user's life with the app: paint, choose a folder, uninstall and install
+again.
+
+The UI classes are `qa19/Qa19NewCanvasUiTest` and `Qa19NewCanvasNarrowUiTest`, and
+`Qa19BackupUiTest` and `Qa19BackupNarrowUiTest` (392 and 360 dp, font scales to 2). The compat
+rows 09, 11, 15 and 16 of `qa19/Qa19CompatBackFromV18RobolectricTest` read A8's fixtures in
+`test/resources/qa19/compat/` with v1.8's readers.
+
 <!-- /v19-A8 -->
 
 ### Erase routing and the cut (A5)
