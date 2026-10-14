@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: write
+  # v1.9 A8 (R16): the release job reads the run number of the last release tag's build.
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -176,8 +178,32 @@ jobs:
             echo "BW_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Release key restored."
           else
-            echo "No KEYSTORE_BASE64 secret: the APK will be signed with a debug key."
+            echo "No KEYSTORE_BASE64 secret: a pull request's APK is signed with a debug key; any other release build is refused."
           fi
+
+      # v1.9 A8 (R16): an APK that does not install over the last release makes the user uninstall
+      # the app, which deletes the artworks. checkReleaseGuards (app/build.gradle.kts) refuses a
+      # release build of a push or a tag without the release keystore, or with a versionCode (the run
+      # number) not above the last release's: the run number of the last vX.Y.Z release tag's build.
+      - name: Find the last release's versionCode
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          last_tag=$(gh release list --exclude-drafts --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$GITHUB_REF_NAME" | sort -V | tail -n 1 || true)
+          if [ -z "$last_tag" ]; then
+            echo "No earlier release."
+            exit 0
+          fi
+          code=$(gh run list --workflow android.yml --branch "$last_tag" --event push --status success --limit 1 \
+            --json number --jq '.[0].number // empty')
+          if [ -z "$code" ]; then
+            echo "::error::No successful build of $last_tag found, so its versionCode is unknown."
+            exit 1
+          fi
+          echo "BW_LAST_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "The last release, $last_tag, has versionCode $code; this build has ${{ github.run_number }}."
 
       - name: Build release APK
         env:
@@ -186,7 +212,15 @@ jobs:
           BW_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           BW_VERSION_CODE: ${{ github.run_number }}
           BW_VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          BW_RELEASE_GUARD: ${{ github.event_name != 'pull_request' }}
         run: ./gradlew --no-daemon assembleRelease
+
+      # v1.9 A8: R8's mapping.txt turns a release crash report's stack back into names.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mapping-${{ github.run_number }}
+          path: app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: error
 
       - name: Rename APK
         run: |
