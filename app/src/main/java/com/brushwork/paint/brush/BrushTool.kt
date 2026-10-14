@@ -13,6 +13,7 @@ import com.brushwork.paint.ColorModeOps
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.assist.SymmetryMaps
 import com.brushwork.paint.core.ColorUtils
+import com.brushwork.paint.engine.EditInvalidation
 import com.brushwork.paint.engine.EditTarget
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.PerfTrace
@@ -514,6 +515,11 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
         private val copyReach: Array<Rect>? = mapping?.let { m -> Array(m.copies) { Rect() } }
         /** Union of all dab bounds, clipped to the document. */
         private val bounds = Rect()
+        /**
+         * v1.9 A6 (P1): the regions the end taper redrew at the lift ([retaper]): the dabs it
+         * shrank no longer reach all of them, yet the screen showed the old dabs there.
+         */
+        private val retapered = ArrayList<Rect>()
         private var style = CoverageStyle(
             mode = when {
                 maskTarget -> PorterDuff.Mode.SRC_OVER
@@ -1127,6 +1133,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             }
             canvas.restore()
             bounds.union(region)
+            retapered += region
             // v1.8 D: a clone stroke's copies show the re-rendered part too.
             markCopies(region)
         }
@@ -1179,6 +1186,7 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 }
                 canvas.restore()
                 bounds.union(region)
+                retapered += region
             }
         }
 
@@ -1253,7 +1261,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                 commitCopies(canvas, r, sel)
                 res.painter.draw(canvas, coverage, r, style, sel?.mask)
             }
-            return controller.commitEdit(rec, undoLabel(kind))
+            // v1.9 A6 (P1): only the touched tiles are redrawn.
+            return controller.commitStrokeEdit(rec, undoLabel(kind))
         }
 
         /** Where the original (`[0]`) and each copy k of a clone stroke land within [commitRect]. */
@@ -1319,6 +1328,20 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
                     controller.invalidateDoc(runRect)
                 }
                 grid.clear()
+                return
+            }
+            if (sourceCopies == null) {
+                // v1.9 A6 (P1): the coverage lies under the dabs and their symmetry copies, so
+                // only their tiles are cleared and redrawn (a row of tiles as one rect), and what
+                // the end taper redrew; not the stroke's whole bounding box.
+                for (r in EditInvalidation.tilesAfterCommit(touchedTiles(bounds), bounds, displayCurrent = false)) {
+                    res.clear(r)
+                    controller.invalidateDoc(r)
+                }
+                for (r in retapered) {
+                    res.clear(r)
+                    controller.invalidateDoc(r)
+                }
                 return
             }
             res.clear(bounds)
@@ -1440,7 +1463,8 @@ class BrushTool(controller: EditorController, override val id: ToolId) : Tool(co
             drain(final = true)
             dirty.setEmpty()
             dropOverride()
-            commitThrough(undoLabel(kind), reached) { controller.commitEdit(rec, undoLabel(kind)) }
+            // v1.9 A6 (P1): only the touched tiles are redrawn.
+            commitThrough(undoLabel(kind), reached) { controller.commitStrokeEdit(rec, undoLabel(kind)) }
         }
 
         override fun cancel() {

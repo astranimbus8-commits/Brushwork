@@ -1162,6 +1162,29 @@ class EditorController(
         label: String,
         extraActions: List<UndoAction> = emptyList(),
         displayCurrent: Boolean = false,
+    ): Boolean = commitEditThen(recorder, label, extraActions) { rect ->
+        EditInvalidation.afterCommit(rect, displayCurrent)?.let { invalidateDoc(it) }
+    }
+
+    /**
+     * v1.9 A6 (P1): [commitEdit] for a brush or eraser lift. Pixels change only in the tiles the
+     * [recorder] snapshotted, so only those tiles' part of the changed rect is redrawn
+     * ([EditInvalidation.tilesAfterCommit]), not its whole bounding box: a long diagonal stroke
+     * on a big canvas no longer redraws every display tile between its ends.
+     */
+    fun commitStrokeEdit(recorder: PixelEditRecorder, label: String, displayCurrent: Boolean = false): Boolean {
+        val tiles = recorder.touchedTileRects()
+        return commitEditThen(recorder, label, emptyList()) { rect ->
+            for (r in EditInvalidation.tilesAfterCommit(tiles, rect, displayCurrent)) invalidateDoc(r)
+        }
+    }
+
+    /** [commitEdit]'s steps; [redraw] gets the changed rect (the union of the touched areas). */
+    private fun commitEditThen(
+        recorder: PixelEditRecorder,
+        label: String,
+        extraActions: List<UndoAction>,
+        redraw: (Rect) -> Unit,
     ): Boolean = editScope {
         if (recorder.isEmpty) return@editScope false
         val rect = Rect(recorder.touched)
@@ -1177,7 +1200,7 @@ class EditorController(
         pushUndo(if (all.size == 1) action else CompositeAction(label, all))
         recorder.layer.markChanged()
         layersVersion++
-        EditInvalidation.afterCommit(rect, displayCurrent)?.let { invalidateDoc(it) }
+        redraw(rect)
         queueEdit(EditEvent(recorder.layer, recorder.target, rect, label))
         true
     }
