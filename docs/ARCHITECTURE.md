@@ -964,6 +964,110 @@ One block per area, in merge order. Each area writes its section only inside its
 
 <!-- v19-A7a -->
 
+R9 ("the app seems to be crashing often"; the user's crash came "while using the magnetic lasso
+and the color selection tool"): a crash log on the phone that the user can copy and share, one
+policy for errors no job caught, and the two tools' jobs guarded and moved off the main thread.
+
+- **Files.** `diagnostics/`: `CrashLog` (the log, the uncaught handler, the "diagnostics"
+  preferences), `ReportText` (the report's text and the privacy rules; pure JVM), `ExitReasons`
+  (`ApplicationExitInfo`), `FreezeWatchdog`, `ErrorReporter` (the scopes' handler), `Breadcrumbs`
+  (F1b). `ui/diagnostics/`: `CrashCard` (the gallery's card, tag `V19Tags.CRASH_CARD`),
+  `DiagnosticsSection` (the settings' section under F3's "Show frame times"), `ReportSharing`
+  (copy, share, "Share all", the rows' times). `engine/RenderScaled.kt`. The tools:
+  `tools/select/magnetic/MagneticLassoTool.kt`, `tools/select/colorrange/ColorSelectTool.kt` and
+  `ColorPreview.kt` (`ColorMasks`). `EditorController` region `v19-A7a savedSelectionWork`.
+- **Reports and caps.** `filesDir/diagnostics/reports/<13-digit millis>-<kind>[-quiet].txt`
+  (kind `crash`, `out_of_memory`, `freeze`, `native`, `anr`, `low_memory_kill`); the id is the
+  file name without `.txt`. At most `CrashLog.MAX_REPORTS` = 20 (the oldest goes) of
+  `CrashLog.MAX_BYTES` = 64 KB each (the last section is cut, ending "[cut: N more lines]"). A
+  handled error is kept at most once a minute per place and class (`REPEAT_MS`). Quiet reports
+  (handled errors, freezes, a low-memory kill in the background, the exits from before the first
+  run with the log) are listed under Diagnostics only; the others put the card on the gallery
+  until it is dismissed (preference "seenAt"; "exitSeenAt" is the newest exit read).
+- **Format** (`ReportText`): "Brushwork crash report", then the fields `Kind`, `Fatal`, `Time`
+  (UTC), `Where`, `App` ("1.9 (19) release"), `Device` (maker, model, Android, ABI), `Memory`
+  (Java heap used of max, native heap; PSS on API 29+), `Canvas` (size, layers, tool: when an
+  editor is open), `Summary` (what the Diagnostics row shows: "Crash: IllegalStateException",
+  "Handled error: X in <where>", "Freeze: 4.2 s"), then "Breadcrumbs, oldest first" (the last
+  32) and "Stack" (the shape of `printStackTrace`, at most 120 frames per throwable and 10
+  throwables; an exit has its trace's main thread or the tombstone's names instead).
+- **Privacy** (`ReportText.scrub`, on every message and `Where`): the open artwork's name becomes
+  `<name>`, a quoted text `<text>`, a path or content id `<path>`, a link `<uri>`, an e-mail
+  `<email>`; one line, at most 300 chars. Only class names, line numbers, sizes, counts and the
+  app's ids stay. Breadcrumbs hold no personal data by contract and are kept as they are. A name
+  in an exception's message without quotes is not recognised unless it is the open artwork's.
+- **Install** (first in `BrushworkApp.onCreate`, after `super`): the handler goes before the default one,
+  writes the fatal report synchronously (about 5 ms, at most 50 ms; a reserve is freed first for
+  an out-of-memory crash) and hands the crash on, so Android still ends the process. Then, on the
+  diagnostics thread ("brushwork-diagnostics", one daemon thread, ended after 2 s idle), the
+  exits are read; the watchdog starts. Under Robolectric only the app is kept (no JVM-wide
+  handler, no watchdog, no exit read). Nothing of it ever throws or blocks the main thread.
+- **Exit reasons** (`ExitReasons`, API 30+, at most 20 ms, off the main thread): the exits after
+  "exitSeenAt", oldest first. `REASON_LOW_MEMORY` (or, where low-memory kills are not reported, a
+  SIGKILL) becomes `LOW_MEMORY_KILL` (quiet in the background), `REASON_ANR` an `ANR` with the
+  trace's main thread, `REASON_CRASH_NATIVE` a `NATIVE` with the tombstone's library and function
+  names (heuristic). `REASON_CRASH` has its report from the handler already. Each exit carries
+  the process's last state summary (the breadcrumbs, `publishSummary`).
+- **Freeze watchdog** (`FreezeWatchdog`): its thread posts a no-op to the main thread every 1 s
+  while an activity is started and no debugger is attached (under 0.1 ms a second); unanswered
+  for 4 s, it takes the main thread's stack once and writes one quiet `FREEZE` report ("Freeze:
+  4.2 s", section "Main thread"). A gap of more than two ticks (the phone slept) starts it over.
+- **Errors no job caught** (`ErrorReporter.handler`, in every scope the app makes:
+  `BrushworkApp.appScope`, `EditorSession.scope`, `FontStore`, every `rememberCoroutineScope`;
+  `UnguardedLaunchGateTest` fails a scope without it, and `GlobalScope` always). Release builds
+  (not debuggable): the error is kept as a quiet report, the open tool's touch is cancelled
+  (`Tool.onCancel`), `StabilityLabels19.ERROR_TOAST` names the tool (outside the editor, the
+  error's class), and the app goes on (`SupervisorJob`: only the failed job ends). Debug builds,
+  tests and a JVM with no app hand it to the thread's uncaught handler, as v1.8 did, so a bug is
+  never hidden. `EditorSession` keeps its open, save and close failures as reports too.
+- **Line numbers in release.** `app/proguard-rules.pro`: `-keepattributes
+  SourceFile,LineNumberTable` and `-renamesourcefileattribute SourceFile`, so a stack reads
+  `at a.b.c(SourceFile:120)`. Keep each release's `app/build/outputs/mapping/release/mapping.txt`;
+  R8's `retrace` with it turns a shared report back into class, method and line names.
+- **The card and the list.** The gallery shows `CrashCard` for the newest report neither seen
+  nor quiet: `CRASH_TITLE`, `CRASH_SAVED` (and `CRASH_OOM` for memory), then Copy, Share and
+  Dismiss, each at least 40 dp tall, on one line at font scale 1. Diagnostics (the editor's
+  settings, under "Show frame times"): "Crash reports (n)", each report's summary with its own
+  "Copy report <time>" and "Share report <time>" (time "13 Oct 14:03"; the seconds, then " (2)",
+  when two would read alike), then "Share all" (one text; past 100 KB a file in
+  `cacheDir/exports/` through the FileProvider) and "Delete all reports". The files are read and
+  written off the main thread.
+- **`RenderScaled`** (`engine/RenderScaled.kt`): what the Magnetic lasso's edge map and Color
+  select's proxy read. `Source.canvas(doc)` and `Source.layer(bitmap)` are taken on the main
+  thread (no pixel read: a private document holding the same layers, its paper and colour mode);
+  `render(source, maxSide = 2048, withPaper)` and `renderAt(source, w, h, withPaper)` run on any
+  thread: 1:1 the flatten; from 1/2 up straight through a scaled canvas (no full-size bitmap);
+  below 1/2 at twice the size, then filtered down, as `renderThumbnail`. `withPaper` (both tools)
+  puts the paper under it, behind a visible adjustment layer as a matte. Its size rounds as
+  `EdgeMap.proxySize`. A layer recycled meanwhile throws a `RuntimeException`: the tools take a
+  new source and try once more. PRINT (3000 x 4000, 3 layers): at most 60 ms on the phone.
+- **Magnetic lasso.** The edge map is rendered on the tool's worker by `renderSource` (a test
+  hook) instead of a full-size flatten on the main thread (PRINT: 12 MB at 1536 x 2048 in place
+  of 48 MB). The map, trace and closing jobs are guarded: a failure is kept as a report and said
+  (`ERROR_TOAST`; out of memory `MagneticLabels18.OUT_OF_MEMORY`), the touch ends, the map goes
+  and is not built again for the same pixels (the next activation tries again), the anchors stay
+  and the outline still closes (a closing that fails selects the outline as drawn).
+- **Color select.** The proxy is rendered off the main thread at `ColorMasks.proxySize` by
+  `renderSource`; `drawOverlay` no longer builds it: a draw that finds the pixels changed keeps
+  drawing the last preview and asks once for a new proxy (`proxyRequest`, part of `idle`), built
+  after the draw. The proxy, preview and commit jobs are guarded the same way. The bands of
+  `ColorMasks` run on the caller and at most three helpers of
+  `Dispatchers.Default.limitedParallelism(4)` (`ColorMasks.WORKERS`; v1.8: the common fork-join
+  pool on every core); a band starts only while the job is not cancelled, the call returns only
+  when no band runs, and a band's error is thrown to the caller.
+- **Saved selections** (region `v19-A7a savedSelectionWork`): a compression that throws never
+  throws at `await` (nor from the undo that lands it): the save is dropped, kept as a report and
+  said (`ERROR_TOAST` with "Save selection" or "Update saved selection").
+- **Not A7a's** (lead requests): excluding `files/diagnostics/` and `shared_prefs/diagnostics.xml`
+  from Auto Backup and from the backup folder (the manifest's backup rules, A8); compat row 15's
+  generator; `LabelsV19` entries for the report kinds (private stand-ins in `ReportText`).
+- **Tests** (`app/src/test/java/com/brushwork/paint/v19/a7a/`): `CrashLogTest`,
+  `ExitInfoReasonTest`, `FreezeWatchdogTest`, `ErrorReporterReleaseTest`,
+  `UnguardedLaunchGateTest`, `CrashCardRobolectricTest`, `DiagnosticsSectionRobolectricTest` (the
+  one UI class: the card at 360 and 392 dp and the list, font scales 1, 1.3 and 2.0),
+  `MagneticLassoGuardTest`, `ColorSelectNoProxyInDrawTest`, `RenderScaledTest`,
+  `SavedSelectionWorkGuardTest`, and the Timing guard `RenderScaledPrintTimingTest`.
+
 <!-- /v19-A7a -->
 
 ### Paper, new canvas and backup (A8)
