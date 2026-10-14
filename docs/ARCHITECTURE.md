@@ -1592,7 +1592,9 @@ exactly as in v1.8 and drops the session's steps; ✕ drops them too.
   (`FilterSessionMath.sameValue(s)`: arrays by content, numbers by value).
 - At the opening state `undoStep()` returns false and the controller cancels the panel, as in v1.8;
   landing there shows "Back at the start: Undo again closes the effect" once. A new step drops the
-  redo steps; Redo while a change is pending records it and redoes nothing.
+  redo steps; Redo while a change is pending records it and redoes nothing. While the apply runs
+  (`isApplying`) `canUndo`, `canRedo` and the labels are off, so the labels read "Filter cancelled"
+  and "Finish the filter first": Undo then stops the apply and closes the panel, as in v1.8.
 - A history tap whose first finger landed in the panel (`EditorHistoryTaps`' light mark):
   `historyTapGuard` sets `heldByTap` when the editor's root consumes the claimed gesture, so the
   control's own end of that gesture (a slider's `onValueChangeFinished`, a − / + release) is not a
@@ -1604,7 +1606,11 @@ exactly as in v1.8 and drops the session's steps; ✕ drops them too.
 40 dp target, `ResetGap` = 8 dp after the value, description "Reset <label>"), shown only while
 `ParamHost.isDefault(p)` is false (fringes compare as drawn, a v1.7 "order" included).
 `LabeledSlider(onReset, resetTag)` carries it for sliders; other callers pass nothing and are
-unchanged. The curve editor's own "Reset" button gave way to the label row's icon.
+unchanged. The curve editor's own "Reset" button gave way to the label row's icon. A row that
+can hold the icon is always at least `MinTouchTarget` (40 dp) tall (`LabelRow`, the point row; the
+slider, switch, colour, seed, text and dropdown rows already are), so the icon showing or going
+never moves what is below: a curve point added at a touch's DOWN or a gradient stop dragged stays
+under the finger (A2 review; `Qa19FilterUndo` checks the fringe chips stay put).
 
 **Adjustment sheets.** `ParamHost` is shared: `adjustmentParamHost` (`AdjustmentSheet.kt`) drives the
 Adjust sheet's controls through `AdjustmentEdit`. `changing(label)` marks the step's name (a pending

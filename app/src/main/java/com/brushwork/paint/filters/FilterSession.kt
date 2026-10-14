@@ -403,14 +403,16 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
 
     // ------------------------------------------------------------------ v1.9 steps (R8)
 
-    override val canUndo: Boolean get() = !isClosed && (history.canUndo || pendingParam() != null)
+    // While ✓ applies, the steps wait: Undo stops the apply and closes the panel as in v1.8, so the
+    // labels say so ("Filter cancelled", "Finish the filter first"), not a step's name.
+    override val canUndo: Boolean get() = !isClosed && !isApplying && (history.canUndo || pendingParam() != null)
 
-    override val canRedo: Boolean get() = !isClosed && history.canRedo && pendingParam() == null
+    override val canRedo: Boolean get() = !isClosed && !isApplying && history.canRedo && pendingParam() == null
 
     /** The control whose step Undo takes back: a change not recorded yet first ([pendingParam]). */
     override val undoLabel: String?
         get() {
-            if (isClosed) return null
+            if (isClosed || isApplying) return null
             pendingParam()?.let { return it.label }
             return if (history.depth > 0) undoLabels.lastOrNull() else null
         }

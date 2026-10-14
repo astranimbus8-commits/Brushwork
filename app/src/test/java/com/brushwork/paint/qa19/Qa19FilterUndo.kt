@@ -5,6 +5,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import com.brushwork.paint.filters.FilterParam
 import com.brushwork.paint.filters.FilterRegistry
 import com.brushwork.paint.filters.FilterSession
 import com.brushwork.paint.filters.art.CaBlend
@@ -15,6 +16,7 @@ import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.ui.color.RobolectricUi
 import com.brushwork.paint.ui.common.FilterLabels19
+import com.brushwork.paint.ui.common.FringeLabels18
 import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import com.brushwork.paint.ui.editor.chrome.ChromeTags
@@ -33,6 +35,8 @@ import org.junit.Assert.assertTrue
  * - Chromatic aberration: "Blend mode" (a dropdown of the layers panel's modes) and "Opacity"
  *   after the v1.8 controls; a drag of Opacity and a pick of Multiply are a step each, and each
  *   row keeps its label, value and reset icon apart, on one line; a two-finger tap undoes the pick.
+ *   The fringes' "No color" chip and their reset icon are a step each, and the chips under the
+ *   fringes' label row stay put as the icon shows and goes (the row's height is constant).
  * - An adjustment layer's sheet: a press of + is "Change <label>" and its row keeps the value and
  *   the reset icon on one line (R8, at 360 dp).
  * Each part ends with [Qa19Ui.assertNoTextOverflow].
@@ -131,6 +135,32 @@ internal object Qa19FilterUndo {
         assertEquals(LayerBlendMode.NORMAL.ordinal, session.values.choice(mode.key))
         assertEquals(1, session.history.depth)
         assertTrue(session.values.float(opacity.key) < 100f)
+
+        // A label row is as tall with its reset icon as without (A2 review): the fringes' "No
+        // color" chip, under their label row, stays where it was when its tap shows the icon and
+        // when the icon's tap takes the change back (a step each).
+        val fringes = session.filter.params.first { it is FilterParam.Fringes }
+        val fringeReset = V19Tags.FILTER_RESET_PREFIX + fringes.key
+        // The chip's top in the window, looked up without scrolling (find scrolls into view).
+        fun chipTop(): Float = RobolectricUi.elements().lastOrNull { e -> inside(e.node, panel) && labels(e.node).any { it == FringeLabels18.NO_COLOR } }
+            ?.let { extent(it.node).top } ?: throw AssertionError("$where: no \"${FringeLabels18.NO_COLOR}\": ${Qa19Ui.shown()}")
+        val noColor = find(panel, FringeLabels18.NO_COLOR)
+        assertTrue("$where: no fringe reset icon at the default", tagIn(panel, fringeReset) == null)
+        val shownAt = chipTop()
+        noColor.tap()
+        Qa19Ui.settle()
+        assertEquals("$where: the chip is one step", 2, session.history.depth)
+        assertEquals(fringes.label, session.undoLabel)
+        assertTrue("$where: the fringe reset icon off the default", tagIn(panel, fringeReset) != null)
+        assertEquals("$where: the chips stay put as the reset icon shows", shownAt, chipTop(), 1f)
+        val reset = intoView { tagIn(panel, fringeReset) ?: throw AssertionError("$where: no fringe reset icon: ${Qa19Ui.shown()}") }
+        val goneAt = chipTop()
+        reset.tap()
+        Qa19Ui.settle()
+        assertEquals("$where: the reset is one step", 3, session.history.depth)
+        assertEquals(String.format(FilterLabels19.RESET_ONE, fringes.label), session.undoLabel)
+        assertTrue("$where: the reset hides its icon", tagIn(panel, fringeReset) == null)
+        assertEquals("$where: the chips stay put as the reset icon goes", goneAt, chipTop(), 1f)
         session.cancel()
         Qa19Ui.settle()
         Smoke.assertQuiet(c, "the Chromatic aberration panel, $where")

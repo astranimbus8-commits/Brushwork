@@ -158,6 +158,21 @@ class AdjustmentPerChangeStepTest {
         c.undo()
         assertEquals(-4f, s.value("blacks"))
         assertEquals(change("Blacks"), c.undoManager.undoLabel)
+
+        // A run of − / + presses of a control, then that control's reset: the run is its own
+        // step first, so Undo of the reset goes back to where the run ended (as in a panel).
+        val n = c.undoManager.undoCount
+        repeat(2) {
+            s.host.update("contrast", s.value("contrast") + 1f)
+            s.host.onNudgeFinished("contrast")
+        }
+        s.host.resetParam("contrast")
+        assertEquals(0f, s.value("contrast"))
+        assertEquals("the run and the reset, a step each", n + 2, c.undoManager.undoCount)
+        assertEquals(reset("Contrast"), c.undoManager.undoLabel)
+        c.undo()
+        assertEquals(2f, s.value("contrast"))
+        assertEquals(change("Contrast"), c.undoManager.undoLabel)
     }
 
     @Test

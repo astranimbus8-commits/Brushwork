@@ -144,7 +144,8 @@ internal const val AMOUNT_KEY = "layer.amount"
 
 /** v1.9 (R8): Amount back to 100 %: one step "Reset Amount". */
 internal fun resetAmount(layer: Layer, edit: AdjustmentEdit) {
-    edit.changing(PointLabels19.AMOUNT)
+    // A change still pending is its own step first (as a control's reset).
+    edit.flush()
     edit.preview(layer.adjustment, 1f, layer.name)
     edit.record(String.format(FilterLabels19.RESET_ONE, PointLabels19.AMOUNT))
 }
@@ -180,7 +181,9 @@ internal fun adjustmentParamHost(c: EditorController, layer: Layer, filter: Filt
             val p = filter.params.firstOrNull { it.key == key } ?: return@ParamHost
             val cur = layer.adjustment?.let { AdjustmentEffects.valuesOf(it, filter) } ?: filter.defaultValues()
             val def = AdjustmentEffects.defaultValues(filter, c.color).raw(p.key) ?: p.defaultValue()
-            edit.changing(p.label)
+            // A change still pending (a run of − / + presses, of this control too) is its own
+            // step first: Undo of the reset goes back to where the run ended (A2 review).
+            edit.flush()
             edit.preview(AdjustmentEffects.spec(filter, cur.copy().set(key, def)), layer.opacity, layer.name)
             edit.record(String.format(FilterLabels19.RESET_ONE, p.label))
         },

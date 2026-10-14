@@ -179,6 +179,22 @@ class FilterSessionHistoryTest {
     }
 
     @Test
+    fun aRunThenItsOwnResetAreAStepEach() {
+        val (c, s) = open()
+        val host = s.paramHost()
+        repeat(2) {
+            host.update("radius", s.values.float("radius") + 1f)
+            host.onNudgeFinished("radius")
+        }
+        host.resetParam("radius")
+        assertEquals(4f, s.values.float("radius"))
+        assertEquals("the run and the reset", 2, s.history.depth)
+        c.undo()
+        assertEquals("Undo of the reset goes back to where the run ended", 6f, s.values.float("radius"))
+        assertEquals("Undo: Radius", HistoryLabels.undo(c))
+    }
+
+    @Test
     fun aHistoryTapsHoldRecordsNothing() {
         val (c, s) = open()
         s.change("amount", 30f)
@@ -254,6 +270,31 @@ class FilterSessionHistoryTest {
         assertNull(c.inToolHistory)
         assertNull("no second toast", c.message)
         assertFalse(c.canUndo)
+    }
+
+    @Test
+    fun whileApplyingUndoStopsTheFilterAndTheLabelsSaySo() {
+        val (c, s) = open()
+        s.change("amount", 20f)
+        s.change("radius", 6f)
+        c.undo()
+        assertTrue(s.canUndo && s.canRedo)
+        s.apply()
+        // ✓ runs (its coroutine not started yet): the steps wait, and Undo is v1.8's cancel.
+        assertTrue(s.isApplying)
+        assertFalse(s.canUndo)
+        assertFalse(s.canRedo)
+        assertNull(s.undoLabel)
+        assertNull(s.redoLabel)
+        assertEquals("Filter cancelled", HistoryLabels.undo(c))
+        assertEquals("Finish the filter first", HistoryLabels.redo(c))
+        c.undo()
+        assertTrue("Undo while applying cancels the panel, as in v1.8", s.isClosed)
+        assertNull(c.filterSession)
+        assertNull(c.inToolHistory)
+        val looper = shadowOf(Looper.getMainLooper())
+        repeat(20) { looper.idleFor(java.time.Duration.ofMillis(10)) }
+        assertFalse("nothing applied", c.canUndo)
     }
 
     @Test

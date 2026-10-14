@@ -87,13 +87,24 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
      * another control is recorded first, as its own step; the pending change becomes [label]'s.
      */
     fun changing(label: String) {
-        val step = String.format(FilterLabels19.CHANGE_STEP, label)
+        val step = changeStep(label)
         if (registered && stepLabel != null && stepLabel != step) flush()
         stepLabel = step
     }
 
     /** v1.9 (R8): the control labelled [label] finished its change: one step "Change <label>" now. */
-    fun finish(label: String) = record(String.format(FilterLabels19.CHANGE_STEP, label))
+    fun finish(label: String) = record(changeStep(label))
+
+    // "Change <label>" of the last control named: a drag calls [changing] per sample, so the name
+    // is formatted once per control, not per sample (A2 review).
+    private var changeOf: String? = null
+    private var changeName: String? = null
+
+    private fun changeStep(label: String): String {
+        val known = changeName
+        if (known != null && label == changeOf) return known
+        return String.format(FilterLabels19.CHANGE_STEP, label).also { changeOf = label; changeName = it }
+    }
 
     /**
      * v1.9 (R8): records the pending change now as one step named [stepName] (a reset: "Reset

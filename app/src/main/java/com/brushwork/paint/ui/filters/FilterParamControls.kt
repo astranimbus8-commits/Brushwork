@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardActions
@@ -44,6 +45,7 @@ import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.ColorSwatch
 import com.brushwork.paint.ui.common.LabeledSlider
 import com.brushwork.paint.ui.common.LocalIncrements
+import com.brushwork.paint.ui.common.MinTouchTarget
 import com.brushwork.paint.ui.common.RepeatIconButton
 import com.brushwork.paint.ui.common.ResetGap
 import com.brushwork.paint.ui.common.ResetValueButton
@@ -164,10 +166,15 @@ private fun ParamLabel(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.bodyMedium, modifier = modifier.padding(bottom = 4.dp))
 }
 
-/** A label over its control (chips, editors), with [p]'s reset icon at the row's far end ([ResetSlot]). */
+/**
+ * A label over its control (chips, editors), with [p]'s reset icon at the row's far end ([ResetSlot]).
+ * v1.9 (A2 review): the row is always as tall as the icon's target, so the icon showing does not
+ * move the control below (a curve point added at a touch's DOWN, a gradient stop dragged: the
+ * editor stays under the finger).
+ */
 @Composable
 internal fun LabelRow(host: ParamHost, p: FilterParam, enabled: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = MinTouchTarget)) {
         ParamLabel(p.label, Modifier.weight(1f))
         ResetSlot(host, p, enabled)
     }
@@ -254,7 +261,8 @@ private fun ColorControl(host: ParamHost, p: FilterParam.Color, enabled: Boolean
 private fun PointControl(host: ParamHost, p: FilterParam.Point, enabled: Boolean) {
     val v = host.values.point(p.key)
     val dragging = host.draggingPoint == p.key
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+    // As tall as the reset icon's target whether it shows or not ([LabelRow]).
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = MinTouchTarget)) {
         Column(Modifier.weight(1f)) {
             Text(p.label, style = MaterialTheme.typography.bodyMedium, color = if (dragging) BrushworkColors.Accent else BrushworkColors.OnChrome)
             Text(
