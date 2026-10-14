@@ -342,8 +342,9 @@ class ProjectRepositoryTest {
         }
     }
 
+    /** v1.9 (R15): the picture is the project's only layer, active (v1.8 added an empty "Layer 1"). */
     @Test
-    fun createFromImageBuildsPictureAndEmptyLayer() = runBlocking<Unit> {
+    fun createFromImageBuildsThePictureLayerAlone() = runBlocking<Unit> {
         val src = BitmapUtils.createLayerBitmap(30, 20)
         Canvas(src).drawPaint(Paint().apply {
             shader = LinearGradient(0f, 0f, 30f, 20f, 0xFF2040C0.toInt(), 0x60FFAA00, Shader.TileMode.CLAMP)
@@ -358,10 +359,9 @@ class ProjectRepositoryTest {
         val doc = repo.load(id)
         assertEquals(30 to 20, doc.width to doc.height)
         assertEquals(350f, doc.dpi)
-        assertEquals(listOf("Picture", "Layer 1"), doc.layers.map { it.name })
-        assertEquals(1, doc.activeLayerIndex)
+        assertEquals(listOf("Picture"), doc.layers.map { it.name })
+        assertEquals(0, doc.activeLayerIndex)
         assertSamePixels(BitmapFactory.decodeFile(png.path), doc.layers[0].bitmap)
-        assertArrayEquals(ByteArray(30 * 20 * 4), raw(doc.layers[1].bitmap))
         val info = repo.list().single { it.id == id }
         assertEquals("Imported picture", info.name)
         assertEquals(30 to 20, BitmapFactory.decodeFile(info.thumbnail!!.path).let { it.width to it.height })

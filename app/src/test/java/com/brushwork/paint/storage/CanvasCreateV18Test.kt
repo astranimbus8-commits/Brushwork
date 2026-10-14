@@ -21,8 +21,12 @@ import java.nio.ByteBuffer
 /**
  * v1.9 F1b (design 2.4.8): `ProjectRepository.create` and `createFromImage`, now writing the
  * project from a [CanvasCreate] seed, write exactly v1.8's files: the same `project.json` (no
- * paper key, "Layer 1" active), the same pixel files and the same thumbnail, byte for byte. The
- * seed is v1.8's for every [NewCanvasSpec.start] in F1b (A8 gives the starts their meaning).
+ * paper key, "Layer 1" active), the same pixel files and the same thumbnail, byte for byte.
+ *
+ * v1.9 A8 (R15): narrowed to what stays v1.8. A null [NewCanvasSpec.start] (the test fixtures
+ * and the SVG/PDF import) is still v1.8 byte for byte; the dialog's starts make one layer
+ * (`v19/a8/NewCanvasStartTest`). A picture keeps v1.8's pixel file and thumbnail, now as the
+ * project's only layer, "Picture", active.
  */
 @RunWith(RobolectricTestRunner::class)
 class CanvasCreateV18Test {
@@ -84,8 +88,11 @@ class CanvasCreateV18Test {
         }
     }
 
-    /** v1.8's `project.json` of a new project, with the id, name, size and times it was given. */
-    private fun v18Json(actual: ProjectFileDto, dpi: Float, bottom: String): String =
+    /**
+     * v1.8's `project.json` of a new project with the layers [names] (bottom first, ids from 1) and
+     * [active], with the id, name, size and times it was given.
+     */
+    private fun jsonOf(actual: ProjectFileDto, dpi: Float, names: List<String>, active: Int): String =
         ProjectFormat.json.encodeToString(
             ProjectFileDto.serializer(),
             ProjectFileDto(
@@ -96,15 +103,18 @@ class CanvasCreateV18Test {
                 dpi = dpi,
                 createdAt = actual.createdAt,
                 modifiedAt = actual.modifiedAt,
-                activeLayerIndex = 1,
-                layers = listOf(
-                    LayerEntryDto(1, bottom, ProjectFormat.defaultProps(bottom), file = ProjectFormat.layerFile(1, 0)),
-                    LayerEntryDto(2, "Layer 1", ProjectFormat.defaultProps("Layer 1"), file = ProjectFormat.layerFile(2, 0)),
-                ),
+                activeLayerIndex = active,
+                layers = names.mapIndexed { i, n ->
+                    LayerEntryDto(i + 1L, n, ProjectFormat.defaultProps(n), file = ProjectFormat.layerFile(i + 1L, 0))
+                },
             ),
         )
 
+    /** v1.8's `project.json` of a new project: [bottom] under "Layer 1", which is active. */
+    private fun v18Json(actual: ProjectFileDto, dpi: Float, bottom: String): String = jsonOf(actual, dpi, listOf(bottom, "Layer 1"), 1)
+
     private val files = setOf(ProjectFormat.PROJECT_FILE, ProjectFormat.THUMB_FILE, ProjectFormat.layerFile(1, 0), ProjectFormat.layerFile(2, 0))
+    private val pictureFiles = setOf(ProjectFormat.PROJECT_FILE, ProjectFormat.THUMB_FILE, ProjectFormat.layerFile(1, 0))
 
     // ------------------------------------------------------------------ create
 
@@ -117,9 +127,10 @@ class CanvasCreateV18Test {
             NewCanvasSpec("Tinted", 700, 300, 350f, background = 0xFF3080C0.toInt()),
             NewCanvasSpec("Half", 33, 17, Float.NaN, background = 0x80FF0000.toInt()),
         )
-        for (spec in cases) for (start in listOf(null) + CanvasStart.entries) {
-            val why = "${spec.name} / $start"
-            val id = repo.create(spec.copy(start = start))
+        for (spec in cases) {
+            val why = spec.name
+            assertNull(why, spec.start)
+            val id = repo.create(spec)
             val dir = dirOf(id)
             assertEquals(why, files, dir.list()!!.toSet())
             val json = File(dir, ProjectFormat.PROJECT_FILE).readText()
@@ -156,8 +167,9 @@ class CanvasCreateV18Test {
         return f
     }
 
+    /** v1.9 A8 (R15): the picture layer and the thumbnail are v1.8's; the empty "Layer 1" is gone. */
     @Test
-    fun anImportedPictureIsWrittenAsInV18() = runBlocking {
+    fun anImportedPictureIsItsOnlyLayerAsInV18() = runBlocking {
         val repo = ProjectRepository(context)
         for ((w, h) in listOf(48 to 32, 640 to 120)) {
             val why = "${w}x$h"
@@ -165,22 +177,21 @@ class CanvasCreateV18Test {
             val picture = BitmapFactory.decodeFile(file.path)
             val id = repo.createFromImage(Uri.fromFile(file))
             val dir = dirOf(id)
-            assertEquals(why, files, dir.list()!!.toSet())
+            assertEquals(why, pictureFiles, dir.list()!!.toSet())
             val json = File(dir, ProjectFormat.PROJECT_FILE).readText()
             val dto = ProjectFormat.read(dir)
             assertEquals(why, w, dto.width)
             assertEquals(why, h, dto.height)
-            assertEquals(why, v18Json(dto, 350f, "Picture"), json)
+            assertEquals(why, jsonOf(dto, 350f, listOf("Picture"), 0), json)
             assertFalse("$why: no paper key (I13)", json.contains("\"paper\""))
             assertArrayEquals(why, v18PictureLayer(picture), File(dir, ProjectFormat.layerFile(1, 0)).readBytes())
-            assertArrayEquals(why, v18FilledLayer(w, h, 0), File(dir, ProjectFormat.layerFile(2, 0)).readBytes())
             // v1.8: the picture is the thumbnail (scaled down when larger than a thumbnail).
             val (tw, th) = ProjectRepository.thumbnailSize(w, h)
             val thumb = if (tw == w && th == h) picture else Bitmap.createScaledBitmap(picture, tw, th, true)
             assertArrayEquals(why, png(thumb), File(dir, ProjectFormat.THUMB_FILE).readBytes())
             val doc = repo.load(id)
-            assertEquals(why, listOf("Picture", "Layer 1"), doc.layers.map { it.name })
-            assertEquals(why, 1, doc.activeLayerIndex)
+            assertEquals(why, listOf("Picture"), doc.layers.map { it.name })
+            assertEquals(why, 0, doc.activeLayerIndex)
             assertNull(why, doc.paper)
             val pixels = IntArray(w * h).also { doc.layers[0].bitmap.getPixels(it, 0, w, 0, 0, w, h) }
             val expected = IntArray(w * h).also { picture.getPixels(it, 0, w, 0, 0, w, h) }
@@ -192,24 +203,23 @@ class CanvasCreateV18Test {
     // ------------------------------------------------------------------ the seeds
 
     @Test
-    fun theSeedsAreV18ForEveryStart() {
+    fun theSeedIsV18WithoutAStart() {
         for (background in listOf(0xFFFFFFFF.toInt(), null, 0xFF3080C0.toInt())) {
-            for (start in listOf(null) + CanvasStart.entries) {
-                val why = "$background / $start"
-                val seed = CanvasCreate.seed(NewCanvasSpec("n", 10, 10, 350f, background, start))
-                assertEquals(why, listOf("Background", "Layer 1"), seed.layers.map { it.name })
-                assertEquals(why, listOf(background ?: 0, 0), seed.layers.map { it.fill })
-                assertEquals(why, listOf(null, null), seed.layers.map { it.picture })
-                assertEquals(why, 1, seed.activeLayerIndex)
-                assertNull(why, seed.paper)
-            }
+            val why = "$background"
+            val seed = CanvasCreate.seed(NewCanvasSpec("n", 10, 10, 350f, background, start = null))
+            assertEquals(why, listOf("Background", "Layer 1"), seed.layers.map { it.name })
+            assertEquals(why, listOf(background ?: 0, 0), seed.layers.map { it.fill })
+            assertEquals(why, listOf(null, null), seed.layers.map { it.picture })
+            assertEquals(why, 1, seed.activeLayerIndex)
+            assertNull(why, seed.paper)
         }
+        // v1.9 A8 (R15): a picture alone.
         val picture = Bitmap.createBitmap(4, 3, Bitmap.Config.ARGB_8888)
         val seed = CanvasCreate.seedFromImage(picture, "Holiday")
-        assertEquals(listOf("Picture", "Layer 1"), seed.layers.map { it.name })
-        assertEquals(listOf(picture, null), seed.layers.map { it.picture })
-        assertEquals(listOf(0, 0), seed.layers.map { it.fill })
-        assertEquals(1, seed.activeLayerIndex)
+        assertEquals(listOf("Picture"), seed.layers.map { it.name })
+        assertEquals(listOf(picture), seed.layers.map { it.picture })
+        assertEquals(listOf(0), seed.layers.map { it.fill })
+        assertEquals(0, seed.activeLayerIndex)
         assertNull(seed.paper)
         assertEquals(CanvasStart.entries, listOf(CanvasStart.FILL, CanvasStart.TRANSPARENT, CanvasStart.PAPER))
     }

@@ -108,10 +108,11 @@ class ProjectRepository(private val context: Context) {
     // ------------------------------------------------------------------ create
 
     /**
-     * Creates a project with a "Background" layer (filled with [NewCanvasSpec.background], or
-     * transparent) and an empty "Layer 1" on top. Returns the new id. Writes the pixel files
-     * directly, so no full-size bitmaps are allocated. v1.9 (design 2.4.8): the layers, the active
-     * layer and the paper are [CanvasCreate.seed]'s (v1.8's for every spec in F1b).
+     * Creates a project from [spec] and returns the new id. v1.9 (R15, design 2.4.8): the layers,
+     * the active layer and the paper are [CanvasCreate.seed]'s: one "Layer 1" for every
+     * [NewCanvasSpec.start], v1.8's "Background" (filled with [NewCanvasSpec.background], or
+     * transparent) under an empty "Layer 1" for a null start. Writes the pixel files directly, so
+     * no full-size bitmaps are allocated.
      */
     suspend fun create(spec: NewCanvasSpec): String = withContext(Dispatchers.IO) {
         val w = spec.width
@@ -157,11 +158,10 @@ class ProjectRepository(private val context: Context) {
 
     /**
      * Creates a project from a picture: a document of the image size (350 dpi, longest side at
-     * most 4096 px) with the picture as a "Picture" layer and an empty "Layer 1" above it.
-     * Pictures too large for this device's memory are scaled down until at least
-     * [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the editor's layer limit uses);
-     * wide-gamut photos are converted to sRGB like every layer. v1.9 (design 2.4.8): the layers,
-     * the active layer and the paper are [CanvasCreate.seedFromImage]'s (v1.8's in F1b).
+     * most 4096 px) with the picture as its one layer, "Picture" (v1.9, R15: no empty "Layer 1"
+     * above it; [CanvasCreate.seedFromImage]). Pictures too large for this device's memory are
+     * scaled down until at least [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the
+     * editor's layer limit uses); wide-gamut photos are converted to sRGB like every layer.
      */
     suspend fun createFromImage(uri: Uri): String = withContext(Dispatchers.IO) {
         val maxSide = pictureBounds(uri)?.let { (w, h) ->
@@ -200,7 +200,7 @@ class ProjectRepository(private val context: Context) {
                     ),
                 )
                 val (tw, th) = thumbnailSize(w, h)
-                // v1.8: the picture is the thumbnail; a seed with a paper (A8) draws it underneath.
+                // v1.8: the picture is the thumbnail; a seed with a paper would draw it underneath.
                 val thumb = when {
                     seed.paper != null -> Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888).also { drawSeedThumbnail(it, seed) }
                     tw == w && th == h -> picture

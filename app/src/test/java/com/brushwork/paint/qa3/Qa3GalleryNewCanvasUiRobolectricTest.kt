@@ -7,6 +7,7 @@ import com.brushwork.paint.EditorController
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
 import com.brushwork.paint.smoke.SmokeUi.settle
+import com.brushwork.paint.storage.CanvasStart
 import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
@@ -31,7 +32,8 @@ import java.io.File
  * PDF" entry (empty gallery and with artworks) is on the screen next to "Import picture"; a new
  * canvas made by the repository, opened in the editor: Vector turns its empty "Layer 1" into
  * "Vector 1", a stroke is an object, and after saving and reopening the layer is still a vector
- * layer and vector mode is on.
+ * layer and vector mode is on. v1.9 (R15): the canvas starts as the dialog's "Transparent" makes
+ * it, one empty "Layer 1".
  *
  * Own sandbox; all UI work in ONE test split into sections.
  */
@@ -110,9 +112,9 @@ class Qa3GalleryNewCanvasUiRobolectricTest {
         File(a.filesDir, "projects").deleteRecursively()
         a.getSharedPreferences("brushwork_settings", android.content.Context.MODE_PRIVATE).edit().clear().commit()
         val repo = ProjectRepository(a)
-        val id = runBlocking { repo.create(NewCanvasSpec("Art", 540, 960, 350f)) }
+        val id = runBlocking { repo.create(NewCanvasSpec("Art", 540, 960, 350f, background = null, start = CanvasStart.TRANSPARENT)) }
         val doc = runBlocking { repo.load(id) }
-        assertEquals(listOf("Background", "Layer 1"), doc.layers.map { it.name })
+        assertEquals("the dialog makes one layer", listOf("Layer 1"), doc.layers.map { it.name })
         val c = EditorController(a.applicationContext, doc, Smoke.newScope(), AppSettings(a))
         a.setContent { BrushworkTheme { EditorScreen(c, onExit = {}, onSaveNow = {}) } }
         settle()
@@ -122,7 +124,7 @@ class Qa3GalleryNewCanvasUiRobolectricTest {
         SmokeUi.click("Vector", exact = true)
         val layer = c.activeLayer
         assertEquals("the empty Layer 1 became the vector layer", "Vector 1", layer.name)
-        assertEquals(2, doc.layers.size)
+        assertEquals(1, doc.layers.size)
         assertTrue(layer.isVectorLayer)
         c.selectTool(ToolId.BRUSH)
         c.pointerDown(ToolPoint(100f, 300f))
