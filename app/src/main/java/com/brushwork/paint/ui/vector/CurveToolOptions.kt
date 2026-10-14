@@ -62,6 +62,8 @@ import com.brushwork.paint.tools.points.Mixed
 import com.brushwork.paint.tools.points.MixedEdit
 import com.brushwork.paint.ui.points.MixedNumberField
 import com.brushwork.paint.ui.points.MixedValueDialog
+import com.brushwork.paint.ui.points.ThicknessRow
+import com.brushwork.paint.ui.points.ThicknessRowDefaults
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.VSpline
@@ -495,7 +497,7 @@ private fun HandlesChip(label: String, selected: Boolean, onClick: () -> Unit) {
 }
 
 /** Thickness range of a point in percent (§4.5) and the step of its slider and arrows. */
-private const val MAX_THICKNESS_PERCENT = 300f
+private const val MAX_THICKNESS_PERCENT = ThicknessRowDefaults.MAX_PERCENT
 private const val THICKNESS_STEP = 5f
 
 /** [percent] moved by one step up or down, on the step grid, within 0..300 %. */
@@ -521,6 +523,7 @@ private fun thicknessSliderSteps(step: Float): Int {
  * the canvas shows a ring of the real line diameter at the point. One undo step per drag, held
  * arrow or typed value. v1.8 (§3.9): an item of the More row, which never scrolls (the v1.7
  * bring-into-view is gone); the typing dialog is [ThicknessDialog], in the strip's overlays.
+ * v1.9 (R1): the row itself is [ThicknessRow], which the several points' control shares.
  */
 @Composable
 internal fun ThicknessControl(tool: CurveTool, index: Int, width: Float, onType: () -> Unit) {
@@ -542,62 +545,32 @@ internal fun ThicknessControl(tool: CurveTool, index: Int, width: Float, onType:
         setPercent(100f)
         tool.endNumericEdit()
     }
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Thinner point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = false, step))
-        }
-        Box(
-            Modifier
-                .heightIn(min = 40.dp)
-                .widthIn(min = 52.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .stepOnLongPress(IncrementKind.PERCENT)
-                .clickable(onClickLabel = "Type the point thickness", role = Role.Button) { onType() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "${percent.roundToInt()} %",
-                style = MaterialTheme.typography.bodyMedium,
-                color = BrushworkColors.OnChrome,
-                maxLines = 1,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BrushworkColors.ChromeHigh)
-                    .padding(horizontal = 6.dp, vertical = 3.dp)
-                    .semantics { contentDescription = "Point thickness ${percent.roundToInt()} %" },
-            )
-        }
-        RepeatIconButton(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Thicker point", onRelease = { tool.endNumericEdit() }) {
-            setPercent(stepThickness(current(), up = true, step))
-        }
-        Slider(
-            value = percent.coerceIn(0f, MAX_THICKNESS_PERCENT),
-            onValueChange = { v ->
-                tool.thicknessRing = true
-                // The whole drag is one step, however long the finger rests on the way.
-                if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
-                setPercent(((v / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT))
-            },
-            onValueChangeFinished = {
-                sliding[0] = false
-                tool.thicknessRing = false
-                tool.endNumericEdit()
-            },
-            valueRange = 0f..MAX_THICKNESS_PERCENT,
-            steps = thicknessSliderSteps(step),
-            colors = SliderDefaults.colors(thumbColor = BrushworkColors.Accent, activeTrackColor = BrushworkColors.Accent),
-            modifier = Modifier
-                .width(THICKNESS_SLIDER)
-                // (The gesture handler outlives recompositions: it calls the newest callbacks,
-                // which act on the point selected now.)
-                .onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() }
-                .semantics { contentDescription = "Point thickness slider" },
-        )
-    }
+    ThicknessRow(
+        value = percent,
+        text = "${percent.roundToInt()} %",
+        textDescription = "$POINT_THICKNESS_LABEL ${percent.roundToInt()} %",
+        onThinner = { setPercent(stepThickness(current(), up = false, step)) },
+        onThicker = { setPercent(stepThickness(current(), up = true, step)) },
+        onArrowRelease = { tool.endNumericEdit() },
+        onType = onType,
+        onSlide = { v ->
+            tool.thicknessRing = true
+            // The whole drag is one step, however long the finger rests on the way.
+            if (!sliding[0]) { sliding[0] = true; tool.beginNumericEdit() }
+            setPercent(((v / step).roundToInt() * step).coerceIn(0f, MAX_THICKNESS_PERCENT))
+        },
+        onSlideEnd = {
+            sliding[0] = false
+            tool.thicknessRing = false
+            tool.endNumericEdit()
+        },
+        range = 0f..MAX_THICKNESS_PERCENT,
+        steps = thicknessSliderSteps(step),
+        // (The gesture handler outlives recompositions: it calls the newest callbacks, which
+        // act on the point selected now.)
+        sliderModifier = Modifier.onDoubleTap(onFirstDown = { latestFirstDown() }) { latestReset() },
+    )
 }
-
-/** The thickness slider's width (v1.7: 128 dp). */
-private val THICKNESS_SLIDER = 128.dp
 
 /** The typing dialog of [ThicknessControl] for point [index] (in the strip's overlays). One in-tool step. */
 @Composable
