@@ -17,7 +17,9 @@ import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.ui.common.FolderLabels
 import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.StabilityLabels19
+import com.brushwork.paint.vector.VectorContent
 import com.brushwork.paint.vector.VectorLayerOps
+import com.brushwork.paint.vector.geom.ObjectIndex
 import kotlin.math.ceil
 import kotlin.math.floor
 
@@ -27,8 +29,9 @@ enum class MergeKind { TEXT_ITEMS, VECTOR_OBJECTS, RASTER }
 /**
  * v1.9 (design 2.4.6; owner A4): "Merge down", moved out of [EditorController], which keeps its
  * `mergeDown` as a one-line delegate (callers and tests do not change). R19: two text layers keep
- * their texts ([MergeKind.TEXT_ITEMS]) and two vector layers their objects
- * ([VectorLayerOps.mergeVector]) when the result looks the same ([kindOf]); anything else is
+ * their texts ([MergeKind.TEXT_ITEMS]) and two shape or vector layers their objects
+ * ([MergeKind.VECTOR_OBJECTS], as v1.8's [VectorLayerOps.mergeVector] did for two vector layers)
+ * when the result looks the same ([kindOf]); anything else is
  * flattened into the layer below through a temporary two-layer document, so the result matches
  * the screen. Every kind is ONE step "Merge down". Never draws the paper (I21).
  */
@@ -70,14 +73,15 @@ internal class LayerMerge(private val c: EditorController) {
     /** Merges [layer] (at [idx]) into [lower] as ONE step "Merge down" (inside the caller's edit scope). */
     fun mergeDownInto(layer: Layer, idx: Int, lower: Layer) {
         val doc = c.doc
-        // v1.9 (R19): two text layers keep their texts.
-        if (kindOf(layer, lower) == MergeKind.TEXT_ITEMS && mergeTexts(layer, lower)) {
-            c.queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, MERGE_LABEL))
-            return
+        // v1.9 (R19): two text layers keep their texts, shape and vector layers their objects;
+        // otherwise the result is pixels.
+        val kept = when (kindOf(layer, lower)) {
+            MergeKind.TEXT_ITEMS -> mergeTexts(layer, lower)
+            MergeKind.VECTOR_OBJECTS -> mergeObjects(layer, lower)
+            MergeKind.RASTER -> false
         }
-        // Two vector layers can keep their objects (A1); otherwise the result is pixels.
-        if (layer.isVectorLayer && lower.isVectorLayer && VectorLayerOps.mergeVector(c, layer, lower)) {
-            c.queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, "Merge down"))
+        if (kept) {
+            c.queueLayerList(LayerListEvent(LayerListKind.MERGED, layer, lower, MERGE_LABEL))
             return
         }
         // Flatten lower (+ its mask, opacity) and upper (with blend, opacity, mask, clipping) via a
@@ -125,13 +129,19 @@ internal class LayerMerge(private val c: EditorController) {
      * What merging [upper] into [lower] (the layer right below it) keeps: [MergeKind.VECTOR_OBJECTS]
      * where v1.8 already merges vector onto vector (the guard of [VectorLayerOps.mergeVector],
      * [VectorLayerOps.mergesAsObjects]); R19: [MergeKind.TEXT_ITEMS] for two text layers that
-     * [textWhy] lets through; else [MergeKind.RASTER].
+     * [textWhy] lets through, [MergeKind.VECTOR_OBJECTS] for two shape or vector layers that
+     * [objectWhy] lets through; else [MergeKind.RASTER].
      */
     fun kindOf(upper: Layer, lower: Layer): MergeKind = when {
         VectorLayerOps.mergesAsObjects(c, upper, lower) -> MergeKind.VECTOR_OBJECTS
-        upper.isTextLayer && lower.isTextLayer && adjacent(upper, lower) && textWhyOf(upper, lower) == null -> MergeKind.TEXT_ITEMS
+        !adjacent(upper, lower) -> MergeKind.RASTER
+        upper.isTextLayer && lower.isTextLayer -> if (textWhyOf(upper, lower) == null) MergeKind.TEXT_ITEMS else MergeKind.RASTER
+        holdsObjects(upper) && holdsObjects(lower) -> if (objectWhy(upper, lower) == null) MergeKind.VECTOR_OBJECTS else MergeKind.RASTER
         else -> MergeKind.RASTER
     }
+
+    /** A shape layer (one shape, R19: converted by the merge) or a vector layer. */
+    private fun holdsObjects(layer: Layer): Boolean = layer.isVectorLayer || layer.isShapeLayer
 
     /** True when [lower] is the row right below [upper] (the pair "Merge down" works on). */
     private fun adjacent(upper: Layer, lower: Layer): Boolean {
@@ -196,6 +206,48 @@ internal class LayerMerge(private val c: EditorController) {
         val area = Rect()
         for (r in textPixelRects(above)) area.union(r)
         return mergeData(upper, lower, lower.dataSnapshot().copy(text = data), area)
+    }
+
+    /**
+     * The objects of a shape or vector layer: its vector content, or the one shape of a legacy shape
+     * layer as [LayerConvert.shapeToVector] converts it; null when that shape does not decode.
+     */
+    private fun objectsOf(layer: Layer): VectorContent? = layer.vector ?: LayerConvert.shapeToVector(layer)
+
+    /**
+     * R19: why the objects of the shape or vector layer [upper] can't join those of [lower] (a
+     * [LayerLabels19] WHY_* text), or null when they can; [UNREADABLE] when a shape does not decode.
+     * v1.8's guard ([VectorLayerOps.mergesAsObjects]) on both kinds: neither layer masked or with
+     * copies (a live array), [upper] Normal and not clipping (the lower layer's blend mode and
+     * clipping apply to the merged layer, as in v1.8), both at 100 %.
+     */
+    private fun objectWhy(upper: Layer, lower: Layer): String? {
+        if (objectsOf(upper) == null || objectsOf(lower) == null) return UNREADABLE
+        if (upper.mask != null || upper.maskSpec != null || lower.mask != null || lower.maskSpec != null) return LayerLabels19.WHY_MASK
+        if (upper.blendMode != LayerBlendMode.NORMAL) return LayerLabels19.WHY_BLEND
+        if (upper.clipping) return LayerLabels19.WHY_CLIP
+        if (upper.array != null || lower.array != null) return LayerLabels19.WHY_COPIES
+        if (upper.adjustment != null || lower.adjustment != null) return LayerLabels19.WHY_KINDS
+        if (upper.opacity < 1f || lower.opacity < 1f) return LayerLabels19.WHY_OVERLAP
+        return null
+    }
+
+    /**
+     * R19 [MergeKind.VECTOR_OBJECTS]: the objects of [upper] join those of [lower] on top of them
+     * (with new ids, [VectorContent.plus]). A shape layer converts on the way ([LayerConvert]: its
+     * one shape, its pixels kept), so [lower] becomes or stays a vector layer and keeps its name.
+     * The merged pixels are [upper]'s drawn over [lower]'s within the paint bounds of [upper]'s
+     * objects (a shape layer's: the whole layer). ONE step "Merge down"; false (nothing done) when
+     * a shape does not decode or the pixels don't fit in memory.
+     */
+    private fun mergeObjects(upper: Layer, lower: Layer): Boolean {
+        // Renders still on their way land first: the pixels drawn are those of the objects.
+        c.vectors.flushPending()
+        val above = objectsOf(upper) ?: return false
+        val below = objectsOf(lower) ?: return false
+        val merged = below.plus(above.objects).first
+        val area = if (upper.isVectorLayer) pixelRect(ObjectIndex.of(above).unionBounds()) else Rect(0, 0, c.doc.width, c.doc.height)
+        return mergeData(upper, lower, lower.dataSnapshot().copy(text = null, shape = null, vector = merged), area)
     }
 
     /**

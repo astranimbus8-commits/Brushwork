@@ -9,6 +9,9 @@ import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextThreadSpec
 import com.brushwork.paint.tools.text.TextWrapSpec
+import com.brushwork.paint.tools.vector.ShapeCodec
+import com.brushwork.paint.vector.VObject
+import com.brushwork.paint.vector.VShape
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -20,8 +23,9 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * v1.9 (R19, A4): "Merge down" keeps the type of two text layers (their texts appended in picture
- * order, the lower layer's name and opacity) as ONE step "Merge down" that undo restores; any
- * condition of R19 that fails merges them as pixels, as in v1.8.
+ * order, the lower layer's name and opacity) and of two shape or vector layers (their objects in
+ * one vector layer with the lower layer's name, a shape layer converted) as ONE step "Merge down"
+ * that undo restores; any condition of R19 that fails merges them as pixels, as in v1.8.
  */
 @RunWith(RobolectricTestRunner::class)
 class MergeKeepsTypeTest {
@@ -119,6 +123,83 @@ class MergeKeepsTypeTest {
         c.mergeDown(upper)
         assertNull(lower.textData)
     }
+
+    /** Shape and vector layers: "Lower" below "Upper" (active), built by [lower] and [upper]. */
+    private class ObjectPair(val why: String, val lower: (A4Kit, EditorController) -> Layer, val upper: (A4Kit, EditorController) -> Layer)
+
+    private val objectPairs = listOf(
+        ObjectPair("shape onto shape", { k, c -> k.shapeLayer(c, k.rect(60f, 50f, 70f, 50f), "Lower") }, { k, c -> k.shapeLayer(c, k.rect(150f, 110f, 60f, 60f, 0xFF30A0F0.toInt()), "Upper") }),
+        ObjectPair("shape onto vector", { k, c -> k.vectorLayer(c, listOf(k.box(20f, 20f, 90f, 80f)), "Lower") }, { k, c -> k.shapeLayer(c, k.rect(80f, 70f, 60f, 60f), "Upper") }),
+        ObjectPair("vector onto shape", { k, c -> k.shapeLayer(c, k.rect(60f, 50f, 70f, 50f), "Lower") }, { k, c -> k.vectorLayer(c, listOf(k.box(70f, 40f, 160f, 120f), k.box(150f, 100f, 220f, 160f, 0xFF20A040.toInt())), "Upper") }),
+        ObjectPair("vector onto vector", { k, c -> k.vectorLayer(c, listOf(k.box(20f, 20f, 90f, 80f)), "Lower") }, { k, c -> k.vectorLayer(c, listOf(k.box(60f, 50f, 160f, 120f)), "Upper") }),
+    )
+
+    @Test
+    fun shapeAndVectorLayersKeepTheirObjectsInOneStep() {
+        for (p in objectPairs) {
+            val c = kit.controller()
+            val lower = p.lower(kit, c)
+            val upper = p.upper(kit, c)
+            assertSame(p.why, upper, c.activeLayer)
+            val lowerData = lower.dataSnapshot()
+            val upperData = upper.dataSnapshot()
+            val expected = (objectsOf(lower) + objectsOf(upper)).map { it.withId(0) }
+            assertEquals(p.why, MergeKind.VECTOR_OBJECTS, c.layerMerge.kindOf(upper, lower))
+            val steps = c.undoManager.undoCount
+            c.mergeDown(upper)
+            kit.settle(c)
+            assertEquals(p.why, steps + 1, c.undoManager.undoCount)
+            assertEquals(p.why, "Merge down", c.undoManager.undoLabel)
+            assertEquals(p.why, listOf("Background", "Lower"), c.doc.layers.map { it.name })
+            assertSame(p.why, lower, c.activeLayer)
+            assertNull("${p.why}: converted", lower.shapeData)
+            val merged = lower.vector!!
+            assertEquals("${p.why}: the lower objects, then the upper ones", expected, merged.objects.map { it.withId(0) })
+            assertEquals("${p.why}: ids unique", merged.objects.size, merged.objects.map { it.id }.toSet().size)
+            assertEquals(p.why, 1f, lower.opacity)
+            c.undo()
+            kit.settle(c)
+            assertEquals(p.why, listOf("Background", "Lower", "Upper"), c.doc.layers.map { it.name })
+            assertEquals("${p.why}: undo restores the lower layer", lowerData, lower.dataSnapshot())
+            assertEquals("${p.why}: undo restores the upper layer", upperData, upper.dataSnapshot())
+            c.redo()
+            kit.settle(c)
+            assertEquals(p.why, expected.size, lower.vector!!.objects.size)
+            assertEquals(p.why, -1, c.doc.indexOf(upper))
+        }
+    }
+
+    @Test
+    fun shapeConditionsThatFailMergeAsPixels() {
+        val cases: List<Pair<String, (EditorController, Layer, Layer) -> Unit>> = listOf(
+            "upper Multiply" to { c, u, _ -> c.setLayerProps(u, u.props().copy(blendMode = LayerBlendMode.MULTIPLY)) },
+            "upper clipping" to { c, u, _ -> c.setLayerProps(u, u.props().copy(clipping = true)) },
+            "lower masked" to { c, _, l -> c.addMask(l, fromSelection = false) },
+            "upper masked" to { c, u, _ -> c.addMask(u, fromSelection = false) },
+        )
+        for ((why, apply) in cases) {
+            val c = kit.controller()
+            val lower = kit.shapeLayer(c, kit.rect(60f, 50f, 70f, 50f), "Lower")
+            val upper = kit.shapeLayer(c, kit.rect(150f, 110f, 60f, 60f), "Upper")
+            apply(c, upper, lower)
+            assertEquals(why, MergeKind.RASTER, c.layerMerge.kindOf(upper, lower))
+            c.mergeDown(upper)
+            assertEquals(why, listOf("Background", "Lower"), c.doc.layers.map { it.name })
+            assertNull("$why: pixels", lower.shapeData)
+            assertNull("$why: pixels", lower.vector)
+        }
+        // Different kinds: a text onto a shape, a shape onto a text.
+        val c = kit.controller()
+        val shape = kit.shapeLayer(c, kit.rect(60f, 50f, 70f, 50f), "Shape")
+        val text = kit.textLayer(c, kit.text("Two", 160f, 140f), name = "Text")
+        assertEquals(MergeKind.RASTER, c.layerMerge.kindOf(text, shape))
+        val d = kit.controller()
+        val t2 = kit.textLayer(d, kit.text("Two", 160f, 140f), name = "Text")
+        val s2 = kit.shapeLayer(d, kit.rect(60f, 50f, 70f, 50f), "Shape")
+        assertEquals(MergeKind.RASTER, d.layerMerge.kindOf(s2, t2))
+    }
+
+    private fun objectsOf(layer: Layer): List<VObject> = layer.vector?.objects ?: listOf(VShape(0L, shape = ShapeCodec.decode(layer.shapeData)!!))
 
     @Test
     fun atMost64TextsInAll() {

@@ -46,4 +46,21 @@ class MergeExactTest {
             mergeAndCompare("texts at $opacity", c, upper, lower, MergeKind.TEXT_ITEMS) { kit.renderTexts(it) }
         }
     }
+
+    @Test
+    fun shapeAndVectorMergesLookTheSame() {
+        val red = 0xFFE04020.toInt()
+        val blue = 0xFF3070D0.toInt()
+        val cases: List<Pair<String, (EditorController) -> Pair<Layer, Layer>>> = listOf(
+            "shape onto shape" to { c -> kit.shapeLayer(c, kit.rect(80f, 70f, 90f, 70f), "Lower") to kit.shapeLayer(c, kit.rect(120f, 100f, 90f, 70f, blue), "Upper") },
+            "shape onto vector" to { c -> kit.vectorLayer(c, listOf(kit.box(30f, 30f, 130f, 120f, red)), "Lower") to kit.shapeLayer(c, kit.rect(120f, 100f, 90f, 70f, blue), "Upper") },
+            "vector onto shape" to { c -> kit.shapeLayer(c, kit.rect(80f, 70f, 90f, 70f), "Lower") to kit.vectorLayer(c, listOf(kit.box(60f, 50f, 150f, 130f, blue), kit.box(120f, 90f, 210f, 160f, red)), "Upper") },
+            "vector onto vector" to { c -> kit.vectorLayer(c, listOf(kit.box(30f, 30f, 130f, 120f, red)), "Lower") to kit.vectorLayer(c, listOf(kit.box(60f, 50f, 150f, 130f, blue)), "Upper") },
+        )
+        for ((why, build) in cases) {
+            val c = kit.controller()
+            val (lower, upper) = build(c)
+            mergeAndCompare(why, c, upper, lower, MergeKind.VECTOR_OBJECTS) { kit.render(it.vector!!) }
+        }
+    }
 }
