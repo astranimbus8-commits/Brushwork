@@ -1890,6 +1890,68 @@ to insert a point).
 
 <!-- v19-A6 -->
 
+A6 makes drawing, erasing and the mask tools cheaper per frame without changing a committed pixel
+(I25) or v1.8's behaviour under Robolectric's EXACT policy (I8). Steps 1-8 of design 3.2 A6; P3
+and R11a (steps 9 and 10) wait for the lead.
+
+**The lift (P1, I25).** A brush, eraser, smudge or blur lift redraws only the 256 px display tiles
+its dabs touched (`EditorController.commitStrokeEdit` in region `v19-A6 commitEdit`,
+`EditInvalidation.tilesAfterCommit`), not the stroke's bounding box; other `commitEdit` callers
+keep v1.8's rect. Where the canvas already shows the stroke exactly as it commits (an RGB
+document, no recorder-gated tool such as the clone stamp, not a path stroke, the stroke's
+override still installed; smudge and blur without a monochrome override) the lift passes
+`displayCurrent = true` and redraws only the dabs the canvas has not shown yet and the retapered
+end (`BrushTool.lastLiftShowedCommit` reports the decision). `v19/a6/PreviewEqualsCommitParityTest`
+pins the premise: after every lift the display equals a full redraw of the committed document, bit
+for bit, across blend modes, alpha lock, selection, grain, taper, masks, clipping, adjustment
+layers, folders, symmetry, smudge and blur; elsewhere the lift redraws its tiles as before.
+
+**Per-frame allocations (P2).** `DisplayTiles` keeps each tile's Canvas and `CompositeTarget`
+with its bitmap, tracks dirty tiles in a flag array with a count (`hasDirty` is O(1)) and reuses
+its rects, order arrays and `TileUpdate` values; `Compositor` caches its blend Paint per (mode,
+alpha) on the main thread; `DirectStroke` (smudge, blur, watercolor, raster eraser) recycles its
+dabs.
+
+**Mask drags (R13).** Under the live policy (`LiveAdjust.Policy.LIVE`, the app's; tests opt in
+with `liveAdjust.policy` and `clock`) the Masks tool records a drag's newest spec and renders its
+preview once per frame: `CanvasView.onDraw` first calls `BeforeFrame.beforeFrame()` on the active
+tool. While the finger moves the preview renders at the interaction scale
+(`MaskTool.interactionScaleFor`: `LiveAdjust.proxyScaleFor(zoom)`, at least 1/8 and at most v1.8's
+`MaskPreview.previewScale`), so it lines up with the live proxies one to one; after 150 ms still
+(`LiveAdjust.touch(..., resting = true)` keeps the proxies refining) and on release it renders at
+v1.8's scale. With "Fast adjustment preview" off the drag previews at v1.8's scale, once per
+frame. A Brush-mask stroke stamps only the dabs added since the last frame into the preview
+(`MaskBrushRaster.DabTrail`, `StrokeTiles`: 64 px float tiles, at most 1024). A release whose
+full-resolution render is estimated above `MaskTool.REFINE_MIN_MS` (24 ms) becomes a `MaskRefine`:
+bands rendered on the main thread, one slice per Handler message within 6 ms of the live clock,
+while the preview shows the edit; it lands as ONE step through `MaskEdits.applyWith`, equal to
+v1.8's `MaskEdits.apply` (I1). It is a `DeferredStep`: another step, undo / redo, a new gesture
+or leaving the tool lands it first; a layer changed in another way drops it. Under EXACT every
+move previews at once at v1.8's scale and the release renders at once (I8).
+
+**Memory (design 2.4.3).** Two entries in the `MemoryGovernor` registry, for A7b's policy:
+- "display tiles", priority 0, one per editor (region `v19-A6 invalidate`): the bytes of the tile
+  bitmaps held (`DisplayTiles.heldBytes`). At any pressure above NORMAL its trim frees them all
+  (`DisplayTiles.freeBitmaps`) and invalidates the canvas, which renders them again on its next
+  frame; NORMAL frees nothing.
+- "live proxies", priority 10, while a `LiveAdjust` holds proxies (registered with its
+  ComponentCallbacks2, closed with them): `LiveAdjust.proxyBytes`. Above NORMAL, proxies kept
+  after a session (2 s) are freed; at LOW or worse a running session ends (its next frame renders
+  exactly). MODERATE leaves a running session alone.
+Both hold their owner weakly (`engine/live/WeakRegistration`): an owner collected without closing
+reads as 0 bytes and its entry is closed at the next registration. Both trims run on the main
+thread and return the bytes freed. The "Fast adjustment preview" switch reads R13's note
+(`FAST_ADJUST_PREVIEW_DESCRIPTION = StabilityLabels19.FAST_ADJUST_NOTE`) in Settings and in the
+Masks sheet.
+
+**Guards.** `v19/a6/LiftInvalidationTest`, `PreviewEqualsCommitParityTest`,
+`DisplayTilesReuseTest`, `MaskInteractionScaleTest`, `BrushMaskIncrementalTest`,
+`MaskReleaseParityTest`, `GovernorRegistrationTest`; Timing (`A6Bench`, the P0 bench's way of
+timing a laid-out `CanvasView`): `LiftPerfTest` (the brush lift and the raster Eraser's frame on a
+512 px canvas; locally the PRINT lift within Q5's 40 ms at the T606 factor 6 and the PHONE erase
+frame within 1.5x A6's checkpoint) and `MaskFramePerfTest` (the mask tool's work per frame, live
+at most 0.6x v1.8's, for Linear, Radial and Brush; 512 px everywhere, A4 at fit locally).
+
 <!-- /v19-A6 -->
 
 ### Memory and banded save (A7b)
