@@ -93,6 +93,20 @@ class ObjectIndex private constructor(
 
     fun query(rect: RectF): IntArray = query(rect.left, rect.top, rect.right, rect.bottom)
 
+    /**
+     * v1.9 (A5): z-indices (bottom first) of the objects no [query] returns: those whose paint
+     * bounds are empty (a path with neither fill nor outline), which a caller that still finds
+     * them by other means (the vector eraser) checks on its own.
+     */
+    val unbounded: IntArray by lazy {
+        var count = 0
+        for (i in 0 until size) if (isEmpty(i)) count++
+        if (count == 0) EMPTY_INTS else IntArray(count).also { out ->
+            var k = 0
+            for (i in 0 until size) if (isEmpty(i)) out[k++] = i
+        }
+    }
+
     /** Z-indices of the objects whose bounds come within [tol] of ([x], [y]), bottom first. */
     fun queryPoint(x: Float, y: Float, tol: Float): IntArray {
         val e = if (tol.isFinite()) max(0f, tol) else 0f

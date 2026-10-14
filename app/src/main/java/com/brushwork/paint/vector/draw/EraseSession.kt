@@ -6,6 +6,7 @@ import com.brushwork.paint.vector.VPath
 import com.brushwork.paint.vector.VShape
 import com.brushwork.paint.vector.VStroke
 import com.brushwork.paint.vector.VectorContent
+import com.brushwork.paint.vector.geom.ObjectIndex
 import java.util.IdentityHashMap
 import kotlin.math.max
 import kotlin.math.min
@@ -39,6 +40,8 @@ internal class EraseSession(
     val content: VectorContent,
     val mode: VectorEraseMode,
     private val targets: TargetCache = TargetCache(),
+    /** False: every object is tested for every capsule (v1.8's pass; the reference of the index's tests). */
+    private val indexed: Boolean = true,
 ) {
     /** Per object of [objects] when copies were expanded: the index of the object of [content] it comes from; null otherwise. */
     private val origin: IntArray?
@@ -61,6 +64,43 @@ internal class EraseSession(
 
     init {
         targets.trimTo(objects)
+    }
+
+    /**
+     * v1.9 (A5, design 2.4.4): the objects near each eraser capsule come from [content]'s
+     * [ObjectIndex] (usually built already: the layer's renders use it), not from a pass over
+     * every object per point.
+     */
+    private val index: ObjectIndex by lazy(LazyThreadSafetyMode.NONE) { ObjectIndex.of(content) }
+
+    /** When copies were expanded: per object of [content], its first index in [objects] (and [n] last). */
+    private val firstOf: IntArray? = origin?.let { from ->
+        val out = IntArray(content.objects.size + 1) { n }
+        for (i in n - 1 downTo 0) out[from[i]] = i
+        // (Every object expands to at least itself: the ranges are contiguous.)
+        for (j in content.objects.size - 1 downTo 0) if (out[j] == n) out[j] = out[j + 1]
+        out
+    }
+
+    /**
+     * Calls [block] with the index in [objects] of every object whose box may reach the rect
+     * (document px; bottom first, then the objects the index can't place, see
+     * [ObjectIndex.unbounded]). The callers test each object's own box next.
+     */
+    private inline fun near(l: Float, t: Float, r: Float, b: Float, block: (Int) -> Unit) {
+        if (!indexed) {
+            for (i in 0 until n) block(i)
+            return
+        }
+        val ix = index
+        val hits = ix.query(l - QUERY_PAD, t - QUERY_PAD, r + QUERY_PAD, b + QUERY_PAD)
+        val starts = firstOf
+        for (pass in 0..1) {
+            val list = if (pass == 0) hits else ix.unbounded
+            for (j in list) {
+                if (starts == null) block(j) else for (i in starts[j] until starts[j + 1]) block(i)
+            }
+        }
     }
 
     /** Per object: erased whole. */
@@ -123,56 +163,59 @@ internal class EraseSession(
     }
 
     private fun apply(cx: Float, cy: Float, dx: Float, dy: Float, r: Float) {
-        // Widest reach of any object is unknown: test each object's box grown by its own reach.
         val l = min(cx, dx) - r; val t = min(cy, dy) - r
         val rt = max(cx, dx) + r; val b = max(cy, dy) + r
-        for (i in 0 until n) {
-            if (whole[i]) continue
-            if (!targets.boundsOf(objects[i]).let { it[0] <= rt && it[2] >= l && it[1] <= b && it[3] >= t }) continue
-            val tg = target(i)
-            if (!tg.intersects(l, t, rt, b)) continue
-            when (mode) {
-                VectorEraseMode.OBJECT -> if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
-                VectorEraseMode.PARTIAL -> {
-                    if (tg.cut == CutKind.WHOLE) {
-                        if (tg.touchedBy(cx, cy, dx, dy, r)) {
-                            doom(i)
-                            // (A dot is a line with nothing to cut: no hint for it.)
-                            if (!tg.isLine) removedWholeInPartial = true
-                        }
-                    } else {
-                        val set = removed[i] ?: Intervals().also { removed[i] = it }
-                        val size0 = set.size
-                        val sum0 = total(set)
-                        EraseMath.capsuleIntervals(tg.lines[0], cx, cy, dx, dy, r + tg.cutReach, set)
-                        if (set.size != size0 || total(set) != sum0) mark(i)
+        near(l, t, rt, b) { i -> applyTo(i, cx, cy, dx, dy, r, l, t, rt, b) }
+    }
+
+    /** The capsule ([cx], [cy]) to ([dx], [dy]) of radius [r] (box [l], [t], [rt], [b]) over object [i]. */
+    private fun applyTo(i: Int, cx: Float, cy: Float, dx: Float, dy: Float, r: Float, l: Float, t: Float, rt: Float, b: Float) {
+        if (whole[i]) return
+        // Widest reach of any object is unknown: test each object's box grown by its own reach.
+        if (!targets.boundsOf(objects[i]).let { it[0] <= rt && it[2] >= l && it[1] <= b && it[3] >= t }) return
+        val tg = target(i)
+        if (!tg.intersects(l, t, rt, b)) return
+        when (mode) {
+            VectorEraseMode.OBJECT -> if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
+            VectorEraseMode.PARTIAL -> {
+                if (tg.cut == CutKind.WHOLE) {
+                    if (tg.touchedBy(cx, cy, dx, dy, r)) {
+                        doom(i)
+                        // (A dot is a line with nothing to cut: no hint for it.)
+                        if (!tg.isLine) removedWholeInPartial = true
                     }
-                }
-                VectorEraseMode.TO_INTERSECTION -> {
-                    // Closed or filled objects and shapes are only boundaries here.
-                    if (!tg.isLine) continue
-                    if (tg.cut == CutKind.WHOLE) {
-                        // A dot: the touched piece is all of it.
-                        if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
-                        continue
-                    }
-                    val line = tg.lines[0]
-                    // Touched where the eraser meets the line's paint (as the other modes), not
-                    // only its centerline; the spill over a crossing is measured the same way.
-                    val reach = r + tg.cutReach
-                    val set = touched[i] ?: Intervals().also { touched[i] = it }
-                    val sum0 = total(set)
+                } else {
+                    val set = removed[i] ?: Intervals().also { removed[i] = it }
                     val size0 = set.size
-                    EraseMath.capsuleIntervals(line, cx, cy, dx, dy, reach, set)
-                    if (set.isEmpty || (set.size == size0 && total(set) == sum0)) continue
-                    val cr = crossings[i] ?: crossingsOf(i).also { crossings[i] = it }
-                    val out = Intervals()
-                    EraseMath.piecesToIntersection(line, cr, set, reach, out)
-                    val old = removed[i]
-                    if (old == null || total(old) != total(out) || old.size != out.size) {
-                        removed[i] = out
-                        if (!out.isEmpty) mark(i)
-                    }
+                    val sum0 = total(set)
+                    EraseMath.capsuleIntervals(tg.lines[0], cx, cy, dx, dy, r + tg.cutReach, set)
+                    if (set.size != size0 || total(set) != sum0) mark(i)
+                }
+            }
+            VectorEraseMode.TO_INTERSECTION -> {
+                // Closed or filled objects and shapes are only boundaries here.
+                if (!tg.isLine) return
+                if (tg.cut == CutKind.WHOLE) {
+                    // A dot: the touched piece is all of it.
+                    if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
+                    return
+                }
+                val line = tg.lines[0]
+                // Touched where the eraser meets the line's paint (as the other modes), not
+                // only its centerline; the spill over a crossing is measured the same way.
+                val reach = r + tg.cutReach
+                val set = touched[i] ?: Intervals().also { touched[i] = it }
+                val sum0 = total(set)
+                val size0 = set.size
+                EraseMath.capsuleIntervals(line, cx, cy, dx, dy, reach, set)
+                if (set.isEmpty || (set.size == size0 && total(set) == sum0)) return
+                val cr = crossings[i] ?: crossingsOf(i).also { crossings[i] = it }
+                val out = Intervals()
+                EraseMath.piecesToIntersection(line, cr, set, reach, out)
+                val old = removed[i]
+                if (old == null || total(old) != total(out) || old.size != out.size) {
+                    removed[i] = out
+                    if (!out.isEmpty) mark(i)
                 }
             }
         }
@@ -201,14 +244,14 @@ internal class EraseSession(
         val line = tg.lines[0]
         val out = ArrayList<Float>()
         var grid: SegmentGrid? = null
-        for (k in 0 until n) {
-            if (k == i) continue
+        near(tg.left, tg.top, tg.right, tg.bottom) { k ->
             val bb = targets.boundsOf(objects[k])
-            if (bb[0] > tg.right || bb[2] < tg.left || bb[1] > tg.bottom || bb[3] < tg.top) continue
-            for (other in target(k).lines) {
-                if (other.n < 2 || other.right < line.left || other.left > line.right || other.bottom < line.top || other.top > line.bottom) continue
-                val g = grid ?: SegmentGrid.of(line).also { grid = it }
-                EraseMath.crossings(line, other, out, g)
+            if (k != i && !(bb[0] > tg.right || bb[2] < tg.left || bb[1] > tg.bottom || bb[3] < tg.top)) {
+                for (other in target(k).lines) {
+                    if (other.n < 2 || other.right < line.left || other.left > line.right || other.bottom < line.top || other.top > line.bottom) continue
+                    val g = grid ?: SegmentGrid.of(line).also { grid = it }
+                    EraseMath.crossings(line, other, out, g)
+                }
             }
         }
         out.sort()
@@ -257,6 +300,14 @@ internal class EraseSession(
         }
         if (map.isEmpty()) return null
         return content.replaced(map)
+    }
+
+    private companion object {
+        /**
+         * Added around an index query (document px): the index holds paint bounds, the eraser's
+         * own boxes ([TargetCache.boundsOf]) can stick out of them by a rounding.
+         */
+        const val QUERY_PAD = 2f
     }
 }
 
