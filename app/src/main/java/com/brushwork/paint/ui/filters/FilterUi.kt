@@ -360,7 +360,7 @@ private fun PanelHeader(session: FilterSession) {
         }
         RenderingIndicator(session.isRendering && !busy)
         IconButton(onClick = { session.reset() }, enabled = !busy) {
-            Icon(Icons.Filled.RestartAlt, contentDescription = "Reset to defaults")
+            Icon(Icons.Filled.RestartAlt, contentDescription = FilterSession.RESET_ALL)
         }
         CompareButton(session, enabled = !busy)
         FilledIconButton(

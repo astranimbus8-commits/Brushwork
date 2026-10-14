@@ -11,6 +11,7 @@ import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -23,8 +24,10 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.RestartAlt
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
@@ -54,6 +57,7 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -126,6 +130,10 @@ class SliderTyping(val scale: Float = 1f, val decimals: Int = 0, val suffix: Str
  * under "$label|$suffix". Steps are in the shown unit ([SliderTyping.scale]; a 0..1 percentage slider
  * without typing counts as × 100). While increments are on the slider lands on the step's
  * multiples; a long-press on the value opens the Step popup.
+ *
+ * v1.9 (R8): with [onReset] the label row ends with the reset icon ([ResetValueButton], tagged
+ * [resetTag]), at least 8 dp from the value; callers pass it only while the value differs from
+ * its default, so it never sits next to an unchanged value.
  */
 @Composable
 fun LabeledSlider(
@@ -141,6 +149,8 @@ fun LabeledSlider(
     typing: SliderTyping? = null,
     incrementKind: IncrementKind? = null,
     incrementKey: String? = null,
+    onReset: (() -> Unit)? = null,
+    resetTag: String? = null,
 ) {
     var editing by remember { mutableStateOf(false) }
     // v1.7: the value editor's text (here, so the operator keys under the value row type into it).
@@ -230,6 +240,10 @@ fun LabeledSlider(
                     modifier = Modifier.stepOnLongPressFor(stepTarget, enabled),
                 )
             }
+            if (onReset != null) {
+                Spacer(Modifier.width(ResetGap))
+                ResetValueButton(label, onReset, if (resetTag != null) Modifier.testTag(resetTag) else Modifier, enabled)
+            }
         }
         // v1.7 (item 15's UI): while the value is typed, its readout and the operator keys.
         if (typing != null && editorOpen) {
@@ -318,6 +332,22 @@ private fun SliderValueEditor(
 
 /** Smallest height of a tap target the app draws itself (Material components bring their own). */
 internal val MinTouchTarget = 40.dp
+
+/** v1.9 (R8): the least room between a value and the reset icon after it. */
+val ResetGap = 8.dp
+
+/**
+ * v1.9 (R8): the reset icon at the far end of a value's label row: a 24 dp icon in a 40 dp
+ * target, read "Reset <label>" ([FilterLabels19.RESET_ONE]) by TalkBack and tests. It extends
+ * v1.8's point reset to every control; callers show it only while the value differs from its
+ * default.
+ */
+@Composable
+fun ResetValueButton(label: String, onReset: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+    IconButton(onClick = onReset, enabled = enabled, modifier = modifier.size(MinTouchTarget)) {
+        Icon(Icons.Filled.RestartAlt, contentDescription = String.format(FilterLabels19.RESET_ONE, label), modifier = Modifier.size(24.dp))
+    }
+}
 
 /** Width a numeric field takes when its parent doesn't limit it (e.g. a horizontally scrolling strip). */
 private val UnboundedFieldWidth = 240.dp

@@ -357,17 +357,25 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
      */
     internal var heldByTap = false
 
-    /** Restores every parameter to its default (drawing-color parameters to the current drawing color). */
+    /**
+     * Restores every parameter to its default (drawing-color parameters to the current drawing
+     * color). v1.9 (R8): one step, [RESET_ALL].
+     */
     fun reset() {
         if (isClosed || isApplying) return
+        settle()
         values = sessionDefaults()
         onValuesChanged()
+        record(RESET_ALL)
     }
 
-    /** Restores one parameter to its default. */
+    /** Restores one parameter to its default. v1.9 (R8): one step, "Reset <label>" ([FilterLabels19.RESET_ONE]). */
     fun resetParam(key: String) {
         val p = filter.params.firstOrNull { it.key == key } ?: return
+        if (isClosed || isApplying) return
+        settle()
         update(key, sessionDefault(p))
+        record(String.format(FilterLabels19.RESET_ONE, p.label))
     }
 
     /** Default of [p] in this session: [FilterParam.Color.useDrawingColor] means the current drawing color. */
@@ -937,10 +945,13 @@ class FilterSession(val controller: EditorController, val filter: Filter) : InTo
         }
     }
 
-    private companion object {
+    companion object {
+        /** v1.9 (R8): the header's reset button, and the label of the step it records ("Undo: Reset to defaults"). */
+        const val RESET_ALL = "Reset to defaults"
+
         /** A render slower than this is restarted (not queued) when parameters change. */
-        const val SLOW_RENDER_MS = 250L
-        const val HANDLE_GRAB_DP = 36f
-        const val ACCENT = 0xFF4DA3FF.toInt()
+        private const val SLOW_RENDER_MS = 250L
+        private const val HANDLE_GRAB_DP = 36f
+        private const val ACCENT = 0xFF4DA3FF.toInt()
     }
 }
