@@ -158,6 +158,9 @@ class EraseRoutingTest {
         c.pointerDown(ToolPoint(60f, 70f))
         c.pointerMove(ToolPoint(60f, 90f))
         c.pointerUp(ToolPoint(60f, 90f))
+        // (Step 5: "Partial" cuts the shape by region in the background; anything that records a
+        // step lands it first, on this thread.)
+        c.flushDeferredSteps()
         // Whatever the mode makes of it, the layer still holds objects (or its shape), as data.
         assertEquals(steps + 1, c.undoManager.undoCount)
         assertNull(shape.shapeData)

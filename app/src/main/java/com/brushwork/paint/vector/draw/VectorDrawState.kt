@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.model.Layer
 import com.brushwork.paint.vector.VectorContent
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Job
 import java.util.IdentityHashMap
 import java.util.WeakHashMap
@@ -31,8 +32,14 @@ internal class VectorDrawState(initialMode: VectorEraseMode) {
     /** "Selections don't limit vector strokes" was shown. */
     var selectionHintShown = false
 
-    /** "Closed shapes and fills are erased whole" was shown. */
-    var partialWholeHintShown = false
+    /**
+     * v1.9 (R11 c): above 0 while a pending region cut of the eraser lands at once (its
+     * [com.brushwork.paint.DeferredStep] is flushed): the erases that run then cut on this thread.
+     */
+    var cutsNow = 0
+
+    /** Test seam: where the eraser's region cut runs (null: `Dispatchers.Default`). */
+    var cutDispatcher: CoroutineDispatcher? = null
 
     /** What the eraser does on a vector layer (and where its modes are) was shown. */
     var eraserHintShown = false

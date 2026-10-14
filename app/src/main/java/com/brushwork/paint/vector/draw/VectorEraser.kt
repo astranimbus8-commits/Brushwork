@@ -10,6 +10,7 @@ import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
+import com.brushwork.paint.DeferredStep
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
@@ -18,7 +19,17 @@ import com.brushwork.paint.engine.LayerConvert
 import com.brushwork.paint.engine.LayerRenderOverride
 import com.brushwork.paint.engine.PerfTrace
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VectorContent
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlin.math.max
 
 /**
@@ -82,9 +93,12 @@ internal class VectorEraserRecorder(
         path[pathSize++] = x; path[pathSize++] = y; path[pathSize++] = r
         // v1.9 (design 2.4.4): the preview's rebuild is timed as PerfTrace.ERASE_REBUILD.
         val dirty = PerfTrace.span(PerfTrace.ERASE_REBUILD) {
-            session.add(x, y, r)
+            val overRegion = session.add(x, y, r)
             val changed = session.takeChanged()
-            if (changed.isEmpty()) null else preview.update(changed)
+            val parts = if (changed.isEmpty()) null else preview.update(changed)
+            // v1.9 (R11 c): over a shape or filled path the partial eraser punches its capsule
+            // (the region cut itself comes at the lift).
+            if (!overRegion) parts else preview.punch(session.capsule).also { if (parts != null) it.union(parts) }
         } ?: return
         if (!installed) {
             installed = true
@@ -108,8 +122,15 @@ internal class VectorEraserRecorder(
     /**
      * Removes what the gesture erased from what the layer holds NOW (ONE undo step "Erase");
      * [finish] is called once it was applied (or nothing was to be done).
+     *
+     * v1.9 (R11 c): the partial eraser's region cut of shapes and filled paths runs here, on
+     * `Dispatchers.Default` over the immutable objects ([cutInBackground]; the preview stays
+     * meanwhile, the busy overlay shows after [CUT_BUSY_AFTER_MS]); when the layer changed while
+     * it ran, the whole erase runs again on what it holds then ([reruns]). It runs on this thread
+     * inside another step, under another busy operation, while a pending step is flushed
+     * ([sync]) and after [MAX_RERUNS] reruns.
      */
-    private fun apply(finish: () -> Unit) {
+    private fun apply(finish: () -> Unit, reruns: Int = 0, sync: Boolean = false) {
         val current = contentNow()
         if (current == null || c.doc.indexOf(layer) < 0) { removePreview(); finish(); return }
         // v1.9: a shape layer still to convert (its shape decodes again into an equal object).
@@ -121,12 +142,99 @@ internal class VectorEraserRecorder(
             var k = 0
             while (k < pathSize) { s.add(path[k], path[k + 1], path[k + 2]); k += 3 }
         }
-        val after = final.result()
-        if (after == null) { removePreview(); finish(); return }
-        if (final.removedWholeInPartial && !state.partialWholeHintShown) {
-            state.partialWholeHintShown = true
-            c.toast("Closed shapes and fills are erased whole (\"Partial\" cuts strokes and lines)")
+        val targets = final.cutTargets()
+        if (targets.isEmpty()) { land(final, EraseCut.Cuts.NONE, finish); return }
+        val region = sweptRegion()
+        if (sync || state.cutsNow > 0 || reruns >= MAX_RERUNS || c.editDepth != 0 || c.busyMessage != null || !c.scope.isActive) {
+            val cuts = try {
+                PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) }
+            } catch (e: Exception) {
+                EraseCut.Cuts.FAILED
+            }
+            land(final, cuts, finish)
+            return
         }
+        cutInBackground(Cutting(final, current, finish, reruns), targets, region)
+    }
+
+    /** The region the gesture swept ([EraseCut.sweptRegion] of its points). */
+    private fun sweptRegion(): Path {
+        val n = pathSize / 3
+        val xs = FloatArray(n) { path[3 * it] }
+        val ys = FloatArray(n) { path[3 * it + 1] }
+        val rs = FloatArray(n) { path[3 * it + 2] }
+        return EraseCut.sweptRegion(xs, ys, rs, n)
+    }
+
+    /**
+     * A region cut on its way in the background, for [final] over [base] (what the layer held).
+     * As the editor's [DeferredStep] it lands at once when anything else records a step.
+     */
+    private inner class Cutting(val final: EraseSession, val base: VectorContent, val finish: () -> Unit, val reruns: Int) : DeferredStep {
+        var job: Deferred<EraseCut.Cuts>? = null
+        var done = false
+        val completion = CompletableDeferred<Unit>()
+
+        override fun flush() {
+            if (done) return
+            val cuts = try {
+                runBlocking { job?.await() }
+            } catch (e: CancellationException) {
+                null
+            } catch (e: Exception) {
+                EraseCut.Cuts.FAILED
+            }
+            // Whatever lands (or runs again) now does it on this thread, as one step.
+            state.cutsNow++
+            try {
+                c.editScope { landed(this, cuts) }
+            } finally {
+                state.cutsNow--
+            }
+        }
+    }
+
+    private fun cutInBackground(p: Cutting, targets: List<VObject>, region: Path) {
+        val job = c.scope.async(state.cutDispatcher ?: Dispatchers.Default) { PerfTrace.span(PerfTrace.CUT) { EraseCut.cutAll(targets, region) } }
+        p.job = job
+        c.addDeferredStep(p)
+        // (Dispatchers.Main, not immediate, as VectorLayers' renders: it never lands inside another operation.)
+        c.scope.launch(Dispatchers.Main) {
+            val cuts = try {
+                job.await()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                EraseCut.Cuts.FAILED
+            }
+            landed(p, cuts)
+        }
+        c.scope.launch {
+            delay(CUT_BUSY_AFTER_MS)
+            if (!p.done && c.busyMessage == null) c.runBusy(ERASE_LABEL) { p.completion.await() }
+        }
+    }
+
+    /**
+     * The region cut [p] is back ([cuts]; null: it was dropped): applied when the layer still
+     * holds what it was cut from, else the erase runs again on what it holds now.
+     */
+    private fun landed(p: Cutting, cuts: EraseCut.Cuts?) {
+        if (p.done) return
+        p.done = true
+        c.removeDeferredStep(p)
+        p.completion.complete(Unit)
+        val now = contentNow()
+        val same = now != null && c.doc.indexOf(layer) >= 0 && (now === p.base || (layer.vector == null && now == p.base))
+        if (!same || cuts == null) { apply(p.finish, p.reruns + 1); return }
+        land(p.final, cuts, p.finish)
+    }
+
+    /** Applies [final]'s result with the region cut's pieces [cuts] (the layer holds [EraseSession.content]). */
+    private fun land(final: EraseSession, cuts: EraseCut.Cuts, finish: () -> Unit) {
+        val converting = layer.vector == null
+        val after = final.result(cuts.pieces)
+        if (after == null) { removePreview(); finish(); return }
         try {
             if (!converting) {
                 state.update(c, layer, after, ERASE_LABEL) { removePreview(); finish() }
@@ -175,6 +283,12 @@ internal class VectorEraserRecorder(
     companion object {
         /** The undo step of one eraser gesture on a vector layer. */
         const val ERASE_LABEL = "Erase"
+
+        /** A region cut still running after this long (ms) shows the busy overlay (as `VectorLayers.BUSY_AFTER_MS`). */
+        const val CUT_BUSY_AFTER_MS = 400L
+
+        /** After this many reruns (the layer kept changing while the cut ran) it runs on the main thread. */
+        private const val MAX_RERUNS = 2
     }
 }
 
@@ -247,6 +361,27 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         stale.union(dirty)
         val r = Rect()
         if (!dirty.isEmpty) dirty.roundOut(r)
+        r.inset(-2, -2)
+        return r
+    }
+
+    /** Capsules [punch]ed so far (their items' keys are -1, -2, ...: object indices are not negative). */
+    private var punches = 0
+
+    /**
+     * v1.9 (R11 c): takes the eraser's capsule [cap] (x0, y0, x1, y1, radius; [EraseSession.capsule])
+     * away, as the partial eraser's region cut will at the lift; returns the area to redraw.
+     */
+    fun punch(cap: FloatArray): Rect {
+        val p = Path()
+        p.moveTo(cap[0], cap[1])
+        p.lineTo(cap[2], cap[3])
+        val it = item(p, 2f * cap[4], fill = false, butt = false)
+        items[-(++punches)] = listOf(it)
+        union.union(it.bounds)
+        stale.union(it.bounds)
+        val r = Rect()
+        it.bounds.roundOut(r)
         r.inset(-2, -2)
         return r
     }

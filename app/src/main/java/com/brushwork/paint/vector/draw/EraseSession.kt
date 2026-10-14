@@ -15,7 +15,10 @@ import kotlin.math.min
 enum class VectorEraseMode(val label: String, val description: String) {
     /** Every touched object goes. */
     OBJECT("Object", "Erases every object it touches"),
-    /** Strokes and open lines are cut where the eraser passes; closed or filled objects go whole. */
+    /**
+     * Strokes and open lines are cut where the eraser passes; v1.9 (R11 b): shapes and filled paths
+     * are cut by the eraser's region at the lift ([EraseCut]); other closed lines go whole.
+     */
     PARTIAL("Partial", "Cuts strokes and lines where it passes; closed shapes and fills go whole"),
     /** The touched piece of a stroke or line goes, up to where it crosses other lines. */
     TO_INTERSECTION("To intersection", "Erases the touched piece of a line up to where it crosses other lines");
@@ -35,6 +38,10 @@ enum class VectorEraseMode(val label: String, val description: String) {
  * expand the copies first: the session works on each copy as a plain object of its own
  * ([ObjectCopies.expanded]), and [result] replaces an object whose copies were touched by all of
  * its copies' pieces, in the same step. Without copies the session is v1.7's.
+ *
+ * v1.9 (R11 b, A5): the partial eraser only marks the shapes and filled paths it touches
+ * ([cutTargets]); their boolean cut by the swept region ([EraseCut.cutAll], at the lift, in the
+ * background) is handed to [result].
  */
 internal class EraseSession(
     val content: VectorContent,
@@ -125,8 +132,20 @@ internal class EraseSession(
     var hasEffect = false
         private set
 
-    /** True when a closed or filled object is erased whole by the partial eraser. */
-    var removedWholeInPartial = false
+    /** Per object (partial eraser): a shape or filled path the region cut works on ([EraseCut.cutsByRegion]); null in the other modes. */
+    private val byRegion: BooleanArray? = if (mode == VectorEraseMode.PARTIAL) BooleanArray(n) { EraseCut.cutsByRegion(objects[it]) } else null
+
+    /** Per object: [byRegion] and touched (its boolean cut decides what goes, at the lift). */
+    private val cut = BooleanArray(n)
+
+    /** The last capsule [add] applied: x0, y0, x1, y1, radius. */
+    val capsule = FloatArray(5)
+
+    /** The capsule being applied touched an object of [byRegion]. */
+    private var regionHit = false
+
+    /** The last [result] baked an object's live copies into pieces of their own. */
+    var bakedCopies = false
         private set
 
     fun target(i: Int): EraseTarget = targets.of(objects[i])
@@ -150,16 +169,21 @@ internal class EraseSession(
 
     /**
      * The eraser reaches ([x], [y]) with radius [r] (document px): the capsule from the last
-     * point (or a disc for the first one) is applied to every object it can reach.
+     * point (or a disc for the first one) is applied to every object it can reach. True when it
+     * touched a shape or filled path of the partial eraser's region cut (the preview takes the
+     * capsule, [capsule], out of the layer).
      */
-    fun add(x: Float, y: Float, r: Float) {
-        if (!x.isFinite() || !y.isFinite()) return
+    fun add(x: Float, y: Float, r: Float): Boolean {
+        if (!x.isFinite() || !y.isFinite()) return false
         val radius = if (r.isFinite()) max(0.5f, r) else 0.5f
         val cx = if (lastX.isNaN()) x else lastX
         val cy = if (lastY.isNaN()) y else lastY
         val rr = if (lastX.isNaN()) radius else max(radius, lastR)
         lastX = x; lastY = y; lastR = radius
+        capsule[0] = cx; capsule[1] = cy; capsule[2] = x; capsule[3] = y; capsule[4] = rr
+        regionHit = false
         apply(cx, cy, x, y, rr)
+        return regionHit
     }
 
     private fun apply(cx: Float, cy: Float, dx: Float, dy: Float, r: Float) {
@@ -178,12 +202,14 @@ internal class EraseSession(
         when (mode) {
             VectorEraseMode.OBJECT -> if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
             VectorEraseMode.PARTIAL -> {
-                if (tg.cut == CutKind.WHOLE) {
+                if (byRegion?.get(i) == true) {
+                    // v1.9: cut by the region at the lift; every capsule over it is punched.
                     if (tg.touchedBy(cx, cy, dx, dy, r)) {
-                        doom(i)
-                        // (A dot is a line with nothing to cut: no hint for it.)
-                        if (!tg.isLine) removedWholeInPartial = true
+                        regionHit = true
+                        if (!cut[i]) { cut[i] = true; hasEffect = true }
                     }
+                } else if (tg.cut == CutKind.WHOLE) {
+                    if (tg.touchedBy(cx, cy, dx, dy, r)) doom(i)
                 } else {
                     val set = removed[i] ?: Intervals().also { removed[i] = it }
                     val size0 = set.size
@@ -259,15 +285,37 @@ internal class EraseSession(
     }
 
     /**
+     * The objects of [content] the partial eraser's region cut works on (v1.9): each shape or
+     * filled path it touched (an object with live copies once, whichever copies were touched), in
+     * the layer's order.
+     */
+    fun cutTargets(): List<VObject> {
+        val out = ArrayList<VObject>()
+        var last = -1
+        for (i in 0 until n) {
+            if (!cut[i]) continue
+            val j = origin?.get(i) ?: i
+            if (j == last) continue
+            last = j
+            out += content.objects[j]
+        }
+        return out
+    }
+
+    /**
      * The content once the erased objects and parts are gone (a cut object's first piece keeps
      * its id and place, further pieces get new ids right after it), or null when nothing goes.
+     * v1.9: [cuts] holds the region cut's pieces of [cutTargets] by id ([EraseCut.Cuts.pieces]);
+     * a target without an entry stays as it is.
      */
-    fun result(): VectorContent? {
+    fun result(cuts: Map<Long, List<VObject>> = emptyMap()): VectorContent? {
+        bakedCopies = false
         if (!hasEffect) return null
-        if (origin != null) return expandedResult(origin)
+        if (origin != null) return expandedResult(origin, cuts)
         val map = HashMap<Long, List<VObject>>()
         for (i in 0 until n) {
             val o = objects[i]
+            if (cut[i]) { cuts[o.id]?.let { map[o.id] = it }; continue }
             if (whole[i]) { map[o.id] = emptyList(); continue }
             val set = removed[i] ?: continue
             if (set.isEmpty) continue
@@ -279,23 +327,37 @@ internal class EraseSession(
     }
 
     /** What is left of erased objects (pieces in place) when [objects] are the expanded copies ([from]: their object in [content]). */
-    private fun expandedResult(from: IntArray): VectorContent? {
+    private fun expandedResult(from: IntArray, cuts: Map<Long, List<VObject>>): VectorContent? {
         val map = HashMap<Long, List<VObject>>()
         var i = 0
         while (i < n) {
             val j = from[i]
             var end = i
             while (end < n && from[end] == j) end++
+            val id = content.objects[j].id
+            // v1.9: the region cut baked every copy of a cut target itself.
+            val cutHere = cuts[id]
+            if (cutHere != null) {
+                map[id] = cutHere
+                if (end - i > 1) bakedCopies = true
+                i = end
+                continue
+            }
             // The pieces of every copy of content object j, when one of them was erased.
             val out = ArrayList<VObject>(end - i)
             var changedHere = false
             for (k in i until end) {
+                // (A cut target the region cut left: it stays, with its copies unless another one changed.)
+                if (cut[k]) { out += objects[k]; continue }
                 if (whole[k]) { changedHere = true; continue }
                 val set = removed[k]
                 val pieces = if (set == null || set.isEmpty) null else ErasePieces.pieces(target(k), set)
                 if (pieces == null) out += objects[k] else { changedHere = true; out += pieces }
             }
-            if (changedHere) map[content.objects[j].id] = out
+            if (changedHere) {
+                map[id] = out
+                if (end - i > 1) bakedCopies = true
+            }
             i = end
         }
         if (map.isEmpty()) return null

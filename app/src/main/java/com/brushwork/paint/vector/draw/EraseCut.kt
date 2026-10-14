@@ -76,6 +76,17 @@ object EraseCut {
         is VStroke -> false
     }
 
+    /**
+     * True when the partial eraser cuts [o] with its region (R11 b): a shape that is not a line or
+     * an arrow, or a path with a fill. Strokes and open lines keep v1.8's cut along their line;
+     * other closed lines go whole.
+     */
+    fun cutsByRegion(o: VObject): Boolean = when (o) {
+        is VPath -> o.fill != null
+        is VShape -> !o.shape.type.isLineLike
+        is VStroke -> false
+    }
+
     /** [cut], telling a failed op from an untouched target (the caller's toast is for the first only). */
     internal fun cutOne(target: VObject, eraser: Path): Detail {
         if (!isOperand(target)) return Detail.Untouched
@@ -124,6 +135,9 @@ object EraseCut {
     ) {
         companion object {
             val NONE = Cuts(emptyMap(), tooComplex = false, copiesBaked = false)
+
+            /** Nothing could be cut (the cut itself failed): every target stays. */
+            val FAILED = Cuts(emptyMap(), tooComplex = true, copiesBaked = false)
         }
     }
 
