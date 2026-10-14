@@ -22,10 +22,12 @@ import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
 import com.brushwork.paint.compat18.VPathV18
 import com.brushwork.paint.compat18.VShapeV18
+import com.brushwork.paint.compat18.VSplineV18
 import com.brushwork.paint.compat18.VStrokeV18
 import com.brushwork.paint.compat18.VectorCodecV18
 import com.brushwork.paint.compat18.VectorContentV18
 import com.brushwork.paint.core.PackedPoints
+import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.CrashReport
 import com.brushwork.paint.diagnostics.ReportText
@@ -44,12 +46,15 @@ import com.brushwork.paint.storage.NewCanvasSpec
 import com.brushwork.paint.storage.ProjectRepository
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeObject
 import com.brushwork.paint.tools.vector.ShapeSettings
 import com.brushwork.paint.tools.vector.ShapeStyle
 import com.brushwork.paint.tools.vector.ShapeType
+import com.brushwork.paint.v19.a1.A1Tools
+import com.brushwork.paint.v19.a1.A1Tools.curveTool
 import com.brushwork.paint.v19.a8.BackupKit
 import com.brushwork.paint.vector.CopyMaps
 import com.brushwork.paint.vector.VAnchor
@@ -246,11 +251,23 @@ class Qa19CompatBackFromV18RobolectricTest {
         // A9: fully read and fully editable in v1.8.
     }
 
-    @Ignore("5.2 row 10 (mixed curves), existing kinds only: owner A1")
     @Test
     fun row10MixedCurves() {
         v18Reads("curves-mixed")
-        // A1: fully read and fully editable in v1.8.
+        // A1: fully read and fully editable in v1.8: the Curve, Polyline and Path lines of one
+        // vector layer keep what v1.8's tools reopen them by (corners, the polyline flag, the spline).
+        val paths = curvePaths("curves-mixed")
+        assertEquals("one layer, three lines", 3, paths.size)
+        val (curve, polyline, path) = paths
+        assertFalse(curve.polyline)
+        assertEquals(null, curve.spline)
+        assertEquals(3, curve.subpaths.single().anchors.size)
+        assertTrue(polyline.polyline)
+        assertEquals(null, polyline.spline)
+        assertEquals(3, polyline.subpaths.single().anchors.size)
+        assertTrue("Polyline's corners", polyline.subpaths.single().anchors.all { it.sharp })
+        assertFalse(path.polyline)
+        assertEquals(3, requireNotNull(path.spline) { "the Path line keeps its spline" }.points.size)
     }
 
     @Ignore("5.2 row 10 (merged layers), existing kinds only: owner A4")
@@ -299,11 +316,28 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertTrue(shapePieces.all { it is VPathV18 && it.fill != null })
     }
 
-    @Ignore("5.2 row 10 (bevelled points of Curve, Polyline and Path), existing kinds only: owner A1")
     @Test
     fun row10BevelledCurvePoints() {
         v18Reads("bevel-curves")
-        // A1: fully read and fully editable in v1.8.
+        // A1: fully read and fully editable in v1.8. Only Polyline bevels (R18): a bevel is
+        // more sharp points of the same polyline, with thickness in v1.8's range.
+        val paths = curvePaths("bevel-curves")
+        assertEquals(2, paths.size)
+        val (open, closed) = paths
+        for (p in paths) {
+            assertTrue(p.polyline)
+            assertTrue(p.subpaths.single().anchors.all { it.sharp && it.width in 0f..VSplineV18.MAX_WIDTH })
+        }
+        assertEquals("4 points, 2 corners of 3 points each (2 segments)", 8, open.subpaths.single().anchors.size)
+        assertFalse(open.subpaths.single().closed)
+        assertEquals("3 points, 1 corner of 4 points (3 segments)", 6, closed.subpaths.single().anchors.size)
+        assertTrue(closed.subpaths.single().closed)
+    }
+
+    /** The paths of row [row]'s one vector layer, as v1.8 reads them, in drawing order. */
+    private fun curvePaths(row: String): List<VPathV18> {
+        val layer = v18Reads(row).layers.single { it.vectorFile != null }
+        return VectorCodecV18.decode(resource("$row/${layer.vectorFile}")).objects.map { it as VPathV18 }
     }
 
     @Ignore("5.2 row 10 (bevelled points of shapes), existing kinds only: owner A9")
@@ -444,6 +478,8 @@ class Qa19CompatBackFromV18RobolectricTest {
         "backup-state" to ::writeBackupState,
         "backup-folder" to ::writeBackupFolder,
         "cut-pieces" to ::writeCutPieces,
+        "curves-mixed" to ::writeMixedCurves,
+        "bevel-curves" to ::writeBevelledCurves,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -541,6 +577,42 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertTrue("the preferences were written: $changed", "shared_prefs/${CrashLog.PREFS}.xml" in changed)
         for (path in changed) File(app.dataDir, path).copyTo(File(dir, path), overwrite = true)
         File(dir, "files.txt").writeText(changed.joinToString("\n", postfix = "\n"))
+    }
+
+    /** Row 10 (A1): a Curve, a Polyline and a Path line drawn into one vector layer, saved. */
+    private fun writeMixedCurves(dir: File) {
+        val c = A1Tools.controller()
+        for ((id, y) in listOf(ToolId.CURVE to 40f, ToolId.POLYLINE to 120f, ToolId.PATH to 200f)) {
+            val t = c.curveTool(id)
+            for (p in listOf(Vec2(40f, y), Vec2(180f, y + 50f), Vec2(320f, y))) assertTrue("$id", t.addAnchor(p))
+            t.commit()
+        }
+        assertEquals(3, c.activeLayer.vector!!.objects.size)
+        File(app.filesDir, "projects").deleteRecursively()
+        saveProject(c.doc, dir)
+    }
+
+    /** Row 10 (A1): an open and a closed polyline with bevelled corners (R18), saved. */
+    private fun writeBevelledCurves(dir: File) {
+        val c = A1Tools.controller()
+        val t = c.curveTool(ToolId.POLYLINE)
+        c.settings.curveBevelAmount = 0.3f
+        c.settings.curveBevelSegments = 2
+        for (p in listOf(Vec2(40f, 60f), Vec2(120f, 140f), Vec2(200f, 60f), Vec2(280f, 140f))) assertTrue(t.addAnchor(p))
+        t.setWidths(listOf(0, 1, 2, 3), floatArrayOf(1f, 2f, 0.5f, 1f))
+        t.endNumericEdit()
+        t.selectPoints(PointSelection.of(t.pointCount, 1, 2))
+        assertTrue(t.bevelPoints())
+        t.commit()
+        c.settings.curveBevelSegments = 3
+        for (p in listOf(Vec2(60f, 200f), Vec2(200f, 200f), Vec2(130f, 280f))) assertTrue(t.addAnchor(p))
+        t.setClosed(true)
+        t.selectPoints(PointSelection.of(t.pointCount, 0))
+        assertTrue(t.bevelPoints())
+        t.commit()
+        assertEquals(2, c.activeLayer.vector!!.objects.size)
+        File(app.filesDir, "projects").deleteRecursively()
+        saveProject(c.doc, dir)
     }
 
     /**

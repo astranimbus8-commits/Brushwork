@@ -60,6 +60,7 @@ import com.brushwork.paint.tools.vector.spline.SplineBezier
 import com.brushwork.paint.tools.vector.spline.SplineEditing
 import com.brushwork.paint.tools.vector.spline.SplinePresets
 import com.brushwork.paint.ui.common.CurveGenLabels18
+import com.brushwork.paint.ui.common.CurveLabels19
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
@@ -218,7 +219,8 @@ data class CurveSettings(
  *   select it ([selectedPoint]). On a vector layer ✓ adds a [VPath] with its spline ("Path");
  *   a tap on a spline path that passes the I9 check ([SplineBezier.matches]) reopens it ("Edit
  *   path"). Curve / Polyline tapping such a path switch to Path, Path tapping a plain path
- *   switches to the tool that edits it. [toBezier] hands the pending path to the Curve tool
+ *   switches to the tool that edits it (v1.9: Curve and Polyline swap the same way, with a
+ *   toast and [slotFlash]). [toBezier] hands the pending path to the Curve tool
  *   (one in-tool step there: its undo hands it back). Path has its own settings ("vec.path").
  *   The Capsule quick start's look and a handed-over path's look are that pending path's only:
  *   the tool's own settings come back when it ends ([ownSettings]).
@@ -592,6 +594,14 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /** True while a path object of a vector layer is reopened for editing (Compose state). */
     val isReopened: Boolean get() = reopenedState
+
+    /**
+     * v1.9 (R14): bumped once each time a tap on a line of this tool's kind switched to this tool
+     * from another curve tool ([switchAndReopen]; the toast [CurveLabels19.SWITCHED_TO] names it).
+     * The bottom bar's tool slot flashes once, for [SLOT_FLASH_MS], on each change (Compose state).
+     */
+    var slotFlash by mutableIntStateOf(0)
+        private set
 
     /**
      * The reopened path has a gradient fill (an imported SVG): without a fill color of its own it
@@ -2622,8 +2632,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /**
      * With no path pending, a tap on a path object of the vector layer reopens it (a drag starts
-     * a new path): in this tool, or in the one that edits it (Curve / Polyline ↔ Path). True when
-     * the touch is armed for that.
+     * a new path): in this tool, or in the one that edits it (Curve / Polyline ↔ Path; v1.9:
+     * Curve ↔ Polyline too). True when the touch is armed for that.
      */
     private fun armReopen(pt: Vec2): Boolean {
         val (path, k) = reopenablePathAt(pt) ?: return false
@@ -2921,7 +2931,11 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         return if (r > 0) "+$r" else if (r < 0) "−${abs(r)}" else "0"
     }
 
-    /** Switches to the tool of [k] (Curve / Polyline ↔ Path) and reopens [path] there. */
+    /**
+     * Switches to the tool of [k] and reopens [path] there: Curve / Polyline ↔ Path (v1.6), and
+     * v1.9 (R14) Curve ↔ Polyline. When the path opens, the toast [CurveLabels19.SWITCHED_TO]
+     * names that tool and its [slotFlash] is bumped (the bottom bar flashes its tool slot once).
+     */
     private fun switchAndReopen(k: CurveKind, path: VPath) {
         val id = when (k) {
             CurveKind.CURVE -> ToolId.CURVE
@@ -2930,7 +2944,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         }
         val other = controller.tools[id] as? CurveTool ?: return
         controller.selectTool(id)
-        if (controller.currentTool === other) other.reopen(path)
+        if (controller.currentTool !== other || !other.reopen(path)) return
+        controller.toast(String.format(java.util.Locale.ROOT, CurveLabels19.SWITCHED_TO, id.label))
+        other.slotFlash++
     }
 
     /**
@@ -3016,8 +3032,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     /**
      * A path object of the active vector layer under [p] that a tap reopens, and the kind of tool
      * that edits it ([editorKindOf]): this one, or Path for a Curve / Polyline tapping a spline
-     * path, or Curve / Polyline for Path tapping a plain path. (Curve and Polyline still leave
-     * each other's paths alone, as in v1.5.)
+     * path, or Curve / Polyline for Path tapping a plain path. v1.9 (R14): Curve and Polyline
+     * reopen each other's paths too, each in its own tool (up to v1.8 they left them alone).
      */
     private fun reopenablePathAt(p: Vec2): Pair<VPath, CurveKind>? {
         if (opening) return null
@@ -3027,8 +3043,6 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         val hit = controller.vectors.hitTest(layer, p, tol) as? VPath ?: return null
         if (!hit.isCurveEditable || hit.subpaths[0].anchors.size < 2) return null
         val k = editorKindOf(hit)
-        val switches = k != kind && (isPath || k == CurveKind.PATH)
-        if (k != kind && !switches) return null
         // A filled path with a visible line reopens from its line: a tap inside its fill starts
         // a new path there (curves are drawn over filled shapes; a fill alone reopens anywhere).
         // v1.8 (item 1a): the line of any of its copies reopens the path itself (its source).
@@ -4177,6 +4191,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         internal const val NEW_POINT_BRUSH_DELAY_MS = 150L
         /** Undo label of ✓ on a reopened path object. */
         const val EDIT_PATH_LABEL = "Edit path"
+        /** v1.9 (R14): how long the bottom bar's tool slot flashes after a switch ([slotFlash]). */
+        const val SLOT_FLASH_MS = 200L
         /** Undo label of ✓ of a new Path-tool path. */
         const val PATH_LABEL = "Path"
         /** Shown when ✓ of the Curve tool stores a former Path-tool path without its spline. */
