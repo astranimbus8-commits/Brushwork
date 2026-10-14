@@ -1785,7 +1785,7 @@ options on them) and R14 ("a button to duplicate the selection in the same layer
 Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's merge; steps 12
 (vertical justify) and 13 (tap the guide to insert a point) are cuttable and not built yet.
 
-- **Placeholder (R4).** `PlaceholderAmount.WORDS` ("3 words") is first in `CHIP_ORDER`; the
+- **Placeholder (R6).** `PlaceholderAmount.WORDS` ("3 words") is first in `CHIP_ORDER`; the
   amount chips wrap in a `FlowRow` (`TextFlowChips.kt`).
 - **Justify (R4).** `Justify.kt` spreads the lines that `WrapLayout` broke and never changes a
   break, so wrap, frame and overset passes are untouched. `TextJustify.ON` spreads every line
@@ -1810,15 +1810,20 @@ Steps 1-10 of 13 are built. Step 11 (`MergedNumberedTextsTest`) waits for A4's m
   new text in that layer (`TextTool.joinTarget`). Exceptions: "New layer each time" is on, a
   selection is active, or the layer cannot join (a linked frame, a wrap text, a live array, mask
   editing, or `TextCodec.MAX_ITEMS` texts, which toasts `LAYER_FULL`). A tap edits one text
-  (`editLayer` with its index); a second tap cycles to the text under it (`cycleBelow`). ✓
-  re-renders only where the open text was and is. `TextLayerDraw` draws neighbours in picture
-  order. A pixel edit of a layer of several texts toasts `RASTERIZED_TEXTS` with the count (C13,
-  region `v19-A3 rasterizeMessage`).
+  (`editLayer` with its index); a second tap cycles to the text under it (`cycleBelow`). While a
+  text is open, the layer previews in place (`TextTool.LayerPreview`). Each tile draws the open
+  text and only the other texts whose ink meets that tile. ✓ re-renders only where the open text
+  was and is. `TextLayerDraw` draws neighbours in picture order. A pixel edit of a layer of
+  several texts toasts `RASTERIZED_TEXTS` with the count (C13, region `v19-A3 rasterizeMessage`).
+  A text frame links only a layer of one text. For a layer of several, `TextFrameTool.join`
+  refuses with `ALONE_ONLY`.
 - **Text items (R14).** `TextItemOps.duplicateItems(c, layer, area, ids)` returns one
   `UndoAction` for A4's Duplicate; the arrange items use `ArrangeOrder.step`. Duplicate and
   Arrange commit the open text's pending changes first. In the Text More row, "New layer each
   time" (no text open) or Duplicate, Bring forward and Send backward (a text open) stand before
-  Snap; Snap, then Numbers, end the row as in v1.8.
+  Snap; Snap, then Numbers, end the row as in v1.8. The v1.8 pins in
+  `Qa18PolishChromeVerifyTest` require this order. `StripKeysV19`'s ranks would put the v1.9
+  items after Snap; the lead decides which order stays.
 - **Path nodes (R12).** `TextPathSpec.nodes` (frozen) holds a `VSpline`; `TextPathNodes` converts
   a guide. `asPath` gives a curve's 4 control points, a circle's 8 nodes, or a rectangle's exact
   arcs. `asPolyline` gives `CUBIC_POLYLINE_SEGMENTS + 1` points. The edits are

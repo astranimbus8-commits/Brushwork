@@ -102,7 +102,9 @@ internal fun textSpec(tool: TextTool): StripSpec {
         StripItem(T.LETTERS, T.LETTERS_LABEL, T.LETTERS_DP.dp) { LettersButton(tool) },
         StripItem(T.WRAP, T.wrapLabel(tool), T.WRAP_DP.dp, overflowRank = 1) { WrapButton(tool) },
         // v1.9 (R14, R19): the open text as an item of its layer. The v1.9 More items stand before
-        // Snap: Snap, then Numbers while a text is open, end the More row as in v1.8.
+        // Snap: Snap, then Numbers while a text is open, end the More row as in v1.8 (the v1.8
+        // pins Qa18PolishChromeVerifyTest keeps; StripKeysV19's ranks would put them after it,
+        // which the lead decides: a LeadRequest).
         if (item == null) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
             ToolIconButton(
                 icon = Icons.Outlined.ControlPointDuplicate,

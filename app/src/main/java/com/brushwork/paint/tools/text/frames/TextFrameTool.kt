@@ -961,8 +961,14 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         cancelLink()
         val fromItem = threads.frameOf(from) ?: return false
         // v1.9 (F2): only a layer of one text joins (it becomes a frame, and a frame is alone in
-        // its layer, I24); a layer of several texts is refused, so none of its texts is lost.
-        val tItem = TextCodec.decodeAll(target.textData).singleOrNull() ?: return false
+        // its layer, I24); a layer of several texts is refused with a message, so none of its
+        // texts is lost and the link mode doesn't end without a word.
+        val tItems = TextCodec.decodeAll(target.textData)
+        if (tItems.size > 1) {
+            controller.toast(ALONE_ONLY)
+            return false
+        }
+        val tItem = tItems.singleOrNull() ?: return false
         val tFrame = threads.frameOf(target)
         if (tFrame != null && tFrame.thread.storyId == fromItem.thread.storyId) {
             controller.toast(SAME_STORY)
@@ -1293,6 +1299,13 @@ class TextFrameTool(controller: EditorController) : Tool(controller), Positioned
         const val HORIZONTAL_ONLY = "Only horizontal text boxes can be linked"
         const val SINGLE_FRAME_ONLY = "Only a text box or a story's single frame can be linked: unlink that story first"
         const val SAME_STORY = "That frame is already part of this story"
+
+        /**
+         * v1.9 (F2, I24): a text of a layer of several can't become a frame. Stands in for a
+         * TextLabels19 entry that LabelsV19 lacks (a LeadRequest), worded like
+         * [com.brushwork.paint.tools.text.TextTool.WRAP_ALONE_ONLY].
+         */
+        const val ALONE_ONLY = "Only a text alone in its layer can be linked"
         const val NOTHING_TO_UNLINK = "This is the last frame of its story: nothing to unlink"
         const val TOO_SMALL = "Drag a bigger rectangle to draw a text frame"
 

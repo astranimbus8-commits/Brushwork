@@ -26,6 +26,7 @@ import com.brushwork.paint.model.LayerData
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.frames.FrameFixtures
+import com.brushwork.paint.tools.text.frames.TextFrameTool
 import com.brushwork.paint.tools.transform.DataRender
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.layers.FrameInfoCache
@@ -434,6 +435,7 @@ class TextMultiItemReadersTest {
         assertNotNull(target)
         val steps = s.c.undoManager.undoCount
         assertFalse(s.tool.join(frame, target!!))
+        assertEquals("v1.9 review: the refusal says why", TextFrameTool.ALONE_ONLY, s.c.message)
         assertEquals(json, target.textData)
         assertEquals(steps, s.c.undoManager.undoCount)
         assertEquals("A short story", s.c.textThreads.frameOf(frame)!!.thread.story)

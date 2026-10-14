@@ -34,14 +34,14 @@ import org.robolectric.annotation.Config
 /**
  * v1.9 A3 step 7 (R14 a; I27): “New layer each time” in the Text tool's More row of the real
  * editor on the 360 dp phone, at font scale 1 and at each of [Qa19Ui.FONT_SCALES]:
- * - while no text is open, the More row ends with it (tag [V19Tags.NEW_LAYER_EACH_TIME]), a
- *   checkbox-like toggle, off, [StripKeysV19.NEW_LAYER_EACH_TIME_TEXT] wide, inside the screen,
+ * - while no text is open, the More row holds it (tag [V19Tags.NEW_LAYER_EACH_TIME]; before
+ *   Snap, which still ends the row as in v1.8, see [TextStripItems]), a checkbox-like toggle, off, [StripKeysV19.NEW_LAYER_EACH_TIME_TEXT] wide, inside the screen,
  *   its label not cut (it grows up to [TextStripItems.NEW_LAYER_MAX_FONT_SCALE]);
  * - a tap turns it on (the setting too) and off again;
  * - off, a tap on empty canvas adds the new text to the active text layer; on, it gets a layer
  *   of its own;
  * - while a text is open the toggle is gone and Duplicate ([V19Tags.TEXT_DUPLICATE],
- *   [StripKeysV19.DUPLICATE] wide) ends the More row, with Bring forward and Send backward for a
+ *   [StripKeysV19.DUPLICATE] wide) is in the More row, with Bring forward and Send backward for a
  *   text of a layer of several (step 8); Duplicate copies the open text in one step.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -58,7 +58,7 @@ class Qa19TextLayersUiTest {
             t.newLayerEachTime = false
             Qa19Ui.settle()
 
-            // No text open: the toggle ends the More row, off.
+            // No text open: the toggle in the More row, off.
             assertTrue("$where: the More row opens", StripTestKit.moreRowShown() || Qa19Ui.openMoreRow())
             val toggle = toggleNode(where)
             assertTrue("$where: in the More row", generateSequence(toggle) { it.parent }.any(StripTestKit::isStripMoreRow))
@@ -95,7 +95,7 @@ class Qa19TextLayersUiTest {
             assertEquals("$where: a layer of its own", layers + 2, c.doc.layers.size)
             assertEquals(listOf("Three"), TextCodec.decodeAll(c.activeLayer.textData).map { it.text })
 
-            // A text open: no toggle; Duplicate ends the More row (alone in its layer: no arrange items).
+            // A text open: no toggle; Duplicate in the More row (alone in its layer: no arrange items).
             tap(s, 200f, 150f)
             assertNotNull(t.item)
             if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()

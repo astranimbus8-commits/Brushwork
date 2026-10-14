@@ -238,11 +238,30 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     private var belowCount by mutableIntStateOf(0)
     private var aboveCount by mutableIntStateOf(0)
 
-    /** Publishes the open text's place in its layer ([belowCount], [aboveCount]) after a change. */
+    /**
+     * Where [loadedBelow] and [loadedAbove] draw ([TextLayerDraw.inkRect], in the same order),
+     * set with them ([placed]): the in-place preview draws only the texts that meet the tile it
+     * redraws, the rule ✓ redraws them by ([TextLayerDraw.drawMeeting]).
+     */
+    private var belowInk: List<Rect> = emptyList()
+    private var aboveInk: List<Rect> = emptyList()
+
+    /** The clip of the tile [LayerPreview] draws (main thread, no allocation per tile). */
+    private val previewClip = Rect()
+
+    /**
+     * Publishes the open text's place in its layer ([belowCount], [aboveCount]) after a change,
+     * and where its other texts draw ([belowInk], [aboveInk]).
+     */
     private fun placed() {
         belowCount = loadedBelow.size
         aboveCount = loadedAbove.size
+        belowInk = inkRects(loadedBelow, belowPrepared)
+        aboveInk = inkRects(loadedAbove, abovePrepared)
     }
+
+    private fun inkRects(items: List<TextItem>, preps: List<PreparedText>): List<Rect> =
+        items.indices.map { k -> TextLayerDraw.inkRect(items[k], preps[k]) }
 
     /**
      * v1.9 (R14): the pending text is a NEW text that goes into [editingLayer] on ✓ (on top of
@@ -436,18 +455,27 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
      * previews). The text is already laid out ([preparedFor] cache), so a tile redraw only draws it.
      * v1.9 (F2, R14): every text of the layer is drawn, in picture order, the open one in its
      * place ([loadedBelow] under it, [loadedAbove] over it, as laid out when loaded); a new text
-     * that joins the layer is drawn on top of its texts.
+     * that joins the layer is drawn on top of its texts. The other texts are drawn only where they
+     * meet the tile being redrawn ([belowInk], [aboveInk]): a drag redraws the tiles around the
+     * open text every frame, and a layer may hold [TextCodec.MAX_ITEMS] texts (T606).
      */
     private inner class LayerPreview(override val layer: Layer) : LayerRenderOverride {
         override fun drawContent(canvas: Canvas): Boolean {
-            val below = loadedBelow
-            val belowPreps = belowPrepared
-            for (k in below.indices) TextRenderer.drawItem(canvas, below[k], belowPreps[k], null, doc.colorMode)
+            // A live array's copies are drawn from the layer over a larger area: every text then.
+            // An empty clip (getClipBounds false) leaves previewClip empty: nothing else is drawn.
+            val clip = if (layer.array == null) previewClip.also { canvas.getClipBounds(it) } else null
+            drawOthers(canvas, loadedBelow, belowPrepared, belowInk, clip)
             item?.let { cur -> TextRenderer.drawItem(canvas, cur, preparedFor(cur), null, doc.colorMode) }
-            val above = loadedAbove
-            val abovePreps = abovePrepared
-            for (k in above.indices) TextRenderer.drawItem(canvas, above[k], abovePreps[k], null, doc.colorMode)
+            drawOthers(canvas, loadedAbove, abovePrepared, aboveInk, clip)
             return true
+        }
+
+        /** [texts] in order, those whose [ink] meets [clip] (all of them without one). */
+        private fun drawOthers(canvas: Canvas, texts: List<TextItem>, preps: List<PreparedText>, ink: List<Rect>, clip: Rect?) {
+            for (k in texts.indices) {
+                if (clip != null && k < ink.size && !Rect.intersects(ink[k], clip)) continue
+                TextRenderer.drawItem(canvas, texts[k], preps[k], null, doc.colorMode)
+            }
         }
     }
 
@@ -543,7 +571,11 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
     /** v1.9 (R14): every text of a text layer as stored in [data], each laid out ([preps], same order). */
     private class LayerTexts(val data: String, val items: List<TextItem>, val preps: List<PreparedText>)
 
-    /** Decoded texts of text layers, keyed by layer id (dropped when the stored text changes). */
+    /**
+     * Decoded texts of text layers, keyed by layer id (dropped when the stored text changes). At
+     * most [LAYER_CACHE_SIZE] layers and [LAYER_CACHE_TEXTS] laid-out texts: v1.9 layers hold up
+     * to [TextCodec.MAX_ITEMS] texts each, so the layer count alone no longer bounds it (T606).
+     */
     private val layerTextCache = HashMap<Long, LayerTexts>()
 
     /** The texts of [layer] (null when it holds none), laid out; cached while its data and the fonts are unchanged. */
@@ -553,7 +585,10 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         val items = TextCodec.decodeAll(data)
         if (items.isEmpty()) return null
         val texts = LayerTexts(data, items, items.map { TextRenderer.prepare(it) })
-        if (layerTextCache.size >= LAYER_CACHE_SIZE) layerTextCache.clear()
+        layerTextCache.remove(layer.id)
+        if (layerTextCache.size >= LAYER_CACHE_SIZE || layerTextCache.values.sumOf { it.items.size } + items.size > LAYER_CACHE_TEXTS) {
+            layerTextCache.clear()
+        }
         layerTextCache[layer.id] = texts
         return texts
     }
@@ -735,6 +770,7 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         if (stale) {
             belowPrepared = loadedBelow.mapIndexed { k, t -> belowPrepared[k].takeIf { it.fontsCurrent } ?: TextRenderer.prepare(t) }
             abovePrepared = loadedAbove.mapIndexed { k, t -> abovePrepared[k].takeIf { it.fontsCurrent } ?: TextRenderer.prepare(t) }
+            placed()
             if (previewInLayer) editingLayer?.let { controller.tiles.invalidate(Rect(0, 0, doc.width, doc.height)) }
         }
         if (cur.spec.fontId == null && cur.spec.list.markerFontId == null) {
@@ -2597,6 +2633,9 @@ class TextTool(controller: EditorController) : Tool(controller), TextEditorHost,
         /** Extra document px redrawn around the in-layer preview. */
         private const val PREVIEW_SLACK_PX = 2
         private const val LAYER_CACHE_SIZE = 16
+
+        /** v1.9 (R14): the most laid-out texts [layerTextCache] keeps, over all its layers (4 full layers). */
+        private const val LAYER_CACHE_TEXTS = 4 * TextCodec.MAX_ITEMS
         /** Guide label of a text path's other points. */
         private const val PATH_POINT_LABEL = "Path point"
         /** A box edge counts as upright / level (and snaps) when its direction is this close to an axis (cos ~0.8°). */
