@@ -1,7 +1,5 @@
 package com.brushwork.paint.qa17
 
-import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.brush.BrushLibrary
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.qa16.QaCurves
@@ -23,6 +21,7 @@ import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import com.brushwork.paint.ui.vector.SHARP_MIXED
+import com.brushwork.paint.ui.vector.TYPE_POINT_WEIGHT
 import com.brushwork.paint.vector.VPath
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -156,13 +155,10 @@ class Qa17PointsGroupPropsUiTest {
         assertEquals(5f, tool.spline!!.points[2].weight, 1e-4f)
         press(PointLabels.SELECT_ALL, 44f)
         click(POINT_WEIGHT_LABEL, exact = true)
-        // (The field's own node carries the state; its visible label is a child text node.)
-        var field = SmokeUi.find(POINT_WEIGHT_LABEL, exact = true)?.node
-        while (field != null && field.config.getOrNull(SemanticsProperties.StateDescription) == null) field = field.parent
-        val state = field?.config?.getOrNull(SemanticsProperties.StateDescription)
-        assertTrue("the weight field says Mixed: $state", state?.startsWith(PointLabels.MIXED) == true)
+        // v1.9 (R1): the group's weight control is the one point's, its value box reading "Mixed".
+        assertTrue("the weight reads Mixed: ${SmokeUi.shown().take(60)}", has("$POINT_WEIGHT_LABEL ${PointLabels.MIXED}", exact = true))
         val n3 = steps(tool)
-        press("Type $POINT_WEIGHT_LABEL")
+        press(TYPE_POINT_WEIGHT)
         SmokeUi.typeAndDone(POINT_WEIGHT_LABEL, "*4")
         assertEquals("each weight × 4, 10 at most", listOf(4f, 4f, 10f, 4f, 4f), tool.spline!!.points.map { it.weight })
         assertEquals("one step for all five", n3 + 1, steps(tool))

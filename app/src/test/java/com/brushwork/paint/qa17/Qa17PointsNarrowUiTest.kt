@@ -16,7 +16,7 @@ import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.common.V18Tags
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
-import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
+import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.vector.POINT_WEIGHT_LABEL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -107,7 +107,7 @@ class Qa17PointsNarrowUiTest {
         val group = buildList {
             add(PointLabels.DESELECT_ALL to SELECTION_DP)
             if (tool.isPath) add(POINT_WEIGHT_LABEL to FIELD_DP)
-            add(POINT_THICKNESS_LABEL to FIELD_DP)
+            add(ThicknessRowLabels.TYPE to FIELD_DP)
             if (!tool.polyline) add("Sharp corner" to CHIP_DP)
             add("Delete point" to CHIP_DP)
         }

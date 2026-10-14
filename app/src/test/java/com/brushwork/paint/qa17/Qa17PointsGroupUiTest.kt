@@ -14,6 +14,7 @@ import com.brushwork.paint.tools.vector.CurveTool
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
 import com.brushwork.paint.ui.editor.chrome.ChromeHarness
+import com.brushwork.paint.ui.points.ThicknessRowLabels
 import com.brushwork.paint.ui.vector.POINT_THICKNESS_LABEL
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -146,7 +147,7 @@ class Qa17PointsGroupUiTest {
         assertEquals(5, tool.pointSelection.count)
         assertTrue("$label: \"Mixed\"", has(PointLabels.MIXED, exact = true))
         val n1 = steps(tool)
-        press("Type $POINT_THICKNESS_LABEL")
+        press(ThicknessRowLabels.TYPE)
         SmokeUi.typeAndDone(POINT_THICKNESS_LABEL, "*1.5")
         val w = widths(tool)
         val want = listOf(1.5f, 1.5f, 0.75f, 1.5f, 3f)

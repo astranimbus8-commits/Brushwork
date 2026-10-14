@@ -241,7 +241,6 @@ internal const val CURVE_LINE_WIDTH_DP = 64
 internal const val CURVE_ORDER_DP = 64
 internal const val CURVE_GENERATOR_DP = 92
 internal const val CURVE_THICKNESS_DP = 260
-internal const val CURVE_GROUP_THICKNESS_DP = 224
 internal const val CURVE_WEIGHT_DP = 64
 
 /** The keys of the curve strips' items. */
@@ -559,10 +558,13 @@ private fun closedItem(tool: CurveTool, row: StripRow): StripItem {
     }
 }
 
+/** Path: the "Order" item's label and face ("Order 4"). */
+internal fun orderLabel(order: Int): String = "Order $order"
+
 /** Path: "Order 4" (its value); its popup holds v1.7's stepper ("Lower order", "Higher order"). */
-private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, "Order ${f.order}", CURVE_ORDER_DP, row) {
+private fun orderItem(tool: CurveTool, f: CurveStripFacts, row: StripRow) = item(CurveKeys.ORDER, orderLabel(f.order), CURVE_ORDER_DP, row) {
     val order = tool.pathOrder
-    DropCell("Order $order", CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText("Order $order") }) { _ ->
+    DropCell(orderLabel(order), CURVE_ORDER_DP, longPress = false, arrow = false, face = { CellText(orderLabel(order)) }) { _ ->
         OrderStepper(tool, tool.pathOrder)
     }
 }
@@ -653,7 +655,8 @@ private fun selectAllItem(tool: CurveTool, f: CurveStripFacts): StripItem {
 
 /**
  * "Point thickness": one point's [ThicknessControl] (‹ value › and its slider, whole on a 360 dp
- * screen), or several points' [GroupThicknessField]; nothing without a selection.
+ * screen), or v1.9 (R1) several points' [GroupThicknessControl], the same row at the same width;
+ * nothing without a selection.
  */
 private fun thicknessItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): StripItem? = when {
     f.single >= 0 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_THICKNESS_DP, StripRow.MORE) {
@@ -663,21 +666,17 @@ private fun thicknessItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi)
             ui.typing = CurveTyping.Thickness(f.single)
         })
     }
-    f.selected >= 2 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_GROUP_THICKNESS_DP, StripRow.MORE) {
+    f.selected >= 2 -> item(CurveKeys.THICKNESS, POINT_THICKNESS_LABEL, CURVE_THICKNESS_DP, StripRow.MORE) {
         val ctx = LocalStripContext.current
-        GroupThicknessField(
-            tool,
-            onOpenDialog = {
-                ctx.closeMore()
-                ui.typing = CurveTyping.GroupThickness
-            },
-            modifier = Modifier.width(CURVE_GROUP_THICKNESS_DP.dp),
-        )
+        GroupThicknessControl(tool, onType = {
+            ctx.closeMore()
+            ui.typing = CurveTyping.GroupThickness
+        })
     }
     else -> null
 }
 
-/** Path: "Point weight" (its value under "Weight"); its popup is v1.6's Weight control or the group's field. */
+/** Path: "Point weight" (its value under "Weight"); its popup is v1.6's Weight control or (v1.9) the group's [GroupWeightControl]. */
 private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = item(CurveKeys.WEIGHT, POINT_WEIGHT_LABEL, CURVE_WEIGHT_DP, StripRow.MORE) {
     val ctx = LocalStripContext.current
     val shown = if (f.single >= 0) {
@@ -702,7 +701,7 @@ private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = 
                 ui.typing = CurveTyping.Weight(f.single)
             })
         } else {
-            GroupWeightField(tool, onOpenDialog = {
+            GroupWeightControl(tool, onType = {
                 close()
                 ctx.closeMore()
                 ui.typing = CurveTyping.GroupWeight
