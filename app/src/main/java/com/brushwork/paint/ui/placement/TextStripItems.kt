@@ -15,6 +15,9 @@ import androidx.compose.material.icons.filled.TextRotateVertical
 import androidx.compose.material.icons.filled.TextRotationNone
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.outlined.ControlPointDuplicate
+import androidx.compose.material.icons.outlined.FlipToBack
+import androidx.compose.material.icons.outlined.FlipToFront
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -27,6 +30,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.tools.frame.FrameDividerTool
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.PlaceLabels19
 import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.LocalSheetHost
@@ -37,6 +41,7 @@ import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
+import com.brushwork.paint.vector.select.ObjectEdits
 
 /**
  * The Text tool's strip (v1.8, design §3.9 "Text"; area G): row 1 "Edit text" (dimmed with no
@@ -45,7 +50,8 @@ import com.brushwork.paint.ui.tools.strip.StripSpec
  * "Numbers" while a text is open (no slot kept without one), under v1.7's hint. The editor
  * dialog and the Numbers, Wrap and Letter scaling sheets are its overlays, as v1.7 hosted them.
  * v1.9 (R14) ends the More row with “New layer each time” while no text is open, and fades the
- * wrap button for a text that shares its layer with others.
+ * wrap button for a text that shares its layer with others; with a text open the More row ends
+ * with Duplicate and, for a text of a layer of several, Bring forward and Send backward (R19).
  */
 @Composable
 internal fun textSpec(tool: TextTool): StripSpec {
@@ -104,6 +110,35 @@ internal fun textSpec(tool: TextTool): StripSpec {
                 tool.lettersSheetOpen = false
                 tool.numbersOpen = true
             })
+        },
+        // v1.9 (R14, R19): the open text as an item of its layer, after v1.8's More items.
+        if (item == null) null else StripItem(T.DUPLICATE.key, LayerLabels19.DUPLICATE, T.DUPLICATE.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.ControlPointDuplicate,
+                contentDescription = LayerLabels19.DUPLICATE,
+                onClick = { tool.duplicateOpen() },
+                modifier = Modifier.testTag(V19Tags.TEXT_DUPLICATE),
+                enabled = tool.canDuplicate,
+                size = T.DUPLICATE.widthDp.dp,
+            )
+        },
+        if (item == null || !tool.arrangeShown) null else StripItem(T.FORWARD.key, ObjectEdits.Arrange.FORWARD.label, T.FORWARD.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.FlipToFront,
+                contentDescription = ObjectEdits.Arrange.FORWARD.label,
+                onClick = { tool.arrangeOpen(1) },
+                enabled = tool.canBringForward,
+                size = T.FORWARD.widthDp.dp,
+            )
+        },
+        if (item == null || !tool.arrangeShown) null else StripItem(T.BACKWARD.key, ObjectEdits.Arrange.BACKWARD.label, T.BACKWARD.widthDp.dp, row = StripRow.MORE) {
+            ToolIconButton(
+                icon = Icons.Outlined.FlipToBack,
+                contentDescription = ObjectEdits.Arrange.BACKWARD.label,
+                onClick = { tool.arrangeOpen(-1) },
+                enabled = tool.canSendBackward,
+                size = T.BACKWARD.widthDp.dp,
+            )
         },
         // v1.9 (R14): “New layer each time” while no text is open (off, a new text joins the
         // active text layer), after v1.8's More items.
@@ -215,6 +250,13 @@ internal object TextStripItems {
 
     /** v1.9 (R14): the More-row toggle [NewLayerEachTimeButton], while no text is open. */
     val NEW_LAYER = StripKeysV19.NEW_LAYER_EACH_TIME_TEXT
+
+    /** v1.9 (R14): Duplicate for the open text (tag [V19Tags.TEXT_DUPLICATE]). */
+    val DUPLICATE = StripKeysV19.DUPLICATE
+
+    /** v1.9 (R19): Bring forward and Send backward for the open text of a layer of several. */
+    val FORWARD = StripKeysV19.FORWARD
+    val BACKWARD = StripKeysV19.BACKWARD
 
     /** The largest font scale at which [NEW_LAYER]'s label fits its two lines (I27). */
     const val NEW_LAYER_MAX_FONT_SCALE = 1.3f

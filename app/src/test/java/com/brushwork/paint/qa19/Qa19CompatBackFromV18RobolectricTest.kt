@@ -70,6 +70,7 @@ import com.brushwork.paint.tools.text.TextListType
 import com.brushwork.paint.tools.text.TextNumbering
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
+import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -543,11 +544,17 @@ class Qa19CompatBackFromV18RobolectricTest {
         }
     }
 
-    @Ignore("5.2 row 12 (text arrange order), existing fields: owner A3")
     @Test
     fun row12TextArrangeOrder() {
-        v18Reads("text-arrange")
-        // A3: identical in v1.8.
+        v18Reads("text-arrange", listOf("more"))
+        // A3: v1.9's Bring forward stores the new picture order in the existing fields (`item`
+        // and `more`, bottom first); v1.8 shows the saved pixels, drawn in that order, and edits
+        // the bottom text, which is the one the arrange put there.
+        val data = firstText("text-arrange", "Arranged")
+        assertEquals("arranged by Bring forward", ARRANGED_ORDER, TextCodec.decodeAll(data).map { it.text })
+        val first = requireNotNull(TextCodecV18.decode(data)) { "v1.8 reads the layer" }
+        assertEquals("v1.8 edits the new bottom text", ARRANGED_ORDER[0], first.text)
+        assertEquals(ARRANGE[1].cx, first.cx, 0.01f)
     }
 
     /** 5.2 row 12 (R17 edits), existing fields: owner A9, fixture by [writeShapeR17] (the tool driven below the UI). */
@@ -687,6 +694,7 @@ class Qa19CompatBackFromV18RobolectricTest {
         "text-several" to ::writeTextSeveral,
         "text-transform" to ::writeTextTransform,
         "text-array-lift" to ::writeTextArrayLift,
+        "text-arrange" to ::writeTextArrange,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1167,6 +1175,26 @@ class Qa19CompatBackFromV18RobolectricTest {
         saveTextLayers(dir, "Array source" to SEVERAL)
     }
 
+    /**
+     * Row 12 (A3): "Arranged", [ARRANGE] drawn and stored by v1.9, then its bottom text opened in
+     * the Text tool and moved up by Bring forward (past the text it overlaps): [ARRANGED_ORDER].
+     */
+    private fun writeTextArrange(dir: File) {
+        val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
+        val layer = Layer(doc.newLayerId(), "Arranged", BitmapUtils.createLayerBitmap(doc.width, doc.height))
+        for (item in ARRANGE) TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
+        layer.textData = TextCodec.encodeAll(ARRANGE)
+        doc.layers += layer
+        val c = EditorController(app, doc, CoroutineScope(Dispatchers.Unconfined), AppSettings(app))
+        c.selectTool(ToolId.TEXT)
+        val tool = c.tools.getValue(ToolId.TEXT) as TextTool
+        assertTrue(tool.editLayer(layer, index = 0))
+        assertTrue("Bring forward", tool.arrangeOpen(1))
+        tool.discard()
+        assertEquals(ARRANGED_ORDER, TextCodec.decodeAll(layer.textData).map { it.text })
+        saveProject(doc, dir)
+    }
+
     /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
     private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) =
         saveTextLayers(dir, *texts.map { (name, item) -> name to listOf(item) }.toTypedArray())
@@ -1245,6 +1273,16 @@ class Qa19CompatBackFromV18RobolectricTest {
             TextItem("First text", TextSpec(sizePx = 22f), cx = 90f, cy = 40f),
             TextItem("Second", TextSpec(sizePx = 26f, color = 0xFFCC2222.toInt()), cx = 140f, cy = 90f, rotationDeg = -8f),
         )
+
+        /** Row 12 (A3): three texts, bottom first; the first two overlap, the third is apart. */
+        val ARRANGE = listOf(
+            TextItem("Bottom", TextSpec(sizePx = 36f), cx = 90f, cy = 60f),
+            TextItem("Middle", TextSpec(sizePx = 36f, color = 0xFF2266CC.toInt()), cx = 110f, cy = 72f),
+            TextItem("Top", TextSpec(sizePx = 20f), cx = 190f, cy = 135f),
+        )
+
+        /** Row 12 (A3): [ARRANGE] after Bring forward of its bottom text. */
+        val ARRANGED_ORDER = listOf("Middle", "Bottom", "Top")
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(

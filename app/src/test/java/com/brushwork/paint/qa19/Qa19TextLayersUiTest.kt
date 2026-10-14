@@ -14,10 +14,12 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.text.TextCodec
 import com.brushwork.paint.tools.text.TextTool
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.PlaceLabels19
 import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.placement.TextStripItems
 import com.brushwork.paint.ui.tools.strip.StripKeysV19
+import com.brushwork.paint.vector.select.ObjectEdits
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -38,7 +40,9 @@ import org.robolectric.annotation.Config
  * - a tap turns it on (the setting too) and off again;
  * - off, a tap on empty canvas adds the new text to the active text layer; on, it gets a layer
  *   of its own;
- * - while a text is open the toggle is gone.
+ * - while a text is open the toggle is gone and Duplicate ([V19Tags.TEXT_DUPLICATE],
+ *   [StripKeysV19.DUPLICATE] wide) ends the More row, with Bring forward and Send backward for a
+ *   text of a layer of several (step 8); Duplicate copies the open text in one step.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q360, instrumentedPackages = ["com.brushwork.paint.qa19.textlayerssandbox"])
@@ -91,11 +95,33 @@ class Qa19TextLayersUiTest {
             assertEquals("$where: a layer of its own", layers + 2, c.doc.layers.size)
             assertEquals(listOf("Three"), TextCodec.decodeAll(c.activeLayer.textData).map { it.text })
 
-            // A text open: no toggle.
+            // A text open: no toggle; Duplicate ends the More row (alone in its layer: no arrange items).
             tap(s, 200f, 150f)
             assertNotNull(t.item)
             if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()
             assertNull("$where: no toggle while a text is open", Qa19Ui.tagged(V19Tags.NEW_LAYER_EACH_TIME))
+            val dup = duplicateNode(where)
+            assertTrue("$where: Duplicate in the More row", generateSequence(dup) { it.parent }.any(StripTestKit::isStripMoreRow))
+            val dr = s.dp(box(dup))
+            assertEquals("$where: Duplicate's width", StripKeysV19.DUPLICATE.widthDp.toFloat(), dr.width, 1f)
+            assertTrue("$where: Duplicate inside the screen: $dr", dr.left >= -0.5f && dr.right <= s.widthDp + 0.5f)
+            assertTrue("$where: labelled", labels(dup).any { it == LayerLabels19.DUPLICATE })
+            assertFalse("$where: no arrange items for a text alone", Qa19Ui.has(ObjectEdits.Arrange.FORWARD.label, exact = true))
+            t.discard()
+            Qa19Ui.settle()
+
+            // A text of a layer of several: Bring forward and Send backward too; Duplicate copies it.
+            tap(s, 60f, 60f)
+            assertSame("$where: the bottom text of the joined layer", first, t.editingLayer)
+            assertEquals(0, t.openIndex)
+            if (!StripTestKit.moreRowShown()) Qa19Ui.openMoreRow()
+            assertTrue("$where: Bring forward", Qa19Ui.has(ObjectEdits.Arrange.FORWARD.label, exact = true))
+            assertTrue("$where: Send backward", Qa19Ui.has(ObjectEdits.Arrange.BACKWARD.label, exact = true))
+            val steps = c.undoManager.undoCount
+            click(duplicateNode(where))
+            assertEquals("$where: one step", steps + 1, c.undoManager.undoCount)
+            assertEquals(listOf("One", "One", "Two"), TextCodec.decodeAll(first.textData).map { it.text })
+            assertEquals("$where: the copy is open", 1, t.openIndex)
             t.discard()
             Qa19Ui.settle()
             t.newLayerEachTime = false
@@ -119,6 +145,9 @@ class Qa19TextLayersUiTest {
         assertTrue(t.commitItem())
         Qa19Ui.settle()
     }
+
+    private fun duplicateNode(where: String): SemanticsNode =
+        Qa19Ui.tagged(V19Tags.TEXT_DUPLICATE) ?: throw AssertionError("$where: no Duplicate; shown: ${Qa19Ui.shown().take(80)}")
 
     private fun tagged(where: String): SemanticsNode =
         Qa19Ui.tagged(V19Tags.NEW_LAYER_EACH_TIME) ?: throw AssertionError("$where: no “New layer each time”; shown: ${Qa19Ui.shown().take(80)}")

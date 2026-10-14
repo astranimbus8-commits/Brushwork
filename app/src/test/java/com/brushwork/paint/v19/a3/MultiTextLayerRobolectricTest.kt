@@ -19,7 +19,10 @@ import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.tools.text.TextWrapSpec
 import com.brushwork.paint.tools.text.frames.FrameFixtures
+import com.brushwork.paint.ui.common.LayerLabels19
 import com.brushwork.paint.ui.common.TextLabels19
+import com.brushwork.paint.vector.select.ObjectActions
+import com.brushwork.paint.vector.select.ObjectEdits
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -40,6 +43,10 @@ import org.robolectric.RobolectricTestRunner
  * text below; the 65th text starts a layer of its own with a message; frames, wrapped texts and
  * the “New layer each time” switch keep v1.8's layer per text. After every stored change the
  * layer's pixels equal a fresh rendering of all its texts (I1).
+ *
+ * Step 8 (R14 D24, R19): the More row's Duplicate copies the open text right above it in ONE
+ * step and opens the copy; Bring forward and Send backward move it past the next text it
+ * overlaps (or one plain step) in ONE step each; pending changes are committed first.
  */
 @RunWith(RobolectricTestRunner::class)
 class MultiTextLayerRobolectricTest {
@@ -360,5 +367,144 @@ class MultiTextLayerRobolectricTest {
         assertSame(layer, hit!!.layer)
         assertEquals(1, hit.index)
         assertNull(tool.textAt(Vec2(10f, 290f)))
+    }
+
+    // ------------------------------------------------------------------ step 8: Duplicate and arrange (R14, R19)
+
+    @Test
+    fun duplicateOfTheOpenTextIsOneStepAndOpensTheCopy() {
+        val (c, tool) = newController()
+        place(c, tool, "Alpha", 100f, 80f)
+        place(c, tool, "Beta", 280f, 220f)
+        val layer = c.activeLayer
+        val d = ObjectActions.duplicateOffset(c)
+        assertTrue(d > 0f)
+
+        // An unchanged text: the copy is the only step, right above it, and opens.
+        assertTrue(tool.editLayer(layer, index = 0))
+        assertTrue(tool.canDuplicate)
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.duplicateOpen())
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(LayerLabels19.DUPLICATE_STEP, c.undoManager.undoLabel)
+        assertEquals("the copy right above it", listOf("Alpha", "Alpha", "Beta"), texts(layer))
+        val stored = TextCodec.decodeAll(layer.textData)
+        assertEquals("offset like the object bar's Duplicate", stored[0].cx + d, stored[1].cx, 1e-3f)
+        assertEquals(stored[0].cy + d, stored[1].cy, 1e-3f)
+        assertEquals("unique ids", 3, stored.map { it.id }.toSet().size)
+        assertSame("the copy is open", layer, tool.editingLayer)
+        assertEquals(1, tool.openIndex)
+        assertEquals(stored[1].id, tool.openId)
+        assertEquals(stored[1].cx, tool.item!!.cx, 1e-3f)
+        assertTrue(tool.commitItem())
+        assertRendered(layer, "after Duplicate")
+        c.undo()
+        assertEquals(listOf("Alpha", "Beta"), texts(layer))
+        assertRendered(layer, "after undo")
+
+        // Pending changes are committed first, as their own step.
+        assertTrue(tool.editLayer(layer, index = 1))
+        tool.setText("Gamma")
+        val before = c.undoManager.undoCount
+        assertTrue(tool.duplicateOpen())
+        assertEquals("the edit, then the copy", before + 2, c.undoManager.undoCount)
+        assertEquals(listOf("Alpha", "Gamma", "Gamma"), texts(layer))
+        assertEquals(2, tool.openIndex)
+        tool.discard()
+        assertRendered(layer, "after the edit and Duplicate")
+        c.undo()
+        assertEquals(listOf("Alpha", "Gamma"), texts(layer))
+        c.undo()
+        assertEquals(listOf("Alpha", "Beta"), texts(layer))
+        assertRendered(layer, "after both undos")
+    }
+
+    @Test
+    fun duplicateOfANewTextPlacesItFirstAndAFullLayerRefuses() {
+        val (c, tool) = newController()
+        // A new text of its own: placed ("Add text"), then copied in its new layer.
+        tap(c, 120f, 100f)
+        tool.setText("Solo")
+        tool.updateSpec { it.copy(sizePx = 30f, color = black) }
+        val layers = c.doc.layers.size
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.duplicateOpen())
+        assertEquals(layers + 1, c.doc.layers.size)
+        val layer = c.activeLayer
+        assertEquals(listOf("Solo", "Solo"), texts(layer))
+        assertEquals("Add text, then the copy", steps + 2, c.undoManager.undoCount)
+        assertEquals(LayerLabels19.DUPLICATE_STEP, c.undoManager.undoLabel)
+        assertEquals(1, tool.openIndex)
+        tool.discard()
+        assertRendered(layer, "a new text and its copy")
+
+        // A full layer: refused with a message, nothing stored.
+        val first = TextCodec.decodeAll(layer.textData).first()
+        val all = List(TextCodec.MAX_ITEMS) { i -> first.copy(id = 0, text = "T$i", spec = first.spec.copy(sizePx = 12f), cx = 20f + (i % 8) * 45f, cy = 20f + (i / 8) * 34f) }
+        store(c, layer, all)
+        assertTrue(tool.editLayer(layer, index = 5))
+        tool.setText("Changed")
+        val data = layer.textData
+        val n = c.undoManager.undoCount
+        c.message = null
+        assertFalse(tool.duplicateOpen())
+        assertEquals(TextTool.LAYER_FULL_ONLY, c.message)
+        assertTrue(TextLabels19.LAYER_FULL.startsWith(TextTool.LAYER_FULL_ONLY))
+        assertEquals("nothing stored", data, layer.textData)
+        assertEquals(n, c.undoManager.undoCount)
+        assertEquals("the text stays open with its change", "Changed", tool.item?.text)
+        tool.discard()
+    }
+
+    @Test
+    fun arrangeMovesTheOpenTextPastTheTextItOverlapsInOneStep() {
+        val (c, tool) = newController()
+        place(c, tool, "A", 100f, 100f, size = 60f)
+        val layer = c.activeLayer
+        val a = TextCodec.decodeAll(layer.textData).single()
+        // B overlaps A; C is far from both.
+        store(c, layer, listOf(a, a.copy(id = 0, text = "B", cx = 120f), a.copy(id = 0, text = "C", cx = 320f, cy = 250f)))
+        assertTrue(tool.editLayer(layer, index = 0))
+        assertTrue(tool.arrangeShown && tool.canBringForward)
+        assertFalse(tool.canSendBackward)
+
+        val steps = c.undoManager.undoCount
+        assertTrue(tool.arrangeOpen(1))
+        assertEquals("one step", steps + 1, c.undoManager.undoCount)
+        assertEquals(ObjectEdits.Arrange.FORWARD.label, c.undoManager.undoLabel)
+        assertEquals("past the text it overlaps", listOf("B", "A", "C"), texts(layer))
+        assertEquals("still open, in its new place", 1, tool.openIndex)
+        assertEquals("A", tool.item?.text)
+        assertRendered(layer, "after Bring forward")
+
+        // Nothing it overlaps above: one plain step.
+        assertTrue(tool.arrangeOpen(1))
+        assertEquals(listOf("B", "C", "A"), texts(layer))
+        assertFalse("on top", tool.canBringForward)
+        assertFalse(tool.arrangeOpen(1))
+        assertEquals(steps + 2, c.undoManager.undoCount)
+
+        // Backward: past C (no overlap) to below B, which it overlaps.
+        assertTrue(tool.canSendBackward)
+        assertTrue(tool.arrangeOpen(-1))
+        assertEquals(ObjectEdits.Arrange.BACKWARD.label, c.undoManager.undoLabel)
+        assertEquals(listOf("A", "B", "C"), texts(layer))
+        assertEquals(0, tool.openIndex)
+        assertRendered(layer, "after Send backward")
+
+        // Pending changes go first, as their own step.
+        tool.updateSpec { it.copy(color = 0xFFFF0000.toInt()) }
+        val n = c.undoManager.undoCount
+        assertTrue(tool.arrangeOpen(1))
+        assertEquals(n + 2, c.undoManager.undoCount)
+        assertEquals(0xFFFF0000.toInt(), TextCodec.decodeAll(layer.textData)[1].spec.color)
+        tool.discard()
+        assertRendered(layer, "after an edit and Bring forward")
+
+        // Undo walks back every step.
+        repeat(5) { c.undo() }
+        assertEquals(listOf("A", "B", "C"), texts(layer))
+        assertEquals(black, TextCodec.decodeAll(layer.textData)[0].spec.color)
+        assertRendered(layer, "after undo")
     }
 }
