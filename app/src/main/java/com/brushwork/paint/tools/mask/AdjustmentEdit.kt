@@ -9,6 +9,7 @@ import com.brushwork.paint.masks.AdjustmentAction
 import com.brushwork.paint.masks.AdjustmentSpec
 import com.brushwork.paint.masks.MaskEdits
 import com.brushwork.paint.model.Layer
+import com.brushwork.paint.ui.common.FilterLabels19
 
 /**
  * A live edit of an adjustment layer's effect (the Adjust sheet, v1.5 §4.3a): values, effect,
@@ -26,12 +27,19 @@ import com.brushwork.paint.model.Layer
  * once only when the layer's name changes (the automatic name of a new effect). The canvas is
  * redrawn through the live adjustment session (`controller.liveAdjust.touch`, then `end` when the
  * edit is recorded or put back, or when a slider is let go: [settled]).
+ *
+ * v1.9 (R8): every finished change of a control is one step "Change <label>" ([finish]); a run of
+ * − / + presses stays one step until another control changes ([changing]) or the next flush. A
+ * flush with no control named (the sheet closing on a typed text, say) records [LABEL] as in v1.8.
  */
 class AdjustmentEdit(private val c: EditorController, val layer: Layer) : DeferredStep {
     private var specStart: AdjustmentSpec? = layer.adjustment
     private var opacityStart: Float = layer.opacity
     private var nameStart: String = layer.name
     private var registered = false
+
+    /** v1.9 (R8): the label of the pending change's step (null: [LABEL]). */
+    private var stepLabel: String? = null
 
     /** True while changes wait to be recorded. */
     val isPending: Boolean get() = registered
@@ -74,9 +82,34 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
         if (c.doc.indexOf(layer) >= 0) c.liveAdjust.end(layer)
     }
 
+    /**
+     * v1.9 (R8): the control labelled [label] is about to change the layer. A pending change of
+     * another control is recorded first, as its own step; the pending change becomes [label]'s.
+     */
+    fun changing(label: String) {
+        val step = String.format(FilterLabels19.CHANGE_STEP, label)
+        if (registered && stepLabel != null && stepLabel != step) flush()
+        stepLabel = step
+    }
+
+    /** v1.9 (R8): the control labelled [label] finished its change: one step "Change <label>" now. */
+    fun finish(label: String) = record(String.format(FilterLabels19.CHANGE_STEP, label))
+
+    /**
+     * v1.9 (R8): records the pending change now as one step named [stepName] (a reset: "Reset
+     * <label>"; a new effect: [LABEL]). Nothing when nothing is pending.
+     */
+    fun record(stepName: String) {
+        if (!registered) { stepLabel = null; return }
+        stepLabel = stepName
+        flush()
+    }
+
     /** Records the pending changes as one step (nothing when there are none or they cancel out). */
     override fun flush() {
-        if (!registered) return
+        if (!registered) { stepLabel = null; return }
+        val label = stepLabel ?: LABEL
+        stepLabel = null
         c.removeDeferredStep(this)
         registered = false
         // A layer that is gone can't take a step (its removal recorded the pending change first).
@@ -86,7 +119,7 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
         c.notifyLayersChanged()
         val spec = layer.adjustment; val opacity = layer.opacity; val name = layer.name
         if (spec == specStart && opacity == opacityStart && name == nameStart) return
-        val action = AdjustmentAction(LABEL, layer, specStart, spec, opacityStart, opacity, nameStart, name)
+        val action = AdjustmentAction(label, layer, specStart, spec, opacityStart, opacity, nameStart, name)
         specStart = spec; opacityStart = opacity; nameStart = name
         layer.markChanged()
         c.pushUndo(action)
@@ -95,6 +128,7 @@ class AdjustmentEdit(private val c: EditorController, val layer: Layer) : Deferr
     /** Puts back what the pending change did (no step). */
     fun revert() {
         if (!registered) return
+        stepLabel = null
         c.removeDeferredStep(this)
         registered = false
         if (layer.adjustment == specStart && layer.opacity == opacityStart && layer.name == nameStart) return
