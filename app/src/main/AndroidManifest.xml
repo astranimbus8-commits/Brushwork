@@ -7,9 +7,15 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- v1.9 A8 (R16): Auto Backup keeps the settings, brushes and palettes only
+         (res/xml/backup_rules.xml, data_extraction_rules.xml); hasFragileUserData makes the
+         uninstall dialog offer "Keep app data" (Android 10 and newer). -->
     <application
         android:name=".BrushworkApp"
         android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:hasFragileUserData="true"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"

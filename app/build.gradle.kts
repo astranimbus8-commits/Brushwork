@@ -8,6 +8,43 @@ plugins {
 // locally). Without them the release APK is signed with the debug key so it still installs.
 val keystoreFile: String? = System.getenv("BW_KEYSTORE_FILE")?.takeIf { it.isNotBlank() && file(it).exists() }
 
+// The versionCode: the workflow's run number (BW_VERSION_CODE), 1 locally.
+val releaseCode: Int = System.getenv("BW_VERSION_CODE")?.toIntOrNull() ?: 1
+
+// v1.9 A8 (R16): an APK that does not install over the last release makes the user uninstall the
+// app, and uninstalling deletes the artworks. So when the workflow asks for it (BW_RELEASE_GUARD=true:
+// the build of a release tag only, never a push to main or a pull request), a release build refuses
+// to run without the release keystore, or with a versionCode not above the last release tag's
+// (BW_LAST_VERSION_CODE: the run number of that tag's build, which the workflow looks up). Local
+// builds and unguarded CI builds keep the debug-key fallback.
+val releaseGuard = tasks.register("checkReleaseGuards") {
+    group = "verification"
+    description = "Refuses a CI release build without the release keystore or with a versionCode not above the last release's."
+    val guarded = System.getenv("BW_RELEASE_GUARD") == "true"
+    val hasKey = keystoreFile != null
+    val code = releaseCode
+    val last = System.getenv("BW_LAST_VERSION_CODE")?.toIntOrNull()
+    doLast {
+        if (!guarded) {
+            if (!hasKey) logger.warn("No release keystore (BW_KEYSTORE_FILE): this APK is signed with the debug key and does not install over a release.")
+            return@doLast
+        }
+        if (!hasKey) {
+            throw GradleException(
+                "No release keystore (BW_KEYSTORE_FILE): a debug-signed APK does not install over the release, and uninstalling " +
+                    "deletes the artworks. Set the KEYSTORE_BASE64 secret.",
+            )
+        }
+        if (last != null && code <= last) {
+            throw GradleException(
+                "versionCode $code is not above $last, the last release's: Android refuses to install it over that release.",
+            )
+        }
+        logger.lifecycle("Release guards: the release keystore is set; versionCode $code (the last release's: ${last ?: "none"}).")
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(releaseGuard) }
+
 // v1.9 (LA3): the CI shard of a test class, by its fully qualified name before the first '$', so a
 // nested class runs with its outer class. CiShardFilterTest checks this exact line.
 fun ciShardOf(className: String, shards: Int): Int = (className.substringBefore('$').hashCode() and 0x7fffffff) % shards
@@ -27,7 +64,7 @@ android {
         targetSdk {
             version = release(37)
         }
-        versionCode = System.getenv("BW_VERSION_CODE")?.toIntOrNull() ?: 1
+        versionCode = releaseCode
         // Phones are ARM: skip the x86 builds of the native (LiteRT) libraries to keep the APK small.
         ndk {
             abiFilters += setOf("arm64-v8a", "armeabi-v7a")

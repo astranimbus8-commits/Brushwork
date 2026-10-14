@@ -946,6 +946,9 @@ class EditorRuntimeSmokeTest {
         val doc = runBlocking { app.repository.load(id) }
         assertEquals(120, doc.width)
         assertEquals(80, doc.height)
+        // v1.9 (R15): the picture alone, active.
+        assertEquals(listOf("Picture"), doc.layers.map { it.name })
+        assertEquals(0, doc.activeLayerIndex)
         c.selectTool(ToolId.BRUSH)
     }
 

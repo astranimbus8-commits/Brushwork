@@ -11,7 +11,10 @@ import android.provider.OpenableColumns
 import android.util.Log
 import com.brushwork.paint.ImageImport
 import com.brushwork.paint.engine.Compositor
+import com.brushwork.paint.engine.MemoryGovernor
 import com.brushwork.paint.model.Document
+import com.brushwork.paint.storage.backup.BackupRestore
+import com.brushwork.paint.storage.backup.BackupService
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +27,9 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.nio.ByteBuffer
+import java.util.Collections
 import java.util.UUID
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -68,14 +73,22 @@ enum class ExportFormat(val extension: String, val mimeType: String) {
  * Project folder: `filesDir/projects/<id>/` with `project.json`, one compressed pixel file per
  * layer and mask, and `thumb.png` (see [ProjectFormat] and [LayerCodec]). Operations on one
  * project are serialized by a per-project [Mutex].
+ *
+ * v1.9 A8 (R16): each save, new artwork, rename and duplicate ends with [BackupService.onSaved],
+ * each delete with [BackupService.onDeleted], after the project's lock is released; they only
+ * queue the id for the backup folder.
  */
 class ProjectRepository(private val context: Context) {
     private val changeCounter = MutableStateFlow(0)
 
+    init {
+        synchronized(live) { live += this }
+    }
+
     /** Incremented whenever the project list changes (gallery observes it). */
     val changes: StateFlow<Int> = changeCounter
 
-    private val root: File get() = File(context.filesDir, "projects")
+    private val root: File get() = projectsDir(context)
     private val locks = ConcurrentHashMap<String, Mutex>()
 
     /** True on Android 9 and older while WRITE_EXTERNAL_STORAGE (needed by [exportToGallery]) isn't granted. */
@@ -86,9 +99,10 @@ class ProjectRepository(private val context: Context) {
     /** All readable projects, most recently modified first (corrupt folders are skipped). */
     suspend fun list(): List<ProjectInfo> = withContext(Dispatchers.IO) {
         val all = root.listFiles().orEmpty()
-        // Leftovers of a duplicate() interrupted by a crash.
+        // Leftovers of a duplicate() or (v1.9 A8) a restore interrupted by a crash.
         val staleBefore = System.currentTimeMillis() - 60 * 60 * 1000L
-        all.filter { it.name.startsWith(DUP_PREFIX) && it.lastModified() < staleBefore }.forEach { it.deleteRecursively() }
+        all.filter { (it.name.startsWith(DUP_PREFIX) || it.name.startsWith(BackupRestore.STAGING_PREFIX)) && it.lastModified() < staleBefore }
+            .forEach { it.deleteRecursively() }
         val dirs = all.filter { it.isDirectory && ProjectFormat.isValidId(it.name) }
         dirs.mapNotNull { dir ->
             val dto = ProjectFormat.readOrNull(dir) ?: return@mapNotNull null
@@ -108,10 +122,11 @@ class ProjectRepository(private val context: Context) {
     // ------------------------------------------------------------------ create
 
     /**
-     * Creates a project with a "Background" layer (filled with [NewCanvasSpec.background], or
-     * transparent) and an empty "Layer 1" on top. Returns the new id. Writes the pixel files
-     * directly, so no full-size bitmaps are allocated. v1.9 (design 2.4.8): the layers, the active
-     * layer and the paper are [CanvasCreate.seed]'s (v1.8's for every spec in F1b).
+     * Creates a project from [spec] and returns the new id. v1.9 (R15, design 2.4.8): the layers,
+     * the active layer and the paper are [CanvasCreate.seed]'s: one "Layer 1" for every
+     * [NewCanvasSpec.start], v1.8's "Background" (filled with [NewCanvasSpec.background], or
+     * transparent) under an empty "Layer 1" for a null start. Writes the pixel files directly, so
+     * no full-size bitmaps are allocated.
      */
     suspend fun create(spec: NewCanvasSpec): String = withContext(Dispatchers.IO) {
         val w = spec.width
@@ -152,16 +167,16 @@ class ProjectRepository(private val context: Context) {
             throw e
         }
         notifyChanged()
+        BackupService.onSaved(id)
         id
     }
 
     /**
      * Creates a project from a picture: a document of the image size (350 dpi, longest side at
-     * most 4096 px) with the picture as a "Picture" layer and an empty "Layer 1" above it.
-     * Pictures too large for this device's memory are scaled down until at least
-     * [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the editor's layer limit uses);
-     * wide-gamut photos are converted to sRGB like every layer. v1.9 (design 2.4.8): the layers,
-     * the active layer and the paper are [CanvasCreate.seedFromImage]'s (v1.8's in F1b).
+     * most 4096 px) with the picture as its one layer, "Picture" (v1.9, R15: no empty "Layer 1"
+     * above it; [CanvasCreate.seedFromImage]). Pictures too large for this device's memory are
+     * scaled down until at least [CanvasLimits.IMPORT_MIN_LAYERS] layers fit (the same rule the
+     * editor's layer limit uses); wide-gamut photos are converted to sRGB like every layer.
      */
     suspend fun createFromImage(uri: Uri): String = withContext(Dispatchers.IO) {
         val maxSide = pictureBounds(uri)?.let { (w, h) ->
@@ -200,7 +215,7 @@ class ProjectRepository(private val context: Context) {
                     ),
                 )
                 val (tw, th) = thumbnailSize(w, h)
-                // v1.8: the picture is the thumbnail; a seed with a paper (A8) draws it underneath.
+                // v1.8: the picture is the thumbnail; a seed with a paper would draw it underneath.
                 val thumb = when {
                     seed.paper != null -> Bitmap.createBitmap(tw, th, Bitmap.Config.ARGB_8888).also { drawSeedThumbnail(it, seed) }
                     tw == w && th == h -> picture
@@ -216,6 +231,7 @@ class ProjectRepository(private val context: Context) {
                 throw e
             }
             notifyChanged()
+            BackupService.onSaved(id)
             id
         } finally {
             picture.recycle()
@@ -329,6 +345,8 @@ class ProjectRepository(private val context: Context) {
             for ((layer, version) in writer.savedVersions) layer.savedVersion = version
         }
         notifyChanged()
+        // v1.9 A8 (R16): queued for the backup folder; the save never waits for it.
+        BackupService.onSaved(id)
     }
 
     // ------------------------------------------------------------------ manage
@@ -342,6 +360,7 @@ class ProjectRepository(private val context: Context) {
             }
         }
         notifyChanged()
+        BackupService.onDeleted(id)
     }
 
     /** Copies a project (new id, name "<name> copy", fresh dates). Returns the new id. */
@@ -369,6 +388,7 @@ class ProjectRepository(private val context: Context) {
             }
         }
         notifyChanged()
+        BackupService.onSaved(newId)
         return newId
     }
 
@@ -384,6 +404,7 @@ class ProjectRepository(private val context: Context) {
             }
         }
         notifyChanged()
+        BackupService.onSaved(id)
     }
 
     // ------------------------------------------------------------------ export
@@ -392,36 +413,51 @@ class ProjectRepository(private val context: Context) {
      * Saves [bitmap] to the device gallery (Pictures/Brushwork). Returns the content Uri, or
      * null on failure — including Android 9 and older when WRITE_EXTERNAL_STORAGE hasn't been
      * granted (request it first; see [needsStoragePermission]). JPEG is flattened onto white.
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] when the memory policy refuses the JPEG's
+     * white copy, so the caller can say why.
      */
     suspend fun exportToGallery(bitmap: Bitmap, name: String, format: ExportFormat): Uri? = withContext(Dispatchers.IO) {
         guarded("export") { ImageExport.saveToGallery(context, bitmap, name, format) }
     }
 
-    /** Writes [bitmap] to a shareable cache file and returns a FileProvider Uri (null on failure). */
+    /**
+     * Writes [bitmap] to a shareable cache file and returns a FileProvider Uri (null on failure;
+     * v1.9: [NotEnoughMemoryException] as [exportToGallery]).
+     */
     suspend fun exportForShare(bitmap: Bitmap, name: String, format: ExportFormat): Uri? = withContext(Dispatchers.IO) {
         guarded("share export") { ImageExport.saveForShare(context, bitmap, name, format) }
     }
 
-    /** Loads, flattens and exports a project without opening it in the editor (null on failure). */
+    /**
+     * Loads, flattens and exports a project without opening it in the editor (null on failure).
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] when the memory policy refuses the flatten
+     * ("Export PNG", as the editor names it) or the JPEG's white copy; the gallery shows its message.
+     */
     suspend fun exportProject(id: String, format: ExportFormat): Uri? = guarded("project export") {
-        val (flat, name) = renderFlattened(id)
+        val (flat, name) = renderFlattened(id, "Export ${format.extension.uppercase()}")
         try { exportToGallery(flat, name, format) } finally { flat.recycle() }
     }
 
-    /** Loads and flattens a project into a share file (see [exportForShare]); null on failure. */
+    /**
+     * Loads and flattens a project into a share file (see [exportForShare]); null on failure.
+     * v1.9 (F1b G2): throws [NotEnoughMemoryException] as [exportProject] ("Share").
+     */
     suspend fun shareProject(id: String, format: ExportFormat = ExportFormat.PNG): Uri? = guarded("project share") {
-        val (flat, name) = renderFlattened(id)
+        val (flat, name) = renderFlattened(id, "Share")
         try { exportForShare(flat, name, format) } finally { flat.recycle() }
     }
 
     /**
      * Full-resolution flattened image of a stored project. The caller recycles it. v1.9 (design
-     * 2.4.9): on its paper, if any, like the editor's export and share.
+     * 2.4.9): on its paper, if any, like the editor's export and share. v1.9 (F1b G2, design
+     * 2.4.13): the flatten must fit, as in the editor ([MemoryGovernor.admit] for [purpose]);
+     * refused, the loaded layers are freed and [NotEnoughMemoryException] is thrown.
      */
-    private suspend fun renderFlattened(id: String): Pair<Bitmap, String> {
+    private suspend fun renderFlattened(id: String, purpose: String): Pair<Bitmap, String> {
         val doc = load(id)
         return withContext(Dispatchers.Default) {
             try {
+                if (!MemoryGovernor.admit(doc.width.toLong() * doc.height * 4, purpose)) throw NotEnoughMemoryException(purpose)
                 Compositor(doc) { null }.renderFlattened(withPaper = true) to doc.name
             } finally {
                 for (layer in doc.layers) { layer.recycleBitmaps(); layer.array?.pixels?.bitmap?.recycle() }
@@ -429,9 +465,17 @@ class ProjectRepository(private val context: Context) {
         }
     }
 
+    /**
+     * [block]'s result, or null (logged) when it fails. v1.9 (F1b G2): a memory refusal
+     * ([NotEnoughMemoryException]) is not a failure to hide: it is thrown on, so the gallery's and
+     * the editor's busy overlays show its message instead of v1.8's "could not be saved".
+     */
     private inline fun <T> guarded(what: String, block: () -> T?): T? = try {
         block()
     } catch (e: CancellationException) {
+        throw e
+    } catch (e: NotEnoughMemoryException) {
+        Log.w(TAG, "$what refused: ${e.message}")
         throw e
     } catch (e: Exception) {
         Log.w(TAG, "$what failed", e)
@@ -545,6 +589,20 @@ class ProjectRepository(private val context: Context) {
         const val MAX_SIDE = CanvasLimits.MAX_SIDE
         private const val MAX_NAME = 100
         private const val DUP_PREFIX = ".dup-"
+
+        /** The live repositories ([notifyRestored] refreshes each one's gallery). */
+        private val live: MutableSet<ProjectRepository> = Collections.newSetFromMap(WeakHashMap())
+
+        /** v1.9 A8: the folder of every project (`filesDir/projects`). */
+        internal fun projectsDir(context: Context): File = File(context.filesDir, "projects")
+
+        /**
+         * v1.9 A8 (R16): artworks were added to [projectsDir] behind the repositories' backs (a
+         * restore): every live repository's [changes] moves, so the gallery lists them.
+         */
+        internal fun notifyRestored() {
+            synchronized(live) { live.toList() }.forEach { it.notifyChanged() }
+        }
 
         /** Size of the stored thumbnail (longest side [ProjectFormat.THUMB_SIZE]), like `Compositor.renderThumbnail`. */
         internal fun thumbnailSize(w: Int, h: Int): Pair<Int, Int> {

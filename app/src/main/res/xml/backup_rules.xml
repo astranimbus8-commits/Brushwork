@@ -1,0 +1,13 @@
+<!--
+    v1.9 A8 (R16): what Android's Auto Backup keeps for Android 8 to 11 (Android 12 and newer read
+    data_extraction_rules.xml). Only the settings, the brush presets and the palettes: with these
+    includes nothing else is backed up, so the artworks (the backup folder keeps them, and they
+    would pass Auto Backup's 25 MB limit), the imported fonts, the caches, the crash reports
+    (diagnostics/ and the "diagnostics" preferences) and the UI state stay out. The backup folder's
+    state needs no rule: it lies under noBackupFilesDir, which Auto Backup never includes.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="brushwork_settings.xml" />
+    <include domain="sharedpref" path="brushwork_brushes.xml" />
+    <include domain="sharedpref" path="brushwork_palettes.xml" />
+</full-backup-content>

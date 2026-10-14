@@ -32,6 +32,7 @@ import com.brushwork.paint.exchange.export.StrokeExport
 import com.brushwork.paint.exchange.export.TextExportMode
 import com.brushwork.paint.model.LayerBlendMode
 import com.brushwork.paint.ui.common.BwSheet
+import com.brushwork.paint.ui.common.CanvasLabels19
 import com.brushwork.paint.ui.common.ChoiceChips
 import com.brushwork.paint.ui.common.SectionHeader
 import com.brushwork.paint.ui.common.ToggleRow
@@ -40,8 +41,9 @@ import java.util.Locale
 
 /**
  * The options of "Export SVG…" / "Export PDF…" (v1.5 §4.10a): how brush strokes and text are
- * written, hidden layers, background, the Brushwork data, the PDF page; then Save as… (a file the
- * user picks) or Share. Notes say where the file can't look exactly like the canvas.
+ * written, hidden layers, background (v1.9: and the paper), the Brushwork data, the PDF page; then
+ * Save as… (a file the user picks) or Share. Notes say where the file can't look exactly like the
+ * canvas.
  */
 @Composable
 internal fun ExportOptionsSheet(state: ExchangeUiState) {
@@ -104,7 +106,13 @@ internal fun ExportOptionsSheet(state: ExchangeUiState) {
         SectionHeader("Hidden layers")
         ChoiceChips(listOf("Skip", "Include"), if (o.includeHidden) 1 else 0, { state.exportOptions = o.copy(includeHidden = it == 1) })
         SectionHeader("Background")
-        ChoiceChips(listOf("Transparent", "White"), if (o.whiteBackground) 1 else 0, { state.exportOptions = o.copy(whiteBackground = it == 1) })
+        // v1.9 A8 (R15): a document on paper offers to leave the paper out, on by default. While it
+        // is included the paper is the background, so the Transparent / White choice shows without it.
+        val paper = c.doc.paper != null
+        if (paper) ToggleRow(CanvasLabels19.INCLUDE_PAPER, o.includePaper, { state.exportOptions = o.copy(includePaper = it) })
+        if (!paper || !o.includePaper) {
+            ChoiceChips(listOf("Transparent", "White"), if (o.whiteBackground) 1 else 0, { state.exportOptions = o.copy(whiteBackground = it == 1) })
+        }
         if (pdf) {
             SectionHeader("Page")
             val doc = c.doc

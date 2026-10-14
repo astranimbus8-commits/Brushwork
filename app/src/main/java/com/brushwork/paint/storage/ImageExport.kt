@@ -25,6 +25,14 @@ import java.io.IOException
 import java.io.OutputStream
 import kotlin.coroutines.resume
 
+/**
+ * v1.9 (F1b G2, design 2.4.13): [MemoryGovernor] refused a large allocation for [purpose] ("Export
+ * PNG", "Share", "Export JPG"). Its message is [StabilityLabels19.NO_MEMORY_FOR]; [ProjectRepository]
+ * throws it on instead of returning null, so the gallery shows "Export failed: Not enough memory
+ * for Export PNG" and the editor "Exporting JPG failed: ...".
+ */
+internal class NotEnoughMemoryException(val purpose: String) : IOException(String.format(StabilityLabels19.NO_MEMORY_FOR, purpose))
+
 /** Image encoding and the three export destinations (MediaStore, legacy Pictures dir, share cache). */
 internal object ImageExport {
     const val ALBUM = "Brushwork"
@@ -45,7 +53,7 @@ internal object ImageExport {
                 // v1.9 (design 2.4.13): the white copy must fit (A7b's policy; DefaultPolicy admits
                 // everything). Refused, the export fails like any other (ProjectRepository logs it).
                 if (!MemoryGovernor.admit(bitmap.width.toLong() * bitmap.height * 4, "Export JPG")) {
-                    throw IOException(String.format(StabilityLabels19.NO_MEMORY_FOR, "Export JPG"))
+                    throw NotEnoughMemoryException("Export JPG")
                 }
                 val flat = flattenOnWhite(bitmap)
                 try { flat.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out) } finally { flat.recycle() }
