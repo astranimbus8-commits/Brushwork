@@ -467,11 +467,13 @@ private fun PlaceholderSection(tool: TextEditorHost, onPath: Boolean) {
     }
     val shownNote = note?.takeIf { it.first.first == item.text && it.first.second == spec }?.second
     val canFill = !onPath && spec.box.wrapFor(spec.vertical) > 0f
-    val amounts = PlaceholderAmount.entries.filter { canFill || it != PlaceholderAmount.FILL }
+    // v1.9 (R6): shortest first, "Fill the box" (only with a fixed box) last; the amounts wrap
+    // onto a second line at 360 dp instead of hiding behind a scroll edge.
+    val amounts = PlaceholderAmount.CHIP_ORDER.filter { canFill || it != PlaceholderAmount.FILL }
     val amount = tool.placeholderAmount.takeIf { it in amounts } ?: PlaceholderAmount.PARAGRAPH
     SectionHeader("Placeholder text")
     ChoiceChips(PlaceholderKind.entries.map { it.label }, tool.placeholderKind.ordinal, { tool.placeholderKind = PlaceholderKind.entries[it] })
-    ChoiceChips(amounts.map { it.label }, amounts.indexOf(amount), { tool.placeholderAmount = amounts[it] }, Modifier.padding(top = 2.dp))
+    TextFlowChips(amounts.map { it.label }, amounts.indexOf(amount), { tool.placeholderAmount = amounts[it] }, Modifier.padding(top = 2.dp))
     Row(verticalAlignment = Alignment.CenterVertically) {
         ChoiceChips(listOf("Replace text", "Add after"), if (tool.placeholderReplace) 0 else 1, { tool.placeholderReplace = it == 0 }, Modifier.weight(1f))
         Spacer(Modifier.width(8.dp))

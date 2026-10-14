@@ -1,5 +1,7 @@
 package com.brushwork.paint.tools.text
 
+import com.brushwork.paint.ui.common.TextLabels19
+
 /*
  * Placeholder ("fake") text for layouts: classic Lorem ipsum, plain English filler and the two
  * kinds of Japanese dummy text used in manga and design (「テキストが入ります」 sentences and the
@@ -14,13 +16,24 @@ enum class PlaceholderKind(val label: String, val cjk: Boolean) {
     KANA("あいうえお", true),
 }
 
-/** How much placeholder text to insert when not filling a box. */
+/**
+ * How much placeholder text to insert when not filling a box. Not persisted (the text sheet's
+ * session state); new entries go last so no ordinal moves, and the chips follow [CHIP_ORDER].
+ */
 enum class PlaceholderAmount(val label: String) {
     /** Exactly as much as fits the text box (needs a fixed box width / height). */
     FILL("Fill the box"),
     SHORT("Short"),
     PARAGRAPH("Paragraph"),
     THREE_PARAGRAPHS("3 paragraphs"),
+    /** v1.9 (R6): a three-word phrase ("Lorem ipsum dolor"); a three-unit phrase in Japanese. */
+    WORDS(TextLabels19.WORDS),
+    ;
+
+    companion object {
+        /** The text sheet's chip order: shortest first, "Fill the box" (only with a fixed box) last. */
+        val CHIP_ORDER: List<PlaceholderAmount> = listOf(WORDS, SHORT, PARAGRAPH, THREE_PARAGRAPHS, FILL)
+    }
 }
 
 object PlaceholderText {
@@ -67,6 +80,15 @@ object PlaceholderText {
 
     private const val KANA_SHORT = "あいうえおかきくけこ"
 
+    /**
+     * R6's three-word texts. Japanese has no word spaces, so its "3 words" is a three-unit
+     * phrase (テキスト / を / 入力), and kana is three syllables.
+     */
+    private const val LOREM_WORDS = "Lorem ipsum dolor"
+    private const val ENGLISH_WORDS = "Your text here"
+    private const val JAPANESE_WORDS = "テキストを入力"
+    private const val KANA_WORDS = "あいう"
+
     /** One paragraph of [kind] (index [n], cycling through the available ones). */
     fun paragraph(kind: PlaceholderKind, n: Int = 0): String = when (kind) {
         PlaceholderKind.LOREM -> LOREM_PARAGRAPHS[n.mod(LOREM_PARAGRAPHS.size)]
@@ -77,6 +99,12 @@ object PlaceholderText {
 
     /** Placeholder text of [kind] and [amount] ([PlaceholderAmount.FILL] gives one paragraph: see [PlaceholderFit]). */
     fun text(kind: PlaceholderKind, amount: PlaceholderAmount): String = when (amount) {
+        PlaceholderAmount.WORDS -> when (kind) {
+            PlaceholderKind.LOREM -> LOREM_WORDS
+            PlaceholderKind.ENGLISH -> ENGLISH_WORDS
+            PlaceholderKind.JAPANESE -> JAPANESE_WORDS
+            PlaceholderKind.KANA -> KANA_WORDS
+        }
         PlaceholderAmount.SHORT -> when (kind) {
             PlaceholderKind.LOREM -> LOREM_SHORT
             PlaceholderKind.ENGLISH -> ENGLISH_SHORT

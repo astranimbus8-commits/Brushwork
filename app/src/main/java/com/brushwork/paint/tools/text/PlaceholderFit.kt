@@ -131,7 +131,8 @@ object PlaceholderFit {
         val amt = if (amount == PlaceholderAmount.FILL) PlaceholderAmount.PARAGRAPH else amount
         val text = base + PlaceholderText.separator(base, kind, amt) + PlaceholderText.text(kind, amt)
         var out = spec
-        if (straight && amt != PlaceholderAmount.SHORT && spec.box.wrapFor(spec.vertical) <= 0f) {
+        // A short line or three words stay one line (no wrap box); paragraphs get one.
+        if (straight && amt != PlaceholderAmount.SHORT && amt != PlaceholderAmount.WORDS && spec.box.wrapFor(spec.vertical) <= 0f) {
             val wrap = paragraphWrap(spec, docW, docH, maxBox)
             val natural = TextRenderer.layout(text, spec, measureInk = false)
             val along = if (spec.vertical) natural.contentHeight else natural.contentWidth
