@@ -5,6 +5,7 @@ import androidx.compose.ui.semantics.getOrNull
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.common.PointLabels19
@@ -28,8 +29,8 @@ import org.robolectric.annotation.Config
  * and at 360 dp at each of [Qa19Ui.FONT_SCALES]: a rectangle in Points mode, its top left corner
  * selected by a tap, "Bevel points" from the More row bevels it at once and the two-line popup
  * shows inside the screen, above the ✓ / ✕ and the bottom bar, with none of its texts cut (nor
- * any on screen up to font scale 1.3: at 2.0 v1.8's fixed Shape cells and the pill's readouts
- * are, which the lead's `StripFontScaleTest` covers with the areas merged); "More segments"
+ * any on screen at any font scale, the Shape cells included; the coordinate pill's readouts are
+ * left out: at 2.0 they are taller than the pill's cells, the lead's CoordinatePill); "More segments"
  * re-applies the bevel; "Done" closes it; a second "Bevel points" reopens it on the same step; a
  * tap on the canvas closes it and is consumed (the shape stays open, unchanged); one undo removes
  * the bevel.
@@ -90,12 +91,12 @@ class Qa19ShapeBevelUiTest {
             assertTrue("$where: Done on the second line: $done, Amount $amount", done.center.y > amount.bottom && done.center.y < popup.bottom)
             assertTrue("$where: every control at least 40 dp", listOf(done, more).all { it.width >= 39.5f && it.height >= 39.5f })
             assertTrue("$where: two lines: $popup", popup.height <= 160f)
-            // The popup's own texts at every scale; the whole screen up to 1.3 (at 2.0 v1.8's
-            // fixed cells and the pill's readouts are cut: the lead's StripFontScaleTest, I27).
+            // The popup's own texts, and the whole screen but the pill's readouts (I27).
             val popupWindow = s.placed().last { it.node.config.getOrNull(SemanticsProperties.TestTag) == V19Tags.BEVEL_POPUP }.window
             val cut = Qa19Ui.textOverflows { it.window === popupWindow }
             assertTrue("texts of the bevel popup overflow their box, $where:\n" + cut.joinToString("\n"), cut.isEmpty())
-            if (scale < 2f) Qa19Ui.assertNoTextOverflow("with the bevel popup open, $where") { it == ShapeStripItems.ANGLE_LABEL }
+            val anyCut = Qa19Ui.textOverflows { e -> !StripTestKit.under(e.node, ChromeTags.PILL_SLOT) }
+            assertTrue("texts overflow their box with the bevel popup open, $where:\n" + anyCut.joinToString("\n"), anyCut.isEmpty())
 
             // "More segments" re-applies the bevel on its step.
             Qa19Ui.click(PointLabels19.MORE_SEGMENTS, exact = true)

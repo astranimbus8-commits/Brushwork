@@ -348,11 +348,15 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
 
     override val hasPendingWork: Boolean get() = box != null
 
-    /** A shape layer that was only opened (nothing changed yet) doesn't swallow an undo. */
+    /**
+     * A shape layer that was only opened (nothing changed yet) doesn't swallow an undo. v1.9
+     * (R17): one whose edits brought it back as it was opened still has them to take back (undo
+     * then takes back the last of them, never the document's step before the shape).
+     */
     override val hasUserChanges: Boolean
         get() {
             val b = box ?: return false
-            if (!reopened) return true
+            if (!reopened || canUndoStep) return true
             return loadedObject != objectFor(b, points)
         }
 
@@ -470,6 +474,12 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
     private var pinchStart: ShapeBox? = null
     private var pinchFocus = Vec2.ZERO
     private var pinchPushed = false
+    /**
+     * v1.9 (R17): the redo steps when the two-finger gesture began. Its step is saved at once, which
+     * drops them; a two-finger tap (the app's undo: the gesture is cancelled, then undo runs), a
+     * cancelled pinch or one that changed nothing brings them back with its step gone.
+     */
+    private var pinchRedo: List<PendingState> = emptyList()
 
     // ------------------------------------------------------------------ group gestures (v1.7 item 1)
 
@@ -2560,6 +2570,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             creatingBox = null
             mode = Mode.NONE
             endGroupGesture()
+            pinchRedo = redo.toList()
             beginGroupEdit("Pinch")
             if (groupBase == null) return false
             groupPinchPivot = layout.pivotDoc
@@ -2581,6 +2592,7 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         pinchStart = bx
         pinchFocus = focus
         // v1.9 (R17): a pinch is one in-tool step for every shape (a pinch that moved nothing drops it, below).
+        pinchRedo = redo.toList()
         pushHistory()
         pinchPushed = true
         setDragging(true)
@@ -2605,10 +2617,15 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             groupPinchPivot = null
             showReadout(null)
             setDragging(false)
-            if (cancelled && box != null) {
+            val b = box
+            if (cancelled && b != null) {
                 // Back to the points before the pinch (its step is dropped).
                 history.removeLastOrNull()?.let { restoreState(it) }
-                canUndoStep = history.isNotEmpty()
+                dropPinchStep()
+            } else if (b != null && history.lastOrNull() == pendingState(b)) {
+                // v1.9 (R17): a pinch that left the points as they were is no edit.
+                history.removeLast()
+                dropPinchStep()
             }
             endGroupEdit()
             refreshPreview()
@@ -2620,14 +2637,28 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
         setDragging(false)
         if (cancelled && box != null) {
             box = start
-            if (pinchPushed) history.removeLastOrNull().also { canUndoStep = history.isNotEmpty() }
+            if (pinchPushed) { history.removeLastOrNull(); dropPinchStep() }
         } else if (pinchPushed && box == start) {
             // v1.9 (R17): a pinch that left the shape as it was is no edit (its step is dropped).
             history.removeLastOrNull()
-            canUndoStep = history.isNotEmpty()
+            dropPinchStep()
         }
         pinchPushed = false
         refreshPreview()
+    }
+
+    /**
+     * v1.9 (R17): the two-finger gesture's step was taken off [history] (a tap, a cancelled pinch
+     * or one that changed nothing): the redo steps are those it began with ([pinchRedo]), so the
+     * two-finger tap that undoes never loses what earlier undos left to redo.
+     */
+    private fun dropPinchStep() {
+        canUndoStep = history.isNotEmpty()
+        redo.clear()
+        redo.addAll(pinchRedo)
+        redoCount = redo.size
+        historyKey = null
+        pinchRedo = emptyList()
     }
 
     /**

@@ -2,6 +2,7 @@ package com.brushwork.paint.v19.a9
 
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.core.Vec2
+import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.vector.ShapeBox
 import com.brushwork.paint.tools.vector.ShapeCodec
 import com.brushwork.paint.tools.vector.ShapeStyle
@@ -244,4 +245,129 @@ class ShapePerEditUndoTest {
         c.undo()
         assertSame(placed, vec.vector)
     }
+
+    /**
+     * A two-finger tap on the shape as CanvasView runs it: the two fingers start a gesture on the
+     * shape, which is cancelled when they lift as a tap, then the app's undo runs.
+     */
+    private fun twoFingerTap(c: EditorController, tool: ShapeTool) {
+        val b = tool.box!!
+        assertTrue("the shape takes the two fingers", c.twoFingerStart(b.center, b.center, Vec2(b.cx + 10f, b.cy + 10f)))
+        c.twoFingerEnd(cancelled = true)
+        c.undo()
+    }
+
+    /** Review (R17): the two-finger tap undoes one edit and keeps what earlier undos left to redo. */
+    @Test
+    fun aTwoFingerTapOnTheShapeUndoesOneEditAndKeepsTheRedoSteps() {
+        val c = rig.controller()
+        val tool = rig.shapeTool(c)
+        rig.drawRect(c, tool)
+        val steps = c.undoManager.undoCount
+        val states = mutableListOf(tool.box!!)
+        edited(tool, states, "move 1") { rig.drag(c, 70f to 60f, 80f to 60f, 90f to 60f) }
+        edited(tool, states, "move 2") { rig.drag(c, 90f to 60f, 90f to 70f, 90f to 80f) }
+        c.undo()
+        assertEquals(states[1], tool.box)
+        assertEquals(1, tool.redoCount)
+        twoFingerTap(c, tool)
+        assertEquals("the tap took back move 1", states[0], tool.box)
+        assertEquals("both moves can be redone", 2, tool.redoCount)
+        assertEquals(steps, c.undoManager.undoCount)
+        c.redo()
+        assertEquals(states[1], tool.box)
+        c.redo()
+        assertEquals(states[2], tool.box)
+        assertEquals(0, tool.redoCount)
+        // A pinch that changed nothing, or one that was cancelled, keeps them too.
+        c.undo()
+        val b = tool.box!!
+        assertTrue(c.twoFingerStart(b.center, b.center, Vec2(b.cx + 20f, b.cy + 20f)))
+        c.twoFingerGesture(Vec2.ZERO, 1f, 0f)
+        c.twoFingerEnd(cancelled = false)
+        assertEquals(b, tool.box)
+        assertEquals(1, tool.redoCount)
+        assertTrue(c.twoFingerStart(b.center, b.center, Vec2(b.cx + 20f, b.cy + 20f)))
+        c.twoFingerGesture(Vec2(30f, 0f), 1f, 0f)
+        c.twoFingerEnd(cancelled = true)
+        assertEquals(b, tool.box)
+        assertEquals(1, tool.redoCount)
+        c.redo()
+        assertEquals(states[2], tool.box)
+    }
+
+    /** The same on the points' gizmo (two fingers there scale the selected points). */
+    @Test
+    fun aTwoFingerTapOnThePointsGizmoKeepsTheRedoSteps() {
+        val c = rig.controller()
+        val tool = rig.shapeTool(c)
+        var now = 10_000L
+        tool.clock = { now }
+        rig.drawRect(c, tool)
+        tool.setPointEditing(true)
+        tool.selectPoints(PointSelection.all(tool.pointCount))
+        val a0 = tool.docAnchors()!!
+        tool.nudge(1, 0)
+        val a1 = tool.docAnchors()!!
+        now += 5_000L
+        tool.nudge(0, 1)
+        val a2 = tool.docAnchors()!!
+        assertNotEquals(a1, a2)
+        c.undo()
+        assertEquals(a1, tool.docAnchors())
+        assertEquals(1, tool.redoCount)
+        val b = tool.box!!
+        assertTrue(c.twoFingerStart(b.center, b.center, Vec2(b.cx + 10f, b.cy + 10f)))
+        assertTrue("the gizmo took the two fingers", tool.inGroupEdit)
+        c.twoFingerEnd(cancelled = true)
+        c.undo()
+        assertEquals("the tap took back the first nudge", a0, tool.docAnchors())
+        assertEquals(2, tool.redoCount)
+        c.redo()
+        c.redo()
+        assertEquals(a2, tool.docAnchors())
+    }
+
+    /**
+     * Review (R17): edits that bring a reopened shape back as it was opened (a nudge right, then
+     * after a pause one left) are still taken back one by one; undo never skips to the document's
+     * step before the shape while the tool has edits left.
+     */
+    private fun editsBackToTheOpenedShapeAreUndoneOneByOne(vectorLayer: Boolean) {
+        val c = rig.controller(vectorLayer)
+        val tool = rig.shapeTool(c)
+        var now = 10_000L
+        tool.clock = { now }
+        rig.drawRect(c, tool)
+        tool.commit()
+        val steps = c.undoManager.undoCount
+        val layers = c.doc.layers.size
+        rig.tap(c, 30f, 60f)
+        assertTrue("reopened", tool.editingLayer != null || tool.editingObject)
+        val opened = tool.box!!
+        tool.nudge(1, 0)
+        now += 5_000L
+        tool.nudge(-1, 0)
+        assertEquals(opened, tool.box)
+        assertTrue("two edits to take back", tool.hasUserChanges)
+        c.undo()
+        assertEquals("the last nudge is taken back", opened.translated(1f, 0f), tool.box)
+        assertTrue(tool.hasPendingWork)
+        assertEquals(steps, c.undoManager.undoCount)
+        assertEquals(layers, c.doc.layers.size)
+        c.undo()
+        assertEquals(opened, tool.box)
+        assertTrue(tool.hasPendingWork)
+        assertEquals(steps, c.undoManager.undoCount)
+        // Back as it was opened, nothing left in the tool: undo takes back the shape itself (v1.8).
+        c.undo()
+        assertFalse(tool.hasPendingWork)
+        assertEquals(steps - 1, c.undoManager.undoCount)
+    }
+
+    @Test
+    fun editsBackToAReopenedShapeLayerAreUndoneOneByOne() = editsBackToTheOpenedShapeAreUndoneOneByOne(vectorLayer = false)
+
+    @Test
+    fun editsBackToAReopenedShapeObjectAreUndoneOneByOne() = editsBackToTheOpenedShapeAreUndoneOneByOne(vectorLayer = true)
 }

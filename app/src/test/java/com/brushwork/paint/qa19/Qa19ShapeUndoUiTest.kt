@@ -3,9 +3,11 @@ package com.brushwork.paint.qa19
 import com.brushwork.paint.core.Vec2
 import com.brushwork.paint.smoke.Smoke
 import com.brushwork.paint.smoke.SmokeUi
+import com.brushwork.paint.testing.StripTestKit
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.vector.ShapeTool
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
+import com.brushwork.paint.ui.editor.chrome.ChromeTags
 import com.brushwork.paint.ui.vector.ShapeStripItems
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -25,10 +27,9 @@ import org.robolectric.annotation.Config
  * [Qa19Ui.FONT_SCALES]: a rectangle placed in a shape layer of its own and opened again by a tap
  * on its outline is moved by a drag, then in Points mode its top left point is dragged; the first
  * "Undo" takes back the point drag (the moved shape stays, in Points mode), the second the move
- * (the shape as it was opened); the shape stays open and its layer untouched meanwhile. The texts
- * on screen are not cut up to font scale 1.3 (at 2.0 v1.8's fixed Shape cells and the pill's
- * readouts are, which the lead's `StripFontScaleTest` covers with the areas merged; this test
- * opens no window of its own).
+ * (the shape as it was opened); the shape stays open and its layer untouched meanwhile. No text
+ * on screen is cut at any font scale (I27), the Shape cells included; the coordinate pill's
+ * readouts are left out (at 2.0 they are taller than the pill's cells: the lead's CoordinatePill).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = Qa19Ui.Q392, instrumentedPackages = ["com.brushwork.paint.qa19.shapeundosandbox"])
@@ -93,7 +94,7 @@ class Qa19ShapeUndoUiTest {
             assertEquals("$where: the point is back", before, tool.points)
             assertEquals("$where: the move stays", moved, tool.box)
             assertTrue("$where: still in Points mode", tool.pointsMode)
-            if (scale < 2f) Qa19Ui.assertNoTextOverflow("after one undo, $where") { it == ShapeStripItems.ANGLE_LABEL }
+            assertNoTextCut("after one undo, $where")
 
             // The second takes back the move: the shape as it was opened.
             Qa19Ui.click("Undo", exact = true)
@@ -104,11 +105,17 @@ class Qa19ShapeUndoUiTest {
             assertFalse("$where: nothing left to commit", tool.hasUserChanges)
             assertEquals("$where: the layer is untouched meanwhile", data, layer.shapeData)
             assertEquals("$where: no document step meanwhile", docSteps, s.c.undoManager.undoCount)
-            if (scale < 2f) Qa19Ui.assertNoTextOverflow("after two undos, $where") { it == ShapeStripItems.ANGLE_LABEL }
+            assertNoTextCut("after two undos, $where")
             Smoke.assertQuiet(s.c, where)
         } finally {
             RuntimeEnvironment.setQualifiers(Qa19Ui.Q392)
         }
+    }
+
+    /** I27: no text on screen is cut, but the coordinate pill's readouts (see the class). */
+    private fun assertNoTextCut(where: String) {
+        val cut = Qa19Ui.textOverflows { e -> !StripTestKit.under(e.node, ChromeTags.PILL_SLOT) }
+        assertTrue("texts overflow their box $where:\n" + cut.joinToString("\n"), cut.isEmpty())
     }
 
     /** A one-finger drag between document points [a] and [b] (through their middle). */

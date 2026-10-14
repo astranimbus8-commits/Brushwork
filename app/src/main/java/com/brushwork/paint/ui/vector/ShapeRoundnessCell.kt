@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -16,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.UnfoldMore
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,7 +32,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.brushwork.paint.core.Expressions
 import com.brushwork.paint.core.Units
 import com.brushwork.paint.tools.points.Mixed
@@ -78,6 +75,7 @@ internal fun ShapeRoundnessCell(tool: ShapeTool, value: Mixed<Float>?, width: Dp
     var scrubbing by remember { mutableStateOf(false) }
     val latestValue by rememberUpdatedState(value)
     val density = LocalDensity.current
+    val large = density.fontScale > LARGE_FONT_SCALE
     val shape = RoundedCornerShape(8.dp)
     val tint = if (active) BrushworkColors.OnChrome else BrushworkColors.OnChromeDim.copy(alpha = 0.6f)
 
@@ -129,14 +127,19 @@ internal fun ShapeRoundnessCell(tool: ShapeTool, value: Mixed<Float>?, width: Dp
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Filled.RoundedCorner, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(2.dp))
-            // Laid out at its own width (IntrinsicSize.Max, within the 46 dp the cell keeps for it),
-            // as the shared field's value is: a wider layout reads as an overflow.
-            Text(shown, fontSize = 13.sp, maxLines = 1, softWrap = false, color = tint, modifier = Modifier.weight(1f, fill = false).width(IntrinsicSize.Max))
+            // v1.9 (I27): at a large font scale the corner glyph gives its room to the value.
+            if (!large) {
+                Icon(Icons.Filled.RoundedCorner, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(2.dp))
+            }
+            // Laid out at its own width (within the 46 dp the cell keeps for it), as the shared
+            // field's value is: a wider layout reads as an overflow. v1.9 (I27): a value wider
+            // than that shrinks (ShapeCellText).
+            ShapeCellText(shown, tint, Modifier.weight(1f, fill = false))
         }
-        // The scrub arrows keep 28 dp at the end, as the shared field's do (the value stays left of them).
-        Box(Modifier.width(28.dp).height(SHAPE_CELL_DP), contentAlignment = Alignment.Center) {
+        // The scrub arrows keep 28 dp at the end, as the shared field's do (the value stays left of
+        // them); 20 dp at a large font scale (I27).
+        Box(Modifier.width(if (large) 20.dp else 28.dp).height(SHAPE_CELL_DP), contentAlignment = Alignment.Center) {
             Icon(Icons.Filled.UnfoldMore, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp).rotate(90f))
         }
     }
@@ -177,3 +180,10 @@ internal fun ShapeRoundnessDialog(tool: ShapeTool, onDismiss: () -> Unit) {
         },
     )
 }
+
+/**
+ * v1.9 (I27): above this font scale [ShapeRoundnessCell] drops its corner glyph and narrows its
+ * scrub arrows, so its value ("12.5 px", "Mixed") has 72 dp; below it the value has the v1.8
+ * cell's 46 dp (shrinking a little at 1.3).
+ */
+private const val LARGE_FONT_SCALE = 1.5f

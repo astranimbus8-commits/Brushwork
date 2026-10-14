@@ -1,5 +1,6 @@
 package com.brushwork.paint.ui.vector
 
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -484,7 +485,9 @@ private fun HandlesCell(tool: ShapeTool, hasSelection: Boolean, onType: () -> Un
                 onType()
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) { ShapeHandleSideControls(tool, hasSelection) }
+        // v1.9 (I27): the side and "All points" wrap to a second line where they do not fit beside
+        // each other (the last chip was squeezed out of its label).
+        FlowRow { ShapeHandleSideControls(tool, hasSelection) }
         Spacer(Modifier.height(4.dp))
     }
 }

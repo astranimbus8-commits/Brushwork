@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
@@ -23,6 +25,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,9 +46,12 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.brushwork.paint.tools.vector.LineCapStyle
 import com.brushwork.paint.ui.common.closeOnSecondFinger
@@ -99,7 +105,11 @@ internal fun ShapeIconToggle(
     }
 }
 
-/** A 40 dp text toggle whose one visible [text] is its label ("15°"), or [width] wide for a longer one ("Points"). */
+/**
+ * A 40 dp text toggle whose one visible [text] is its label ("15°"), or [width] wide for a longer
+ * one ("Points"). v1.9 (I27): at a large font scale the text shrinks to fit the cell, down to
+ * [SHAPE_CELL_MIN_TEXT] (at font scale 1 and 1.3 it is 13 sp, as in v1.8).
+ */
 @Composable
 internal fun ShapeTextToggle(text: String, on: Boolean, onClick: () -> Unit, width: Dp = SHAPE_CELL_DP) {
     Box(
@@ -116,8 +126,45 @@ internal fun ShapeTextToggle(text: String, on: Boolean, onClick: () -> Unit, wid
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (on) Color.White else BrushworkColors.OnChrome, fontSize = 13.sp, maxLines = 1)
+        ShapeCellText(text, if (on) Color.White else BrushworkColors.OnChrome)
     }
+}
+
+/**
+ * v1.9 (I27): the smallest size a Shape cell's text shrinks to at a large font scale (scaled by
+ * the font scale like any sp: 18 dp at 2.0) before it would be cut.
+ */
+internal val SHAPE_CELL_MIN_TEXT = 9.sp
+
+/**
+ * A Shape cell's [text] at [size] (v1.8's 13 sp) on up to [maxLines] lines, the Material text
+ * style as `Text` gives it ([lineHeight] and [textAlign] when given). v1.9 (I27): where it does not
+ * fit the room it is given it shrinks, in 0.25 sp steps, down to [SHAPE_CELL_MIN_TEXT], its line
+ * height with it: that is set as a share of the text size, as Compose sets it under the phone's
+ * non-linear font scaling (Material's 24 sp line under 13 sp text is 46 dp at 2.0, taller than the
+ * 40 dp cell). Text that fits is laid out exactly as before.
+ */
+@Composable
+internal fun ShapeCellText(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+    size: TextUnit = 13.sp,
+    lineHeight: TextUnit = TextUnit.Unspecified,
+    maxLines: Int = 1,
+    textAlign: TextAlign = TextAlign.Unspecified,
+) {
+    val style = LocalTextStyle.current.merge(TextStyle(color = color, fontSize = size, lineHeight = lineHeight, textAlign = textAlign))
+    val line = style.lineHeight
+    val shared = if (line.isSp && size.isSp) style.copy(lineHeight = (line.value / size.value).em) else style
+    BasicText(
+        text,
+        modifier = modifier,
+        style = shared,
+        maxLines = maxLines,
+        softWrap = maxLines > 1,
+        autoSize = TextAutoSize.StepBased(minFontSize = SHAPE_CELL_MIN_TEXT, maxFontSize = size, stepSize = 0.25.sp),
+    )
 }
 
 /**
@@ -216,7 +263,7 @@ internal fun <T> ShapeMenuCell(
 
 /**
  * A value cell [width] wide showing [text] (its handle: "60 px") on up to two lines; a tap runs
- * [onClick].
+ * [onClick]. v1.9 (I27): a value too big for the cell shrinks ([ShapeCellText]).
  */
 @Composable
 internal fun ShapeValueCell(text: String, width: Dp, onClick: () -> Unit) {
@@ -230,7 +277,7 @@ internal fun ShapeValueCell(text: String, width: Dp, onClick: () -> Unit) {
             .padding(horizontal = 3.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, fontSize = 11.sp, lineHeight = 13.sp, color = BrushworkColors.OnChrome, maxLines = 2, textAlign = TextAlign.Center)
+        ShapeCellText(text, BrushworkColors.OnChrome, size = 11.sp, lineHeight = 13.sp, maxLines = 2, textAlign = TextAlign.Center)
     }
 }
 
