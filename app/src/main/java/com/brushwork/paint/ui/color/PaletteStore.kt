@@ -104,6 +104,16 @@ data class PaletteData(
 
     fun withRecentCleared(): PaletteData = if (recent.isEmpty()) this else copy(recent = emptyList())
 
+    /**
+     * v1.9 A8 (R16): with [other]'s user palettes this data lacks, by id (none is replaced; the
+     * active palette, the recent colors and the picker tab stay).
+     */
+    fun withMissingPalettes(other: PaletteData): PaletteData {
+        val have = palettes.mapTo(HashSet()) { it.id }
+        val added = other.palettes.filter { it.id !in have && BuiltInPalettes.byId(it.id) == null }
+        return if (added.isEmpty()) this else copy(palettes = palettes + added).sanitized()
+    }
+
     /** Repairs data read from storage (see [decode]). */
     fun sanitized(): PaletteData {
         val seen = HashSet<String>()
@@ -246,6 +256,22 @@ class PaletteStore internal constructor(private val prefs: SharedPreferences) {
         internal const val KEY = "data"
 
         @Volatile private var instance: PaletteStore? = null
+
+        /**
+         * v1.9 A8 (R16): adds [other]'s user palettes missing from [context]'s store (by id; none is
+         * replaced). The shared instance updates live when it reads that store. Main thread.
+         */
+        fun mergeMissing(context: Context, other: PaletteData) {
+            val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val live = instance?.takeIf { it.prefs === prefs }
+            if (live != null) {
+                live.update { it.withMissingPalettes(other) }
+                return
+            }
+            val current = PaletteData.decode(prefs.getString(KEY, null))
+            val next = current.withMissingPalettes(other)
+            if (next != current) prefs.edit().putString(KEY, PaletteData.encode(next)).commit()
+        }
 
         /** The shared instance (created from the application context on first use). */
         fun get(context: Context): PaletteStore =

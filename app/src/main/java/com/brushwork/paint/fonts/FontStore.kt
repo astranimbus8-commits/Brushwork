@@ -27,6 +27,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
@@ -228,6 +229,41 @@ class FontStore internal constructor(
         // meanwhile (a star tapped just before closing the picker is still saved).
         publish(next)
         withContext(NonCancellable + io) { writeIndex(next) }
+    }
+
+    /**
+     * v1.9 A8 (R16): adds the backup's imported fonts [restored] this store lacks (by id; none is
+     * replaced), with their names from the backup: each file is read from [open] into
+     * `<dir>/<id>.<ext>` through a temp file, then the index is written once. Text layouts are
+     * rebuilt ([generation]). A font whose file cannot be read is left out.
+     */
+    suspend fun restoreFonts(restored: List<ImportedFont>, open: (ImportedFont) -> InputStream) = mutex.withLock {
+        ensureLoaded()
+        val known = index.fonts.mapTo(HashSet()) { it.id }
+        val added = withContext(NonCancellable + io) {
+            dir.mkdirs()
+            restored.filter { f ->
+                val ext = f.file.substringAfterLast('.', "")
+                f.id !in known && FontIds.isValid(f.id) && f.file == "${f.id}.$ext" && FontFormat.entries.any { it.ext == ext }
+            }.distinctBy { it.id }.mapNotNull { f ->
+                val target = File(dir, f.file)
+                val tmp = File(dir, "${f.file}.tmp")
+                try {
+                    open(f).use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                    Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                    f.copy(bytes = target.length())
+                } catch (e: IOException) {
+                    tmp.delete()
+                    null
+                }
+            }
+        }
+        if (added.isEmpty()) return@withLock
+        val next = index.copy(fonts = index.fonts + added).sanitized()
+        withContext(NonCancellable + io) { writeIndex(next) }
+        publish(next)
+        typefaces.clear()
+        bumpGeneration()
     }
 
     private fun publish(data: FontIndexData) {

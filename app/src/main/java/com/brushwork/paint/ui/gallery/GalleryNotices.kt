@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -14,6 +13,8 @@ import com.brushwork.paint.diagnostics.CrashLog
 import com.brushwork.paint.diagnostics.CrashReport
 import com.brushwork.paint.storage.backup.BackupService
 import com.brushwork.paint.storage.backup.BackupStatus
+import com.brushwork.paint.ui.backup.BackupFlow
+import com.brushwork.paint.ui.backup.BackupHost
 import com.brushwork.paint.ui.diagnostics.CrashCard
 
 /**
@@ -52,17 +53,22 @@ fun pickNotice(crash: CrashReport?, backup: BackupStatus, notSetDismissedAtMilli
 }
 
 /**
- * The gallery's notice slot (GalleryScreen, under its top bar). F1b: no crash report is kept and
- * the backup reads Ok, so nothing shows; a tap on [com.brushwork.paint.ui.common.BackupLabels19.LATER] is
- * remembered for the screen only (A8 keeps it).
+ * The gallery's notice slot (GalleryScreen, under its top bar). v1.9 A8: it also hosts the backup's
+ * folder picker and dialogs ([BackupHost]), for the notice, the ⋮ menu and the empty gallery.
+ * The no-folder notice waits for the first artwork (nothing to lose before), and
+ * [com.brushwork.paint.ui.common.BackupLabels19.LATER] is kept in the backup's state file, so it
+ * holds for 7 days across app starts.
  */
 @Composable
 fun GalleryNotices(modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val backup by BackupService.status.collectAsState()
+    BackupHost()
+    val status by BackupService.status.collectAsState()
+    val hasArtworks by BackupService.hasArtworks.collectAsState()
+    val laterAt by BackupService.notSetLaterAt.collectAsState()
     var crash by remember { mutableStateOf(CrashLog.unseen(context)) }
-    var laterAt by remember { mutableLongStateOf(0L) }
-    val now = remember(backup, laterAt) { System.currentTimeMillis() }
+    val backup = if (status == BackupStatus.NotSet && !hasArtworks) BackupStatus.Ok(0L, "", 0L) else status
+    val now = remember(backup, laterAt) { BackupService.clock() }
     val notice = pickNotice(crash, backup, laterAt, now) ?: return
     Box(modifier) {
         when (notice) {
@@ -75,7 +81,7 @@ fun GalleryNotices(modifier: Modifier = Modifier) {
                     crash = null
                 },
             )
-            else -> BackupBanner(notice = notice, onChoose = {}, onLater = { laterAt = System.currentTimeMillis() })
+            else -> BackupBanner(notice = notice, onChoose = { BackupFlow.chooseFolder() }, onLater = { BackupService.putOffNotice() })
         }
     }
 }
