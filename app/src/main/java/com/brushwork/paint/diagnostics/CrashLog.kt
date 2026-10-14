@@ -35,7 +35,8 @@ data class CrashReport(val id: String, val timeMillis: Long, val kind: Kind, val
  * - [record] is also how the guarded jobs and `ErrorReporter` keep a handled error: written on
  *   the diagnostics thread, at most once a minute for the same place and class.
  * - [install] also reads, on the diagnostics thread, how the last runs ended ([ExitReasons]: a
- *   low-memory kill, an ANR, a native crash become reports).
+ *   low-memory kill, an ANR, a native crash become reports) and starts the [FreezeWatchdog]
+ *   ([recordFreeze]).
  * - What was seen: the "diagnostics" preferences ("seenAt", the newest report the gallery's card
  *   was dismissed for; "exitSeenAt", the newest exit read).
  *
@@ -127,6 +128,12 @@ object CrashLog {
             ExitReasons.readSince(app)
             ExitReasons.publishSummary(app)
         }
+        // Step 3: the freeze watchdog (its own thread, while an activity is started).
+        try {
+            FreezeWatchdog.start(app)
+        } catch (e: Throwable) {
+            Log.w(TAG, "crash log: no watchdog", e)
+        }
     }
 
     /**
@@ -178,6 +185,29 @@ object CrashLog {
             background { write(now, kind, quiet = true, text) }
         } catch (e: Throwable) {
             try { Log.w(TAG, "crash log: not recorded", e) } catch (_: Throwable) {}
+        }
+    }
+
+    /**
+     * Keeps a freeze ([FreezeWatchdog]: the main thread blocked [blockedMs]) with the main
+     * thread's [stack] as it was then; written on the diagnostics thread, never on the card.
+     */
+    internal fun recordFreeze(blockedMs: Long, stack: Array<StackTraceElement>) {
+        try {
+            val now = System.currentTimeMillis()
+            val editor = editorFacts()
+            val seconds = "%.1f".format(java.util.Locale.ROOT, blockedMs / 1000.0)
+            val fields = baseFields(CrashReport.Kind.FREEZE, fatal = false, now, "main thread blocked $seconds s") +
+                listOfNotNull(editor?.let { "Canvas" to it.canvas }) +
+                ("Summary" to "${ReportText.kindTitle(CrashReport.Kind.FREEZE, fatal = false)}: $seconds s")
+            val sections = listOf(
+                "Breadcrumbs, oldest first" to Breadcrumbs.snapshot(),
+                "Main thread" to stack.take(ReportText.MAX_FRAMES).map { "    at $it" },
+            )
+            val text = ReportText.compose(fields, sections, MAX_BYTES)
+            background { write(now, CrashReport.Kind.FREEZE, quiet = true, text) }
+        } catch (e: Throwable) {
+            runCatching { Log.w(TAG, "crash log: freeze not recorded", e) }
         }
     }
 
