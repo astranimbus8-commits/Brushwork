@@ -47,6 +47,8 @@ object TextExport {
         if (item.spec.letterScale.isOn) return null
         if (!item.spec.fontKerning || kerned(item)) return null
         if (item.spec.vertical || item.path.isActive) return null
+        // v1.9 (R5): a "Pair kerning" mode that moves a letter (Metrics outside Latin runs, Optical).
+        if (TextRenderer.modeMovesLetters(item)) return null
         val prep = TextRenderer.prepare(item)
         val block = prep.block ?: return null
         val paint = TextRunPaint(item.spec, affine(TextRenderer.matrix(item, block)))
@@ -148,7 +150,7 @@ object TextExport {
         val block = prep.block
         if (block == null) {
             val paints = prep.paints ?: TextRenderer.pathPaints(spec)
-            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path, TextRenderer.pathLetters(item), item.kerns) ?: return null
+            val (glyphs, stroke) = TextOnPathEngine.outlines(item.text, paints.fill, paints.stroke, item.path, TextRenderer.pathLetters(item), item.kerns, KerningModes.modeOf(item.spec, onPath = true)) ?: return null
             if (stroke != null) out += TextOutlinePart(stroke, spec.strokeColor, TextOutlinePart.Kind.TEXT_OUTLINE)
             out += TextOutlinePart(glyphs, spec.color, TextOutlinePart.Kind.TEXT)
             return out

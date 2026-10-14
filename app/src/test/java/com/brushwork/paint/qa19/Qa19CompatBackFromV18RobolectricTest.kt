@@ -2,6 +2,7 @@ package com.brushwork.paint.qa19
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -22,6 +23,7 @@ import com.brushwork.paint.compat18.ShapeLayerDataV18
 import com.brushwork.paint.compat18.ShapeObjectV18
 import com.brushwork.paint.compat18.ShapeSettingsV18
 import com.brushwork.paint.compat18.ShapeTypeV18
+import com.brushwork.paint.compat18.TextAlignV18
 import com.brushwork.paint.compat18.TextCodecV18
 import com.brushwork.paint.compat18.TextTransformsV18
 import com.brushwork.paint.compat18.ToolSettingsV18
@@ -56,6 +58,14 @@ import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
 import com.brushwork.paint.tools.points.PointSelection
 import com.brushwork.paint.tools.select.SelectionDuplicate
+import com.brushwork.paint.tools.text.TextAlign
+import com.brushwork.paint.tools.text.TextBoxSpec
+import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextItem
+import com.brushwork.paint.tools.text.TextJustify
+import com.brushwork.paint.tools.text.TextKerningMode
+import com.brushwork.paint.tools.text.TextRenderer
+import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.vector.CornerStyle
 import com.brushwork.paint.tools.vector.CurveSettings
 import com.brushwork.paint.tools.vector.ShapeCodec
@@ -162,6 +172,8 @@ class Qa19CompatBackFromV18RobolectricTest {
                 val item = TextCodecV18.decode(d)
                 assertNotNull("$row ${l.name}: v1.8 reads the text", item)
                 written += TextCodecV18.encode(item!!)
+                // A3: the text data is a string in project.json (its quotes escaped): look for the keys in it as read.
+                inLayers.append(d)
             }
             l.shapeData?.let { d ->
                 val s = ShapeCodecV18.decode(d)
@@ -238,18 +250,25 @@ class Qa19CompatBackFromV18RobolectricTest {
 
     // ------------------------------------------------------------------ the rows (5.2)
 
-    @Ignore("5.2 row 1, TextSpec.justify (NEVER): owner A3")
     @Test
     fun row01TextJustify() {
         v18Reads("text-justify", listOf("justify"))
         // A3: v1.8 shows the saved pixels; an edit lays out with `align` (ragged) and drops the field.
+        val item = requireNotNull(TextCodecV18.decode(firstText("text-justify", "Justified"))) { "v1.8 reads the justified text" }
+        assertEquals(TEXT_PARAGRAPH, item.text)
+        assertEquals("the last line's alignment is v1.8's align", TextAlignV18.END, item.spec.align)
+        assertTrue("the box width is kept", item.spec.box.width > 0f)
     }
 
-    @Ignore("5.2 row 2, TextSpec.kerningMode (NEVER; sanitized sets fontKerning = true): owner A3")
     @Test
     fun row02TextKerningMode() {
         v18Reads("text-kerning", listOf("kerningMode"))
-        // A3: v1.8 shows the saved pixels; an edit kerns as "Auto" (fontKerning is true in the data).
+        // A3: v1.8 shows the saved pixels; an edit kerns as "Auto" while "Font kerning" is on in the
+        // data, and not at all while it is off ("Off" keeps the mode in v1.9 and turns the switch off).
+        val metrics = requireNotNull(TextCodecV18.decode(firstText("text-kerning", "Metrics"))) { "v1.8 reads Metrics" }
+        assertTrue("Metrics: Font kerning on, so v1.8 kerns as Auto", metrics.spec.fontKerning)
+        val off = requireNotNull(TextCodecV18.decode(firstText("text-kerning", "Off"))) { "v1.8 reads Off" }
+        assertFalse("Off: Font kerning off, so v1.8 doesn't kern", off.spec.fontKerning)
     }
 
     @Ignore("5.2 row 3, TextSpec.list (NEVER): owner A3")
@@ -628,6 +647,8 @@ class Qa19CompatBackFromV18RobolectricTest {
         "shape-r17" to ::writeShapeR17,
         "layers-merged" to ::writeMergedLayers,
         "duplicates" to ::writeDuplicates,
+        "text-justify" to ::writeTextJustify,
+        "text-kerning" to ::writeTextKerning,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1060,6 +1081,34 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertEquals(listOf("Layer 1", ShapeType.RECTANGLE.label, VECTOR_LAYER), c.doc.layers.map { it.name })
     }
 
+    /** Row 1 (A3): a justified paragraph in a 200 px box, its last line on the right. */
+    private fun writeTextJustify(dir: File) {
+        val spec = TextSpec(sizePx = 24f, align = TextAlign.END, justify = TextJustify.ON, box = TextBoxSpec(width = 200f))
+        saveTexts(dir, "Justified" to TextItem(TEXT_PARAGRAPH, spec, cx = 120f, cy = 80f))
+    }
+
+    /**
+     * Row 2 (A3): "Metrics" (Font kerning on) on Latin and Japanese letters, and "Off" ("Font
+     * kerning" off, keeping "Optical" for when it is turned on again).
+     */
+    private fun writeTextKerning(dir: File) {
+        val metrics = TextSpec(sizePx = 28f, kerningMode = TextKerningMode.METRICS_LATIN)
+        val off = TextSpec(sizePx = 28f, fontKerning = false, kerningMode = TextKerningMode.OPTICAL)
+        saveTexts(dir, "Metrics" to TextItem("AVATAR テキスト", metrics, cx = 120f, cy = 50f), "Off" to TextItem("AVATAR", off, cx = 120f, cy = 110f))
+    }
+
+    /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
+    private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) {
+        val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
+        for ((name, item) in texts) {
+            val layer = Layer(doc.newLayerId(), name, BitmapUtils.createLayerBitmap(doc.width, doc.height))
+            TextRenderer.drawItem(Canvas(layer.bitmap), item, TextRenderer.prepare(item), null)
+            layer.textData = TextCodec.encodeAll(listOf(item))
+            doc.layers += layer
+        }
+        saveProject(doc, dir)
+    }
+
     /** Every file under [root] by its path relative to it ('/'-separated), with its bytes. */
     private fun snapshot(root: File): Map<String, ByteArray> =
         root.walkTopDown().filter { it.isFile }.associate { it.relativeTo(root).invariantSeparatorsPath to it.readBytes() }
@@ -1110,6 +1159,9 @@ class Qa19CompatBackFromV18RobolectricTest {
 
         /** v1.8's vector JSON read strictly: a key or a value v1.8 does not know fails. */
         val STRICT_V18 = Json { allowSpecialFloatingPointValues = true }
+
+        /** Row 1 (A3): the justified paragraph. */
+        const val TEXT_PARAGRAPH = "Justified lines reach both edges of the box while the last line keeps its alignment."
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(

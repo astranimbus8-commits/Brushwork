@@ -76,11 +76,13 @@ class TextKerningRowTest {
         select(1, 1)
         assertTrue("caption: ${SmokeUi.shown().take(80)}", SmokeUi.has(KerningLabels.between("A", "V"), exact = true))
         assertTrue(SmokeUi.isEnabled(increase))
-        // 392 dp: a 96 dp label, 40 dp steppers, a 72 dp field, all inside the screen.
-        assertWidth("label", 96f * dp, rowLabel(row).node.size.width.toFloat())
+        // 392 dp: 40 dp steppers and the field between them filling the row (v1.9: the field's
+        // own label names it, so no row label), the unit after it, all inside the screen.
+        assertTrue("v1.9: no separate row label", rowLabel(row) == null)
         assertWidth("−", 40f * dp, clickable(decrease).size.width.toFloat())
         assertWidth("+", 40f * dp, clickable(increase).size.width.toFloat())
-        assertWidth("field", 72f * dp, SmokeUi.field(kerning).node.size.width.toFloat())
+        assertTrue("the field fills the row", SmokeUi.field(kerning).node.size.width >= 120f * dp)
+        assertTrue("the row starts with −", abs(clickable(decrease).positionInRoot.x - row.node.positionInRoot.x) <= 1.5f)
         val unit = SmokeUi.find(KERNING_UNIT, exact = true)?.node ?: throw AssertionError("no unit")
         val rowRight = row.node.positionInRoot.x + row.node.size.width
         assertTrue("the unit fits in the row", unit.positionInRoot.x + unit.size.width <= rowRight + 0.5f)
@@ -97,7 +99,7 @@ class TextKerningRowTest {
         assertTrue("mixed: ${SmokeUi.shown().take(80)}", SmokeUi.has(PointLabels.MIXED, exact = true))
         assertEquals("", SmokeUi.field(kerning).text)
         assertWidth("mixed −", 40f * dp, clickable(decrease).size.width.toFloat())
-        assertWidth("mixed field", 72f * dp, SmokeUi.field(kerning).node.size.width.toFloat())
+        assertTrue("the mixed field fills the row", SmokeUi.field(kerning).node.size.width >= 72f * dp)
         // −/+ move each gap by 10.
         SmokeUi.click(increase, exact = true)
         assertEquals(listOf(TextKern(0, -70), TextKern(1, 10)), tool.item!!.kerns)
@@ -176,11 +178,11 @@ class TextKerningRowTest {
         RobolectricUi.elements().lastOrNull { it.node.config.getOrNull(SemanticsProperties.TestTag) == tag && it.node.layoutInfo.isPlaced }
             ?: throw AssertionError("no element tagged $tag; shown: ${SmokeUi.shown().take(80)}")
 
-    /** The row's own "Kerning" label (the field's floating label is another "Kerning"). */
-    private fun rowLabel(row: RobolectricUi.Element): RobolectricUi.Element =
+    /** A "Kerning" label at the row's left edge (v1.7 had one; v1.9's field names the row itself), or null. */
+    private fun rowLabel(row: RobolectricUi.Element): RobolectricUi.Element? =
         RobolectricUi.elements().filter { e ->
             e.node.config.getOrNull(SemanticsProperties.Text)?.any { it.text == kerning } == true && abs(e.node.positionInRoot.x - row.node.positionInRoot.x) < 1f
-        }.lastOrNull() ?: throw AssertionError("no row label")
+        }.lastOrNull()
 
     /** The clickable node of the stepper described [label] (its icon carries the description). */
     private fun clickable(label: String): SemanticsNode {

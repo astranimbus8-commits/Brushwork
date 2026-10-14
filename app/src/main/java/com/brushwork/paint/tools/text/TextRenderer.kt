@@ -313,7 +313,7 @@ object TextRenderer {
         return when {
             item.path.isActive -> {
                 val paints = reuse?.paints?.takeIf { sameLook } ?: pathPaints(item.spec)
-                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns))
+                val b = if (item.text.isEmpty()) RectF() else RectF(TextOnPath.bounds(item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns, KerningModes.modeOf(item.spec, onPath = true)))
                 PreparedText(item.text, item.spec, item.path, null, paints, b, kerns = item.kerns)
             }
             item.thread.isOn -> {
@@ -385,10 +385,42 @@ object TextRenderer {
      * linked story's tail from a frame's start) for [kerns], or null when none applies (see
      * [TextKerns.advancesPx]: vertical text, a paragraph in a script drawn as a whole, no usable
      * kern). [ramp] (scaled letters) scales each kern with the letter before its gap.
+     *
+     * v1.9 (R5): plus what the "Pair kerning" mode adds to the font's own kerning
+     * ([KerningModes]: "Metrics" takes the font's pairs back outside Latin, Greek and Cyrillic
+     * runs), measured as the text is measured. Auto and Off add nothing: such text keeps its v1.8
+     * route and pixels.
      */
-    private fun kernPx(spec: TextSpec, source: String, kerns: List<TextKern>, from: Int, ramp: LetterRampResult?): FloatArray? {
-        if (kerns.isEmpty() || spec.vertical) return null
-        return TextKerns.advancesPx(source, kerns, from, spec.sizePx, ramp?.factors)
+    internal fun kernPx(spec: TextSpec, source: String, kerns: List<TextKern>, from: Int, ramp: LetterRampResult?): FloatArray? {
+        if (spec.vertical) return null
+        val manual = if (kerns.isEmpty()) null else TextKerns.advancesPx(source, kerns, from, spec.sizePx, ramp?.factors)
+        val mode = KerningModes.modeOf(spec) ?: return manual
+        val paint = newPaint(spec).apply {
+            letterSpacing = spec.letterSpacing
+            if (ramp != null) fontFeatureSettings = scaledFeatures(spec)
+        }
+        return KerningModes.sum(manual, KerningModes.advancesPx(mode, source, from, paint, ramp?.factors))
+    }
+
+    /**
+     * v1.9 (R5): whether [item]'s "Pair kerning" mode moves one of its own letters ([kernPx] of
+     * its text, or of its slice of a linked story): a run of text in an export can't carry that
+     * (an SVG viewer or PDF reader sets every pair with the font's kerning), so it exports as
+     * outlines. Text on a path is outlined anyway.
+     */
+    internal fun modeMovesLetters(item: TextItem): Boolean {
+        val mode = KerningModes.modeOf(item.spec) ?: return false
+        val th = item.thread
+        val source = if (th.isOn) th.story else item.text
+        val from = if (th.isOn) th.start.coerceIn(0, source.length) else 0
+        val ramp = rampFor(item.spec, source)
+        val paint = newPaint(item.spec).apply {
+            letterSpacing = item.spec.letterSpacing
+            if (ramp != null) fontFeatureSettings = scaledFeatures(item.spec)
+        }
+        val px = KerningModes.advancesPx(mode, source, from, paint, ramp?.factors) ?: return false
+        val n = if (th.isOn) (th.end - from).coerceIn(0, px.size) else px.size
+        return KerningModes.moves(px, n)
     }
 
     /**
@@ -1180,7 +1212,7 @@ object TextRenderer {
             canvas.restore()
         } else {
             val paints = prepared.paints
-            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns)
+            if (paints != null) TextOnPath.draw(canvas, item.text, paints.fill, paints.stroke, item.path, pathLetters(item), item.kerns, KerningModes.modeOf(item.spec, onPath = true))
         }
         if (selection != null) {
             canvas.clipRect(bounds)

@@ -15,7 +15,6 @@ import com.brushwork.paint.tools.text.TextBoxSpec
 import com.brushwork.paint.tools.text.TextJustify
 import com.brushwork.paint.tools.text.TextTool
 import com.brushwork.paint.ui.common.BwSheetTitleKey
-import com.brushwork.paint.ui.common.KerningLabels
 import com.brushwork.paint.ui.common.TextLabels19
 import com.brushwork.paint.ui.editor.chrome.ChromeScreen
 import org.junit.Assert.assertEquals
@@ -158,11 +157,9 @@ class Qa19TextAlignUiTest {
     /**
      * I27 for the text sheet ("Add text"): no text in it overflows its box ([Qa19Ui.textOverflows]
      * of the nodes under the sheet's panel; the Text strip behind it is the strip's own check).
-     * Until step 3 the v1.7 Kerning field's own label ("Kerning" in a 72 dp field) is left out:
-     * step 3 gives it room and checks it in `Qa19KerningUiTest`.
      */
     private fun assertSheetFits(where: String) {
-        val bad = Qa19Ui.textOverflows { e -> inSheet(e.node) && e.node.config.getOrNull(SemanticsProperties.Text)?.joinToString("") { it.text } != KerningLabels.KERNING }
+        val bad = Qa19Ui.textOverflows { e -> inSheet(e.node) }
         if (bad.isNotEmpty()) throw AssertionError("texts overflow their box in the text sheet $where:\n" + bad.joinToString("\n"))
     }
 

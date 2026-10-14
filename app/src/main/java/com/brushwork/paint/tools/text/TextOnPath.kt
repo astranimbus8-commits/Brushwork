@@ -39,6 +39,9 @@ object TextOnPath {
      * along the path, by `value / 1000` em (scaled with the letter before the gap). They apply
      * on a left-to-right line drawn one cluster at a time (as scaled letters are, so without
      * ligatures); a text holding right-to-left or shaped script ignores them.
+     *
+     * v1.9 (R5): [mode] ("Pair kerning" Metrics or Optical, [KerningModes]; null for Auto and Off)
+     * moves the letters after their gaps along the path as kerns do, on the same lines.
      */
     fun draw(
         canvas: Canvas,
@@ -48,11 +51,12 @@ object TextOnPath {
         spec: TextPathSpec,
         letters: LetterScaleSpec? = null,
         kerns: List<TextKern> = emptyList(),
-    ): RectF = TextOnPathEngine.draw(canvas, text, fill, stroke, spec, letters, kerns)
+        mode: TextKerningMode? = null,
+    ): RectF = TextOnPathEngine.draw(canvas, text, fill, stroke, spec, letters, kerns, mode)
 
     /** Bounds [draw] would cover (for hit testing and invalidation). */
-    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList()): RectF =
-        TextOnPathEngine.bounds(text, fill, stroke, spec, letters, kerns)
+    fun bounds(text: String, fill: Paint, stroke: Paint?, spec: TextPathSpec, letters: LetterScaleSpec? = null, kerns: List<TextKern> = emptyList(), mode: TextKerningMode? = null): RectF =
+        TextOnPathEngine.bounds(text, fill, stroke, spec, letters, kerns, mode)
 
     /**
      * The guide path (thin line shown while editing): the shape itself, plus the control arms of
