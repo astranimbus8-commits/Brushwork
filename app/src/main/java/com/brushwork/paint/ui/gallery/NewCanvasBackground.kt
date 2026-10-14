@@ -50,10 +50,10 @@ internal enum class NewCanvasBackground(val setting: String, val start: CanvasSt
 }
 
 /**
- * v1.9 (R15; owner A8): the "Paper" swatch: a white page with its top-right corner folded over,
- * and the checker of a transparent background in the corner the fold uncovers, so it never looks
- * like the White swatch. Drawn with plain [Canvas] calls, so a test can render it into a bitmap;
- * the dialog draws it through `nativeCanvas`. Main thread only (its paints are shared).
+ * v1.9 (R15; owner A8): the [CanvasLabels19.PAPER] swatch: a white page with its top-right corner
+ * folded over, and the checker of a transparent background in the corner the fold uncovers, so it
+ * never looks like the White swatch. Drawn with plain [Canvas] calls, so a test can render it into
+ * a bitmap; the dialog draws it through `nativeCanvas`. Main thread only (its paints are shared).
  */
 internal object PaperSwatchArt {
     private const val PAGE = 0xFFFFFFFF.toInt()
