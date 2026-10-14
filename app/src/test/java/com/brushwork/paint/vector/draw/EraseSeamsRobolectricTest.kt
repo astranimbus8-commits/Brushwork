@@ -27,8 +27,8 @@ import org.robolectric.RobolectricTestRunner
 /**
  * v1.9 (R11, design 2.4.12): the erase seams of F1b. An erasing [VectorPaintSpec] takes paint away
  * (DST_OUT) and a plain one still paints, also inside a selection (A5: nothing under the alpha
- * lock); [EraseCut.strokeRegion] is the round stroke region; the chooser stubs keep v1.8 (no
- * chooser item; the tool session is [ToolEraseSession]).
+ * lock); [EraseCut.strokeRegion] is the round stroke region; the chooser offers nothing without a
+ * vector or shape layer (null items; the tool session is [ToolEraseSession]).
  */
 @RunWith(RobolectricTestRunner::class)
 class EraseSeamsRobolectricTest {
@@ -91,7 +91,7 @@ class EraseSeamsRobolectricTest {
     }
 
     @Test
-    fun theChooserStubsKeepV18() {
+    fun theChooserOffersNothingWithoutALayerOfObjects() {
         val ctx = StripContext(selectionBarShown = false, vectorMode = true)
         assertEquals(VectorEraserStrip.KEY, VectorEraseChooser.KEY)
         assertNull(VectorEraseChooser.item(ctx, null, VectorEraseMode.OBJECT) {})

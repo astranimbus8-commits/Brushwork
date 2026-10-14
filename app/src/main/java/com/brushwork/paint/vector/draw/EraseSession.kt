@@ -1,5 +1,6 @@
 package com.brushwork.paint.vector.draw
 
+import com.brushwork.paint.ui.common.EraseLabels19
 import com.brushwork.paint.vector.ObjectCopies
 import com.brushwork.paint.vector.VObject
 import com.brushwork.paint.vector.VPath
@@ -11,17 +12,28 @@ import java.util.IdentityHashMap
 import kotlin.math.max
 import kotlin.math.min
 
-/** The vector eraser's modes (persisted in `AppSettings.vectorEraserMode` by name). */
+/**
+ * The vector eraser's modes (persisted in `AppSettings.vectorEraserMode` by name). [label] and
+ * [description] are v1.8's texts (an API: the label checks read them as v1.8's); what the editor
+ * shows of a mode is [note].
+ */
 enum class VectorEraseMode(val label: String, val description: String) {
     /** Every touched object goes. */
     OBJECT("Object", "Erases every object it touches"),
     /**
      * Strokes and open lines are cut where the eraser passes; v1.9 (R11 b): shapes and filled paths
-     * are cut by the eraser's region at the lift ([EraseCut]); other closed lines go whole.
+     * are cut by the eraser's region at the lift ([EraseCut]); other closed lines go whole. Its
+     * [description] is v1.8's, from before fills were cut; v1.9 shows [EraseLabels19.PARTIAL_NOTE].
      */
     PARTIAL("Partial", "Cuts strokes and lines where it passes; closed shapes and fills go whole"),
     /** The touched piece of a stroke or line goes, up to where it crosses other lines. */
     TO_INTERSECTION("To intersection", "Erases the touched piece of a line up to where it crosses other lines");
+
+    /**
+     * v1.9 (R11 a): what the editor shows of the mode (the Eraser's hint, the mode cell's menu, the
+     * eraser's first-use toast): [description], but [EraseLabels19.PARTIAL_NOTE] for [PARTIAL].
+     */
+    val note: String get() = if (this == PARTIAL) EraseLabels19.PARTIAL_NOTE else description
 
     companion object {
         fun parse(name: String?): VectorEraseMode = entries.firstOrNull { it.name == name } ?: OBJECT

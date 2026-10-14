@@ -29,13 +29,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.engine.EditTarget
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.iconLongPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
-import com.brushwork.paint.ui.tools.strip.StripItem
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import com.brushwork.paint.vector.draw.VectorEraserModes
 
@@ -100,26 +101,29 @@ private fun ModeChip(label: String, selected: Boolean, icon: ImageVector?, onCli
  * three 40 dp icon buttons (120 dp) described by the mode labels ("Object", "Partial", "To
  * intersection", unchanged), the chosen one accent and selected; a long press shows the mode's
  * label (v1.8 polish).
+ *
+ * v1.9 (R11 a; A5): also on a legacy shape layer (the Eraser erases its shape as an object); the
+ * item is [VectorEraseChooser.item].
  */
 internal object VectorEraserStrip {
     const val KEY = "eraser.modes"
     const val WIDTH_DP = 120f
 
-    /** The eraser removes [controller]'s vector objects: a vector layer, its content (not its mask). */
+    /**
+     * The eraser removes [controller]'s objects: a vector layer or (v1.9) a legacy shape layer,
+     * its content (not its mask).
+     */
     fun erasesObjects(controller: EditorController): Boolean {
         controller.layersVersion
         val layer = controller.activeLayer
-        return layer.isVectorLayer && controller.editTargetOf(layer) == EditTarget.CONTENT
+        return VectorEraseChooser.holdsObjects(layer) && controller.editTargetOf(layer) == EditTarget.CONTENT
     }
 
-    fun modesItem(controller: EditorController): StripItem =
-        StripItem(KEY, VectorEraserModes.mode(controller).label, WIDTH_DP.dp) { ModeButtons(controller) }
-
+    /** The three mode buttons, [mode] selected. */
     @Composable
-    private fun ModeButtons(controller: EditorController) {
-        val mode = VectorEraserModes.mode(controller)
-        Row(Modifier.width(WIDTH_DP.dp), verticalAlignment = Alignment.CenterVertically) {
-            VectorEraseMode.entries.forEach { m -> ModeButton(m, m == mode) { VectorEraserModes.setMode(controller, m) } }
+    fun ModeButtons(mode: VectorEraseMode, modifier: Modifier = Modifier, onMode: (VectorEraseMode) -> Unit) {
+        Row(modifier.width(WIDTH_DP.dp), verticalAlignment = Alignment.CenterVertically) {
+            VectorEraseMode.entries.forEach { m -> ModeButton(m, m == mode) { onMode(m) } }
         }
     }
 
@@ -131,6 +135,7 @@ internal object VectorEraserStrip {
                 .size(40.dp)
                 .clip(shape)
                 .background(if (selected) BrushworkColors.AccentDim else Color.Transparent)
+                .testTag(V19Tags.ERASE_MODE_PREFIX + m.name)
                 .iconLongPressLabel(m.label)
                 .selectable(selected = selected, role = Role.RadioButton, onClick = onClick),
             contentAlignment = Alignment.Center,
@@ -140,7 +145,8 @@ internal object VectorEraserStrip {
     }
 }
 
-private fun iconOf(m: VectorEraseMode): ImageVector = when (m) {
+/** The mode's icon (v1.8): the buttons, and (v1.9) the face of the four tools' mode cell. */
+internal fun iconOf(m: VectorEraseMode): ImageVector = when (m) {
     VectorEraseMode.OBJECT -> Icons.Outlined.DeleteSweep
     VectorEraseMode.PARTIAL -> Icons.Filled.ContentCut
     VectorEraseMode.TO_INTERSECTION -> Icons.Filled.JoinInner

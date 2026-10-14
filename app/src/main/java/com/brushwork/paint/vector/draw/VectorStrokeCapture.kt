@@ -83,7 +83,7 @@ object VectorStrokeCapture {
 
     /** What the eraser does on a vector layer in [mode], and where the other modes are (shown once per editor). */
     internal fun eraserHint(mode: VectorEraseMode): String =
-        "Vector eraser — ${mode.label}: ${mode.description.replaceFirstChar { it.lowercase() }}. " +
+        "Vector eraser — ${mode.label}: ${mode.note.replaceFirstChar { it.lowercase() }}. " +
             "Other modes are at the start of the options strip"
 
     /** "Watercolor needs a raster layer" (the brush's name, else its tip). */

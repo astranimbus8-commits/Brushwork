@@ -55,10 +55,10 @@ class ToolEraseSession internal constructor(
     private val c: EditorController,
     private val layer: Layer,
     private val source: EraseSource,
-    private val route: EraseRoute,
+    private var route: EraseRoute,
 ) {
     /** The erase removes objects (else pixels). */
-    private val objects = route == EraseRoute.OBJECTS || route == EraseRoute.CONVERT_THEN_OBJECTS
+    private val objects: Boolean get() = removesObjects(route)
     private val state = VectorDrawState.of(c)
     private var footprint: OutlineFootprint? = null
     private var ended = false
@@ -97,9 +97,28 @@ class ToolEraseSession internal constructor(
      */
     fun update(outline: Path, strokeWidth: Float, filledRegion: Boolean) {
         if (ended) return
+        reroute()
         val f = OutlineFootprint(outline, strokeWidth, filledRegion)
         footprint = f
         if (objects) showObjects(f) else showPixels(f)
+    }
+
+    /**
+     * Follows the layer when the kind of erase it takes changed while the session is open (turned
+     * into pixels by [com.brushwork.paint.ui.common.EraseLabels19.TURN_INTO_PIXELS], a mask chosen
+     * as the target): the preview starts over in the new kind.
+     * False when it takes no erase now ([EraseRoute.REFUSE]).
+     */
+    private fun reroute(): Boolean {
+        val now = EraseRouting.route(layer, source, maskTarget, isPath = false)
+        if (now == EraseRoute.REFUSE) return false
+        // (A shape layer that became a vector layer in another step keeps its objects' erase.)
+        if (now == route || removesObjects(now) && objects) return true
+        removePreview()
+        doom = null
+        session = null
+        route = now
+        return true
     }
 
     private fun showPixels(f: OutlineFootprint) {
@@ -143,15 +162,14 @@ class ToolEraseSession internal constructor(
      *   overlay shows after [EraseLanding.CUT_BUSY_AFTER_MS], the preview stays meanwhile), and
      *   anything that records a step, undo and redo land it first;
      * - [ToolEraseResult.Nothing]: nothing was under the outline (or the layer is gone, or no
-     *   longer takes this kind of erase); no step;
+     *   longer takes an erase); no step. A layer that takes another kind of erase now (turned
+     *   into pixels meanwhile) gets that one;
      * - [ToolEraseResult.Refused]: the layer can't be edited now (locked, hidden, alpha-locked
      *   pixels); its message is shown; no step.
      */
     fun commit(label: String): ToolEraseResult {
         if (ended) return ToolEraseResult.Nothing
-        val now = EraseRouting.route(layer, source, maskTarget, isPath = false)
-        val same = if (objects) now == EraseRoute.OBJECTS || now == EraseRoute.CONVERT_THEN_OBJECTS else now == route
-        if (c.doc.indexOf(layer) < 0 || !same) { end(); return ToolEraseResult.Nothing }
+        if (c.doc.indexOf(layer) < 0 || !reroute()) { end(); return ToolEraseResult.Nothing }
         if (!c.checkEditable(layer)) { end(); return ToolEraseResult.Refused(c.message.orEmpty()) }
         if (!objects && !maskTarget && layer.alphaLocked) {
             end()
@@ -228,6 +246,8 @@ class ToolEraseSession internal constructor(
          * thread at [commit] (design 6: 150 ms for 50); more are cut in the background.
          */
         const val SYNC_TARGETS = 50
+
+        private fun removesObjects(route: EraseRoute) = route == EraseRoute.OBJECTS || route == EraseRoute.CONVERT_THEN_OBJECTS
 
         /** Stands in for `BrushTool`'s refusal of the Eraser on an alpha-locked layer (A6's file; the same words). */
         internal fun alphaLockedMessage(layer: Layer): String =

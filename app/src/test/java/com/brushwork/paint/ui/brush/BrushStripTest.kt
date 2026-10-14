@@ -9,6 +9,9 @@ import com.brushwork.paint.ui.brush.MirrorsStripKit.inspect
 import com.brushwork.paint.ui.brush.MirrorsStripKit.key
 import com.brushwork.paint.ui.brush.MirrorsStripKit.row1Handles
 import com.brushwork.paint.ui.brush.MirrorsStripKit.staysOpen
+import com.brushwork.paint.ui.common.EraseLabels19
+import com.brushwork.paint.ui.tools.strip.StripKeysV19
+import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.vector.VectorEraserStrip
 import com.brushwork.paint.vector.draw.VectorEraseMode
 import org.junit.Assert.assertEquals
@@ -27,9 +30,9 @@ import org.robolectric.shadows.ShadowLog
  * - Brush, raster Eraser, Smudge, Blur: row 1 only, "Choose brush", "Brush size", "Opacity" (or
  *   "Strength"), "Pressure changes size", no toggle, everywhere; "All brush settings" stays in
  *   the size and opacity popups and opens the brush panel.
- * - The vector Eraser: the three modes, "Brush size", "Opacity" (AUTO 1: on the More row's front
- *   at 360 dp with the VECTOR cell); the More row "Choose brush", "Pressure changes size"; the
- *   brush panel opened from the More row outlives it.
+ * - The vector Eraser: the three modes, "Brush size"; the More row "Opacity", "Choose brush",
+ *   "Pressure changes size" and (v1.9, R11 a) "Turn into pixels", last; the brush panel opened
+ *   from the More row outlives it.
  * Measured widths (rule 4, rounded up to 4 dp) differ from the planning table: "Brush size" 76
  * (for "1000 px"), "Opacity" 64 (for "100%"); the sums stay within rule 1 (288 of 288, and 200 of
  * 240 for the vector eraser), so no item became AUTO. The longest texts ("1000 px", "100%") fit.
@@ -53,16 +56,16 @@ class BrushStripTest {
                 val spec = rig.spec
                 val modes = id == ToolId.ERASER && vector
                 if (modes) {
-                    assertSplits(k, spec) { w, chip ->
-                        val r1 = listOf(VectorEraserStrip.KEY, BrushStripItems.SIZE)
-                        if (w == 360 && chip) r1 else r1 + BrushStripItems.OPACITY
-                    }
-                    // The modes first, unchanged; the brush's rarer controls on the More row.
+                    // v1.9 (R11 a): the modes and "Brush size" on row 1 at both widths; "Opacity",
+                    // the brush's rarer controls and, last, "Turn into pixels" on the More row.
+                    assertSplits(k, spec) { _, _ -> listOf(VectorEraserStrip.KEY, BrushStripItems.SIZE) }
+                    val moreKeys = spec.items.filter { it.row == StripRow.MORE }.map { it.key }
+                    assertEquals("$k: the More row's order", listOf(BrushStripItems.OPACITY, BrushStripItems.CHOOSE, BrushStripItems.PRESSURE, StripKeysV19.ERASE_PIXELS.key), moreKeys)
                     val row1 = row1Handles()
-                    val want = VectorEraseMode.entries.map { it.label } + "Brush size" + if (dp == 392) listOf("Opacity") else emptyList()
+                    val want = VectorEraseMode.entries.map { it.label } + "Brush size"
                     assertEquals("$k at $dp dp: row 1", want, row1)
                     assertTrue("$k: the toggle", StripTestKit.toggle() != null)
-                    assertTrue(shown.containsAll(listOf("Choose brush", "Pressure changes size: off", "Opacity")))
+                    assertTrue(shown.containsAll(listOf("Choose brush", "Pressure changes size: off", "Opacity", EraseLabels19.TURN_INTO_PIXELS)))
                 } else {
                     assertSplits(k, spec) { _, _ -> plain }
                     val strength = id == ToolId.SMUDGE || id == ToolId.BLUR
