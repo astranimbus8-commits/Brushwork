@@ -214,7 +214,7 @@ class VectorEraserRobolectricTest {
     }
 
     @Test
-    fun whatWillGoIsShownDimmedAndACancelLeavesNoTrace() {
+    fun whatWillGoIsTakenAwayAndACancelLeavesNoTrace() {
         val c = setup()
         lines(c)
         val before = c.vec.vector!!
@@ -229,9 +229,10 @@ class VectorEraserRobolectricTest {
         assertSame(c.vec, ov!!.layer)
         val shown = BitmapUtils.createLayerBitmap(w, h)
         assertTrue(ov.drawContent(Canvas(shown)))
-        // The doomed line is faded, the others are as they were; the layer is untouched.
-        val doomed = shown.getPixel(40, 100) ushr 24
-        assertTrue("faded alpha $doomed", doomed in 1..140)
+        // v1.9 (design 2.4.4): the doomed line is gone (v1.8 faded it), the others are as they
+        // were; the layer is untouched.
+        assertTrue(c.vec.bitmap.getPixel(40, 100) ushr 24 > 0)
+        assertEquals(0, shown.getPixel(40, 100) ushr 24)
         assertEquals(c.vec.bitmap.getPixel(100, 40), shown.getPixel(100, 40))
         assertArrayEquals(cache, pixels(c.vec.bitmap))
         c.pointerCancel()

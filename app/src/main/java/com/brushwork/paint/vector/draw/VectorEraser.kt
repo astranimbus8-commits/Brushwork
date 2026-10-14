@@ -1,5 +1,7 @@
 package com.brushwork.paint.vector.draw
 
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -7,6 +9,7 @@ import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.Shader
 import com.brushwork.paint.EditorController
 import com.brushwork.paint.brush.BrushPreset
 import com.brushwork.paint.brush.StrokeRaster
@@ -20,9 +23,10 @@ import kotlin.math.max
 
 /**
  * The eraser on a vector layer (v1.5 §4.9, A3): it paints nothing; what it will remove (objects,
- * or parts of strokes and lines, by [VectorEraseMode]) is shown dimmed while the finger moves,
- * and lifting the finger removes it as ONE undo step "Erase" (`VectorLayers.update`, which
- * re-renders the changed area). A second finger (cancel) leaves no trace.
+ * or parts of strokes and lines, by [VectorEraseMode]) is taken away from the layer's image while
+ * the finger moves ([DoomPreview]; v1.8 dimmed it), and lifting the finger removes it as ONE undo
+ * step "Erase" (`VectorLayers.update`, which re-renders the changed area). A second finger
+ * (cancel) leaves no trace.
  *
  * v1.9 (R11 b, I20; A5): on a legacy shape layer ([convertFirst]) the eraser works on the object
  * the shape becomes ([LayerConvert.shapeToVector]); the layer becomes a vector layer in the same
@@ -93,7 +97,7 @@ internal class VectorEraserRecorder(
     override fun commit(label: String, bounds: Rect, commitPixels: () -> Boolean): Boolean {
         if (ended) return false
         if (contentNow() == null || c.doc.indexOf(layer) < 0) { end(); return false }
-        // No more points. The dimmed preview stays until the new content is on the layer: the
+        // No more points. The preview stays until the new content is on the layer: the
         // update of an earlier gesture may still be on its way, and this one may render in the
         // background.
         ended = true
@@ -155,6 +159,7 @@ internal class VectorEraserRecorder(
 
     private fun removePreview() {
         preview.alive = false
+        preview.release()
         if (installed) {
             installed = false
             // What was installed before this gesture comes back, unless it is the preview of an
@@ -174,9 +179,18 @@ internal class VectorEraserRecorder(
 }
 
 /**
- * Draws the layer with what the eraser will remove dimmed (punched out at [DIM_ALPHA]): whole
- * objects along their centerlines and fills, cut parts along their part of the centerline.
- * Drawn inside the compositor's layer (any xfermode is safe there).
+ * Draws the layer without what the eraser will remove (v1.9, design 2.4.4: taken away whole,
+ * as the result will be; v1.8 dimmed it): whole objects along their centerlines and fills, cut
+ * parts along their part of the centerline, each a little wider than its paint. Drawn inside the
+ * compositor's layer (any xfermode is safe there).
+ *
+ * [update] (each move) only rebuilds the parts of the objects that changed. What they cover is
+ * kept in an alpha mask the size of the layer, redrawn where it changed at most once per frame
+ * ([drawContent]): a frame costs the layer and one masked rect however many parts there are.
+ * Without memory for the mask the parts are drawn on every frame instead.
+ *
+ * Known difference with the result: an object that stays but lies under a removed part is
+ * hidden there too until the finger lifts (the layer's pixels are one image).
  */
 internal class DoomPreview(override val layer: Layer, private val session: EraseSession) : LayerRenderOverride {
     private class Item(val path: Path, val width: Float, val fill: Boolean, val butt: Boolean, val bounds: RectF)
@@ -193,13 +207,25 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.BUTT; strokeJoin = Paint.Join.ROUND; color = 0xFF000000.toInt()
     }
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = 0xFF000000.toInt() }
-    private val dim = Paint().apply {
-        alpha = DIM_ALPHA
-        xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
-    }
     private val tmp = FloatArray(2)
 
-    /** Everything drawn dimmed now (document px). */
+    /** The parts' coverage (ALPHA_8, document px), allocated at the first frame; null without memory. */
+    private var mask: Bitmap? = null
+    private var maskCanvas: Canvas? = null
+    private var noMask = false
+
+    /** Where [mask] is out of date (document px): redrawn at the next frame. */
+    private val stale = RectF()
+    private val clear = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.CLEAR) }
+    /** Takes [mask]'s coverage out of the layer (a shader: Skia draws a bare ALPHA_8 bitmap as coverage, see VectorRenderer). */
+    private val punch = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_OUT) }
+    private val erase = PorterDuffXfermode(PorterDuff.Mode.DST_OUT)
+
+    /** Mask rebuilds so far (one per frame at most; tests). */
+    var rebuilds = 0
+        private set
+
+    /** Everything taken away now (document px). */
     fun bounds(): Rect {
         val r = Rect()
         if (!union.isEmpty) union.roundOut(r)
@@ -207,7 +233,7 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         return r
     }
 
-    /** Rebuilds the dimmed parts of the objects [indices]; returns the area to redraw. */
+    /** Rebuilds the removed parts of the objects [indices]; returns the area to redraw. */
     fun update(indices: List<Int>): Rect {
         val dirty = RectF()
         for (i in indices) {
@@ -218,19 +244,28 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         }
         union.setEmpty()
         for (list in items.values) for (it in list) union.union(it.bounds)
+        stale.union(dirty)
         val r = Rect()
         if (!dirty.isEmpty) dirty.roundOut(r)
         r.inset(-2, -2)
         return r
     }
 
+    /** The gesture ended: the mask goes (this preview is never drawn again). */
+    fun release() {
+        noMask = true
+        mask = null
+        maskCanvas = null
+        punch.shader = null
+    }
+
     private fun build(i: Int): List<Item> {
         val tg = session.target(i)
         val out = ArrayList<Item>()
         if (session.isWhole(i)) {
-            val w = max(1f, 2f * tg.reach)
+            val w = max(1f, 2f * tg.reach) + 2f * MARGIN
             for (line in tg.lines) out += item(pathOf(line, 0f, line.uMax, line.closed), w, fill = false, butt = false)
-            // (v1.8: an object with live copies dims each copy's fill on its own.)
+            // (v1.8: an object with live copies takes each copy's fill on its own.)
             for (part in tg.parts ?: listOf(tg)) {
                 if (part.fills.isEmpty()) continue
                 val p = Path()
@@ -242,7 +277,7 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         }
         val set = session.removedOf(i) ?: return out
         val line = tg.lines[0]
-        val w = max(1f, 2f * tg.cutReach)
+        val w = max(1f, 2f * tg.cutReach) + 2f * MARGIN
         for (k in 0 until set.size) {
             val a = set.start(k).coerceIn(0f, line.uMax)
             val b = set.end(k).coerceIn(0f, line.uMax)
@@ -276,11 +311,11 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
         return p
     }
 
-    override fun drawContent(canvas: Canvas): Boolean {
-        canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
-        if (items.isEmpty() || union.isEmpty) return true
-        val save = canvas.saveLayer(union, dim)
+    /** Draws every part that reaches [clip] (null: all) with [mode] (null: plain coverage). */
+    private fun drawItems(canvas: Canvas, clip: RectF?, mode: PorterDuffXfermode?) {
+        fillPaint.xfermode = mode; round.xfermode = mode; butt.xfermode = mode
         for (list in items.values) for (it in list) {
+            if (clip != null && !RectF.intersects(it.bounds, clip)) continue
             if (it.fill) {
                 canvas.drawPath(it.path, fillPaint)
             } else {
@@ -289,12 +324,58 @@ internal class DoomPreview(override val layer: Layer, private val session: Erase
                 canvas.drawPath(it.path, paint)
             }
         }
-        canvas.restoreToCount(save)
+    }
+
+    /** [mask], brought up to date (once per frame: what changed since the last one); null without memory. */
+    private fun maskNow(): Bitmap? {
+        if (noMask) return null
+        val m = mask ?: try {
+            Bitmap.createBitmap(layer.bitmap.width, layer.bitmap.height, Bitmap.Config.ALPHA_8).also {
+                mask = it
+                maskCanvas = Canvas(it)
+                stale.set(union)
+            }
+        } catch (e: OutOfMemoryError) {
+            noMask = true
+            return null
+        }
+        if (!stale.isEmpty) {
+            val r = Rect()
+            stale.roundOut(r)
+            r.inset(-1, -1)
+            stale.setEmpty()
+            if (r.intersect(0, 0, m.width, m.height)) {
+                val mc = maskCanvas!!
+                val save = mc.save()
+                mc.clipRect(r)
+                mc.drawPaint(clear)
+                drawItems(mc, RectF(r), null)
+                mc.restoreToCount(save)
+                rebuilds++
+            }
+        }
+        return m
+    }
+
+    override fun drawContent(canvas: Canvas): Boolean {
+        canvas.drawBitmap(layer.bitmap, 0f, 0f, null)
+        if (items.isEmpty() || union.isEmpty) return true
+        val m = maskNow()
+        if (m == null) {
+            drawItems(canvas, null, erase)
+            return true
+        }
+        if (punch.shader == null) punch.shader = BitmapShader(m, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        canvas.drawRect(union, punch)
         return true
     }
 
     private companion object {
-        /** How much of a doomed part's paint the preview takes away (0..255). */
-        const val DIM_ALPHA = 165
+        /**
+         * How much wider than its paint a removed part is taken away, each side (document px): the
+         * paint's anti-aliased edge (half a pixel), the centerlines' flattening (a quarter) and the
+         * part's own edge (half a pixel) must all fall inside, or a faint rim stays.
+         */
+        const val MARGIN = 2f
     }
 }
