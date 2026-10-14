@@ -41,6 +41,8 @@ import com.brushwork.paint.tools.ScaledTool
 import com.brushwork.paint.tools.Tool
 import com.brushwork.paint.tools.ToolId
 import com.brushwork.paint.tools.ToolPoint
+import com.brushwork.paint.tools.points.BevelPoint
+import com.brushwork.paint.tools.points.PointBevel
 import com.brushwork.paint.tools.points.PointEditor
 import com.brushwork.paint.tools.points.PointGizmo
 import com.brushwork.paint.tools.points.PointGroupMath
@@ -61,6 +63,7 @@ import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PillLabels
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
 import com.brushwork.paint.ui.editor.HistoryLabels
 import com.brushwork.paint.ui.theme.IbisDims
 import com.brushwork.paint.vector.CopyMaps
@@ -349,6 +352,144 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         setMaps(emptyList())
         changed()
         return true
+    }
+
+    // ------------------------------------------------------------------ v1.9: Bevel points (R18, Polyline)
+
+    /**
+     * v1.9 (R18): the last bevel ([PointLabels19.BEVEL]) of the open polyline: the pre-bevel copy ([before], with
+     * the selection then) that the popup re-applies from, and the values it shows (Compose state).
+     * It lives while its step is the latest in-tool edit: any other edit, undo or redo ends it.
+     */
+    class BevelSession internal constructor(
+        internal val before: List<CurveAnchor>,
+        internal val selectionBefore: PointSelection,
+        amount: Float,
+        segments: Int,
+    ) {
+        /** Amount, 0.01..0.5 of the shorter adjacent edge ([PointBevel.clampAmount]). */
+        var amount by mutableFloatStateOf(amount)
+            internal set
+
+        /** Segments, 1..8 ([PointBevel.clampSegments]). */
+        var segments by mutableIntStateOf(segments)
+            internal set
+
+        /** The popup ([com.brushwork.paint.ui.points.BevelPopup]) is open. */
+        var popupOpen by mutableStateOf(true)
+            internal set
+
+        /** What the bevel made: the anchors and the selection (its new points). */
+        internal var result: List<CurveAnchor> = before
+        internal var selection: PointSelection = selectionBefore
+    }
+
+    private var bevelState by mutableStateOf<BevelSession?>(null)
+
+    /** The touch in progress went down while the bevel popup showed: its lift closes it, and adds nothing. */
+    private var bevelClosingTouch = false
+
+    /**
+     * The live bevel session (Compose state): the last bevel while its points are what the tool
+     * shows and they stay selected; null otherwise.
+     */
+    val bevelSession: BevelSession?
+        get() = bevelState?.takeIf { it.result === anchors && it.selection == pointSelection }
+
+    /** The bevel popup shows (Compose state). */
+    val bevelPopupShown: Boolean get() = bevelSession?.popupOpen == true
+
+    /**
+     * [PointLabels19.BEVEL] (v1.9, R18), Polyline with points selected: bevels the selected sharp corners
+     * at once with the remembered Amount and Segments ([AppSettings.curveBevelAmount],
+     * [AppSettings.curveBevelSegments]) as ONE in-tool step, selects the new points and opens the
+     * popup that adjusts that same step ([setBevelAmount], [setBevelSegments]). While those points
+     * stay selected, a second call reopens the popup on that step instead of bevelling again.
+     * [PointLabels19.BEVEL_SHARP_ONLY] when no selected point is a sharp corner (the ends of an
+     * open line are not), [PointLabels19.BEVEL_TOO_MANY] past [PointBevel.MAX_POINTS_POLYLINE]
+     * points; nothing changes then. True when it bevelled or reopened the popup.
+     */
+    fun bevelPoints(): Boolean {
+        if (!polyline || groupEdit != null) return false
+        bevelSession?.let {
+            it.popupOpen = true
+            return true
+        }
+        val sel = pointSelection
+        if (sel.isEmpty) return false
+        val amount = PointBevel.clampAmount(controller.settings.curveBevelAmount)
+        val segments = PointBevel.clampSegments(controller.settings.curveBevelSegments)
+        val before = anchors
+        val r = bevelled(before, sel, amount, segments) ?: return false
+        editGeometry()
+        val session = BevelSession(before, sel, amount, segments)
+        showBevel(session, r)
+        bevelState = session
+        return true
+    }
+
+    /** The popup's Amount: the bevel is made again from the pre-bevel copy, in the same step. False without a live session. */
+    fun setBevelAmount(amount: Float): Boolean = rebevel(PointBevel.clampAmount(amount), null)
+
+    /** The popup's segment count, as [setBevelAmount]. */
+    fun setBevelSegments(segments: Int): Boolean = rebevel(null, PointBevel.clampSegments(segments))
+
+    /** Done, or a tap outside: the popup closes; the bevel stays one step and a re-tap of the item reopens it. */
+    fun closeBevelPopup() {
+        bevelState?.popupOpen = false
+    }
+
+    private fun endBevel() {
+        if (bevelState != null) bevelState = null
+    }
+
+    private fun rebevel(amount: Float?, segments: Int?): Boolean {
+        val s = bevelSession ?: return false
+        val a = amount ?: s.amount
+        val n = segments ?: s.segments
+        if (a == s.amount && n == s.segments) return true
+        // (Too many points: the toast, and the values stay.)
+        val r = bevelled(s.before, s.selectionBefore, a, n) ?: return false
+        s.amount = a
+        s.segments = n
+        showBevel(s, r)
+        controller.settings.curveBevelAmount = a
+        controller.settings.curveBevelSegments = n
+        return true
+    }
+
+    /** [PointBevel.bevel] of [points] at [sel], or null after its message. */
+    private fun bevelled(points: List<CurveAnchor>, sel: PointSelection, amount: Float, segments: Int): PointBevel.Result.Ok? {
+        val closed = isClosed
+        val r = PointBevel.bevel(
+            points.map { BevelPoint(it.x, it.y, it.width) }, closed, PointBevel.polylineSharp(points.size, closed),
+            sel.indices.toSet(), amount, segments, PointBevel.MAX_POINTS_POLYLINE,
+        )
+        return when (r) {
+            is PointBevel.Result.Ok -> r
+            PointBevel.Result.NoSharpCorner -> {
+                controller.toast(PointLabels19.BEVEL_SHARP_ONLY)
+                null
+            }
+            is PointBevel.Result.TooMany -> {
+                controller.toast(String.format(java.util.Locale.ROOT, PointLabels19.BEVEL_TOO_MANY, r.max))
+                null
+            }
+        }
+    }
+
+    /** Shows [r] made from [session]'s copy: untouched anchors as they were, new ones sharp with the interpolated width; the new ones selected. */
+    private fun showBevel(session: BevelSession, r: PointBevel.Result.Ok) {
+        val src = session.before
+        val next = r.points.mapIndexed { i, p ->
+            val o = r.origin[i]
+            if (o in src.indices) src[o] else CurveAnchor(p.x, p.y, sharp = true, width = CurveWidths.clamp(p.width))
+        }
+        anchors = next
+        selectionState = PointSelection.of(next.size, *r.selected.toIntArray())
+        session.result = next
+        session.selection = pointSelection
+        changed()
     }
 
     /** Where the generator's two canvas handles are (document px). */
@@ -756,6 +897,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * coordinate, holding a nudge arrow) share one step.
      */
     private fun pushHistory(key: Any? = null) {
+        // v1.9 (R18): another edit ends the bevel session (its popup adjusts only the latest step).
+        endBevel()
         val now = if (key != null) clock() else 0L
         val coalesce = key != null && key == historyKey && history.isNotEmpty() && (numericHeld || now - historyKeyTime <= COALESCE_MS)
         historyKey = key
@@ -1035,6 +1178,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * (button / two-finger tap) so it takes back the last point instead of the whole curve.
      */
     override fun undoStep(): Boolean {
+        endBevel()
         val prev = history.removeLastOrNull() ?: return false
         prev.back?.let { back ->
             // The first step after To Bézier: the path goes back to the Path tool as it was.
@@ -1051,6 +1195,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
 
     /** Brings back the edit last taken back by [undoStep] (the app's redo: the top row's Redo, a three-finger tap). */
     override fun redoStep(): Boolean {
+        endBevel()
         val next = redo.removeLastOrNull() ?: return false
         redoCount = redo.size
         if (next.toBezier) return toBezier()
@@ -2144,6 +2289,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
      * rotation is ignored. Any other pinch moves the view.
      */
     override fun onTwoFingerStart(focus: Vec2, a: Vec2, b: Vec2): Boolean {
+        // v1.9 (R18): while the bevel popup shows, two fingers pan and zoom the view.
+        if (bevelPopupShown) return false
         if (groupPinchStart(focus, a, b)) return true
         if (!canScaleHandles) return false
         val i = if (pointSelection.isSingle) selected else -1
@@ -2434,6 +2581,9 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
         snapMoving = null
         touching = true
         droppedDuringTouch = false
+        // v1.9 (R18): the touch that closes the bevel popup is consumed: its lift closes it, no point is added.
+        bevelClosingTouch = bevelPopupShown
+        if (bevelClosingTouch) { drag = Drag.IGNORE; return }
         if (anchors.isEmpty() && !controller.checkEditable()) { drag = Drag.IGNORE; return }
         // v1.8 (item 6): a generator's handles win over the points under them.
         if (generatorDown(pt)) return
@@ -2669,7 +2819,10 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
                     if (k == kind) reopen(path) else switchAndReopen(k, path)
                 }
             }
-            Drag.NONE, Drag.IGNORE -> {}
+            Drag.NONE, Drag.IGNORE -> if (bevelClosingTouch) {
+                bevelClosingTouch = false
+                closeBevelPopup()
+            }
         }
         drag = Drag.NONE
         genStart = null
@@ -2688,6 +2841,8 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     override fun onCancel() {
+        // v1.9 (R18): a second finger (pan, zoom, a two-finger tap) passes the bevel popup by.
+        bevelClosingTouch = false
         setDragging(false)
         reopenCandidate = null
         marqueeTo = null
@@ -3735,6 +3890,7 @@ class CurveTool(controller: EditorController, val kind: CurveKind) :
     }
 
     private fun clearHistory() {
+        endBevel()
         historyEpoch++
         history.clear()
         redo.clear()

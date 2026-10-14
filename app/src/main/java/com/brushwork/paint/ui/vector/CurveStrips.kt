@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.LineWeight
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.Pin
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.RoundedCorner
 import androidx.compose.material.icons.filled.SelectAll
 import androidx.compose.material.icons.filled.Timeline
 import androidx.compose.material.icons.filled.Tune
@@ -60,6 +61,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
@@ -81,12 +83,15 @@ import com.brushwork.paint.ui.common.CurveGenLabels18
 import com.brushwork.paint.ui.common.CurveLabels17
 import com.brushwork.paint.ui.common.MirrorLabels18
 import com.brushwork.paint.ui.common.PointLabels
+import com.brushwork.paint.ui.common.PointLabels19
+import com.brushwork.paint.ui.common.V19Tags
 import com.brushwork.paint.ui.common.closeOnSecondFinger
 import com.brushwork.paint.ui.common.longPressLabel
 import com.brushwork.paint.ui.theme.BrushworkColors
 import com.brushwork.paint.ui.theme.IbisColors
 import com.brushwork.paint.ui.tools.strip.LocalStripContext
 import com.brushwork.paint.ui.tools.strip.StripItem
+import com.brushwork.paint.ui.tools.strip.StripKeysV19
 import com.brushwork.paint.ui.tools.strip.StripRow
 import com.brushwork.paint.ui.tools.strip.StripSpec
 import com.brushwork.paint.vector.CurveGenKind
@@ -327,6 +332,8 @@ internal fun curveSpec(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi): S
             items += brushOrTaper(tool, f)
             items += sheetItems(tool, ui)
             if (f.copies) items += removeCopiesItem(tool)
+            // v1.9 (R18): after v1.8's More items (StripKeysV19.BEVEL's rank).
+            if (f.selected > 0) items += bevelItem(tool)
         }
         CurveKind.PATH -> if (!open) {
             items += curvesItem(tool)
@@ -395,6 +402,8 @@ private fun CurveOverlays(tool: CurveTool, ui: CurveStripUi) {
         CurveTyping.GroupThickness -> GroupThicknessDialog(tool, close)
         CurveTyping.GroupWeight -> GroupWeightDialog(tool, close)
     }
+    // v1.9 (R18): Polyline's bevel popup, More row open or closed.
+    if (tool.polyline) CurveBevelPopupHost(tool)
 }
 
 // ====================================================================== items
@@ -710,6 +719,15 @@ private fun weightItem(tool: CurveTool, f: CurveStripFacts, ui: CurveStripUi) = 
     }
 }
 
+/**
+ * v1.9 (R18): [PointLabels19.BEVEL], Polyline with points selected ([StripKeysV19.BEVEL], tag
+ * [V19Tags.BEVEL]): bevels the selected corners at once and opens the popup that adjusts that
+ * step ([CurveBevelPopupHost]); while the new points stay selected a second tap reopens it.
+ */
+private fun bevelItem(tool: CurveTool) = item(StripKeysV19.BEVEL.key, PointLabels19.BEVEL, StripKeysV19.BEVEL.widthDp, StripRow.MORE) {
+    IconCell(Icons.Filled.RoundedCorner, PointLabels19.BEVEL, onClick = { tool.bevelPoints() }, tag = V19Tags.BEVEL)
+}
+
 private fun deselectItem(tool: CurveTool) = item(CurveKeys.DESELECT, DESELECT_POINT_LABEL, CURVE_ICON_DP, StripRow.MORE) {
     IconCell(Icons.Filled.Deselect, DESELECT_POINT_LABEL, onClick = { tool.deselect() })
 }
@@ -804,9 +822,11 @@ private fun IconCell(
     selected: Boolean? = null,
     tint: Color = BrushworkColors.OnChrome,
     state: String? = null,
+    tag: String? = null,
 ) {
     val on = selected == true
     val base = Modifier
+        .then(if (tag != null) Modifier.testTag(tag) else Modifier)
         .size(CURVE_ICON_DP.dp)
         .clip(RoundedCornerShape(8.dp))
         .background(if (on) BrushworkColors.AccentDim else Color.Transparent)
