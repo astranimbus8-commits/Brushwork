@@ -440,10 +440,15 @@ class ShapeLayerEditTest {
         assertEquals(data, layer.shapeData)
         assertEquals(0, diff(c.composite(), shown))
         assertEquals(ShapeType.RECTANGLE, tool.settings.type)
-        // Undo of an opened and changed shape throws the changes away (like ✕).
+        // v1.9 (R17): Undo of an opened and changed shape takes back its last edit (the move);
+        // the shape stays open as it was opened, and ✕ then leaves the layer as it was.
         c.tap(70f, 60f)
+        val opened = tool.box
         c.drag(70f to 60f, 90f to 60f)
         c.undo()
+        assertTrue(tool.hasPendingWork)
+        assertEquals(opened, tool.box)
+        tool.discard()
         assertFalse(tool.hasPendingWork)
         assertEquals(0, diff(layer.bitmap, before))
         assertEquals(2, c.doc.layers.size)

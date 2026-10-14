@@ -251,7 +251,8 @@ class ShapePointsToolTest {
         val c = controller()
         val tool = shapeTool(c)
         pending(c, tool, ShapeType.RECTANGLE, ShapeBox(100f, 100f, 100f, 80f))
-        assertFalse(tool.canUndoStep)
+        // v1.9 (R17): the typed placement is an in-tool step too (every shape, not only one with points).
+        assertTrue(tool.canUndoStep)
         tool.setPointEditing(true)
         assertTrue(tool.canUndoStep)
         c.drag(50f to 60f, 40f to 50f, 30f to 40f)              // move point 0
@@ -273,6 +274,10 @@ class ShapePointsToolTest {
         assertNull(tool.points)
         assertFalse(tool.pointsMode)
         assertTrue(tool.hasPendingWork)
+        // v1.9 (R17): then the typed placement (back to the shape Numbers made).
+        c.undo()
+        assertTrue(tool.hasPendingWork)
+        assertFalse(tool.canUndoStep)
         // Nothing left to step back: undo discards the shape.
         c.undo()
         assertFalse(tool.hasPendingWork)
@@ -371,6 +376,7 @@ class ShapePointsToolTest {
         c.pointerMove(ToolPoint(20f, 30f))
         c.pointerCancel()
         assertEquals(pts, tool.points)
-        assertEquals("only the conversion can be undone", 1, generateSequence { if (tool.undoStep()) 1 else null }.count())
+        // v1.9 (R17): the typed placement is a step too.
+        assertEquals("only the conversion and the placement can be undone", 2, generateSequence { if (tool.undoStep()) 1 else null }.count())
     }
 }

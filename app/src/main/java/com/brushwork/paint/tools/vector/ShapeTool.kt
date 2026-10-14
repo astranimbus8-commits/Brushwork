@@ -554,7 +554,13 @@ class ShapeTool(controller: EditorController) : Tool(controller), PointEditor, P
             clearHistory()
             if (old.type.isLineLike == new.type.isLineLike) box = clean(b)
         }
-        if (b != null && old.type.isLineLike != new.type.isLineLike) box = clean(convert(b, new.type))
+        if (b != null && old.type.isLineLike != new.type.isLineLike) {
+            // v1.9 (R17): the edits before a change between a line-like and a box-like type do
+            // not map onto the new geometry: the in-tool history starts again (a change within
+            // one kind keeps it: its boxes still apply).
+            clearHistory()
+            box = clean(convert(b, new.type))
+        }
         refreshPreview()
     }
 
