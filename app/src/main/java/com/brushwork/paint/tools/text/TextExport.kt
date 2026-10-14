@@ -42,6 +42,11 @@ object TextExport {
      * v1.9 (R4): a justified line gives one run per word, each keeping its space, at the x its
      * pixels have (so SVG matches them); null for text with a line spread between its letters
      * (a line without word spaces, [Justified.spreadsClusters]), which exports as outlines.
+     *
+     * v1.9 (R7): a list's markers come first, one run each with its own [TextRunPaint] (the
+     * marker's size and font, no letter spacing; a marker thickness is an outline in the text's
+     * colour, [ListMarkers.OUTLINE_EM]); null (outlines) when a marker is in an imported font or
+     * is thickened on a text that has an outline (a run carries one outline).
      */
     fun lines(item: TextItem): List<TextLineRun>? {
         if (item.spec.letterScale.isOn) return null
@@ -55,6 +60,8 @@ object TextExport {
         if (block.isEmpty) return emptyList()
         val inset = block.inset
         val text = item.text
+        // v1.9 (R7): the list's markers, before the lines (they are drawn first).
+        val markers = markerRuns(item.spec, block, paint.matrix) ?: return null
         block.justified?.let { j ->
             // v1.9 (R4): a justified line is one run per word, each keeping its space (so the
             // exported text still reads with its spaces), at the x its pixels have. A line spread
@@ -65,10 +72,10 @@ object TextExport {
             for (l in lines) Justify.forEachPiece(l, j.measured, j.offsets) { a, b, x ->
                 out += TextLineRun(text.substring(a, b), x + inset, l.baseline + inset, paint)
             }
-            return out
+            return markers + out
         }
         block.wrapLines?.let { lines ->
-            return lines.filter { it.end > it.start }.map { TextLineRun(text.substring(it.start, it.end), it.x + inset, it.baseline + inset, paint) }
+            return markers + lines.filter { it.end > it.start }.map { TextLineRun(text.substring(it.start, it.end), it.x + inset, it.baseline + inset, paint) }
         }
         val layout = block.staticLayout ?: return null
         val out = ArrayList<TextLineRun>(layout.lineCount)
@@ -79,6 +86,28 @@ object TextExport {
             out += TextLineRun(text.substring(s, e), TextRenderer.staticLineX(layout, i) + inset, layout.getLineBaseline(i) + inset, paint)
         }
         return out
+    }
+
+    /**
+     * v1.9 (R7): [block]'s list markers as runs in the block's coordinates (x and baseline with the
+     * inset, [matrix] to document px): each in its marker's size and font, with [spec]'s colours
+     * and outline; a thickened marker's thickness as an outline in the text colour. Empty without
+     * markers; null when one can't be a run (an imported marker font, or a thickened marker on a
+     * text with an outline).
+     */
+    private fun markerRuns(spec: TextSpec, block: TextBlock, matrix: List<Float>): List<TextLineRun>? {
+        val m = block.listMarkers ?: return emptyList()
+        val list = spec.list
+        if (!list.sameFontAsText && list.markerFontId != null) return null
+        val weight = list.markerWeight
+        if (weight > 0f && spec.strokeWidthPx > 0f) return null
+        val font = ListMarkers.markerFontSpec(spec).copy(letterSpacing = 0f, list = TextListSpec())
+        val inset = block.inset
+        return m.markers.map { k ->
+            val s = if (weight > 0f) font.copy(sizePx = k.sizePx, strokeWidthPx = ListMarkers.OUTLINE_EM * weight * k.sizePx, strokeColor = spec.color)
+            else font.copy(sizePx = k.sizePx)
+            TextLineRun(k.text, k.x + inset, k.baseline + inset, TextRunPaint(s, matrix))
+        }
     }
 
     /**

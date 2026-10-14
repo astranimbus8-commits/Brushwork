@@ -61,9 +61,13 @@ import com.brushwork.paint.tools.select.SelectionDuplicate
 import com.brushwork.paint.tools.text.TextAlign
 import com.brushwork.paint.tools.text.TextBoxSpec
 import com.brushwork.paint.tools.text.TextCodec
+import com.brushwork.paint.tools.text.TextFont
 import com.brushwork.paint.tools.text.TextItem
 import com.brushwork.paint.tools.text.TextJustify
 import com.brushwork.paint.tools.text.TextKerningMode
+import com.brushwork.paint.tools.text.TextListSpec
+import com.brushwork.paint.tools.text.TextListType
+import com.brushwork.paint.tools.text.TextNumbering
 import com.brushwork.paint.tools.text.TextRenderer
 import com.brushwork.paint.tools.text.TextSpec
 import com.brushwork.paint.tools.vector.CornerStyle
@@ -271,11 +275,17 @@ class Qa19CompatBackFromV18RobolectricTest {
         assertFalse("Off: Font kerning off, so v1.8 doesn't kern", off.spec.fontKerning)
     }
 
-    @Ignore("5.2 row 3, TextSpec.list (NEVER): owner A3")
     @Test
     fun row03TextList() {
         v18Reads("text-list", listOf("list"))
         // A3: v1.8 shows the saved pixels; an edit drops markers and indent and keeps the text.
+        for (name in listOf("Numbered", "Bullets")) {
+            val item = requireNotNull(TextCodecV18.decode(firstText("text-list", name))) { "v1.8 reads $name" }
+            assertEquals(name, TEXT_LIST, item.text)
+            assertTrue("$name: the box width is kept", item.spec.box.width > 0f)
+            // v1.9 reads its list back.
+            assertTrue(name, TextCodec.decode(firstText("text-list", name))!!.spec.list.isOn)
+        }
     }
 
     @Ignore("5.2 row 4, TextPathSpec.nodes (NEVER; sanitized writes the CURVE or LINE fallback): owner A3")
@@ -649,6 +659,7 @@ class Qa19CompatBackFromV18RobolectricTest {
         "duplicates" to ::writeDuplicates,
         "text-justify" to ::writeTextJustify,
         "text-kerning" to ::writeTextKerning,
+        "text-list" to ::writeTextList,
     )
 
     /** `project.json` of the gallery's project [id], copied into [dir]. */
@@ -1097,6 +1108,23 @@ class Qa19CompatBackFromV18RobolectricTest {
         saveTexts(dir, "Metrics" to TextItem("AVATAR テキスト", metrics, cx = 120f, cy = 50f), "Off" to TextItem("AVATAR", off, cx = 120f, cy = 110f))
     }
 
+    /**
+     * Row 3 (A3): "Numbered" (Roman from III, larger and thicker markers in a serif font, a wide
+     * gap) and "Bullets" (stars), each three paragraphs in a 200 px box.
+     */
+    private fun writeTextList(dir: File) {
+        val numbered = TextListSpec(
+            type = TextListType.NUMBERS, numbering = TextNumbering.UPPER_ROMAN, start = 3,
+            markerScale = 1.2f, markerWeight = 0.5f, gapEm = 1f, markerFont = TextFont.SERIF,
+        )
+        val box = TextBoxSpec(width = 200f)
+        saveTexts(
+            dir,
+            "Numbered" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = numbered), cx = 120f, cy = 45f),
+            "Bullets" to TextItem(TEXT_LIST, TextSpec(sizePx = 16f, box = box, list = TextListSpec(type = TextListType.BULLETS, bullet = "★")), cx = 120f, cy = 115f),
+        )
+    }
+
     /** A 240 x 160 document of one text layer per [texts] (name to text, its pixels drawn by v1.9), saved into [dir]. */
     private fun saveTexts(dir: File, vararg texts: Pair<String, TextItem>) {
         val doc = Document("qa19-${dir.name}", dir.name, 240, 160, dpi = 144f)
@@ -1162,6 +1190,9 @@ class Qa19CompatBackFromV18RobolectricTest {
 
         /** Row 1 (A3): the justified paragraph. */
         const val TEXT_PARAGRAPH = "Justified lines reach both edges of the box while the last line keeps its alignment."
+
+        /** Row 3 (A3): three paragraphs and a blank one (neither marked nor counted). */
+        const val TEXT_LIST = "Brushes\n\nLayers and text\nExport"
 
         /** The keys v1.9 adds to [SETTINGS_FILE] (F1a, design 2.3.4). */
         val V19_SETTINGS_KEYS = listOf(

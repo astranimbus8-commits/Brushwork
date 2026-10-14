@@ -46,6 +46,8 @@ class TextBlock internal constructor(
     private val outlineGlyphs: ((Path, TextPaint) -> Unit)? = null,
     /** v1.9 (R4): justified [wrapLines]: where their pieces are drawn (for [TextExport]); null when no line is justified. */
     internal val justified: JustifiedLines? = null,
+    /** v1.9 (R7): the list's markers, drawn and outlined with the letters (for [TextExport]); null without a list. */
+    internal val listMarkers: ListMarkerLayout? = null,
 ) {
     /** True when there is nothing to draw (empty text); the box still has a placeholder size. */
     val isEmpty: Boolean get() = drawGlyphs == null
@@ -213,6 +215,8 @@ class TextFrameLayout internal constructor(
     internal val measured: WrapText,
     /** v1.6 scaled letters: the ramp over the whole story (null when the letters aren't scaled). */
     internal val ramp: LetterRampResult? = null,
+    /** v1.9 (R7): the list measured over the whole story (null without one, see [ListMarkers]). */
+    internal val list: ListPlan? = null,
 ) {
     /** Characters of the story this frame shows. */
     val length: Int get() = end - start
@@ -356,6 +360,8 @@ object TextRenderer {
      *
      * v1.9 (R4): justified horizontal text ([justifies]) takes the same [WrapLayout] route and is
      * drawn in pieces split at its stretched gaps; text that isn't keeps StaticLayout bit for bit.
+     * v1.9 (R7): so does horizontal text with a list ([ListMarkers]): its lines keep the markers'
+     * column and the markers are drawn before them.
      */
     fun layout(text: String, spec: TextSpec, measureInk: Boolean = true, kerns: List<TextKern> = emptyList()): TextBlock = when {
         spec.vertical -> layoutVertical(text, spec, measureInk)
@@ -363,7 +369,7 @@ object TextRenderer {
         scalesLetters(spec, text) -> layoutScaled(text, spec, measureInk, kerns)
         else -> {
             val px = kernPx(spec, text, kerns, 0, null)
-            if (px != null || (text.isNotEmpty() && justifies(spec))) layoutKerned(text, spec, measureInk, px) else layoutHorizontal(text, spec, measureInk)
+            if (px != null || (text.isNotEmpty() && (justifies(spec) || ListMarkers.applies(spec)))) layoutKerned(text, spec, measureInk, px) else layoutHorizontal(text, spec, measureInk)
         }
     }
 
@@ -478,10 +484,11 @@ object TextRenderer {
 
     /**
      * Text area width of text measured for [WrapLayout] (scaled letters, v1.7 kerned text): the
-     * fixed box (whole pixels, as StaticLayout), else the widest paragraph.
+     * fixed box (whole pixels, as StaticLayout), else the widest paragraph (v1.9, R7: and the
+     * list markers' [indent]).
      */
-    private fun scaledWidth(wrap: Float, wt: WrapText): Float =
-        (if (wrap > 0f) ceil(wrap).toInt() else ceil(WrapLayout.widestParagraph(wt)).toInt() + 1).coerceAtLeast(1).toFloat()
+    private fun scaledWidth(wrap: Float, wt: WrapText, indent: Float = 0f): Float =
+        (if (wrap > 0f) ceil(wrap).toInt() else ceil(WrapLayout.widestParagraph(wt) + indent).toInt() + 1).coerceAtLeast(1).toFloat()
 
     /**
      * Horizontal text with scaled letters (v1.6 §3.5c): the advances are scaled per letter and
@@ -500,20 +507,24 @@ object TextRenderer {
         val ramp = LetterRamp.of(text, spec.letterScale)
         val wt = measureFor(text, paint, ramp, 0, ScaleKey(spec.letterScale, text, 0), kernPx(spec, text, kerns, 0, ramp))
         val wrap = spec.box.width
-        val width = scaledWidth(wrap, wt)
+        // v1.9 (R7): a list keeps its markers' column.
+        val list = ListMarkers.plan(spec, text, ramp)
+        val indent = list?.indent ?: 0f
+        val width = scaledWidth(wrap, wt, indent)
         val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
-        val res = WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, WrapSides.LARGEST, spec.align, 0f)
+        val res = WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, WrapSides.LARGEST, spec.align, 0f, indent = indent)
         val height = max(max(1f, res.height), minHeight)
-        return scaledBlock(spec, text, ramp, 0, paint, wt, justified(spec, wt, res.lines), width, height, measureInk)
+        return scaledBlock(spec, text, ramp, 0, paint, wt, justified(spec, wt, res.lines), width, height, measureInk, list)
     }
 
     /**
      * The block of scaled lines [j] of [text] ([ramp] from [offset], see [ScaledLetters]).
-     * v1.9 (R4): justified lines move their letters by the justified offsets.
+     * v1.9 (R4): justified lines move their letters by the justified offsets. v1.9 (R7): [list]'s
+     * markers (its source indexed from [offset], as [ramp]) go before their paragraphs' first lines.
      */
     private fun scaledBlock(
         spec: TextSpec, text: String, ramp: LetterRampResult, offset: Int, paint: TextPaint, wt: WrapText,
-        j: Justified, width: Float, contentH: Float, measureInk: Boolean,
+        j: Justified, width: Float, contentH: Float, measureInk: Boolean, list: ListPlan? = null,
     ): TextBlock {
         val lines = j.lines
         // Built-in fonts: a tile redraw draws only the lines near it. Imported fonts may swash anywhere.
@@ -521,7 +532,7 @@ object TextRenderer {
         val letters = ScaledLetters(text, ramp, offset, spec.letterScale.align, ScaledLetters.capHeight(paint), cull, j.offsets)
         val overflow = if (measureInk && spec.fontId != null) letters.overflow(lines, wt, paint, width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p -> letters.outline(out, lines, wt, p) }
-        return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline, justified = j.forBlock(wt)) { c, p -> letters.draw(c, lines, wt, p) }
+        return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline, justified = j.forBlock(wt), markers = list?.place(lines, offset)) { c, p -> letters.draw(c, lines, wt, p) }
     }
 
     /**
@@ -529,7 +540,8 @@ object TextRenderer {
      * advances ([kernPx]) and broken into lines by [WrapLayout] with StaticLayout's metrics,
      * width and alignment, like scaled letters; drawn by [kernedBlock].
      *
-     * v1.9 (R4): also justified text without a kern ([kernPx] null, see [justifies]).
+     * v1.9 (R4): also justified text without a kern ([kernPx] null, see [justifies]); v1.9 (R7) and
+     * text with a list ([ListMarkers]).
      */
     private fun layoutKerned(text: String, spec: TextSpec, measureInk: Boolean, kernPx: FloatArray?): TextBlock {
         val paint = newPaint(spec).apply { letterSpacing = spec.letterSpacing }
@@ -537,11 +549,14 @@ object TextRenderer {
         val metrics = WrapMetrics.staticLayout(fmi.ascent, fmi.descent, spec.lineSpacing)
         val wt = measureFor(text, paint, null, 0, null, kernPx)
         val wrap = spec.box.width
-        val width = scaledWidth(wrap, wt)
+        // v1.9 (R7): a list keeps its markers' column.
+        val list = ListMarkers.plan(spec, text, null)
+        val indent = list?.indent ?: 0f
+        val width = scaledWidth(wrap, wt, indent)
         val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
-        val res = WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, WrapSides.LARGEST, spec.align, 0f)
+        val res = WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, WrapSides.LARGEST, spec.align, 0f, indent = indent)
         val height = max(max(1f, res.height), minHeight)
-        return kernedBlock(spec, text, paint, wt, kernPx, justified(spec, wt, res.lines), width, height, measureInk)
+        return kernedBlock(spec, text, paint, wt, kernPx, justified(spec, wt, res.lines), width, height, measureInk, list)
     }
 
     /**
@@ -562,7 +577,7 @@ object TextRenderer {
      */
     private fun kernedBlock(
         spec: TextSpec, text: String, paint: TextPaint, wt: WrapText, kernPx: FloatArray?,
-        j: Justified, width: Float, contentH: Float, measureInk: Boolean,
+        j: Justified, width: Float, contentH: Float, measureInk: Boolean, list: ListPlan? = null, offset: Int = 0,
     ): TextBlock {
         val lines = j.lines
         val off = j.offsets
@@ -575,7 +590,7 @@ object TextRenderer {
                 out.addPath(tmp)
             }
         }
-        return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline, justified = j.forBlock(wt)) { c, p ->
+        return block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline, justified = j.forBlock(wt), markers = list?.place(lines, offset)) { c, p ->
             for (l in lines) forEachPiece(l, wt, kernPx, off) { a, b, x, whole ->
                 if (whole) c.drawText(text, a, b, x, l.baseline, p) else c.drawTextRun(text, a, b, l.start, l.end, x, l.baseline, false, p)
             }
@@ -624,11 +639,16 @@ object TextRenderer {
         spec: TextSpec, cw: Float, ch: Float, lines: Int, paint: TextPaint, overflow: Float = 0f,
         staticLayout: StaticLayout? = null, wrapLines: List<WrapLine>? = null, outline: ((Path, TextPaint) -> Unit)? = null,
         justified: JustifiedLines? = null,
+        markers: ListMarkerLayout? = null,
         glyphs: ((Canvas, TextPaint) -> Unit)?,
     ): TextBlock {
         val inset = spec.box.inset
-        val pad = max(inkPad(spec), spec.strokeWidthPx + overflow + 2f)
-        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, glyphs, staticLayout, wrapLines, outline, justified)
+        // v1.9 (R7): the list's markers are drawn and outlined before the letters, and their ink counts.
+        val g = if (markers == null || glyphs == null) glyphs else { c: Canvas, p: TextPaint -> markers.draw(c, p); glyphs(c, p) }
+        val o = if (markers == null || outline == null) outline else { out: Path, p: TextPaint -> markers.outline(out); outline(out, p) }
+        val over = if (markers == null) overflow else max(overflow, markers.overflow(cw, ch))
+        val pad = max(inkPad(spec), spec.strokeWidthPx + over + 2f)
+        return TextBlock(cw + 2f * inset, ch + 2f * inset, cw, ch, pad, lines, spec, paint, g, staticLayout, wrapLines, o, justified, markers)
     }
 
     private fun layoutHorizontal(text: String, spec: TextSpec, measureInk: Boolean): TextBlock {
@@ -702,9 +722,12 @@ object TextRenderer {
         // v1.7: manual kerns are measured in (and a measurement is reused only for the same kerns).
         val px = kernPx(spec, text, item.kerns, 0, ramp)
         val wt = measured?.takeIf { it.text == text && it.scaleKey == key && it.sameKerns(px) } ?: measureFor(text, paint, ramp, 0, key, px)
+        // v1.9 (R7): a list's markers take a column on the start side of every line.
+        val list = ListMarkers.plan(spec, text, ramp)
+        val indent = list?.indent ?: 0f
         // StaticLayout's width (whole pixels); without a fixed box, the text's own width.
-        val width = if (ramp != null || px != null) scaledWidth(wrap, wt)
-        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val width = if (ramp != null || px != null) scaledWidth(wrap, wt, indent)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint) + indent).toInt() + 1).coerceAtLeast(1).toFloat()
         val minHeight = if (wrap > 0f) spec.box.minHeight else 0f
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val inset = spec.box.inset
@@ -714,9 +737,9 @@ object TextRenderer {
         fun blockHeight(contentH: Float) = max(max(1f, contentH), minHeight) + 2f * inset
         fun run(blockH: Float): WrapResult {
             val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - blockW / 2f, inset - blockH / 2f, gap)
-            return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, minRun)
+            return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, minRun, indent = indent)
         }
-        var bh = blockHeight(WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, item.wrap.sides, spec.align, minRun).height)
+        var bh = blockHeight(WrapLayout.layout(wt, width, metrics, NOTHING_BLOCKED, item.wrap.sides, spec.align, minRun, indent = indent).height)
         var res = run(bh)
         var next = blockHeight(res.height)
         var tallest = max(bh, next)
@@ -746,8 +769,8 @@ object TextRenderer {
         val contentH = finalH - 2f * inset
         // v1.9 (R4): justified lines spread over their segment beside the picture.
         val j = justified(spec, wt, res.lines)
-        if (ramp != null) return scaledBlock(spec, text, ramp, 0, paint, wt, j, width, contentH, measureInk) to wt
-        if (px != null || j.offsets != null) return kernedBlock(spec, text, paint, wt, px, j, width, contentH, measureInk) to wt
+        if (ramp != null) return scaledBlock(spec, text, ramp, 0, paint, wt, j, width, contentH, measureInk, list) to wt
+        if (px != null || j.offsets != null) return kernedBlock(spec, text, paint, wt, px, j, width, contentH, measureInk, list) to wt
         val lines = j.lines
         val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p ->
@@ -759,7 +782,7 @@ object TextRenderer {
                 out.addPath(tmp)
             }
         }
-        val block = block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p ->
+        val block = block(spec, width, contentH, lines.size, paint, overflow, wrapLines = lines, outline = outline, markers = list?.place(lines, 0)) { c, p ->
             for (l in lines) if (l.end > l.start) c.drawText(text, l.start, l.end, l.x, l.baseline, p)
         }
         return block to wt
@@ -781,12 +804,13 @@ object TextRenderer {
         // v1.7: the item's kerns index its own text (another text is measured without them).
         val px = if (text == item.text) kernPx(spec, text, item.kerns, 0, ramp) else null
         val wt = measureFor(text, paint, ramp, 0, ramp?.let { ScaleKey(spec.letterScale, text, 0) }, px)
-        val width = if (ramp != null || px != null) scaledWidth(wrap, wt)
-        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        val indent = ListMarkers.plan(spec, text, ramp)?.indent ?: 0f
+        val width = if (ramp != null || px != null) scaledWidth(wrap, wt, indent)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(text, paint) + indent).toInt() + 1).coerceAtLeast(1).toFloat()
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val inset = spec.box.inset
         val blocked = if (obstacle.isEmpty) NOTHING_BLOCKED else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - blockHeight / 2f, item.wrap.gapPx)
-        return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx).height
+        return WrapLayout.layout(wt, width, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx, indent = indent).height
     }
 
     // ------------------------------------------------------------------ v1.6: frames of a linked story (§3.6, §4.4)
@@ -829,15 +853,18 @@ object TextRenderer {
         val px = kernPx(spec, story, item.kerns, start, ramp)
         val wt = measured?.takeIf { reusable(it, story, start, ramp) && it.sameKerns(px) }
             ?: measureFor(story.substring(start), paint, ramp, start, ramp?.let { TailScaleKey.of(it, start) }, px)
-        val width = if (ramp != null || wt.kernPx != null) scaledWidth(wrap, wt)
-        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint)).toInt() + 1).coerceAtLeast(1).toFloat()
+        // v1.9 (R7): the list numbers the whole story (C22: its frames go on counting).
+        val list = ListMarkers.plan(spec, story, ramp)
+        val indent = list?.indent ?: 0f
+        val width = if (ramp != null || wt.kernPx != null) scaledWidth(wrap, wt, indent)
+        else (if (wrap > 0f) ceil(wrap).toInt() else ceil(Layout.getDesiredWidth(wt.text, paint) + indent).toInt() + 1).coerceAtLeast(1).toFloat()
         val height = if (wrap > 0f && spec.box.minHeight > 0f) spec.box.minHeight else Float.POSITIVE_INFINITY
         val inset = spec.box.inset
         val obstacle = WrapObstacle(item.wrap.polygons, item.cx, item.cy, item.rotationDeg)
         val blocked = if (!item.wrapActive || obstacle.isEmpty || !height.isFinite()) NOTHING_BLOCKED
         else obstacle.forArea(inset - (width + 2f * inset) / 2f, inset - (height + 2f * inset) / 2f, item.wrap.gapPx)
-        val res = WrapLayout.layoutFrame(wt, width, height, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx)
-        return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt, ramp)
+        val res = WrapLayout.layoutFrame(wt, width, height, metrics, blocked, item.wrap.sides, spec.align, item.wrap.minRunEm * spec.sizePx, indent = indent)
+        return TextFrameLayout(res.lines, start, start + res.end, res.height, width, if (height.isFinite()) height else res.height, wt, ramp, list)
     }
 
     /**
@@ -899,11 +926,11 @@ object TextRenderer {
         val ramp = fl.ramp
         if (ramp != null) {
             paint.fontFeatureSettings = scaledFeatures(spec)
-            return scaledBlock(spec, text, ramp, fl.start, paint, fl.measured, j, fl.width, max(1f, contentH), measureInk) to fl.measured
+            return scaledBlock(spec, text, ramp, fl.start, paint, fl.measured, j, fl.width, max(1f, contentH), measureInk, fl.list) to fl.measured
         }
         // v1.7: the story's kerns, as the tail was measured with them (indices of this frame's text).
         val px = fl.measured.kernPx
-        if (px != null || j.offsets != null) return kernedBlock(spec, text, paint, fl.measured, px, j, fl.width, max(1f, contentH), measureInk) to fl.measured
+        if (px != null || j.offsets != null) return kernedBlock(spec, text, paint, fl.measured, px, j, fl.width, max(1f, contentH), measureInk, fl.list, fl.start) to fl.measured
         val overflow = if (measureInk && spec.fontId != null) wrappedOverflow(lines, text, paint, fl.width, contentH) else 0f
         val outline: (Path, TextPaint) -> Unit = { out, p ->
             val tmp = Path()
@@ -914,7 +941,7 @@ object TextRenderer {
                 out.addPath(tmp)
             }
         }
-        val block = block(spec, fl.width, max(1f, contentH), lines.size, paint, overflow, wrapLines = lines, outline = outline) { c, p ->
+        val block = block(spec, fl.width, max(1f, contentH), lines.size, paint, overflow, wrapLines = lines, outline = outline, markers = fl.list?.place(lines, fl.start)) { c, p ->
             for (l in lines) if (l.end > l.start) c.drawText(text, l.start, l.end, l.x, l.baseline, p)
         }
         return block to fl.measured
